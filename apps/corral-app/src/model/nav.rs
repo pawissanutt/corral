@@ -1,6 +1,7 @@
 //! Destinations, pages and overlays shared by every shell.
 
 use crate::model::effect::Page;
+use crate::model::live::{Live, Route, Selection};
 
 /// Desktop sidebar prompt for the Ask composer.
 pub const ASK_HINT: &str = "Ask…";
@@ -362,6 +363,50 @@ impl ThemeChoice {
         }
     }
 }
+/// The desktop and terminal sidebar's wide-layout choice. A narrow window or grid always folds
+/// the sidebar to its rail whatever the choice, so a choice made wide never crushes a narrow
+/// layout; there the toggle opens the labels over the content for the moment instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SidebarPref {
+    /// Labels while wide; the user has not chosen.
+    #[default]
+    Auto,
+    /// Labels while wide, by choice.
+    Expanded,
+    /// The rail even while wide, by choice.
+    Collapsed,
+}
+impl SidebarPref {
+    /// The storage slug.
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Expanded => "expanded",
+            Self::Collapsed => "collapsed",
+        }
+    }
+    /// Finds a preference by its slug.
+    pub fn from_slug(slug: &str) -> Option<SidebarPref> {
+        [Self::Auto, Self::Expanded, Self::Collapsed]
+            .into_iter()
+            .find(|pref| pref.slug() == slug)
+    }
+    /// Whether the layout gives the sidebar only its rail at this width: always while narrow.
+    pub const fn collapsed(self, narrow: bool) -> bool {
+        narrow || matches!(self, Self::Collapsed)
+    }
+    /// The wide choice that flips what shows wide; it stays put for the return to wide when
+    /// the toggle is used while narrow.
+    pub const fn toggled(self, narrow: bool) -> SidebarPref {
+        if narrow {
+            self
+        } else if self.collapsed(false) {
+            Self::Expanded
+        } else {
+            Self::Collapsed
+        }
+    }
+}
 /// The app's presentation form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Form {
@@ -396,8 +441,10 @@ pub struct NavState {
     pub goes: u32,
     /// Open overlays in oldest-first order.
     pub overlays: Vec<Overlay>,
-    /// Open pages in oldest-first order; task and plan pages are phone-only.
-    pub pages: Vec<Page>,
+    /// Open pages in oldest-first order; task, plan and review pages are phone-only.
+    pub pages: Vec<Route>,
+    /// The live record selected in each domain.
+    pub selection: Selection,
 }
 impl NavState {
     /// Creates navigation state at the form's home destination.
@@ -409,6 +456,7 @@ impl NavState {
             goes: 0,
             overlays: Vec::new(),
             pages: Vec::new(),
+            selection: Selection::default(),
         }
     }
     /// Navigates to a destination and closes the palette.
@@ -424,15 +472,26 @@ impl NavState {
         self.section_opens = self.section_opens.wrapping_add(1);
         self.go(Destination::Settings);
     }
-    /// Opens a page under its owner without duplicating the top page; tasks and plans select in place off phone.
+    /// Opens a fixture page under its owner without duplicating the top page; tasks and plans
+    /// select in place off phone.
     pub fn open_page(&mut self, page: Page, form: Form) {
-        self.destination = page.owner();
+        let push = form == Form::Phone
+            || matches!(page, Page::Question | Page::Session(_) | Page::Thread(_));
+        self.open_route(Route::Page(page), push);
+    }
+    /// Selects a live record, then pushes its page where the form stacks it; tasks, plans and
+    /// reviews select in place off phone.
+    pub fn open_live(&mut self, live: Live, form: Form) {
+        self.selection.set(&live);
+        let push = live.pushes(form);
+        self.open_route(Route::Live(live), push);
+    }
+    fn open_route(&mut self, route: Route, push: bool) {
+        self.destination = route.owner();
         self.close(Overlay::Palette);
-        if form == Form::Phone
-            || matches!(page, Page::Question | Page::Session(_) | Page::Thread(_))
-        {
-            if self.page() != Some(page) {
-                self.pages.push(page);
+        if push {
+            if self.pages.last() != Some(&route) {
+                self.pages.push(route);
             }
         } else {
             self.pages.clear();
@@ -440,15 +499,25 @@ impl NavState {
     }
     /// Pops the top page; its owner remains selected when the stack becomes empty.
     pub fn back(&mut self) -> bool {
-        let Some(page) = self.pages.pop() else {
+        let Some(route) = self.pages.pop() else {
             return false;
         };
-        self.destination = self.page().unwrap_or(page).owner();
+        self.destination = self.pages.last().unwrap_or(&route).owner();
         true
     }
-    /// The page currently above the destination.
+    /// The fixture page currently above the destination; None under a live page.
     pub fn page(&self) -> Option<Page> {
-        self.pages.last().copied()
+        match self.pages.last() {
+            Some(Route::Page(page)) => Some(*page),
+            _ => None,
+        }
+    }
+    /// The live record whose page is currently above the destination.
+    pub fn live(&self) -> Option<&Live> {
+        match self.pages.last() {
+            Some(Route::Live(live)) => Some(live),
+            _ => None,
+        }
     }
     /// Opens an overlay or moves it to the newest position.
     pub fn open(&mut self, overlay: Overlay) {
@@ -552,7 +621,7 @@ mod tests {
                     Page::Question
                 };
                 nav.open_page(above, form);
-                assert_eq!(nav.pages, [page, above]);
+                assert_eq!(nav.pages, [Route::Page(page), Route::Page(above)]);
                 assert!(nav.back());
                 assert_eq!(nav.page(), Some(page));
                 assert!(nav.back());
@@ -571,10 +640,31 @@ mod tests {
         nav.open_page(thread, Form::Phone);
         nav.destination = Destination::Inbox;
         nav.open_page(thread, Form::Phone);
-        assert_eq!(nav.pages, [session, thread]);
+        assert_eq!(nav.pages, [Route::Page(session), Route::Page(thread)]);
         assert_eq!(nav.destination, Destination::Agents);
         assert!(nav.back());
         assert_eq!(nav.page(), Some(session));
+    }
+
+    #[test]
+    fn live_records_select_everywhere_and_push_only_where_the_form_stacks_them() {
+        use crate::model::id::Id;
+        for form in [Form::Desktop, Form::Terminal, Form::Phone] {
+            let mut nav = NavState::new(form);
+            let task = Live::Task(Id::from("T-9"));
+            nav.open_live(task.clone(), form);
+            assert_eq!(nav.destination, Destination::Now);
+            assert_eq!(nav.selection.task.as_deref(), Some("T-9"));
+            assert_eq!(nav.live(), (form == Form::Phone).then_some(&task));
+            let question = Live::Question(Id::from("T-9/R1/Q1"));
+            nav.open_live(question.clone(), form);
+            nav.open_live(question.clone(), form);
+            assert_eq!(nav.live(), Some(&question));
+            assert_eq!(nav.page(), None);
+            assert_eq!(nav.pages.len(), if form == Form::Phone { 2 } else { 1 });
+            assert!(nav.back());
+            assert_eq!(nav.selection.question.as_deref(), Some("T-9/R1/Q1"));
+        }
     }
 
     #[test]
@@ -606,5 +696,25 @@ mod tests {
         nav.goes = u32::MAX;
         nav.go(nav.destination);
         assert_eq!(nav.goes, 0);
+    }
+
+    #[test]
+    fn a_wide_choice_never_unfolds_a_narrow_sidebar_and_survives_the_return_to_wide() {
+        let mut pref = SidebarPref::Auto;
+        pref = pref.toggled(false).toggled(false);
+        assert_eq!(pref, SidebarPref::Expanded);
+        // Narrow: folded whatever was chosen wide, and the toggle keeps the wide choice.
+        assert!(pref.collapsed(true));
+        assert_eq!(pref.toggled(true), SidebarPref::Expanded);
+        // Wide again: the choice made wide shows again.
+        assert!(!pref.collapsed(false));
+        assert!(SidebarPref::Collapsed.collapsed(false));
+        for pref in [
+            SidebarPref::Auto,
+            SidebarPref::Expanded,
+            SidebarPref::Collapsed,
+        ] {
+            assert_eq!(SidebarPref::from_slug(pref.slug()), Some(pref));
+        }
     }
 }

@@ -28,6 +28,12 @@ pub(crate) struct Shared {
     pub commands: Mutex<Option<std::sync::Arc<crate::commands::Service>>>,
     #[cfg(unix)]
     pub devices: Mutex<Option<std::sync::Arc<crate::devices::Devices>>>,
+    /// Lazy typed app readers; never computed on the socket, loop or projector.
+    #[cfg(unix)]
+    pub views: Mutex<Option<std::sync::Arc<crate::views::Service>>>,
+    /// Pane-less hosts outlive every individual app connection.
+    #[cfg(unix)]
+    pub assistant: Mutex<Option<std::sync::Arc<crate::assistant::Service>>>,
 }
 
 pub(crate) struct State {
@@ -78,6 +84,10 @@ impl Shared {
             commands: Mutex::new(None),
             #[cfg(unix)]
             devices: Mutex::new(None),
+            #[cfg(unix)]
+            views: Mutex::new(None),
+            #[cfg(unix)]
+            assistant: Mutex::new(None),
             state: Mutex::new(State {
                 stop: false,
                 closed: false,

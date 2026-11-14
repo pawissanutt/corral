@@ -25,7 +25,7 @@ pub(super) fn story(app: AppState, inspector: &Story) -> AnyElement {
         .test_id("plan-story")
         .min_w(px(0.0))
         .child(identity(app, inspector))
-        .child(title(app, inspector.title))
+        .child(title(app, &inspector.title))
         .child(
             view()
                 .when(!terminal, |v| v.mb(px(14.0)))
@@ -48,18 +48,20 @@ pub(super) fn story(app: AppState, inspector: &Story) -> AnyElement {
                     inspector
                         .steps
                         .iter()
-                        .map(|&(state, words)| {
+                        .map(|(state, words)| {
+                            let state = *state;
                             let hue = if state == Mark::Active {
                                 Hue::Worker
                             } else {
                                 Hue::Neutral
                             };
-                            let line =
-                                plain(app, words).text_color(color(if state == Mark::Next {
+                            let line = plain(app, words.clone()).text_color(color(
+                                if state == Mark::Next {
                                     Token::Ink3
                                 } else {
                                     Token::Ink
-                                }));
+                                },
+                            ));
                             (state, hue, line.into_element())
                         })
                         .collect(),
@@ -99,7 +101,7 @@ fn identity(app: AppState, inspector: &Story) -> AnyElement {
     });
     let parts: Vec<AnyElement> = [
         Some(
-            mono(app, inspector.id)
+            mono(app, inspector.id.to_string())
                 .text_color(color(Token::Ink3))
                 .into_element(),
         ),
@@ -127,8 +129,8 @@ fn identity(app: AppState, inspector: &Story) -> AnyElement {
 }
 
 /// The title (`.insp h2`): 16 pt bold, 2 pt above and below.
-fn title(app: AppState, words: &'static str) -> AnyElement {
-    let heading = text(words)
+fn title(app: AppState, words: &str) -> AnyElement {
+    let heading = text(words.to_owned())
         .role(AccessibilityRole::Header)
         .font_weight(FontWeight::BOLD)
         .text_color(color(Token::Ink));

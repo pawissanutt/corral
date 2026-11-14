@@ -1,8 +1,9 @@
-//! Numbering and pairing mirror the Review mockup, including its run-end comment anchor.
+//! Diff numbering, side-by-side pairing, discussion placement and served-patch parsing. The
+//! fixture replay and the daemon's candidate patches share these builders.
 
 use crate::model::board::{LineKind, hunk};
 
-use super::data::{Comment, File, HunkSource, SourceLine};
+use super::data::{File, HunkSource, SourceLine};
 
 /// A half-open UTF-8 byte range in the original, unescaped code text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,7 +15,7 @@ pub struct Highlight {
 }
 
 /// One code line with both unified gutter numbers and a word-level highlight.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NumberedLine {
     /// Context, deletion or addition, also determining the line's state colour.
     pub kind: LineKind,
@@ -25,24 +26,33 @@ pub struct NumberedLine {
     /// Empty for context, `-` for a deletion and `+` for an addition.
     pub sign: &'static str,
     /// Code without a sign or gutter.
-    pub text: &'static str,
+    pub text: String,
     /// First matching word in raw code; never HTML-escaped offsets.
     pub highlight: Option<Highlight>,
 }
 
-/// One unified code row and the discussion placed directly after it.
+/// A discussion placed directly after the row holding the zero-based source line `after`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Anchor {
+    /// Source line index within the hunk.
+    pub after: usize,
+    /// Index into the file's discussions.
+    pub discussion: usize,
+}
+
+/// One unified code row and the discussions placed directly after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnifiedRow {
     /// Numbered code line.
     pub line: NumberedLine,
     /// Original zero-based hunk line index.
     pub source_index: usize,
-    /// Comment inserted after this row, when attached to its source index.
-    pub comment: Option<Comment>,
+    /// Indexes of the file's discussions inserted after this row.
+    pub discussions: Vec<usize>,
 }
 
 /// One side-by-side row. A missing side is an empty cell, not a context line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SplitRow {
     /// Old side: use its old gutter number.
     pub left: Option<NumberedLine>,
@@ -50,8 +60,8 @@ pub struct SplitRow {
     pub right: Option<NumberedLine>,
     /// Context index or the final source index of the entire deletion/addition run.
     pub source_index: usize,
-    /// Mockup comment placement: run-end anchor plus a nonempty added right side.
-    pub comment: Option<Comment>,
+    /// Indexes of the file's discussions inserted after this row.
+    pub discussions: Vec<usize>,
 }
 
 /// Finds only the first highlighted word, matching `wordMark` before HTML rendering.
@@ -65,7 +75,7 @@ pub fn word_mark(text: &str, word: Option<&str>) -> Option<Highlight> {
 
 fn numbered(
     kind: LineKind,
-    text: &'static str,
+    text: &str,
     word: Option<&str>,
     old: &mut u32,
     new: &mut u32,
@@ -93,7 +103,7 @@ fn numbered(
             LineKind::Del => "-",
             LineKind::Add => "+",
         },
-        text,
+        text: text.to_owned(),
         highlight: word_mark(text, word),
     }
 }
@@ -107,7 +117,7 @@ pub fn number_lines(lines: &[SourceLine], start: (u32, u32)) -> Vec<NumberedLine
         .collect()
 }
 
-/// Returns the file's hunk heading; collapsed files have no supplied heading.
+/// Returns the fixture file's hunk heading; collapsed files have no supplied heading.
 pub fn hunk_header(file: &File) -> Option<&'static str> {
     match file.hunk {
         HunkSource::Inline { header, .. } => Some(header),
@@ -133,32 +143,41 @@ pub fn hunk_lines(file: &File) -> Vec<NumberedLine> {
     }
 }
 
-/// Unified rows in source order; comments immediately follow their exact source line.
-pub fn unified(file: &File) -> Vec<UnifiedRow> {
-    hunk_lines(file)
+fn placed(anchors: &[Anchor], index: usize) -> Vec<usize> {
+    anchors
+        .iter()
+        .filter(|anchor| anchor.after == index)
+        .map(|anchor| anchor.discussion)
+        .collect()
+}
+
+/// Unified rows in source order; discussions immediately follow their exact source line.
+pub fn unified_rows(lines: Vec<NumberedLine>, anchors: &[Anchor]) -> Vec<UnifiedRow> {
+    lines
         .into_iter()
         .enumerate()
         .map(|(source_index, line)| UnifiedRow {
             line,
             source_index,
-            comment: file.comment.filter(|comment| comment.after == source_index),
+            discussions: placed(anchors, source_index),
         })
         .collect()
 }
 
 /// Pairs each deletion run with the additions immediately following it, row by row.
 /// Context occupies both sides; unmatched deletions/additions leave the other side empty.
-/// All rows of a change run share its final source index, as in the original `split`.
-pub fn split_rows(lines: &[NumberedLine], comment: Option<Comment>) -> Vec<SplitRow> {
+/// All rows of a change run share its final source index. A discussion follows the row that
+/// shows its anchored line, on whichever side that line sits.
+pub fn split_rows(lines: &[NumberedLine], anchors: &[Anchor]) -> Vec<SplitRow> {
     let mut rows = Vec::with_capacity(lines.len());
     let mut i = 0;
     while i < lines.len() {
         if lines[i].kind == LineKind::Context {
             rows.push(SplitRow {
-                left: Some(lines[i]),
-                right: Some(lines[i]),
+                left: Some(lines[i].clone()),
+                right: Some(lines[i].clone()),
                 source_index: i,
-                comment: None,
+                discussions: placed(anchors, i),
             });
             i += 1;
             continue;
@@ -171,28 +190,105 @@ pub fn split_rows(lines: &[NumberedLine], comment: Option<Comment>) -> Vec<Split
         while i < lines.len() && lines[i].kind == LineKind::Add {
             i += 1;
         }
-        let deletions = &lines[del_start..add_start];
-        let additions = &lines[add_start..i];
+        let deleted = add_start - del_start;
+        let added = i - add_start;
         let source_index = i - 1;
-        for j in 0..deletions.len().max(additions.len()) {
-            let right = additions.get(j).copied();
+        for j in 0..deleted.max(added) {
+            let mut discussions = Vec::new();
+            if j < deleted {
+                discussions.extend(placed(anchors, del_start + j));
+            }
+            if j < added {
+                discussions.extend(placed(anchors, add_start + j));
+            }
             rows.push(SplitRow {
-                left: deletions.get(j).copied(),
-                right,
+                left: (j < deleted).then(|| lines[del_start + j].clone()),
+                right: (j < added).then(|| lines[add_start + j].clone()),
                 source_index,
-                comment: comment.filter(|comment| {
-                    comment.after == source_index
-                        && right.is_some_and(|line| line.kind == LineKind::Add)
-                }),
+                discussions,
             });
         }
     }
     rows
 }
 
-/// Side-by-side file rows with the mockup's exact run-end inline-comment behavior.
-pub fn split(file: &File) -> Vec<SplitRow> {
-    split_rows(&hunk_lines(file), file.comment)
+/// One served hunk: its verbatim header and numbered lines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedHunk {
+    /// The `@@ … @@` line as served.
+    pub header: String,
+    /// Lines with gutters numbered from the header's starts.
+    pub lines: Vec<NumberedLine>,
+}
+
+/// A served file patch split into hunks, plus the non-hunk lines git reports for the file
+/// (a binary change, a mode change, a rename), which carry no code to number.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ParsedPatch {
+    pub hunks: Vec<ParsedHunk>,
+    pub notes: Vec<String>,
+}
+
+/// The old and new starting line numbers of a `@@ -a,b +c,d @@` header.
+fn starts(header: &str) -> Option<(u32, u32)> {
+    let mut fields = header.strip_prefix("@@ ")?.split(' ');
+    let old = fields.next()?.strip_prefix('-')?;
+    let new = fields.next()?.strip_prefix('+')?;
+    let first = |range: &str| range.split(',').next()?.parse::<u32>().ok();
+    Some((first(old)?, first(new)?))
+}
+
+/// Parses served unified-diff text. When `complete` is false more pages follow, so a final
+/// line without its newline is cut mid-way and is left for the next page rather than shown.
+pub fn parse_patch(text: &str, complete: bool) -> ParsedPatch {
+    let usable = if complete || text.ends_with('\n') {
+        text
+    } else {
+        text.rfind('\n').map_or("", |end| &text[..=end])
+    };
+    let mut patch = ParsedPatch::default();
+    let mut counters = (0, 0);
+    for raw in usable.lines() {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if line.starts_with("@@") {
+            if let Some(start) = starts(line) {
+                counters = start;
+                patch.hunks.push(ParsedHunk {
+                    header: line.to_owned(),
+                    lines: Vec::new(),
+                });
+                continue;
+            }
+        }
+        let Some(current) = patch.hunks.last_mut() else {
+            if line.starts_with("Binary files") || line.starts_with("rename ") {
+                patch.notes.push(line.to_owned());
+            }
+            continue;
+        };
+        let (kind, code) = match line.as_bytes().first() {
+            Some(b'+') => (LineKind::Add, &line[1..]),
+            Some(b'-') => (LineKind::Del, &line[1..]),
+            Some(b' ') => (LineKind::Context, &line[1..]),
+            None => (LineKind::Context, ""),
+            // `\ No newline at end of file` and any trailer belong to no side.
+            Some(_) => continue,
+        };
+        let (old, new) = &mut counters;
+        current.lines.push(numbered(kind, code, None, old, new));
+    }
+    patch
+}
+
+/// The zero-based index of the line showing `number` on the requested side.
+pub fn line_index(lines: &[NumberedLine], number: u32, old_side: bool) -> Option<usize> {
+    lines.iter().position(|line| {
+        if old_side {
+            line.old == Some(number) && line.kind != LineKind::Add
+        } else {
+            line.new == Some(number) && line.kind != LineKind::Del
+        }
+    })
 }
 
 #[cfg(test)]
@@ -215,17 +311,20 @@ mod tests {
             source_lines.extend((0..added).map(|_| source(LineKind::Add)));
             source_lines.push(source(LineKind::Context));
             let lines = number_lines(&source_lines, (10, 20));
-            let rows = split_rows(&lines, None);
+            let rows = split_rows(&lines, &[]);
             assert_eq!(rows.len(), deleted.max(added) + 2);
             assert_eq!(rows[0].left, rows[0].right);
             for j in 0..deleted.max(added) {
-                let row = rows[j + 1];
-                assert_eq!(row.left, (j < deleted).then(|| lines[1 + j]));
-                assert_eq!(row.right, (j < added).then(|| lines[1 + deleted + j]));
+                let row = &rows[j + 1];
+                assert_eq!(row.left, (j < deleted).then(|| lines[1 + j].clone()));
+                assert_eq!(
+                    row.right,
+                    (j < added).then(|| lines[1 + deleted + j].clone())
+                );
             }
             assert_eq!(
-                rows.last().map(|row| row.left),
-                rows.last().map(|row| row.right)
+                rows.last().map(|row| row.left.clone()),
+                rows.last().map(|row| row.right.clone())
             );
         }
     }
@@ -256,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn split_comment_uses_run_end_and_requires_an_added_right_cell() {
+    fn split_discussion_follows_the_row_of_its_anchored_line_once() {
         let lines = number_lines(
             &[
                 source(LineKind::Del),
@@ -267,30 +366,43 @@ mod tests {
             ],
             (1, 1),
         );
-        let comment = Comment {
-            after: 4,
-            who: "",
-            at: "",
-            sha: "",
-            text: "",
-        };
-        let rows = split_rows(&lines, Some(comment));
-        assert_eq!(
-            rows.iter()
-                .map(|row| row.comment.is_some())
-                .collect::<Vec<_>>(),
-            vec![true, true, false]
-        );
-        assert!(
+        let placed = |after| {
             split_rows(
                 &lines,
-                Some(Comment {
-                    after: 1,
-                    ..comment
-                })
+                &[Anchor {
+                    after,
+                    discussion: 0,
+                }],
             )
             .iter()
-            .all(|row| row.comment.is_none())
+            .map(|row| !row.discussions.is_empty())
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(placed(4), vec![false, true, false]);
+        assert_eq!(placed(2), vec![false, false, true]);
+    }
+
+    #[test]
+    fn served_patch_numbers_each_hunk_and_holds_back_a_cut_final_line() {
+        let text = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -3,2 +3,2 @@ fn x\n a\n-b\n+c\n\\ No newline at end of file\n@@ -40 +40,2 @@\n z\n+partial";
+        let patch = parse_patch(text, false);
+        assert_eq!(patch.hunks.len(), 2);
+        let first: Vec<_> = patch.hunks[0]
+            .lines
+            .iter()
+            .map(|line| (line.old, line.new, line.text.as_str()))
+            .collect();
+        assert_eq!(
+            first,
+            vec![
+                (Some(3), Some(3), "a"),
+                (Some(4), None, "b"),
+                (None, Some(4), "c")
+            ]
         );
+        assert_eq!(patch.hunks[1].lines.len(), 1);
+        assert_eq!(parse_patch(text, true).hunks[1].lines.len(), 2);
+        assert_eq!(line_index(&patch.hunks[0].lines, 4, true), Some(1));
+        assert_eq!(line_index(&patch.hunks[0].lines, 4, false), Some(2));
     }
 }

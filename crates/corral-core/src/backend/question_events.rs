@@ -21,6 +21,7 @@ pub(crate) fn identity(kind: &str, detail: &Value) -> Option<String> {
             | "question_withdrawn"
             | "question_unattended"
             | "question_deadline_set"
+            | "question_followup"
     ) {
         return None;
     }
@@ -58,6 +59,7 @@ pub(crate) fn transitions(row: &HistoryRow) -> anyhow::Result<Vec<(String, Value
             "withdraw" => "question_withdrawn",
             "unattended" => "question_unattended",
             "deadline" => "question_deadline_set",
+            "followup" => "question_followup",
             _ => continue,
         };
         let by = match entry.by {

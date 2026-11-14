@@ -1,22 +1,24 @@
 //! The Ask composer and the surface it opens in. One field and one Send: the Assistant | PM switch
 //! with the PM's state, the model pill and its list, the "answered by" line after a switch, the
-//! removable context chip, the offline or waiting line, the attachments. Enter sends and
-//! Shift+Enter breaks the line; Send hands the draft and target to the assistant model, which
-//! stores the message with its state at once, and the draft clears after a nonblank send.
+//! removable context chip and the staged attachments, the offline or waiting line, the
+//! Screenshot, Link and File controls. Enter sends and Shift+Enter breaks the line; Send hands
+//! the draft, target and attachment refs to the assistant model, which stores the message with
+//! its state at once, and the draft clears after a nonblank send.
 
 use nsh_base::{SheetEvent, sheet, toggle, toggle_group};
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
-use crate::model::assistant::{self, Composer, ContextChip, KeyHint, ModelList};
+use std::time::Duration;
+
+use crate::model::assistant::{self, Composer, KeyHint, ModelList, ThreadRef};
 use crate::model::hue::Hue;
 use crate::model::text::Rich;
-use crate::model::{Form, Overlay};
+use crate::model::{Effect, Form, Id, Overlay};
 use crate::state::AppState;
-use crate::ui::ask::{act, drawer, models};
+use crate::ui::ask::{act, chip_row, drawer, field_row, foot_controls, models, tray};
 use crate::ui::atoms::key_hint;
-use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::hue_ink;
@@ -24,8 +26,8 @@ use crate::ui::kit::text::rich_small;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
-/// The mockup's icons for the attachments, in the model's order: Screenshot, Link, File.
-const ATTACH_ICONS: [Icon; 3] = [Icon::Review, Icon::Chevron, Icon::Plans];
+/// How long typing pauses before the draft is kept on this device.
+const DRAFT_PAUSE: Duration = Duration::from_millis(800);
 
 /// Where a composer's model list opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,10 +41,10 @@ pub(crate) enum ListAt {
 }
 
 /// What a composer is for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Host {
-    /// A named session's own composer; `None` for the quick thread and Ask.
-    pub session: Option<&'static str>,
+    /// The thread this composer sends to: Ask's quick thread or a named session's own.
+    pub thread: ThreadRef,
     /// Where the model list opens.
     pub list: ListAt,
     /// Under a thread page rather than in Ask: it never takes the focus when Ask opens.
@@ -61,7 +63,7 @@ pub fn composer(app: AppState) -> AnyElement {
     field(
         app,
         Host {
-            session: None,
+            thread: ThreadRef::quick(untracked(|| app.daemon())),
             list,
             docked: false,
         },
@@ -105,24 +107,67 @@ pub fn ask_surface(app: AppState) -> AnyElement {
 pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
     let form = app.form;
     let Host {
-        session,
+        thread,
         list,
         docked,
     } = host;
+    let named = !thread.is_quick();
+    // Ask and the quick thread's docked composer share the app's draft; a named session's
+    // composer keeps its own, so words typed for one thread are never saved under another.
+    let draft = if named {
+        signal(String::new())
+    } else {
+        app.ask_draft
+    };
+    let source = thread.clone();
     let built = computed(move || {
         let env = app.env();
         let target = app.ask_target.get();
-        app.ask_draft.with(|text| {
-            app.assistant
-                .with(|state| assistant::composer(state, target, text, session, env))
-        })
+        match &source {
+            ThreadRef::Fixture(id) => {
+                let session = named.then_some(*id);
+                draft.with(|text| {
+                    app.assistant
+                        .with(|state| assistant::composer(state, target, text, session, env))
+                })
+            }
+            ThreadRef::Live(scope) => {
+                // Offline there is no session to refuse with: the message queues on the device.
+                let can_send = app.may_message();
+                let context = app.ask_context.get();
+                draft.with(|text| {
+                    app.ask_staged.with(|staged| {
+                        app.feed.with(|feed| {
+                            app.assistant.with(|state| {
+                                assistant::live_composer(
+                                    state,
+                                    feed,
+                                    assistant::Draft {
+                                        scope: scope.as_str(),
+                                        target,
+                                        text,
+                                        context: context.as_ref(),
+                                        can_send,
+                                        staged,
+                                    },
+                                    env,
+                                )
+                            })
+                        })
+                    })
+                })
+            }
+        }
     });
     let entry = element_ref();
     let row = element_ref();
     if !docked {
         focus_on_open(app, entry);
     }
-    if form != Form::Phone && session.is_none() {
+    if let ThreadRef::Live(scope) = &thread {
+        keep_draft(app, scope.clone(), draft);
+    }
+    if form != Form::Phone && !named {
         bind_target_key(app);
     }
     let menu = computed(move || built.with(|c| c.model_menu.clone()));
@@ -162,10 +207,29 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
             s.child(models::inline_list(app, menu))
         })
         .child(chip_row(app, built))
+        .child(tray(app, built))
         .when(terminal, |s| s.child(term::blank()))
-        .child(entry_field(app, built, entry, session))
+        .child(entry_field(
+            app,
+            built,
+            entry,
+            To {
+                thread: thread.clone(),
+                docked,
+                draft,
+            },
+        ))
         .when(terminal, |s| s.child(term::blank()))
-        .child(foot(app, built, session))
+        .when(form == Form::Phone, |s| s.child(field_row(app)))
+        .child(foot(
+            app,
+            built,
+            To {
+                thread,
+                docked,
+                draft,
+            },
+        ))
         .when(terminal, |s| s.child(term::blank()))
         .into_element()
 }
@@ -208,20 +272,156 @@ fn bind_target_key(app: AppState) {
     });
 }
 
-/// Sends the draft to the composer's session or Ask's target; the model stores it with its state
-/// (sent, queued on this device, waiting with its reason) and says whether the draft clears.
-fn send(app: AppState, session: Option<&'static str>) {
-    let text = app.ask_draft.get_untracked();
+/// Where Send delivers: the composer's thread, whether it is docked under a thread page, and the
+/// draft it sends from.
+#[derive(Debug, Clone)]
+struct To {
+    thread: ThreadRef,
+    docked: bool,
+    draft: Signal<String>,
+}
+
+/// Sends the draft to the composer's session or Ask's target. The fixture stores it with its
+/// state; with the daemon it goes out as one `assistant.send` under an identity allocated here
+/// once (the client keeps it in this device's outbox while offline), with Ask's real context
+/// and the refs of every staged attachment, all of them ready. The words leave the composer
+/// only once the root handed the message to the client; a refusal keeps them exactly as typed.
+fn send(app: AppState, to: &To) {
+    let text = to.draft.get_untracked();
     let target = app.ask_target.get_untracked();
-    let mut clear = false;
-    app.act(app.assistant, |state, env| {
-        let outcome = state.key(assistant::Key::Send, &text, target, session, env);
-        clear = outcome.clear_draft;
-        outcome.effects
-    });
-    if clear {
-        app.ask_draft.set(String::new());
+    match &to.thread {
+        ThreadRef::Fixture(id) => {
+            let session = (!to.thread.is_quick()).then_some(*id);
+            let mut clear = false;
+            app.act(app.assistant, |state, env| {
+                let outcome = state.key(assistant::Key::Send, &text, target, session, env);
+                clear = outcome.clear_draft;
+                outcome.effects
+            });
+            if clear {
+                to.draft.set(String::new());
+            }
+        }
+        ThreadRef::Live(scope) => {
+            if text.trim().is_empty() {
+                return;
+            }
+            let staged = app.ask_staged.get_untracked();
+            let refs = match app
+                .feed
+                .with_untracked(|feed| assistant::send_refs(&staged, feed))
+            {
+                Ok(refs) => refs,
+                Err(why) => {
+                    app.toast(why);
+                    return;
+                }
+            };
+            let context = if to.thread.is_quick() {
+                app.ask_context.get_untracked()
+            } else {
+                None
+            };
+            let stamp = assistant::Stamp {
+                cmd_id: crate::client::requests::new_id(),
+                typed_at: jiff::Timestamp::now().to_string(),
+            };
+            let docked = to.docked;
+            let mut ready = None;
+            app.reduce(app.assistant, |state, _, _, env| {
+                match state.send_live(
+                    scope.as_str(),
+                    target,
+                    &text,
+                    context,
+                    refs,
+                    stamp,
+                    docked,
+                    env,
+                ) {
+                    Ok(message) => {
+                        ready = Some(message);
+                        Vec::new()
+                    }
+                    Err(refusal) => refusal,
+                }
+            });
+            let Some((message, after)) = ready else {
+                return;
+            };
+            if !app.send_message(message) {
+                return;
+            }
+            // The client retires the saved draft in the same durable write as the message, a
+            // moment from now; until then no composer of this scope may bring it back.
+            let saved = app
+                .feed
+                .with_untracked(|feed| feed.drafts.get(scope.as_str()).cloned());
+            if let Some(saved) = saved {
+                app.assistant
+                    .update(|state| state.handed_off(scope.as_str(), saved));
+            }
+            to.draft.set(String::new());
+            app.run(after);
+        }
     }
+}
+
+/// Keeps the unsent draft of a served thread on this device a moment after typing pauses, and
+/// restores the saved one into an empty composer when the session brings it back. Only the
+/// scope's own saved draft is watched, so the accepted message's other updates never re-run the
+/// restore, and a draft whose words were already sent is never brought back.
+fn keep_draft(app: AppState, scope: Id, draft: Signal<String>) {
+    let watched = scope.clone();
+    let saved = computed(move || {
+        app.feed
+            .with(|feed| feed.drafts.get(watched.as_str()).cloned())
+    });
+    let restore = scope.clone();
+    effect(move || {
+        let saved = saved.get();
+        let handed = app
+            .assistant
+            .with_untracked(|state| state.live.handed.get(restore.as_str()).cloned());
+        if let Some(sent) = handed {
+            if saved.as_ref() == Some(&sent) {
+                return;
+            }
+            untracked(|| {
+                app.assistant.update(|state| {
+                    state.already_sent(restore.as_str(), saved.as_deref());
+                });
+            });
+        }
+        if let Some(saved) = saved.filter(|saved| !saved.is_empty())
+            && draft.with_untracked(String::is_empty)
+        {
+            draft.set(saved);
+        }
+    });
+    let pending = stored(None::<Spawned<()>>);
+    effect(move || {
+        let text = draft.get();
+        if let Some(old) = pending.replace(None) {
+            old.cancel();
+        }
+        let scope = scope.clone();
+        let task = set_timeout(DRAFT_PAUSE, move || {
+            // Nothing to keep or remove: an untouched composer never writes, and so never
+            // reports a missing device outbox before pairing.
+            let kept = app
+                .feed
+                .with_untracked(|feed| feed.drafts.get(scope.as_str()).cloned());
+            if kept.as_deref().unwrap_or("") == text {
+                return;
+            }
+            app.run(vec![Effect::Draft {
+                thread: scope.to_string(),
+                text,
+            }]);
+        });
+        let _ = pending.replace(Some(task));
+    });
 }
 
 /// A status line above the composer (`.savedline`): its first run as a chip in its colour
@@ -256,42 +456,52 @@ fn controls(
 ) -> AnyElement {
     let form = app.form;
     let has_targets = computed(move || built.with(|c| !c.targets.is_empty()));
-    let pill =
-        computed(move || built.with(|c| c.model_pill.as_ref().map(|b| b.label).zip(c.model_name)));
-    let note = computed(move || built.with(|c| c.profile_note));
+    let pill = computed(move || {
+        built.with(|c| {
+            c.model_pill
+                .as_ref()
+                .map(|b| b.label)
+                .zip(c.model_name.clone())
+        })
+    });
+    let note = computed(move || built.with(|c| c.profile_note.clone()));
     let keys = computed(move || built.with(|c| c.key_hints));
-    // Fixed for a composer's life: Ask always has its switch, a daemon session its pill, a pane
-    // session nothing; only what is inside the row follows the target.
+    // Ask always has its switch, a daemon session its pill, a pane session nothing. A thread
+    // page can mount before its row or the configured profiles arrive, so the row follows them
+    // instead of being fixed at mount; only what is inside it follows the target.
     let shown =
-        untracked(|| has_targets.get() || pill.with(Option::is_some) || note.with(Option::is_some));
-    if !shown {
-        return view().into_element();
-    }
-    view()
-        .element_ref(&row)
-        .flex_row()
-        .flex_wrap()
-        .items_center()
-        .gap(px(8.0))
-        .child(when(
-            move || has_targets.get(),
-            move || untracked(|| target_switch(app, built)),
-        ))
-        .child(dynamic(move || {
-            pill.get()
-                .map(|(label, name)| untracked(|| models::pill(app, label, name, list, row, menu)))
-        }))
-        .child(dynamic(move || {
-            note.get().map(|note| {
-                small(form, note)
-                    .text_color(color(Token::Ink3))
-                    .into_element()
-            })
-        }))
-        .child(dynamic(move || {
-            keys.get().map(|keys| untracked(|| key_hints(app, keys)))
-        }))
-        .into_element()
+        move || has_targets.get() || pill.with(Option::is_some) || note.with(Option::is_some);
+    when(shown, move || {
+        untracked(|| {
+            view()
+                .element_ref(&row)
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(px(8.0))
+                .child(when(
+                    move || has_targets.get(),
+                    move || untracked(|| target_switch(app, built)),
+                ))
+                .child(dynamic(move || {
+                    pill.get().map(|(label, name)| {
+                        untracked(|| models::pill(app, label, name, list, row, menu))
+                    })
+                }))
+                .child(dynamic(move || {
+                    note.get().map(|note| {
+                        small(form, note)
+                            .text_color(color(Token::Ink3))
+                            .into_element()
+                    })
+                }))
+                .child(dynamic(move || {
+                    keys.get().map(|keys| untracked(|| key_hints(app, keys)))
+                }))
+                .into_element()
+        })
+    })
+    .into_element()
 }
 
 /// Assistant | PM: one toggle pressed at a time, one stop of the keyboard focus with the arrow keys
@@ -476,120 +686,12 @@ fn key_hints(app: AppState, keys: &'static [KeyHint]) -> AnyElement {
         .into_element()
 }
 
-/// The context chip (`.achip`) and the note beside it, while a context is attached.
-fn chip_row(app: AppState, built: Memo<Composer>) -> AnyElement {
-    let attached = computed(move || built.with(|c| c.chip.clone()));
-    dynamic(move || {
-        attached
-            .get()
-            .map(|context| untracked(|| context_chip(app, &context)))
-    })
-}
-
-fn context_chip(app: AppState, context: &ContextChip) -> AnyElement {
-    let form = app.form;
-    let remove = context.remove.action.clone();
-    let remove_label = context.remove.label;
-    let kind = text(context.kind)
-        .number_of_lines(1u32)
-        .text_color(color(Token::Ink3));
-    let name = text(context.label.clone())
-        .flex_shrink(1.0)
-        .min_w(px(0.0))
-        .truncate()
-        .text_color(color(Token::Ink));
-    let note = small(form, context.note).text_color(color(Token::Ink3));
-    if form == Form::Terminal {
-        let unchip = remove.clone();
-        return view()
-            .flex_row()
-            .flex_wrap()
-            .gap(term::cells(1.0))
-            .child(
-                view()
-                    .flex_row()
-                    .gap(term::cells(1.0))
-                    .px(term::cells(1.0))
-                    .bg(color(Token::Surface))
-                    .child(kind)
-                    .child(name),
-            )
-            .child(button_with(
-                app,
-                remove_label,
-                ButtonKind::Quiet,
-                ButtonOptions::default(),
-                "btn-unchip",
-                move || act(app, unchip.clone()),
-            ))
-            .child(note)
-            .into_element();
-    }
-    let phone = form == Form::Phone;
-    let size = if phone { 13.0 } else { 12.0 };
-    let close = view()
-        .test_id("btn-unchip")
-        .role(AccessibilityRole::Button)
-        .label(remove_label)
-        .on_press(move || act(app, remove.clone()))
-        .w(px(20.0))
-        .h(px(20.0))
-        .items_center()
-        .justify_center()
-        .rounded(px(4.0))
-        .cursor_pointer()
-        .hover(|s| s.bg(color(Token::Hover)))
-        .focus_visible(|s| {
-            s.outline(px(2.0))
-                .outline_color(color(Token::Focus))
-                .outline_offset(px(1.0))
-        })
-        .when(phone, |v| {
-            v.hit_slop(EdgeInsets {
-                top: px(12.0),
-                right: px(12.0),
-                bottom: px(12.0),
-                left: px(12.0),
-            })
-        })
-        .child(icon(Icon::Close, 12.0, color(Token::Ink3)));
-    view()
-        .flex_row()
-        .flex_wrap()
-        .items_center()
-        .gap(px(8.0))
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(6.0))
-                .max_w(relative(1.0))
-                .h(px(if phone { 30.0 } else { 26.0 }))
-                .pl(px(8.0))
-                .pr(px(4.0))
-                .rounded(px(6.0))
-                .bg(color(Token::Surface2))
-                .border_1()
-                .border_color(color(Token::Rule2))
-                .child(icon(Icon::Plans, 13.0, color(Token::Ink2)))
-                .child(kind.font_family(FONT_TEXT).text_size(px(size)))
-                .child(name.font_family(FONT_TEXT).text_size(px(size)))
-                .child(close),
-        )
-        .child(note)
-        .into_element()
-}
-
 /// The field: multiline, Enter sends, Shift+Enter breaks the line; always ringed in the focus
 /// colour as the mockup draws it, the placeholder naming what it talks to.
-fn entry_field(
-    app: AppState,
-    built: Memo<Composer>,
-    entry: ElementRef,
-    session: Option<&'static str>,
-) -> AnyElement {
+fn entry_field(app: AppState, built: Memo<Composer>, entry: ElementRef, to: To) -> AnyElement {
     let form = app.form;
     let placeholder = computed(move || built.with(|c| c.placeholder.clone()));
+    let draft = to.draft;
     let field = input()
         .element_ref(&entry)
         .test_id("ask-input")
@@ -597,10 +699,17 @@ fn entry_field(
         .multiline(true)
         .submit_behavior(SubmitBehavior::Submit)
         .return_key_type(ReturnKeyType::Send)
-        .on_submit(move |_: &str| send(app, session))
+        .on_submit(move |_: &str| {
+            // Enter does what Send does: a served thread that takes no message (ended, ending,
+            // over the limit, uploads not ready) sends nothing; the status line says why.
+            let live = matches!(to.thread, ThreadRef::Live(_));
+            if !live || built.with_untracked(|c| c.send.enabled) {
+                send(app, &to);
+            }
+        })
         .placeholder(move || placeholder.get())
-        .value(move || app.ask_draft.get())
-        .on_change(move |text: &str| app.ask_draft.set(text.to_owned()))
+        .value(move || draft.get())
+        .on_change(move |text: &str| draft.set(text.to_owned()))
         .text_color(color(Token::Ink))
         .placeholder_color(move || {
             for_appearance(color(if form == Form::Terminal {
@@ -646,24 +755,24 @@ fn entry_field(
     }
 }
 
-/// The attachments (`.att`) and Send, enabled once the draft has words.
-fn foot(app: AppState, built: Memo<Composer>, session: Option<&'static str>) -> AnyElement {
+/// The attachment controls, or the open link or path field, and Send, enabled once the draft
+/// has words and every staged attachment is ready.
+fn foot(app: AppState, built: Memo<Composer>, to: To) -> AnyElement {
     let form = app.form;
-    let attachments = built.with_untracked(|c| c.attachments.clone());
     let send_state = computed(move || built.with(|c| (c.send.label, c.send.enabled)));
     view()
         .flex_row()
         .items_center()
         .gap(px(if form == Form::Terminal { 16.0 } else { 4.0 }))
-        .children(
-            attachments
-                .into_iter()
-                .enumerate()
-                .map(|(index, button)| attachment(app, index, button)),
+        .child(
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .child(foot_controls(app, built)),
         )
-        .child(view().flex_1())
         .child(dynamic(move || {
             let (label, enabled) = send_state.get();
+            let to = to.clone();
             untracked(|| {
                 button_with(
                     app,
@@ -674,66 +783,16 @@ fn foot(app: AppState, built: Memo<Composer>, session: Option<&'static str>) -> 
                         ..ButtonOptions::default()
                     },
                     "btn-send",
-                    move || send(app, session),
+                    move || send(app, &to),
                 )
             })
         }))
         .into_element()
 }
 
-fn attachment(app: AppState, index: usize, button: assistant::Button) -> AnyElement {
-    let form = app.form;
-    let action = button.action.clone();
-    let face = view()
-        .test_id(&format!("btn-attach-{index}"))
-        .role(AccessibilityRole::Button)
-        .label(button.label)
-        .on_press(move || act(app, action.clone()))
-        .flex_row()
-        .items_center()
-        .cursor_pointer();
-    if form == Form::Terminal {
-        return face
-            .child(text(button.label).text_color(color(Token::Ink)))
-            .into_element();
-    }
-    let phone = form == Form::Phone;
-    face.gap(px(5.0))
-        .h(px(26.0))
-        .px(px(8.0))
-        .rounded(px(6.0))
-        .hover(|s| s.bg(color(Token::Hover)))
-        .focus_visible(|s| {
-            s.outline(px(2.0))
-                .outline_color(color(Token::Focus))
-                .outline_offset(px(1.0))
-        })
-        .when(phone, |v| {
-            v.hit_slop(EdgeInsets {
-                top: px(9.0),
-                right: px(0.0),
-                bottom: px(9.0),
-                left: px(0.0),
-            })
-        })
-        .children(
-            ATTACH_ICONS
-                .get(index)
-                .map(|glyph| icon(*glyph, 13.0, color(Token::Ink3))),
-        )
-        .child(
-            text(button.label)
-                .number_of_lines(1u32)
-                .font_family(FONT_TEXT)
-                .text_size(px(if phone { 13.0 } else { 12.0 }))
-                .text_color(color(Token::Ink3)),
-        )
-        .into_element()
-}
-
 /// Secondary words at the composer's note size (`11.5px`; 13 on a phone; the terminal's own).
-fn small(form: Form, words: &'static str) -> Text {
-    let words = text(words).number_of_lines(1u32);
+fn small(form: Form, words: impl Into<String>) -> Text {
+    let words = text(words.into()).number_of_lines(1u32);
     match form {
         Form::Terminal => words,
         Form::Desktop => words.font_family(FONT_TEXT).text_size(px(11.5)),

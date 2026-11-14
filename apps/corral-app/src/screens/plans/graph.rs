@@ -6,9 +6,10 @@ use nsh_core::SvgPaint;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
+use crate::model::Id;
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
-use crate::model::plans::{self, CardGeometry, Graph, Layer, Node};
+use crate::model::plans::{self, CardGeometry, Graph, GraphInput, Layer, Node};
 use crate::state::AppState;
 use crate::ui::kit::marks::{dot, hue_ink, mark, rail};
 use crate::ui::kit::rows::list_row;
@@ -25,20 +26,21 @@ const EDGE: f32 = 1.3;
 /// Layer caption size (`.layer-h`, the vertical layers' heading).
 const CAPTION: f32 = 10.5;
 
-/// The graph of `plan` with `selected` ringed, measured to the width it is given. A terminal
-/// takes no measure: its layout is the vertical one.
+/// The graph `source` gives (members, edges and the selected member), measured to the width it
+/// is given. A terminal takes no measure: its layout is the vertical one. The source is read
+/// tracked, so a member press or a board change redraws the graph alone.
 pub(super) fn drawing(
     app: AppState,
-    plan: &'static str,
-    selected: impl Fn() -> &'static str + 'static,
+    source: impl Fn() -> (GraphInput, Option<Id>) + 'static,
 ) -> AnyElement {
     if app.form == Form::Terminal {
         return view()
             .test_id("plan-graph")
             .child(dynamic(move || {
+                let (members, selected) = source();
                 layers(
                     app,
-                    &plans::layout(plans::plan(plan), selected(), 0.0, false),
+                    &plans::layout(&members, selected.as_deref(), 0.0, false),
                 )
             }))
             .into_element();
@@ -52,7 +54,8 @@ pub(super) fn drawing(
         .on_layout(move |frame: &Bounds<Points>| width.set(Some(frame.size.width.0)))
         .child(dynamic(move || {
             width.get().map(|room| {
-                let graph = plans::layout(plans::plan(plan), selected(), room, phone);
+                let (members, selected) = source();
+                let graph = plans::layout(&members, selected.as_deref(), room, phone);
                 if graph.fits {
                     cards(app, &graph)
                 } else {
@@ -198,7 +201,7 @@ fn card(app: AppState, node: &Node) -> AnyElement {
     let Some(geometry) = node.card.as_ref() else {
         return view().into_element();
     };
-    let action = node.action;
+    let action = node.action.clone();
     let edge = if node.needs_you {
         color(Token::You)
     } else if node.selected {
@@ -235,8 +238,8 @@ fn card(app: AppState, node: &Node) -> AnyElement {
             selected: node.selected,
             ..AccessibilityState::default()
         })
-        .test_id(&target_id(action))
-        .on_press(move || press(app, action))
+        .test_id(&target_id(&action))
+        .on_press(move || press(app, action.clone()))
         .focus_visible(|s| {
             s.outline(px(RING))
                 .outline_color(color(Token::Focus))
@@ -329,24 +332,25 @@ fn layer_heading(app: AppState, layer: &Layer) -> AnyElement {
 /// One member of a vertical layer: dot, id, full title, rail. Terminal: one line of Cells
 /// through the kit's list row.
 fn layer_row(app: AppState, node: &Node) -> AnyElement {
-    let action = node.action;
+    let action = node.action.clone();
     let selected = node.selected;
     let label = format!("{} {}", node.id, node.title);
+    let id = target_id(&action);
     if app.form == Form::Terminal {
         return list_row(
             app,
             label,
-            target_id(action),
+            id,
             move || selected,
-            move || press(app, action),
+            move || press(app, action.clone()),
             vec![
                 dot(app, node.hue),
                 view()
                     .w(term::cells(6.0))
                     .flex_shrink_0()
-                    .child(text(node.id).text_color(color(Token::Ink3)))
+                    .child(text(node.id.to_string()).text_color(color(Token::Ink3)))
                     .into_element(),
-                text(node.title)
+                text(node.title.clone())
                     .flex_1()
                     .min_w(px(0.0))
                     .truncate()
@@ -371,8 +375,8 @@ fn layer_row(app: AppState, node: &Node) -> AnyElement {
             selected,
             ..AccessibilityState::default()
         })
-        .test_id(&target_id(action))
-        .on_press(move || press(app, action))
+        .test_id(&id)
+        .on_press(move || press(app, action.clone()))
         .when(selected, |row| row.bg(color(Token::Sel)))
         .hover(|s| s.bg(color(Token::Hover)))
         .focus_visible(|s| {
@@ -383,7 +387,7 @@ fn layer_row(app: AppState, node: &Node) -> AnyElement {
         .child(view().w(px(12.0)).flex_shrink_0().child(dot(app, node.hue)))
         .child(
             view().w(px(46.0)).flex_shrink_0().child(
-                text(node.id)
+                text(node.id.to_string())
                     .number_of_lines(1u32)
                     .font_family(FONT_MONO)
                     .tabular_nums()
@@ -392,7 +396,7 @@ fn layer_row(app: AppState, node: &Node) -> AnyElement {
             ),
         )
         .child(
-            text(node.title)
+            text(node.title.clone())
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()

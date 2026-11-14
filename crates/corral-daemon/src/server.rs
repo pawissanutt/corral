@@ -172,6 +172,9 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
             frame.kind == FrameKind::Control && frame.stream == 0,
             "expected control RPC frame"
         );
+        if session.via == "app" && frame.payload.len() > wire::app::APP_CONTROL_MAX {
+            return Err(anyhow::anyhow!("app control limit exceeded"));
+        }
         let request: rpc::Request =
             serde_json::from_slice(&frame.payload).context("decoding client RPC")?;
         if request.jsonrpc != rpc::JSONRPC {
@@ -194,6 +197,72 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
         }
         let id = request.id;
         let params = request.params;
+        let app_request = session.via == "app"
+            || (request.method == wire::HELLO
+                && params.pointer("/client/kind").and_then(Value::as_str) == Some("app"));
+        if app_request
+            && (frame.payload.len() > wire::app::APP_CONTROL_MAX
+                || serde_json::to_vec(&id)?.len() > 256)
+        {
+            crate::app::dispatch::error(
+                &mut stream,
+                Value::Null,
+                (rpc::ErrorCode::TooLarge, "app_control_limit".into()),
+            )?;
+            continue;
+        }
+        if session.via == "app"
+            && matches!(
+                request.method.as_str(),
+                wire::READ
+                    | wire::cmd::CMD_SUBMIT
+                    | wire::cmd::CMD_RESULT
+                    | wire::NUDGE
+                    | wire::DAEMON_STOP
+            )
+        {
+            crate::app::dispatch::error(
+                &mut stream,
+                id,
+                (rpc::ErrorCode::Refused, "not_app_safe".into()),
+            )?;
+            continue;
+        }
+        if matches!(
+            request.method.as_str(),
+            wire::SUB_OPEN | wire::SUB_ACK | wire::SUB_CLOSE
+        ) {
+            use wire::subscription::Topic;
+            let topic = params
+                .get("topic")
+                .cloned()
+                .and_then(|topic| serde_json::from_value::<Topic>(topic).ok());
+            let typed = topic.is_some_and(|topic| {
+                matches!(
+                    topic,
+                    Topic::Inbox
+                        | Topic::Plans
+                        | Topic::Agents
+                        | Topic::Assistant
+                        | Topic::Usage
+                        | Topic::Settings
+                        | Topic::Thread
+                )
+            });
+            if (session.via == "app" || typed) && session.attached.is_none() {
+                error(
+                    &mut stream,
+                    id,
+                    rpc::ErrorCode::Unauthenticated,
+                    "device_attach_required",
+                )?;
+                continue;
+            }
+            if session.via == "app" && !topic.is_some_and(crate::app::dispatch::allowed_topic) {
+                error(&mut stream, id, rpc::ErrorCode::Refused, "topic_refused")?;
+                continue;
+            }
+        }
         match request.method.as_str() {
             wire::HELLO => match serde_json::from_value::<wire::Hello>(params) {
                 Ok(hello) if hello.proto.major == wire::PROTO_MAJOR => {
@@ -214,11 +283,16 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
                                 .caps
                                 .into_iter()
                                 .filter(|cap| {
-                                    cap == wire::BOARD_V1
-                                        || cap == wire::READ_V1
-                                        || cap == wire::cmd::CMD_V1
-                                        || cap == wire::CLASSIC_V1
-                                        || cap == wire::device::DEVICE_V1
+                                    if session.via == "app" {
+                                        crate::app::dispatch::capability(&shared, cap)
+                                    } else {
+                                        cap == wire::BOARD_V1
+                                            || cap == wire::READ_V1
+                                            || cap == wire::cmd::CMD_V1
+                                            || cap == wire::CLASSIC_V1
+                                            || cap == wire::device::DEVICE_V1
+                                            || crate::app::dispatch::capability(&shared, cap)
+                                    }
                                 })
                                 .collect(),
                             daemon: wire::DaemonInfo {
@@ -371,6 +445,20 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
                 )?,
             },
             other => {
+                if crate::app::dispatch::is_method(other)
+                    && (other != wire::device::DEVICE_LIST || session.via == "app")
+                {
+                    crate::app::dispatch::serve(
+                        &mut stream,
+                        &shared,
+                        id,
+                        other,
+                        params,
+                        session.attached.as_ref().map(|guard| guard.device.as_str()),
+                        true,
+                    )?;
+                    continue;
+                }
                 if !crate::devices::serve_unix(
                     &mut stream,
                     &shared,

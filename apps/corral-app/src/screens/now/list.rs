@@ -18,7 +18,7 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
 use super::cells;
-use super::parts::{act, action_id, by_data, model_button, question_open, quiet};
+use super::parts::{act, action_id, by_data, model_button, press, press_id, question_open, quiet};
 
 const RING: f32 = 2.0;
 
@@ -27,9 +27,11 @@ pub(super) fn list(app: AppState) -> AnyElement {
     let form = app.form;
     let source = computed(move || {
         if app.daemon() {
-            return app
-                .feed
-                .with(|feed| app.work.with(|state| work::daemon_list(state, feed, form)));
+            let selection = app.selection();
+            return app.feed.with(|feed| {
+                app.work
+                    .with(|state| work::daemon_list(state, feed, &selection, form))
+            });
         }
         let env = app.env();
         let open = question_open(app, env);
@@ -69,8 +71,8 @@ pub(super) fn list(app: AppState) -> AnyElement {
         .into_element()
 }
 
-/// The Goals panel: the model's Goals control (its press explains the filter). The daemon serves
-/// no goals.
+/// The Goals panel: in the fixture the model's Goals control (its press explains the filter);
+/// in the Daemon state the goals the board's tasks serve, each narrowing the list to it.
 pub(super) fn goals(app: AppState) -> AnyElement {
     by_data(
         app,
@@ -94,7 +96,63 @@ pub(super) fn goals(app: AppState) -> AnyElement {
                 .child(model_button(app, &goals, "btn-goals".into(), false))
                 .into_element()
         },
-        move || quiet(app, work::NOT_SERVED),
+        move || {
+            let rows = computed(move || {
+                app.feed
+                    .with(|feed| app.work.with(|state| work::daemon_goals(state, feed)))
+            });
+            dynamic(move || {
+                rows.with(|rows| {
+                    if rows.is_empty() {
+                        return quiet(app, work::NO_GOALS);
+                    }
+                    view()
+                        .py(px(if app.form == Form::Terminal { 0.0 } else { 4.0 }))
+                        .role(AccessibilityRole::List)
+                        .label("Goals")
+                        .children(
+                            rows.iter()
+                                .enumerate()
+                                .map(|(index, row)| goal_row(app, row, index))
+                                .collect::<Vec<_>>(),
+                        )
+                        .into_element()
+                })
+            })
+        },
+    )
+}
+
+/// One goal the board serves: its words, then how many tasks serve it in mono figures; the
+/// goal the list is narrowed to carries the list's selection. A press narrows the list to it.
+fn goal_row(app: AppState, row: &work::GoalRow, index: usize) -> AnyElement {
+    let form = app.form;
+    let selected = row.selected;
+    let action = row.button.action.clone();
+    let content = vec![
+        line(
+            form,
+            row.button.label.to_string(),
+            if form == Form::Phone { 14.0 } else { 12.5 },
+            color(Token::Ink),
+            false,
+        )
+        .flex_1()
+        .min_w(px(0.0))
+        .into_element(),
+        line(form, row.count.to_string(), 11.0, color(Token::Ink3), true).into_element(),
+    ];
+    list_row(
+        app,
+        format!("{}, {} tasks", row.button.label, row.count),
+        format!("btn-goal-{index}"),
+        move || selected,
+        move || {
+            if let Some(action) = &action {
+                press(app, action.clone());
+            }
+        },
+        content,
     )
 }
 
@@ -125,7 +183,7 @@ fn unselected(list: &GroupedList) -> GroupedList {
     list
 }
 
-fn is_selected(source: Memo<GroupedList>, id: &'static str) -> bool {
+fn is_selected(source: Memo<GroupedList>, id: &str) -> bool {
     source.with(|list| {
         list.groups
             .iter()
@@ -163,22 +221,24 @@ fn groups(
         for row in &group.rows {
             out.push(match row {
                 Row::Task(task) => {
-                    let (id, action) = (task.line.id, task.action);
+                    let id = task.line.id.clone();
+                    let action = task.action.clone();
+                    let test_id = format!("task-{id}");
                     task_row(
                         app,
                         task.line.clone(),
-                        move || is_selected(source, id),
-                        move || act(app, action),
-                        format!("task-{id}"),
+                        move || is_selected(source, &id),
+                        move || press(app, action.clone()),
+                        test_id,
                     )
                 }
                 Row::Extra(extra) => extra_row(app, extra, columns),
                 Row::More(button) => {
                     let label = button.label.to_string();
-                    let action = button.action;
-                    quiet_row(app, label, action.map(action_id), move || {
-                        if let Some(action) = action {
-                            act(app, action);
+                    let action = button.action.clone();
+                    quiet_row(app, label, action.as_ref().map(press_id), move || {
+                        if let Some(action) = &action {
+                            press(app, action.clone());
                         }
                     })
                 }

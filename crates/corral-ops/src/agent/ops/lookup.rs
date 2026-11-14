@@ -1,6 +1,6 @@
 //! receipt_lookup: reads one receipt of the requester's own named container, whatever
 //! generation committed it. Authentication only; nothing is written.
-use anyhow::Result;
+use anyhow::{Context, Result};
 use corral_core::Store;
 use corral_core::agent::RequestReceipt;
 use serde::Deserialize;
@@ -68,9 +68,12 @@ pub(crate) fn receipt_lookup(ctx: &Ctx, envelope: &Envelope) -> Result<CallRespo
     let container = &admitted.origin.binding.container;
     let found = match (&admitted.resolved, payload.task.as_deref()) {
         (Resolved::Task(task), None) => task.agent_receipt(container, &payload.request_id)?,
-        (Resolved::Assistant(assistant, _), None) => {
-            assistant.state.receipt(&payload.request_id).cloned()
-        }
+        (Resolved::Assistant(assistant, _), None) => crate::agent::receipts::assistant_receipt(
+            &ctx.store,
+            container.assistant().context("assistant session missing")?,
+            &assistant.state,
+            &payload.request_id,
+        )?,
         (Resolved::Task(_) | Resolved::Assistant(..), Some(_)) => {
             return Err(reject(
                 RejectCode::BadRequest,

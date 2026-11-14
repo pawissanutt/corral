@@ -134,7 +134,7 @@ fn a_generation_beyond_the_cap_opens_when_earlier_ones_hold_only_their_hello() {
 }
 
 #[test]
-fn hello_commits_from_a_receipt_family_at_its_cap() {
+fn hello_compacts_current_generation_receipts_at_capacity_and_keeps_exact_lookup() {
     const CAP: u64 = 8;
     let _cap = SmallCap::set(PmCapacity {
         cap: CAP,
@@ -152,7 +152,8 @@ fn hello_commits_from_a_receipt_family_at_its_cap() {
         let receipts = &mut pm.as_mut().unwrap().state.receipts;
         let fill = CAP as usize - receipts.len();
         receipts.extend((0..fill).map(|i| RequestReceipt {
-            request_id: format!("settled-{i}"),
+            request_id: format!("rq-{i:032x}"),
+            identity: current.identity.clone(),
             ..template.clone()
         }));
         Ok(((), true))
@@ -163,6 +164,12 @@ fn hello_commits_from_a_receipt_family_at_its_cap() {
     let bound = committed(&hello(&fx, &current));
     assert_eq!(bound.identity.generation, current.identity.generation);
     assert!(pm_state::child_count(store, "receipts").unwrap() < CAP);
+    // Unlike the old-generation-only fixture, this cannot be fixed by fencing an old host.
+    let key = format!("rq-{:032x}", 0_u32);
+    let replay = lookup(&fx, &current, &key).unwrap();
+    assert_eq!(replay.request_id, key);
+    assert_eq!(replay.identity, current.identity);
+    assert_eq!(replay.result, template.result);
 }
 
 #[test]
@@ -189,14 +196,12 @@ fn a_retired_generation_is_fenced_and_the_current_generation_still_replays() {
 }
 
 #[test]
-fn a_fruitless_retention_scan_is_not_repeated_until_the_generation_changes() {
-    // Receipt pressure from 2 receipts, with the cap far away.
+fn a_fruitless_retention_scan_resumes_when_a_current_receipt_settles() {
     let limits = pm_state::RetentionLimits {
         receipts_high_water: 2,
         receipts_retained: 1,
         ..pm_state::RetentionLimits::PM
     };
-    let _cap = SmallCap::set(PmCapacity { cap: 64, limits });
     let unpressured = pm_state::RetentionLimits {
         receipts_high_water: u64::MAX,
         generations_high_water: u64::MAX,
@@ -205,21 +210,26 @@ fn a_fruitless_retention_scan_is_not_repeated_until_the_generation_changes() {
     let fx = fx();
     let host = bind(&fx, &pm_target(), "pm-pane", "s-pm");
     committed(&hello(&fx, &host));
-    // Every receipt belongs to the current generation: the third commit's scan reclaims
-    // nothing, and the fourth commit follows it.
-    for seq in 1..=3 {
-        committed(&send(&fx, &state_event(&host, seq), "event"));
-    }
+    committed(&send(&fx, &state_event(&host, 1), "event"));
+    pm_state::update(&fx.ctx.store, |pm| {
+        for receipt in &mut pm.as_mut().unwrap().state.receipts {
+            receipt.post_pending = vec!["pending-test".into()];
+        }
+        Ok(((), true))
+    })
+    .unwrap();
+    assert_eq!(retention_decodes(&fx, &limits).0.receipts, 0);
     let (_, baseline) = retention_decodes(&fx, &unpressured);
     let (skipped, decodes) = retention_decodes(&fx, &limits);
-    assert_eq!(skipped.receipts, 0);
-    assert_eq!(skipped.receipt_count, 4);
+    assert_eq!(skipped.receipt_count, 2);
     assert_eq!(decodes, baseline);
-
-    // A new generation ends the old one, whose receipts the next pass reclaims.
-    bind(&fx, &pm_target(), "pm-pane", "s-pm-2");
+    pm_state::update(&fx.ctx.store, |pm| {
+        pm.as_mut().unwrap().state.receipts[0].post_pending.clear();
+        Ok(((), true))
+    })
+    .unwrap();
     let (rescanned, decodes) = retention_decodes(&fx, &limits);
-    assert!(rescanned.receipts > 0, "{rescanned:?}");
+    assert_eq!(rescanned.receipts, 1);
     assert!(decodes > baseline, "{decodes} <= {baseline}");
 }
 

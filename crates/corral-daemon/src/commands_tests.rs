@@ -254,6 +254,74 @@ fn lost_result_query_tombstones_absent_command() {
 }
 
 #[test]
+fn result_tombstones_respect_capacity_without_losing_recovery() {
+    let fixture = Fixture::new();
+    let (jobs, _) = mpsc::sync_channel(QUEUE);
+    let service = Service {
+        jobs,
+        flights: Mutex::default(),
+        index: Mutex::new(Index::with_limit(3)),
+        journal: Mutex::new(Store::open_unobserved(fixture.ctx.store.root()).unwrap()),
+        previews: Mutex::default(),
+    };
+    // Expired submissions still have unexpired seven-day device recovery windows.
+    for (id, state) in [
+        ("settled", JournalState::Settled),
+        ("unknown", JournalState::Reserved),
+    ] {
+        let key = format!("dev-test/{id}");
+        let journal = Journal {
+            digest: id.into(),
+            state,
+            issued_at: "2000-01-01T00:00:00Z".into(),
+            expires_at: "2000-01-01T00:02:00Z".into(),
+            result: (state == JournalState::Settled).then(|| Answer::bare(CmdState::Done).stored()),
+            retain_until: app::retention(&key),
+        };
+        fixture
+            .ctx
+            .store
+            .insert_record(COMMANDS_AREA, &key, &journal)
+            .unwrap();
+        lock(&service.index).done(&key, journal::eviction_time(&key, &journal));
+    }
+    assert_eq!(
+        service
+            .query("dev-test/abandoned", Instant::now(), true)
+            .unwrap()
+            .state,
+        CmdState::Abandoned,
+    );
+    for key in ["dev-test/fresh-1", "dev-test/fresh-2"] {
+        let problem = service.query(key, Instant::now(), true).unwrap_err();
+        assert_eq!(problem.wire().0, ErrorCode::Busy);
+        assert!(
+            fixture
+                .ctx
+                .store
+                .record::<Journal>(COMMANDS_AREA, key)
+                .unwrap()
+                .is_none()
+        );
+    }
+    for (key, state) in [
+        ("dev-test/settled", CmdState::Done),
+        ("dev-test/unknown", CmdState::Unknown),
+        ("dev-test/abandoned", CmdState::Abandoned),
+    ] {
+        assert_eq!(
+            service.query(key, Instant::now(), true).unwrap().state,
+            state
+        );
+    }
+    assert_eq!(lock(&service.index).count("dev-test"), 3);
+    assert_eq!(
+        fixture.ctx.store.record_rows(COMMANDS_AREA).unwrap().len(),
+        3
+    );
+}
+
+#[test]
 fn pm_caller_attribution_survives_daemon_execution() {
     let fixture = Fixture::new();
     let id = task(&fixture);
@@ -283,10 +351,7 @@ fn daemon_outcome_bytes_equal_local_outcome_bytes() {
     // One success and one executor failure: stdout, stderr, exit and error must not drift.
     for (n, text) in ["same bytes", "   "].into_iter().enumerate() {
         let submit = request(&fixture, &format!("cli-bytes-{n}"), comment(&id, text));
-        let invoker = Invoker {
-            caller: submit.caller.clone(),
-            owner_action: None,
-        };
+        let invoker = Invoker::from_caller(submit.caller.clone());
         let (daemon, output) = connection.submit(&submit).unwrap();
         let output = output.unwrap();
         let local = corral_ops::command::local::run(&fixture.root, &invoker, comment(&id, text));

@@ -62,6 +62,8 @@ impl DeviceLink {
 pub struct DeviceRow {
     pub id: String,
     pub name: String,
+    /// What the daemon lets this device do; absent from daemons that do not report it.
+    pub authority: Option<corral_protocol::app::DeviceAuthority>,
     pub platform: &'static str,
     /// Calendar date, YYYY-MM-DD.
     pub enrolled: String,

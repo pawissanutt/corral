@@ -1,12 +1,13 @@
 //! The assistant's blocks inside Agents: the pinned quick-thread tile (a compact row on the
 //! phone and in a terminal), then the assistant sessions with + New session, and Filed from chat
-//! naming the session each Idea came from.
+//! naming the session each Idea came from. With the daemon they show the served rows.
 
 use nsh_core::prelude::*;
 
-use crate::model::assistant::{Agents, FiledRow, LABELS, QuickThread, SessionRow, agents};
-use crate::model::effect::Page;
-use crate::model::{Form, Hue};
+use crate::model::assistant::{
+    Agents, FiledLine, LABELS, QuickThread, SessionRow, agents, filings_target, live_agents,
+};
+use crate::model::{Authority, Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::{chip, illus};
@@ -17,18 +18,39 @@ use crate::ui::kit::text::h3;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
-use super::parts::{act, model_button, ring, spacer, test_id, words};
+use super::parts::{act, button_row, model_button, ring, spacer, test_id, words};
+
+/// The blocks from the current source, tracked.
+fn blocks(app: AppState, daemon: bool) -> Agents {
+    if daemon {
+        let can_send = app.can(Authority::Assistant);
+        app.feed.with(|feed| {
+            app.assistant
+                .with(|state| live_agents(state, feed, can_send))
+        })
+    } else {
+        let env = app.env();
+        app.assistant.with(|state| agents(state, env))
+    }
+}
 
 /// The quick thread pinned first in Agents. Desktop: the tile (`.tile.qt`) that fills its cell:
 /// state, id and pinning; title; the latest turn; the last question under a rule; model, host,
-/// scope and lifetime in its foot. Phone: the pinned row on the surface (`.prow.qtrow`).
+/// scope and cost in its foot. Phone: the pinned row on the surface (`.prow.qtrow`).
 /// Terminal: one row. Pressing it opens the quick thread.
+///
+/// With the daemon the tile quotes the quick thread's latest question and answer, so the page
+/// placing it holds the thread's subscription for its own lifetime ([`super::open_scope`]).
+/// The tile itself subscribes nothing: the Agents wall rebuilds it whenever agent rows change,
+/// and a subscription per build would close and reopen the thread on every update.
 pub fn agents_head(app: AppState) -> AnyElement {
-    super::drive_stream(app);
+    let daemon = untracked(|| app.daemon());
+    if !daemon {
+        super::drive_stream(app);
+    }
+    let quick = computed(move || blocks(app, daemon).quick_thread);
     dynamic(move || {
-        let env = app.env();
-        let blocks = app.assistant.with(|state| agents(state, env));
-        let qt = blocks.quick_thread;
+        let qt = quick.get();
         Some(match app.form {
             Form::Desktop => tile(app, qt),
             Form::Phone => phone_row(app, qt),
@@ -55,7 +77,7 @@ fn tile(app: AppState, qt: QuickThread) -> AnyElement {
         .pb(px(2.0))
         .child(chip(app, qt.state.label.clone(), qt.state.hue))
         .child(
-            text(qt.id)
+            text(qt.id.clone())
                 .font_family(FONT_MONO)
                 .text_size(px(11.5))
                 .text_color(color(Token::Ink3)),
@@ -75,7 +97,7 @@ fn tile(app: AppState, qt: QuickThread) -> AnyElement {
         .border_color(color(Token::Rule2))
         .overflow_hidden()
         .role(AccessibilityRole::Button)
-        .label(qt.title)
+        .label(qt.title.clone())
         .test_id(&format!("thread-{}", qt.id))
         .cursor_pointer()
         .hover(|s| s.bg(color(Token::Hover)))
@@ -130,7 +152,7 @@ fn phone_row(app: AppState, qt: QuickThread) -> AnyElement {
         .flex_row()
         .items_center()
         .gap(px(8.0))
-        .child(mono(app, qt.id, 13.0, Token::Ink3))
+        .child(mono(app, qt.id.clone(), 13.0, Token::Ink3))
         .child(
             words(app, qt.row_title, 16.0, Token::Ink)
                 .font_weight(FontWeight::SEMIBOLD)
@@ -189,7 +211,7 @@ fn terminal_row(app: AppState, qt: QuickThread) -> AnyElement {
         move || act(app, action.clone()),
         vec![
             dot(app, Hue::Corral),
-            text(qt.id)
+            text(qt.id.clone())
                 .flex_shrink_0()
                 .text_color(color(Token::Ink3))
                 .into_element(),
@@ -215,16 +237,48 @@ fn terminal_row(app: AppState, qt: QuickThread) -> AnyElement {
 /// facts), a full-width + New session, the disclosure; filed rows of id, title and source, time.
 /// Phone: two sections with their heads (+ New session at the trailing edge) and two-line rows.
 /// Terminal: the two sections stacked, one line per row.
+///
+/// With the daemon, the page placing these blocks settles their session operations for its own
+/// lifetime ([`super::watch_ops`]); the blocks are rebuilt with every agent update.
 pub fn agents_tail(app: AppState) -> AnyElement {
+    let daemon = untracked(|| app.daemon());
+    if daemon {
+        load_filings(app);
+    }
+    let built = computed(move || blocks(app, daemon));
     dynamic(move || {
-        let env = app.env();
-        let blocks = app.assistant.with(|state| agents(state, env));
+        let blocks = built.get();
         Some(match app.form {
             Form::Desktop => desktop_tail(app, &blocks),
             Form::Phone => phone_tail(app, &blocks),
             Form::Terminal => terminal_tail(app, &blocks),
         })
     })
+}
+
+/// Keeps the global filings page the wall shows served: fetched when absent and refetched when
+/// it went stale. A failed fetch waits for the owner's Retry; nothing loops.
+fn load_filings(app: AppState) {
+    effect(move || {
+        if !app.capable(corral_protocol::app::FILINGS_V1) {
+            return;
+        }
+        let target = app.assistant.with(filings_target);
+        let wanted = app.with_detail(&target, |cache| {
+            cache.is_none_or(|cache| cache.stale && !cache.loading && cache.error.is_none())
+        });
+        if wanted {
+            untracked(|| app.load(target));
+        }
+    });
+}
+
+/// The disclosure, the loading/empty/refusal line, or nothing.
+fn sessions_foot(app: AppState, blocks: &Agents) -> Option<AnyElement> {
+    if let Some(note) = &blocks.sessions_note {
+        return Some(words(app, note.clone(), 12.0, Token::Ink3).into_element());
+    }
+    blocks.sessions_illustrative.map(|label| illus(app, label))
 }
 
 fn desktop_tail(app: AppState, blocks: &Agents) -> AnyElement {
@@ -243,6 +297,7 @@ fn desktop_tail(app: AppState, blocks: &Agents) -> AnyElement {
             ButtonKind::Ghost,
             ButtonOptions {
                 wide: true,
+                disabled: !blocks.new_session.enabled,
                 ..ButtonOptions::default()
             },
             test_id(&blocks.new_session),
@@ -251,28 +306,30 @@ fn desktop_tail(app: AppState, blocks: &Agents) -> AnyElement {
                 move || act(app, action.clone())
             },
         )))
-        .child(
-            view()
-                .py(px(4.0))
-                .child(illus(app, blocks.sessions_illustrative)),
-        );
+        .children(sessions_foot(app, blocks).map(|foot| view().py(px(4.0)).child(foot)));
     let filed = view()
         .flex_1()
         .min_w(px(0.0))
         .child(h3(
             app,
             blocks.filed_title,
-            Some(blocks.filed.len().to_string()),
+            blocks.filed_total.map(|total| total.to_string()),
         ))
         .child(
             view()
                 .gap(px(2.0))
                 .children(blocks.filed.iter().map(|row| filed_row(app, row))),
         )
-        .child(
+        .children(blocks.filed_note.clone().map(|note| {
             view()
                 .py(px(4.0))
-                .child(illus(app, blocks.filed_illustrative)),
+                .child(words(app, note, 12.0, Token::Ink3))
+        }))
+        .children(pager(app, blocks).map(|row| view().py(px(4.0)).child(row)))
+        .children(
+            blocks
+                .filed_illustrative
+                .map(|label| view().py(px(4.0)).child(illus(app, label))),
         );
     view()
         .flex_row()
@@ -288,7 +345,6 @@ fn desktop_tail(app: AppState, blocks: &Agents) -> AnyElement {
 
 /// A desktop session row (`.srow`): mono id and bold title, then the state chip and the facts.
 fn session_row(app: AppState, row: &SessionRow) -> AnyElement {
-    let session = row.session;
     let action = row.action.clone();
     view()
         .gap(px(3.0))
@@ -296,8 +352,8 @@ fn session_row(app: AppState, row: &SessionRow) -> AnyElement {
         .py(px(8.0))
         .rounded(px(6.0))
         .role(AccessibilityRole::Button)
-        .label(format!("{} {}", session.id, session.title))
-        .test_id(&format!("thread-{}", session.id))
+        .label(format!("{} {}", row.id, row.title))
+        .test_id(&format!("thread-{}", row.id))
         .cursor_pointer()
         .hover(|s| s.bg(color(Token::Hover)))
         .focus_visible(ring)
@@ -306,13 +362,13 @@ fn session_row(app: AppState, row: &SessionRow) -> AnyElement {
             words(app, "", 13.0, Token::Ink)
                 .truncate()
                 .child(
-                    text(session.id)
+                    text(row.id.clone())
                         .font_family(FONT_MONO)
                         .text_size(px(12.0))
                         .text_color(color(Token::Ink3)),
                 )
                 .child(text(" "))
-                .child(text(session.title).font_weight(FontWeight::BOLD)),
+                .child(text(row.title.clone()).font_weight(FontWeight::BOLD)),
         )
         .child(
             view()
@@ -327,8 +383,8 @@ fn session_row(app: AppState, row: &SessionRow) -> AnyElement {
 }
 
 /// A desktop Filed from chat row (`.irow.fr`): mono id, the title over its source, the time.
-fn filed_row(app: AppState, row: &FiledRow) -> AnyElement {
-    let id = row.id;
+fn filed_row(app: AppState, row: &FiledLine) -> AnyElement {
+    let action = row.action.clone();
     view()
         .flex_row()
         .items_center()
@@ -338,37 +394,32 @@ fn filed_row(app: AppState, row: &FiledRow) -> AnyElement {
         .rounded(px(6.0))
         .role(AccessibilityRole::Button)
         .label(format!("{} {}", row.id, row.title))
-        .test_id(&format!("task-{id}"))
+        .test_id(&format!("task-{}", row.id))
         .cursor_pointer()
         .hover(|s| s.bg(color(Token::Hover)))
         .focus_visible(ring)
-        .on_press(move || app.open(Page::Task(id)))
-        .child(
-            view()
-                .w(px(46.0))
-                .flex_shrink_0()
-                .child(mono(app, row.id, 11.5, Token::Ink3)),
-        )
+        .on_press(move || act(app, action.clone()))
+        .child(view().w(px(46.0)).flex_shrink_0().child(mono(
+            app,
+            row.id.clone(),
+            11.5,
+            Token::Ink3,
+        )))
         .child(
             view()
                 .flex_1()
                 .min_w(px(0.0))
-                .child(words(app, row.title, 12.5, Token::Ink).truncate())
+                .child(words(app, row.title.clone(), 12.5, Token::Ink).truncate())
                 .child(source(app, row, 11.0)),
         )
-        .child(words(app, row.at, 12.0, Token::Ink3).flex_shrink_0())
+        .child(words(app, row.at.clone(), 12.0, Token::Ink3).flex_shrink_0())
         .into_element()
 }
 
-/// `filed by assistant A-7 · quick thread`.
-fn source(app: AppState, row: &FiledRow, size: f32) -> Text {
-    words(
-        app,
-        format!("{} {}", LABELS.filed_by, row.source),
-        size,
-        Token::Ink3,
-    )
-    .truncate()
+/// The row's source line as the model wrote it (`From A-7 · quick thread`); the credit is the
+/// model's to state, never added here.
+fn source(app: AppState, row: &FiledLine, size: f32) -> Text {
+    words(app, row.source.clone(), size, Token::Ink3).truncate()
 }
 
 fn phone_tail(app: AppState, blocks: &Agents) -> AnyElement {
@@ -383,15 +434,14 @@ fn phone_tail(app: AppState, blocks: &Agents) -> AnyElement {
             Some(new_session),
         ))
         .children(blocks.sessions.iter().map(|row| {
-            let session = row.session;
             let action = row.action.clone();
             let first = view()
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
-                .child(mono(app, session.id, 13.0, Token::Ink3))
+                .child(mono(app, row.id.clone(), 13.0, Token::Ink3))
                 .child(
-                    words(app, session.title, 16.0, Token::Ink)
+                    words(app, row.title.clone(), 16.0, Token::Ink)
                         .font_weight(FontWeight::SEMIBOLD)
                         .flex_1()
                         .min_w(px(0.0))
@@ -400,8 +450,8 @@ fn phone_tail(app: AppState, blocks: &Agents) -> AnyElement {
                 .child(mono(app, row.cost.clone(), 12.0, Token::Ink3));
             list_row(
                 app,
-                format!("{} {}", session.id, session.title),
-                format!("thread-{}", session.id),
+                format!("{} {}", row.id, row.title),
+                format!("thread-{}", row.id),
                 || false,
                 move || act(app, action.clone()),
                 vec![
@@ -421,54 +471,58 @@ fn phone_tail(app: AppState, blocks: &Agents) -> AnyElement {
                 ],
             )
         }))
-        .child(
-            view()
-                .px(px(18.0))
-                .py(px(6.0))
-                .child(illus(app, blocks.sessions_illustrative)),
+        .children(
+            sessions_foot(app, blocks).map(|foot| view().px(px(18.0)).py(px(6.0)).child(foot)),
         )
         .child(group_head(
             app,
             blocks.filed_title,
-            Some(blocks.filed.len().to_string()),
+            blocks.filed_total.map(|total| total.to_string()),
             Hue::Neutral,
             None,
             None,
         ))
         .children(blocks.filed.iter().map(|row| {
-            let id = row.id;
+            let action = row.action.clone();
             list_row(
                 app,
                 format!("{} {}", row.id, row.title),
-                format!("task-{id}"),
+                format!("task-{}", row.id),
                 || false,
-                move || app.open(Page::Task(id)),
+                move || act(app, action.clone()),
                 vec![
                     view()
                         .w(px(46.0))
                         .flex_shrink_0()
-                        .child(mono(app, row.id, 13.0, Token::Ink3))
+                        .child(mono(app, row.id.clone(), 13.0, Token::Ink3))
                         .into_element(),
                     view()
                         .flex_1()
                         .min_w(px(0.0))
                         .gap(px(2.0))
-                        .child(words(app, row.title, 14.5, Token::Ink).truncate())
+                        .child(words(app, row.title.clone(), 14.5, Token::Ink).truncate())
                         .child(source(app, row, 12.0))
                         .into_element(),
-                    words(app, row.at, 12.5, Token::Ink3)
+                    words(app, row.at.clone(), 12.5, Token::Ink3)
                         .flex_shrink_0()
                         .into_element(),
                 ],
             )
         }))
-        .child(
+        .children(blocks.filed_note.clone().map(|note| {
+            view()
+                .px(px(18.0))
+                .pt(px(6.0))
+                .child(words(app, note, 13.0, Token::Ink3))
+        }))
+        .children(pager(app, blocks).map(|row| view().px(px(18.0)).pt(px(6.0)).child(row)))
+        .children(blocks.filed_illustrative.map(|label| {
             view()
                 .px(px(18.0))
                 .pt(px(6.0))
                 .pb(px(20.0))
-                .child(illus(app, blocks.filed_illustrative)),
-        )
+                .child(illus(app, label))
+        }))
         .into_element()
 }
 
@@ -484,12 +538,11 @@ fn terminal_tail(app: AppState, blocks: &Agents) -> AnyElement {
             None,
         ))
         .children(blocks.sessions.iter().map(|row| {
-            let session = row.session;
             let action = row.action.clone();
             list_row(
                 app,
-                format!("{} {}", session.id, session.title),
-                format!("thread-{}", session.id),
+                format!("{} {}", row.id, row.title),
+                format!("thread-{}", row.id),
                 || false,
                 move || act(app, action.clone()),
                 vec![
@@ -497,9 +550,9 @@ fn terminal_tail(app: AppState, blocks: &Agents) -> AnyElement {
                     view()
                         .w(term::cells(5.0))
                         .flex_shrink_0()
-                        .child(text(session.id).text_color(color(Token::Ink3)))
+                        .child(text(row.id.clone()).text_color(color(Token::Ink3)))
                         .into_element(),
-                    text(session.title)
+                    text(row.title.clone())
                         .flex_1()
                         .min_w(px(0.0))
                         .truncate()
@@ -521,44 +574,56 @@ fn terminal_tail(app: AppState, blocks: &Agents) -> AnyElement {
                 .flex_row()
                 .px(term::cells(1.0))
                 .child(new_session)
-                .child(term::space(2.0))
-                .child(illus(app, blocks.sessions_illustrative)),
+                .children(
+                    sessions_foot(app, blocks)
+                        .map(|foot| view().flex_row().child(term::space(2.0)).child(foot)),
+                ),
         )
         .child(term::blank())
         .child(group_head(
             app,
             blocks.filed_title,
-            Some(blocks.filed.len().to_string()),
+            blocks.filed_total.map(|total| total.to_string()),
             Hue::Neutral,
-            Some(blocks.filed_illustrative.to_owned()),
+            blocks
+                .filed_note
+                .clone()
+                .or_else(|| blocks.filed_illustrative.map(str::to_owned)),
             None,
         ))
         .children(blocks.filed.iter().map(|row| {
-            let id = row.id;
+            let action = row.action.clone();
             list_row(
                 app,
                 format!("{} {}", row.id, row.title),
-                format!("task-{id}"),
+                format!("task-{}", row.id),
                 || false,
-                move || app.open(Page::Task(id)),
+                move || act(app, action.clone()),
                 vec![
                     view()
                         .w(term::cells(5.0))
                         .flex_shrink_0()
-                        .child(text(row.id).text_color(color(Token::Ink3)))
+                        .child(text(row.id.clone()).text_color(color(Token::Ink3)))
                         .into_element(),
-                    text(row.title)
+                    text(row.title.clone())
                         .flex_1()
                         .min_w(px(0.0))
                         .truncate()
                         .text_color(color(Token::Ink))
                         .into_element(),
-                    term::quiet(format!("{} {}", LABELS.filed_by, row.source)).into_element(),
-                    term::quiet(row.at).into_element(),
+                    term::quiet(row.source.clone()).into_element(),
+                    term::quiet(row.at.clone()).into_element(),
                 ],
             )
         }))
+        .children(pager(app, blocks).map(|row| view().px(term::cells(1.0)).child(row)))
         .into_element()
+}
+
+/// Newest, Newer, Older (or Retry) under the served filings page, quiet; nothing without them.
+fn pager(app: AppState, blocks: &Agents) -> Option<AnyElement> {
+    (!blocks.filed_pager.is_empty())
+        .then(|| button_row(app, &blocks.filed_pager, ButtonKind::Quiet, 6.0).into_element())
 }
 
 /// A mono id, cost or caption in one line.

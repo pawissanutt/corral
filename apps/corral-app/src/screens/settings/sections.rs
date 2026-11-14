@@ -9,7 +9,7 @@ use super::parts::{
     under,
 };
 use crate::model::settings::{self, AssistantView, NotificationView, OwnerView};
-use crate::model::{Form, Hue};
+use crate::model::{DataState, Form, Hue};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::chip::{chip, illus};
@@ -265,9 +265,9 @@ fn owner(app: AppState, v: OwnerView) -> AnyElement {
     frame(app, v.title, 12.0, vec![rich_small(app, &v.description)])
 }
 
-/// The phone's Settings root: one row per section with the model's subtitle (the connection's
-/// follows the current reach) and a chevron; a row opens its section through the model. It
-/// scrolls itself, the Ask clearance under it.
+/// The phone's Settings root: one row per section with the model's subtitle (the preview's
+/// illustrative facts, corrald's live ones, or what waits for a connection) and a chevron; a
+/// row opens its section through the model. It scrolls itself, the Ask clearance under it.
 pub fn root(app: AppState) -> AnyElement {
     let v = untracked(|| read(app, settings::phone_root));
     let rows = v
@@ -277,25 +277,26 @@ pub fn root(app: AppState) -> AnyElement {
         .map(|(index, row)| {
             let action = row.action.clone();
             let section = row.section;
-            let subtitle = move || {
-                if app.daemon() {
-                    return if section == crate::model::SettingsSection::Connection {
-                        app.snapshot()
-                            .health
-                            .reach
-                            .map(|reach| reach.into_owned())
-                            .unwrap_or_default()
-                    } else {
-                        String::new()
-                    };
+            let subtitle = move || match app.data.get() {
+                DataState::Daemon => {
+                    if section == crate::model::SettingsSection::Connection
+                        && let Some(reach) = app.snapshot().health.reach
+                    {
+                        return reach.into_owned();
+                    }
+                    app.feed
+                        .with(|feed| settings::live::phone_subtitle(feed, section))
                 }
-                read(app, |state, env| {
+                DataState::Disconnected => app
+                    .feed
+                    .with(|feed| settings::live::disconnected_subtitle(feed, section).to_owned()),
+                DataState::Fixture => read(app, |state, env| {
                     settings::phone_root(state, env)
                         .rows
                         .get(index)
                         .map_or("", |row| row.subtitle)
                         .to_owned()
-                })
+                }),
             };
             let words = view()
                 .flex_1()

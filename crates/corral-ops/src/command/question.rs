@@ -56,7 +56,7 @@ impl Verb for QuestionCommand {
                 };
                 print_applied(
                     &mut cx.out,
-                    &questions::answer(ctx, &key, rev, actor(owner), input)?,
+                    &questions::answer(ctx, &key, rev, actor(owner || cx.invoker.is_app()), input)?,
                     json,
                 )
             }
@@ -89,7 +89,13 @@ impl Verb for QuestionCommand {
                     basis_refs: basis,
                     scope_note,
                 };
-                let applied = questions::answer_group(ctx, &key, actor(owner), &shared, &answers)?;
+                let applied = questions::answer_group(
+                    ctx,
+                    &key,
+                    actor(owner || cx.invoker.is_app()),
+                    &shared,
+                    &answers,
+                )?;
                 for outcome in &applied.outcomes {
                     print_outcome(&mut cx.out, outcome, json)?;
                 }
@@ -111,7 +117,7 @@ impl Verb for QuestionCommand {
                 }).transpose()?;
                 print_applied(
                     &mut cx.out,
-                    &questions::escalate(ctx, &key, rev, actor(false), note, kind)?,
+                    &questions::escalate(ctx, &key, rev, actor(cx.invoker.is_app()), note, kind)?,
                     json,
                 )
             }
@@ -123,7 +129,7 @@ impl Verb for QuestionCommand {
                 json,
             } => print_applied(
                 &mut cx.out,
-                &questions::cancel(ctx, &key, rev, actor(owner), &reason)?,
+                &questions::cancel(ctx, &key, rev, actor(owner || cx.invoker.is_app()), &reason)?,
                 json,
             ),
             Self::Deadline {
@@ -142,6 +148,11 @@ impl Verb for QuestionCommand {
                     json,
                 )
             }
+            Self::Followup { key, rev, text } => print_applied(
+                &mut cx.out,
+                &questions::followup(ctx, &key, rev, &text)?,
+                false,
+            ),
             Self::Other => Err(super::unknown_command("other")),
         }
     }

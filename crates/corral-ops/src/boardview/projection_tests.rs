@@ -1,7 +1,7 @@
 use super::*;
 use corral_core::work::{self, Counter, HotScope};
 use corral_core::{Run, Task};
-use corral_protocol::board::RailGlyph;
+use corral_protocol::board::{BoardGroup, RailGlyph};
 use serde_json::json;
 
 fn fixture() -> (tempfile::TempDir, Ctx) {
@@ -230,4 +230,44 @@ fn rebuild_cursor_pages_same_revision_rows_without_duplicates_or_omissions() {
         }
     }
     assert_eq!(seen, expected);
+}
+
+#[test]
+fn upcoming_rows_keep_idea_and_backlog_distinct_from_ready_queue() {
+    let (_root, ctx) = fixture();
+    let prerequisite = task(&ctx, "unfinished prerequisite");
+    let mut expected = Vec::new();
+    for (status, code) in [
+        (Status::Idea, "idea"),
+        (Status::Backlog, "backlog"),
+        (Status::Ready, "queued"),
+    ] {
+        for queued in [false, true] {
+            for blocked in [false, true] {
+                let task = ctx
+                    .store
+                    .create("upcoming state", None, status, "")
+                    .unwrap();
+                ctx.store
+                    .update(&task.id, |task| {
+                        task.queued = queued;
+                        if blocked {
+                            task.depends_on.push(prerequisite.id.clone());
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                expected.push((task.id, status, queued, blocked, code));
+            }
+        }
+    }
+    let projection = Projection::rebuild(&ctx).unwrap();
+    for (id, status, queued, blocked, code) in expected {
+        let row = projection.rows().get(&id).unwrap();
+        assert_eq!(row.group, BoardGroup::Queued);
+        assert_eq!(
+            row.now.code, code,
+            "{id}: status={status:?}, admission_queued={queued}, blocked={blocked}"
+        );
+    }
 }

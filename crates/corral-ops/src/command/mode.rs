@@ -12,6 +12,11 @@ use crate::{Ctx, SlotUsage};
 
 impl Verb for ModeCommand {
     fn execute(self, cx: &mut Exec<'_>) -> Result<()> {
+        let preview = if matches!(&self, Self::Autopilot { .. }) {
+            Some(autopilot_preview(&cx.ctx.store, &self)?)
+        } else {
+            None
+        };
         match self {
             Self::Assist {} => {
                 cx.ctx.store.config = cx.ctx.store.assist_operating_policy()?;
@@ -29,48 +34,8 @@ impl Verb for ModeCommand {
                 }
                 cx.ctx.store.config = cx.ctx.store.turbo_operating_policy(!off)?;
             }
-            Self::Autopilot {
-                projects,
-                include_new,
-                expires_after_days,
-                max_new_tasks,
-                tasks,
-                exclusions,
-                plan_scopes,
-                dispatch,
-                accept,
-                plan_accept,
-                aggregate_accept,
-                confirm,
-                json,
-            } => {
-                let mut scopes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-                for scope in plan_scopes {
-                    let (task, label) = scope
-                        .split_once(':')
-                        .context("--plan-scope needs TASK:LABEL")?;
-                    ensure!(!label.is_empty(), "plan scope label must not be empty");
-                    scopes
-                        .entry(corral_core::Store::normalize_id(task)?)
-                        .or_default()
-                        .insert(label.to_owned());
-                }
-                let selection = OperatingSelection {
-                    projects: projects.into_iter().collect(),
-                    tasks: tasks.into_iter().collect(),
-                    exclusions: exclusions.into_iter().collect(),
-                    plan_scopes: scopes,
-                    authority: OperatingAuthority {
-                        dispatch,
-                        accept,
-                        plan_accept,
-                        aggregate_accept,
-                    },
-                    include_new,
-                    expires_after_days,
-                    max_new_tasks,
-                };
-                let preview = crate::automation_preview(&cx.ctx.store, &selection)?;
+            Self::Autopilot { confirm, json, .. } => {
+                let preview = preview.context("operating preview missing")?;
                 ensure!(
                     confirm == preview.id,
                     "preview changed; review a fresh mode autopilot preview"
@@ -94,6 +59,59 @@ impl Verb for ModeCommand {
         }
         status(&cx.ctx, false, &mut cx.out)
     }
+}
+
+/// The same finite selection and canonical token used by execution, without publishing a grant.
+pub fn autopilot_preview(
+    store: &corral_core::Store,
+    command: &ModeCommand,
+) -> Result<OperatingPreview> {
+    let ModeCommand::Autopilot {
+        projects,
+        include_new,
+        expires_after_days,
+        max_new_tasks,
+        tasks,
+        exclusions,
+        plan_scopes,
+        dispatch,
+        accept,
+        plan_accept,
+        aggregate_accept,
+        ..
+    } = command
+    else {
+        anyhow::bail!("not an autopilot grant command");
+    };
+    let mut scopes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for scope in plan_scopes {
+        let (task, label) = scope
+            .split_once(':')
+            .context("--plan-scope needs TASK:LABEL")?;
+        ensure!(!label.is_empty(), "plan scope label must not be empty");
+        scopes
+            .entry(corral_core::Store::normalize_id(task)?)
+            .or_default()
+            .insert(label.to_owned());
+    }
+    crate::automation_preview(
+        store,
+        &OperatingSelection {
+            projects: projects.iter().cloned().collect(),
+            tasks: tasks.iter().cloned().collect(),
+            exclusions: exclusions.iter().cloned().collect(),
+            plan_scopes: scopes,
+            authority: OperatingAuthority {
+                dispatch: *dispatch,
+                accept: *accept,
+                plan_accept: *plan_accept,
+                aggregate_accept: *aggregate_accept,
+            },
+            include_new: *include_new,
+            expires_after_days: *expires_after_days,
+            max_new_tasks: *max_new_tasks,
+        },
+    )
 }
 
 pub fn status(ctx: &Ctx, json: bool, out: &mut Output) -> Result<()> {

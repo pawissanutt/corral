@@ -420,6 +420,29 @@ pub fn approve(
     remove_worktree: bool,
     keep_branch: bool,
 ) -> Result<String> {
+    approve_owner(ctx, id, strategy, remove_worktree, keep_branch, None)
+}
+
+/// Manual owner approval bound to the candidate shown by an authenticated app.
+pub fn approve_checked(
+    ctx: &Ctx,
+    id: &str,
+    sha: &str,
+    strategy: ApproveStrategy,
+    remove_worktree: bool,
+    keep_branch: bool,
+) -> Result<String> {
+    approve_owner(ctx, id, strategy, remove_worktree, keep_branch, Some(sha))
+}
+
+fn approve_owner(
+    ctx: &Ctx,
+    id: &str,
+    strategy: ApproveStrategy,
+    remove_worktree: bool,
+    keep_branch: bool,
+    expected_sha: Option<&str>,
+) -> Result<String> {
     ctx.store.check_runtime()?;
     let _lock = ctx
         .store
@@ -427,6 +450,10 @@ pub fn approve(
         .with_context(|| {
             format!("approval already in progress; run `corral approve {id}` after it finishes")
         })?;
+    if let Some(sha) = expected_sha {
+        let task = ctx.store.get(id)?;
+        require_candidate_sha(&current_run(&task)?.worktree, sha)?;
+    }
     if ctx
         .store
         .get(id)?
@@ -438,7 +465,16 @@ pub fn approve(
     }
     crate::recovery::require_ordinary_approval(ctx, id)?;
     crate::verdict_carry::prepare_approval(ctx, id, strategy)?;
-    approve_landed(ctx, id, strategy, remove_worktree, keep_branch, None).map(|(_, line)| line)
+    approve_landed_inner(
+        ctx,
+        id,
+        strategy,
+        remove_worktree,
+        keep_branch,
+        None,
+        (None, expected_sha),
+    )
+    .map(|(_, line)| line)
 }
 
 /// `approve`, also returning the sha the base (or kept branch) ended at.
@@ -457,7 +493,7 @@ pub(crate) fn approve_landed(
         remove_worktree,
         keep_branch,
         expected,
-        None,
+        (None, None),
     )
 }
 
@@ -471,7 +507,7 @@ pub(crate) fn approve_recovery(
         .store
         .try_lock(&format!("autopilot-{id}"))?
         .context("approval already in progress")?;
-    approve_landed_inner(ctx, id, strategy, false, true, None, Some(recovery))
+    approve_landed_inner(ctx, id, strategy, false, true, None, (Some(recovery), None))
 }
 
 fn approve_landed_inner(
@@ -481,7 +517,7 @@ fn approve_landed_inner(
     remove_worktree: bool,
     keep_branch: bool,
     expected: Option<&CandidateIdentity>,
-    recovery: Option<&corral_core::RecoveryRecord>,
+    (recovery, expected_owner_sha): (Option<&corral_core::RecoveryRecord>, Option<&str>),
 ) -> Result<(String, String)> {
     ctx.store.check_runtime()?;
     // `approved` is logged after the merge; record when this approval began.
@@ -548,6 +584,9 @@ fn approve_landed_inner(
     // Peers under review keep going; a clean replay may carry their approval.
     let task = ctx.store.dispatch_update_head(&task.id, |store, head| {
         let contract = corral_core::TaskRef::contract_revision(&*head)?;
+        if let Some(sha) = expected_owner_sha {
+            require_candidate_sha(&run.worktree, sha)?;
+        }
         let t = &*head;
         if !awaiting_owner(t)? || t.current_run_head()?.is_none_or(|r| r.id != run.id) {
             bail!("stale_retry: task or run changed before landing");
@@ -794,4 +833,14 @@ fn approve_landed_inner(
             "{action}; worktree {worktree_note}; {branch_note}{operational_note}{recovery_note}"
         ),
     ))
+}
+
+pub(crate) fn require_candidate_sha(worktree: &Path, expected: &str) -> Result<()> {
+    if corral_git::rev_sha(worktree, "HEAD")? != expected {
+        return Err(corral_core::backend::ApplyError::Precondition(
+            "review candidate changed; reload the candidate".into(),
+        )
+        .into());
+    }
+    Ok(())
 }

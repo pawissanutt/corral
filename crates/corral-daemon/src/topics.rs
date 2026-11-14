@@ -1,13 +1,15 @@
 //! Per-connection cursors and one in-flight marker; no per-client row queue.
+mod app;
 use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result, bail, ensure};
 use corral_ops::boardview::DeltaOutcome;
 use corral_protocol::{
     self as wire,
+    app::APP_CONTROL_MAX as CONTROL_MAX,
     board::BoardCursor,
     classic::ClassicNotice,
-    frame::{CONTROL_MAX, Frame, FrameKind},
+    frame::{Frame, FrameKind},
     rpc,
     subscription::{SubAck, SubClose, SubDelta, SubOpen, SubReset, SubSince, Topic},
 };
@@ -37,6 +39,7 @@ pub(super) struct Topics<'a> {
     board: Option<Subscriber>,
     health: Option<Subscriber>,
     classic: Option<ClassicSubscriber>,
+    app: app::AppTopics,
 }
 
 impl<'a> Topics<'a> {
@@ -46,12 +49,19 @@ impl<'a> Topics<'a> {
             board: None,
             health: None,
             classic: None,
+            app: app::AppTopics::default(),
         }
     }
 
     pub fn open(&mut self, open: SubOpen) -> Result<()> {
         ensure!(open.topic != Topic::Other, "unsupported topic");
-        self.close(SubClose { topic: open.topic });
+        if !matches!(open.topic, Topic::Board | Topic::Health | Topic::Classic) {
+            return self.app.open(self.shared, open);
+        }
+        self.close(SubClose {
+            topic: open.topic,
+            scope: None,
+        });
         match open.topic {
             Topic::Board => {
                 self.board = Some(subscriber(self.shared, open.since));
@@ -78,7 +88,7 @@ impl<'a> Topics<'a> {
                     .classic_subscribers
                     .fetch_add(1, Ordering::Relaxed);
             }
-            Topic::Other => bail!("unsupported topic"),
+            _ => bail!("unsupported topic"),
         }
         Ok(())
     }
@@ -99,6 +109,7 @@ impl<'a> Topics<'a> {
                 return Ok(());
             }
             Topic::Other => None,
+            _ => return self.app.ack(ack),
         }
         .context("topic is not open")?;
         ensure!(
@@ -127,6 +138,7 @@ impl<'a> Topics<'a> {
                 }
             }
             Topic::Other => {}
+            _ => self.app.close(close.topic, close.scope),
         }
     }
 
@@ -143,11 +155,11 @@ impl<'a> Topics<'a> {
                         rpc::ErrorCode::Internal,
                         &format!("{error:#}"),
                     )?;
-                    self.close(SubClose { topic });
+                    self.close(SubClose { topic, scope: None });
                 }
             }
         }
-        Ok(())
+        self.app.flush(self.shared, conn)
     }
 
     fn next(&mut self, topic: Topic) -> Result<Option<Frame>> {
@@ -155,15 +167,22 @@ impl<'a> Topics<'a> {
             Topic::Board => self.board.as_mut(),
             Topic::Health => self.health.as_mut(),
             Topic::Classic => return self.next_classic(),
-            Topic::Other => None,
+            _ => None,
         };
         let Some(subscriber) = subscriber.filter(|subscriber| !subscriber.in_flight) else {
             return Ok(None);
         };
         let epoch = self.shared.epoch();
         if subscriber.epoch != epoch {
-            let frame = notification(wire::SUB_RESET, SubReset { topic, epoch })?;
-            self.close(SubClose { topic });
+            let frame = notification(
+                wire::SUB_RESET,
+                SubReset {
+                    topic,
+                    epoch,
+                    scope: None,
+                },
+            )?;
+            self.close(SubClose { topic, scope: None });
             return Ok(Some(frame));
         }
         match topic {
@@ -178,8 +197,15 @@ impl<'a> Topics<'a> {
                         .delta_since(subscriber.epoch, &subscriber.cursor, limit);
                     match outcome {
                         DeltaOutcome::Reset { epoch } => {
-                            let frame = notification(wire::SUB_RESET, SubReset { topic, epoch })?;
-                            self.close(SubClose { topic });
+                            let frame = notification(
+                                wire::SUB_RESET,
+                                SubReset {
+                                    topic,
+                                    epoch,
+                                    scope: None,
+                                },
+                            )?;
+                            self.close(SubClose { topic, scope: None });
                             return Ok(Some(frame));
                         }
                         DeltaOutcome::Delta(delta) => {
@@ -255,7 +281,7 @@ impl<'a> Topics<'a> {
                 subscriber.in_flight = true;
                 Ok(Some(frame))
             }
-            Topic::Classic | Topic::Other => bail!("unsupported topic"),
+            _ => bail!("unsupported topic"),
         }
     }
 
@@ -280,9 +306,10 @@ impl<'a> Topics<'a> {
                 SubReset {
                     topic,
                     epoch: published.epoch,
+                    scope: None,
                 },
             )?;
-            self.close(SubClose { topic });
+            self.close(SubClose { topic, scope: None });
             return Ok(Some(frame));
         }
         if !classic.initial && published.rev <= classic.rev {
@@ -327,7 +354,7 @@ fn subscriber(shared: &Shared, since: Option<SubSince>) -> Subscriber {
 impl Drop for Topics<'_> {
     fn drop(&mut self) {
         for topic in [Topic::Board, Topic::Classic] {
-            self.close(SubClose { topic });
+            self.close(SubClose { topic, scope: None });
         }
     }
 }

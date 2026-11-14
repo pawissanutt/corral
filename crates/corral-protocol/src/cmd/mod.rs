@@ -10,10 +10,13 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub mod annotation;
 pub mod assistant;
 pub mod attention;
+pub mod config;
 pub mod inbox;
 pub mod knowledge;
+pub mod message;
 pub mod meta;
 pub mod mode;
 pub mod plan;
@@ -21,6 +24,7 @@ pub mod pm;
 pub mod question;
 pub mod queue;
 pub mod repair;
+pub mod review;
 pub mod run;
 pub mod setup;
 pub mod task;
@@ -36,6 +40,10 @@ pub const COMMANDS_AREA: &str = "app-commands";
 // One value per submitted command; family sizes differ and boxing would change nothing on the wire.
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
+    Annotation(annotation::AnnotationCommand),
+    Config(config::ConfigCommand),
+    Message(message::MessageCommand),
+    Review(review::ReviewCommand),
     Assistant(assistant::AssistantCommand),
     Attention(attention::AttentionCommand),
     Inbox(inbox::InboxCommand),
@@ -65,6 +73,10 @@ impl Command {
     pub fn name(&self) -> String {
         let (family, verb) = match self {
             Self::Assistant(command) => ("assistant", command.verb()),
+            Self::Annotation(command) => ("annotation", command.verb()),
+            Self::Config(command) => ("config", command.verb()),
+            Self::Message(command) => ("message", command.verb()),
+            Self::Review(command) => ("review", command.verb()),
             Self::Attention(command) => ("attention", command.verb()),
             Self::Inbox(command) => ("inbox", command.verb()),
             Self::Knowledge(command) => ("knowledge", command.verb()),
@@ -90,6 +102,10 @@ impl Command {
     /// False for unknown families or verbs.
     pub fn is_known(&self) -> bool {
         match self {
+            Self::Annotation(command) => command.verb() != "other",
+            Self::Config(command) => command.verb() != "other",
+            Self::Message(command) => command.verb() != "other",
+            Self::Review(command) => command.verb() != "other",
             Self::Assistant(command) => command.verb() != "other",
             Self::Attention(command) => command.verb() != "other",
             Self::Inbox(command) => command.verb() != "other",
@@ -105,6 +121,81 @@ impl Command {
             Self::Setup(command) => command.verb() != "other",
             Self::Task(command) => command.verb() != "other",
             Self::Other => false,
+        }
+    }
+
+    /// Static app class of this verb: the one table clients and the daemon both read. New verbs
+    /// default to refused. A pre-submit hint only, never a grant: the daemon alone authorizes,
+    /// may refuse a narrower case (config keys), and still demands a fresh confirmation proof.
+    pub fn app_class(&self) -> crate::app::ActClass {
+        use crate::app::ActClass;
+        use {
+            annotation::AnnotationCommand as Annotation, assistant::AssistantCommand as Assistant,
+            attention::AttentionCommand as Attention, config::ConfigCommand as Config,
+            message::MessageCommand as Message, mode::ModeCommand as Mode,
+            plan::PlanCommand as Plan, pm::PmCommand as Pm, question::QuestionCommand as Question,
+            queue::QueueCommand as Queue, review::ReviewCommand as Review,
+            task::TaskCommand as Task,
+        };
+        match self {
+            Self::Question(
+                Question::Answer { .. } | Question::AnswerGroup { .. } | Question::Followup { .. },
+            )
+            | Self::Task(Task::Reply { .. } | Task::Comment { .. })
+            | Self::Annotation(Annotation::Reply { .. }) => ActClass::Reply,
+            Self::Task(
+                Task::New { .. }
+                | Task::Dispatch { .. }
+                | Task::Edit { .. }
+                | Task::Route { .. }
+                | Task::Hold { .. }
+                | Task::Release { .. }
+                | Task::Focus { .. },
+            )
+            | Self::Question(
+                Question::Escalate { .. } | Question::Cancel { .. } | Question::Deadline { .. },
+            )
+            | Self::Queue(
+                Queue::Add { .. } | Queue::Remove { .. } | Queue::Pause {} | Queue::Resume {},
+            )
+            | Self::Attention(Attention::Park { .. } | Attention::Unpark { .. })
+            | Self::Plan(
+                Plan::RequestChanges { .. } | Plan::AddMember { .. } | Plan::MoveMember { .. },
+            )
+            | Self::Annotation(
+                Annotation::Open { .. } | Annotation::Resolve { .. } | Annotation::Reopen { .. },
+            )
+            | Self::Pm(Pm::InboxPost { .. } | Pm::InboxWithdraw { .. })
+            | Self::Message(Message::FileAsIdea { .. } | Message::Withdraw { .. }) => ActClass::Act,
+            Self::Task(
+                Task::Retry { .. }
+                | Task::Revert { .. }
+                | Task::Unstick { .. }
+                | Task::Move { .. }
+                | Task::Idea { .. }
+                | Task::WaiveReview { .. },
+            )
+            | Self::Queue(Queue::Admit { .. })
+            | Self::Plan(Plan::Accept { .. } | Plan::Cancel { .. } | Plan::Policy { .. })
+            | Self::Review(
+                Review::Approve { .. }
+                | Review::RequestChanges { .. }
+                | Review::Verdict { .. }
+                | Review::Discard { .. },
+            )
+            | Self::Assistant(Assistant::PermissionsRevoke { .. }) => ActClass::Confirm,
+            Self::Config(
+                Config::Set { .. } | Config::ProfileAdd { .. } | Config::ProfileRemove { .. },
+            )
+            | Self::Mode(
+                Mode::Assist {}
+                | Mode::Pause {}
+                | Mode::Resume {}
+                | Mode::Turbo { .. }
+                | Mode::Autopilot { .. }
+                | Mode::Off { .. },
+            ) => ActClass::Admin,
+            _ => ActClass::Refused,
         }
     }
 }

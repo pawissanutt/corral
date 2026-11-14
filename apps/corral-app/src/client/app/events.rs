@@ -1,0 +1,452 @@
+use super::*;
+
+impl AppState {
+    pub fn event(&mut self, feed: Signal<Feed>, event: Event) -> Result<Vec<Outgoing>, String> {
+        match event {
+            Event::Health(health) => {
+                feed.update(|feed| feed.health_received(super::super::map::health(health)));
+                Ok(self.poll_changes(feed))
+            }
+            Event::Board {
+                epoch,
+                rows,
+                left,
+                replacement,
+            } => Ok(self.board(feed, epoch, rows, left, replacement)),
+            Event::Rows { delta, replacement } => self.rows(feed, delta, replacement),
+            Event::Live { scope, live } => {
+                self.live(feed, scope, live)?;
+                Ok(vec![])
+            }
+            Event::TopicError {
+                topic,
+                scope,
+                code,
+                message,
+            } => {
+                feed.update(|feed| {
+                    let state = feed
+                        .topics
+                        .entry(topic_key(topic, scope.as_deref()))
+                        .or_default();
+                    state.error = Some(ClientError {
+                        code: value(code).as_str().unwrap_or("unknown").into(),
+                        message,
+                    });
+                    state.stale = true;
+                    state.loading = false;
+                    if let Some(scope) = scope {
+                        let thread = feed.threads.entry(scope.into()).or_default();
+                        thread.stale = true;
+                        thread.loading = false;
+                    }
+                });
+                Ok(vec![])
+            }
+            Event::Reset {
+                topic,
+                scope,
+                epoch,
+            } => {
+                feed.update(|feed| {
+                    if topic == Topic::Board {
+                        feed.begin_epoch(epoch);
+                        feed.link = Link::Connecting;
+                        feed.problem = Some("Waiting for the replacement board snapshot.".into());
+                    }
+                    let state = feed
+                        .topics
+                        .entry(topic_key(topic, scope.as_deref()))
+                        .or_default();
+                    state.loading = true;
+                    state.stale = true;
+                    for detail in feed.details.values_mut() {
+                        if rows::topic_affects(&detail.target, topic) {
+                            detail.stale = true;
+                        }
+                    }
+                    if let Some(scope) = scope {
+                        let thread = feed.threads.entry(scope.into()).or_default();
+                        thread.stale = true;
+                        thread.loading = true;
+                        thread.live = None;
+                    }
+                });
+                Ok(vec![])
+            }
+            Event::Reply {
+                method,
+                tag,
+                params,
+                outcome,
+                error_data,
+            } => self.reply(feed, method, tag, params, outcome, error_data),
+            _ => Ok(vec![]),
+        }
+    }
+    fn reply(
+        &mut self,
+        feed: Signal<Feed>,
+        method: &'static str,
+        tag: Option<String>,
+        params: Value,
+        outcome: Result<Value, (corral_protocol::rpc::ErrorCode, String)>,
+        error_data: Option<Value>,
+    ) -> Result<Vec<Outgoing>, String> {
+        if method == DETAIL_GET {
+            return self.detail_reply(feed, tag, params, outcome);
+        }
+        if matches!(
+            method,
+            ATTACHMENT_BEGIN | ATTACHMENT_PUT | ATTACHMENT_DISCARD
+        ) {
+            return self.upload_reply(feed, method, tag, params, outcome, error_data);
+        }
+        if method == ASSISTANT_CANCEL {
+            return self.cancel_reply(feed, tag, params, outcome, error_data);
+        }
+        if method == CHANGES_PAGE {
+            self.changes_inflight = false;
+        }
+        let id = tag.or_else(|| params["cmd_id"].as_str().map(str::to_owned));
+        if method == ASSISTANT_SEND
+            && id.as_ref().is_some_and(|id| {
+                feed.with_untracked(|feed| {
+                    feed.commands.get(id.as_str()).is_some_and(|state| {
+                        matches!(state.status, CommandStatus::Done | CommandStatus::Abandoned)
+                    })
+                })
+            })
+        {
+            return Ok(vec![]);
+        }
+        let result = match outcome {
+            Ok(value) => value,
+            Err((code, message)) => {
+                let outer_code = value(code);
+                let error = ClientError {
+                    code: error_data
+                        .as_ref()
+                        .and_then(|data| data["code"].as_str())
+                        .or_else(|| outer_code.as_str())
+                        .unwrap_or("unknown")
+                        .into(),
+                    message,
+                };
+                let mut conflict = false;
+                feed.update(|feed| {
+                    if let Some(id) = &id {
+                        if let Some(state) = feed.commands.get_mut(id.as_str()) {
+                            state.status = if method == ASSISTANT_SEND {
+                                if self
+                                    .outbox
+                                    .as_ref()
+                                    .and_then(|outbox| outbox.saved.messages.get(id))
+                                    .is_some_and(|message| message.cancel)
+                                {
+                                    CommandStatus::Unknown
+                                } else if matches!(
+                                    code,
+                                    corral_protocol::rpc::ErrorCode::Refused
+                                        | corral_protocol::rpc::ErrorCode::Conflict
+                                        | corral_protocol::rpc::ErrorCode::InvalidParams
+                                ) {
+                                    if code == corral_protocol::rpc::ErrorCode::Conflict {
+                                        CommandStatus::Conflict
+                                    } else {
+                                        CommandStatus::Refused
+                                    }
+                                } else {
+                                    CommandStatus::Unknown
+                                }
+                            } else if method == ACT_RESULT {
+                                CommandStatus::Unknown
+                            } else {
+                                error_status(&error)
+                            };
+                            conflict = state.status == CommandStatus::Conflict;
+                            state.error = Some(error.clone());
+                        }
+                        if let Some(operation) = feed.operations.get_mut(id.as_str()) {
+                            operation.loading = false;
+                            operation.error = Some(error.clone());
+                        }
+                    }
+                    feed.problem = Some(error.message.clone());
+                });
+                if method != ACT_RESULT {
+                    if let Some(id) = &id {
+                        self.settled(feed, id);
+                    }
+                }
+                return Ok(if conflict {
+                    self.refresh_details(feed)
+                } else {
+                    vec![]
+                });
+            }
+        };
+        if let Some(id) = &id {
+            feed.update(|feed| {
+                if let Some(operation) = feed.operations.get_mut(id.as_str()) {
+                    operation.loading = false;
+                    operation.value = Some(result.clone());
+                    operation.error = None;
+                }
+            });
+        }
+        match method {
+            APP_SESSION => self.session(feed, decode(result)?),
+            ACT_SUBMIT | ACT_RESULT | PROMPT_ANSWER => {
+                let result: CmdResult = decode(result)?;
+                if result.output.is_some() {
+                    return Err("app command unexpectedly advertised DATA output".into());
+                }
+                let cmd_id = result.cmd_id.clone();
+                let status = result_status(&result);
+                feed.update(|feed| {
+                    if let Some(state) = feed.commands.get_mut(cmd_id.as_str()) {
+                        state.status = status;
+                        state.error = result.error.as_ref().map(|error| ClientError {
+                            code: error.code.clone(),
+                            message: error.message.clone(),
+                        });
+                        state.result = Some(result);
+                    }
+                });
+                if status == CommandStatus::Running {
+                    return Ok(vec![recover(&cmd_id)]);
+                }
+                self.settled(feed, &cmd_id);
+                Ok(
+                    if matches!(status, CommandStatus::Done | CommandStatus::Conflict) {
+                        self.refresh_details(feed)
+                    } else {
+                        vec![]
+                    },
+                )
+            }
+            ASSISTANT_SEND => {
+                let ack: SendAck = decode(result)?;
+                if let Some(id) = id {
+                    if feed.with_untracked(|feed| {
+                        feed.commands
+                            .get(id.as_str())
+                            .is_some_and(|state| state.status == CommandStatus::Abandoned)
+                    }) {
+                        return Ok(vec![]);
+                    }
+                    let cancelling = self
+                        .outbox
+                        .as_ref()
+                        .and_then(|outbox| outbox.saved.messages.get(&id))
+                        .is_some_and(|message| message.cancel);
+                    feed.update(|feed| {
+                        if let Some(state) = feed.commands.get_mut(id.as_str()) {
+                            state.status = if cancelling {
+                                CommandStatus::Unknown
+                            } else {
+                                CommandStatus::Done
+                            };
+                            state.error = None;
+                            state.entry = Some(Id::from(&ack.entry));
+                        }
+                    });
+                    // Settle first: retiring a Done send must never skip clearing its saved copy.
+                    self.settled(feed, &id);
+                    feed.update(Feed::retire_echoed_sends);
+                }
+                Ok(vec![])
+            }
+            CHANGES_PAGE => {
+                let page: ChangesPage = decode(result)?;
+                let before = params["before"].as_u64();
+                let after = params["after"].as_u64();
+                let last = page.lines.iter().map(|line| line.seq).max();
+                let head = page.head;
+                if before.is_none() {
+                    if let Some(last) = last {
+                        self.changes_cursor = Some(self.changes_cursor.unwrap_or(0).max(last));
+                    }
+                }
+                feed.update(|feed| {
+                    for line in page.lines {
+                        feed.changes.insert(line.seq, line);
+                    }
+                    while feed.changes.len() > 10_000 {
+                        if before.is_some() {
+                            feed.changes.pop_last();
+                        } else {
+                            feed.changes.pop_first();
+                        }
+                    }
+                    feed.changes_head = feed.changes_head.max(page.head);
+                    if after.is_none() {
+                        feed.changes_older = page.older;
+                    }
+                    feed.seen = Some(page.seen);
+                });
+                if after.is_some() && last.is_some_and(|last| last < head) {
+                    return Ok(self.poll_changes(feed));
+                }
+                Ok(vec![])
+            }
+            SEEN_ADVANCE => {
+                let seen: SeenCursor = decode(result)?;
+                feed.update(|feed| {
+                    feed.seen = Some(seen.clone());
+                    if let Some(session) = &mut feed.session {
+                        session.seen = seen;
+                    }
+                });
+                Ok(vec![])
+            }
+            DEVICE_SET_AUTHORITY => Ok(vec![devices(), out(APP_SESSION, json!({}), None)]),
+            DEVICE_PAGE => {
+                let page: DevicePage = decode(result)?;
+                let id = id.ok_or("device page has no correlation identity")?;
+                if params["after"].is_null() {
+                    self.device_walk = Some((id.clone(), vec![]));
+                }
+                let Some((current, rows)) = &mut self.device_walk else {
+                    return Ok(vec![]);
+                };
+                if *current != id {
+                    return Ok(vec![]);
+                }
+                rows.extend(page.devices);
+                if rows.len() > 256 {
+                    return Err("device enumeration exceeds the enrolled-device bound".into());
+                }
+                if let Some(next) = page.next {
+                    if params["after"]
+                        .as_str()
+                        .is_some_and(|after| next.as_str() <= after)
+                    {
+                        return Err("device page cursor did not advance".into());
+                    }
+                    return Ok(vec![out(
+                        DEVICE_PAGE,
+                        value(DevicePageQuery {
+                            after: Some(next),
+                            limit: DEVICE_PAGE_LIMIT_MAX,
+                        }),
+                        Some(id),
+                    )]);
+                }
+                let rows = self
+                    .device_walk
+                    .take()
+                    .map(|(_, rows)| rows)
+                    .unwrap_or_default();
+                feed.update(|feed| {
+                    feed.devices_received(rows.into_iter().map(super::super::map::device).collect())
+                });
+                Ok(vec![])
+            }
+            _ => Ok(vec![]),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::assistant::{State, ThreadItem, live_items};
+
+    fn reply(app: &mut AppState, feed: Signal<Feed>, (method, params, tag): Outgoing, ok: Value) {
+        let event = Event::Reply {
+            method,
+            tag,
+            params,
+            outcome: Ok(ok),
+            error_data: None,
+        };
+        assert!(app.event(feed, event).unwrap().is_empty());
+    }
+
+    fn thread_page(app: &mut AppState, feed: Signal<Feed>, rows: Vec<ThreadEntry>) {
+        let delta = SubDelta::Thread {
+            scope: "A-3".into(),
+            delta: RowsDelta {
+                epoch: 1,
+                rows,
+                left: Vec::new(),
+                cursor: corral_protocol::board::BoardCursor::default(),
+                more: false,
+            },
+            live: None,
+        };
+        let event = Event::Rows {
+            delta,
+            replacement: true,
+        };
+        app.event(feed, event).unwrap();
+    }
+
+    fn owners(feed: Signal<Feed>) -> Vec<String> {
+        feed.with_untracked(|feed| live_items(&State::default(), feed, "A-3", true))
+            .into_iter()
+            .filter_map(|item| match item {
+                ThreadItem::Owner(message) => Some(message.text),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn delivered_send_stays_retired_by_its_entry_after_minutes_of_change_polls() {
+        let runtime = nsh_core::element::Runtime::default();
+        let _entered = runtime.enter();
+        let feed = signal(Feed::default());
+        feed.update(|feed| {
+            feed.capabilities.insert(CHANGES_V1.into());
+        });
+        let mut app = AppState::new();
+        app.outbox = Some(Outbox::load("send-echo-store", "dev-4c").unwrap());
+        let send = |cmd_id: &str, text: &str| {
+            ClientRequest::AssistantSend(AssistantSend {
+                cmd_id: cmd_id.into(),
+                thread: "A-3".into(),
+                target: AskTarget::Assistant,
+                text: text.into(),
+                typed_at: "2026-11-14T10:10:00Z".into(),
+                context: Vec::new(),
+                attachments: vec![SendAttachment::Link {
+                    url: "https://example.invalid/opaque".into(),
+                    title: None,
+                }],
+            })
+        };
+        assert!(
+            app.request(feed, send("app-1-offline", "queued words"))
+                .is_empty()
+        );
+        app.ready = true;
+        // An identity ordered before every generated one, so the earliest eviction reaches it.
+        let mut sent = app.request(feed, send("app-0-sent", "inspect the evidence"));
+        assert_eq!(sent.len(), 1);
+        let ack = json!({"entry": "M-7", "state": {"state": "sent"}, "replayed": false});
+        reply(&mut app, feed, sent.remove(0), ack);
+        // Every corrald sync pass republishes health, and each one polls the change feed.
+        let page =
+            json!({"lines": [], "head": 0, "older": null, "seen": {"through": 0, "at": null}});
+        for _ in 0..600 {
+            for poll in app.poll_changes(feed) {
+                reply(&mut app, feed, poll, page.clone());
+            }
+        }
+        let echo: ThreadEntry = serde_json::from_value(json!({
+            "id": "M-7", "rev": 2, "at": "2026-11-14T10:10:01Z", "kind": "message",
+            "device": "dev-4c", "via": null, "text": "inspect the evidence",
+            "state": {"state": "delivered"}, "model": null, "cost_usd": null,
+            "tools": [], "links": [], "card": null
+        }))
+        .unwrap();
+        thread_page(&mut app, feed, vec![echo]);
+        assert_eq!(owners(feed), ["inspect the evidence", "queued words"]);
+        // A reopened bounded page that no longer holds the echo cannot revive the local copy.
+        thread_page(&mut app, feed, Vec::new());
+        assert_eq!(owners(feed), ["queued words"]);
+    }
+}

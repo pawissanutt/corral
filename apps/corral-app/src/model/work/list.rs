@@ -5,7 +5,9 @@ use crate::model::effect::{DataMode, Env};
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
 
-use super::{Action, Button, ButtonKind, Extra, ExtraKind, GROUPS, GroupKey, ParkedSummary, State};
+use super::{
+    Action, Button, ButtonKind, Extra, ExtraKind, GROUPS, GroupKey, ParkedSummary, Press, State,
+};
 
 /// A board task row: the facts it draws, and how it reacts to selection and presses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,7 +17,7 @@ pub struct TaskRow {
     /// Whether the desktop list exposes this as its selected option.
     pub selected: bool,
     /// Select on desktop, push a task or question on phone.
-    pub action: Action,
+    pub action: Press,
 }
 
 /// A complete non-task row accompanying T-868.
@@ -278,25 +280,35 @@ fn task_row(id: &'static str, state: &State, phone: bool, question: bool) -> Tas
     TaskRow {
         line: TaskLine::fixture(&task(id)),
         selected: !phone && state.sel == id,
-        action: if phone && question {
+        action: Press::Work(if phone && question {
             Action::OpenQuestion
         } else if phone {
             Action::OpenTask(id)
         } else {
             Action::Select(id)
-        },
+        }),
     }
 }
 
 /// A summary chip above the phone Now list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SummaryChip {
     /// Complete chip wording.
-    pub label: &'static str,
+    pub label: String,
     /// State hue, neutral unless the chip needs the owner.
     pub hue: Hue,
     /// Number carried by the label.
     pub count: u32,
+}
+
+impl SummaryChip {
+    pub fn new(label: impl Into<String>, hue: Hue, count: u32) -> SummaryChip {
+        SummaryChip {
+            label: label.into(),
+            hue,
+            count,
+        }
+    }
 }
 
 /// Phone Now content: a tappable changes summary followed by grouped two-line rows.
@@ -305,7 +317,7 @@ pub struct PhoneNow {
     /// Large navigation title.
     pub title: &'static str,
     /// Summary chips in their source order.
-    pub chips: &'static [SummaryChip],
+    pub chips: Vec<SummaryChip>,
     /// Pressing anywhere in the summary runs this; absent where the summary opens nothing.
     pub summary_action: Option<Action>,
     /// Groups with phone-specific omissions and +19 queued summary.
@@ -319,27 +331,11 @@ pub fn phone_now(state: &State, mut env: Env) -> PhoneNow {
     env.form = Form::Phone;
     PhoneNow {
         title: "Now",
-        chips: &[
-            SummaryChip {
-                label: "▲ 12 since 18:40",
-                hue: Hue::Neutral,
-                count: 12,
-            },
-            SummaryChip {
-                label: "3 need you",
-                hue: Hue::You,
-                count: 3,
-            },
-            SummaryChip {
-                label: "5 moving",
-                hue: Hue::Neutral,
-                count: 5,
-            },
-            SummaryChip {
-                label: "23 queued",
-                hue: Hue::Neutral,
-                count: 23,
-            },
+        chips: vec![
+            SummaryChip::new("▲ 12 since 18:40", Hue::Neutral, 12),
+            SummaryChip::new("3 need you", Hue::You, 3),
+            SummaryChip::new("5 moving", Hue::Neutral, 5),
+            SummaryChip::new("23 queued", Hue::Neutral, 23),
         ],
         summary_action: Some(Action::Go(crate::model::nav::Destination::Changes)),
         list: grouped_list(state, env),

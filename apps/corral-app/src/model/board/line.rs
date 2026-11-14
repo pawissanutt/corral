@@ -12,7 +12,7 @@ const COST_WARNING: f64 = 20.0;
 /// Everything a task row shows, owned so a row renders without any store behind it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskLine {
-    pub id: &'static str,
+    pub id: String,
     pub title: String,
     /// Who acts next: the row's actor mark and quieter ink for queued and parked tasks.
     pub actor: Actor,
@@ -67,7 +67,7 @@ impl TaskLine {
     /// The row of a task on the compiled-in board.
     pub fn fixture(task: &Task) -> TaskLine {
         TaskLine {
-            id: task.id,
+            id: task.id.to_owned(),
             title: task.title.to_owned(),
             actor: task.actor,
             changed: task.changed,
@@ -80,15 +80,15 @@ impl TaskLine {
         }
     }
 
-    /// The row of a daemon task at the daemon's `now` (Unix seconds). The daemon reports no
-    /// last-event fact yet, so a daemon row never carries the changed mark.
-    pub fn daemon(task: &daemon::Task, now: u64) -> TaskLine {
+    /// The row of a daemon task at the daemon's `now` (Unix seconds). `changed` says whether
+    /// the daemon's changes feed holds an event for it past this device's seen cursor.
+    pub fn daemon(task: &daemon::Task, now: u64, changed: bool) -> TaskLine {
         let actor = daemon_actor(task.group);
         TaskLine {
-            id: task.id,
+            id: task.id.to_string(),
             title: task.title.clone(),
             actor,
-            changed: false,
+            changed,
             rail: std::array::from_fn(|index| task.rail[index].mark),
             now: task.now.clone(),
             now_hue: now_hue(actor, &task.now),

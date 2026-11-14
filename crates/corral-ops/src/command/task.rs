@@ -27,7 +27,11 @@ impl Verb for TaskCommand {
                 design,
                 labels,
             } => {
-                let origin = match origin.as_str() {
+                let origin = match if cx.invoker.is_app() {
+                    "owner"
+                } else {
+                    origin.as_str()
+                } {
                     "owner" => Origin::Owner,
                     "pm" => Origin::Pm,
                     "agent" => Origin::Agent,
@@ -56,7 +60,12 @@ impl Verb for TaskCommand {
                             .map_err(anyhow::Error::msg)
                     })
                     .transpose()?;
-                let cwd = cx.invoker.cwd().context("reading the current directory")?;
+                // Devices never supply a cwd; explicit project selection is resolved canonically.
+                let cwd = if cx.invoker.is_app() {
+                    cx.ctx.store.root().to_path_buf()
+                } else {
+                    cx.invoker.cwd().context("reading the current directory")?
+                };
                 let task = crate::new_task_initialized(
                     &cx.ctx,
                     &title.join(" "),
@@ -87,7 +96,11 @@ impl Verb for TaskCommand {
                 author,
                 send,
             } => {
-                let author = match author.as_str() {
+                let author = match if cx.invoker.is_app() {
+                    "owner"
+                } else {
+                    author.as_str()
+                } {
                     "owner" => CommentAuthor::Owner,
                     "pm" => CommentAuthor::Pm,
                     _ => bail!("unknown author '{author}' (owner, pm)"),
@@ -167,7 +180,13 @@ impl Verb for TaskCommand {
             Self::Hold { id, reason } => crate::hold::hold(&cx.ctx, &id, reason.as_deref())?,
             Self::Release { id } => crate::hold::release(&cx.ctx, &id)?,
             Self::WaiveReview { id, reason } => {
-                crate::review_waiver::waive(&cx.ctx, &id, &reason, cx.invoker)?;
+                if cx.invoker.is_app() {
+                    // The daemon has checked owner identity and fresh Confirm-class consent.
+                    cx.invoker.device()?;
+                    crate::review_waiver::apply(&cx.ctx.store, &id, &reason)?;
+                } else {
+                    crate::review_waiver::waive(&cx.ctx, &id, &reason, cx.invoker)?;
+                }
                 cx.out.line(format_args!("{id}: review waived; it lands once its gate passes, marked landed without review"));
             }
             Self::Focus { id, all } => crate::hold::focus(&cx.ctx, id.as_deref(), all)?,
@@ -175,6 +194,100 @@ impl Verb for TaskCommand {
                 crate::recover_infrastructure(&cx.ctx, &id)?;
                 cx.out.line(format_args!(
                     "{id} returned to Review; autopilot will resume it on sync"
+                ));
+            }
+            Self::Dispatch {
+                id,
+                profile,
+                model,
+                effort,
+                base,
+                headless,
+            } => {
+                let opts = crate::DispatchOpts {
+                    profile,
+                    model,
+                    effort,
+                    base,
+                    mode: if headless {
+                        corral_core::RunMode::Headless
+                    } else {
+                        corral_core::RunMode::Interactive
+                    },
+                    ..Default::default()
+                };
+                dispatch_outcome(&mut cx.out, crate::dispatch(&cx.ctx, &id, &opts)?);
+            }
+            Self::Retry { id, run, profile } => {
+                let choice = ProfileChoice {
+                    profile,
+                    ..Default::default()
+                };
+                let outcome = match run {
+                    Some(run) => crate::retry_run(&cx.ctx, &id, &run, &choice)?,
+                    None => crate::retry(&cx.ctx, &id, &choice)?,
+                };
+                dispatch_outcome(&mut cx.out, outcome);
+            }
+            Self::Reply { id, text } => {
+                let task = crate::reply(&cx.ctx, &id, &text)?;
+                cx.out.line(format_args!("{} replied", task.id));
+            }
+            Self::Edit {
+                id,
+                title,
+                body,
+                owner_ok,
+            } => {
+                anyhow::ensure!(
+                    title.is_some() || body.is_some(),
+                    "edit needs a title or body"
+                );
+                let before = cx.ctx.store.get(&id)?;
+                let revision = corral_core::owner_revision(&before)?;
+                if owner_ok {
+                    cx.ctx.store.owner_decision(
+                        &id,
+                        "narrow",
+                        "Owner approved edited specification",
+                        "flag",
+                    )?;
+                }
+                let task = cx.ctx.store.update(&id, |task| {
+                    if corral_core::owner_revision(task)? != revision {
+                        return Err(corral_core::backend::ApplyError::Precondition(
+                            "task changed before edit".into(),
+                        )
+                        .into());
+                    }
+                    if let Some(title) = title {
+                        task.title = title;
+                    }
+                    if let Some(body) = body {
+                        task.body = body;
+                    }
+                    Ok(())
+                })?;
+                cx.out.line(format_args!("{} edited", task.id));
+            }
+            Self::Revert { id } => {
+                let result = crate::revert(&cx.ctx, &id)?;
+                cx.out.line(format_args!(
+                    "{} reopened in Backlog; dispatch held",
+                    result.task.id
+                ));
+            }
+            Self::Unstick { id } => {
+                let task = cx.ctx.store.get(&id)?;
+                let process = task
+                    .current_run()
+                    .and_then(|run| run.stuck.as_ref())
+                    .context("task has no stuck process; run corral sync first")?;
+                let recovered = crate::unstick(&cx.ctx, &id, process)?;
+                cx.out.line(format_args!(
+                    "{} unstuck ({})",
+                    recovered.id,
+                    recovered.status.label()
                 ));
             }
             Self::Other => return Err(super::unknown_command("other")),
@@ -186,10 +299,30 @@ impl Verb for TaskCommand {
         matches!(
             self,
             Self::Comment { send: true, .. }
+                | Self::Dispatch { .. }
+                | Self::Retry { .. }
+                | Self::Reply { .. }
+                | Self::Revert { .. }
+                | Self::Unstick { .. }
                 | Self::Hold { .. }
                 | Self::Release { .. }
                 | Self::Focus { .. }
         )
+    }
+}
+
+pub(super) fn dispatch_outcome(out: &mut super::Output, outcome: crate::DispatchOutcome) {
+    match outcome {
+        crate::DispatchOutcome::Started {
+            task,
+            run_id,
+            pane_id,
+        } => {
+            out.line(format_args!("{} started {run_id} ({pane_id})", task.id));
+        }
+        crate::DispatchOutcome::Queued { task, reason } => {
+            out.line(format_args!("{} queued: {reason}", task.id));
+        }
     }
 }
 

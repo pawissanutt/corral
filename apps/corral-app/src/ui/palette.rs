@@ -64,7 +64,7 @@ fn dialog_panel(app: AppState) -> AnyElement {
         .border_color(color(Token::Rule2))
         .child(command_list(app));
     let panel = if terminal {
-        terminal_place(panel)
+        terminal_place(app, panel)
     } else {
         panel
             .w(px(600.0))
@@ -90,12 +90,12 @@ fn dialog_panel(app: AppState) -> AnyElement {
 /// stays in sight as the row that opened it. NSH cuts no words behind a dialog (it clears what
 /// it knows of the page's text before drawing one), so a box anywhere else would leave the
 /// halves of the page's words beside it; over the whole pane there are none.
-fn terminal_place(panel: View) -> AnyElement {
+fn terminal_place(app: AppState, panel: View) -> AnyElement {
     panel
         .absolute()
         .top(term::rows(2.0))
         .bottom(term::rows(2.0))
-        .left(term::cells(term::sidebar_columns() + 1.0))
+        .left(term::cells(term::sidebar_columns(app) + 1.0))
         .right(term::cells(1.0))
         .into_element()
 }
@@ -297,9 +297,14 @@ fn group_header(form: Form, group: &CommandGroup) -> AnyElement {
         .into_element()
 }
 
-/// The model's message while no row matches the query.
+/// The model's message while no row matches the query, with a real task id as the example
+/// against corrald.
 fn empty(app: AppState, query: &str) -> AnyElement {
-    let message = palette_empty(query);
+    let data = app.data.get();
+    let example = app
+        .feed
+        .with(|feed| palette_model::palette_example(data, feed));
+    let message = palette_empty(query, example.as_deref());
     match app.form {
         Form::Terminal => view().px(px(8.0)).child(rich(app, &message)).into_element(),
         Form::Desktop | Form::Phone => view()
@@ -381,8 +386,10 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
     let env = app.env();
     let conn = env.conn;
     let mode = env.mode;
-    palette_model::filtered(query, crate::client::configured(), data)
-        .into_iter()
+    let rows = app
+        .feed
+        .with(|feed| palette_model::filtered(query, crate::client::configured(), data, feed));
+    rows.into_iter()
         .map(|command| {
             let checked = match command.action {
                 Action::Go(destination) => destination == here,
@@ -404,12 +411,16 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
 
 /// Resolves selection through the same pure command table that produced the displayed row.
 fn run(app: AppState, id: &str, query: &str) {
-    if let Some(action) = palette_model::run(
-        id,
-        query,
-        crate::client::configured(),
-        app.data.get_untracked(),
-    ) {
+    let action = app.feed.with_untracked(|feed| {
+        palette_model::run(
+            id,
+            query,
+            crate::client::configured(),
+            app.data.get_untracked(),
+            feed,
+        )
+    });
+    if let Some(action) = action {
         app.run_command(action);
     }
 }

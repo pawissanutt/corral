@@ -84,7 +84,7 @@ fn handshake(listener: UnixListener) -> UnixStream {
     let hello = request(&mut stream);
     assert_eq!(hello.method, wire::HELLO);
     assert_eq!(hello.params["client"]["kind"], "app");
-    assert_eq!(hello.params["caps"], json!(["board.v1", "device.v1"]));
+    assert_eq!(hello.params["caps"], json!(crate::client::app::CAPS));
     respond(
         &mut stream,
         &hello,
@@ -150,7 +150,13 @@ fn board(session: &mut Session) -> (u64, Vec<wire::board::BoardRow>, Vec<String>
                 left,
                 replacement,
             } => return (epoch, rows, left, replacement),
-            Event::Health(_) | Event::Reply { .. } | Event::Notice { .. } => {}
+            Event::Health(_)
+            | Event::Reply { .. }
+            | Event::Rows { .. }
+            | Event::Reset { .. }
+            | Event::TopicError { .. }
+            | Event::Live { .. }
+            | Event::Notice { .. } => {}
             Event::Idle => assert!(
                 std::time::Instant::now() < deadline,
                 "board was not delivered"
@@ -296,5 +302,117 @@ fn sub_reset_reopens_without_since_and_delivers_a_complete_replacement() {
     assert!(rows.iter().all(|row| row.id != "T-9"));
     assert!(left.is_empty());
     assert!(replacement);
+    server.join().unwrap();
+}
+
+#[test]
+fn reopened_thread_does_not_ack_or_publish_the_retired_live_page() {
+    let dir = SocketDir::new();
+    let path = dir.socket();
+    let listener = UnixListener::bind(&path).unwrap();
+    let (queued, ready) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let mut stream = handshake(listener);
+        let open = request(&mut stream);
+        respond(&mut stream, &open, Value::Null);
+        notification(
+            &mut stream,
+            wire::SUB_DELTA,
+            json!({"topic":"thread","scope":"quick","epoch":1,"rows":[],"left":[],
+                "cursor":{"rev":155,"after":"live:1"},"more":false,
+                "live":{"entry":"old","turn":1,"offset":0,"text":"retired","done":false}}),
+        );
+        queued.send(()).unwrap();
+        let close = request(&mut stream);
+        assert_eq!(close.method, wire::SUB_CLOSE);
+        respond(&mut stream, &close, Value::Null);
+        let reopened = request(&mut stream);
+        assert_eq!(reopened.method, wire::SUB_OPEN);
+        respond(&mut stream, &reopened, Value::Null);
+        notification(
+            &mut stream,
+            wire::SUB_DELTA,
+            json!({"topic":"thread","scope":"quick","epoch":1,"rows":[],"left":[],
+                "cursor":{"rev":156,"after":null},"more":false,"live":null}),
+        );
+        let accepted = ack(&mut stream, Topic::Thread, 156, None);
+        assert_eq!(accepted.params["scope"], "quick");
+        respond(&mut stream, &accepted, Value::Null);
+    });
+    let (mut session, _) = Session::connect(&path).unwrap();
+    session.open(Topic::Health).unwrap();
+    session.open(Topic::Board).unwrap();
+    let scope = json!({"topic":"thread","scope":"quick","since":null});
+    session.request(wire::SUB_OPEN, scope.clone()).unwrap();
+    ready.recv_timeout(Duration::from_secs(3)).unwrap();
+    session
+        .request(wire::SUB_CLOSE, json!({"topic":"thread","scope":"quick"}))
+        .unwrap();
+    session.request(wire::SUB_OPEN, scope).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        match session.next() {
+            Event::Rows {
+                delta: wire::subscription::SubDelta::Thread { scope, delta, .. },
+                replacement,
+            } => {
+                assert_eq!(scope, "quick");
+                assert_eq!(delta.cursor.rev, 156);
+                assert!(replacement);
+                break;
+            }
+            Event::Idle => assert!(std::time::Instant::now() < deadline),
+            Event::Live { .. } => panic!("retired live text reached the reopened thread"),
+            Event::Closed(reason) => panic!("session closed: {reason}"),
+            _ => {}
+        }
+    }
+    server.join().unwrap();
+}
+
+#[test]
+fn tagged_request_preserves_correlation_and_original_params_in_reply() {
+    let dir = SocketDir::new();
+    let path = dir.socket();
+    let listener = UnixListener::bind(&path).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut stream = handshake(listener);
+        let ping = request(&mut stream);
+        assert_eq!(ping.method, wire::PING);
+        assert_eq!(ping.params, json!({"nonce":"original"}));
+        assert_eq!(serde_json::to_value(&ping).unwrap().get("tag"), None);
+        respond(&mut stream, &ping, json!({"pong":true}));
+    });
+    let (mut session, _) = Session::connect(&path).unwrap();
+    session.open(Topic::Health).unwrap();
+    session.open(Topic::Board).unwrap();
+    session
+        .request_tagged(
+            wire::PING,
+            json!({"nonce":"original"}),
+            Some("caller-identity".into()),
+        )
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        match session.next() {
+            Event::Reply {
+                method,
+                params,
+                tag,
+                outcome,
+                ..
+            } => {
+                assert_eq!(method, wire::PING);
+                assert_eq!(params, json!({"nonce":"original"}));
+                assert_eq!(tag.as_deref(), Some("caller-identity"));
+                assert_eq!(outcome, Ok(json!({"pong":true})));
+                break;
+            }
+            Event::Idle => assert!(std::time::Instant::now() < deadline),
+            Event::Closed(reason) => panic!("session closed: {reason}"),
+            _ => panic!("unexpected event before tagged reply"),
+        }
+    }
     server.join().unwrap();
 }

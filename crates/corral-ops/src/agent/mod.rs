@@ -9,6 +9,7 @@
 mod admission;
 #[cfg(test)]
 mod admission_tests;
+pub mod app_runtime;
 #[cfg(test)]
 mod auxiliary_tests;
 pub mod aws_profile;
@@ -52,6 +53,7 @@ pub(crate) mod pm_wake_keys;
 mod receipts;
 #[cfg(test)]
 pub(crate) use receipts::FAILPOINT;
+pub(crate) use receipts::assistant_receipt;
 #[cfg(test)]
 mod event_known_cost_tests;
 #[cfg(all(test, target_os = "linux"))]

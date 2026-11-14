@@ -13,7 +13,7 @@ use crate::ui::kit::text::rich_small;
 use crate::ui::term::{cells, hrule};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
-use super::parts::act;
+use super::parts::press;
 
 const RING: f32 = 2.0;
 
@@ -70,13 +70,14 @@ fn column(form: Form, points: f32, terminal_cells: f32, child: AnyElement) -> An
         .into_element()
 }
 
-/// One event (`.ev`): desktop a 26 pt line, time 40, mark 14, id 50, the event cut to fit, new
-/// events in ink, seen ones in ink-2 and historical ones faint; terminal the same in Cells; phone
-/// the mock's `.prow`: time, id and event, the mark at the trailing edge, at least 48 pt with a
-/// hairline under it. A row with an action opens its task; `test_id` names it.
+/// One event (`.ev`): desktop a 26 pt line, time, mark 14, id 50, the event cut to fit, then
+/// corrald's attribution in faint ink; new events in ink, seen ones in ink-2 and historical
+/// ones faint; terminal the same in Cells; phone the mock's `.prow`: time, id and event (the
+/// attribution under it), the mark at the trailing edge, at least 48 pt with a hairline under
+/// it. The time column holds `18:40` and `Nov 12` alike. A row with an action opens its task;
+/// `test_id` names it.
 pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement {
     let form = app.form;
-    let change = event.change;
     let ink = color(if event.dim {
         Token::Ink3
     } else if event.unseen || form == Form::Terminal {
@@ -84,24 +85,38 @@ pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement
     } else {
         Token::Ink2
     });
-    let words = text(change.text)
+    let words = text(event.text.clone())
         .flex_1()
         .min_w(px(0.0))
         .number_of_lines(1u32)
         .truncate()
         .text_color(ink);
-    let label = format!("{} {} {}", change.at, change.id, change.text);
+    let by = event.by.clone().map(|by| {
+        let words = text(by)
+            .number_of_lines(1u32)
+            .truncate()
+            .text_color(color(Token::Ink3));
+        match form {
+            Form::Terminal => words.max_w(cells(24.0)),
+            Form::Desktop => words
+                .max_w(px(220.0))
+                .font_family(FONT_TEXT)
+                .text_size(px(11.0)),
+            Form::Phone => words.font_family(FONT_TEXT).text_size(px(12.0)),
+        }
+        .into_element()
+    });
     let base = view()
         .flex_row()
         .items_center()
         .flex_shrink_0()
-        .label(label)
+        .label(event.label())
         .test_id(&test_id);
-    let base = match event.action {
+    let base = match event.action.clone() {
         Some(action) => base
             .cursor_pointer()
             .role(AccessibilityRole::Button)
-            .on_press(move || act(app, action))
+            .on_press(move || press(app, action.clone()))
             .focus_visible(|s| {
                 s.outline(px(RING))
                     .outline_color(color(Token::Focus))
@@ -118,43 +133,51 @@ pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement
             .border_b_1()
             .border_b_color(color(Token::Rule))
             .active(|s| s.bg(color(Token::Hover)))
-            .child(column(form, 44.0, 0.0, mono(form, change.at, 12.5)))
+            .child(column(form, 48.0, 0.0, mono(form, event.at.clone(), 12.5)))
             .child(
                 view()
                     .flex_1()
                     .min_w(px(0.0))
-                    .flex_row()
-                    .items_baseline()
-                    .gap(px(6.0))
-                    .child(mono(form, change.id, 13.0))
-                    .child(words.font_family(FONT_TEXT).text_size(px(14.5))),
+                    .gap(px(2.0))
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_baseline()
+                            .gap(px(6.0))
+                            .child(mono(form, event.id.clone(), 13.0))
+                            .child(words.font_family(FONT_TEXT).text_size(px(14.5))),
+                    )
+                    .children(by),
             )
-            .child(column(form, 14.0, 0.0, change_mark(app, change.kind)))
+            .child(column(form, 14.0, 0.0, change_mark(app, event.kind)))
             .into_element(),
         Form::Desktop => base
             .h(px(26.0))
             .px(px(16.0))
             .gap(px(8.0))
             .hover(|s| s.bg(color(Token::Hover)))
-            .child(column(form, 40.0, 0.0, mono(form, change.at, 11.0)))
-            .child(column(form, 14.0, 0.0, change_mark(app, change.kind)))
-            .child(column(form, 50.0, 0.0, mono(form, change.id, 11.0)))
+            .child(column(form, 44.0, 0.0, mono(form, event.at.clone(), 11.0)))
+            .child(column(form, 14.0, 0.0, change_mark(app, event.kind)))
+            .child(column(form, 50.0, 0.0, mono(form, event.id.clone(), 11.0)))
             .child(words.font_family(FONT_TEXT).text_size(px(12.0)))
+            .children(by)
             .into_element(),
         Form::Terminal => base
             .h(px(16.0))
             .px(cells(1.0))
             .gap(px(8.0))
-            .child(column(form, 0.0, 5.0, mono(form, change.at, 0.0)))
-            .child(column(form, 0.0, 1.0, change_mark(app, change.kind)))
-            .child(column(form, 0.0, 5.0, mono(form, change.id, 0.0)))
+            .child(column(form, 0.0, 6.0, mono(form, event.at.clone(), 0.0)))
+            .child(column(form, 0.0, 1.0, change_mark(app, event.kind)))
+            .child(column(form, 0.0, 5.0, mono(form, event.id.clone(), 0.0)))
             .child(words)
+            .children(by)
             .into_element(),
     }
 }
 
 /// One hold, in the feed's columns: when the hold began, its mark, the id, the title with its
-/// attribution dimmed after it. Not pressable, as in the mock.
+/// attribution dimmed after it. A daemon hold opens its task; the fixture's are not pressable,
+/// as in the mock.
 pub(crate) fn hold(app: AppState, held: &HoldRow) -> AnyElement {
     let form = app.form;
     let label = format!("{} {} {}", held.since, held.id, held.title);
@@ -171,7 +194,7 @@ pub(crate) fn hold(app: AppState, held: &HoldRow) -> AnyElement {
             mono(form, held.since.clone(), 11.0),
         ))
         .child(column(form, 14.0, 1.0, mark(app, held.mark, Hue::Neutral)))
-        .child(column(form, 50.0, 5.0, mono(form, held.id, 11.0)))
+        .child(column(form, 50.0, 5.0, mono(form, held.id.clone(), 11.0)))
         .child(
             view()
                 .flex_1()
@@ -179,6 +202,20 @@ pub(crate) fn hold(app: AppState, held: &HoldRow) -> AnyElement {
                 .overflow_hidden()
                 .child(rich_small(app, &held.text)),
         );
+    let row = match held.action.clone() {
+        Some(action) => row
+            .test_id(&format!("task-{}", held.id))
+            .cursor_pointer()
+            .role(AccessibilityRole::Button)
+            .on_press(move || press(app, action.clone()))
+            .hover(|s| s.bg(color(Token::Hover)))
+            .focus_visible(|s| {
+                s.outline(px(RING))
+                    .outline_color(color(Token::Focus))
+                    .outline_offset(px(-RING))
+            }),
+        None => row,
+    };
     match form {
         Form::Terminal => row.h(px(16.0)).px(cells(1.0)).gap(px(8.0)),
         Form::Desktop | Form::Phone => row.h(px(26.0)).px(px(16.0)).gap(px(8.0)),
@@ -188,7 +225,8 @@ pub(crate) fn hold(app: AppState, held: &HoldRow) -> AnyElement {
 
 /// The per-device seen line (`.seenline`): the model's words in faint spaced capitals between
 /// two lines.
-pub(crate) fn seen_line(app: AppState, label: &'static str) -> AnyElement {
+pub(crate) fn seen_line(app: AppState, label: impl Into<SharedString>) -> AnyElement {
+    let label: SharedString = label.into();
     let form = app.form;
     if form == Form::Terminal {
         return view()

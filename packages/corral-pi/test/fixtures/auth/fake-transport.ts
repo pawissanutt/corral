@@ -17,6 +17,8 @@ export interface FakeStep {
   /** Awaited after the first chunk is sent, so a partially streamed reply can be observed. */
   readonly afterFirstChunk?: () => Promise<void>;
   readonly toolCalls?: readonly FakeToolCall[];
+  /** Terminal provider usage; defaults preserve the standard fixture's 32 input / 3 output. */
+  readonly usage?: { readonly input: number; readonly output: number };
   /**
    * Taken only by a request whose last user text contains this, so concurrent sessions sharing the
    * transport (a build parent and its children) each get their own steps. Unmatched steps keep their order.
@@ -131,9 +133,10 @@ export function fakeCodexTransport(): FakeTransport {
         } else if (item.type === "message") yield { type: "response.output_text.delta", output_index: index, delta: text };
         yield { type: "response.output_item.done", output_index: index, item };
       }
+      const usage = step.usage ?? { input: 32, output: 3 };
       yield { type: "response.completed", response: { id, status: "completed", usage: {
-        input_tokens: 32, input_tokens_details: { cached_tokens: 0 }, output_tokens: 3,
-        output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 35 } } };
+        input_tokens: usage.input, input_tokens_details: { cached_tokens: 0 }, output_tokens: usage.output,
+        output_tokens_details: { reasoning_tokens: 0 }, total_tokens: usage.input + usage.output } } };
     }
     const iterator = frames();
     return new Response(new ReadableStream({

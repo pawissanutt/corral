@@ -5,7 +5,7 @@
 //! progress publication time. Rail freshness compares recorded candidates, not live Git.
 mod cache;
 pub mod changes;
-mod rail;
+pub(crate) mod rail;
 mod row;
 
 pub use cache::cache_path;

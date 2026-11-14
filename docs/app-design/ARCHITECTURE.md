@@ -6,6 +6,12 @@ R24 to R35, decisions 36 to 41).
 Companion to `REQUIREMENTS.md` (final) and `mockup/` (visuals, owned by `ui`).
 Not a task contract; grants no authority. No code was changed to write this.
 
+This document is a historical proposal, including the section titled “Current state” and
+the delivery phases. For implemented behavior and verification limits, see the
+[integration overview](README.md) and [app guide](../../apps/corral-app/README.md).
+In particular, the proposed alternate rollover summary profile is not a canonical
+supported setting.
+
 Citation legend. Corral paths are relative to `/home/pawis/miti-workspace/corral` as read on 2026-11-11:
 `core/` = `crates/corral-core/src/`, `ops/` = `crates/corral-ops/src/`, `herdr/` = `crates/corral-herdr/src/`,
 `cli/` = `crates/corral/src/`, `tui/` = `crates/corral-tui/src/`, `pi/` = `packages/corral-pi/src/`,

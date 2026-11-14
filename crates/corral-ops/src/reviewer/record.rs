@@ -77,7 +77,7 @@ pub(super) fn record_verdict(
     task: &Task,
     run: &Run,
     mut record: ReviewRecord,
-    (verdict, notes, evidence): (Verdict, String, &Evidence),
+    (verdict, notes, evidence, expected_sha): (Verdict, String, &Evidence, Option<&str>),
     ended: Timestamp,
     report: Option<&effects::Report<'_>>,
 ) -> Result<Recorded> {
@@ -131,6 +131,9 @@ pub(super) fn record_verdict(
         }
         refuse_review_child(ctx, t, &run.id)?;
         let current = t.current_run().context("run disappeared")?;
+        if let Some(sha) = expected_sha {
+            crate::review::require_candidate_sha(&current.worktree, sha)?;
+        }
         crate::recovery::code_review_record(ctx, t, &record)?;
         let (changes, _) = verification::verdict_changes(ctx, t, &corral_core::RunHead::of(current)?, &record)?;
         if !changes.is_empty() {

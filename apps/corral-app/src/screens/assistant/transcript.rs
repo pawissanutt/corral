@@ -4,9 +4,10 @@
 
 use nsh_core::prelude::*;
 
+use crate::model::Authority;
 use crate::model::assistant::{
-    Action, AssistantMessage, Body, LABELS, Mode, OwnerMessage, PmMessage, QueueNote, RollDivider,
-    ThreadItem, WaitingBlock, thread,
+    Action, AssistantMessage, Body, LABELS, Mode, OwnerMessage, PmMessage, PmReply, QueueNote,
+    RollDivider, ThreadItem, ThreadRef, ToolRow, WaitingBlock, live_items, thread,
 };
 use crate::model::board::Mark;
 use crate::model::{Form, Hue, Rich};
@@ -18,6 +19,7 @@ use crate::ui::kit::text::{plain, rich};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, Token, color, text_size};
 
+use super::attachments;
 use super::cards;
 use super::parts::{
     act, avatar, button_row, link_words, meta_size, model_button, mono_run, note_size, spacer,
@@ -31,28 +33,54 @@ const MEASURE: f32 = 640.0;
 /// The avatar column and its gap, which the waiting and queued blocks line up under.
 const AVATAR_COLUMN: f32 = 36.0;
 
-/// The transcript of thread `id`: a scroll view filling its container, rows `inset` points in on
+/// The transcript of `source`: a scroll view filling its container, rows `inset` points in on
 /// either side (desktop page 24, drawer 16; phone 14). It opens at its end and follows each new
-/// message and each streamed step.
-pub fn list(app: AppState, id: &'static str, inset: f32) -> AnyElement {
+/// message and each streamed step. The fixture builds its preview thread; with the daemon it
+/// is the served thread, its streamed turn and this device's unsent messages.
+pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
     let form = app.form;
     let scroller = element_ref();
-    let tools_open = signal(false);
-    super::drive_stream(app);
-    follow(app, id, scroller);
-    let content = dynamic(move || {
-        let env = app.env();
-        let items = app.assistant.with(|state| thread(state, id, env));
-        let mut out = Vec::with_capacity(items.len() * 2);
-        for item in &items {
-            if form == Form::Terminal && !out.is_empty() {
-                out.push(term::blank());
+    let tools_open = signal(None::<String>);
+    if matches!(source, ThreadRef::Fixture(_)) {
+        super::drive_stream(app);
+    }
+    follow(app, source.clone(), scroller);
+    let region = format!("thread-{}-items", source.as_str());
+    // Built through a memo and drawn as keyed rows, so a clock tick redraws nothing and a
+    // streamed step or a new message redraws only its own row: a field being typed in a card
+    // keeps its text and focus.
+    let items = computed(move || {
+        let items = match &source {
+            ThreadRef::Fixture(id) => {
+                let env = app.env();
+                app.assistant.with(|state| thread(state, *id, env))
             }
-            out.push(item_view(app, item, inset, tools_open));
-        }
-        out
+            ThreadRef::Live(scope) => {
+                let can_send = app.can(Authority::Assistant);
+                app.feed.with(|feed| {
+                    app.assistant
+                        .with(|state| live_items(state, feed, scope.as_str(), can_send))
+                })
+            }
+        };
+        items.into_iter().enumerate().collect::<Vec<_>>()
     });
-    let region = format!("thread-{id}-items");
+    let content = each(
+        move || items.get(),
+        |(at, item): &(usize, ThreadItem)| (*at, std::mem::discriminant(item)),
+        move |row: ReadSignal<(usize, ThreadItem)>, _| {
+            dynamic(move || {
+                row.with(|(at, item)| {
+                    let body = item_view(app, item, inset, tools_open);
+                    if form == Form::Terminal && *at > 0 {
+                        view().child(term::blank()).child(body).into_element()
+                    } else {
+                        body
+                    }
+                })
+            })
+        },
+    );
     let inner = view().child(content);
     let inner = match form {
         Form::Desktop => inner.pt(px(10.0)).pb(px(14.0)),
@@ -71,18 +99,28 @@ pub fn list(app: AppState, id: &'static str, inset: f32) -> AnyElement {
 
 /// Scrolls to the end once mounted (after the commit that mounts it), then again, animated, when
 /// the thread gains a message or the streamed answer grows.
-fn follow(app: AppState, id: &'static str, scroller: ElementRef) {
-    let seen = stored(None::<(usize, u32)>);
+fn follow(app: AppState, source: ThreadRef, scroller: ElementRef) {
+    let seen = stored(None::<(usize, usize)>);
     effect(move || {
-        let now = app.assistant.with(|state| {
-            let sent = state.sent.iter().filter(|m| m.thread == id).count();
-            let stream = if state.mode == Mode::Answering {
-                state.stream.to_bits()
-            } else {
-                0
-            };
-            (sent, stream)
-        });
+        let now = match &source {
+            ThreadRef::Fixture(id) => app.assistant.with(|state| {
+                let sent = state.sent.iter().filter(|m| m.thread == *id).count();
+                let stream = if state.mode == Mode::Answering {
+                    state.stream.to_bits() as usize
+                } else {
+                    0
+                };
+                (sent, stream)
+            }),
+            ThreadRef::Live(scope) => app.feed.with(|feed| {
+                let thread = feed.threads.get(scope.as_str());
+                let entries = thread.map_or(0, |thread| thread.entries.len());
+                let streamed = thread
+                    .and_then(|thread| thread.live.as_ref())
+                    .map_or(0, |live| live.text.len());
+                (entries + feed.commands.len(), streamed)
+            }),
+        };
         let before = seen.replace(Some(now));
         if before != Some(now) {
             let animated = before.is_some();
@@ -91,19 +129,25 @@ fn follow(app: AppState, id: &'static str, scroller: ElementRef) {
     });
 }
 
-fn item_view(app: AppState, item: &ThreadItem, inset: f32, tools: Signal<bool>) -> AnyElement {
+fn item_view(
+    app: AppState,
+    item: &ThreadItem,
+    inset: f32,
+    tools: Signal<Option<String>>,
+) -> AnyElement {
     match item {
         ThreadItem::Roll(roll) => roll_view(app, roll, inset),
         ThreadItem::Owner(owner) => owner_view(app, owner, inset),
         ThreadItem::Assistant(message) => assistant_view(app, message, inset, tools),
         ThreadItem::Pm(pm) => pm_view(app, pm, inset),
+        ThreadItem::PmReply { id, reply } => under_avatar(app, inset, pm_reply(app, id, reply)),
         ThreadItem::Waiting(block) => under_avatar(app, inset, waiting(app, block)),
         ThreadItem::Queued(note) => under_avatar(app, inset, queued(app, note)),
         ThreadItem::Saved(card) => under_avatar(app, inset, cards::saved(app, card)),
         ThreadItem::Note(note) => under_avatar(
             app,
             inset,
-            words(app, *note, 12.5, Token::Ink3).into_element(),
+            words(app, note.clone(), 12.5, Token::Ink3).into_element(),
         ),
     }
 }
@@ -186,80 +230,95 @@ const DOT: &str = " · ";
 
 /// `you · app:pawis-desktop · 21:31 · typed 21:20 offline`, with the PM target and item id
 /// between the author and the device when it is a PM item.
-fn owner_runs(app: AppState, owner: &OwnerMessage, pm: Option<&'static str>) -> Vec<Text> {
+fn owner_runs(app: AppState, owner: &OwnerMessage, pm: Option<&str>) -> Vec<Text> {
     let size = meta_size(app.form);
     let mut runs = vec![strong_run(owner.author)];
     if let Some(id) = pm {
         runs.push(text(" → "));
         runs.push(strong_run(LABELS.pm));
         runs.push(text(DOT));
-        runs.push(mono_run(app, id, size));
+        runs.push(mono_run(app, id.to_owned(), size));
     }
     runs.push(text(DOT));
     runs.push(mono_run(app, owner.provenance.clone(), size));
     runs.push(text(format!("{DOT}{}", owner.at)));
-    if let Some(extra) = owner.extra {
+    if let Some(extra) = &owner.extra {
         runs.push(text(format!("{DOT}{extra}")));
     }
     runs
 }
 
-fn owner_tail(app: AppState, owner: &OwnerMessage, hue: Hue) -> Vec<AnyElement> {
+fn owner_tail(app: AppState, owner: &OwnerMessage) -> Vec<AnyElement> {
     let mut tail = Vec::new();
-    if let Some(attachment) = owner.attachment {
-        tail.push(chip(app, attachment, Hue::Neutral));
+    if let Some(attachment) = &owner.attachment {
+        tail.push(chip(app, attachment.clone(), Hue::Neutral));
     }
-    tail.push(tag(app, owner.state.label(), hue));
+    tail.extend(attachments::chips(app, &owner.files));
+    tail.push(tag(app, owner.tag.label.clone(), owner.tag.hue));
     tail
 }
 
 fn owner_view(app: AppState, owner: &OwnerMessage, inset: f32) -> AnyElement {
+    let mut body = vec![plain(app, owner.text.clone()).into_element()];
+    if let Some(opened) = &owner.opened {
+        body.push(attachments::readback(app, opened));
+    }
     message(
         app,
         inset,
         avatar(app, LABELS.owner_avatar, Hue::You),
-        head(
-            app,
-            owner_runs(app, owner, None),
-            owner_tail(app, owner, owner.state.hue()),
-        ),
-        vec![plain(app, owner.text.clone()).into_element()],
+        head(app, owner_runs(app, owner, None), owner_tail(app, owner)),
+        body,
     )
 }
 
-/// A PM item: the owner's words to the PM, then the PM's outcome folded under them on the corral
-/// ground (`.pmreply`), or the note of a queued item.
+/// The PM's outcome on the corral ground (`.pmreply`): who, when, which item, what it said.
+fn pm_reply(app: AppState, id: &str, reply: &PmReply) -> AnyElement {
+    let form = app.form;
+    let hd = words(app, "", meta_size(form), Token::Ink3)
+        .child(strong_run(LABELS.pm))
+        .child(text(format!(
+            "{DOT}{}{DOT}{} {id}",
+            reply.at, LABELS.outcome_of
+        )));
+    let said_size = if form == Form::Phone { 15.0 } else { 13.0 };
+    let said = words(app, reply.text.clone(), said_size, Token::Ink);
+    let reply_box = view()
+        .gap(px(2.0))
+        .bg(color(Token::CorralBg))
+        .child(hd)
+        .child(said);
+    if form == Form::Terminal {
+        reply_box.px(term::cells(1.0)).into_element()
+    } else {
+        reply_box
+            .px(px(12.0))
+            .py(px(8.0))
+            .rounded(px(8.0))
+            .mt(px(2.0))
+            .into_element()
+    }
+}
+
+/// A PM item: the owner's words to the PM, then the PM's outcome folded under them, or the note
+/// of a queued item, and Withdraw while the PM has not replied.
 fn pm_view(app: AppState, pm: &PmMessage, inset: f32) -> AnyElement {
     let form = app.form;
     let mut body = vec![plain(app, pm.owner.text.clone()).into_element()];
     if let Some(reply) = &pm.reply {
-        let size = meta_size(form);
-        let hd = words(app, "", size, Token::Ink3)
-            .child(strong_run(LABELS.pm))
-            .child(text(format!(
-                "{DOT}{}{DOT}{} {}",
-                reply.at, LABELS.outcome_of, pm.id
-            )));
-        let said_size = if form == Form::Phone { 15.0 } else { 13.0 };
-        let said = words(app, reply.text, said_size, Token::Ink);
-        let reply_box = view()
-            .gap(px(2.0))
-            .bg(color(Token::CorralBg))
-            .child(hd)
-            .child(said);
-        let reply_box = if form == Form::Terminal {
-            reply_box.px(term::cells(1.0))
-        } else {
-            reply_box
-                .px(px(12.0))
-                .py(px(8.0))
-                .rounded(px(8.0))
-                .mt(px(2.0))
-        };
-        body.push(reply_box.into_element());
+        body.push(pm_reply(app, &pm.id, reply));
     }
     if let Some(note) = pm.note {
         body.push(words(app, note, note_size(form), Token::Ink3).into_element());
+    }
+    if !pm.buttons.is_empty() || pm.status.is_some() {
+        let mut row = button_row(app, &pm.buttons, ButtonKind::Quiet, 6.0);
+        if let Some(status) = &pm.status {
+            row = row
+                .when(form == Form::Terminal, |r| r.child(term::space(2.0)))
+                .child(chip(app, status.label.clone(), status.hue));
+        }
+        body.push(row.into_element());
     }
     message(
         app,
@@ -267,8 +326,8 @@ fn pm_view(app: AppState, pm: &PmMessage, inset: f32) -> AnyElement {
         avatar(app, LABELS.owner_avatar, Hue::You),
         head(
             app,
-            owner_runs(app, &pm.owner, Some(pm.id)),
-            owner_tail(app, &pm.owner, pm.owner.state.pm_hue()),
+            owner_runs(app, &pm.owner, Some(pm.id.as_str())),
+            owner_tail(app, &pm.owner),
         ),
         body,
     )
@@ -280,22 +339,22 @@ fn assistant_view(
     app: AppState,
     message_data: &AssistantMessage,
     inset: f32,
-    tools: Signal<bool>,
+    tools: Signal<Option<String>>,
 ) -> AnyElement {
     let mut runs = vec![strong_run(format!(
         "{} {}",
         LABELS.assistant, message_data.id
     ))];
     runs.push(text(format!("{DOT}{}{DOT}", message_data.at)));
-    runs.push(text(message_data.model).text_color(color(Token::Ink3)));
+    runs.push(text(message_data.model.clone()).text_color(color(Token::Ink3)));
     let tail = message_data
         .state
         .iter()
         .map(|state| chip(app, state.label.clone(), state.hue))
         .collect();
     let mut body = Vec::new();
-    if let Some(summary) = message_data.tool_summary {
-        body.push(tool_summary(app, summary, message_data, tools));
+    if let Some(summary) = &message_data.tool_summary {
+        body.push(tool_summary(app, summary.clone(), message_data, tools));
     }
     for block in &message_data.body {
         body.push(body_view(app, block));
@@ -327,7 +386,7 @@ fn body_view(app: AppState, block: &Body) -> AnyElement {
         Body::Merged(card) => cards::merged(app, card),
         Body::Permission(card) => cards::permission(app, card),
         Body::Filed(card) => cards::filed(app, card),
-        Body::Starting { state, text: said } => cards::starting(app, state, *said),
+        Body::Starting { state, text: said } => cards::starting(app, state, said),
         Body::Illustrative(label) => illus(app, *label),
     }
 }
@@ -391,29 +450,43 @@ fn caret(app: AppState) -> AnyElement {
 }
 
 /// The tool activity (`.toolsum`): one pressable line that opens the rows of tool, command and
-/// time under it.
+/// time under it; one reply's rows are open at a time.
 fn tool_summary(
     app: AppState,
-    summary: &'static str,
+    summary: String,
     message_data: &AssistantMessage,
-    open: Signal<bool>,
+    open_key: Signal<Option<String>>,
 ) -> AnyElement {
     let form = app.form;
     let size = note_size(form);
     let terminal = form == Form::Terminal;
+    let key = message_data.key.clone();
+    let open = {
+        let key = key.clone();
+        computed(move || open_key.with(|open| open.as_deref() == Some(key.as_str())))
+    };
     let line = view()
         .flex_row()
         .items_center()
         .gap(px(6.0))
         .role(AccessibilityRole::Button)
-        .label(summary)
+        .label(summary.clone())
         .accessibility_state(move || AccessibilityState {
             expanded: Some(open.get()),
             ..AccessibilityState::default()
         })
         .test_id("btn-tool-activity")
         .cursor_pointer()
-        .on_press(move || open.update(|o| *o = !*o))
+        .on_press(move || {
+            let key = key.clone();
+            open_key.update(|open| {
+                *open = if open.as_deref() == Some(key.as_str()) {
+                    None
+                } else {
+                    Some(key)
+                };
+            });
+        })
         .child(mark(app, Mark::Done, Hue::Neutral))
         .when(terminal, |row| row.child(term::space(1.0)))
         .child(
@@ -429,7 +502,7 @@ fn tool_summary(
             .py(px(5.0))
             .hover(|s| s.bg(color(Token::Hover)))
     };
-    let tools = message_data.tools;
+    let tools: Vec<ToolRow> = message_data.tools.clone();
     let rows = dynamic(move || {
         if !open.get() {
             return Vec::new();
@@ -444,16 +517,21 @@ fn tool_summary(
                         view()
                             .w(if terminal { term::cells(6.0) } else { px(40.0) })
                             .flex_shrink_0()
-                            .child(tool_mono(app, tool.kind, 11.0, Token::Ink3)),
+                            .child(tool_mono(app, tool.kind.clone(), 11.0, Token::Ink3)),
                     )
                     .child(
-                        tool_mono(app, tool.command, 11.5, Token::Ink)
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .truncate(),
+                        tool_mono(
+                            app,
+                            tool.command.clone(),
+                            11.5,
+                            if tool.failed { Token::Fail } else { Token::Ink },
+                        )
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .truncate(),
                     )
                     .when(terminal, |row| row.child(term::space(1.0)))
-                    .child(words(app, tool.elapsed, size, Token::Ink3).flex_shrink_0());
+                    .child(words(app, tool.elapsed.clone(), size, Token::Ink3).flex_shrink_0());
                 if terminal {
                     row.pl(term::cells(2.0)).into_element()
                 } else {
@@ -480,7 +558,7 @@ fn tool_summary(
     }
 }
 
-fn tool_mono(app: AppState, content: &'static str, size: f32, ink: Token) -> Text {
+fn tool_mono(app: AppState, content: String, size: f32, ink: Token) -> Text {
     let t = text(content).number_of_lines(1u32).text_color(color(ink));
     if app.form == Form::Terminal {
         t
@@ -490,7 +568,7 @@ fn tool_mono(app: AppState, content: &'static str, size: f32, ink: Token) -> Tex
 }
 
 /// `Rests on` and the records the answer cites, ` · ` apart (`.rests`): a record opens its page,
-/// the search shows its outcome.
+/// the fixture's search shows its outcome.
 fn sources(app: AppState, label: &'static str, message_data: &AssistantMessage) -> AnyElement {
     let size = note_size(app.form);
     let mut parts = vec![words(app, label, size, Token::Ink3).into_element()];
@@ -498,21 +576,14 @@ fn sources(app: AppState, label: &'static str, message_data: &AssistantMessage) 
         if at > 0 {
             parts.push(words(app, "·", size, Token::Ink3).into_element());
         }
-        let page = source.page;
-        let toast = source.toast;
+        let action = source.action.clone();
         parts.push(
             link_words(
                 app,
-                source.label,
+                source.label.clone(),
                 size,
                 &format!("source-{at}"),
-                move || {
-                    if let Some(page) = page {
-                        app.open(page);
-                    } else if let Some(toast) = toast {
-                        app.toast(toast);
-                    }
-                },
+                move || act(app, action.clone()),
             )
             .into_element(),
         );
@@ -534,8 +605,8 @@ fn foot(app: AppState, message_data: &AssistantMessage) -> Option<AnyElement> {
     if let Some(stop) = &message_data.stop {
         parts.push(model_button(app, stop, ButtonKind::Ghost));
     }
-    if let Some(cost) = message_data.cost {
-        parts.push(words(app, cost, size, Token::Ink3).into_element());
+    if let Some(cost) = &message_data.cost {
+        parts.push(words(app, cost.clone(), size, Token::Ink3).into_element());
     }
     if let Some(note) = message_data.stopped_note {
         parts.push(chip(app, note, Hue::Neutral));
@@ -571,31 +642,36 @@ fn spaced(app: AppState, parts: Vec<AnyElement>) -> Vec<AnyElement> {
     out
 }
 
-/// The roll divider (`.sumrow`): the summary of the generation before, and its transcript.
+/// The roll divider (`.sumrow`): the summary of the generation before, and its transcript when
+/// it can be opened.
 fn roll_view(app: AppState, roll: &RollDivider, inset: f32) -> AnyElement {
     let form = app.form;
     let size = note_size(form);
-    let action = roll.transcript.action.clone();
-    let transcript = link_words(
-        app,
-        roll.transcript.label,
-        size,
-        &super::parts::test_id(&roll.transcript),
-        move || act(app, action.clone()),
-    )
-    .flex_shrink_0();
+    let transcript = roll.transcript.as_ref().map(|transcript| {
+        let action = transcript.action.clone();
+        link_words(
+            app,
+            transcript.label,
+            size,
+            &super::parts::test_id(transcript),
+            move || act(app, action.clone()),
+        )
+        .flex_shrink_0()
+    });
     let row = view()
         .flex_row()
         .items_center()
         .child(mark(app, Mark::Na, Hue::Neutral))
         .when(form == Form::Terminal, |row| row.child(term::space(1.0)))
         .child(
-            words(app, roll.text, size, Token::Ink3)
+            words(app, roll.text.clone(), size, Token::Ink3)
                 .flex_1()
                 .min_w(px(0.0)),
         )
-        .when(form == Form::Terminal, |row| row.child(term::space(1.0)))
-        .child(transcript);
+        .when(form == Form::Terminal && transcript.is_some(), |row| {
+            row.child(term::space(1.0))
+        })
+        .children(transcript);
     if form == Form::Terminal {
         return row.px(term::cells(1.0)).into_element();
     }
@@ -618,7 +694,7 @@ fn waiting(app: AppState, block: &WaitingBlock) -> AnyElement {
     let form = app.form;
     let size = if form == Form::Phone { 15.0 } else { 13.0 };
     let mut runs = vec![strong_run(block.state.label.clone())];
-    if let Some(explanation) = block.explanation {
+    if let Some(explanation) = &block.explanation {
         runs.push(text(format!("{DOT}{explanation}")));
     }
     if !block.note.is_empty() {
@@ -648,7 +724,13 @@ fn waiting(app: AppState, block: &WaitingBlock) -> AnyElement {
         .child(mark(app, Mark::Stale, Hue::Held))
         .when(form == Form::Terminal, |row| row.child(term::space(1.0)))
         .child(sentence)
-        .child(buttons.when(form != Form::Terminal, |b| b.gap(px(6.0))));
+        .child(buttons.when(form != Form::Terminal, |b| b.gap(px(6.0))))
+        .children(
+            block
+                .status
+                .as_ref()
+                .map(|status| chip(app, status.label.clone(), status.hue)),
+        );
     let box_row = if form == Form::Terminal {
         box_row
     } else {
@@ -670,12 +752,14 @@ fn queued(app: AppState, note: &QueueNote) -> AnyElement {
     let form = app.form;
     view()
         .gap(px(6.0))
-        .child(words(app, note.text, note_size(form), Token::Ink3))
-        .child(view().flex_row().justify_end().child(button_row(
-            app,
-            &note.buttons,
-            ButtonKind::Quiet,
-            6.0,
-        )))
+        .child(words(app, note.text.clone(), note_size(form), Token::Ink3))
+        .when(!note.buttons.is_empty(), |v| {
+            v.child(view().flex_row().justify_end().child(button_row(
+                app,
+                &note.buttons,
+                ButtonKind::Quiet,
+                6.0,
+            )))
+        })
         .into_element()
 }

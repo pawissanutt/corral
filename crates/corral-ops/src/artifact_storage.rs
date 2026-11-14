@@ -485,28 +485,32 @@ pub(crate) fn artifact_read_confined_limited(ctx: &Ctx, a: &Artifact, max: u64) 
     if a.purged_at.is_some() {
         return Ok(stub(a));
     }
+    let mut decoded = Vec::new();
+    artifact_reader_confined(ctx, a)?
+        .take(max.saturating_add(1))
+        .read_to_end(&mut decoded)
+        .context("reading decoded artifact")?;
+    Ok(decoded)
+}
+
+/// Stream a canonical snapshot through the same confinement boundary as evidence reads.
+/// Callers must independently bound decoded bytes and discard/offset work.
+pub(crate) fn artifact_reader_confined(ctx: &Ctx, a: &Artifact) -> Result<Box<dyn Read>> {
+    if a.purged_at.is_some() {
+        return Ok(Box::new(Cursor::new(stub(a))));
+    }
     if a.kind == corral_core::ArtifactKind::Plan
         && let Some(reader) = blob_reader(ctx, a)?
     {
-        let mut decoded = Vec::new();
-        reader
-            .take(max.saturating_add(1))
-            .read_to_end(&mut decoded)
-            .context("reading stored plan blob")?;
-        return Ok(decoded);
+        return Ok(reader);
     }
     let file = match open_beneath_artifacts(ctx, &a.path) {
         Ok(file) => file,
         Err(error) if absent(&error) => {
-            let Some(reader) = blob_reader(ctx, a)? else {
-                return Err(error);
+            return match blob_reader(ctx, a)? {
+                Some(reader) => Ok(reader),
+                None => Err(error),
             };
-            let mut decoded = Vec::new();
-            reader
-                .take(max.saturating_add(1))
-                .read_to_end(&mut decoded)
-                .context("reading artifact blob")?;
-            return Ok(decoded);
         }
         Err(error) => return Err(error),
     };
@@ -517,17 +521,11 @@ pub(crate) fn artifact_read_confined_limited(ctx: &Ctx, a: &Artifact, max: u64) 
     {
         bail!("artifact is not a regular file: {}", a.path);
     }
-    let reader: Box<dyn Read> = if a.compressed_bytes.is_some() {
-        Box::new(MultiGzDecoder::new(file))
+    if a.compressed_bytes.is_some() {
+        Ok(Box::new(MultiGzDecoder::new(file)))
     } else {
-        Box::new(file)
-    };
-    let mut decoded = Vec::new();
-    reader
-        .take(max.saturating_add(1))
-        .read_to_end(&mut decoded)
-        .context("reading decoded artifact")?;
-    Ok(decoded)
+        Ok(Box::new(file))
+    }
 }
 
 #[cfg(target_os = "linux")]

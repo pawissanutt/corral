@@ -58,6 +58,21 @@ when you dispatch, before a worktree exists.
 Other `[agent]` settings apply only to corral-pi runs: `question_unattended_secs` (default
 600), `gate_start_uncertain_secs` (default 300) and `drain_secs` (default 60).
 
+### Daemon-owned app turns
+
+Paired-app owner entries keep their original canonical entry/input IDs and exact owner
+words in delivery records and streamed answer correlation. The remote owner host derives
+the bridge turn-origin key with the existing `toolRequestId(sessionId, "owner:" + entry)`
+hash convention: arbitrary allowed entry IDs (including slashes and 256-byte IDs) never
+become raw lifecycle idempotency keys. The resulting `rq-` key is deterministic for the
+session and entry, uses only safe ASCII, and stays below the server's 128-character limit.
+Duplicate deliveries retain their original result; changed payloads still conflict.
+
+Host TypeScript is loaded when the Bun process starts. After changing this producer,
+pause/resume the daemon-owned assistant to launch a fresh generation; an already-running
+generation does not reload the code.
+
+
 ### Retained memory
 
 Bound corral-pi PMs, assistants and workers have `corral_memory_list`,

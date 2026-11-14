@@ -12,7 +12,8 @@ use std::f32::consts::{SQRT_2, TAU};
 use nsh_core::canvas::CanvasTextAlign;
 use nsh_core::prelude::*;
 
-use crate::model::timeline::{self, Burnup, Kind, Layout};
+use super::shown::Shown;
+use crate::model::timeline::{self, Burnup, BurnupSeries, Kind, Layout};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::marks::{hue_fill, hue_ink};
@@ -29,6 +30,14 @@ const DOT_RADIUS: f32 = 4.5;
 const TITLE_X: f32 = 52.0;
 /// The phone puts the title after the id at the mockup's 7 points a character.
 const PHONE_ID_ADVANCE: f32 = 7.0;
+/// Estimated advances of the canvas fonts, to keep words inside their room (a canvas cannot
+/// measure): 11 pt mono ids, 12 pt titles, 11 pt semibold annotations, 10.5 pt mono axis.
+const ID_ADVANCE: f32 = 6.7;
+const TITLE_ADVANCE: f32 = 6.4;
+const NOTE_ADVANCE: f32 = 6.3;
+const AXIS_ADVANCE: f32 = 6.4;
+/// Room kept between a lane's label and the plot, and between two captions.
+const LABEL_GAP: f32 = 8.0;
 /// Room under the last lane for the last-visit and now captions.
 const FOOT: f32 = 18.0;
 /// The legend swatch (`.legend i`).
@@ -45,26 +54,24 @@ const IDLE_ALPHA: f32 = 0.55;
 
 /// The lanes chart: hour ticks and grid, the owner and supervisor lanes, one lane per task with
 /// its segments drawn by kind (solid run, gate, review, land; hatched idle, stall, stale verdict
-/// and waiting on you), the question strip and the annotations above their bars, and the
-/// last-visit and now lines with their captions. It fills its container's width and lays out
-/// again when that changes; desktop keeps the 190 pt label column, the phone puts labels above the
-/// bars and labels every other hour. Screen readers hear "Run timeline 09:00 to 22:12" and then
-/// each segment's own label.
-pub fn lanes(app: AppState) -> AnyElement {
+/// and waiting on you; outlined awaiting acceptance; dashed where times were not recorded), the
+/// question strip and the annotations above their bars, a lane's unrecorded phases written in its
+/// track, and the last-visit and now lines with their captions. It fills its container's width
+/// and lays out again when that or the plot changes; desktop keeps the 190 pt label column, the
+/// phone puts labels above the bars and labels every other tick. Screen readers hear the plot's
+/// description and then each segment's own label.
+pub fn lanes(app: AppState, data: Memo<Shown>) -> AnyElement {
     let form = app.form;
     let phone = form == Form::Phone;
     let width = signal(0.0_f32);
+    let plot = computed(move || data.with(|shown| shown.plot.clone()));
     view()
         .w_full()
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
         .child(dynamic(move || {
             let room = width.get();
-            (room > 0.0).then(|| {
-                let layout = app
-                    .timeline
-                    .with(|state| timeline::layout(state, room, phone));
-                drawn_lanes(layout, form)
-            })
+            let plot = plot.get()?;
+            (room > 0.0).then(|| drawn_lanes(timeline::layout(&plot, room, phone), form))
         }))
         .into_element()
 }
@@ -72,7 +79,7 @@ pub fn lanes(app: AppState) -> AnyElement {
 fn drawn_lanes(layout: Layout, form: Form) -> AnyElement {
     let phone = form == Form::Phone;
     let (width, height) = (layout.width, layout.height);
-    let spoken = layout.accessible_label;
+    let spoken = layout.accessible_label.clone();
     let boxes = hit_boxes(&layout, form);
     view()
         .relative()
@@ -110,10 +117,10 @@ pub fn swatch(kind: Kind) -> AnyElement {
     .into_element()
 }
 
-/// The goal burn-up (R23): the 0, 20, 40, 60 grid, scope dashed in ink-3, landed solid in ink, the
-/// two end labels and the first and last day. Its container's width, 150 pt high (140 on the
-/// phone); screen readers hear the model's summary.
-pub fn burnup(app: AppState) -> AnyElement {
+/// The goal burn-up (R23): the round grid, scope dashed in ink-3, landed solid in ink, the two end
+/// labels and the first and last day. Its container's width, 150 pt high (140 on the phone);
+/// screen readers hear the model's summary.
+pub fn burnup(app: AppState, series: BurnupSeries) -> AnyElement {
     let height = if app.form == Form::Phone {
         BURNUP_HEIGHT_PHONE
     } else {
@@ -127,8 +134,8 @@ pub fn burnup(app: AppState) -> AnyElement {
         .child(dynamic(move || {
             let room = width.get();
             (room > 0.0).then(|| {
-                let chart = timeline::burnup(room, height);
-                let spoken = chart.accessible_label;
+                let chart = timeline::burnup(&series, room, height);
+                let spoken = chart.accessible_label.clone();
                 canvas(move || paint_burnup(&chart))
                     .w(px(room))
                     .h(px(height))
@@ -271,6 +278,20 @@ fn bar(p: Painter, kind: Kind, area: Rect, radius: f32) -> Painter {
                 rising: false,
             },
         ),
+        Kind::Held => solid(p, area, radius, now(hue_fill(hue)))
+            .stroke_color(now(hue_ink(hue)))
+            .line_width(1.2)
+            .begin_path()
+            .round_rect(area.bounds(), px(radius))
+            .stroke(),
+        Kind::Unavailable => p
+            .stroke_color(ink(Token::Ink4))
+            .line_width(1.0)
+            .line_dash(&[px(3.0), px(2.0)])
+            .begin_path()
+            .round_rect(area.bounds(), px(radius))
+            .stroke()
+            .line_dash(&[]),
     }
 }
 
@@ -323,28 +344,69 @@ fn hatch(p: Painter, area: Rect, radius: f32, stripes: Stripes) -> Painter {
 
 /// A lane's mono id in ink-3 and its title in ink: beside each other in the desktop's label
 /// column, on one line above the bar on the phone.
+/// `words` cut with an ellipsis to fit `room` points at `advance` points a character.
+fn clip(words: &str, room: f32, advance: f32) -> String {
+    let fits = (room / advance).floor().max(0.0) as usize;
+    if words.chars().count() <= fits {
+        return words.to_owned();
+    }
+    let mut kept: String = words.chars().take(fits.saturating_sub(1)).collect();
+    kept.push('…');
+    kept
+}
+
+/// Where words `advance` points a character start so they end inside `right` without starting
+/// before `left`.
+fn fit_start(x: f32, words: &str, advance: f32, left: f32, right: f32) -> f32 {
+    let width = words.chars().count() as f32 * advance;
+    x.min(right - width).max(left)
+}
+
+/// A lane label's id and title, each cut to its room, with where the title starts: after the
+/// id (at least the mockup's 52 pt on desktop), inside the label column on desktop and the
+/// canvas on the phone.
+fn label_parts(layout: &Layout, phone: bool, (id, title): (&str, &str)) -> (String, String, f32) {
+    let right = if phone {
+        layout.width
+    } else {
+        layout.label_width - LABEL_GAP
+    };
+    let id = clip(id, right, if phone { PHONE_ID_ADVANCE } else { ID_ADVANCE });
+    let id_end = id.chars().count() as f32 * if phone { PHONE_ID_ADVANCE } else { ID_ADVANCE };
+    let title_x = if phone {
+        id_end + LABEL_GAP
+    } else {
+        TITLE_X.max(id_end + LABEL_GAP)
+    };
+    (id, clip(title, right - title_x, TITLE_ADVANCE), title_x)
+}
+
+/// Whether a lane label is cut to fit, so its full words need a hover hint.
+fn label_cut(layout: &Layout, phone: bool, words: (&str, &str)) -> bool {
+    let (id, title, _) = label_parts(layout, phone, words);
+    id != words.0 || title != words.1
+}
+
 fn lane_label(
     p: Painter,
     layout: &Layout,
     phone: bool,
     lane_y: f32,
-    (id, title): (&str, &str),
+    words: (&str, &str),
 ) -> Painter {
-    let (title_x, baseline) = if phone {
-        (
-            id.chars().count() as f32 * PHONE_ID_ADVANCE + 8.0,
-            lane_y + 11.0,
-        )
+    let (id, title, title_x) = label_parts(layout, phone, words);
+    let baseline = if phone {
+        lane_y + 11.0
     } else {
-        (TITLE_X, lane_y + layout.lane_height / 2.0 + 4.0)
+        lane_y + layout.lane_height / 2.0 + 4.0
     };
     p.text_align(CanvasTextAlign::Start)
         .font(&mono_font(11.0))
         .fill_color(ink(Token::Ink3))
-        .fill_text(id, 0.0, baseline)
+        .fill_text(&id, 0.0, baseline)
         .font(&text_font(400, 12.0))
         .fill_color(ink(Token::Ink))
-        .fill_text(title, title_x, baseline)
+        .fill_text(&title, title_x, baseline)
 }
 
 fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
@@ -368,7 +430,10 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
         .fill_color(quiet)
         .text_align(CanvasTextAlign::Center);
     for tick in layout.ticks.iter().filter(|tick| !tick.label.is_empty()) {
-        p = p.fill_text(&tick.label, tick.x, 14.0);
+        // Centred on its tick, but kept on the canvas: the phone's first day sits at x = 0.
+        let half = tick.label.chars().count() as f32 * AXIS_ADVANCE / 2.0;
+        let x = tick.x.min(layout.width - half).max(half);
+        p = p.fill_text(&tick.label, x, 14.0);
     }
 
     p = lane_label(p, layout, phone, layout.top, layout.owner_label);
@@ -395,7 +460,7 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
             2.0,
             fill,
         );
-        if let Some(words) = interval.label {
+        if let Some(words) = &interval.label {
             p = p
                 .font(&axis)
                 .fill_color(quiet)
@@ -405,12 +470,27 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
     }
 
     for lane in &layout.lanes {
-        p = lane_label(p, layout, phone, lane.y, (lane.id, lane.title));
+        p = lane_label(
+            p,
+            layout,
+            phone,
+            lane.y,
+            (lane.id.as_str(), lane.title.as_str()),
+        );
         let top = bar_top(layout, phone, lane.y, BAR);
+        if let Some(words) = &lane.missing {
+            let x = lane_end(lane).map_or(layout.label_width, |end| end + 6.0);
+            let words = clip(words, layout.width - x, NOTE_ADVANCE);
+            p = p
+                .font(&text_font(400, 11.0))
+                .fill_color(ink(Token::Ink3))
+                .text_align(CanvasTextAlign::Start)
+                .fill_text(&words, x, top + BAR - 2.0);
+        }
         for segment in &lane.segments {
             let (area, radius) = segment_rect(top, segment);
             p = bar(p, segment.kind, area, radius);
-            if let Some(words) = segment.annotation {
+            if let Some(words) = &segment.annotation {
                 let (x, y) = if segment.overlay {
                     (segment.x + 4.0, top - 9.0)
                 } else if phone {
@@ -418,6 +498,14 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
                 } else {
                     (segment.x + 4.0, top - 3.0)
                 };
+                // Kept on the canvas: a wait ending at now would run off its right edge.
+                let x = fit_start(
+                    x,
+                    words,
+                    NOTE_ADVANCE,
+                    layout.label_width,
+                    layout.width - 2.0,
+                );
                 p = p
                     .font(&note)
                     .fill_color(now(hue_ink(segment.hue)))
@@ -427,20 +515,21 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
         }
     }
 
-    let visit = &layout.last_visit;
-    p = p
-        .stroke_color(quiet)
-        .line_width(1.0)
-        .line_dash(&[px(3.0), px(3.0)])
-        .begin_path()
-        .move_to(visit.x, layout.top - 4.0)
-        .line_to(visit.x, foot)
-        .stroke()
-        .line_dash(&[])
-        .font(&axis)
-        .fill_color(quiet)
-        .text_align(CanvasTextAlign::End)
-        .fill_text(visit.label, visit.x - 4.0, foot + 12.0);
+    if let Some(visit) = &layout.last_visit {
+        p = p
+            .stroke_color(quiet)
+            .line_width(1.0)
+            .line_dash(&[px(3.0), px(3.0)])
+            .begin_path()
+            .move_to(visit.x, layout.top - 4.0)
+            .line_to(visit.x, foot)
+            .stroke()
+            .line_dash(&[])
+            .font(&axis)
+            .fill_color(quiet)
+            .text_align(CanvasTextAlign::End)
+            .fill_text(&visit.label, visit_caption_end(layout, visit), foot + 12.0);
+    }
     let strong = ink(Token::Ink);
     let current = &layout.now;
     p.stroke_color(strong)
@@ -449,8 +538,29 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
         .move_to(current.x, layout.top - 4.0)
         .line_to(current.x, foot)
         .stroke()
+        .font(&axis)
         .fill_color(strong)
-        .fill_text(current.label, current.x - 2.0, foot + 12.0)
+        .text_align(CanvasTextAlign::End)
+        .fill_text(&current.label, current.x - 2.0, foot + 12.0)
+}
+
+/// Where the last-visit caption ends: beside its line, but clear of the now caption that ends
+/// at now and inside the plot on the left.
+fn visit_caption_end(layout: &Layout, visit: &timeline::Line) -> f32 {
+    let width = |words: &str| words.chars().count() as f32 * AXIS_ADVANCE;
+    let now_start = layout.now.x - 2.0 - width(&layout.now.label);
+    (visit.x - 4.0)
+        .min(now_start - LABEL_GAP)
+        .max(layout.label_width + width(&visit.label))
+}
+
+/// Where a lane's last drawn bar ends, if it has one.
+fn lane_end(lane: &timeline::PlacedLane) -> Option<f32> {
+    lane.segments
+        .iter()
+        .filter(|segment| !segment.overlay)
+        .map(|segment| segment.x + segment.width)
+        .reduce(f32::max)
 }
 
 /// The transparent boxes over the owner dots, the supervisor bars and every segment.
@@ -475,9 +585,31 @@ fn hit_boxes(layout: &Layout, form: Form) -> Vec<AnyElement> {
     }
     for lane in &layout.lanes {
         let top = bar_top(layout, phone, lane.y, BAR);
+        let words = (lane.id.as_str(), lane.title.as_str());
+        if form == Form::Desktop && label_cut(layout, phone, words) {
+            boxes.push(hit(
+                form,
+                Rect::new(
+                    0.0,
+                    lane.y,
+                    layout.label_width - LABEL_GAP,
+                    layout.lane_height,
+                ),
+                &format!("{} {}", lane.id, lane.title),
+            ));
+        }
         for segment in &lane.segments {
             let (area, _) = segment_rect(top, segment);
             boxes.push(hit(form, area, &segment.accessible_label));
+        }
+        if let Some(words) = &lane.missing {
+            let x = lane_end(lane).map_or(layout.label_width, |end| end + 6.0);
+            let width = (layout.width - x).max(0.0);
+            boxes.push(hit(
+                form,
+                Rect::new(x, top, width, BAR),
+                &format!("{} {}", lane.id, words),
+            ));
         }
     }
     boxes
@@ -533,7 +665,7 @@ fn polyline(p: Painter, points: &[timeline::Point]) -> Painter {
 fn paint_burnup(chart: &Burnup) -> Painter {
     let axis = mono_font(10.5);
     let quiet = ink(Token::Ink3);
-    let [first_day, last_day] = chart.axis_labels;
+    let [first_day, last_day] = &chart.axis_labels;
     let left = first_day.1;
     let right = last_day.1;
     let mut p = Painter::new()
@@ -564,11 +696,11 @@ fn paint_burnup(chart: &Burnup) -> Painter {
         .font(&axis)
         .fill_color(quiet)
         .text_align(CanvasTextAlign::End);
-    for (words, x, y) in chart.series_labels {
-        p = p.fill_text(words, x, y);
+    for (words, x, y) in &chart.series_labels {
+        p = p.fill_text(words, *x, *y);
     }
     p.text_align(CanvasTextAlign::Start)
-        .fill_text(first_day.0, first_day.1, first_day.2)
+        .fill_text(&first_day.0, first_day.1, first_day.2)
         .text_align(CanvasTextAlign::End)
-        .fill_text(last_day.0, last_day.1, last_day.2)
+        .fill_text(&last_day.0, last_day.1, last_day.2)
 }

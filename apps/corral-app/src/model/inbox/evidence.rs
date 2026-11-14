@@ -1,4 +1,4 @@
-//! Independently loading evidence and the selected artifact contents for the handover.
+//! The fixture's independently loading evidence and the selected artifact contents.
 
 use super::sheet::{Assessment, ButtonKind, DiffLine, EvidenceBody, EvidenceTab, Notice, button};
 use super::{Action, EXCERPT, Evidence, LOGTAIL, State};
@@ -33,15 +33,15 @@ pub fn assessment(state: &State, env: Env) -> Assessment {
         });
     }
     let tabs = [
-        (Evidence::Diff, "Diff hunk"),
-        (Evidence::File, "File excerpt"),
-        (Evidence::Log, "Gate log tail"),
-        (Evidence::Shot, "Screenshot"),
+        (Evidence::Diff, "Diff hunk", "diff"),
+        (Evidence::File, "File excerpt", "file"),
+        (Evidence::Log, "Gate log tail", "log"),
+        (Evidence::Shot, "Screenshot", "shot"),
     ]
     .into_iter()
-    .map(|(evidence, label)| EvidenceTab {
-        label,
-        evidence,
+    .map(|(evidence, label, slug)| EvidenceTab {
+        label: label.into(),
+        test_id: format!("seg-evidence-{slug}"),
         selected: state.evidence == evidence,
         action: Action::Evidence(evidence),
     })
@@ -49,41 +49,17 @@ pub fn assessment(state: &State, env: Env) -> Assessment {
     let body = match state.evidence {
         Evidence::Diff => {
             let hunk = board::hunk();
-            let (mut old, mut new) = hunk.start;
-            let lines = hunk
-                .lines
-                .iter()
-                .map(|&(kind, text)| {
-                    let (old_number, new_number, prefix) = match kind {
-                        LineKind::Context => {
-                            let pair = (Some(old), Some(new), "");
-                            old += 1;
-                            new += 1;
-                            pair
-                        }
-                        LineKind::Del => {
-                            let pair = (Some(old), None, "-");
-                            old += 1;
-                            pair
-                        }
-                        LineKind::Add => {
-                            let pair = (None, Some(new), "+");
-                            new += 1;
-                            pair
-                        }
-                    };
-                    DiffLine {
-                        old: old_number,
-                        new: new_number,
-                        kind,
-                        prefix,
-                        text,
-                    }
-                })
-                .collect();
+            let (old, new) = hunk.start;
             EvidenceBody::Diff {
-                hunk,
-                lines,
+                file: hunk.file.into(),
+                at: hunk.at.into(),
+                lines: number_lines(
+                    old,
+                    new,
+                    hunk.lines
+                        .iter()
+                        .map(|&(kind, text)| (kind, text.to_owned())),
+                ),
                 note: vec![
                     span("With option 1, "),
                     span("restoreInput").mono(),
@@ -96,16 +72,17 @@ pub fn assessment(state: &State, env: Env) -> Assessment {
             }
         }
         Evidence::File => EvidenceBody::Text {
-            file: EXCERPT.file,
+            file: EXCERPT.file.into(),
             attribution: None,
             lines: EXCERPT
                 .lines
                 .iter()
                 .map(|line| vec![span(*line).mono()])
                 .collect(),
+            note: None,
         },
         Evidence::Log => EvidenceBody::Text {
-            file: LOGTAIL.file,
+            file: LOGTAIL.file.into(),
             attribution: Some("tail illustrative · title real"),
             lines: LOGTAIL
                 .lines
@@ -118,6 +95,7 @@ pub fn assessment(state: &State, env: Env) -> Assessment {
                     })]
                 })
                 .collect(),
+            note: None,
         },
         Evidence::Shot => EvidenceBody::Shot {
             file: "artifacts/T-868/R1/7bc302c8-52x24.ansi · rendered",
@@ -151,4 +129,41 @@ pub fn assessment(state: &State, env: Env) -> Assessment {
         tabs,
         body,
     }
+}
+
+/// Number unified lines from the hunk's first old and new line.
+pub(crate) fn number_lines(
+    mut old: u32,
+    mut new: u32,
+    lines: impl Iterator<Item = (LineKind, String)>,
+) -> Vec<DiffLine> {
+    lines
+        .map(|(kind, text)| {
+            let (old_number, new_number, prefix) = match kind {
+                LineKind::Context => {
+                    let pair = (Some(old), Some(new), "");
+                    old += 1;
+                    new += 1;
+                    pair
+                }
+                LineKind::Del => {
+                    let pair = (Some(old), None, "-");
+                    old += 1;
+                    pair
+                }
+                LineKind::Add => {
+                    let pair = (None, Some(new), "+");
+                    new += 1;
+                    pair
+                }
+            };
+            DiffLine {
+                old: old_number,
+                new: new_number,
+                kind,
+                prefix,
+                text,
+            }
+        })
+        .collect()
 }

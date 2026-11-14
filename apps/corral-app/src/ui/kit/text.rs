@@ -95,15 +95,20 @@ fn span_of(app: AppState, run: &Span, size: f32) -> Text {
         piece = piece.line_through();
     }
     if let Some(page) = run.link {
-        piece = piece
-            .underline()
-            .text_decoration_color(color(Token::Ink).opacity(0.35))
-            .underline_offset(px(2.0))
-            .cursor_pointer()
-            .role(AccessibilityRole::Link)
-            .on_press(move || app.open(page));
+        piece = link_style(piece).on_press(move || app.open(page));
+    } else if let Some(live) = run.live.clone() {
+        piece = link_style(piece).on_press(move || app.open_live(live.clone()));
     }
     piece
+}
+
+fn link_style(piece: Text) -> Text {
+    piece
+        .underline()
+        .text_decoration_color(color(Token::Ink).opacity(0.35))
+        .underline_offset(px(2.0))
+        .cursor_pointer()
+        .role(AccessibilityRole::Link)
 }
 
 /// Body text at the form's size in ink, one paragraph that wraps (chain `.truncate()` for one

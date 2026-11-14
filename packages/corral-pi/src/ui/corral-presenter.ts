@@ -421,6 +421,25 @@ const NOTES_DID: Readonly<Record<string, string>> = {
   list: "Read PM notes", add: "Noted", supersede: "Replaced note", remove: "Removed note",
 };
 const BOARD_DID: Readonly<Record<string, string>> = { act: "Ran board action", park: "Parked", attend: "Handled" };
+const OWNER_ASK_DID: Readonly<Record<string, string>> = {
+  open: "Asked the owner", get: "Checked the owner's answer", withdraw: "Withdrew the owner question",
+};
+/** Whether an owner prompt asks for permission or a confirmation; a status read carries it on its result only. */
+function promptKind(c: Ctx): string | undefined {
+  return str(c.args.kind) ?? str(c.result?.kind);
+}
+/** Where a canonical owner question or prompt stands: open ones wait for the owner, settled ones say how they ended. */
+function ownerDigest(result: Fields, kind: string | undefined): Digest | undefined {
+  const state = str(result.state);
+  if (!state) return undefined;
+  if (state === "open" || state === "escalated") return { state: "needs-you", tone: "warning", outcome: "waiting for your answer" };
+  if (state === "answered") {
+    if (kind === "permission") return result.authorized === true ? { outcome: "allowed" } : { outcome: "denied", tone: "warning" };
+    if (kind === "confirmation") return result.authorized === true ? { outcome: "confirmed" } : { outcome: "declined", tone: "warning" };
+    return { outcome: "answered" };
+  }
+  return { outcome: words(state), tone: state === "expired" ? "warning" : "muted" };
+}
 
 const ENTRIES: Readonly<Record<CorralOp, Entry>> = {
   hello: { did: "Connected to corral", doing: "Connecting to corral", noun: "Connection" },
@@ -762,6 +781,33 @@ const ENTRIES: Readonly<Record<CorralOp, Entry>> = {
     prose: c => str(c.args.note) ?? str(c.args.reason),
   },
   pm_shadow: { did: "Recorded a shadow decision", doing: "Recording a shadow decision", noun: "Shadow decision" },
+  owner_ask: {
+    did: c => OWNER_ASK_DID[str(c.args.action) ?? ""] ?? "Asked the owner",
+    doing: c => c.args.action === "withdraw" ? "Withdrawing the owner question"
+      : c.args.action === "get" ? "Waiting for the owner's answer" : "Asking the owner",
+    noun: "Owner question",
+    target: c => str(c.result?.key) ?? str(c.args.key),
+    digest: c => ownerDigest(c.result, "question"),
+    prose: c => c.args.action === "open" ? str(c.args.text) : undefined,
+  },
+  owner_prompt: {
+    did: c => promptKind(c) === "confirmation" ? "Asked you to confirm" : "Asked your permission",
+    doing: c => c.args.action === "get" ? "Waiting for your decision"
+      : promptKind(c) === "confirmation" ? "Asking you to confirm" : "Asking your permission",
+    noun: "Owner prompt",
+    target: c => str(c.args.command) ?? str(c.args.tool) ?? str(c.result?.key),
+    digest: c => ownerDigest(c.result, promptKind(c)),
+    prose: c => str(c.args.preview),
+  },
+  idea_file: {
+    did: "Filed the owner's idea", doing: "Filing the owner's idea", noun: "Filed idea",
+    target: c => str(c.result?.task) ?? str(c.args.title),
+    digest: c => ({
+      outcome: [str(c.result.task) ? str(c.args.title) : undefined, "owner's words kept verbatim"]
+        .filter(Boolean).map(part => flat(String(part))).join(" · "),
+    }),
+    prose: c => str(c.args.body),
+  },
 };
 
 /** The corral operation behind each model-facing tool name. */

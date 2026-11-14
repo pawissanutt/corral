@@ -539,6 +539,18 @@ An unfinished publication receipt from before tracker Plans is upgraded on
 resume without changing existing child IDs. Completed historical decompositions
 are left as they were.
 
+The app keeps the design and tracker as separate records with stable task IDs,
+even when they share a title and revision. Its canonical `role` identifies a
+`design`, `tracker`, or known ordinary record (`other`); an absent role means
+an older producer has not supplied that fact. The optional `linked` ID connects
+a design to its published tracker through the indexed parent relation, and a
+tracker to its source design through `approved_scope.approved_design`. These
+links are not inferred from titles. After publication the design's Task status
+is Done but its Plan state is Approved: the document was accepted and published,
+not “approved but not started.” The tracker remains Executing until its own
+Task status is Done, when its Plan state becomes Complete; completed member
+tasks alone do not establish aggregate acceptance.
+
 The tracker is never dispatchable. Sync marks it Done only when all children
 are Done, and that aggregate state isn't final acceptance of the Plan.
 Trackers can also be imported directly; see [Import a plan](import.md).

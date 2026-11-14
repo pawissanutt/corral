@@ -1,9 +1,9 @@
-//! Pure handover descriptors. Band order and wording are resolved here, not in a renderer.
+//! Pure handover descriptors and the fixture preview's builders. Band order and wording are
+//! resolved here or in `live_sheet`, never in a renderer.
 
-use super::{
-    Action, Evidence, HistoryEntry, Message, Q, QuestionState, State, Wait, assessment, phone,
-};
-use crate::model::board::{self, Hunk, LineKind};
+use super::{Action, Evidence, Q, QuestionState, State, WaitKind, assessment, phone};
+use crate::model::Id;
+use crate::model::board::{self, LineKind};
 use crate::model::effect::{Conn, DataMode, Env, Page};
 use crate::model::hue::Hue;
 use crate::model::nav::Destination;
@@ -74,22 +74,37 @@ pub struct Header {
     pub chips: Vec<Chip>,
     /// Mono question key and revision.
     pub record: String,
-    /// Worker, escalation and age line.
+    /// Asker, escalation and age line.
     pub attribution: String,
     /// Full title.
-    pub title: &'static str,
+    pub title: String,
+}
+
+/// One dependency in “Waiting on this answer”.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitLine {
+    /// Task or plan id.
+    pub id: String,
+    /// Dependency explanation.
+    pub text: String,
+    /// The mark and emphasis of this dependency.
+    pub kind: WaitKind,
 }
 
 /// S: the decision, affected work and optional immutable answer stamp.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Situation {
     /// The complete question.
-    pub text: &'static str,
+    pub text: String,
+    /// The recorded deadline and what happens at it, when there is one.
+    pub deadline: Option<Rich>,
     /// Dependency-list heading.
     pub waits_title: &'static str,
-    /// Waiting tasks, including the explicitly independent task.
-    pub waits: &'static [Wait],
-    /// Answered, answered-elsewhere or queued stamp, absent when open.
+    /// Waiting tasks, including explicitly independent ones.
+    pub waits: Vec<WaitLine>,
+    /// Shown under the heading when nothing is recorded as waiting.
+    pub waits_empty: Option<&'static str>,
+    /// Answered, answered-elsewhere, pending, refused or queued stamp, absent when open.
     pub notice: Option<Notice>,
 }
 
@@ -155,8 +170,13 @@ pub enum Background {
         goal: Rich,
         /// Plan, governing revision, run and step metadata.
         plan_line: Rich,
-        /// Source miniature graph, never inferred by the UI.
-        graph: MiniGraph,
+        /// Source miniature graph, never inferred by the UI; absent when none was served.
+        graph: Option<MiniGraph>,
+    },
+    /// Nothing about the asking task or plan is recorded.
+    Absent {
+        /// What is missing.
+        note: &'static str,
     },
 }
 
@@ -164,9 +184,9 @@ pub enum Background {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceTab {
     /// The tab's label.
-    pub label: &'static str,
-    /// Its typed evidence identity.
-    pub evidence: Evidence,
+    pub label: String,
+    /// Its test id (`seg-evidence-<name>`).
+    pub test_id: String,
     /// Its pressed state.
     pub selected: bool,
     /// Reducer action selecting the tab.
@@ -185,16 +205,18 @@ pub struct DiffLine {
     /// Prefix cell; context uses an empty prefix.
     pub prefix: &'static str,
     /// Source code text.
-    pub text: &'static str,
+    pub text: String,
 }
 
 /// The selected evidence contents, including file titles and real/illustrative labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvidenceBody {
-    /// Real patch hunk and option-1 explanation.
+    /// A patch hunk and its explanation.
     Diff {
-        /// Canonical board hunk, without duplicating its data.
-        hunk: &'static Hunk,
+        /// File path.
+        file: String,
+        /// Hunk header, empty when the excerpt carries none.
+        at: String,
         /// Display-ready line numbering.
         lines: Vec<DiffLine>,
         /// Explanation below the hunk.
@@ -203,11 +225,13 @@ pub enum EvidenceBody {
     /// Interface excerpt or log tail.
     Text {
         /// File title.
-        file: &'static str,
+        file: String,
         /// Illustrative attribution, if present.
         attribution: Option<&'static str>,
-        /// Styled content lines; PASS lines are marked successful.
+        /// Styled content lines.
         lines: Vec<Rich>,
+        /// Truncation or provenance line under the box.
+        note: Option<Rich>,
     },
     /// Rendered illustrative terminal screenshot.
     Shot {
@@ -222,9 +246,16 @@ pub enum EvidenceBody {
         /// Caption beneath the screenshot.
         note: &'static str,
     },
+    /// A reference corrald could not resolve, with its reason.
+    Unresolved {
+        /// Reference title.
+        file: String,
+        /// Why it is not shown.
+        reason: String,
+    },
 }
 
-/// A: evidence is independently loading, failed, or ready with four tabs.
+/// A: evidence is independently loading, failed, absent or ready with its tabs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Assessment {
     /// No evidence tabs are shown while the content streams in.
@@ -234,13 +265,18 @@ pub enum Assessment {
         /// Explanatory copy.
         note: &'static str,
     },
-    /// The board-projected options remain current despite an artifact error.
+    /// The projected options remain current despite an artifact error.
     Error(Notice),
+    /// The asker attached nothing.
+    Empty {
+        /// Explanatory copy.
+        note: &'static str,
+    },
     /// Loaded evidence toolbar and selected body.
     Ready {
         /// Toolbar accessibility name.
         label: &'static str,
-        /// Four ordered evidence tabs.
+        /// Ordered evidence tabs.
         tabs: Vec<EvidenceTab>,
         /// The selected body.
         body: EvidenceBody,
@@ -253,19 +289,19 @@ pub struct AnswerOption {
     /// One-based number printed on the option.
     pub number: usize,
     /// Complete option label.
-    pub label: &'static str,
-    /// Worker-recommendation chip, absent on the other option.
-    pub recommendation_chip: Option<&'static str>,
-    /// Whether this option is selected, including the elsewhere winning answer.
+    pub label: String,
+    /// Asker-recommendation chip, absent on the other options.
+    pub recommendation_chip: Option<String>,
+    /// Whether this option is selected, including a winning answer from elsewhere.
     pub selected: bool,
     /// Whether the radio is interactive.
     pub enabled: bool,
     /// Choose this option.
     pub action: Action,
-    /// Then, Unblocks, Costs values in the label order on Recommendation.
-    pub consequences: [&'static str; 3],
-    /// “see” evidence link with the correct tab action.
-    pub proof: Button,
+    /// Then, Unblocks, Costs: each label with its value, only those that are recorded.
+    pub consequences: Vec<(&'static str, String)>,
+    /// “see” evidence link with the correct tab action, when the option cites evidence.
+    pub proof: Option<Button>,
 }
 
 /// R: options, free-answer field and recommendation explanation.
@@ -273,52 +309,69 @@ pub struct AnswerOption {
 pub struct Recommendation {
     /// Radiogroup accessibility name.
     pub label: &'static str,
-    /// Labels for each option's three consequence rows.
-    pub consequence_labels: [&'static str; 3],
-    /// Both numbered options.
+    /// Every numbered option.
     pub options: Vec<AnswerOption>,
-    /// Whether this answer is read-only; queued answers remain editable in the source.
+    /// Whether this answer is read-only.
     pub locked: bool,
     /// Pencil glyph on the alternate-answer row.
     pub draft_mark: &'static str,
     /// Alternate-answer placeholder.
     pub draft_placeholder: &'static str,
-    /// Current alternate answer, including whitespace as entered.
-    pub draft: String,
-    /// Bold recommendation lead-in.
-    pub reason_label: &'static str,
-    /// Complete recommendation reason.
-    pub reason: &'static str,
+    /// The live question whose alternate answer the field edits; None in the fixture.
+    pub draft_key: Option<Id>,
+    /// Bold lead-in and complete recommendation reason, when the asker gave one.
+    pub reason: Option<Rich>,
+}
+
+/// One follow-up in the thread with the asker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadLine {
+    /// Speaker shown in bold.
+    pub who: String,
+    /// Device or surface attribution, when present.
+    pub via: Option<String>,
+    /// Message time.
+    pub at: String,
+    /// Message body.
+    pub text: String,
 }
 
 /// Thread content shared by the inline band and phone sheet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadView {
     /// Phone sheet title.
-    pub title: &'static str,
-    /// The source's two illustrative messages.
-    pub messages: &'static [Message],
+    pub title: String,
+    /// Messages, oldest first.
+    pub messages: Vec<ThreadLine>,
+    /// Shown instead of messages when there are none.
+    pub empty: Option<&'static str>,
     /// Reply textarea placeholder.
-    pub reply_placeholder: &'static str,
+    pub reply_placeholder: String,
     /// Textarea accessibility name.
     pub reply_label: &'static str,
-    /// Ask button and source send toast.
+    /// The live question whose follow-up the field edits; None in the fixture.
+    pub reply_key: Option<Id>,
+    /// Whether the reply field accepts typing.
+    pub reply_enabled: bool,
+    /// Send control.
     pub send: Button,
-    /// Illustrative attribution beneath the reply.
-    pub attribution: &'static str,
+    /// Illustrative attribution beneath the reply, fixture only.
+    pub attribution: Option<&'static str>,
+    /// The follow-up's pending, refused or unknown state.
+    pub status: Option<Notice>,
     /// Done control for dismissing the sheet.
     pub done: Button,
 }
 
-/// One history row with its owner-decision versus worker-attempt label resolved.
+/// One history row with its owner-decision versus attempt label resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryRow {
     /// Complete date and kind label.
     pub label: String,
     /// Whether this row uses the owner-decision mark.
     pub owner_decision: bool,
-    /// Canonical history data.
-    pub entry: HistoryEntry,
+    /// The previous decision or attempt.
+    pub text: String,
 }
 
 /// The source's SBAR, Thread and History band identities.
@@ -356,10 +409,12 @@ pub struct Band {
 pub struct DecideBar {
     /// Ordered controls for the current form and answer state.
     pub buttons: Vec<Button>,
-    /// Desktop's answered timestamp stamp.
-    pub stamp: Option<&'static str>,
-    /// Command attribution, offline queue rule, or one-answer-wins explanation.
+    /// Desktop's answered stamp and its hue.
+    pub stamp: Option<(String, Hue)>,
+    /// Command attribution, connection rule, or one-answer-wins explanation.
     pub note: Rich,
+    /// What Ctrl+Enter runs: the answer control's action while it is enabled.
+    pub submit: Option<Action>,
 }
 
 /// A complete handover with payloads separate from source-defined band order.
@@ -395,13 +450,15 @@ pub struct Sheet {
     pub thread_open: bool,
     /// H payload.
     pub history: Vec<HistoryRow>,
+    /// Shown instead of history rows when none are recorded.
+    pub history_empty: Option<&'static str>,
     /// Pinned decision controls.
     pub decide: DecideBar,
     /// Focus-page back control, absent inline.
     pub back: Option<Button>,
     /// Pager wording, absent inline.
-    pub pager: Option<&'static str>,
-    /// Next-plan control, absent inline.
+    pub pager: Option<String>,
+    /// Next-item control, absent inline or when nothing else needs you.
     pub next: Option<Button>,
     /// Focus desktop shortcut help, absent inline and on phone.
     pub key_help: Option<Rich>,
@@ -435,14 +492,13 @@ pub fn qhead(_state: &State, env: Env) -> Header {
         chips,
         record: format!("{} · rev {}", Q.key, Q.rev),
         attribution: format!("from {} · {} · {} ago", Q.from, Q.via, Q.age),
-        title: Q.short,
+        title: Q.short.into(),
     }
 }
 
 /// Build S with the queued/answered/answered-elsewhere notice stamped beneath the question.
 pub fn situation(state: &State, env: Env) -> Situation {
     let notice = match state.question_state(env) {
-        QuestionState::Open => None,
         QuestionState::Elsewhere => Some(Notice {
             stamp: Some("ANSWERED ELSEWHERE"),
             hue: Hue::Ok,
@@ -477,11 +533,22 @@ pub fn situation(state: &State, env: Env) -> Situation {
             ))],
             retry: None,
         }),
+        _ => None,
     };
     Situation {
-        text: Q.text,
+        text: Q.text.into(),
+        deadline: None,
         waits_title: "Waiting on this answer",
-        waits: Q.waits,
+        waits: Q
+            .waits
+            .iter()
+            .map(|wait| WaitLine {
+                id: wait.id.into(),
+                text: wait.text.into(),
+                kind: wait.kind,
+            })
+            .collect(),
+        waits_empty: None,
         notice,
     }
 }
@@ -550,7 +617,7 @@ pub fn background(_state: &State, env: Env, compact: bool) -> Background {
             span("T-701@P2").mono(),
             span(" · run R1 on pi-sol xhigh, step 3 of 5"),
         ],
-        graph: mini_graph(compact),
+        graph: Some(mini_graph(compact)),
     }
 }
 
@@ -563,22 +630,30 @@ pub fn recommendation(state: &State, env: Env) -> Recommendation {
     } else {
         state.choice
     };
+    let reason = vec![
+        span("Why the worker recommends 1:").bold(),
+        span(" "),
+        span(Q.recommendation).dim(),
+    ];
     Recommendation {
         label: "Options",
-        consequence_labels: ["Then", "Unblocks", "Costs"],
         options: Q
             .options
             .iter()
             .enumerate()
             .map(|(index, option)| AnswerOption {
                 number: index + 1,
-                label: option.label,
-                recommendation_chip: option.rec.then_some("worker recommends"),
+                label: option.label.into(),
+                recommendation_chip: option.rec.then(|| "worker recommends".into()),
                 selected: chosen == index,
                 enabled: !locked,
                 action: Action::Choose(index),
-                consequences: [option.next, option.unblocks, option.costs],
-                proof: button(
+                consequences: vec![
+                    ("Then", option.next.into()),
+                    ("Unblocks", option.unblocks.into()),
+                    ("Costs", option.costs.into()),
+                ],
+                proof: Some(button(
                     format!("see {}", option.proof),
                     Action::Evidence(if index == 0 {
                         Evidence::Diff
@@ -586,27 +661,39 @@ pub fn recommendation(state: &State, env: Env) -> Recommendation {
                         Evidence::File
                     }),
                     ButtonKind::Quiet,
-                ),
+                )),
             })
             .collect(),
         locked,
         draft_mark: "✎",
         draft_placeholder: "Write a different answer…",
-        draft: state.draft.clone(),
-        reason_label: "Why the worker recommends 1:",
-        reason: Q.recommendation,
+        draft_key: None,
+        reason: Some(reason),
     }
 }
 
 /// Build the complete thread band/sheet, including the illustrative send control.
 pub fn thread_view() -> ThreadView {
     ThreadView {
-        title: "Thread · worker T-868",
-        messages: Q.thread,
-        reply_placeholder: "Ask worker T-868 before answering…",
+        title: "Thread · worker T-868".into(),
+        messages: Q
+            .thread
+            .iter()
+            .map(|message| ThreadLine {
+                who: message.who.into(),
+                via: message.via.map(Into::into),
+                at: message.at.into(),
+                text: message.text.into(),
+            })
+            .collect(),
+        empty: None,
+        reply_placeholder: "Ask worker T-868 before answering…".into(),
         reply_label: "Follow-up to the asker",
+        reply_key: None,
+        reply_enabled: true,
         send: button("Ask", Action::SendThread, ButtonKind::Ghost),
-        attribution: "thread messages illustrative",
+        attribution: Some("thread messages illustrative"),
+        status: None,
         done: button("Done", Action::CloseThread, ButtonKind::Quiet),
     }
 }
@@ -615,7 +702,7 @@ pub fn thread_view() -> ThreadView {
 pub fn history() -> Vec<HistoryRow> {
     Q.history
         .iter()
-        .map(|&entry| HistoryRow {
+        .map(|entry| HistoryRow {
             label: format!(
                 "{} · {}",
                 entry.at,
@@ -626,7 +713,7 @@ pub fn history() -> Vec<HistoryRow> {
                 }
             ),
             owner_decision: entry.who == "you",
-            entry,
+            text: entry.text.into(),
         })
         .collect()
 }
@@ -648,6 +735,7 @@ pub fn decide_bar(state: &State, env: Env) -> DecideBar {
                 ],
                 stamp: None,
                 note: vec![],
+                submit: None,
             };
         }
         return DecideBar {
@@ -656,14 +744,18 @@ pub fn decide_bar(state: &State, env: Env) -> DecideBar {
                 Action::Open(Page::Session(Q.task)),
                 ButtonKind::Ghost,
             )],
-            stamp: Some(if status == QuestionState::Elsewhere {
-                "ANSWERED ON PM PANE 22:14"
-            } else {
-                "ANSWERED 22:12"
-            }),
+            stamp: Some((
+                if status == QuestionState::Elsewhere {
+                    "ANSWERED ON PM PANE 22:14".into()
+                } else {
+                    "ANSWERED 22:12".into()
+                },
+                Hue::Ok,
+            )),
             note: vec![span(
                 "One answer wins: the PM pane, this app and every paired device read the same question record.",
             )],
+            submit: None,
         };
     }
     let off = matches!(env.conn, Conn::Offline | Conn::Down);
@@ -685,6 +777,7 @@ pub fn decide_bar(state: &State, env: Env) -> DecideBar {
             ],
             stamp: None,
             note: vec![],
+            submit: Some(Action::Answer),
         };
     }
     answer.shortcut = Some("Ctrl ↵");
@@ -716,10 +809,16 @@ pub fn decide_bar(state: &State, env: Env) -> DecideBar {
         ],
         stamp: None,
         note,
+        submit: Some(Action::Answer),
     }
 }
 
-fn band(kind: BandKind, letter: &'static str, title: &'static str, detail: Option<String>) -> Band {
+pub(crate) fn band(
+    kind: BandKind,
+    letter: &'static str,
+    title: &'static str,
+    detail: Option<String>,
+) -> Band {
     Band {
         kind,
         letter,
@@ -730,8 +829,8 @@ fn band(kind: BandKind, letter: &'static str, title: &'static str, detail: Optio
 
 /// Desktop inline order is S, B, A, R, Thread, History. Focus mode moves B, Thread,
 /// History to the side and leaves S, A, R in the centre so the choices stay visible.
-pub fn sheet_desk(state: &State, env: Env, with_side: bool) -> Sheet {
-    let mut sheet = build_sheet(state, env, with_side);
+pub(crate) fn desk_bands(sheet: &mut Sheet, with_side: bool, plan: Option<String>) {
+    let threads = sheet.thread.messages.len().to_string();
     sheet.bands = vec![band(BandKind::Situation, "S", "Situation", None)];
     if !with_side {
         sheet
@@ -744,17 +843,12 @@ pub fn sheet_desk(state: &State, env: Env, with_side: bool) -> Sheet {
     ]);
     if with_side {
         sheet.side_bands = vec![
-            band(
-                BandKind::Background,
-                "B",
-                "Background · place",
-                Some("T-870".into()),
-            ),
+            band(BandKind::Background, "B", "Background · place", plan),
             band(
                 BandKind::Thread,
                 "T",
                 "Thread with the asker",
-                Some(Q.thread.len().to_string()),
+                Some(threads),
             ),
             band(
                 BandKind::History,
@@ -769,16 +863,12 @@ pub fn sheet_desk(state: &State, env: Env, with_side: bool) -> Sheet {
             band(BandKind::History, "H", "History", None),
         ]);
     }
-    sheet
 }
 
-/// Focus-page builder for every form. Phone order is S, R, A, B, Thread, History;
-/// its thread is a collapsed preview opening the shared sheet, and its pager follows JS.
-pub fn question(state: &State, env: Env) -> Sheet {
-    if !phone(env) {
-        return sheet_desk(state, env, true);
-    }
-    let mut sheet = build_sheet(state, env, true);
+/// Phone order is S, R, A, B, Thread, History; its thread is a collapsed preview opening
+/// the shared sheet.
+pub(crate) fn phone_bands(sheet: &mut Sheet) {
+    let threads = sheet.thread.messages.len();
     sheet.bands = vec![
         band(BandKind::Situation, "S", "Situation", None),
         band(
@@ -793,11 +883,40 @@ pub fn question(state: &State, env: Env) -> Sheet {
             BandKind::Thread,
             "T",
             "Thread with the asker",
-            Some(format!("{} · Ask ›", Q.thread.len())),
+            Some(format!("{threads} · Ask ›")),
         ),
         band(BandKind::History, "H", "History", None),
     ];
+}
+
+/// The fixture's inline or focus desktop handover.
+pub fn fixture_desk(state: &State, env: Env, with_side: bool) -> Sheet {
+    let mut sheet = build_sheet(state, env, with_side);
+    desk_bands(&mut sheet, with_side, Some("T-870".into()));
     sheet
+}
+
+/// The fixture's focus page in every form.
+pub fn fixture_question(state: &State, env: Env) -> Sheet {
+    if !phone(env) {
+        return fixture_desk(state, env, true);
+    }
+    let mut sheet = build_sheet(state, env, true);
+    phone_bands(&mut sheet);
+    sheet
+}
+
+/// The keys line on a desktop focus page.
+pub(crate) fn key_help(choose: &str) -> Rich {
+    vec![
+        span("Keys "),
+        span(choose.to_owned()).mono(),
+        span(" choose · "),
+        span("Ctrl ↵").mono(),
+        span(" answer · "),
+        span("Esc").mono(),
+        span(" back"),
+    ]
 }
 
 fn build_sheet(state: &State, env: Env, focus: bool) -> Sheet {
@@ -828,9 +947,10 @@ fn build_sheet(state: &State, env: Env, focus: bool) -> Sheet {
         thread_action: Action::Thread,
         thread_open: state.thread_open,
         history: history(),
+        history_empty: None,
         decide: decide_bar(state, env),
         back: focus.then(|| button("Inbox", Action::Go(Destination::Inbox), ButtonKind::Quiet)),
-        pager: focus.then_some("1 of 5 needing you"),
+        pager: focus.then(|| "1 of 5 needing you".into()),
         next: focus.then(|| {
             button(
                 if phone(env) {
@@ -842,19 +962,7 @@ fn build_sheet(state: &State, env: Env, focus: bool) -> Sheet {
                 ButtonKind::Ghost,
             )
         }),
-        key_help: (focus && !phone(env)).then(|| {
-            vec![
-                span("Keys "),
-                span("1").mono(),
-                span(" "),
-                span("2").mono(),
-                span(" choose · "),
-                span("Ctrl ↵").mono(),
-                span(" answer · "),
-                span("Esc").mono(),
-                span(" back"),
-            ]
-        }),
+        key_help: (focus && !phone(env)).then(|| key_help("1 2")),
         ask: focus.then(|| {
             button(
                 if phone(env) {

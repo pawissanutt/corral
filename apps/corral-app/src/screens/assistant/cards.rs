@@ -1,19 +1,19 @@
 //! The typed cards an assistant reply carries: the owner action and its receipt, the ask_user
-//! choice, the merge, the write permission, the filed Idea (and its edit state), the Idea saved
-//! as written, and the host starting.
+//! choice, the merge, the permission prompt, the filed Idea (with its edit and merge states),
+//! the Idea saved as written, and the host starting.
 
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::assistant::{
-    ActionCard, ActionOutcome, AskUserCard, Chip, DiffLine, FILED_LABELS, FiledCard, LABELS,
-    MergedCard, PermissionCard, SavedCard,
+    Action, ActionCard, ActionOutcome, AskUserCard, Button, Chip, DiffLine, Editing, FILED_LABELS,
+    FiledCard, LABELS, MergeInput, MergedCard, PermissionCard, SavedCard,
 };
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::state::AppState;
-use crate::ui::kit::button::ButtonKind;
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::{chip, illus, stamp_small};
 use crate::ui::kit::marks::{dot, hue_fill, mark};
 use crate::ui::kit::text::{label_value, rich, rich_small};
@@ -21,8 +21,8 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
 use super::parts::{
-    Edge, button_row, frame, meta_size, mono_line, mono_run, note_size, quote, spacer, strong_run,
-    words,
+    Edge, act, button_row, frame, meta_size, model_button, mono_line, mono_run, note_size, quote,
+    ring, spacer, strong_run, test_id, words,
 };
 
 /// The owner-action card (`.actcard`): heading, class chip, why and the cited input id over the
@@ -35,23 +35,21 @@ pub fn action(app: AppState, card: &ActionCard) -> AnyElement {
         words(app, card.heading, size, Token::Ink3).into_element(),
         chip(app, card.class.label(), card.class.hue()),
     ];
-    if let Some(why) = card.why {
-        head.push(words(app, why, size, Token::Ink3).into_element());
+    if let Some(why) = &card.why {
+        head.push(words(app, why.clone(), size, Token::Ink3).into_element());
     }
     head.push(spacer());
-    head.push(
-        words(app, "", size, Token::Ink3)
-            .child(mono_run(
-                app,
-                format!("{} {}", LABELS.cites, card.input),
-                size,
-            ))
-            .into_element(),
-    );
+    if let Some(input) = &card.input {
+        head.push(
+            words(app, "", size, Token::Ink3)
+                .child(mono_run(app, format!("{} {input}", LABELS.cites), size))
+                .into_element(),
+        );
+    }
     let head = row(app, head, 8.0);
     let command = mono_line(
         app,
-        card.command,
+        card.command.clone(),
         if form == Form::Phone { 15.0 } else { 13.0 },
     );
     let mut parts = Vec::new();
@@ -69,7 +67,7 @@ pub fn action(app: AppState, card: &ActionCard) -> AnyElement {
                 .into_element(),
         );
     }
-    if let Some(confirmed) = card.confirmed {
+    if let Some(confirmed) = &card.confirmed {
         let line = words(
             app,
             format!("{} {confirmed}", LABELS.confirmed_on),
@@ -97,6 +95,7 @@ fn receipt(app: AppState, outcome: &ActionOutcome) -> AnyElement {
     let fill = match outcome {
         ActionOutcome::Refused(_) => Some(Hue::Fail),
         ActionOutcome::Waiting { .. } => Some(Hue::You),
+        ActionOutcome::Unknown(_) => Some(Hue::Held),
         _ => None,
     };
     let mut parts = Vec::new();
@@ -106,7 +105,9 @@ fn receipt(app: AppState, outcome: &ActionOutcome) -> AnyElement {
     match outcome {
         ActionOutcome::Executed(said)
         | ActionOutcome::Refused(said)
-        | ActionOutcome::Declined(said) => {
+        | ActionOutcome::Declined(said)
+        | ActionOutcome::Pending(said)
+        | ActionOutcome::Unknown(said) => {
             parts.push(
                 mono_line(app, said.clone(), size)
                     .flex_1()
@@ -160,14 +161,15 @@ fn receipt(app: AppState, outcome: &ActionOutcome) -> AnyElement {
         .into_element()
 }
 
-/// The ask_user card (`.askuser`): who asks and when, the linked question, the two options with
-/// their consequences (the recorded one outlined in ink), and how it was answered.
+/// The ask_user card (`.askuser`): who asks and when, the question, the options with their
+/// consequences (the recorded one outlined in ink; an open one answers it when pressed), and how
+/// it was answered.
 pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
     let form = app.form;
     let options = card.options.iter().enumerate().map(|(at, option)| {
         let selected = option.selected;
         let enabled = option.enabled;
-        let label = text(option.label)
+        let label = text(option.label.clone())
             .font_weight(FontWeight::BOLD)
             .text_color(color(if selected { Token::Ink } else { Token::Ink2 }));
         let label = if form == Form::Terminal {
@@ -177,7 +179,12 @@ pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
                 .font_family(FONT_TEXT)
                 .text_size(px(if form == Form::Phone { 15.0 } else { 13.0 }))
         };
-        let consequence = words(app, option.consequence, note_size(form), Token::Ink3);
+        let consequence = words(
+            app,
+            option.consequence.clone(),
+            note_size(form),
+            Token::Ink3,
+        );
         let choice = view()
             .role(AccessibilityRole::Button)
             .label(format!("{}. {}", option.label, option.consequence))
@@ -187,7 +194,13 @@ pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
                 ..AccessibilityState::default()
             })
             .test_id(&format!("opt-{}", at + 1))
-            .gap(px(3.0));
+            .gap(px(3.0))
+            .when_some(option.action.clone(), |choice, action| {
+                choice
+                    .cursor_pointer()
+                    .focus_visible(ring)
+                    .on_press(move || act(app, action.clone()))
+            });
         if form == Form::Terminal {
             choice
                 .child(
@@ -209,6 +222,7 @@ pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
                 .rounded(px(8.0))
                 .border(px(if selected { 1.5 } else { 1.0 }))
                 .border_color(color(if selected { Token::Ink } else { Token::Rule2 }))
+                .when(enabled, |c| c.hover(|s| s.bg(color(Token::Hover))))
                 .when(!enabled && !selected, |c| c.opacity(0.8))
                 .child(label)
                 .child(consequence)
@@ -224,25 +238,23 @@ pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
             .gap(px(8.0))
             .children(options.collect::<Vec<_>>())
     };
-    frame(
-        app,
-        Edge::Asks,
-        true,
-        vec![
-            asks_head(app, card.heading, None),
-            rich(app, &card.question),
-            options.into_element(),
-            rich_small(app, &card.answer),
-        ],
-    )
+    let mut parts = vec![
+        asks_head(app, &card.heading, None),
+        rich(app, &card.question),
+        options.into_element(),
+    ];
+    if let Some(answer) = &card.answer {
+        parts.push(rich_small(app, answer));
+    }
+    frame(app, Edge::Asks, true, parts)
 }
 
 /// The head of a card that asks (`.askuser .hd`): the needs-you dot, the heading, a chip at the
 /// trailing edge.
-fn asks_head(app: AppState, heading: &'static str, state: Option<&Chip>) -> AnyElement {
+fn asks_head(app: AppState, heading: &str, state: Option<&Chip>) -> AnyElement {
     let mut parts = vec![
         dot(app, Hue::You),
-        words(app, heading, meta_size(app.form), Token::Ink3)
+        words(app, heading.to_owned(), meta_size(app.form), Token::Ink3)
             .flex_1()
             .min_w(px(0.0))
             .into_element(),
@@ -291,39 +303,63 @@ pub fn permission(app: AppState, card: &PermissionCard) -> AnyElement {
         .iter()
         .map(|choice| choice.button.clone())
         .collect::<Vec<_>>();
-    let body = frame(
-        app,
-        Edge::Asks,
-        true,
-        vec![
-            asks_head(app, card.heading, Some(&card.state)),
-            mono_line(
-                app,
-                card.path,
-                if form == Form::Phone { 13.0 } else { 12.0 },
-            )
-            .into_element(),
-            diff(app, &card.lines),
-            button_row(app, &choices, ButtonKind::Ghost, 6.0).into_element(),
-            words(app, card.presence_note, size, Token::Ink3).into_element(),
-            illus(app, card.illustrative),
-        ],
-    );
+    let mut parts = vec![
+        asks_head(app, &card.heading, Some(&card.state)),
+        mono_line(
+            app,
+            card.path.clone(),
+            if form == Form::Phone { 13.0 } else { 12.0 },
+        )
+        .into_element(),
+    ];
+    if !card.lines.is_empty() {
+        parts.push(diff(app, &card.lines));
+    }
+    if !choices.is_empty() {
+        parts.push(button_row(app, &choices, ButtonKind::Ghost, 6.0).into_element());
+    }
+    if let Some(note) = card.presence_note {
+        parts.push(words(app, note, size, Token::Ink3).into_element());
+    }
+    if let Some(label) = card.illustrative {
+        parts.push(illus(app, label));
+    }
     view()
         .gap(px(6.0))
-        .child(body)
-        .child(words(app, card.timer_note, size, Token::Ink3))
+        .child(frame(app, Edge::Asks, true, parts))
+        .children(
+            card.timer_note
+                .clone()
+                .map(|note| words(app, note, size, Token::Ink3)),
+        )
         .into_element()
 }
 
-/// The preview lines (`.diff .ln.add`): line number, `+` in the ok colour, the code cut to fit,
-/// on the added ground.
+/// The preview lines (`.diff .ln`): line number when known, the marker in its colour, the code
+/// cut to fit, on the added or removed ground.
 fn diff(app: AppState, lines: &[DiffLine]) -> AnyElement {
     let form = app.form;
     let rows = lines.iter().map(|line| {
-        let number = diff_mono(form, line.line.to_string(), Token::Ink4);
-        let marker = diff_mono(form, line.marker, Token::Ok);
-        let code = diff_mono(form, line.text, Token::Ink)
+        let hue = match line.marker {
+            "+" => Some(Hue::Ok),
+            "-" => Some(Hue::Fail),
+            _ => None,
+        };
+        let number = diff_mono(
+            form,
+            line.line.map_or_else(String::new, |at| at.to_string()),
+            Token::Ink4,
+        );
+        let marker = diff_mono(
+            form,
+            line.marker,
+            if hue == Some(Hue::Fail) {
+                Token::Fail
+            } else {
+                Token::Ok
+            },
+        );
+        let code = diff_mono(form, line.text.clone(), Token::Ink)
             .flex_1()
             .min_w(px(0.0))
             .truncate();
@@ -339,7 +375,7 @@ fn diff(app: AppState, lines: &[DiffLine]) -> AnyElement {
         view()
             .flex_row()
             .items_center()
-            .bg(hue_fill(Hue::Ok))
+            .when_some(hue, |line, hue| line.bg(hue_fill(hue)))
             .child(
                 view()
                     .w(px(number_column))
@@ -379,11 +415,12 @@ fn diff_mono(form: Form, content: impl Into<SharedString>, ink: Token) -> Text {
 
 /// The filed Idea (`.filed`): the result chip and provenance, who filed it, the owner's words
 /// quoted first and unchanged, then the fields the assistant wrote (editable in the edit state),
-/// and Edit, Merge into, Discard (or Save and Cancel while editing).
+/// and Edit, Merge into, Discard (or Save and Cancel while editing, or the merge destination and
+/// Merge and Cancel), with the status of the last command sent for it.
 pub fn filed(app: AppState, card: &FiledCard) -> AnyElement {
     let form = app.form;
     let size = meta_size(form);
-    let idea = card.idea;
+    let idea = &card.idea;
     let mut head = vec![
         chip(app, card.chip.label.clone(), card.chip.hue),
         view()
@@ -395,15 +432,25 @@ pub fn filed(app: AppState, card: &FiledCard) -> AnyElement {
     if card.attached {
         head.push(chip(app, LABELS.link_attached, Hue::Neutral));
     }
+    if let Some(status) = &card.status {
+        head.push(chip(app, status.label.clone(), status.hue));
+    }
     let value_size = if form == Form::Phone { 15.0 } else { 12.5 };
-    let title = if card.editing {
-        field(app, idea.title, FILED_LABELS.title)
-    } else {
-        words(app, idea.title, value_size, Token::Ink)
+    // The live title field owns its text while it is typed; Save reads it when pressed.
+    let title_text = signal(idea.title.clone());
+    let title = match card.editing {
+        Editing::No => words(app, idea.title.clone(), value_size, Token::Ink)
             .font_weight(FontWeight::BOLD)
-            .into_element()
+            .into_element(),
+        Editing::Fixture => field(app, idea.title.clone(), FILED_LABELS.title, None),
+        Editing::Title => field(
+            app,
+            idea.title.clone(),
+            FILED_LABELS.title,
+            Some(title_text),
+        ),
     };
-    let project = if card.editing {
+    let project = if card.editing == Editing::Fixture {
         let pick = format!("{} ▾", card.project);
         let pick = words(app, pick, note_size(form), Token::Ink2);
         if form == Form::Terminal {
@@ -422,12 +469,12 @@ pub fn filed(app: AppState, card: &FiledCard) -> AnyElement {
                 .into_element()
         }
     } else {
-        words(app, card.project, value_size, Token::Ink).into_element()
+        words(app, card.project.clone(), value_size, Token::Ink).into_element()
     };
     let mut labels = idea
         .labels
         .iter()
-        .map(|label| chip(app, *label, Hue::Neutral))
+        .map(|label| chip(app, label.clone(), Hue::Neutral))
         .collect::<Vec<_>>();
     if let Some(related) = &card.related {
         labels.push(rich_small(app, related));
@@ -435,10 +482,10 @@ pub fn filed(app: AppState, card: &FiledCard) -> AnyElement {
     let criteria = view()
         .gap(px(if form == Form::Terminal { 0.0 } else { 3.0 }))
         .children(idea.criteria.iter().enumerate().map(|(at, criterion)| {
-            let entry = if card.editing {
-                field(app, *criterion, FILED_LABELS.criteria)
+            let entry = if card.editing == Editing::Fixture {
+                field(app, criterion.clone(), FILED_LABELS.criteria, None)
             } else {
-                words(app, *criterion, value_size, Token::Ink).into_element()
+                words(app, criterion.clone(), value_size, Token::Ink).into_element()
             };
             view()
                 .flex_row()
@@ -456,58 +503,146 @@ pub fn filed(app: AppState, card: &FiledCard) -> AnyElement {
                 .child(view().flex_1().min_w(px(0.0)).child(entry))
                 .into_element()
         }));
+    // A served card shows only the fields corrald sent: an empty list is not "none".
+    let has_labels = !labels.is_empty();
     let fields = view()
         .gap(px(if form == Form::Terminal { 0.0 } else { 5.0 }))
         .child(label_value(app, FILED_LABELS.title, title))
         .child(label_value(app, FILED_LABELS.project, project))
-        .child(label_value(
-            app,
-            FILED_LABELS.labels,
-            row(app, labels, 6.0).into_element(),
-        ))
-        .child(label_value(
-            app,
-            FILED_LABELS.criteria,
-            criteria.into_element(),
-        ))
-        .child(label_value(
-            app,
-            FILED_LABELS.duplicates,
-            words(app, idea.duplicates, value_size, Token::Ink3).into_element(),
-        ));
-    let mut actions = button_row(app, &card.buttons, ButtonKind::Ghost, 8.0);
+        .when(has_labels, |fields| {
+            fields.child(label_value(
+                app,
+                FILED_LABELS.labels,
+                row(app, labels, 6.0).into_element(),
+            ))
+        })
+        .when(!idea.criteria.is_empty(), |fields| {
+            fields.child(label_value(
+                app,
+                FILED_LABELS.criteria,
+                criteria.into_element(),
+            ))
+        })
+        .when(!idea.duplicates.is_empty(), |fields| {
+            fields.child(label_value(
+                app,
+                FILED_LABELS.duplicates,
+                words(app, idea.duplicates.clone(), value_size, Token::Ink3).into_element(),
+            ))
+        });
+    let into_text = signal(String::new());
+    let mut actions = typed_row(app, &card.buttons, title_text, 8.0);
     if let Some(note) = card.discard_note {
         actions = actions
             .when(form == Form::Terminal, |r| r.child(term::space(2.0)))
             .child(words(app, note, size, Token::Ink3));
     }
-    frame(
-        app,
-        Edge::Plain,
-        true,
-        vec![
-            row(app, head, 8.0).into_element(),
-            words(app, card.attribution, size, Token::Ink3).into_element(),
-            quote(app, card.quote_label, idea.words),
-            fields.into_element(),
+    let mut parts = vec![
+        row(app, head, 8.0).into_element(),
+        words(app, card.attribution.clone(), size, Token::Ink3).into_element(),
+        quote(app, card.quote_label, &idea.words),
+        fields.into_element(),
+    ];
+    if let Some(merge) = &card.merge {
+        parts.push(merge_field(app, merge, into_text));
+    }
+    if !card.buttons.is_empty() {
+        parts.push(
             actions
                 .when(form != Form::Terminal, |r| r.mt(px(4.0)))
                 .into_element(),
-        ],
-    )
+        );
+    }
+    frame(app, Edge::Plain, true, parts)
 }
 
-/// An editable field of the filed card (`.einput`): the assistant's words on the sunken ground
-/// in the focus line, kept by the field until Save or Cancel leaves the edit state.
-fn field(app: AppState, value: &'static str, label: &'static str) -> AnyElement {
+/// Model buttons in a wrapping row, those whose command carries typed text (Save, Merge) reading
+/// it from `typed` when pressed rather than when drawn.
+fn typed_row(app: AppState, buttons: &[Button], typed: Signal<String>, gap: f32) -> View {
+    let terminal = app.form == Form::Terminal;
+    let base = view().flex_row().flex_wrap().items_center();
+    let base = if terminal { base } else { base.gap(px(gap)) };
+    let mut parts = Vec::with_capacity(buttons.len() * 2);
+    for (at, button) in buttons.iter().enumerate() {
+        if at > 0 && terminal {
+            parts.push(term::space(2.0));
+        }
+        parts.push(match &button.action {
+            Action::SaveIdea { .. } | Action::MergeInto { .. } => {
+                let action = button.action.clone();
+                button_with(
+                    app,
+                    button.label,
+                    if button.primary {
+                        ButtonKind::Primary
+                    } else {
+                        ButtonKind::Ghost
+                    },
+                    ButtonOptions {
+                        disabled: !button.enabled,
+                        ..ButtonOptions::default()
+                    },
+                    test_id(button),
+                    move || act(app, with_text(&action, typed.get_untracked())),
+                )
+            }
+            _ => model_button(app, button, ButtonKind::Ghost),
+        });
+    }
+    base.children(parts)
+}
+
+/// The command with the text its field holds now.
+fn with_text(action: &Action, text: String) -> Action {
+    match action {
+        Action::SaveIdea { task, .. } => Action::SaveIdea {
+            task: task.clone(),
+            title: text,
+        },
+        Action::MergeInto { task, .. } => Action::MergeInto {
+            task: task.clone(),
+            into: text,
+        },
+        other => other.clone(),
+    }
+}
+
+/// The merge destination (`.einput`) and Merge and Cancel; Merge sends the typed task id.
+fn merge_field(app: AppState, merge: &MergeInput, into: Signal<String>) -> AnyElement {
     let form = app.form;
+    let entry = field(app, String::new(), "Merge into task id", Some(into));
+    view()
+        .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
+        .child(label_value(app, "Merge into", entry))
+        .child(typed_row(app, &merge.buttons, into, 8.0))
+        .into_element()
+}
+
+/// An editable field of the filed card (`.einput`): words on the sunken ground in the focus
+/// line. The fixture's fields keep their text until Save or Cancel leaves the edit state; a live
+/// field writes what is typed into `bound`, which the command reads when sent.
+fn field(
+    app: AppState,
+    value: String,
+    label: &'static str,
+    bound: Option<Signal<String>>,
+) -> AnyElement {
+    let form = app.form;
+    // NSH's web host puts `label` on the field's wrapper, not on the input a screen reader
+    // reads; the placeholder is the name the input itself carries when it is empty or not.
     let entry = input()
-        .default_value(value.to_owned())
+        .default_value(value)
         .label(label)
+        .placeholder(label)
+        .placeholder_color(move || for_appearance(color(Token::Ink4)))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(color(Token::Ink))
         .caret_color(move || for_appearance(color(Token::Ink)))
         .selection_color(move || for_appearance(color(Token::Sel)));
+    let entry = match bound {
+        Some(bound) => entry.on_change(move |text: &str| bound.set(text.to_owned())),
+        None => entry,
+    };
     match form {
         // A terminal draws a field without a fill of its own as a raised band.
         Form::Terminal => entry.bg(AdaptiveColor::TRANSPARENT).into_element(),
@@ -560,7 +695,7 @@ pub fn saved(app: AppState, card: &SavedCard) -> AnyElement {
 
 /// The host starting (`.hoststate`): the running mark, the state in bold and what it means, on
 /// the corral ground.
-pub fn starting(app: AppState, state: &Chip, explanation: &'static str) -> AnyElement {
+pub fn starting(app: AppState, state: &Chip, explanation: &str) -> AnyElement {
     let form = app.form;
     let size = if form == Form::Phone {
         15.0

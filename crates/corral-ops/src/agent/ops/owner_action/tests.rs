@@ -12,6 +12,9 @@ use crate::agent::test_support as ts;
 use crate::agent::{event_request_id, tool_request_id};
 use crate::assistant::owner_action::claim;
 
+#[path = "remote_tests.rs"]
+mod remote_tests;
+
 const PANE: &str = "w1:p7";
 
 /// A-1 bound by a live stand-in host, with a stand-in corral that logs each command it runs.

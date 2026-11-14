@@ -125,8 +125,8 @@ export class HostQueue {
   };
 
   /** Allocated before asynchronous bridge preflight, retaining the original envelope digest. */
-  bridgeInput(input: SubmitInput): unknown {
-    return this.mint(input.text, input.busyPolicy, input.origin === "corral-inbox" ? "corral-inbox" : "extension", undefined, input.idempotencyKey);
+  bridgeInput(input: SubmitInput, images?: ImageContent[]): unknown {
+    return this.mint(input.text, input.busyPolicy, input.origin === "corral-inbox" ? "corral-inbox" : "extension", images, input.idempotencyKey);
   }
 
   private mint(text: string, mode: Mode, origin: Origin, images?: ImageContent[], key?: string, supersedes?: string): Item {

@@ -13,6 +13,8 @@ const ENDED: &str = "agent-pm-ended-turns";
 /// One `RetiredGeneration` per retired generation, keyed by its zero-padded number. History
 /// only: no PM head read or update loads it.
 const RETIRED: &str = "agent-pm-retired-generations";
+/// Settled replay answers compacted out of the bounded active family; keyed reads only.
+const REPLAY: &str = "agent-pm-replay-receipts";
 /// The normalized head layout.
 const LAYOUT: u32 = 2;
 /// Layout 2 plus retired generations (the head's floor and the history records). Binaries that
@@ -210,10 +212,15 @@ pub(super) fn read(store: &Store, selection: &Selection) -> Result<Option<(Head,
     for (kind, token) in keys {
         ensure!(KINDS.contains(&kind), "unknown PM family {kind}");
         let key = key(&token);
-        if !rows.contains_key(&(kind.into(), key.clone()))
-            && let Some(child) = store.record(&area(kind), &key)?
-        {
-            rows.insert((kind.into(), key), child);
+        if !rows.contains_key(&(kind.into(), key.clone())) {
+            let child = store.record(&area(kind), &key)?;
+            let child = match child {
+                None if kind == "receipts" => store.record(REPLAY, &key)?,
+                child => child,
+            };
+            if let Some(child) = child {
+                rows.insert((kind.into(), key), child);
+            }
         }
     }
     let pm = assemble(head.pm.clone(), &rows)?;
@@ -273,11 +280,9 @@ pub(super) fn save(store: &Store, old: Option<&(Head, AgentPm)>, pm: &AgentPm) -
         head.layout = LAYOUT_RETIRED;
     }
     let floor = head.pm.state.retired.as_ref().map_or(0, |r| r.floor);
-    let current = u64::from(head.pm.state.binding.generation);
-    // What can make a fruitless retention pass reclaim something clears its watermark: any
-    // removal from a pinning family, any generation write, a write to a receipt of another
-    // generation, and a changed question, job or wake. Writing a current-generation receipt
-    // (never evictable) or adding a question, job or wake (only more pins) cannot.
+    // Any receipt write can make compaction fruitful, including a current-generation
+    // settlement or a newly appended settled answer. Generation and pin-family changes
+    // also invalidate a previous fruitless scan.
     let mut pins_changed = false;
     if legacy {
         head.next.clear();
@@ -315,8 +320,7 @@ pub(super) fn save(store: &Store, old: Option<&(Head, AgentPm)>, pm: &AgentPm) -
             store.record(&area(kind), key)?
         };
         pins_changed |= match kind.as_str() {
-            "generations" => true,
-            "receipts" => child.record["identity"]["generation"].as_u64() != Some(current),
+            "generations" | "receipts" => true,
             "questions" | "jobs" | "wakes" => existing.is_some(),
             _ => false,
         };
@@ -423,7 +427,7 @@ pub(super) fn delete(store: &Store) -> Result<()> {
             }
         }
     }
-    for index in [ENDED, RETIRED] {
+    for index in [ENDED, RETIRED, REPLAY] {
         for row in store.record_rows(index)? {
             store.delete_record(index, &row.key)?;
         }

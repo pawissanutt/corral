@@ -1,0 +1,438 @@
+use super::*;
+
+const MAX_DETAILS: usize = 128;
+const MAX_PAGES: usize = 256;
+const MAX_DETAIL_BYTES: usize = 8 * 1024 * 1024;
+
+impl AppState {
+    pub(super) fn detail_request(
+        &mut self,
+        feed: Signal<Feed>,
+        id: String,
+        request: DetailGet,
+    ) -> Vec<Outgoing> {
+        let key = detail_key(&request.target);
+        let mut retired = if matches!(&request.target, DetailRef::Filings { .. }) {
+            feed.with_untracked(|feed| {
+                feed.details
+                    .iter()
+                    .filter(|(cached_key, cache)| {
+                        cached_key.as_str() != key.as_str()
+                            && matches!(&cache.target, DetailRef::Filings { .. })
+                    })
+                    .map(|(cached_key, _)| (cached_key.clone(), None))
+                    .collect::<Vec<_>>()
+            })
+        } else {
+            Vec::new()
+        };
+        for (retired_key, retired_id) in &mut retired {
+            *retired_id = self.detail_inflight.remove(retired_key);
+            self.detail_pages.remove(retired_key);
+            self.detail_bytes.remove(retired_key);
+        }
+        let mut accepted = true;
+        feed.update(|feed| {
+            for (retired_key, retired_id) in &retired {
+                feed.details.remove(retired_key);
+                if let Some(operation) = retired_id
+                    .as_ref()
+                    .and_then(|id| feed.operations.get_mut(id.as_str()))
+                {
+                    operation.loading = false;
+                    operation.value = None;
+                    operation.error = Some(ClientError {
+                        code: "superseded".into(),
+                        message: "A different filings page replaced this detail request.".into(),
+                    });
+                }
+            }
+            if !feed.details.contains_key(&key) && feed.details.len() >= MAX_DETAILS {
+                let evict = feed
+                    .details
+                    .iter()
+                    .find(|(_, detail)| !detail.loading)
+                    .map(|(key, _)| key.clone());
+                if let Some(evict) = evict {
+                    feed.details.remove(&evict);
+                } else {
+                    feed.problem = Some("Too many details are loading; wait for a reply.".into());
+                    accepted = false;
+                    return;
+                }
+            }
+            let cache = feed
+                .details
+                .entry(key.clone())
+                .or_insert_with(|| DetailCache {
+                    target: request.target.clone(),
+                    pages: vec![],
+                    loading: false,
+                    stale: true,
+                    error: None,
+                    merged: None,
+                });
+            cache.loading = self.ready;
+            cache.stale = true;
+            cache.error = (!self.ready).then(offline);
+        });
+        if !accepted || !self.ready {
+            return vec![];
+        }
+        // Only the latest request for a stable selector can publish its pages.
+        if let Some(previous) = self.detail_inflight.insert(key.clone(), id.clone()) {
+            feed.update(|feed| {
+                if let Some(operation) = feed.operations.get_mut(previous.as_str()) {
+                    operation.loading = false;
+                    operation.error = Some(ClientError {
+                        code: "superseded".into(),
+                        message: "A newer fetch replaced this detail request.".into(),
+                    });
+                }
+            });
+        }
+        self.detail_pages.insert(key.clone(), vec![]);
+        self.detail_bytes.insert(key, 0);
+        self.operation(feed, id, DETAIL_GET, value(request))
+    }
+    pub(super) fn detail_reply(
+        &mut self,
+        feed: Signal<Feed>,
+        tag: Option<String>,
+        params: Value,
+        outcome: Result<Value, (corral_protocol::rpc::ErrorCode, String)>,
+    ) -> Result<Vec<Outgoing>, String> {
+        let request: DetailGet = decode(params)?;
+        let key = detail_key(&request.target);
+        let Some(id) = tag else {
+            return Err("detail reply has no correlation identity".into());
+        };
+        if self.detail_inflight.get(&key) != Some(&id) {
+            return Ok(vec![]);
+        }
+        let page: DetailReply = match outcome {
+            Ok(value) => decode(value)?,
+            Err((code, message)) => {
+                let error = ClientError {
+                    code: value(code).as_str().unwrap_or("unknown").into(),
+                    message,
+                };
+                self.detail_failed(feed, &key, &id, error);
+                return Ok(vec![]);
+            }
+        };
+        let pages = self.detail_pages.entry(key.clone()).or_default();
+        if let Some(first) = pages.first() {
+            if first.etag != page.etag {
+                self.detail_failed(feed, &key, &id, ClientError { code: "conflict".into(),
+                    message: "Detail changed while its pages were loading; refresh to fetch a current snapshot.".into() });
+                return Ok(vec![]);
+            }
+        }
+        if page.body.is_none() {
+            if !pages.is_empty() || request.page.is_some() {
+                return Err("daemon returned not-modified inside a detail continuation".into());
+            }
+            let valid = feed.with_untracked(|feed| {
+                feed.details.get(&key).is_some_and(|cache| {
+                    cache.merged.is_some()
+                        && cache.pages.first().is_some_and(|old| old.etag == page.etag)
+                })
+            });
+            if !valid {
+                return Err("daemon returned not-modified without a matching cached detail".into());
+            }
+            feed.update(|feed| {
+                if let Some(cache) = feed.details.get_mut(&key) {
+                    cache.loading = false;
+                    cache.stale = false;
+                    cache.error = None;
+                    if let Some(first) = cache.pages.first_mut() {
+                        first.as_of = page.as_of.clone();
+                        first.seq = page.seq;
+                    }
+                }
+                if let Some(operation) = feed.operations.get_mut(id.as_str()) {
+                    operation.loading = false;
+                    operation.value = Some(value(page));
+                    operation.error = None;
+                }
+            });
+            self.detail_pages.remove(&key);
+            self.detail_inflight.remove(&key);
+            self.detail_bytes.remove(&key);
+            return Ok(vec![]);
+        }
+        let next = page.next.clone();
+        let size = serde_json::to_vec(&page)
+            .map_err(|error| error.to_string())?
+            .len();
+        let bytes = self.detail_bytes.entry(key.clone()).or_default();
+        *bytes = bytes.saturating_add(size);
+        pages.push(page);
+        if pages.len() > MAX_PAGES || *bytes > MAX_DETAIL_BYTES {
+            self.detail_failed(
+                feed,
+                &key,
+                &id,
+                ClientError {
+                    code: "too_large".into(),
+                    message: "Detail exceeds this device's bounded cache (8 MiB).".into(),
+                },
+            );
+            return Ok(vec![]);
+        }
+        if let Some(next) = next {
+            return Ok(vec![out(
+                DETAIL_GET,
+                value(DetailGet {
+                    target: request.target,
+                    etag: None,
+                    page: Some(next),
+                }),
+                Some(id),
+            )]);
+        }
+        let mut pages = self.detail_pages.remove(&key).unwrap_or_default();
+        let seq = pages.iter().map(|page| page.seq).max().unwrap_or(0);
+        let as_of = pages.last().map(|page| page.as_of.clone());
+        if let Some(first) = pages.first_mut() {
+            first.seq = seq;
+            if let Some(as_of) = as_of {
+                first.as_of = as_of;
+            }
+        }
+        self.detail_bytes.remove(&key);
+        let merged = match merge_pages(&pages) {
+            Ok(merged) => merged,
+            Err(message) => {
+                self.detail_failed(
+                    feed,
+                    &key,
+                    &id,
+                    ClientError {
+                        code: "invalid_reply".into(),
+                        message,
+                    },
+                );
+                return Ok(vec![]);
+            }
+        };
+        self.detail_inflight.remove(&key);
+        feed.update(|feed| {
+            if let Some(cache) = feed.details.get_mut(&key) {
+                cache.pages = pages;
+                cache.merged = merged;
+                cache.loading = false;
+                cache.stale = false;
+                cache.error = None;
+            }
+            let response = feed
+                .details
+                .get(&key)
+                .and_then(|cache| cache.pages.first())
+                .map(value);
+            if let Some(operation) = feed.operations.get_mut(id.as_str()) {
+                operation.loading = false;
+                operation.value = response;
+                operation.error = None;
+            }
+        });
+        Ok(vec![])
+    }
+    fn detail_failed(&mut self, feed: Signal<Feed>, key: &str, id: &str, error: ClientError) {
+        self.detail_pages.remove(key);
+        self.detail_inflight.remove(key);
+        self.detail_bytes.remove(key);
+        feed.update(|feed| {
+            if let Some(cache) = feed.details.get_mut(key) {
+                cache.loading = false;
+                cache.stale = true;
+                cache.error = Some(error.clone());
+            }
+            if let Some(operation) = feed.operations.get_mut(id) {
+                operation.loading = false;
+                operation.error = Some(error);
+            }
+        });
+    }
+    pub(super) fn refresh_details(&mut self, feed: Signal<Feed>) -> Vec<Outgoing> {
+        let targets = feed.with_untracked(|feed| {
+            feed.details
+                .values()
+                .map(|cache| cache.target.clone())
+                .collect::<Vec<_>>()
+        });
+        let mut outgoing = vec![];
+        for target in targets {
+            outgoing.extend(self.detail_request(
+                feed,
+                requests::new_id(),
+                DetailGet {
+                    target,
+                    etag: None,
+                    page: None,
+                },
+            ));
+        }
+        outgoing
+    }
+}
+
+fn merge_pages(pages: &[DetailReply]) -> Result<Option<DetailBody>, String> {
+    if let Some(DetailBody::Artifact(first)) = pages.first().and_then(|page| page.body.as_ref()) {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let mut artifact = first.clone();
+        let mut bytes = vec![];
+        artifact.content.clear();
+        for page in pages {
+            let Some(DetailBody::Artifact(part)) = &page.body else {
+                return Err("Artifact page kind changed.".into());
+            };
+            if part.task != artifact.task
+                || part.key != artifact.key
+                || part.encoding != artifact.encoding
+                || part.media_type != artifact.media_type
+            {
+                return Err("Artifact page identity or encoding changed.".into());
+            }
+            match part.encoding {
+                ArtifactEncoding::Text => artifact.content.push_str(&part.content),
+                ArtifactEncoding::Base64 => bytes.extend(
+                    STANDARD
+                        .decode(&part.content)
+                        .map_err(|error| format!("Invalid artifact base64: {error}"))?,
+                ),
+                ArtifactEncoding::Other => return Ok(Some(DetailBody::Artifact(first.clone()))),
+            }
+            artifact.truncated = part.truncated;
+            if bytes.len() > MAX_DETAIL_BYTES || artifact.content.len() > MAX_DETAIL_BYTES {
+                return Err("Artifact exceeds this device's bounded byte cache.".into());
+            }
+        }
+        if artifact.encoding == ArtifactEncoding::Base64 {
+            artifact.content = STANDARD.encode(bytes);
+        }
+        return Ok(Some(DetailBody::Artifact(artifact)));
+    }
+    let mut merged: Option<Value> = None;
+    for page in pages {
+        if let Some(body) = &page.body {
+            let body = serde_json::to_value(body).map_err(|error| error.to_string())?;
+            match &mut merged {
+                Some(merged) => append(merged, body, ""),
+                None => merged = Some(body),
+            }
+        }
+    }
+    merged
+        .map(|body| {
+            serde_json::from_value(body)
+                .map_err(|error| format!("invalid assembled detail: {error}"))
+        })
+        .transpose()
+}
+fn append(current: &mut Value, next: Value, field: &str) {
+    match (current, next) {
+        (Value::Array(current), Value::Array(next)) => {
+            if field == "stages" {
+                return;
+            }
+            // Oversized id-bearing objects recur across pages with nested arrays split.
+            let keyed = current
+                .iter()
+                .chain(next.iter())
+                .all(|item| item_key(item).is_some());
+            if keyed {
+                let mut positions: BTreeMap<String, usize> = current
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, item)| item_key(item).map(|id| (id.into(), index)))
+                    .collect();
+                for item in next {
+                    let id = item_key(&item).unwrap_or_default().to_owned();
+                    if let Some(index) = positions.get(&id) {
+                        append(&mut current[*index], item, "");
+                    } else {
+                        positions.insert(id, current.len());
+                        current.push(item);
+                    }
+                }
+            } else {
+                current.extend(next);
+            }
+        }
+        (Value::Object(current), Value::Object(next)) => {
+            for (key, value) in next {
+                if let Some(current) = current.get_mut(&key) {
+                    append(current, value, &key);
+                } else {
+                    current.insert(key, value);
+                }
+            }
+        }
+        (Value::String(current), Value::String(next)) if field == "patch" => {
+            current.push_str(&next)
+        }
+        (Value::Bool(current), Value::Bool(next)) if field == "truncated" => *current = next,
+        // Each continuation repeats scalar metadata; it is not another result.
+        _ => {}
+    }
+}
+
+fn item_key(item: &Value) -> Option<&str> {
+    item.get("id").or_else(|| item.get("day"))?.as_str()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn paged_nested_rows_merge_by_id_and_fixed_stages_do_not_duplicate() {
+        let mut first = json!({"stages":[1,2,3,4],"annotations":[
+            {"id":"note-1","messages":["one"]}],"patch":"first\n"});
+        append(
+            &mut first,
+            json!({"stages":[1,2,3,4],"annotations":[
+            {"id":"note-1","messages":["two"]},{"id":"note-2","messages":["three"]}],"patch":"second\n"}),
+            "",
+        );
+        assert_eq!(first["stages"], json!([1, 2, 3, 4]));
+        assert_eq!(first["annotations"][0]["messages"], json!(["one", "two"]));
+        assert_eq!(first["annotations"][1]["id"], "note-2");
+        assert_eq!(first["patch"], "first\nsecond\n");
+    }
+}
+
+#[cfg(test)]
+mod artifact_tests {
+    use super::*;
+    #[test]
+    fn binary_artifacts_decode_each_padded_page_before_assembly() {
+        let pages = ["AAE=", "AgM="]
+            .into_iter()
+            .map(|content| DetailReply {
+                etag: "content-hash".into(),
+                as_of: "2026-11-14T00:00:00Z".into(),
+                seq: 1,
+                next: None,
+                body: Some(DetailBody::Artifact(ArtifactPage {
+                    task: "T-1".into(),
+                    key: "report".into(),
+                    media_type: None,
+                    encoding: ArtifactEncoding::Base64,
+                    content: content.into(),
+                    truncated: false,
+                })),
+            })
+            .collect::<Vec<_>>();
+        let Some(DetailBody::Artifact(artifact)) = merge_pages(&pages).unwrap() else {
+            panic!("artifact body was not assembled");
+        };
+        assert_eq!(artifact.content, "AAECAw==");
+    }
+}
+
+#[cfg(test)]
+#[path = "filings_tests.rs"]
+mod filings_tests;

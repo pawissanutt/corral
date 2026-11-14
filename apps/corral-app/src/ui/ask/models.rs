@@ -28,7 +28,7 @@ const DISCLOSURE: &str = " ▾";
 pub(crate) fn pill(
     app: AppState,
     label: &'static str,
-    name: &'static str,
+    name: String,
     at: ListAt,
     row: ElementRef,
     menu: Memo<Option<ModelList>>,
@@ -141,8 +141,8 @@ pub(crate) fn inline_list(app: AppState, menu: Memo<Option<ModelList>>) -> AnyEl
 }
 
 /// The profiles in cycling order, the current one checked, then the footer naming where the list
-/// is configured and the illustrative tag. A listbox; each profile an option with its selected
-/// state, `model-<n>`.
+/// is configured and, in the fixture preview, the illustrative tag. A listbox; each profile an
+/// option with its selected state, `model-<n>`.
 fn model_list(app: AppState, list: &ModelList, inline: bool) -> AnyElement {
     let form = app.form;
     let rows = list
@@ -156,7 +156,7 @@ fn model_list(app: AppState, list: &ModelList, inline: bool) -> AnyElement {
         .items_end()
         .gap(px(6.0))
         .child(rich_small(app, &list.footer))
-        .child(illus(app, list.illustrative));
+        .children(list.illustrative.map(|label| illus(app, label)));
     let shell = view()
         .role(AccessibilityRole::Listbox)
         .label(list.label)
@@ -197,11 +197,10 @@ fn model_list(app: AppState, list: &ModelList, inline: bool) -> AnyElement {
 }
 
 /// One profile: the check on the current one, its name over the model and effort, its note at the
-/// trailing edge. Picking it closes the list and shows the model's toast.
+/// trailing edge. Picking it closes the list and applies the profile to the next message.
 fn row(app: AppState, index: usize, option: &ModelOption, inline: bool) -> AnyElement {
     let form = app.form;
     let action = option.action.clone();
-    let profile = option.profile;
     let check = if option.selected {
         mark(app, Mark::Done, Hue::Ok)
     } else {
@@ -210,7 +209,7 @@ fn row(app: AppState, index: usize, option: &ModelOption, inline: bool) -> AnyEl
     let item = view()
         .test_id(&format!("model-{index}"))
         .role(AccessibilityRole::Option)
-        .label(profile.name)
+        .label(option.name.clone())
         .accessibility_state(AccessibilityState {
             selected: option.selected,
             ..AccessibilityState::default()
@@ -225,20 +224,20 @@ fn row(app: AppState, index: usize, option: &ModelOption, inline: bool) -> AnyEl
             .px(crate::ui::term::cells(1.0))
             .child(check)
             .child(
-                text(profile.name)
+                text(option.name.clone())
                     .number_of_lines(1u32)
                     .font_weight(FontWeight::BOLD)
                     .text_color(color(Token::Ink)),
             )
             .child(
-                text(profile.model)
+                text(option.model.clone())
                     .flex_1()
                     .min_w(px(0.0))
                     .number_of_lines(1u32)
                     .text_color(color(Token::Ink3)),
             )
             .child(
-                text(profile.note)
+                text(option.note.clone())
                     .number_of_lines(1u32)
                     .text_color(color(Token::Ink3)),
             )
@@ -268,7 +267,7 @@ fn row(app: AppState, index: usize, option: &ModelOption, inline: bool) -> AnyEl
                 .min_w(px(0.0))
                 .gap(px(1.0))
                 .child(
-                    text(profile.name)
+                    text(option.name.clone())
                         .number_of_lines(1u32)
                         .font_family(FONT_TEXT)
                         .text_size(px(name_size))
@@ -276,7 +275,7 @@ fn row(app: AppState, index: usize, option: &ModelOption, inline: bool) -> AnyEl
                         .text_color(color(Token::Ink)),
                 )
                 .child(
-                    text(profile.model)
+                    text(option.model.clone())
                         .number_of_lines(1u32)
                         .font_family(FONT_MONO)
                         .text_size(px(model_size))
@@ -284,7 +283,7 @@ fn row(app: AppState, index: usize, option: &ModelOption, inline: bool) -> AnyEl
                 ),
         )
         .child(
-            text(profile.note)
+            text(option.note.clone())
                 .flex_shrink(1.0)
                 .text_right()
                 .font_family(FONT_TEXT)

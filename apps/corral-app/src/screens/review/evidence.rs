@@ -1,18 +1,21 @@
-//! The Report, Screenshot and Gate log tabs: the rendered report (`.plan-doc`), and the terminal
-//! captures (`.term`) with their provenance lines.
+//! The Report, Screenshot, Artifacts and Gate log tabs: the rendered report (`.plan-doc`), the
+//! terminal captures (`.term`) with their provenance lines, and the candidate's artifacts.
 
 use nsh_core::prelude::*;
 
-use crate::model::review::{LogLine, ReportView, ScreenshotView};
+use crate::model::review::{
+    ArtifactContent, ArtifactView, ArtifactsView, LogView, ReportView, ScreenshotView,
+};
 use crate::model::{Form, Hue, Span};
 use crate::state::AppState;
 use crate::ui::kit::chip::illus;
 use crate::ui::kit::marks::{hue_ink, mark};
-use crate::ui::kit::text::{h3, plain};
+use crate::ui::kit::text::{dim, h3, mono, plain};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, Token, color, text_size};
 
-use super::{flush_h3, rich_at};
+use super::head::flush_h3;
+use super::{Ctx, command, rich_at};
 
 /// `.plan-doc p { max-width: 72ch }` at the body size.
 const DOC_MAX: f32 = 560.0;
@@ -22,16 +25,17 @@ const SHOT_MAX: f32 = 640.0;
 const TERM_LEADING: f32 = 1.55;
 /// The capture's cursor block (`.term .cur`).
 const CURSOR: (f32, f32) = (7.0, 13.0);
+/// An image's frame before it has loaded and told its own proportions.
+const IMAGE_RATIO: f32 = 16.0 / 9.0;
 
-/// The rendered implementation report: heading, paragraphs, the acceptance list with its marks,
-/// and the source line.
+/// The rendered implementation report: heading, paragraphs, the acceptance list with its marks
+/// (a bullet where the record carries none), and the source line.
 pub(super) fn report(app: AppState, report: &ReportView) -> AnyElement {
     let form = app.form;
     let terminal = form == Form::Terminal;
-    let doc = report.document;
     let leading = (text_size(form) * TERM_LEADING).round();
-    let paragraph = |words: &'static str| {
-        plain(app, words)
+    let paragraph = |words: &str| {
+        plain(app, words.to_owned())
             .when(!terminal, |t| t.line_height(px(leading)))
             .into_element()
     };
@@ -44,7 +48,14 @@ pub(super) fn report(app: AppState, report: &ReportView) -> AnyElement {
                 list.pl(px(18.0))
             }
         })
-        .children(doc.acceptance.iter().map(|item| {
+        .children(report.acceptance.iter().map(|item| {
+            let lead = match item.mark {
+                Some(state) => mark(app, state, Hue::Neutral),
+                None => text("•")
+                    .accessibility_elements_hidden(true)
+                    .text_color(color(Token::Ink3))
+                    .into_element(),
+            };
             view()
                 .flex_row()
                 .items_start()
@@ -52,31 +63,41 @@ pub(super) fn report(app: AppState, report: &ReportView) -> AnyElement {
                 .child(
                     view()
                         .flex_shrink_0()
-                        .when(!terminal, |m| m.pt(px(3.0)))
-                        .child(mark(app, item.mark, Hue::Neutral)),
+                        .when(!terminal && item.mark.is_some(), |m| m.pt(px(3.0)))
+                        .child(lead),
                 )
                 .when(terminal, |row| row.child(term::space(1.0)))
-                .child(paragraph(item.text))
+                .child(paragraph(item.text.as_str()))
                 .into_element()
         }));
-    let mut parts = vec![flush_h3(app, doc.heading)];
+    let gap = || {
+        if terminal {
+            term::blank()
+        } else {
+            view().h(px(10.0)).into_element()
+        }
+    };
+    let mut parts = vec![flush_h3(app, report.heading.clone())];
     if terminal {
         parts.push(term::blank());
     }
-    parts.extend(doc.paragraphs.iter().map(|&words| paragraph(words)));
-    if terminal {
-        parts.push(term::blank());
+    for (at, words) in report.paragraphs.iter().enumerate() {
+        if at > 0 {
+            parts.push(gap());
+        }
+        parts.push(paragraph(words.as_str()));
     }
-    parts.push(h3(app, doc.acceptance_heading, None));
-    if terminal {
-        parts.push(term::blank());
+    if !report.acceptance.is_empty() {
+        if terminal {
+            parts.push(term::blank());
+        }
+        parts.push(h3(app, report.acceptance_heading, None));
+        if terminal {
+            parts.push(term::blank());
+        }
+        parts.push(items.into_element());
     }
-    parts.push(items.into_element());
-    parts.push(if terminal {
-        term::blank()
-    } else {
-        view().h(px(10.0)).into_element()
-    });
+    parts.push(gap());
     parts.push(rich_at(app, &report.source, 12.0, Token::Ink3, false).into_element());
     view()
         .when(!terminal, |doc| doc.max_w(px(DOC_MAX)))
@@ -84,7 +105,7 @@ pub(super) fn report(app: AppState, report: &ReportView) -> AnyElement {
         .into_element()
 }
 
-/// The terminal capture with its cursor, then the artifact caption.
+/// The fixture's terminal capture with its cursor, then the artifact caption.
 pub(super) fn screenshot(app: AppState, shot: &ScreenshotView) -> AnyElement {
     let spans = shot
         .terminal
@@ -98,15 +119,16 @@ pub(super) fn screenshot(app: AppState, shot: &ScreenshotView) -> AnyElement {
         .into_element()
 }
 
-/// The gate log, its passing lines in the success colour, then its illustrative label.
-pub(super) fn log(app: AppState, lines: &[LogLine], note: &'static str) -> AnyElement {
+/// The gate log, its passing lines in the success colour and failing ones in the failure
+/// colour, then its label: illustrative for the fixture, the served tail's extent otherwise.
+pub(super) fn log(app: AppState, lines: &[LogView], note: &str, illustrative: bool) -> AnyElement {
     let ink = console_ink(app);
     let mut spans = Vec::with_capacity(lines.len() * 2);
     for (at, line) in lines.iter().enumerate() {
         if at > 0 {
             spans.push(text("\n"));
         }
-        spans.push(text(line.text).text_color(match line.hue {
+        spans.push(text(line.text.clone()).text_color(match line.hue {
             Hue::Neutral => ink,
             hue => hue_ink(hue),
         }));
@@ -114,7 +136,122 @@ pub(super) fn log(app: AppState, lines: &[LogLine], note: &'static str) -> AnyEl
     view()
         .child(console(app, spans, 11.5, false, None))
         .child(below(app))
-        .child(illus(app, note))
+        .child(if illustrative {
+            illus(app, note.to_owned())
+        } else {
+            dim(app, note.to_owned()).into_element()
+        })
+        .into_element()
+}
+
+/// The candidate's artifacts: each record's title, type and catalog key with Show or Hide, and
+/// once shown its contents; then where those contents come from.
+pub(super) fn artifacts(cx: &Ctx, list: &ArtifactsView) -> AnyElement {
+    let app = cx.app;
+    let terminal = app.form == Form::Terminal;
+    view()
+        .gap(px(if terminal { 0.0 } else { 12.0 }))
+        .children(list.empty.map(|line| dim(app, line).into_element()))
+        .children(list.rows.iter().map(|row| artifact(cx, row)))
+        .when(terminal, |rows| rows.child(term::blank()))
+        .child(dim(app, list.note))
+        .into_element()
+}
+
+fn artifact(cx: &Ctx, row: &ArtifactView) -> AnyElement {
+    let app = cx.app;
+    let terminal = app.form == Form::Terminal;
+    let head = view()
+        .flex_row()
+        .items_center()
+        .gap(px(if terminal { 0.0 } else { 8.0 }))
+        .child(
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .child(
+                    plain(app, row.title.clone())
+                        .truncate()
+                        .font_weight(FontWeight::BOLD),
+                )
+                .child(
+                    view()
+                        .flex_row()
+                        .gap(px(6.0))
+                        .child(dim(app, row.kind.clone()).flex_shrink_0())
+                        .child(
+                            mono(app, row.source.clone())
+                                .truncate()
+                                .text_color(color(Token::Ink3)),
+                        ),
+                ),
+        )
+        .child(command(cx, &row.toggle));
+    let body = match &row.content {
+        ArtifactContent::Closed => None,
+        ArtifactContent::Loading => Some(dim(app, "Loading from corrald…").into_element()),
+        ArtifactContent::Error(line) => Some(
+            dim(app, line.clone())
+                .text_color(hue_ink(Hue::Fail))
+                .into_element(),
+        ),
+        ArtifactContent::Unsupported(line) => Some(dim(app, *line).into_element()),
+        ArtifactContent::Text {
+            text: words,
+            truncated,
+        } => Some(
+            view()
+                .child(console(app, vec![text(words.clone())], 11.0, false, None))
+                .children(truncated.then(|| cut_note(app)))
+                .into_element(),
+        ),
+        ArtifactContent::Image { uri, truncated } => Some(
+            view()
+                .child(picture(row.title.clone(), uri.clone()))
+                .children(truncated.then(|| cut_note(app)))
+                .into_element(),
+        ),
+    };
+    view()
+        .gap(px(if terminal { 0.0 } else { 6.0 }))
+        .child(head)
+        .children(body)
+        .into_element()
+}
+
+fn cut_note(app: AppState) -> AnyElement {
+    view()
+        .mt(px(4.0))
+        .child(dim(
+            app,
+            "corrald stops this artifact at its size bound; the rest is not served to the app.",
+        ))
+        .into_element()
+}
+
+/// An image artifact at its own proportions, at most the capture's width, on a hairline frame.
+fn picture(title: String, uri: String) -> AnyElement {
+    let ratio = signal(IMAGE_RATIO);
+    view()
+        .max_w(px(SHOT_MAX))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(color(Token::Rule))
+        .bg(color(Token::BgSunk))
+        .overflow_hidden()
+        .child(
+            image(uri)
+                .w_full()
+                .aspect_ratio(move || ratio.get())
+                .object_fit(ResizeMode::Contain)
+                .role(AccessibilityRole::Image)
+                .label(title)
+                .on_load(move |size: &Size<DevicePixels>| {
+                    if size.width.0 > 0 && size.height.0 > 0 {
+                        ratio.set(size.width.0 as f32 / size.height.0 as f32);
+                    }
+                }),
+        )
         .into_element()
 }
 

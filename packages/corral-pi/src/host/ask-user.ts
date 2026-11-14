@@ -105,10 +105,14 @@ export async function sequential(ui: DialogUi, questions: DialogQuestion[], sign
   }
   return answers;
 }
+/** Remote hosts replace only the owner interaction, retaining the existing tool schema. */
+export type RemoteAsk = (id: string, params: unknown, signal?: AbortSignal) => Promise<{
+  content: { type: "text"; text: string }[]; details: Record<string, unknown>;
+}>;
 
 /** Dialogs are local to the owner's interactive pane, never a worker question flow. */
 export function askUserTool(record: (answer: string) => Promise<string>, pending?: Pick<PendingQuestions, "ask" | "withdraw">,
-  dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource): ToolDefinition {
+  dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource, remote?: RemoteAsk): ToolDefinition {
   return {
     name: "ask_user", label: "Ask the owner", exposure: "model-only", executionMode: "sequential",
     description: "Ask the owner 1-4 focused choice questions together in one dialog instead of asking only in chat; "
@@ -135,6 +139,7 @@ export function askUserTool(record: (answer: string) => Promise<string>, pending
       Type.Object({ withdraw: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
     ] }),
     async execute(_id, params: { questions: Question[]; nonBlocking?: false; key?: string; supersedes?: string } | { questions: ChoiceQuestion[]; nonBlocking: true; key?: string; supersedes?: string } | { withdraw: string }, signal, _update, ctx) {
+      if (remote) return remote(_id, params, signal);
       const noAnswer = () => ({ content: [{ type: "text" as const, text: "no answer" }], details: { status: "no answer" } });
       if ("withdraw" in params) {
         if (!pending) throw new Error("pending_questions_unavailable");

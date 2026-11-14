@@ -35,9 +35,10 @@ test("the assistant loadout reads, shells and writes behind its path guard, and 
   expect(typeof assistant.extend).toBe("function");
   const memoryOps = ["memory_list", "memory_read", "memory_put", "memory_remove"];
   const memoryNames = memoryOps.map((op) => `corral_${op}`);
-  expect(assistant.corralOps).toEqual(["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission", ...memoryOps]);
+  expect(assistant.corralOps).toEqual(["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission", "idea_file", ...memoryOps]);
   expect(assistant.tools(context).map((tool) => tool.name)).toEqual(["corral_receipt_lookup", "corral_owner_action", ...memoryNames]);
   expect(assistant.tools({ ...context, todo: true }).map((tool) => tool.name)).toEqual(["corral_receipt_lookup", "corral_owner_action", ...memoryNames, "corral_todo"]);
+  expect(assistant.tools({ ...context, daemonHosted: true }).map((tool) => tool.name)).toEqual(["corral_receipt_lookup", "corral_owner_action", ...memoryNames, "corral_idea_file"]);
 });
 
 test("the contract names the bound session and leaves no placeholder", () => {

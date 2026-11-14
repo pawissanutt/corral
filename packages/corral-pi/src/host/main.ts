@@ -39,6 +39,7 @@ import { RESUME_ASSISTANT_EXIT } from "./assistant-resume.ts";
 import { admitConnection } from "./connections.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
 import { errorPresenter } from "../ui/error-copy.ts";
+import { RemoteOwner } from "./remote-owner.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -124,10 +125,11 @@ export async function runHost(config: HostConfig, overrides: {
   host = await HostSession.create({
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider, ...(aws ? { aws } : {}),
     ...(config.binding ? { binding: config.binding } : {}),
+    ...(config.daemonHosted ? { daemonHosted: true, ui: "plain" as const } : {}),
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
     ...(config.memoryFile ? { memoryFile: config.memoryFile } : {}),
-    ...(config.ui ? { ui: config.ui } : {}),
+    ...(!config.daemonHosted && config.ui ? { ui: config.ui } : {}),
     todo: config.todo === true,
     ...(config.capabilities ? { capabilities: config.capabilities } : {}),
     ...(config.guidance ? { guidance: config.guidance } : {}),
@@ -139,11 +141,13 @@ export async function runHost(config: HostConfig, overrides: {
         ...(!headlessEnabled(config.capabilities) ? { newAssistant: () => restart(NEW_ASSISTANT_EXIT),
           resumeAssistant: () => restart(RESUME_ASSISTANT_EXIT) } : {}),
       } : {}),
-    ...herdrLifecycle(process.env, config.pane, config.identity, events, headlessEnabled(config.capabilities)),
+    ...(config.pane !== null && !config.daemonHosted
+      ? herdrLifecycle(process.env, config.pane, config.identity, events, headlessEnabled(config.capabilities)) : {}),
     sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession,
       config.resumeLeaf),
   });
   const session = host;
+  const remote = config.daemonHosted ? new RemoteOwner(session, events, config.identity.assistant ?? "", config.runtimeDir) : undefined;
   let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;
   const bridge = overrides.bridge === false ? undefined : await startBridge({
     path: join(config.runtimeDir, "host.sock"),
@@ -156,15 +160,25 @@ export async function runHost(config: HostConfig, overrides: {
       hello: () => ({
         protocol: 1, generation: config.identity.generation, role: config.identity.role,
         bound: session.bound, session_id: session.sessionId(), last_seq: events.last,
-        commands: COMMANDS.filter(command => command !== "handoff_drain" || config.identity.role === "assistant"),
+        commands: COMMANDS.filter(command => (command !== "handoff_drain" || config.identity.role === "assistant")
+          && (!["owner_turn", "set_model"].includes(command) || remote !== undefined)),
+        daemon_hosted: remote !== undefined, remote_ready: remote?.isReady ?? false, turn: session.state().turn,
       }),
       state: () => session.state(),
       queueState: limit => session.queue.snapshot(limit, false),
       queueWithdraw: (key, op_key) => ({ ...session.queue.bridgeWithdraw(key, op_key) }),
       handoffDrain: args => attestSourceDrain(session, config.identity,
         { pid: process.pid, start_time: processStartTime() }, args),
-      submit: (input, requestId) => session.submit(input, requestId),
-      cancel: (turn) => session.cancel(turn),
+      submit: (input, requestId) => remote && input.origin === "daemon-owner"
+        ? Promise.resolve({ disposition: "rejected" as const, reason: "owner_turn_required" }) : session.submit(input, requestId),
+      ...(remote ? {
+        ownerTurn: async (args: Record<string, unknown>) => ({ ...await remote.submit(args) }),
+        setModel: (args: Record<string, unknown>) => remote.setModel(args),
+      } : {}),
+      cancel: (turn) => {
+        if (remote && turn === undefined) throw new Error("remote_stop_requires_turn");
+        return session.cancel(turn);
+      },
       questions: (updates) => session.questionsChanged(updates),
       shutdown: () => {
         events.emit("shutdown");
@@ -190,6 +204,11 @@ export async function runHost(config: HostConfig, overrides: {
       throw new Error("Build session has no transcript");
     }
     saveSession(dirname(dirname(overrides.build.dir)), { ...record, sessionFile: state.file, updated: new Date().toISOString() });
+  }
+  if (remote) {
+    try { await remote.attach(); }
+    catch (error) { await session.close(); await bridge?.close(); throw error; }
+    return;
   }
   if (headlessEnabled(config.capabilities)) {
     await attachHeadless(session, events, (line) => process.stdout.write(line));

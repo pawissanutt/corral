@@ -8,7 +8,7 @@
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::usage::{Level, PROFILE_HEADERS, ProfileRow, SHARE_MARKER_PERCENT, profile_rows};
+use crate::model::usage::{Level, Page, ProfileRow, SHARE_MARKER_PERCENT};
 use crate::screens::usage::cellbar::meter;
 use crate::state::AppState;
 use crate::ui::kit::page::Width;
@@ -50,18 +50,24 @@ const TERM_METER_CELLS: usize = 12;
 /// A profile sits two Cells in under its provider's group row.
 const TERM_INDENT: f32 = 2.0;
 
-/// The desktop table: the model's six column names over one row per profile. test_id
-/// "usage-profiles" around the kit's "devtable".
-pub fn desktop(app: AppState) -> AnyElement {
+/// The desktop table: the model's six column names over one row per profile; a share corral
+/// cannot know reads "unknown" in place of its meter. test_id "usage-profiles" around the kit's
+/// "devtable".
+pub fn desktop(app: AppState, page: &Page) -> AnyElement {
     let form = app.form;
-    let rows = profile_rows()
-        .into_iter()
+    let rows = page
+        .profiles
+        .iter()
+        .cloned()
         .map(|row| {
             vec![
                 provider_name(row.provider),
                 mono(app, row.profile).into_element(),
                 figure(form, row.window),
-                share_meter(row.share_percent, row.level),
+                match row.share_percent {
+                    Some(share) => share_meter(share, row.level),
+                    None => unknown(form),
+                },
                 figure(form, row.today),
                 figure(form, row.headroom),
             ]
@@ -69,15 +75,30 @@ pub fn desktop(app: AppState) -> AnyElement {
         .collect();
     view()
         .test_id("usage-profiles")
-        .child(devtable(app, &DESKTOP_WIDTHS, &PROFILE_HEADERS, rows))
+        .child(devtable(app, &DESKTOP_WIDTHS, &page.profile_headers, rows))
+        .into_element()
+}
+
+/// "unknown" in the quiet ink, where a share has no quota fact behind it.
+fn unknown(form: Form) -> AnyElement {
+    let words = text("unknown")
+        .number_of_lines(1u32)
+        .text_color(color(Token::Ink3));
+    if form == Form::Terminal {
+        return words.into_element();
+    }
+    words
+        .font_family(FONT_TEXT)
+        .text_size(px(12.0))
         .into_element()
 }
 
 /// The terminal table, `room` Cells wide: a bold group row per provider with its headroom,
 /// then its profiles indented with their window, meter (when it fits) and cost.
-pub fn terminal(app: AppState, room: usize) -> AnyElement {
+pub fn terminal(app: AppState, page: &Page, room: usize) -> AnyElement {
     let wide = room >= TERM_SHARE_ROOM;
-    let header: Vec<&str> = PROFILE_HEADERS
+    let header: Vec<&str> = page
+        .profile_headers
         .iter()
         .skip(1)
         .enumerate()
@@ -86,7 +107,7 @@ pub fn terminal(app: AppState, room: usize) -> AnyElement {
         .collect();
     let widths: &[Width] = if wide { &TERM_WIDE } else { &TERM_NARROW };
     let mut rows = Vec::new();
-    for row in profile_rows() {
+    for row in page.profiles.iter().cloned() {
         if !row.provider.is_empty() {
             rows.push(group_row(app.form, &row, wide));
         }
@@ -101,7 +122,7 @@ pub fn terminal(app: AppState, room: usize) -> AnyElement {
 /// A provider's group row: its label in bold in the profile column, its headroom at the end.
 fn group_row(form: Form, row: &ProfileRow, wide: bool) -> Vec<AnyElement> {
     let mut cells = vec![
-        text(row.provider)
+        text(row.provider.clone())
             .number_of_lines(1u32)
             .font_weight(FontWeight::BOLD)
             .text_color(color(Token::Ink))
@@ -135,7 +156,10 @@ fn profile_row(app: AppState, row: ProfileRow, wide: bool) -> Vec<AnyElement> {
         figure(form, row.window),
     ];
     if wide {
-        cells.push(meter(row.share_percent, row.level, TERM_METER_CELLS));
+        cells.push(match row.share_percent {
+            Some(share) => meter(share, row.level, TERM_METER_CELLS),
+            None => unknown(form),
+        });
     }
     cells.push(figure(form, row.today));
     cells.push(view().into_element());
@@ -143,7 +167,7 @@ fn profile_row(app: AppState, row: ProfileRow, wide: bool) -> Vec<AnyElement> {
 }
 
 /// The provider label on a provider's first row; nothing on the rows after it.
-fn provider_name(provider: &'static str) -> AnyElement {
+fn provider_name(provider: String) -> AnyElement {
     if provider.is_empty() {
         return view().into_element();
     }

@@ -1,5 +1,5 @@
-//! "Cost per day · 7 days": one stacked bar per day, its segments the model's dollar values as
-//! percents of the track (as the mockup draws them), the day before it and the total after it,
+//! "Cost per day": one stacked bar per day, its segments the model's widths in percent of the
+//! track (as the mockup draws them), the day before it and the total after it,
 //! then the legend. Desktop and phone draw filled boxes; a terminal draws Cell bars as wide as
 //! its room allows. The day and total beside each bar are its text; the bar itself is hidden
 //! from screen readers.
@@ -7,7 +7,7 @@
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::usage::{COST_LEGEND, cost_bars};
+use crate::model::usage::Costs;
 use crate::screens::usage::cellbar::{COST_LOOKS, stacked, swatch};
 use crate::state::AppState;
 use crate::ui::term;
@@ -16,8 +16,8 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 /// The segments' fills in legend order (`var(--ink-2)`, `var(--ink-4)`, `var(--held)`).
 const FILLS: [Token; 3] = [Token::Ink2, Token::Ink4, Token::Held];
 /// Terminal: the day column, the total column and the bar's bounds, in Cells.
-const TERM_DAY: f32 = 4.0;
-const TERM_TOTAL: usize = 5;
+const TERM_DAY: f32 = 5.0;
+const TERM_TOTAL: usize = 7;
 const TERM_BAR_MIN: usize = 10;
 const TERM_BAR_MAX: usize = 50;
 const TERM_GAP: usize = 2;
@@ -53,11 +53,16 @@ fn metrics(form: Form) -> Metrics {
 /// The bars and the legend on desktop and phone: rows `day | bar | total` (34, the rest, 52 on
 /// desktop), bars 10 pt high with 2 pt corners, the legend 10 pt under them. test_id
 /// "usage-costs".
-pub fn bars(app: AppState) -> AnyElement {
+pub fn bars(app: AppState, costs: &Costs) -> AnyElement {
     let form = app.form;
     let m = metrics(form);
-    let rows = cost_bars()
-        .into_iter()
+    if let Some(words) = &costs.empty {
+        return empty(app, words);
+    }
+    let rows = costs
+        .bars
+        .iter()
+        .cloned()
         .map(|bar| {
             let segments = bar
                 .values
@@ -114,10 +119,12 @@ pub fn bars(app: AppState) -> AnyElement {
                 .into_element()
         })
         .collect::<Vec<_>>();
-    let legend = COST_LEGEND
+    let legend = costs
+        .legend
         .iter()
+        .cloned()
         .zip(FILLS)
-        .map(|(&label, fill)| {
+        .map(|(label, fill)| {
             view()
                 .flex_row()
                 .items_center()
@@ -155,12 +162,17 @@ pub fn bars(app: AppState) -> AnyElement {
 
 /// The terminal's bars, `room` Cells wide: the day, the Cell bar, the total at the end; then the
 /// legend, each segment's Cell before its name. test_id "usage-costs".
-pub fn terminal(room: usize) -> AnyElement {
+pub fn terminal(app: AppState, costs: &Costs, room: usize) -> AnyElement {
+    if let Some(words) = &costs.empty {
+        return empty(app, words);
+    }
     let cells = room
         .saturating_sub(TERM_DAY as usize + 1 + TERM_GAP + TERM_TOTAL)
         .clamp(TERM_BAR_MIN, TERM_BAR_MAX);
-    let rows = cost_bars()
-        .into_iter()
+    let rows = costs
+        .bars
+        .iter()
+        .cloned()
         .map(|bar| {
             view()
                 .flex_row()
@@ -196,7 +208,7 @@ pub fn terminal(room: usize) -> AnyElement {
         })
         .collect::<Vec<_>>();
     let mut legend = Vec::new();
-    for (at, (&label, look)) in COST_LEGEND.iter().zip(COST_LOOKS).enumerate() {
+    for (at, (label, look)) in costs.legend.iter().cloned().zip(COST_LOOKS).enumerate() {
         if at > 0 {
             legend.push(term::space(TERM_GAP as f32));
         }
@@ -209,5 +221,21 @@ pub fn terminal(room: usize) -> AnyElement {
         .children(rows)
         .child(term::blank())
         .child(view().flex_row().flex_wrap().children(legend))
+        .into_element()
+}
+
+/// What the section says in place of its bars (loading, failed, nothing recorded).
+fn empty(app: AppState, words: &str) -> AnyElement {
+    let words = text(words.to_owned()).text_color(color(Token::Ink3));
+    if app.form == Form::Terminal {
+        return view().test_id("usage-costs").child(words).into_element();
+    }
+    view()
+        .test_id("usage-costs")
+        .child(
+            words
+                .font_family(FONT_TEXT)
+                .text_size(px(if app.form == Form::Phone { 14.0 } else { 12.5 })),
+        )
         .into_element()
 }

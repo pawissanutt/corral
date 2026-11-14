@@ -239,6 +239,13 @@ fn now(store: &Store, head: &TaskHead, owner_since: Option<jiff::Timestamp>) -> 
             return Ok((BoardGroup::NeedsYou, "needs_you", "needs you".into(), since));
         }
     }
+    // Ready is visibly queued even when its admission flag is unset. Idea and
+    // backlog share this broad upcoming bucket without becoming scheduled work.
+    let code = match head.status {
+        Status::Idea => "idea",
+        Status::Backlog => "backlog",
+        _ => "queued",
+    };
     for id in &head.depends_on {
         let dependency = store
             .head_if_exists(id)
@@ -246,13 +253,13 @@ fn now(store: &Store, head: &TaskHead, owner_since: Option<jiff::Timestamp>) -> 
         if dependency.is_none_or(|head| head.status != Status::Done) {
             return Ok((
                 BoardGroup::Queued,
-                "queued",
-                format!("queued · after {id}"),
+                code,
+                format!("{code} · after {id}"),
                 since,
             ));
         }
     }
-    Ok((BoardGroup::Queued, "queued", "queued".into(), since))
+    Ok((BoardGroup::Queued, code, code.into(), since))
 }
 
 fn agent(head: &TaskHead, run: Option<&RunHead>) -> Result<Option<BoardAgent>> {

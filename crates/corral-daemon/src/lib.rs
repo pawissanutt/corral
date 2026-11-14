@@ -1,6 +1,8 @@
 //! The workspace's single synchronization loop owner.
 #[cfg(unix)]
 mod app;
+#[cfg(unix)]
+mod assistant;
 mod classic;
 #[cfg(unix)]
 mod commands;
@@ -19,6 +21,8 @@ mod server;
 mod state;
 #[cfg(unix)]
 mod topics;
+#[cfg(unix)]
+mod views;
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -188,6 +192,10 @@ fn run_loop(
         reader::start(&ctx, &shared)?;
         commands::start(&ctx, &shared)?;
         devices::start(&ctx, &shared, identity::state_root().ok())?;
+        corral_ops::agent::app_runtime::ensure_filing_log(&ctx)
+            .context("building chat filing log")?;
+        views::start(&ctx, &shared)?;
+        assistant::start(&ctx, &shared)?;
         server::start(listener, Arc::clone(&shared), ctx.store.dir())?;
         app::start(&ctx, &shared);
         let transitions = Arc::new(Mutex::new(health::Transitions::new()));
@@ -480,6 +488,8 @@ impl Drop for Cleanup {
         let upgrading = self.shared.lock().upgrading;
         self.shared.stop(upgrading);
         self.shared.close();
+        #[cfg(unix)]
+        assistant::join(&self.shared);
         if let Some(projector) = self.projector.take()
             && projector.join().is_err()
         {

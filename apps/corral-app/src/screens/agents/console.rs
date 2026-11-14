@@ -192,7 +192,7 @@ pub fn lines(lines: &[Line], set: Set, with_cursor: bool) -> AnyElement {
 
 /// The `live` or `snapshot` tag of a tail (`.tlab`): 10 pt words in the ok or held colour in a
 /// half-strength ring of the same colour. A snapshot never passes for a stream.
-pub fn tag(feed: Feed, label: &'static str) -> AnyElement {
+pub fn tag(feed: Feed, label: impl Into<SharedString>) -> AnyElement {
     let ink = night(match feed {
         Feed::Live => Token::Ok,
         Feed::Snapshot => Token::Held,
@@ -206,7 +206,7 @@ pub fn tag(feed: Feed, label: &'static str) -> AnyElement {
         .border_1()
         .border_color(ink.opacity(0.5))
         .child(
-            text(label)
+            text(label.into())
                 .number_of_lines(1u32)
                 .font_family(FONT_TEXT)
                 .text_size(px(10.0))
@@ -217,10 +217,54 @@ pub fn tag(feed: Feed, label: &'static str) -> AnyElement {
         .into_element()
 }
 
-/// The desktop terminal's toolbar (`.termbar`): the runtime, pane and size, the stream's
-/// state, and at the trailing edge where keys go. A legacy snapshot's state is in the held
-/// colour, so it never reads as a live stream.
-pub fn toolbar(terminal: &Terminal) -> AnyElement {
+/// Why the surface has no lines (no capture yet, none recorded), quiet in the surface's own
+/// face so the empty surface still reads as the terminal it stands for.
+pub fn empty(words: String, set: Set) -> AnyElement {
+    text(words)
+        .font_family(FONT_MONO)
+        .text_size(px(set.size))
+        .line_height(px(set.leading))
+        .text_color(night(Token::Ink3))
+        .into_element()
+}
+
+/// The toolbar's refresh control: asks corrald for the pane's latest recorded capture. Drawn
+/// in the surface's night inks, with the app's focus ring.
+pub fn refresh(on_press: impl Fn() + 'static) -> AnyElement {
+    view()
+        .flex_row()
+        .flex_shrink_0()
+        .items_center()
+        .px(px(8.0))
+        .py(px(2.0))
+        .rounded(px(4.0))
+        .border_1()
+        .border_color(night(Token::Rule2))
+        .cursor_pointer()
+        .role(AccessibilityRole::Button)
+        .label("Refresh capture")
+        .test_id("btn-refresh-capture")
+        .hover(|s| s.bg(night(Token::Hover)))
+        .focus_visible(|s| {
+            s.outline(px(2.0))
+                .outline_color(color(Token::Focus))
+                .outline_offset(px(2.0))
+        })
+        .on_press(on_press)
+        .child(
+            text("Refresh")
+                .number_of_lines(1u32)
+                .font_family(FONT_TEXT)
+                .text_size(px(11.5))
+                .text_color(night(Token::Ink)),
+        )
+        .into_element()
+}
+
+/// The desktop terminal's toolbar (`.termbar`): the runtime, pane and size, the capture's
+/// state, and at the trailing edge where keys go and the refresh control. A snapshot's state
+/// is in the held colour, so it never reads as a live stream.
+pub fn toolbar(terminal: &Terminal, refresh: Option<AnyElement>) -> AnyElement {
     let words = |content: SharedString, ink: AdaptiveColor| {
         text(content)
             .number_of_lines(1u32)
@@ -245,9 +289,10 @@ pub fn toolbar(terminal: &Terminal) -> AnyElement {
         .py(px(6.0))
         .bg(night(Token::BgSunk))
         .child(words(terminal.heading.clone().into(), quiet))
-        .child(words(terminal.status.into(), state))
+        .child(words(terminal.status.clone().into(), state))
         .child(view().flex_1().min_w(px(0.0)))
-        .child(words(terminal.input.into(), quiet))
+        .child(words(terminal.input.clone().into(), quiet))
+        .children(refresh)
         .into_element()
 }
 

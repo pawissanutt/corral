@@ -3,8 +3,8 @@
 //! the role, delivery and auth modules, generates `host_cap` and `ctl_cap`, writes `ctl.cap` and
 //! execs Bun by argv, passing the launch message (nonce, scope and both secrets) on an
 //! inherited pipe: never argv, the environment or a file the model can read. Owner: T-252
-//! child host-bridge. `prepare` is the dispatch half: it opens the generation, writes the
-//! bootstrap and renders the pane command.
+//! child host-bridge. `prepare` opens a pane generation; [`daemon`] exposes claimed, focused
+//! pane-less assistant preparation and argv spawning with the same one-shot secrets pipe.
 //!
 //! The runtime-directory layout lives here so run-end cleanup (integration-seams) and the
 //! launcher agree on it: `$XDG_RUNTIME_DIR/corral/<store>/<recipient>/`, else an owner-only
@@ -27,6 +27,7 @@ use super::cli::LaunchArgs;
 use crate::Ctx;
 
 mod capabilities;
+pub mod daemon;
 mod fixture_assets;
 mod secrets;
 pub(crate) use capabilities::capabilities_payload;
@@ -69,6 +70,9 @@ pub struct Bootstrap {
     pub generation: u32,
     pub bind_nonce: String,
     pub pane: String,
+    /// Explicit remote-owner mode. Pane sessions never infer this from a pane name.
+    #[serde(default)]
+    pub daemon_hosted: bool,
     pub cwd: PathBuf,
     pub assets: PathBuf,
     pub asset_sha256: String,
@@ -304,6 +308,15 @@ pub fn prepare_bootstrap(
     pane: &str,
     spec: &HostSpec,
 ) -> Result<Prepared> {
+    prepare_bootstrap_host(ctx, target, Some(pane), spec)
+}
+
+pub(crate) fn prepare_bootstrap_host(
+    ctx: &Ctx,
+    target: &BindTarget,
+    pane: Option<&str>,
+    spec: &HostSpec,
+) -> Result<Prepared> {
     super::connections::validate(
         spec.binding.as_ref(),
         spec.provider.as_deref(),
@@ -424,7 +437,7 @@ pub fn prepare_bootstrap(
         .map(|pins| pins.capabilities)
         .unwrap_or_default();
     let memory = super::hooks::memory::projection(&ctx.store, target.role(), &project)?;
-    let grant = super::admission::open_generation_bound(
+    let grant = super::admission::open_generation_host(
         &ctx.store,
         target,
         pane,
@@ -465,7 +478,8 @@ pub fn prepare_bootstrap(
         assistant: container.assistant().map(str::to_owned),
         generation: grant.generation,
         bind_nonce: grant.bind_nonce,
-        pane: pane.into(),
+        pane: pane.unwrap_or_default().into(),
+        daemon_hosted: pane.is_none(),
         cwd: spec.cwd.clone(),
         assets: assets.clone(),
         asset_sha256,
@@ -819,7 +833,8 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "generation": bootstrap.generation,
         "secrets": {"host_cap": secrets.host_cap, "ctl_cap": secrets.ctl_cap,
                     "bind_nonce": bootstrap.bind_nonce},
-        "pane": bootstrap.pane, "cwd": bootstrap.cwd, "root": bootstrap.root,
+        "pane": (!bootstrap.daemon_hosted).then_some(&bootstrap.pane),
+        "daemon_hosted": bootstrap.daemon_hosted, "cwd": bootstrap.cwd, "root": bootstrap.root,
         "corral": bootstrap.corral, "assets": ready.assets,
         "runtime_dir": ready.generation_dir, "session_dir": bootstrap.session_dir,
         "resume_session": bootstrap.resume_session,
@@ -869,6 +884,9 @@ pub fn host_command(
         .arg("--launch-fd")
         .arg(reader.as_raw_fd().to_string())
         .current_dir(&ready.assets);
+    if bootstrap.daemon_hosted {
+        command.arg("--remote-owner");
+    }
     if bootstrap.provider.as_deref() == Some("amazon-bedrock") {
         use std::os::unix::ffi::OsStrExt;
         for (key, _) in std::env::vars_os().filter(|(key, _)| key.as_bytes().starts_with(b"AWS_")) {

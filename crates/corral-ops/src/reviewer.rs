@@ -158,6 +158,26 @@ pub fn verdict(ctx: &Ctx, id: &str, verdict: Verdict, notes: &str) -> Result<Rev
     verdict_bound(ctx, id, verdict, notes, None)
 }
 
+/// Manual verdict with the app's exact committed candidate as a transaction precondition.
+pub fn verdict_checked(
+    ctx: &Ctx,
+    id: &str,
+    sha: &str,
+    verdict: Verdict,
+    notes: &str,
+) -> Result<ReviewRecord> {
+    verdict_with_clock(
+        ctx,
+        id,
+        verdict,
+        notes,
+        (None, &[], Some(sha)),
+        None,
+        corral_core::clock::now,
+    )
+    .map(|(record, _)| record)
+}
+
 /// Record a manual verdict at an explicit timestamp.
 pub fn verdict_at(
     ctx: &Ctx,
@@ -166,7 +186,8 @@ pub fn verdict_at(
     notes: &str,
     at: Timestamp,
 ) -> Result<ReviewRecord> {
-    verdict_with_clock(ctx, id, verdict, notes, (None, &[]), None, || at).map(|(record, _)| record)
+    verdict_with_clock(ctx, id, verdict, notes, (None, &[], None), None, || at)
+        .map(|(record, _)| record)
 }
 
 /// Reviewer callbacks must carry the attempt from their prompt. An unbound call is
@@ -198,7 +219,7 @@ pub fn verdict_with_evidence(
         id,
         verdict,
         notes,
-        (expected_attempt, evidence),
+        (expected_attempt, evidence, None),
         None,
         now,
     )
@@ -223,7 +244,7 @@ pub fn verdict_request(
             id,
             verdict,
             notes,
-            (expected_attempt, &[]),
+            (expected_attempt, &[], None),
             Some(report),
             now,
         )
@@ -238,7 +259,7 @@ fn verdict_with_clock(
     id: &str,
     verdict: Verdict,
     notes: &str,
-    (expected_attempt, evidence): (Option<&str>, &[PathBuf]),
+    (expected_attempt, evidence, expected_sha): (Option<&str>, &[PathBuf], Option<&str>),
     report: Option<&crate::agent::effects::Report<'_>>,
     now: impl FnOnce() -> Timestamp,
 ) -> Result<Recorded> {
@@ -252,10 +273,11 @@ fn verdict_with_clock(
                 && expected_attempt.is_none_or(|attempt| callback::matches(review, attempt))
         })
     });
-    let bound = (expected_attempt, evidence);
+    let bound = (expected_attempt, evidence, expected_sha);
     let result = verdict_inner(ctx, id, verdict, notes, bound, report, now);
     if let Err(error) = &result
         && let Some(review) = pending
+        && expected_sha.is_none()
     {
         watchdog::record_failure(ctx, &task, review, error)?;
     }
@@ -267,7 +289,7 @@ fn verdict_inner(
     id: &str,
     verdict: Verdict,
     notes: &str,
-    (expected_attempt, evidence): (Option<&str>, &[PathBuf]),
+    (expected_attempt, evidence, expected_sha): (Option<&str>, &[PathBuf], Option<&str>),
     report: Option<&crate::agent::effects::Report<'_>>,
     now: impl FnOnce() -> Timestamp,
 ) -> Result<Recorded> {
@@ -288,6 +310,9 @@ fn verdict_inner(
         bail!("{}: worktree {} is gone", task.id, run.worktree.display());
     }
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
+    if let Some(expected_sha) = expected_sha {
+        crate::review::require_candidate_sha(&run.worktree, expected_sha)?;
+    }
     let attempt_dir = match run.review_runs.last() {
         Some(_) => notes_of(ctx, &task.id, &run_head)?
             .parent()
@@ -348,7 +373,7 @@ fn verdict_inner(
             &task,
             &run,
             record,
-            (Verdict::Escalate, escalation, &evidence),
+            (Verdict::Escalate, escalation, &evidence, expected_sha),
             now(),
             report,
         )?;
@@ -415,7 +440,7 @@ fn verdict_inner(
         &task,
         &run,
         record,
-        (verdict, notes, &evidence),
+        (verdict, notes, &evidence, expected_sha),
         now(),
         report,
     )?;

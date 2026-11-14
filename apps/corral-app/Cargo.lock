@@ -2950,6 +2950,7 @@ dependencies = [
 name = "nsh-app-corral"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "corral-protocol",
  "env_logger",
  "futures-channel",
@@ -2966,6 +2967,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "snow",
  "wasm-bindgen",
  "wasm-bindgen-futures",

@@ -1,7 +1,10 @@
-//! Pure content builders for the shared composer, model list and Agents blocks.
+//! Content shared by the composer, model list and Agents blocks, and the fixture preview's
+//! builders for them. Every field the daemon can supply is owned, so the live builders in
+//! `live` fill the same records the renderers already draw.
 
 use super::{
-    Action, BOTH_Q, FILED_LIST, FiledRow, MODELS, Mode, Model, SESSIONS, Session, State, session,
+    Action, BOTH_Q, FILED_LIST, FiledRow, MODELS, Mode, SESSIONS, Session, StagedChip, State,
+    session,
 };
 use crate::model::board;
 use crate::model::effect::{Conn, Env, Page};
@@ -16,6 +19,15 @@ pub struct Chip {
     pub label: String,
     /// Semantic state colour.
     pub hue: Hue,
+}
+
+impl Chip {
+    pub fn new(label: impl Into<String>, hue: Hue) -> Chip {
+        Chip {
+            label: label.into(),
+            hue,
+        }
+    }
 }
 
 /// A button descriptor shared by cards and surfaces.
@@ -60,7 +72,7 @@ pub struct TargetOption {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextChip {
     /// Kind, such as task or diff hunk.
-    pub kind: &'static str,
+    pub kind: String,
     /// Item id and descriptive name.
     pub label: String,
     /// Removal action.
@@ -72,11 +84,15 @@ pub struct ContextChip {
 /// A profile row in the accessible Model list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelOption {
-    /// Profile, real model id, effort and note.
-    pub profile: Model,
+    /// Profile name.
+    pub name: String,
+    /// Model id and effort under the name.
+    pub model: String,
+    /// Short selection advice, empty when the profile has none.
+    pub note: String,
     /// Current profile checkmark.
     pub selected: bool,
-    /// Picking this row closes the list and shows its toast.
+    /// Picking this row closes the list and applies the profile to the next message.
     pub action: Action,
 }
 
@@ -89,8 +105,17 @@ pub struct ModelList {
     pub options: Vec<ModelOption>,
     /// Footer with mono configuration key.
     pub footer: Rich,
-    /// Disclosure of illustrative profile names.
-    pub illustrative: &'static str,
+    /// Disclosure of illustrative profile names (fixture only).
+    pub illustrative: Option<&'static str>,
+}
+
+/// The list's footer: where the profiles are configured.
+pub(super) fn model_footer() -> Rich {
+    vec![
+        span("Applies to your next message; the conversation is kept. List: "),
+        span("[assistant.quick] models").mono(),
+        span(" · Settings › Assistant"),
+    ]
 }
 
 /// Builds every list row even when the popup is currently closed.
@@ -100,17 +125,15 @@ pub fn model_list(state: &State) -> ModelList {
         options: MODELS
             .iter()
             .map(|model| ModelOption {
-                profile: *model,
+                name: model.name.into(),
+                model: model.model.into(),
+                note: model.note.into(),
                 selected: model.name == state.model_name(),
                 action: Action::PickModel(model.name),
             })
             .collect(),
-        footer: vec![
-            span("Applies to your next message; the conversation is kept. List: "),
-            span("[assistant.quick] models").mono(),
-            span(" · Settings › Assistant"),
-        ],
-        illustrative: "profile names illustrative",
+        footer: model_footer(),
+        illustrative: Some("profile names illustrative"),
     }
 }
 
@@ -167,13 +190,13 @@ pub struct Composer {
     /// Model pill when this host uses the app picker.
     pub model_pill: Option<Button>,
     /// Text inside the model pill, without a disclosure glyph.
-    pub model_name: Option<&'static str>,
+    pub model_name: Option<String>,
     /// Open model list, absent when closed or not pickable.
     pub model_menu: Option<ModelList>,
     /// Whether the phone displays the model menu inline.
     pub menu_inline: bool,
-    /// PM profile note or named daemon-session note.
-    pub profile_note: Option<&'static str>,
+    /// PM profile note, named-session note or the host's own profile.
+    pub profile_note: Option<String>,
     /// Changed-model line above the field, preserving the conversation.
     pub next_message: Option<Rich>,
     /// Removable bounded-context chip.
@@ -182,10 +205,15 @@ pub struct Composer {
     pub text: String,
     /// Empty-field prompt.
     pub placeholder: String,
-    /// Offline or waiting status above the composer.
+    /// Offline, waiting, refusal or failure status above the composer.
     pub status: Option<Rich>,
-    /// Attachment affordances and their illustrative outcome.
+    /// Screenshot, Link and File. With the daemon they attach for real and are dimmed only for
+    /// a missing capability, the link (uploads), authority, the PM target or a full message.
     pub attachments: Vec<Button>,
+    /// What is staged for the next message, in the context chip's anatomy.
+    pub staged: Vec<StagedChip>,
+    /// Why an attachment button is dimmed.
+    pub attach_note: Option<String>,
     /// Send remains available offline and while waiting, but does not submit blank input.
     pub send: Button,
     /// Desktop key hints, absent on phone and named-session composers.
@@ -199,10 +227,7 @@ fn pm_chip(conn: Conn) -> Chip {
         Conn::Down => ("absent", Hue::Fail),
         Conn::Offline => ("live · as of 22:08", Hue::Held),
     };
-    Chip {
-        label: label.into(),
-        hue,
-    }
+    Chip::new(label, hue)
 }
 
 fn context(id: &'static str) -> ContextChip {
@@ -218,11 +243,39 @@ fn context(id: &'static str) -> ContextChip {
         ),
     };
     ContextChip {
+        kind: kind.into(),
+        label,
+        remove: button("Remove context", Action::Unchip),
+        note: "the assistant gets a bounded brief of it",
+    }
+}
+
+/// The removable chip's note and remove control, shared with the live composer.
+pub(super) fn context_chip(kind: String, label: String) -> ContextChip {
+    ContextChip {
         kind,
         label,
         remove: button("Remove context", Action::Unchip),
         note: "the assistant gets a bounded brief of it",
     }
+}
+
+/// The composer's target switch; the PM entry carries its state.
+pub(super) fn targets(target: AskTarget, pm: Chip) -> Vec<TargetOption> {
+    vec![
+        TargetOption {
+            target: AskTarget::Assistant,
+            label: "Assistant",
+            selected: target == AskTarget::Assistant,
+            state: None,
+        },
+        TargetOption {
+            target: AskTarget::Pm,
+            label: "PM",
+            selected: target == AskTarget::Pm,
+            state: Some(pm),
+        },
+    ]
 }
 
 /// Builds Ask or a named session's composer. Pass `None` for the quick thread and drawer.
@@ -294,29 +347,16 @@ pub fn composer(
         targets: if named {
             Vec::new()
         } else {
-            vec![
-                TargetOption {
-                    target: AskTarget::Assistant,
-                    label: "Assistant",
-                    selected: target == AskTarget::Assistant,
-                    state: None,
-                },
-                TargetOption {
-                    target: AskTarget::Pm,
-                    label: "PM",
-                    selected: target == AskTarget::Pm,
-                    state: Some(pm_chip(env.conn)),
-                },
-            ]
+            targets(target, pm_chip(env.conn))
         },
         model_pill: pickable.then(|| button("Model for the next message", Action::ToggleModelMenu)),
-        model_name: pickable.then(|| state.model_name()),
+        model_name: pickable.then(|| state.model_name().to_owned()),
         model_menu: (pickable && state.model_menu).then(|| model_list(state)),
         menu_inline: pickable && env.form == Form::Phone,
         profile_note: if named {
-            daemon.then_some("model for this session")
+            daemon.then(|| "model for this session".to_owned())
         } else {
-            (target == AskTarget::Pm).then_some("the PM runs its own profile")
+            (target == AskTarget::Pm).then(|| "the PM runs its own profile".to_owned())
         },
         next_message,
         chip: state.chip.map(context),
@@ -324,22 +364,27 @@ pub fn composer(
         placeholder,
         status,
         attachments: vec![
-            button("Screenshot", Action::Toast("Attach a screenshot")),
-            button("Link", Action::Toast("Attach a link")),
-            button("File", Action::Toast("Attach a file")),
+            button("Screenshot", Action::Toast(FIXTURE_ATTACH)),
+            button("Link", Action::Toast(FIXTURE_ATTACH)),
+            button("File", Action::Toast(FIXTURE_ATTACH)),
         ],
+        staged: Vec::new(),
+        attach_note: None,
         send,
         key_hints: (!named && env.form != Form::Phone).then_some(COMPOSER_KEYS),
     }
 }
 
+/// The fixture preview's attachment buttons say what they would need.
+const FIXTURE_ATTACH: &str = "The fixture preview attaches nothing; connect to corrald to attach screenshots, links and files.";
+
 /// Current quick-thread status chip, also used by the drawer and phone header.
 pub fn state_chip(state: &State) -> Chip {
     if let Some(reason) = state.mode.wait_reason() {
-        return Chip {
-            label: format!("waiting for assistant · {}", reason.label()),
-            hue: Hue::Held,
-        };
+        return Chip::new(
+            format!("waiting for assistant · {}", reason.label()),
+            Hue::Held,
+        );
     }
     let (label, hue) = match state.mode {
         Mode::Answering if state.stream < 1.0 => ("answering", Hue::Corral),
@@ -348,19 +393,16 @@ pub fn state_chip(state: &State) -> Chip {
         Mode::Stopped => ("stopped", Hue::Neutral),
         _ => ("", Hue::Neutral),
     };
-    Chip {
-        label: label.into(),
-        hue,
-    }
+    Chip::new(label, hue)
 }
 
 /// Pinned quick-thread tile; render the same content as a compact row on phone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuickThread {
     /// Session id.
-    pub id: &'static str,
+    pub id: String,
     /// Full tile title.
-    pub title: &'static str,
+    pub title: String,
     /// Compact-row title.
     pub row_title: &'static str,
     /// Current answering/waiting chip.
@@ -372,57 +414,96 @@ pub struct QuickThread {
     /// Last owner question, clipped at 96 characters.
     pub last_question: String,
     /// Attribution for the last owner message.
-    pub owner_at: &'static str,
+    pub owner_at: String,
     /// Thread-wide model selection.
-    pub model: &'static str,
+    pub model: String,
     /// Host description.
-    pub location: &'static str,
+    pub location: String,
     /// Cross-device scope.
     pub scope: &'static str,
     /// Host's lifetime, unrelated to idle time.
-    pub lifetime: &'static str,
+    pub lifetime: String,
     /// Opens the quick thread.
     pub action: Action,
 }
 
 /// A session row with both compact and desktop fact lines prebuilt.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRow {
-    /// Typed fixture facts.
-    pub session: Session,
+    /// Session identity.
+    pub id: String,
+    /// Session title.
+    pub title: String,
     /// State chip, including live-since time.
     pub state: Chip,
     /// Desktop facts with focus placeholder.
     pub desktop_facts: String,
     /// Phone facts omit focus when absent.
     pub phone_facts: String,
-    /// Fixed two-decimal session cost.
+    /// Fixed two-decimal session cost, or "cost unknown".
     pub cost: String,
     /// Opens this session.
     pub action: Action,
 }
 
+/// One Filed from chat row, always naming its source session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FiledLine {
+    /// Task to open.
+    pub id: String,
+    /// Filed title or merge outcome.
+    pub title: String,
+    /// Filing time.
+    pub at: String,
+    /// Session and host that supplied the words.
+    pub source: String,
+    /// Opens the task.
+    pub action: Action,
+}
+
+impl FiledLine {
+    fn fixture(row: &FiledRow) -> FiledLine {
+        FiledLine {
+            id: row.id.into(),
+            title: row.title.into(),
+            at: row.at.into(),
+            // The mockup's rows were all filed by the assistant.
+            source: format!("{} {}", super::LABELS.filed_by, row.source),
+            action: Action::Open(Page::Task(row.id)),
+        }
+    }
+}
+
 /// Agents' three assistant blocks; no assistant destination is introduced.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Agents {
     /// Pinned quick-thread tile or row.
     pub quick_thread: QuickThread,
     /// Assistant sessions section heading.
     pub sessions_title: &'static str,
-    /// Named daemon and pane session rows, excluding A-7.
+    /// Named daemon and pane session rows, excluding the quick thread.
     pub sessions: Vec<SessionRow>,
     /// Desktop count descriptor.
     pub sessions_count: String,
-    /// Starts an illustrative named daemon session.
+    /// Starts a named daemon session.
     pub new_session: Button,
+    /// Loading, stale, empty or refusal line under the sessions.
+    pub sessions_note: Option<String>,
     /// Session fixture disclosure.
-    pub sessions_illustrative: &'static str,
+    pub sessions_illustrative: Option<&'static str>,
     /// Filed section heading.
     pub filed_title: &'static str,
     /// Filed rows, each naming its originating session.
-    pub filed: &'static [FiledRow],
+    pub filed: Vec<FiledLine>,
+    /// The source's total of filings beside the heading; none while the source is unknown,
+    /// loading or unavailable.
+    pub filed_total: Option<u64>,
+    /// Loading, freshness, error, capability or empty.
+    pub filed_note: Option<String>,
+    /// Newest, Newer, Older or Retry for the served page.
+    pub filed_pager: Vec<Button>,
     /// Filed id disclosure.
-    pub filed_illustrative: &'static str,
+    pub filed_illustrative: Option<&'static str>,
 }
 
 /// Builds quick-thread, named-session and Filed from chat blocks for Agents.
@@ -442,50 +523,22 @@ pub fn agents(state: &State, _env: Env) -> Agents {
     let rows: Vec<SessionRow> = SESSIONS
         .iter()
         .filter(|session| session.id != "A-7")
-        .map(|session| {
-            let cost = format!("${:.2}", session.cost);
-            let focus = session
-                .focus
-                .map_or(String::new(), |id| format!(" · focus {id}"));
-            SessionRow {
-                session: *session,
-                state: Chip {
-                    label: session.state.into(),
-                    hue: if session.state.starts_with("live") {
-                        Hue::Worker
-                    } else {
-                        Hue::Neutral
-                    },
-                },
-                desktop_facts: format!(
-                    "{} · focus {} · {cost} · scratch {}",
-                    session.location,
-                    session.focus.unwrap_or("−"),
-                    session.scratch
-                ),
-                phone_facts: format!(
-                    "{} · {}{focus} · scratch {}",
-                    session.state, session.location, session.scratch
-                ),
-                cost,
-                action: Action::OpenThread(session.id),
-            }
-        })
+        .map(fixture_row)
         .collect();
     Agents {
         quick_thread: QuickThread {
-            id: "A-7",
-            title: "Quick thread · A-7",
+            id: "A-7".into(),
+            title: "Quick thread · A-7".into(),
             row_title: "Quick thread",
             state: state_chip(state),
             pinned: "assistant · pinned",
             last_line,
             last_question: format!("{}…", question.chars().take(96).collect::<String>()),
-            owner_at: "you · 22:11",
-            model: state.model_name(),
-            location: "runs: daemon",
+            owner_at: "you · 22:11".into(),
+            model: state.model_name().into(),
+            location: "runs: daemon".into(),
             scope: "shared by your devices",
-            lifetime: "live · since 14:02",
+            lifetime: "live · since 14:02".into(),
             action: Action::OpenQuickThread,
         },
         sessions_title: "Assistant sessions",
@@ -495,10 +548,45 @@ pub fn agents(state: &State, _env: Env) -> Agents {
             "+ New session",
             Action::Toast("New session A-19 started in corrald · separate from the quick thread"),
         ),
-        sessions_illustrative: "sessions illustrative",
+        sessions_note: None,
+        sessions_illustrative: Some("sessions illustrative"),
         filed_title: "Filed from chat",
-        filed: FILED_LIST,
-        filed_illustrative: "filed ids illustrative",
+        filed: FILED_LIST.iter().map(FiledLine::fixture).collect(),
+        filed_total: Some(FILED_LIST.len() as u64),
+        filed_note: None,
+        filed_pager: Vec::new(),
+        filed_illustrative: Some("filed ids illustrative"),
+    }
+}
+
+fn fixture_row(session: &Session) -> SessionRow {
+    let cost = format!("${:.2}", session.cost);
+    let focus = session
+        .focus
+        .map_or(String::new(), |id| format!(" · focus {id}"));
+    SessionRow {
+        id: session.id.into(),
+        title: session.title.into(),
+        state: Chip::new(
+            session.state,
+            if session.state.starts_with("live") {
+                Hue::Worker
+            } else {
+                Hue::Neutral
+            },
+        ),
+        desktop_facts: format!(
+            "{} · focus {} · {cost} · scratch {}",
+            session.location,
+            session.focus.unwrap_or("−"),
+            session.scratch
+        ),
+        phone_facts: format!(
+            "{} · {}{focus} · scratch {}",
+            session.state, session.location, session.scratch
+        ),
+        cost,
+        action: Action::OpenThread(session.id),
     }
 }
 
@@ -517,20 +605,26 @@ pub struct ThreadHeader {
     /// Desktop page title.
     pub title: String,
     /// Compact phone title.
-    pub phone_title: &'static str,
+    pub phone_title: String,
     /// Back destination label.
     pub back_label: &'static str,
-    /// State chip shown only on the quick thread.
+    /// State chip shown on the quick thread and on a live session.
     pub state: Option<Chip>,
     /// Host/scope subtitle.
-    pub subtitle: &'static str,
+    pub subtitle: String,
     /// Id, State, Where, Profile, Cost and Scratch.
     pub facts: Vec<Fact>,
     /// Session host lifetime explanation.
     pub lifetime_note: &'static str,
-    /// Filed from this thread rows, only for A-7 in the mockup.
-    pub filed: Vec<FiledRow>,
+    /// Filed from this thread rows.
+    pub filed: Vec<FiledLine>,
+    /// End session, on a served named session corrald has not ended; it asks this device to
+    /// confirm before the canonical `assistant.session` End goes out.
+    pub end: Option<Button>,
 }
+
+/// The host lifetime explanation every session's facts carry; there is no idle stop.
+pub(super) const LIFETIME_NOTE: &str = "The host runs until its work is done or it stops on its own (it exits, crashes, you end the session, or corrald restarts). Rolling at caps starts the next A-<n> with a summary.";
 
 /// Builds known session headers; unknown ids have no fabricated session facts.
 pub fn thread_header(state: &State, id: &'static str, _env: Env) -> Option<ThreadHeader> {
@@ -550,14 +644,15 @@ pub fn thread_header(state: &State, id: &'static str, _env: Env) -> Option<Threa
         } else {
             format!("{id} · {}", session.title)
         },
-        phone_title: if quick { "Quick thread" } else { id },
+        phone_title: if quick { "Quick thread" } else { id }.into(),
         back_label: "Agents",
         state: quick.then(|| state_chip(state)),
         subtitle: if quick {
             "runs: daemon · one per workspace · every device"
         } else {
             "assistant session"
-        },
+        }
+        .into(),
         facts: vec![
             Fact {
                 label: "Id",
@@ -584,16 +679,17 @@ pub fn thread_header(state: &State, id: &'static str, _env: Env) -> Option<Threa
                 value: vec![span(session.scratch.to_string())],
             },
         ],
-        lifetime_note: "The host runs until its work is done or it stops on its own (it exits, crashes, you end the session, or corrald restarts). Rolling at caps starts the next A-<n> with a summary.",
+        lifetime_note: LIFETIME_NOTE,
         filed: if quick {
             FILED_LIST
                 .iter()
                 .filter(|row| row.source.starts_with("A-7"))
-                .copied()
+                .map(FiledLine::fixture)
                 .collect()
         } else {
             Vec::new()
         },
+        end: None,
     })
 }
 

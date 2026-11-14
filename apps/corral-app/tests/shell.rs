@@ -24,11 +24,14 @@ fn phone() -> EngineConfig {
     config
 }
 
+/// Starts the app on the explicitly chosen fixture preview, stored as the palette's
+/// `Data: fixture` choice remembers it; normal startup without a daemon is disconnected.
+/// `entries` may override it.
 fn with_storage(config: EngineConfig, entries: &[(&str, &str)]) -> Headless {
     let mut config = config;
     config.storage = Some(MemoryStorage::new(
-        entries
-            .iter()
+        std::iter::once(("corral.data", "preview"))
+            .chain(entries.iter().copied())
             .map(|(key, value)| (key.to_string(), value.to_string())),
     ));
     let mut app = Headless::start(config).unwrap();

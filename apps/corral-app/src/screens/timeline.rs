@@ -1,26 +1,31 @@
-//! The Timeline destination: who worked when today. Desktop and phone draw the model's lanes on a
-//! canvas measured to its container (`timeline/chart.rs`); a terminal draws the same lanes as rows
-//! of Cells (`timeline/cells.rs`). The legend comes before the chart, the gaps worth a look and the
-//! goal burn-up after it, on every form.
+//! The Timeline destination: who worked when. Desktop and phone draw the lanes on a canvas
+//! measured to its container (`timeline/chart.rs`); a terminal draws the same lanes as rows of
+//! Cells (`timeline/cells.rs`). The legend comes before the chart, the gaps worth a look and the
+//! goal burn-up after it, on every form. The fixture preview draws the mockup's illustrative
+//! day; a daemon session draws corral's recorded spans (`shown`), with its loading, stale and
+//! failed states said in place.
 
 mod cells;
 mod chart;
+mod shown;
 
 use nsh_core::prelude::*;
 
-use crate::model::Form;
 use crate::model::timeline::{
-    self, GAPS, GAPS_DISCLOSURE, GAPS_TITLE, Gap, GroupOption, Grouping, Head, LegendItem, Range,
-    RangeOption,
+    self, Gap, GroupOption, Grouping, Head, LegendItem, Range, RangeOption,
 };
+use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::button::seg;
 use crate::ui::kit::chip::illus;
 use crate::ui::kit::marks::hue_ink;
+use crate::ui::kit::notice::{empty, error, notice};
 use crate::ui::kit::page::{body, head, pane};
 use crate::ui::kit::text::{h3, mono, plain};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
+
+use shown::{Shown, Status};
 
 /// Below this width the burn-up moves under the gaps instead of its 440 pt column beside them.
 const SIDE_BY_SIDE: f32 = 880.0;
@@ -28,9 +33,6 @@ const SIDE_BY_SIDE: f32 = 880.0;
 const BURNUP_COLUMN: f32 = 440.0;
 /// The gaps list's measure (`max-width: 880px` with its 18 pt sides).
 const GAPS_MEASURE: f32 = 844.0;
-/// The burn-up's nominal size on each form, for its words (the canvas measures its own).
-const BURNUP_NOMINAL: (f32, f32) = (404.0, 150.0);
-const BURNUP_NOMINAL_PHONE: (f32, f32) = (354.0, 140.0);
 
 /// The Timeline. Desktop: the page head (title, sub line, the Today / 7 days and By task / By
 /// agent switches), then a scrolling pane of the legend, the lanes chart, and the gaps beside
@@ -39,10 +41,15 @@ const BURNUP_NOMINAL_PHONE: (f32, f32) = (354.0, 140.0);
 /// Terminal: the head, then the sub line, legend, lanes as Cells, gaps and burn-up in one scroll.
 /// Test ids: "page-title", "seg-range-<i>", "seg-group-<i>", "timeline-pane".
 pub fn screen(app: AppState) -> AnyElement {
+    let live = untracked(|| app.daemon());
+    if live {
+        shown::keep_loaded(app);
+    }
+    let data = computed(move || shown::shown(app));
     match app.form {
-        Form::Desktop => desktop(app),
-        Form::Phone => phone(app),
-        Form::Terminal => terminal(app),
+        Form::Desktop => desktop(app, data, live),
+        Form::Phone => phone(app, data, live),
+        Form::Terminal => terminal(app, data, live),
     }
 }
 
@@ -54,6 +61,14 @@ fn page_head(app: AppState) -> Head {
     })
 }
 
+fn subtitle(page: &Head, live: bool) -> &'static str {
+    if live {
+        timeline::LIVE_SUBTITLE
+    } else {
+        page.subtitle
+    }
+}
+
 fn head_actions(app: AppState, page: &Head) -> Vec<AnyElement> {
     let mut actions = vec![range_switch(app, page.ranges)];
     if let Some(options) = page.grouping {
@@ -62,19 +77,20 @@ fn head_actions(app: AppState, page: &Head) -> Vec<AnyElement> {
     actions
 }
 
-fn desktop(app: AppState) -> AnyElement {
+fn desktop(app: AppState, data: Memo<Shown>, live: bool) -> AnyElement {
     let page = page_head(app);
     let content = view()
         .flex_col()
-        .child(legend_row(app))
+        .child(legend_row(app, live))
+        .child(status(app, data))
         .child(
             view()
                 .pt(px(8.0))
                 .px(px(18.0))
                 .pb(px(18.0))
-                .child(chart::lanes(app)),
+                .child(chart::lanes(app, data)),
         )
-        .child(lower(app));
+        .child(lower(app, data));
     view()
         .flex_1()
         .flex_col()
@@ -83,14 +99,14 @@ fn desktop(app: AppState) -> AnyElement {
         .child(head(
             app,
             page.title,
-            Some(page.subtitle.to_owned()),
+            Some(subtitle(&page, live).to_owned()),
             head_actions(app, &page),
         ))
         .child(pane(app, "timeline-pane", content.into_element()))
         .into_element()
 }
 
-fn phone(app: AppState) -> AnyElement {
+fn phone(app: AppState, data: Memo<Shown>, live: bool) -> AnyElement {
     let page = page_head(app);
     let content = view()
         .flex_col()
@@ -101,10 +117,21 @@ fn phone(app: AppState) -> AnyElement {
                 .mb(px(8.0))
                 .child(range_switch(app, page.ranges)),
         )
-        .child(legend_row(app))
-        .child(view().px(px(14.0)).pb(px(10.0)).child(chart::lanes(app)))
-        .child(gaps(app))
-        .child(view().px(px(18.0)).pb(px(24.0)).child(burnup_section(app)));
+        .child(legend_row(app, live))
+        .child(status(app, data))
+        .child(
+            view()
+                .px(px(14.0))
+                .pb(px(10.0))
+                .child(chart::lanes(app, data)),
+        )
+        .child(gaps(app, data))
+        .child(
+            view()
+                .px(px(18.0))
+                .pb(px(24.0))
+                .child(burnup_section(app, data)),
+        );
     view()
         .flex_1()
         .flex_col()
@@ -114,19 +141,20 @@ fn phone(app: AppState) -> AnyElement {
 }
 
 /// The sub line goes under the head: on a grid it would push the switches off the row.
-fn terminal(app: AppState) -> AnyElement {
+fn terminal(app: AppState, data: Memo<Shown>, live: bool) -> AnyElement {
     let page = page_head(app);
     let content = view()
         .flex_col()
-        .child(text(page.subtitle).text_color(color(Token::Ink3)))
+        .child(text(subtitle(&page, live)).text_color(color(Token::Ink3)))
         .child(term::blank())
-        .child(legend_row(app))
+        .child(legend_row(app, live))
+        .child(status(app, data))
         .child(term::blank())
-        .child(cells::lanes(app))
+        .child(cells::lanes(data))
         .child(term::blank())
-        .child(gaps(app))
+        .child(gaps(app, data))
         .child(term::blank())
-        .child(burnup_section(app));
+        .child(burnup_section(app, data));
     view()
         .flex_1()
         .flex_col()
@@ -135,6 +163,58 @@ fn terminal(app: AppState) -> AnyElement {
         .child(head(app, page.title, None, head_actions(app, &page)))
         .child(body(app, "timeline-pane", content.into_element()))
         .into_element()
+}
+
+/// What the recorded spans' request is doing when it is not simply shown: loading, kept from
+/// before a lost connection, failed, or answered with no lanes. Nothing in the preview.
+fn status(app: AppState, data: Memo<Shown>) -> AnyElement {
+    let state = computed(move || data.with(|shown| (shown.status.clone(), shown.lanes_empty())));
+    dynamic(move || {
+        let (status, lanes_empty) = state.get();
+        untracked(move || {
+            let pad = |element: AnyElement| match app.form {
+                Form::Terminal => element,
+                Form::Desktop | Form::Phone => view()
+                    .px(px(18.0))
+                    .pt(px(8.0))
+                    .child(element)
+                    .into_element(),
+            };
+            match status {
+                Status::Ready if lanes_empty => Some(empty(
+                    app,
+                    "No recorded work in this range",
+                    "corral recorded no run, gate, review or land spans here yet.",
+                    None,
+                )),
+                Status::Ready => None,
+                Status::Loading => Some(pad(notice(
+                    app,
+                    Hue::Neutral,
+                    &vec![crate::model::text::span(
+                        "Loading recorded spans from corrald…",
+                    )],
+                    None,
+                ))),
+                Status::Stale => Some(pad(notice(
+                    app,
+                    Hue::Held,
+                    &vec![crate::model::text::span(
+                        "Showing the last spans received; they may be out of date until corrald answers again.",
+                    )],
+                    None,
+                ))),
+                Status::Failed(message) => Some(error(
+                    app,
+                    &vec![
+                        crate::model::text::span("Timeline unavailable: ").bold(),
+                        crate::model::text::span(message),
+                    ],
+                    None,
+                )),
+            }
+        })
+    })
 }
 
 /// Today / 7 days: runs the model's `set_range`; the pressed option is the model's selection.
@@ -188,8 +268,8 @@ fn grouping_switch(app: AppState, groups: [GroupOption; 2]) -> AnyElement {
 /// The legend (`.legend`): each kind's swatch and name in ink-3, wrapping. Desktop 11.5 pt,
 /// 16 pt apart, padding 0 18 4; phone 12 pt, padding 4 18 8; terminal each kind's two glyphs
 /// in its colour and its name, as one wrapping line.
-fn legend_row(app: AppState) -> AnyElement {
-    let items = timeline::legend();
+fn legend_row(app: AppState, live: bool) -> AnyElement {
+    let items = timeline::legend(live);
     match app.form {
         // Each entry is one unbreakable line in a wrapping row, so an entry never splits across
         // rows; its trailing blanks set it apart from the next.
@@ -258,25 +338,28 @@ fn legend_item(item: LegendItem, size: f32) -> AnyElement {
 
 /// Under the chart on desktop: the gaps and the burn-up's 440 pt column side by side when there
 /// is room, else stacked.
-fn lower(app: AppState) -> AnyElement {
+fn lower(app: AppState, data: Memo<Shown>) -> AnyElement {
     let width = signal(0.0_f32);
     let wide = computed(move || width.get() >= SIDE_BY_SIDE);
     view()
         .w_full()
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
         .child(dynamic(move || {
-            let burnup = view().px(px(18.0)).pb(px(18.0)).child(burnup_section(app));
+            let burnup = view()
+                .px(px(18.0))
+                .pb(px(18.0))
+                .child(burnup_section(app, data));
             Some(if wide.get() {
                 view()
                     .flex_row()
                     .items_start()
-                    .child(view().flex_1().min_w(px(0.0)).child(gaps(app)))
+                    .child(view().flex_1().min_w(px(0.0)).child(gaps(app, data)))
                     .child(burnup.w(px(BURNUP_COLUMN)).flex_shrink_0())
                     .into_element()
             } else {
                 view()
                     .flex_col()
-                    .child(gaps(app))
+                    .child(gaps(app, data))
                     .child(burnup.max_w(px(BURNUP_COLUMN)))
                     .into_element()
             })
@@ -284,38 +367,63 @@ fn lower(app: AppState) -> AnyElement {
         .into_element()
 }
 
-/// "Gaps worth a look today": each gap's span in its state colour, the task, what happened, then
-/// the illustrative-data note. Desktop: one row in 96 / 54 / rest columns, 12.5 pt; phone: the
-/// span and task on one line, the words under them; terminal: one row of 13 / 7 Cells and the
-/// words wrapping beside them.
-fn gaps(app: AppState) -> AnyElement {
+/// "Gaps worth a look": each gap's span in its state colour, the task, what happened, then how
+/// the gaps were found (the preview's illustrative-data note, or the recorded-times note).
+/// Desktop: one row in 96 / 54 / rest columns, 12.5 pt; phone: the span and task on one line,
+/// the words under them; terminal: one row of 13 / 7 Cells and the words wrapping beside them.
+fn gaps(app: AppState, data: Memo<Shown>) -> AnyElement {
     let form = app.form;
-    let list = view()
-        .flex_col()
-        .gap(px(if form == Form::Phone { 12.0 } else { 6.0 }))
-        .children(GAPS.iter().map(|gap| gap_row(app, gap)).collect::<Vec<_>>())
-        .child(disclosure(form, GAPS_DISCLOSURE));
-    let section = view().flex_col().child(h3(app, GAPS_TITLE, None));
-    match form {
-        Form::Desktop => section
-            .px(px(18.0))
-            .pb(px(18.0))
-            .child(list.max_w(px(GAPS_MEASURE))),
-        Form::Phone => section.px(px(18.0)).pb(px(18.0)).child(list),
-        Form::Terminal => section.child(list),
-    }
-    .into_element()
+    let content = computed(move || {
+        data.with(|shown| {
+            (
+                shown.gaps_title,
+                shown.gaps.clone(),
+                shown.gaps_empty,
+                shown.gaps_note,
+            )
+        })
+    });
+    dynamic(move || {
+        let (title, items, nothing, note) = content.get();
+        untracked(move || {
+            let mut rows: Vec<AnyElement> = items.iter().map(|gap| gap_row(app, gap)).collect();
+            if items.is_empty()
+                && let Some(line) = nothing
+            {
+                rows.push(
+                    plain(app, line)
+                        .text_color(color(Token::Ink3))
+                        .into_element(),
+                );
+            }
+            let list = view()
+                .flex_col()
+                .gap(px(if form == Form::Phone { 12.0 } else { 6.0 }))
+                .children(rows)
+                .child(disclosure(form, note));
+            let section = view().flex_col().child(h3(app, title, None));
+            match form {
+                Form::Desktop => section
+                    .px(px(18.0))
+                    .pb(px(18.0))
+                    .child(list.max_w(px(GAPS_MEASURE))),
+                Form::Phone => section.px(px(18.0)).pb(px(18.0)).child(list),
+                Form::Terminal => section.child(list),
+            }
+            .into_element()
+        })
+    })
 }
 
 fn gap_row(app: AppState, gap: &Gap) -> AnyElement {
     let form = app.form;
-    let span = mono(app, gap.time)
+    let span = mono(app, gap.time.clone())
         .text_color(hue_ink(gap.kind.hue()))
         .flex_shrink_0();
-    let task = mono(app, gap.task)
+    let task = mono(app, gap.task.clone())
         .text_color(color(Token::Ink3))
         .flex_shrink_0();
-    let words = plain(app, gap.wording);
+    let words = plain(app, gap.wording.clone());
     match form {
         Form::Desktop => view()
             .flex_row()
@@ -363,24 +471,44 @@ fn disclosure(form: Form, words: &'static str) -> AnyElement {
 }
 
 /// The goal burn-up: its caption with the period at the trailing edge, the chart (a canvas, or
-/// block rows in a terminal), and the illustrative-numbers tag.
-fn burnup_section(app: AppState) -> AnyElement {
+/// block rows in a terminal), and the preview's illustrative-numbers tag. Live, a burn-up corral
+/// has not recorded, or one still loading, says so in place of the chart.
+fn burnup_section(app: AppState, data: Memo<Shown>) -> AnyElement {
     let form = app.form;
-    let (width, height) = if form == Form::Phone {
-        BURNUP_NOMINAL_PHONE
-    } else {
-        BURNUP_NOMINAL
-    };
-    let words = timeline::burnup(width, height);
-    let drawn = if form == Form::Terminal {
-        cells::burnup()
-    } else {
-        chart::burnup(app)
-    };
-    view()
-        .flex_col()
-        .child(h3(app, words.title, Some(words.period.to_owned())))
-        .child(drawn)
-        .child(illus(app, words.disclosure))
-        .into_element()
+    let series = computed(move || data.with(|shown| shown.burnup.clone()));
+    let state = computed(move || data.with(|shown| shown.burnup_status.clone()));
+    dynamic(move || {
+        let series = series.get();
+        let state = state.get();
+        untracked(move || {
+            let Some(series) = series else {
+                let line = match state {
+                    Status::Loading => "Loading the goal burn-up…".to_owned(),
+                    Status::Failed(message) => format!("Goal burn-up unavailable: {message}"),
+                    Status::Ready | Status::Stale => {
+                        "corral has recorded no goal changes to plot yet.".to_owned()
+                    }
+                };
+                return view()
+                    .flex_col()
+                    .child(h3(app, "Goal burn-up", None))
+                    .child(plain(app, line).text_color(color(Token::Ink3)))
+                    .into_element();
+            };
+            let disclosure = series.disclosure;
+            let title = series.title.clone();
+            let period = series.period.clone();
+            let drawn = if form == Form::Terminal {
+                cells::burnup(&series)
+            } else {
+                chart::burnup(app, series)
+            };
+            view()
+                .flex_col()
+                .child(h3(app, title, Some(period)))
+                .child(drawn)
+                .children(disclosure.map(|words| illus(app, words)))
+                .into_element()
+        })
+    })
 }

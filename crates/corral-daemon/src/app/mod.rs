@@ -1,4 +1,5 @@
 //! Explicitly enabled, authenticated loopback app connections.
+pub(crate) mod dispatch;
 mod session;
 mod ws;
 

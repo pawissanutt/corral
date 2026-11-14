@@ -1,12 +1,13 @@
-//! Inspector, selected live tail and phone task story content.
+//! Inspector, selected live tail and phone task story content of the fixture preview, and the
+//! owned descriptors (dependencies, tails, tiles) the Daemon state's builders share.
 
 use crate::model::board::{Actor, Mark, STAGES, find, money, stage_word, task};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::nav::{Destination, Form};
-use crate::model::text::{Rich, span, task_link};
+use crate::model::text::{Rich, span};
 
-use super::{Action, Button, ButtonKind, NowTab, PM_TAIL, QUESTION_TAIL, RUNNING, Running, State};
+use super::{Action, Button, ButtonKind, NowTab, PM_TAIL, Press, QUESTION_TAIL, RUNNING, State};
 
 /// One run/gate/review/land stage in a task's story.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,16 +27,16 @@ pub struct Stage {
 }
 
 /// A task dependency or downstream member with its board state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dependency {
     /// Mono task id.
-    pub id: &'static str,
+    pub id: String,
     /// The task's required/result mark, or the downstream run mark.
     pub mark: Mark,
     /// Needs shows marks; the source's Unblocks row shows ids only.
     pub show_mark: bool,
     /// Open this task when a renderer makes the id interactive.
-    pub action: Action,
+    pub action: Press,
 }
 
 /// The progress heading's completed/total counts.
@@ -77,7 +78,7 @@ pub struct Story {
     /// Dim plan attribution beside the task id, including its leading middle dot.
     pub plan_label: Option<String>,
     /// Optional plan-opening action.
-    pub plan_action: Option<Action>,
+    pub plan_action: Option<Press>,
     /// Changed-since-visit chip text, absent for unchanged and simple queued tasks.
     pub changed: Option<&'static str>,
     /// The task's full goal where the snapshot provides it.
@@ -199,7 +200,7 @@ pub fn story(state: &State, env: Env) -> Story {
         title: t.title,
         plan: t.plan,
         plan_label: t.plan.map(|plan| format!("· plan {plan}")),
-        plan_action: t.plan.map(Action::OpenPlan),
+        plan_action: t.plan.map(|plan| Press::Work(Action::OpenPlan(plan))),
         changed: (detailed && t.changed).then_some("▲ changed since 18:40"),
         goal: t.goal,
         facts,
@@ -244,10 +245,10 @@ pub fn story(state: &State, env: Env) -> Story {
             .needs
             .iter()
             .map(|(id, mark)| Dependency {
-                id,
+                id: (*id).to_owned(),
                 mark: *mark,
                 show_mark: true,
-                action: Action::OpenTask(id),
+                action: Press::Work(Action::OpenTask(id)),
             })
             .collect(),
         needs_fallback: (!detailed && t.needs.is_empty()).then_some("capacity"),
@@ -255,10 +256,10 @@ pub fn story(state: &State, env: Env) -> Story {
             .unblocks
             .iter()
             .map(|id| Dependency {
-                id,
+                id: (*id).to_owned(),
                 mark: find(id).map_or(Mark::Next, |task| task.rail[0]),
                 show_mark: false,
-                action: Action::OpenTask(id),
+                action: Press::Work(Action::OpenTask(id)),
             })
             .collect(),
         unblocks_fallback: "−",
@@ -348,36 +349,62 @@ pub enum TailTone {
     Ok,
 }
 
+impl TailTone {
+    /// The tone of a terminal line, as the mockup's tail helper decides it.
+    pub fn of(line: &str) -> TailTone {
+        if line.contains("PASS") || line.contains("ok ") {
+            TailTone::Ok
+        } else if ["$", "Edit", "Bash", "Read"]
+            .iter()
+            .any(|prefix| line.starts_with(*prefix))
+        {
+            TailTone::Command
+        } else {
+            TailTone::Plain
+        }
+    }
+}
+
 /// A terminal tail line, with text unmodified and styling decided in the model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TailLine {
     /// Exact terminal text, including indentation.
-    pub text: &'static str,
+    pub text: String,
     /// Semantic style for this line.
     pub tone: TailTone,
 }
 
-/// The selected task's illustrative live terminal preview.
+impl TailLine {
+    pub fn new(text: impl Into<String>) -> TailLine {
+        let text = text.into();
+        TailLine {
+            tone: TailTone::of(&text),
+            text,
+        }
+    }
+}
+
+/// A task's terminal tail: a live stream in the fixture, a read-only capture from corrald.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tail {
     /// Task or PM identity.
-    pub id: &'static str,
+    pub id: String,
     /// Pane at the top of the tail; `−` if absent.
-    pub pane: &'static str,
+    pub pane: String,
     /// The runtime name.
-    pub runtime: &'static str,
-    /// `live` or the legacy runtime's timestamped snapshot label.
-    pub label: &'static str,
-    /// Whether this tail is a refreshed legacy snapshot rather than a stream.
+    pub runtime: String,
+    /// `live`, or a capture's label with its time.
+    pub label: String,
+    /// Whether this tail is a capture rather than a stream.
     pub snapshot: bool,
-    /// Attribution shown above the terminal.
-    pub illustrative: &'static str,
+    /// Attribution shown above the terminal, in the fixture preview.
+    pub illustrative: Option<&'static str>,
     /// Terminal output in source order.
     pub lines: Vec<TailLine>,
-    /// Draw the source's final cursor cell after the output.
+    /// Draw the source's final cursor cell after the output: only a live stream has one.
     pub cursor: bool,
-    /// Open the full session for this preview.
-    pub action: Action,
+    /// Open the full session for this tail.
+    pub action: Option<Press>,
 }
 
 /// Build a task's tail, including T-868's agent-snapshot fallback and legacy labelling.
@@ -398,42 +425,33 @@ fn tail_with_limit(id: &'static str, limit: usize) -> Tail {
         &["no live pane for this item"]
     };
     Tail {
-        id,
+        id: id.to_owned(),
         pane: if id == "PM" {
             "pm:p0"
         } else {
             t.pane.unwrap_or("−")
-        },
+        }
+        .to_owned(),
         runtime: if snapshot {
             "Herdr TUI (legacy)"
         } else {
             "herdr-core"
-        },
+        }
+        .to_owned(),
         label: if snapshot {
             "snapshot · 20s ago"
         } else {
             "live"
-        },
+        }
+        .to_owned(),
         snapshot,
-        illustrative: "tail illustrative",
+        illustrative: Some("tail illustrative"),
         lines: lines[lines.len().saturating_sub(limit)..]
             .iter()
-            .map(|line| TailLine {
-                text: line,
-                tone: if line.contains("PASS") || line.contains("ok ") {
-                    TailTone::Ok
-                } else if ["$", "Edit", "Bash", "Read"]
-                    .iter()
-                    .any(|prefix| line.starts_with(*prefix))
-                {
-                    TailTone::Command
-                } else {
-                    TailTone::Plain
-                },
-            })
+            .map(|line| TailLine::new(*line))
             .collect(),
         cursor: true,
-        action: Action::OpenSession(id),
+        action: Some(Press::Work(Action::OpenSession(id))),
     }
 }
 
@@ -472,9 +490,13 @@ pub enum Inspector {
     Evidence(Evidence),
     /// Session handoff.
     Session(Session),
-    /// The daemon's facts about the selected task.
-    Facts(super::TaskFacts),
-    /// One quiet line in place of content the daemon does not provide.
+    /// The selected daemon task's story.
+    LiveStory(Box<super::LiveStory>),
+    /// The selected daemon task's artifacts.
+    LiveEvidence(super::LiveEvidence),
+    /// The selected daemon task's run and log tail.
+    LiveSession(super::LiveSession),
+    /// One quiet line in place of content: no board, nothing on it, an unenrolled device.
     Quiet(&'static str),
 }
 
@@ -502,7 +524,7 @@ pub struct PlanContext {
     /// Explanation shown instead of a graph when there is no plan.
     pub empty: Option<&'static str>,
     /// Open the corresponding plan page.
-    pub action: Option<Action>,
+    pub action: Option<Press>,
 }
 
 /// Resolve graph ids without copying plan data into the work domain.
@@ -513,32 +535,44 @@ pub fn plan_context(state: &State, _env: Env) -> PlanContext {
         member: state.sel,
         heading: format!("Plan {}", plan.unwrap_or("")),
         empty: plan.is_none().then_some("Not part of a plan."),
-        action: plan.map(Action::OpenPlan),
+        action: plan.map(|plan| Press::Work(Action::OpenPlan(plan))),
     }
 }
 
-/// A running-agent tile, if a renderer offers the expanded Live overview.
+/// A running-agent tile of the expanded Live overview.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveTile {
-    /// Agent, pane, runtime and doing-now metadata.
-    pub running: Running,
+    /// Agent identity, distinct from a gate's task id.
+    pub id: String,
+    /// Agent role label.
+    pub role: String,
+    /// The current action line.
+    pub doing: String,
+    /// The doing line's hue: needs-you when the agent waits on the owner.
+    pub doing_hue: Hue,
+    /// Profile or gate script; empty when unknown.
+    pub profile: String,
+    /// Runtime name; empty when unknown.
+    pub runtime: String,
+    /// Pane identity; `−` when the agent has none.
+    pub pane: String,
     /// Source state-chip wording, with asking displayed as needs you.
     pub chip: &'static str,
     /// State hue of the tile's chip.
     pub chip_hue: Hue,
-    /// Agent title from the snapshot, not its current doing-now line.
-    pub title: &'static str,
-    /// Footer clock with the source's since prefix.
+    /// Agent title, not its current doing-now line.
+    pub title: String,
+    /// Footer clock with the source's since prefix; empty when unknown.
     pub since: String,
-    /// Last four terminal lines with the live/snapshot label.
+    /// Last terminal lines with the live/snapshot label.
     pub tail: Tail,
     /// Open this agent's session.
-    pub action: Action,
+    pub action: Option<Press>,
 }
 
-/// Selected live tail plus the snapshot's optional running-agent overview tiles.
+/// Selected live tail plus the running-agent overview tiles.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Live {
+pub struct LiveDock {
     /// The actual Now Live dock content.
     pub selected: Tail,
     /// Current PM, worker and gate tiles, retaining their distinct agent identities.
@@ -546,16 +580,22 @@ pub struct Live {
 }
 
 /// Build the selected Live dock content and every current running tile.
-pub fn live(state: &State, env: Env) -> Live {
-    Live {
+pub fn live(state: &State, env: Env) -> LiveDock {
+    LiveDock {
         selected: live_tail(state.sel, env),
         tiles: RUNNING
             .iter()
             .map(|running| {
                 let mut tail = tail_with_limit(running.session, 4);
-                tail.pane = running.pane;
+                running.pane.clone_into(&mut tail.pane);
                 LiveTile {
-                    running: *running,
+                    id: running.id.to_owned(),
+                    role: running.role.to_owned(),
+                    doing: running.doing.to_owned(),
+                    doing_hue: running.hue,
+                    profile: running.profile.to_owned(),
+                    runtime: running.runtime.to_owned(),
+                    pane: running.pane.to_owned(),
                     chip: if running.state == "asking" {
                         "needs you"
                     } else {
@@ -572,10 +612,11 @@ pub fn live(state: &State, env: Env) -> Live {
                         "gate-T-890" => "quick gate 1751bd2",
                         "gate-T-894" => "gate 6b36916",
                         _ => task(running.session).title,
-                    },
+                    }
+                    .to_owned(),
                     since: format!("since {}", running.since),
                     tail,
-                    action: Action::OpenSession(running.session),
+                    action: Some(Press::Work(Action::OpenSession(running.session))),
                 }
             })
             .collect(),
@@ -622,19 +663,4 @@ pub fn task_page(state: &State, mut env: Env) -> TaskPage {
         plan: plan_context(state, env),
         status: super::status(env),
     }
-}
-
-/// Rich task references for a renderer that chooses a compact dependency sentence.
-pub fn dependency_text(dependencies: &[Dependency]) -> Rich {
-    let mut parts = Vec::with_capacity(dependencies.len() * 3);
-    for (index, dependency) in dependencies.iter().enumerate() {
-        if index != 0 {
-            parts.push(span(" · "));
-        }
-        parts.push(task_link(dependency.id));
-        if dependency.show_mark {
-            parts.push(span(format!(" {}", dependency.mark.glyph())));
-        }
-    }
-    parts
 }

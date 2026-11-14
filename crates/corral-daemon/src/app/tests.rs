@@ -205,6 +205,8 @@ fn paired_browser_reads_board_and_revocation_closes_it() {
     let shared = Arc::new(Shared::new());
     let projector = crate::projector::start(&fixture.ctx, &shared).unwrap();
     crate::devices::start(&fixture.ctx, &shared, Some(fixture.root.join("state"))).unwrap();
+    crate::commands::start(&fixture.ctx, &shared).unwrap();
+    crate::views::start(&fixture.ctx, &shared).unwrap();
     let socket_path = fixture.root.join("d.sock");
     crate::server::start(
         UnixListener::bind(&socket_path).unwrap(),
@@ -228,6 +230,16 @@ fn paired_browser_reads_board_and_revocation_closes_it() {
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
     unix_call(&mut local, wire::HELLO, hello());
+    let native: DeviceInfo = serde_json::from_value(unix_call(
+        &mut local,
+        DEVICE_ENROL,
+        DeviceEnrol {
+            name: "Native".into(),
+            app_version: "test".into(),
+        },
+    ))
+    .unwrap();
+    assert!(native.authority.as_ref().unwrap().admin);
     let offer: PairOffer =
         serde_json::from_value(unix_call(&mut local, PAIR_BEGIN, PairBegin {})).unwrap();
     let code = PairCode::decode(&offer.code).unwrap();
@@ -290,7 +302,76 @@ fn paired_browser_reads_board_and_revocation_closes_it() {
     let (socket, noise) = noise_start(&code, &key.private, false);
     let (mut browser, _) = Client::finish(socket, noise);
     let welcome = browser.call(wire::HELLO, hello());
-    assert_eq!(welcome["result"]["caps"], json!([wire::BOARD_V1]));
+    assert_eq!(
+        welcome["result"]["caps"],
+        json!([wire::BOARD_V1, DEVICE_V1])
+    );
+    let app_session = browser.call(wire::app::APP_SESSION, json!({}));
+    assert_eq!(app_session["result"]["device"]["id"], device.id);
+    assert_eq!(app_session["result"]["authority"]["assistant_act"], false);
+    let issued = jiff::Timestamp::now();
+    let command = wire::app::ActSubmit {
+        cmd_id: "browser-comment-1".into(),
+        expect: None,
+        issued_at: issued.to_string(),
+        expires_at: issued
+            .checked_add(jiff::SignedDuration::from_secs(60))
+            .unwrap()
+            .to_string(),
+        command: wire::cmd::Command::Task(wire::cmd::task::TaskCommand::Comment {
+            id: first.id.clone(),
+            text: "cross-carrier comment".into(),
+            author: "owner".into(),
+            send: false,
+        }),
+        confirm: None,
+    };
+    let acted = browser.call(wire::app::ACT_SUBMIT, &command);
+    assert_eq!(acted["result"]["state"], "done", "{acted}");
+    assert!(acted["result"]["output"].is_null());
+    let recovered = browser.call(
+        wire::app::ACT_RESULT,
+        json!({
+            "cmd_id": command.cmd_id, "wait_ms": 0, "abandon_if_absent": true,
+        }),
+    );
+    assert_eq!(recovered["result"]["state"], "done");
+    assert_eq!(recovered["result"]["replayed"], true);
+    let replayed = browser.call(wire::app::ACT_SUBMIT, &command);
+    assert_eq!(replayed["result"]["replayed"], true);
+    assert_eq!(fixture.ctx.store.get(&first.id).unwrap().comments.len(), 1);
+    let detail = json!({"kind": "task", "id": first.id, "etag": null, "page": null});
+    let web_detail = browser.call(wire::app::DETAIL_GET, &detail);
+    let unix_detail = unix_call(&mut local, wire::app::DETAIL_GET, &detail);
+    assert_eq!(web_detail["result"]["etag"], unix_detail["etag"]);
+    assert_eq!(web_detail["result"]["body"], unix_detail["body"]);
+    let browser_admin = browser.call(
+        wire::app::DEVICE_SET_AUTHORITY,
+        json!({
+            "device": device.id, "authority": native.authority,
+        }),
+    );
+    assert_eq!(browser_admin["error"]["data"]["code"], "admin_only");
+    let devices_first = browser.call(DEVICE_PAGE, json!({"after": null, "limit": 1}));
+    assert_eq!(
+        devices_first["result"]["devices"].as_array().unwrap().len(),
+        1
+    );
+    let devices_next = browser.call(
+        DEVICE_PAGE,
+        json!({
+            "after": devices_first["result"]["next"], "limit": 1,
+        }),
+    );
+    assert_eq!(
+        devices_next["result"]["devices"].as_array().unwrap().len(),
+        1
+    );
+    assert_ne!(
+        devices_first["result"]["devices"][0]["id"],
+        devices_next["result"]["devices"][0]["id"]
+    );
+    assert!(devices_next["result"]["next"].is_null());
     assert_eq!(
         browser.call(wire::SUB_OPEN, json!({"topic": "board", "since": null}))["result"],
         Value::Null

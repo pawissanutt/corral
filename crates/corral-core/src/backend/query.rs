@@ -176,6 +176,8 @@ pub struct TaskQuery {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EventQuery {
     pub after: Option<EventSeq>,
+    /// Exclusive upper event-sequence bound, applied before paging in either order.
+    pub before: Option<EventSeq>,
     pub task: Option<String>,
     /// Empty matches every kind.
     pub kinds: Vec<String>,

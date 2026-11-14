@@ -1,13 +1,10 @@
-//! `owner_action` (T-544 owner-authority): an assistant executes one owner-level corral command
-//! the owner clearly asked for in its pane, citing that journaled owner input. The instruction
-//! is the authorization: corral checks only that the cited input is a real pane-typed or
-//! dialog-selected owner input of this session, then runs the command once as a direct child `corral` process that
-//! claims the reservation (`crate::assistant::owner_action`), so the same CLI path, locks and refusals apply as from
-//! the owner's shell. The confirm class first waits for the owner's y or n, which the host
-//! journals bound to this request, so the request's payload never changes; n records a
-//! declined receipt. A replay returns the first receipt; a reservation whose executor died is
-//! reconciled from the command child's own completion record or a verified terminal state,
-//! otherwise left uncertain, and never re-executed.
+//! Canonical owner actions, citing journaled owner instructions. Interactive pane behavior
+//! is unchanged. Daemon-hosted assistants additionally require server-authenticated, fresh,
+//! untainted device provenance and current assistant_act authority at citation/reservation.
+//! High-risk actions use the same journaled confirmation mechanism for panes and apps;
+//! app confirmation is device-bound and can only be written by the daemon prompt API.
+//! Commands run once as the existing reserved child; replay and uncertain recovery never
+//! re-execute a command.
 #[cfg(all(test, target_os = "linux"))]
 mod crash_tests;
 #[cfg(all(test, target_os = "linux"))]
@@ -62,9 +59,11 @@ fn reject(code: RejectCode, reason: impl Into<String>) -> anyhow::Error {
 struct Cited {
     input: OwnerInput,
     confirmation: Option<OwnerInput>,
+    confirm_class: bool,
 }
 
 fn cite(
+    store: &corral_core::Store,
     assistant: &AssistantContainer,
     payload: &Payload,
     action: &Action,
@@ -90,13 +89,49 @@ fn cite(
                 ),
             )
         })?;
-    let confirmation = match action.class {
-        Class::Ordinary => None,
-        Class::Confirm => assistant.confirmation(request, &action.command).cloned(),
+    let origin = crate::agent::app_runtime::input::recheck(store, assistant, &input)
+        .map_err(|error| reject(RejectCode::NotOwnerInput, error.to_string()))?;
+    let confirm_class =
+        action.class == Class::Confirm || origin.as_ref().is_some_and(|p| p.confirm_class());
+    let confirmation = if confirm_class {
+        assistant.confirmation(request, &action.command).cloned()
+    } else {
+        None
     };
+    if let Some(answer) = &confirmation
+        && let Some(origin) = origin
+    {
+        let confirmed = crate::agent::app_runtime::input::recheck(store, assistant, answer)
+            .map_err(|error| reject(RejectCode::NotOwnerInput, error.to_string()))?
+            .ok_or_else(|| {
+                reject(
+                    RejectCode::NotOwnerInput,
+                    "app confirmation has no device provenance",
+                )
+            })?;
+        if confirmed.device != origin.device
+            || answer.generation != assistant.state.binding.generation
+        {
+            return Err(reject(
+                RejectCode::NotOwnerInput,
+                "confirmation belongs to a different device or generation",
+            ));
+        }
+        if origin.confirm_class() {
+            super::owner_prompt::check_attachment_confirmation(
+                store,
+                &input,
+                answer,
+                request,
+                &action.command,
+            )
+            .map_err(|error| reject(RejectCode::NotOwnerInput, error.to_string()))?;
+        }
+    }
     Ok(Cited {
         input,
         confirmation,
+        confirm_class,
     })
 }
 
@@ -104,7 +139,8 @@ fn base(action: &Action, cited: &Cited) -> Value {
     let confirmation = cited.confirmation.as_ref();
     json!({
         "kind": action.kind, "target": action.target, "command": action.command, "argv": action.argv,
-        "class": action.class.as_str(), "input": cited.input.id, "sha256": cited.input.sha256,
+        "class": if cited.confirm_class { Class::Confirm.as_str() } else { action.class.as_str() },
+        "input": cited.input.id, "sha256": cited.input.sha256,
         "confirmation": confirmation.map(|entry| &entry.id),
         "confirmed": action.kind == "finish" || confirmation.is_some_and(|entry| entry.text == "y"),
     })
@@ -291,11 +327,10 @@ fn finished(
         }
         None => {
             let container = ctx.store.get_assistant_container(session)?;
-            let stored = container
-                .state
-                .receipt(request)
-                .context("the owner-action reservation disappeared")?;
-            after_claim(ctx, stored)?
+            let stored =
+                receipts::assistant_receipt(&ctx.store, session, &container.state, request)?
+                    .context("the owner-action reservation disappeared")?;
+            after_claim(ctx, &stored)?
         }
     })
 }
@@ -315,13 +350,19 @@ fn reserve(
         .context("owner_action names an assistant session")?;
     ctx.store
         .settle_assistant_container(session, |assistant, ended| {
-            if let Some(stored) = assistant.state.receipt(&origin.request_id) {
-                admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
-                return Ok((stored.clone(), true));
+            if let Some(stored) = receipts::assistant_receipt(
+                &ctx.store,
+                session,
+                &assistant.state,
+                &origin.request_id,
+            )? {
+                admission::same_request(&stored, &origin.op, &origin.payload_sha256)?;
+                return Ok((stored, true));
             }
             admission::recheck_assistant(assistant, ended, origin.binding.generation)?;
             crate::assistant::workflow::boundary::require_ordinary(&ctx.store, session, assistant)?;
-            let cited = cite(assistant, payload, action, &origin.request_id)?;
+            let cited = cite(&ctx.store, assistant, payload, action, &origin.request_id)?;
+            receipts::assistant_capacity(&ctx.store, session, &mut assistant.state)?;
             if assistant.state.receipts.len() >= RECEIPTS_MAX {
                 return Err(reject(
                     RejectCode::ReceiptLimit,
@@ -364,6 +405,20 @@ fn settle(
 ) -> Result<RequestReceipt> {
     ctx.store
         .settle_assistant_container(session, |assistant, _| {
+            if !assistant
+                .state
+                .receipts
+                .iter()
+                .any(|receipt| receipt.request_id == request)
+            {
+                return receipts::assistant_receipt(
+                    &ctx.store,
+                    session,
+                    &assistant.state,
+                    request,
+                )?
+                .context("the owner-action reservation disappeared");
+            }
             let stored = assistant
                 .state
                 .receipts
@@ -463,14 +518,14 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     };
     crate::assistant::workflow::boundary::require_ordinary(&ctx.store, &session, assistant)?;
     let request = envelope.request_id.as_str();
-    let cited = cite(assistant, &payload, &action, request)?;
+    let cited = cite(&ctx.store, assistant, &payload, &action, request)?;
     if cited
         .confirmation
         .as_ref()
         .is_some_and(|answer| answer.text == "n")
     {
         return receipts::commit_assistant(ctx, &admitted, |assistant| {
-            let cited = cite(assistant, &payload, &action, request)?;
+            let cited = cite(&ctx.store, assistant, &payload, &action, request)?;
             Ok(Commit {
                 result: with(base(&action, &cited), json!({"outcome": "declined"})),
                 effect: effect(&action),
@@ -479,15 +534,30 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         });
     }
     in_flight(ctx, &action)?;
-    if action.class == Class::Confirm && cited.confirmation.is_none() {
+    if cited.confirm_class && cited.confirmation.is_none() {
+        let prompt = if assistant
+            .state
+            .current_generation()
+            .is_some_and(|g| g.daemon_hosted)
+        {
+            Some(super::owner_prompt::confirmation(
+                ctx,
+                &session,
+                request,
+                &action.command,
+                &payload.input,
+            )?)
+        } else {
+            None
+        };
         return Err(Rejection::new(
             RejectCode::ConfirmationRequired,
             format!(
-                "`{}` waits for the owner's confirmation in the pane",
+                "`{}` waits for the owner's fresh confirmation",
                 action.command
             ),
         )
-        .with_detail(json!({"command": action.command, "kind": action.kind}))
+        .with_detail(json!({"command": action.command, "kind": action.kind, "prompt": prompt}))
         .into());
     }
     if serde_json::to_vec(&base(&action, &cited))?.len() > BASE_MAX {

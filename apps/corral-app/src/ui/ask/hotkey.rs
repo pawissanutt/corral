@@ -251,7 +251,7 @@ fn content(app: AppState, draft: Signal<Option<String>>, window: Memo<HotkeyWind
                 .model_pill
                 .as_ref()
                 .map(|b| b.label)
-                .zip(w.composer.model_name)
+                .zip(w.composer.model_name.clone())
         })
     });
     let sent = computed(move || window.with(|w| w.sent.clone()));

@@ -1,4 +1,4 @@
-//! Authenticated browser sessions deliberately expose no daemon command paths.
+//! Authenticated browser sessions share the bounded enrolled-device app gateway.
 use std::{
     net::TcpStream,
     sync::{Arc, atomic::Ordering},
@@ -16,9 +16,13 @@ use corral_protocol::{
 use serde_json::Value;
 use tungstenite::protocol::frame::coding::CloseCode;
 
-use super::ws::{self, Mode, WsConn};
+use super::dispatch::reply;
+use super::{
+    dispatch,
+    ws::{self, Mode, WsConn},
+};
 use crate::{
-    conn::{error, notify, reply},
+    conn::{error, notify},
     devices::{self, DeviceError, Devices},
     state::Shared,
     topics::Topics,
@@ -107,7 +111,10 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
             conn.close(CloseCode::Policy, device::CLOSE_PROTOCOL);
             return Ok(());
         }
-        if frame.kind != FrameKind::Control || frame.stream != 0 {
+        if frame.kind != FrameKind::Control
+            || frame.stream != 0
+            || frame.payload.len() > wire::app::APP_CONTROL_MAX
+        {
             conn.close(CloseCode::Policy, device::CLOSE_PROTOCOL);
             return Ok(());
         }
@@ -118,6 +125,14 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
                 return Ok(());
             }
         };
+        if serde_json::to_vec(&request.id)?.len() > 256 {
+            dispatch::error(
+                &mut conn,
+                Value::Null,
+                (ErrorCode::InvalidParams, "invalid_rpc_id".into()),
+            )?;
+            continue;
+        }
         if request.jsonrpc != rpc::JSONRPC {
             error(
                 &mut conn,
@@ -152,7 +167,7 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
                             caps: hello
                                 .caps
                                 .into_iter()
-                                .filter(|cap| pair.is_none() && cap == wire::BOARD_V1)
+                                .filter(|cap| pair.is_none() && dispatch::capability(&shared, cap))
                                 .collect(),
                             daemon: wire::DaemonInfo {
                                 version: env!("CARGO_PKG_VERSION").into(),
@@ -211,6 +226,18 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
             } else {
                 refused(&mut conn, id)?;
             }
+            continue;
+        }
+        if dispatch::is_method(&request.method) {
+            dispatch::serve(
+                &mut conn,
+                &shared,
+                id,
+                &request.method,
+                params,
+                session.as_ref().map(|session| session.device.as_str()),
+                false,
+            )?;
             continue;
         }
         match request.method.as_str() {
@@ -291,7 +318,7 @@ fn pairing_finished(conn: &mut WsConn, pair: &PairGuard) -> Result<bool> {
 }
 
 fn allowed_topic(topic: Topic) -> bool {
-    matches!(topic, Topic::Board | Topic::Health)
+    dispatch::allowed_topic(topic)
 }
 
 fn topic_reply(conn: &mut WsConn, id: Value, result: Result<()>) -> Result<()> {

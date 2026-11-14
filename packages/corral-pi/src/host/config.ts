@@ -41,7 +41,9 @@ export interface HostSecrets {
 export interface HostConfig {
   readonly identity: HostIdentity;
   readonly secrets: HostSecrets;
-  readonly pane: string;
+  readonly pane: string | null;
+  /** Authenticated daemon-owned assistant; no terminal and no pane-derived authority. */
+  readonly daemonHosted?: boolean;
   readonly cwd: string;
   readonly root: string;
   readonly corral: string;
@@ -196,6 +198,13 @@ export function parseLaunchMessage(text: string): HostConfig {
   if (message.todo !== undefined && typeof message.todo !== "boolean") {
     throw new LaunchMessageInvalid("todo must be a boolean");
   }
+  if (message.daemon_hosted !== undefined && typeof message.daemon_hosted !== "boolean") {
+    throw new LaunchMessageInvalid("daemon_hosted must be a boolean");
+  }
+  const daemonHosted = message.daemon_hosted === true;
+  if (daemonHosted && (role !== "assistant" || message.pane != null)) {
+    throw new LaunchMessageInvalid("daemon_hosted requires an assistant with no pane");
+  }
   const model = field(message, "model", provider === "llama.cpp" ? /^[^\s\0]+$/ : /^[A-Za-z0-9._:/+-]+$/, provider === "llama.cpp" ? 512 : 128);
   const effort = optional(message, "effort", TOKEN);
   const binding = parseBinding(message.binding, provider ?? "openai-codex", model, effort);
@@ -256,7 +265,8 @@ export function parseLaunchMessage(text: string): HostConfig {
       generation,
     },
     secrets: parsed,
-    pane: field(message, "pane", TOKEN, 128),
+    pane: daemonHosted ? null : field(message, "pane", TOKEN, 128),
+    ...(daemonHosted ? { daemonHosted: true } : {}),
     cwd: path(message, "cwd"),
     root: path(message, "root"),
     corral: path(message, "corral"),

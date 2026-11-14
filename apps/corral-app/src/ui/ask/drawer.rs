@@ -5,9 +5,9 @@
 
 use nsh_core::prelude::*;
 
-use crate::model::Form;
-use crate::model::assistant::{self, Action, Button, Chip, QUICK_THREAD};
-use crate::screens::assistant::items;
+use crate::model::assistant::{self, Action, Button, Chip, QUICK, ThreadRef};
+use crate::model::{Form, Id};
+use crate::screens::assistant::{items, open_scope};
 use crate::state::AppState;
 use crate::ui::ask::act;
 use crate::ui::composer::composer;
@@ -26,31 +26,42 @@ const SHEET_SHARE: f32 = 0.92;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Head {
     label: &'static str,
-    title: &'static str,
+    title: String,
     state: Option<Chip>,
-    subtitle: Option<&'static str>,
+    subtitle: Option<String>,
     buttons: Vec<Button>,
     close_label: &'static str,
 }
 
 /// The model's drawer head, tracked: it follows the assistant's state and the connection, never
-/// the draft.
+/// the draft. With the daemon it is the served quick thread's.
 fn head(app: AppState) -> Memo<Head> {
     computed(move || {
         let env = app.env();
-        let target = app.ask_target.get();
-        app.assistant.with(|state| {
-            let drawer = assistant::drawer(state, target, "", env);
-            Head {
-                label: drawer.label,
-                title: drawer.title,
-                state: drawer.state,
-                subtitle: drawer.subtitle,
-                buttons: drawer.buttons,
-                close_label: drawer.close_label,
-            }
-        })
+        let drawer = if app.daemon() {
+            app.feed.with(|feed| assistant::live_drawer(feed, env))
+        } else {
+            app.assistant.with(|state| assistant::drawer(state, env))
+        };
+        Head {
+            label: drawer.label,
+            title: drawer.title,
+            state: drawer.state,
+            subtitle: drawer.subtitle,
+            buttons: drawer.buttons,
+            close_label: drawer.close_label,
+        }
     })
+}
+
+/// The quick thread of the current source; with the daemon it is subscribed and its host warmed
+/// while Ask is open, so the first answer does not wait for it.
+fn quick(app: AppState) -> ThreadRef {
+    let daemon = untracked(|| app.daemon());
+    if daemon {
+        open_scope(app, Id::from(QUICK), true);
+    }
+    ThreadRef::quick(daemon)
 }
 
 /// The test id of a head button.
@@ -91,7 +102,7 @@ pub(crate) fn desktop(app: AppState) -> AnyElement {
             let head = head.get();
             untracked(|| desktop_head(app, &head))
         }))
-        .child(items(app, QUICK_THREAD))
+        .child(items(app, quick(app)))
         .child(composer(app))
         .into_element()
 }
@@ -110,7 +121,7 @@ fn desktop_head(app: AppState, head: &Head) -> AnyElement {
         .border_b(px(1.0))
         .border_color(color(Token::Rule))
         .child(
-            text(head.title)
+            text(head.title.clone())
                 .role(AccessibilityRole::Header)
                 .number_of_lines(1u32)
                 .flex_shrink_0()
@@ -124,7 +135,7 @@ fn desktop_head(app: AppState, head: &Head) -> AnyElement {
                 .as_ref()
                 .map(|state| chip(app, state.label.clone(), state.hue)),
         )
-        .children(head.subtitle.map(|subtitle| {
+        .children(head.subtitle.clone().map(|subtitle| {
             text(subtitle)
                 .flex_shrink(1.0)
                 .min_w(px(0.0))
@@ -187,7 +198,7 @@ pub(crate) fn pane(app: AppState) -> AnyElement {
         .min_w(px(0.0))
         .child(terminal_head(app, head))
         .child(term::hrule())
-        .child(items(app, QUICK_THREAD))
+        .child(items(app, quick(app)))
         .child(term::hrule())
         .child(composer(app));
     let pane = view()
@@ -253,7 +264,7 @@ fn terminal_parts(app: AppState, head: &Head, room: usize) -> Vec<AnyElement> {
         .filter(|state| fits(state.label.chars().count() + 2));
     let open = open.filter(|b| fits(b.label.chars().count() + 2));
     let mut parts = vec![
-        text(head.title)
+        text(head.title.clone())
             .role(AccessibilityRole::Header)
             .number_of_lines(1u32)
             .flex_shrink_0()
@@ -315,6 +326,8 @@ const ESC: &str = "Esc";
 pub(crate) fn phone_panel(app: AppState) -> AnyElement {
     let head = head(app);
     let label = head.with_untracked(|h| h.label);
+    // The sheet shows no transcript, but its sends land in the quick thread it subscribes.
+    let _ = quick(app);
     view()
         .pb_keyboard()
         .max_h(move || px(window().height.0 * SHEET_SHARE))
@@ -365,7 +378,7 @@ fn phone_head(app: AppState, head: &Head) -> AnyElement {
         .pr(px(6.0))
         .pb(px(2.0))
         .child(
-            text(head.title)
+            text(head.title.clone())
                 .role(AccessibilityRole::Header)
                 .flex_1()
                 .min_w(px(0.0))

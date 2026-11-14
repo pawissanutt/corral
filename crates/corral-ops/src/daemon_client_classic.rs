@@ -35,6 +35,7 @@ impl ClassicWatch {
                 SubOpen {
                     topic: Topic::Classic,
                     since: None,
+                    scope: None,
                 },
             )
             .context("opening the classic subscription")?;
@@ -87,6 +88,7 @@ impl ClassicWatch {
                     rev: notice.rev,
                     after: None,
                 },
+                scope: None,
             },
         )?;
         self.epoch = Some(notice.epoch);

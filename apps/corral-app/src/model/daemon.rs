@@ -1,23 +1,10 @@
 //! Owned daemon snapshots, independent of the transport and the UI runtime.
+use crate::model::Id;
+use corral_protocol::{
+    app::*, assistant::ThreadEntry, cmd::CmdResult, detail::*, rows::*, subscription::LiveText,
+};
 use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::sync::{LazyLock, Mutex};
-
-/// One process-lifetime copy of a task id, bounded by distinct ids received.
-pub fn id(text: &str) -> &'static str {
-    static IDS: LazyLock<Mutex<HashSet<&'static str>>> =
-        LazyLock::new(|| Mutex::new(HashSet::new()));
-    let mut ids = match IDS.lock() {
-        Ok(ids) => ids,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if let Some(&existing) = ids.get(text) {
-        return existing;
-    }
-    let text = Box::leak(text.to_owned().into_boxed_str());
-    ids.insert(text);
-    text
-}
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Link {
@@ -60,7 +47,7 @@ pub struct Agent {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Task {
-    pub id: &'static str,
+    pub id: Id,
     pub title: String,
     pub project: Option<String>,
     pub plan: Option<String>,
@@ -98,7 +85,7 @@ impl Board {
 
     pub fn task(&self, id: &str) -> Option<&Task> {
         self.rows
-            .binary_search_by(|task| order(task.id, id))
+            .binary_search_by(|task| order(&task.id, id))
             .ok()
             .map(|index| &self.rows[index])
     }
@@ -124,7 +111,7 @@ impl Board {
         for row in rows {
             match self
                 .rows
-                .binary_search_by(|existing| order(existing.id, row.id))
+                .binary_search_by(|existing| order(&existing.id, &row.id))
             {
                 Ok(index) => self.rows[index] = row,
                 Err(index) => self.rows.insert(index, row),
@@ -132,7 +119,7 @@ impl Board {
         }
         if !left.is_empty() {
             let left: HashSet<&str> = left.iter().map(String::as_str).collect();
-            self.rows.retain(|row| !left.contains(row.id));
+            self.rows.retain(|row| !left.contains(row.id.as_str()));
         }
         self.epoch = epoch;
         self.complete = true;
@@ -192,6 +179,109 @@ pub struct DaemonHealth {
     pub version: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientError {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UploadStatus {
+    Uploading,
+    Ready,
+    Failed(ClientError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadState {
+    pub kind: corral_protocol::attachment::AttachmentKind,
+    pub name: String,
+    pub media_type: String,
+    pub bytes: u64,
+    pub sent: u64,
+    pub sha256: String,
+    pub status: UploadStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TopicState {
+    pub loading: bool,
+    pub stale: bool,
+    pub error: Option<ClientError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ThreadSnapshot {
+    pub entries: BTreeMap<Id, ThreadEntry>,
+    pub live: Option<LiveText>,
+    pub stale: bool,
+    pub loading: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetailCache {
+    pub target: DetailRef,
+    pub pages: Vec<DetailReply>,
+    pub loading: bool,
+    pub stale: bool,
+    pub error: Option<ClientError>,
+    pub merged: Option<DetailBody>,
+}
+
+impl DetailCache {
+    pub fn body(&self) -> Option<&DetailBody> {
+        self.merged.as_ref()
+    }
+    pub fn bodies(&self) -> impl Iterator<Item = &DetailBody> {
+        self.pages.iter().filter_map(|page| page.body.as_ref())
+    }
+}
+
+pub fn detail_key(target: &DetailRef) -> String {
+    // All selectors contain only strings/enums, so serialization cannot fail.
+    serde_json::to_string(target).unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandStatus {
+    Queued,
+    Pending,
+    Running,
+    Done,
+    Failed,
+    Refused,
+    Conflict,
+    Unknown,
+    Abandoned,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommandState {
+    pub device: Option<String>,
+    pub method: String,
+    pub request: serde_json::Value,
+    pub status: CommandStatus,
+    pub result: Option<CmdResult>,
+    pub error: Option<ClientError>,
+    /// The thread entry corrald acknowledged for an assistant send; kept with the command, never
+    /// in the bounded reply cache, so the local copy stays merged into it.
+    pub entry: Option<Id>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Operation {
+    pub method: String,
+    pub loading: bool,
+    pub value: Option<serde_json::Value>,
+    pub error: Option<ClientError>,
+}
+
+impl Operation {
+    pub fn decode<T: serde::de::DeserializeOwned>(&self) -> Option<T> {
+        serde_json::from_value(self.value.as_ref()?.clone()).ok()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Feed {
     pub link: Link,
@@ -199,6 +289,29 @@ pub struct Feed {
     pub problem: Option<String>,
     pub health: Option<DaemonHealth>,
     pub board: Board,
+    pub session: Option<AppSession>,
+    pub capabilities: BTreeSet<String>,
+    pub date: String,
+    pub inbox: BTreeMap<Id, InboxRow>,
+    pub plans: BTreeMap<Id, PlanRow>,
+    pub agents: BTreeMap<Id, AgentRow>,
+    pub assistants: BTreeMap<Id, AssistantRow>,
+    pub usage: BTreeMap<Id, UsageRow>,
+    pub settings: BTreeMap<Id, SettingsSnapshot>,
+    pub threads: BTreeMap<Id, ThreadSnapshot>,
+    pub topics: BTreeMap<String, TopicState>,
+    pub details: BTreeMap<String, DetailCache>,
+    pub commands: BTreeMap<Id, CommandState>,
+    pub operations: BTreeMap<Id, Operation>,
+    /// Upload metadata only; file bytes never enter the model or persistent storage.
+    pub uploads: BTreeMap<Id, UploadState>,
+    pub cancelling: BTreeSet<Id>,
+    pub not_withdrawn: BTreeSet<Id>,
+    pub changes: BTreeMap<u64, ChangeLine>,
+    pub changes_head: u64,
+    pub changes_older: Option<u64>,
+    pub seen: Option<SeenCursor>,
+    pub drafts: BTreeMap<Id, String>,
     pub device: crate::model::devices::DeviceLink,
     pub devices: Vec<crate::model::devices::DeviceRow>,
     pub pairing: crate::model::devices::Pairing,
@@ -220,6 +333,46 @@ pub struct Feed {
 }
 
 impl Feed {
+    pub fn capable(&self, capability: &str) -> bool {
+        self.capabilities.contains(capability)
+    }
+
+    pub fn detail(&self, target: &DetailRef) -> Option<&DetailCache> {
+        self.details.get(&detail_key(target))
+    }
+
+    pub fn mark_stale(&mut self) {
+        self.session = None;
+        for state in self.topics.values_mut() {
+            state.stale = true;
+            state.loading = false;
+        }
+        for detail in self.details.values_mut() {
+            detail.stale = true;
+            detail.loading = false;
+        }
+        for thread in self.threads.values_mut() {
+            thread.stale = true;
+            thread.loading = false;
+        }
+        for command in self.commands.values_mut() {
+            if matches!(
+                command.status,
+                CommandStatus::Pending | CommandStatus::Running
+            ) {
+                command.status = CommandStatus::Unknown;
+            }
+        }
+        for operation in self.operations.values_mut() {
+            if operation.loading {
+                operation.loading = false;
+                operation.error = Some(ClientError {
+                    code: "disconnected".into(),
+                    message: "Connection lost before a reply was received.".into(),
+                });
+            }
+        }
+    }
     /// An explicit link (including a refused one) must never resume an old browser identity.
     pub fn browser_pairing_pending(&self) -> bool {
         self.pairing_code.is_some()
@@ -272,6 +425,7 @@ impl Feed {
 
     pub fn link_lost(&mut self, problem: String) {
         self.link = Link::Down;
+        self.mark_stale();
         self.problem = Some(if problem.contains(['\r', '\n']) {
             problem.replace(['\r', '\n'], " ")
         } else {
@@ -282,11 +436,51 @@ impl Feed {
     pub fn revoked(&mut self, id: String) {
         self.device = crate::model::devices::DeviceLink::Revoked { id };
         self.board = Board::default();
+        self.session = None;
+        self.inbox.clear();
+        self.plans.clear();
+        self.agents.clear();
+        self.assistants.clear();
+        self.usage.clear();
+        self.settings.clear();
+        self.threads.clear();
+        self.details.clear();
+        self.uploads.clear();
+        self.cancelling.clear();
+        self.not_withdrawn.clear();
+        self.changes.clear();
+        self.capabilities.clear();
         self.link_lost("This device was revoked.".into());
     }
 
     pub fn devices_received(&mut self, rows: Vec<crate::model::devices::DeviceRow>) {
         self.devices = rows;
+    }
+
+    /// Retires delivered sends whose acknowledged entry this device has seen in their thread:
+    /// the canonical echo owns the message from then on, so a later page without it (a bounded
+    /// window or a reopened scope) cannot revive the local copy.
+    pub fn retire_echoed_sends(&mut self) {
+        let threads = &self.threads;
+        let echoed: Vec<Id> = self
+            .commands
+            .iter()
+            .filter(|(_, command)| {
+                command.method == corral_protocol::assistant::ASSISTANT_SEND
+                    && command.status == CommandStatus::Done
+                    && command.entry.as_ref().is_some_and(|entry| {
+                        command.request["thread"]
+                            .as_str()
+                            .and_then(|thread| threads.get(thread))
+                            .is_some_and(|thread| thread.entries.contains_key(entry))
+                    })
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in echoed {
+            self.commands.remove(&id);
+            self.not_withdrawn.remove(&id);
+        }
     }
 
     pub fn tick(&mut self, now: u64, clock: String) {
@@ -317,7 +511,7 @@ mod tests {
 
     fn task(text: &str) -> Task {
         Task {
-            id: id(text),
+            id: Id::new(text),
             title: text.into(),
             project: None,
             plan: None,
@@ -347,7 +541,11 @@ mod tests {
         board.apply_batch(1, vec![task("T-10"), task("T-9"), task("other")], &[]);
         board.apply_batch(1, vec![task("T-2")], &["T-10".into()]);
         assert_eq!(
-            board.tasks().iter().map(|row| row.id).collect::<Vec<_>>(),
+            board
+                .tasks()
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
             ["T-2", "T-9", "other"]
         );
         assert!(board.task("T-10").is_none());

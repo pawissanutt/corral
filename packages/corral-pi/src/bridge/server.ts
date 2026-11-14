@@ -28,6 +28,8 @@ export interface BridgeHandlers {
   queueWithdraw?(key: string, op_key: string): Record<string, unknown>;
   /** Internal C3 proof only; absent handlers/legacy hosts fail closed. */
   handoffDrain?(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  ownerTurn?(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  setModel?(args: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
 
 export interface BridgeServerOptions {
@@ -153,6 +155,12 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
       case "handoff_drain":
         if (!options.handlers.handoffDrain) throw new BridgeRefusal("source_boundary_unavailable", "this host cannot attest source drain");
         return options.handlers.handoffDrain(frame.args);
+      case "owner_turn":
+        if (!options.handlers.ownerTurn) throw new BridgeRefusal("capability_unavailable", "remote owner mode is unavailable");
+        return options.handlers.ownerTurn(frame.args);
+      case "set_model":
+        if (!options.handlers.setModel) throw new BridgeRefusal("capability_unavailable", "remote model selection is unavailable");
+        return options.handlers.setModel(frame.args);
       case "submit_input": {
         const input = parseSubmitInput(frame.args);
         const result = await submit(input, frame.id);

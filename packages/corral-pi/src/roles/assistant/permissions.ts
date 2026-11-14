@@ -98,11 +98,27 @@ export class PermissionBroker {
         port.emit("write_permission_used", { rule: "grant", grant: checked.grant });
         return undefined;
       }
-      if (!ctx.hasUI) return block("no_ui", "The owner can configure write_permissions.allow directories.");
+      if (!ctx.hasUI && !port.remote) return block("no_ui", "The owner can configure write_permissions.allow directories.");
       const candidates = scopeCandidates(current.shown, this.paths?.home);
       const operation = tool === "edit" ? { kind: "edit", replacements: Array.isArray(input.edits) ? input.edits.length : 1 }
         : { kind: existsSync(current.shown) ? "overwrite" : "new_file" };
       const preview = utf8Prefix((tool === "write" ? String(input.content ?? "") : JSON.stringify(input.edits ?? input)).split("\n").slice(0, 40).join("\n"), 4096);
+      if (port.remote) {
+        const generation = this.context.identity.generation;
+        const decision = await port.remote({
+          tool, operation, target, digest: sha256Hex(canonicalJson({ tool, target: current.canonical, input })),
+          preview, preview_sha256: sha256Hex(preview),
+          invocation: { generation, id: randomBytes(16).toString("hex"), tool_call: toolCall },
+          scopes: candidates,
+        }, turn.signal);
+        if (turn.signal.aborted) return block("aborted");
+        if (!decision.authorized) {
+          if (decision.state === "answered") this.denied.add(current.canonical ?? current.shown);
+          return block(decision.state === "answered" ? "owner_denied" : `permission_${decision.state}`);
+        }
+        if (!await unchanged()) return block("target_changed");
+        return undefined;
+      }
       const choices = candidates.length ? Object.values(CHOICES) : [CHOICES.once, CHOICES.deny];
       const destination = current.canonical === current.shown ? "" : `\nResolved destination: ${current.canonical}`;
       const answer = await ctx.ui.select(`${tool} ${current.shown}${destination}\n${operation.kind.replace("_", " ")}${"replacements" in operation ? ` (${operation.replacements} replacements)` : ""}\n${preview}`, choices, { signal: turn.signal, timeout: 300_000 });

@@ -1,17 +1,20 @@
-//! Usage fixtures and projections for the desktop table and stacked phone blocks.
-//! All costs and quota numbers are illustrative; usage is visibility only.
+//! Usage views for the desktop table, stacked phone blocks and terminal lines. The fixture
+//! preview projects the mockup's illustrative providers (`data`); a daemon session projects
+//! corral's recorded usage rows, series and session costs (`live`). Usage is visibility only.
+
+mod data;
+mod live;
+
+pub use live::{Inputs, page as live_page, series_request};
 
 use crate::model::Effect;
 
-/// The selected period; the illustrative fixture remains unchanged.
+/// The selected period.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Period {
-    /// Today's usage.
     #[default]
     Today,
-    /// Seven-day period.
     Week,
-    /// Thirty-day period.
     Month,
 }
 
@@ -29,215 +32,41 @@ impl Period {
     }
 }
 
-/// Selection state for the illustrative usage screen.
+/// Selection state for the usage screen.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct State {
-    /// Currently selected period.
     pub period: Period,
 }
 
 impl State {
-    /// Select a period without changing the illustrative data or emitting effects.
+    /// Select a period without emitting effects.
     pub fn select_period(&mut self, period: Period) -> Vec<Effect> {
         self.period = period;
         Vec::new()
     }
 }
 
-/// A profile's share of its provider window and today's cost.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Profile {
-    /// Profile or quick-thread name.
-    pub name: &'static str,
-    /// Fraction of the provider window consumed by this profile.
-    pub used: f32,
-    /// Today's illustrative cost in dollars.
-    pub today: f32,
-}
-
-/// One provider's current window, costs, profiles and today's usage history.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Provider {
-    /// Connection identifier.
-    pub id: &'static str,
-    /// Provider heading.
-    pub label: &'static str,
-    /// Window description.
-    pub window: &'static str,
-    /// Fraction of the current window used.
-    pub used: f32,
-    /// Reset time or duration as supplied by the fixture.
-    pub resets: &'static str,
-    /// Optional fraction of the weekly cap used.
-    pub weekly: Option<f32>,
-    /// Today's cost in dollars.
-    pub today: f32,
-    /// Seven-day cost in dollars.
-    pub week: f32,
-    /// Profiles in table and phone order.
-    pub profiles: &'static [Profile],
-    /// Window use sampled at [`HOURS`].
-    pub series: &'static [f32],
-}
-
-/// The illustrative provider and profile records.
-pub const PROVIDERS: &[Provider] = &[
-    Provider {
-        id: "openai-subscription",
-        label: "OpenAI · subscription",
-        window: "5 h rolling",
-        used: 0.78,
-        resets: "1h 46m",
-        weekly: Some(0.61),
-        today: 61.2,
-        week: 318.4,
-        profiles: &[
-            Profile {
-                name: "pi-sol xhigh",
-                used: 0.69,
-                today: 53.7,
-            },
-            Profile {
-                name: "pi-terra high",
-                used: 0.07,
-                today: 6.4,
-            },
-            Profile {
-                name: "assistant · quick thread A-7",
-                used: 0.02,
-                today: 1.1,
-            },
-        ],
-        series: &[
-            0.12, 0.2, 0.31, 0.38, 0.42, 0.47, 0.55, 0.61, 0.66, 0.72, 0.75, 0.78,
-        ],
-    },
-    Provider {
-        id: "anthropic-subscription",
-        label: "Anthropic · subscription",
-        window: "5 h rolling",
-        used: 0.34,
-        resets: "3h 02m",
-        weekly: Some(0.48),
-        today: 22.7,
-        week: 141.0,
-        profiles: &[
-            Profile {
-                name: "omo opus",
-                used: 0.29,
-                today: 19.1,
-            },
-            Profile {
-                name: "claude sonnet review",
-                used: 0.05,
-                today: 3.6,
-            },
-        ],
-        series: &[
-            0.05, 0.08, 0.1, 0.18, 0.22, 0.25, 0.27, 0.29, 0.3, 0.31, 0.33, 0.34,
-        ],
-    },
-    Provider {
-        id: "openai-api",
-        label: "OpenAI · API (metered)",
-        window: "allowance $40 / day",
-        used: 0.21,
-        resets: "01:48",
-        weekly: None,
-        today: 8.4,
-        week: 29.9,
-        profiles: &[Profile {
-            name: "fallback · pi-sol",
-            used: 0.21,
-            today: 8.4,
-        }],
-        series: &[
-            0.0, 0.0, 0.0, 0.0, 0.04, 0.04, 0.09, 0.12, 0.15, 0.18, 0.2, 0.21,
-        ],
-    },
-];
-
-/// Hour labels corresponding to the provider series.
-pub const HOURS: &[&str] = &[
-    "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22",
-];
-
-/// One day's costs in the order of [`COST_LEGEND`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DayCost {
-    /// Day abbreviation.
-    pub day: &'static str,
-    /// Dollar amounts for the three cost categories.
-    pub values: [u32; 3],
-}
-
-/// The seven illustrative daily cost records.
-pub const WEEK: &[DayCost] = &[
-    DayCost {
-        day: "Thu",
-        values: [38, 21, 2],
-    },
-    DayCost {
-        day: "Fri",
-        values: [52, 18, 4],
-    },
-    DayCost {
-        day: "Sat",
-        values: [12, 9, 0],
-    },
-    DayCost {
-        day: "Sun",
-        values: [44, 26, 5],
-    },
-    DayCost {
-        day: "Mon",
-        values: [57, 30, 6],
-    },
-    DayCost {
-        day: "Tue",
-        values: [54, 14, 4],
-    },
-    DayCost {
-        day: "Wed",
-        values: [61, 23, 8],
-    },
-];
-/// Cost bar segment labels, in the same order as [`DayCost::values`].
-pub const COST_LEGEND: [&str; 3] = ["OpenAI sub", "Anthropic sub", "metered API"];
 /// Usage page title.
 pub const TITLE: &str = "Usage";
 /// Phone back destination label.
 pub const BACK_LABEL: &str = "More";
 /// Desktop page subtitle.
 pub const SUBTITLE: &str = "cost and quota per provider and profile · visibility only, no routing";
-/// Period selector labels; Today is selected in the mockup.
-pub const PERIODS: [&str; 3] = ["Today", "7 days", "30 days"];
 /// The small quiet word following a provider cell's desktop usage percentage.
 pub const USED_LABEL: &str = "used";
 /// Profile table heading.
 pub const PROFILE_TITLE: &str = "By profile · current window";
-/// Profile table column labels in order.
-pub const PROFILE_HEADERS: [&str; 6] = [
-    "Provider",
-    "Profile",
-    "Window",
-    "Share · 80% marker",
-    "Today",
-    "Headroom",
-];
+/// Session table heading.
+pub const SESSION_TITLE: &str = "By session";
+/// Session table column labels.
+pub const SESSION_HEADERS: [&str; 5] = ["Session", "Working on", "Profile", "Tokens", "Cost"];
 /// The share meter's marker, as a percentage.
 pub const SHARE_MARKER_PERCENT: u32 = 80;
-/// Daily cost section heading.
-pub const COST_TITLE: &str = "Cost per day · 7 days";
-/// Desktop illustration disclaimer.
-pub const DESKTOP_DISCLAIMER: &str = "All numbers illustrative. Connection names follow real usage records (openai-subscription); bands mark 70% and 90% of the provider window.";
-/// Phone illustration disclaimer.
-pub const PHONE_DISCLAIMER: &str = "All numbers illustrative.";
 
 /// Usage band for a provider or a profile meter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
-    /// Below 70 percent.
+    /// Below 70 percent, or no quota known.
     None,
     /// At least 70 percent but below 90 percent.
     Warn,
@@ -259,7 +88,7 @@ pub fn level(used: f32) -> Level {
 fn percent(value: f32) -> u32 {
     (value * 100.0).round() as u32
 }
-fn money(value: f32) -> String {
+fn money(value: f64) -> String {
     if value >= 10.0 {
         format!("${:.0}", value.round())
     } else {
@@ -267,32 +96,33 @@ fn money(value: f32) -> String {
     }
 }
 
+/// Samples of a window's use (fractions) with one tick label per sample.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chart {
+    pub series: Vec<f32>,
+    pub ticks: Vec<String>,
+    pub label: String,
+}
+
 /// A coordinate in the chart's supplied view box.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
-    /// Horizontal position.
     pub x: f32,
-    /// Vertical position.
     pub y: f32,
 }
 /// A coloured threshold rectangle in the chart.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Zone {
-    /// Threshold band represented by this rectangle.
     pub level: Level,
-    /// Top-left position.
     pub origin: Point,
-    /// Rectangle width.
     pub width: f32,
-    /// Rectangle height.
     pub height: f32,
 }
 /// A chart axis label and its baseline position.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AxisLabel {
-    /// Label text.
-    pub text: &'static str,
-    /// Text position; hour labels are centered on x.
+    pub text: String,
+    /// Text position; tick labels are centered on x.
     pub position: Point,
 }
 /// Geometric chart data, including the filled-area polygon and final point.
@@ -300,31 +130,28 @@ pub struct AxisLabel {
 pub struct BandChart {
     /// 90 to 100 and 70 to 90 percent zones, in that order.
     pub zones: [Zone; 2],
-    /// Vertical band and zero labels.
-    pub vertical_labels: [AxisLabel; 3],
-    /// Every third hour label.
+    pub vertical_labels: Vec<AxisLabel>,
+    /// Every third tick label.
     pub hour_labels: Vec<AxisLabel>,
-    /// Usage series in sample order.
     pub line: Vec<Point>,
     /// Series closed to the zero baseline for an area renderer.
     pub area: Vec<Point>,
-    /// Last sample, if the series is nonempty.
     pub last: Option<Point>,
-    /// Accessible chart description.
     pub accessibility_label: String,
 }
 
-/// Project a provider's samples and threshold bands into the requested chart dimensions.
-pub fn band_chart(provider: &Provider, width: f32, height: f32) -> BandChart {
+/// Project a window's samples and threshold bands into the requested chart dimensions.
+pub fn band_chart(chart: &Chart, width: f32, height: f32) -> BandChart {
     let plot_width = width - 26.0;
+    let count = chart.series.len();
     let x = |i: usize| {
-        22.0 + if provider.series.len() > 1 {
-            i as f32 / (provider.series.len() - 1) as f32 * plot_width
+        22.0 + if count > 1 {
+            i as f32 / (count - 1) as f32 * plot_width
         } else {
             0.0
         }
     };
-    let y = |v: f32| 4.0 + (1.0 - v) * (height - 26.0);
+    let y = |v: f32| 4.0 + (1.0 - v.clamp(0.0, 1.0)) * (height - 26.0);
     let zones = [
         Zone {
             level: Level::Bad,
@@ -339,39 +166,30 @@ pub fn band_chart(provider: &Provider, width: f32, height: f32) -> BandChart {
             height: y(0.7) - y(0.9),
         },
     ];
-    let vertical_labels = [
-        AxisLabel {
-            text: "90",
+    let vertical_labels = [("90", 0.95, 3.0), ("70", 0.8, 3.0), ("0", 0.0, 0.0)]
+        .into_iter()
+        .map(|(text, at, lift)| AxisLabel {
+            text: text.to_owned(),
             position: Point {
                 x: 0.0,
-                y: y(0.95) + 3.0,
+                y: y(at) + lift,
             },
-        },
-        AxisLabel {
-            text: "70",
-            position: Point {
-                x: 0.0,
-                y: y(0.8) + 3.0,
-            },
-        },
-        AxisLabel {
-            text: "0",
-            position: Point { x: 0.0, y: y(0.0) },
-        },
-    ];
-    let hour_labels = HOURS
+        })
+        .collect();
+    let hour_labels = chart
+        .ticks
         .iter()
         .enumerate()
         .filter(|(i, _)| i % 3 == 0)
-        .map(|(i, &text)| AxisLabel {
-            text,
+        .map(|(i, text)| AxisLabel {
+            text: text.clone(),
             position: Point {
                 x: x(i),
                 y: height - 2.0,
             },
         })
         .collect();
-    let line: Vec<Point> = provider
+    let line: Vec<Point> = chart
         .series
         .iter()
         .enumerate()
@@ -396,45 +214,114 @@ pub fn band_chart(provider: &Provider, width: f32, height: f32) -> BandChart {
         line,
         area,
         last,
-        accessibility_label: format!(
-            "{} window use today, {} percent now",
-            provider.label,
-            percent(provider.used)
-        ),
+        accessibility_label: chart.label.clone(),
     }
 }
 
-/// One provider cell, also used as the basis of a stacked phone block.
+/// One provider cell, also used as the basis of a stacked phone block and a terminal line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderView {
-    /// Source record including identity and window.
-    pub provider: &'static Provider,
-    /// Current window use, including the percent sign.
-    pub used: String,
-    /// Headroom including its percent sign and label.
+    pub id: String,
+    pub label: String,
+    pub window: String,
+    /// The big figure: window use, or the period's cost when no quota is known.
+    pub big: String,
+    /// The quiet word after the big figure.
+    pub big_label: &'static str,
+    /// Fraction of the window used, when known.
+    pub used: Option<f32>,
     pub headroom: String,
     /// Provider threshold, used for headroom and profile meters.
     pub level: Level,
-    /// Desktop reset sentence.
+    /// Desktop reset sentence, empty when unknown.
     pub resets: String,
-    /// Phone reset sentence, which omits at/in.
+    /// Phone reset sentence.
     pub phone_resets: String,
-    /// Desktop cost and optional weekly-cap line.
+    /// Cost line and optional weekly-cap line.
     pub costs: String,
-    /// Phone profile rows in order.
+    pub chart: Option<Chart>,
+    /// Said in the chart's place when there is nothing to chart.
+    pub chart_missing: Option<&'static str>,
     pub profiles: Vec<PhoneProfile>,
 }
 /// A profile line inside a phone provider block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhoneProfile {
-    /// Profile name.
-    pub name: &'static str,
-    /// Window percentage and today's cost.
+    pub name: String,
     pub detail: String,
 }
-/// Build the cells in provider order; phone renders these as stacked blocks.
-pub fn providers() -> Vec<ProviderView> {
-    PROVIDERS
+/// One profile table row, with repeated provider and headroom cells suppressed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileRow {
+    /// Provider label on the first row only.
+    pub provider: String,
+    pub profile: String,
+    pub window: String,
+    /// Meter fill as a percentage; None when the share is unknown.
+    pub share_percent: Option<u32>,
+    /// Meter level follows provider use, not profile use.
+    pub level: Level,
+    pub today: String,
+    /// Provider headroom on the first row only.
+    pub headroom: String,
+}
+/// One stacked daily cost bar: segment widths in percent of the track, in legend order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CostBar {
+    pub day: String,
+    pub values: [u32; 3],
+    pub total_label: String,
+}
+/// The cost-per-day section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Costs {
+    pub title: String,
+    pub legend: Vec<String>,
+    pub bars: Vec<CostBar>,
+    /// Said in place of the bars when there are none.
+    pub empty: Option<String>,
+}
+/// One session's recorded tokens and cost.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRow {
+    pub session: String,
+    pub what: String,
+    pub profile: String,
+    pub tokens: String,
+    pub cost: String,
+}
+/// The whole page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Page {
+    pub providers: Vec<ProviderView>,
+    /// Said when no provider has recorded usage.
+    pub providers_empty: Option<&'static str>,
+    pub profile_headers: [&'static str; 6],
+    pub profiles: Vec<ProfileRow>,
+    pub costs: Costs,
+    /// Live only: per-session tokens and cost.
+    pub sessions: Option<Vec<SessionRow>>,
+    pub sessions_note: Option<String>,
+    pub disclaimer: &'static str,
+    pub phone_disclaimer: &'static str,
+}
+
+/// Profile table column labels in the preview.
+const PROFILE_HEADERS: [&str; 6] = [
+    "Provider",
+    "Profile",
+    "Window",
+    "Share · 80% marker",
+    "Today",
+    "Headroom",
+];
+const DESKTOP_DISCLAIMER: &str = "All numbers illustrative. Connection names follow real usage records (openai-subscription); bands mark 70% and 90% of the provider window.";
+const PHONE_DISCLAIMER: &str = "All numbers illustrative.";
+
+/// The fixture preview's page; the illustrative figures do not change with the period.
+pub fn fixture_page() -> Page {
+    let fixture_money = |value: f32| money(f64::from(value));
+    let providers = data::PROVIDERS
         .iter()
         .map(|p| {
             let weekly = p
@@ -442,8 +329,12 @@ pub fn providers() -> Vec<ProviderView> {
                 .map(|w| format!(" · weekly cap {}%", percent(w)))
                 .unwrap_or_default();
             ProviderView {
-                provider: p,
-                used: format!("{}%", percent(p.used)),
+                id: p.id.to_owned(),
+                label: p.label.to_owned(),
+                window: p.window.to_owned(),
+                big: format!("{}%", percent(p.used)),
+                big_label: USED_LABEL,
+                used: Some(p.used),
                 headroom: format!("{}% headroom", percent(1.0 - p.used)),
                 level: level(p.used),
                 resets: format!(
@@ -454,56 +345,48 @@ pub fn providers() -> Vec<ProviderView> {
                 phone_resets: format!("resets {}", p.resets),
                 costs: format!(
                     "today {} · 7 days {}{}",
-                    money(p.today),
-                    money(p.week),
+                    fixture_money(p.today),
+                    fixture_money(p.week),
                     weekly
                 ),
+                chart: Some(Chart {
+                    series: p.series.to_vec(),
+                    ticks: data::HOURS.iter().map(|&h| h.to_owned()).collect(),
+                    label: format!(
+                        "{} window use today, {} percent now",
+                        p.label,
+                        percent(p.used)
+                    ),
+                }),
+                chart_missing: None,
                 profiles: p
                     .profiles
                     .iter()
                     .map(|profile| PhoneProfile {
-                        name: profile.name,
-                        detail: format!("{}% · {}", percent(profile.used), money(profile.today)),
+                        name: profile.name.to_owned(),
+                        detail: format!(
+                            "{}% · {}",
+                            percent(profile.used),
+                            fixture_money(profile.today)
+                        ),
                     })
                     .collect(),
             }
         })
-        .collect()
-}
-
-/// One desktop profile table row, with repeated provider and headroom cells suppressed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileRow {
-    /// Provider label on the first row only.
-    pub provider: &'static str,
-    /// Profile name.
-    pub profile: &'static str,
-    /// Profile window percentage.
-    pub window: String,
-    /// Meter fill width as a percentage.
-    pub share_percent: u32,
-    /// Meter level follows provider use, not profile use.
-    pub level: Level,
-    /// Today's profile cost.
-    pub today: String,
-    /// Provider headroom on the first row only.
-    pub headroom: String,
-}
-/// Flatten all providers' profiles, including the quick thread, into table rows.
-pub fn profile_rows() -> Vec<ProfileRow> {
-    PROVIDERS
+        .collect();
+    let profiles = data::PROVIDERS
         .iter()
         .flat_map(|p| {
             p.profiles
                 .iter()
                 .enumerate()
                 .map(move |(i, profile)| ProfileRow {
-                    provider: if i == 0 { p.label } else { "" },
-                    profile: profile.name,
+                    provider: if i == 0 { p.label } else { "" }.to_owned(),
+                    profile: profile.name.to_owned(),
                     window: format!("{}%", percent(profile.used)),
-                    share_percent: percent(profile.used),
+                    share_percent: Some(percent(profile.used)),
                     level: level(p.used),
-                    today: money(profile.today),
+                    today: fixture_money(profile.today),
                     headroom: if i == 0 {
                         format!("{}%", percent(1.0 - p.used))
                     } else {
@@ -511,34 +394,30 @@ pub fn profile_rows() -> Vec<ProfileRow> {
                     },
                 })
         })
-        .collect()
-}
-
-/// One stacked daily cost bar, with segment widths in percent and a dollar total.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CostBar {
-    /// Day abbreviation.
-    pub day: &'static str,
-    /// Segment values and widths, in legend order.
-    pub values: [u32; 3],
-    /// Sum of the three dollar values.
-    pub total: u32,
-    /// Formatted sum shown next to the bar.
-    pub total_label: String,
-}
-/// Build the seven daily bars in fixture order.
-pub fn cost_bars() -> Vec<CostBar> {
-    WEEK.iter()
-        .map(|day| {
-            let total = day.values.iter().sum();
-            CostBar {
-                day: day.day,
-                values: day.values,
-                total,
-                total_label: format!("${total}"),
-            }
-        })
-        .collect()
+        .collect();
+    Page {
+        providers,
+        providers_empty: None,
+        profile_headers: PROFILE_HEADERS,
+        profiles,
+        costs: Costs {
+            title: "Cost per day · 7 days".into(),
+            legend: data::COST_LEGEND.iter().map(|&l| l.to_owned()).collect(),
+            bars: data::WEEK
+                .iter()
+                .map(|&(day, values)| CostBar {
+                    day: day.to_owned(),
+                    values,
+                    total_label: format!("${}", values.iter().sum::<u32>()),
+                })
+                .collect(),
+            empty: None,
+        },
+        sessions: None,
+        sessions_note: None,
+        disclaimer: DESKTOP_DISCLAIMER,
+        phone_disclaimer: PHONE_DISCLAIMER,
+    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { HOST_CAPABILITIES, LaunchMessageInvalid, parseLaunchMessage } from "./config.ts";
 import { bindingDigest } from "./connections.ts";
+import { parseOwnerTurn } from "./remote-owner.ts";
 
 const message = {
   version: 1, store: "st-demo", project: "demo", role: "reviewer",
@@ -25,6 +26,19 @@ test("assistant launch keeps its recorded project and accepts legacy projectless
     // When the launch is parsed, then the same project reaches the host identity.
     expect(parseLaunchMessage(JSON.stringify({ ...assistant, project })).identity.project).toBe(project);
   }
+});
+
+test("daemon assistant launch is pane-less without weakening terminal pane admission", () => {
+  const assistant = { ...message, role: "assistant", assistant: "A-1" };
+  const remote = parseLaunchMessage(JSON.stringify({ ...assistant, daemon_hosted: true, pane: null }));
+  expect(remote.daemonHosted).toBeTrue();
+  expect(remote.pane).toBeNull();
+  expect(() => parseLaunchMessage(JSON.stringify({ ...assistant, pane: null }))).toThrow(LaunchMessageInvalid);
+  expect(() => parseLaunchMessage(JSON.stringify({ ...assistant, daemon_hosted: true }))).toThrow(LaunchMessageInvalid);
+  expect(() => parseLaunchMessage(JSON.stringify({ ...message, daemon_hosted: true, pane: null }))).toThrow(LaunchMessageInvalid);
+  const turn = { entry: "E-1", input: "A-1/g0/i1", turn: 1, text: "owner words", device: "dev-1", via: "app:dev-1", typed_at: "2026-11-14T00:00:00Z" };
+  expect(parseOwnerTurn(turn).input).toBe("A-1/g0/i1");
+  expect(() => parseOwnerTurn({ ...turn, input: "arbitrary text" })).toThrow("already journaled");
 });
 
 test("workspace PM launch has no project while legacy PM launches remain readable", () => {

@@ -1,6 +1,121 @@
 {
   "components": {
     "schemas": {
+      "ActClass": {
+        "enum": [
+          "reply",
+          "act",
+          "confirm",
+          "admin",
+          "refused",
+          "other"
+        ],
+        "type": "string"
+      },
+      "ActPreview": {
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/ActClass"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "effects": {
+            "description": "At most 16 effects, each at most 256 bytes.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "operation_token": {
+            "default": null,
+            "description": "Canonical operation preview token, when the selected command requires one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "preview_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "preview_id",
+          "digest",
+          "class",
+          "effects",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "ActPreviewRequest": {
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/Command"
+          },
+          "expect": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expect"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      },
+      "ActSubmit": {
+        "description": "Caller identity and executable admission fields are deliberately absent.",
+        "properties": {
+          "cmd_id": {
+            "type": "string"
+          },
+          "command": {
+            "$ref": "#/components/schemas/Command"
+          },
+          "confirm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfirmProof"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expect": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expect"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "issued_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd_id",
+          "issued_at",
+          "expires_at",
+          "command"
+        ],
+        "type": "object"
+      },
       "ActorName": {
         "description": "Mirrors `corral_core::Actor` serde names.",
         "enum": [
@@ -14,6 +129,438 @@
           "other"
         ],
         "type": "string"
+      },
+      "AgentRow": {
+        "properties": {
+          "cost_basis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CostBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "machine": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "now": {
+            "type": "string"
+          },
+          "pane": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "role": {
+            "type": "string"
+          },
+          "run": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtime": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentStatus"
+          },
+          "tail": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "tokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "title",
+          "status",
+          "now",
+          "tail",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "AgentStatus": {
+        "enum": [
+          "live",
+          "working",
+          "asking",
+          "gating",
+          "reviewing",
+          "idle",
+          "waiting",
+          "ended",
+          "unavailable",
+          "other"
+        ],
+        "type": "string"
+      },
+      "AnnotationCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "base": {
+                "type": "string"
+              },
+              "expected_run": {
+                "type": "string"
+              },
+              "head": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/LineRange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "side": {
+                "$ref": "#/components/schemas/AnnotationSide"
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "open",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "key",
+              "expected_run",
+              "base",
+              "head",
+              "path",
+              "side",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "thread": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "reply",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "key",
+              "thread",
+              "expected_revision",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "thread": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "resolve",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "key",
+              "thread",
+              "expected_revision",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "thread": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "reopen",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "key",
+              "thread",
+              "expected_revision",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AnnotationMessage": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "by",
+          "at",
+          "text"
+        ],
+        "type": "object"
+      },
+      "AnnotationSide": {
+        "enum": [
+          "new",
+          "old",
+          "other"
+        ],
+        "type": "string"
+      },
+      "AppSession": {
+        "properties": {
+          "authority": {
+            "$ref": "#/components/schemas/DeviceAuthority"
+          },
+          "device": {
+            "$ref": "#/components/schemas/DeviceInfo"
+          },
+          "seen": {
+            "$ref": "#/components/schemas/SeenCursor"
+          },
+          "server_time": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "device",
+          "authority",
+          "seen",
+          "server_time"
+        ],
+        "type": "object"
+      },
+      "AppSessionRequest": {
+        "type": "object"
+      },
+      "ArtifactEncoding": {
+        "enum": [
+          "text",
+          "base64",
+          "other"
+        ],
+        "type": "string"
+      },
+      "ArtifactPage": {
+        "properties": {
+          "content": {
+            "description": "UTF-8 text or one independently base64-encoded byte chunk.\nThe complete JSON-RPC reply remains within APP_CONTROL_MAX.",
+            "type": "string"
+          },
+          "encoding": {
+            "$ref": "#/components/schemas/ArtifactEncoding"
+          },
+          "key": {
+            "description": "Canonical catalog key within that owner, not a filesystem path.",
+            "type": "string"
+          },
+          "media_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "description": "Canonical task or assistant artifact owner.",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "More source content exists; continue with DetailReply.next.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "task",
+          "key",
+          "encoding",
+          "content",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "ArtifactRef": {
+        "properties": {
+          "media_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_ref": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_ref",
+          "title"
+        ],
+        "type": "object"
+      },
+      "AskTarget": {
+        "enum": [
+          "assistant",
+          "pm",
+          "other"
+        ],
+        "type": "string"
+      },
+      "AssistantCancel": {
+        "properties": {
+          "cmd_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd_id"
+        ],
+        "type": "object"
       },
       "AssistantCommand": {
         "oneOf": [
@@ -122,6 +669,402 @@
             "type": "object"
           }
         ]
+      },
+      "AssistantKind": {
+        "enum": [
+          "quick",
+          "session",
+          "other"
+        ],
+        "type": "string"
+      },
+      "AssistantLocation": {
+        "enum": [
+          "pane",
+          "daemon",
+          "none",
+          "other"
+        ],
+        "type": "string"
+      },
+      "AssistantRow": {
+        "properties": {
+          "cost_basis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CostBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "focus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AssistantKind"
+          },
+          "live_in": {
+            "$ref": "#/components/schemas/AssistantLocation"
+          },
+          "pending": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AssistantState"
+          },
+          "title": {
+            "type": "string"
+          },
+          "turn": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "wait": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WaitReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "state",
+          "live_in",
+          "pending",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "AssistantSend": {
+        "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/SendAttachment"
+            },
+            "type": "array"
+          },
+          "cmd_id": {
+            "type": "string"
+          },
+          "context": {
+            "items": {
+              "$ref": "#/components/schemas/ContextRef"
+            },
+            "type": "array"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AskTarget"
+          },
+          "text": {
+            "type": "string"
+          },
+          "thread": {
+            "type": "string"
+          },
+          "typed_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd_id",
+          "thread",
+          "target",
+          "text",
+          "typed_at",
+          "context"
+        ],
+        "type": "object"
+      },
+      "AssistantSessionOp": {
+        "oneOf": [
+          {
+            "properties": {
+              "op": {
+                "const": "new",
+                "type": "string"
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "end",
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "session"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "take_over",
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "session"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "set_profile",
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "thread": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "thread",
+              "profile"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AssistantState": {
+        "enum": [
+          "cold",
+          "starting",
+          "ready",
+          "working",
+          "waiting",
+          "stopping",
+          "ended",
+          "failed",
+          "other"
+        ],
+        "type": "string"
+      },
+      "AssistantStop": {
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "turn": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session",
+          "turn"
+        ],
+        "type": "object"
+      },
+      "AssistantWarm": {
+        "properties": {
+          "thread": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "type": "object"
+      },
+      "AttachmentBegin": {
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AttachmentKind"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "upload": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "upload",
+          "kind",
+          "name",
+          "media_type",
+          "bytes",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "AttachmentDiscard": {
+        "properties": {
+          "upload": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "upload"
+        ],
+        "type": "object"
+      },
+      "AttachmentFact": {
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AttachmentKind"
+          },
+          "media_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name"
+        ],
+        "type": "object"
+      },
+      "AttachmentKind": {
+        "enum": [
+          "image",
+          "file",
+          "link",
+          "other"
+        ],
+        "type": "string"
+      },
+      "AttachmentPut": {
+        "properties": {
+          "data": {
+            "type": "string"
+          },
+          "offset": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "upload": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "upload",
+          "offset",
+          "data"
+        ],
+        "type": "object"
       },
       "AttentionCommand": {
         "oneOf": [
@@ -447,6 +1390,47 @@
         ],
         "type": "object"
       },
+      "Burnup": {
+        "properties": {
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/BurnupPoint"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "points"
+        ],
+        "type": "object"
+      },
+      "BurnupPoint": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "landed": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "total",
+          "landed"
+        ],
+        "type": "object"
+      },
       "Bye": {
         "properties": {
           "reason": {
@@ -594,6 +1578,134 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "CancelAck": {
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          },
+          "entry": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "cancelled"
+        ],
+        "type": "object"
+      },
+      "ChangeLine": {
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          },
+          "class": {
+            "type": "string"
+          },
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "via": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "class",
+          "text",
+          "actor",
+          "via"
+        ],
+        "type": "object"
+      },
+      "ChangesPage": {
+        "properties": {
+          "head": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeLine"
+            },
+            "type": "array"
+          },
+          "older": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "seen": {
+            "$ref": "#/components/schemas/SeenCursor"
+          }
+        },
+        "required": [
+          "lines",
+          "head",
+          "seen"
+        ],
+        "type": "object"
+      },
+      "ChangesQuery": {
+        "properties": {
+          "after": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "before": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit"
+        ],
         "type": "object"
       },
       "ClientBuild": {
@@ -792,6 +1904,70 @@
       },
       "Command": {
         "oneOf": [
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/AnnotationCommand"
+              },
+              "family": {
+                "const": "annotation",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/ConfigCommand"
+              },
+              "family": {
+                "const": "config",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/MessageCommand"
+              },
+              "family": {
+                "const": "message",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/ReviewCommand"
+              },
+              "family": {
+                "const": "review",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
           {
             "properties": {
               "args": {
@@ -1031,6 +2207,141 @@
           }
         ]
       },
+      "ConfigCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "expected_hash": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "set",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "key",
+              "value",
+              "expected_hash"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Clone only a server-configured profile; never accepts host commands or raw TOML.",
+            "properties": {
+              "effort": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expected_hash": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "profile-add",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "name",
+              "from",
+              "expected_hash"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_hash": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "profile-remove",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "name",
+              "expected_hash"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ConfirmProof": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "preview_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "preview_id",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "ContextRef": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "type": "object"
+      },
       "CostBasis": {
         "enum": [
           "reported",
@@ -1070,6 +2381,555 @@
         ],
         "type": "string"
       },
+      "DetailBody": {
+        "oneOf": [
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/QuestionDetail"
+              },
+              "kind": {
+                "const": "question",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/TaskDetail"
+              },
+              "kind": {
+                "const": "task",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/PlanDetail"
+              },
+              "kind": {
+                "const": "plan",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/PatchPage"
+              },
+              "kind": {
+                "const": "plan_diff",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/ReviewDetail"
+              },
+              "kind": {
+                "const": "review",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/PatchPage"
+              },
+              "kind": {
+                "const": "review_file",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionPage"
+              },
+              "kind": {
+                "const": "session",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/TerminalSnapshot"
+              },
+              "kind": {
+                "const": "terminal",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/TimelinePage"
+              },
+              "kind": {
+                "const": "timeline",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/Burnup"
+              },
+              "kind": {
+                "const": "burnup",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/UsageSeries"
+              },
+              "kind": {
+                "const": "usage_series",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/ArtifactPage"
+              },
+              "kind": {
+                "const": "artifact",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/FilingsPage"
+              },
+              "kind": {
+                "const": "filings",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DetailGet": {
+        "oneOf": [
+          {
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "question",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "key"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "task",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "plan",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "plan_diff",
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "review",
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "task"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "review_file",
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "task",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "terminal",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "by": {
+                "$ref": "#/components/schemas/TimelineBy"
+              },
+              "from": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "timeline",
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "from",
+              "to",
+              "by"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "burnup",
+                "type": "string"
+              },
+              "scope": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "scope"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "usage_series",
+                "type": "string"
+              },
+              "period": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "period"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "artifact",
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "task",
+              "key"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "entry": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "attachment",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "entry",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "before": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "filings",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "etag": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "DetailReply": {
+        "properties": {
+          "as_of": {
+            "type": "string"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DetailBody"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None means not modified, not an empty or unavailable detail."
+          },
+          "etag": {
+            "type": "string"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "etag",
+          "as_of",
+          "seq"
+        ],
+        "type": "object"
+      },
       "DeviceAttach": {
         "properties": {
           "device": {
@@ -1078,6 +2938,33 @@
         },
         "required": [
           "device"
+        ],
+        "type": "object"
+      },
+      "DeviceAuthority": {
+        "properties": {
+          "act": {
+            "type": "boolean"
+          },
+          "admin": {
+            "type": "boolean"
+          },
+          "assistant": {
+            "type": "boolean"
+          },
+          "assistant_act": {
+            "type": "boolean"
+          },
+          "reply": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reply",
+          "act",
+          "assistant",
+          "assistant_act",
+          "admin"
         ],
         "type": "object"
       },
@@ -1100,6 +2987,17 @@
         "properties": {
           "app_version": {
             "type": "string"
+          },
+          "authority": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeviceAuthority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "enrolled_at": {
             "type": "string"
@@ -1132,6 +3030,49 @@
       "DeviceList": {
         "type": "object"
       },
+      "DevicePage": {
+        "properties": {
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceInfo"
+            },
+            "type": "array"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "devices"
+        ],
+        "type": "object"
+      },
+      "DevicePageQuery": {
+        "description": "App-safe device enumeration without changing the Unix device.list contract.",
+        "properties": {
+          "after": {
+            "description": "Resume strictly after this canonical device ID.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "At most DEVICE_PAGE_LIMIT_MAX; replies also obey APP_CONTROL_MAX.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit"
+        ],
+        "type": "object"
+      },
       "DevicePlatform": {
         "enum": [
           "native",
@@ -1150,6 +3091,245 @@
           "device"
         ],
         "type": "object"
+      },
+      "DeviceSetAuthority": {
+        "properties": {
+          "authority": {
+            "$ref": "#/components/schemas/DeviceAuthority"
+          },
+          "device": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "device",
+          "authority"
+        ],
+        "type": "object"
+      },
+      "EntryCard": {
+        "oneOf": [
+          {
+            "properties": {
+              "criteria": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "duplicates": {
+                "items": {
+                  "$ref": "#/components/schemas/ContextRef"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "idea",
+                "type": "string"
+              },
+              "labels": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "task": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "words": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "task",
+              "title",
+              "labels",
+              "criteria",
+              "duplicates",
+              "words"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "class": {
+                "$ref": "#/components/schemas/ActClass"
+              },
+              "command": {
+                "$ref": "#/components/schemas/Command"
+              },
+              "input": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "action",
+                "type": "string"
+              },
+              "outcome": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CmdResult"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "command",
+              "class"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "answer": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/QuestionAnswer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "key": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "question",
+                "type": "string"
+              },
+              "options": {
+                "items": {
+                  "$ref": "#/components/schemas/QuestionOption"
+                },
+                "type": "array"
+              },
+              "rev": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "key",
+              "rev",
+              "options"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "choices": {
+                "items": {
+                  "$ref": "#/components/schemas/PromptChoice"
+                },
+                "type": "array"
+              },
+              "key": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "prompt",
+                "type": "string"
+              },
+              "needs_presence": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "preview": {
+                "type": "string"
+              },
+              "rev": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tool": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "key",
+              "rev",
+              "preview",
+              "choices",
+              "needs_presence"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "pm_item",
+                "type": "string"
+              },
+              "revision": {
+                "default": 0,
+                "description": "Canonical PM inbox revision used by pm.inbox-withdraw, not ThreadEntry.rev.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "EntryKind": {
+        "enum": [
+          "message",
+          "answer",
+          "idea",
+          "pm_message",
+          "pm_reply",
+          "action",
+          "question",
+          "prompt",
+          "notice",
+          "roll",
+          "other"
+        ],
+        "type": "string"
       },
       "Error": {
         "properties": {
@@ -1186,6 +3366,144 @@
           "other"
         ],
         "type": "string"
+      },
+      "EvidenceBlock": {
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/EvidenceBody"
+          },
+          "source_ref": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_ref",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "EvidenceBody": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "const": "diff",
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "path": {
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "path",
+              "lines",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "excerpt",
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "lines",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "log_tail",
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "lines",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "unresolved",
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "Expect": {
         "oneOf": [
@@ -1241,6 +3559,149 @@
         ],
         "type": "object"
       },
+      "FiledDecision": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "into": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "FiledIdea": {
+        "properties": {
+          "at": {
+            "description": "Canonical task creation time, RFC 3339.",
+            "type": "string"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FiledDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device": {
+            "description": "Recorded device name; absent for pane-typed input.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Canonical filed owner input, stable across retries and quick-thread rolls.",
+            "type": "string"
+          },
+          "quick": {
+            "type": "boolean"
+          },
+          "seq": {
+            "description": "Dense, one-based canonical filing order.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "description": "Source assistant session, including ended quick-thread generations.",
+            "type": "string"
+          },
+          "status": {
+            "description": "Current canonical task status.",
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "seq",
+          "task",
+          "session",
+          "quick",
+          "at",
+          "title",
+          "status"
+        ],
+        "type": "object"
+      },
+      "FilingsPage": {
+        "properties": {
+          "newer": {
+            "description": "Exclusive `before` anchor for the next newer page; None selects newest.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "older": {
+            "description": "Exclusive `before` anchor for the next older page, if any.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rows": {
+            "description": "Newest first; at most FILINGS_PAGE_MAX summaries.",
+            "items": {
+              "$ref": "#/components/schemas/FiledIdea"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Exact count of chat filings, independent of the requested `before` anchor.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "Followup": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "via": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "by",
+          "via",
+          "at",
+          "text"
+        ],
+        "type": "object"
+      },
       "Frame": {
         "properties": {
           "kind": {
@@ -1275,6 +3736,33 @@
           "Credit"
         ],
         "type": "string"
+      },
+      "GrantLine": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "enabled"
+        ],
+        "type": "object"
       },
       "Health": {
         "properties": {
@@ -1479,6 +3967,181 @@
           }
         ]
       },
+      "InboxKind": {
+        "enum": [
+          "worker_question",
+          "pm_ask",
+          "assistant_ask",
+          "prompt",
+          "plan_acceptance",
+          "review",
+          "stuck",
+          "escalated",
+          "other"
+        ],
+        "type": "string"
+      },
+      "InboxRow": {
+        "properties": {
+          "answerable": {
+            "type": "boolean"
+          },
+          "asked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "from": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/InboxKind"
+          },
+          "needed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "question_rev": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/InboxState"
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "unanswerable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "from",
+          "blocking",
+          "state",
+          "answerable",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "InboxState": {
+        "oneOf": [
+          {
+            "properties": {
+              "state": {
+                "const": "open",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "at": {
+                "type": "string"
+              },
+              "by": {
+                "type": "string"
+              },
+              "state": {
+                "const": "answered",
+                "type": "string"
+              },
+              "via": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "by",
+              "via",
+              "at"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "cancelled",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "expired",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "KnowledgeCommand": {
         "oneOf": [
           {
@@ -1663,6 +4326,88 @@
           }
         ]
       },
+      "LimitBasis": {
+        "enum": [
+          "declared",
+          "observed",
+          "none",
+          "other"
+        ],
+        "type": "string"
+      },
+      "LineRange": {
+        "properties": {
+          "end": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "ListenerInfo": {
+        "properties": {
+          "origins": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "port": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "port",
+          "origins"
+        ],
+        "type": "object"
+      },
+      "LiveText": {
+        "description": "UTF-8 text offset in bytes; acknowledged pages advance the running turn.",
+        "properties": {
+          "done": {
+            "type": "boolean"
+          },
+          "entry": {
+            "type": "string"
+          },
+          "offset": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "description": "At most 32 KiB per page.",
+            "type": "string"
+          },
+          "turn": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entry",
+          "turn",
+          "offset",
+          "text",
+          "done"
+        ],
+        "type": "object"
+      },
       "LoopFacts": {
         "properties": {
           "age_secs": {
@@ -1698,6 +4443,186 @@
           "pass_seq"
         ],
         "type": "object"
+      },
+      "MessageCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "entry": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "file-as-idea",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "entry"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "entry": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "withdraw",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "entry"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MessageState": {
+        "oneOf": [
+          {
+            "properties": {
+              "state": {
+                "const": "sent",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "$ref": "#/components/schemas/WaitReason"
+              },
+              "state": {
+                "const": "waiting",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "delivered",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "late",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "queued_for_pm",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "pm_delivered",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "pm_replied",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "saved",
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "task"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "MetaCommand": {
         "oneOf": [
@@ -2007,6 +4932,33 @@
           }
         ]
       },
+      "ModelChoice": {
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "model"
+        ],
+        "type": "object"
+      },
       "Notification": {
         "properties": {
           "jsonrpc": {
@@ -2060,6 +5012,14 @@
           "completed"
         ],
         "type": "object"
+      },
+      "OperatingMode": {
+        "enum": [
+          "assist",
+          "autopilot",
+          "other"
+        ],
+        "type": "string"
       },
       "OutputBody": {
         "description": "Exactly `frames` DATA frames follow on `stream`: one UTF-8 JSON `CmdOutput`, `bytes` long.",
@@ -2309,6 +5269,26 @@
         ],
         "type": "object"
       },
+      "PatchPage": {
+        "properties": {
+          "patch": {
+            "description": "At most 48 KiB; remaining text is fetched with DetailReply.next.",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "patch",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "Ping": {
         "type": "object"
       },
@@ -2434,6 +5414,62 @@
           },
           {
             "properties": {
+              "id": {
+                "type": "string"
+              },
+              "notes": {
+                "default": null,
+                "description": "Canonical explicit decision resolutions retained by the acceptance guard.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "owner_ok": {
+                "type": "boolean"
+              },
+              "revision": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "accept",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "revision",
+              "owner_ok"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "request-changes",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "revision",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
               "verb": {
                 "const": "other",
                 "type": "string"
@@ -2443,6 +5479,428 @@
               "verb"
             ],
             "type": "object"
+          }
+        ]
+      },
+      "PlanDetail": {
+        "properties": {
+          "accept_blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "acceptable": {
+            "type": "boolean"
+          },
+          "document": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/PlanEdge"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "linked": {
+            "default": null,
+            "description": "Published tracker for a design, or approved source design for a tracker.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mapped": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/PlanMember"
+            },
+            "type": "array"
+          },
+          "owner_decisions": {
+            "default": [],
+            "description": "Exact canonical decision texts requiring explicit owner acceptance resolutions.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/PlanReview"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revisions": {
+            "default": [],
+            "description": "Canonical submitted revision IDs in stored order, including unreviewed revisions.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanRole"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Canonical record kind; absent only when the producer does not know it."
+          },
+          "scenarios": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/PlanState"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "reviews",
+          "members",
+          "edges",
+          "acceptable",
+          "accept_blockers"
+        ],
+        "type": "object"
+      },
+      "PlanDocument": {
+        "properties": {
+          "changes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "goal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "non_goals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "problem": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proposed": {
+            "items": {
+              "$ref": "#/components/schemas/PlanProposal"
+            },
+            "type": "array"
+          },
+          "retained": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "changes",
+          "retained",
+          "non_goals",
+          "proposed"
+        ],
+        "type": "object"
+      },
+      "PlanEdge": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "PlanMember": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "layer": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rail": {
+            "items": {
+              "$ref": "#/components/schemas/RailStep"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "state": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "state",
+          "rail"
+        ],
+        "type": "object"
+      },
+      "PlanPosition": {
+        "properties": {
+          "landed": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "layer": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "layers": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "plan": {
+            "type": "string"
+          },
+          "total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "plan",
+          "layer",
+          "layers",
+          "landed",
+          "total"
+        ],
+        "type": "object"
+      },
+      "PlanProposal": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "needs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "needs"
+        ],
+        "type": "object"
+      },
+      "PlanReview": {
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          },
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "PlanRole": {
+        "oneOf": [
+          {
+            "enum": [
+              "design",
+              "tracker"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "A known ordinary task, not an unknown record kind.",
+            "type": "string"
+          }
+        ]
+      },
+      "PlanRow": {
+        "properties": {
+          "accepted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "delivery": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "linked": {
+            "default": null,
+            "description": "Published tracker for a design, or approved source design for a tracker.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "members_landed": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "members_total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanRole"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Canonical record kind; absent only when the producer does not know it."
+          },
+          "state": {
+            "$ref": "#/components/schemas/PlanState"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "state",
+          "members_total",
+          "members_landed",
+          "blockers",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "PlanState": {
+        "oneOf": [
+          {
+            "enum": [
+              "awaiting",
+              "executing",
+              "complete",
+              "cancelled",
+              "other"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "approved",
+            "description": "The document is accepted; a design may already have published its tracker.",
+            "type": "string"
           }
         ]
       },
@@ -2882,6 +6340,163 @@
           }
         ]
       },
+      "ProfileChoice": {
+        "description": "A configured profile's safe editable values and canonical removal restrictions.",
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "harness": {
+            "type": "string"
+          },
+          "inherited": {
+            "description": "Removing the workspace entry would leave a personal or built-in profile.",
+            "type": "boolean"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "references": {
+            "description": "Current configured/task/session references, for explanation rather than authority.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "remove_refusal": {
+            "description": "None only when canonical removal is currently possible; rechecked at commit.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {
+            "description": "A workspace entry exists, including partial overrides of inherited profiles.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "harness",
+          "workspace",
+          "inherited",
+          "references"
+        ],
+        "type": "object"
+      },
+      "ProfileUsage": {
+        "properties": {
+          "cost_basis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CostBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": "string"
+          },
+          "tokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "PromptAnswer": {
+        "properties": {
+          "choice": {
+            "$ref": "#/components/schemas/PromptChoice"
+          },
+          "cmd_id": {
+            "type": "string"
+          },
+          "confirm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfirmProof"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "rev": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cmd_id",
+          "key",
+          "rev",
+          "choice"
+        ],
+        "type": "object"
+      },
+      "PromptChoice": {
+        "enum": [
+          "once",
+          "hour",
+          "session",
+          "deny",
+          "confirm",
+          "decline",
+          "other"
+        ],
+        "type": "string"
+      },
+      "PromptPreview": {
+        "properties": {
+          "choice": {
+            "$ref": "#/components/schemas/PromptChoice"
+          },
+          "key": {
+            "type": "string"
+          },
+          "rev": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "rev",
+          "choice"
+        ],
+        "type": "object"
+      },
       "Proto": {
         "properties": {
           "major": {
@@ -2898,6 +6513,59 @@
         "required": [
           "major",
           "minor"
+        ],
+        "type": "object"
+      },
+      "ProviderSeries": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/UsagePoint"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "points"
+        ],
+        "type": "object"
+      },
+      "QuestionAnswer": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "option": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "via": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "by",
+          "via",
+          "at",
+          "text"
         ],
         "type": "object"
       },
@@ -3111,6 +6779,32 @@
           },
           {
             "properties": {
+              "key": {
+                "type": "string"
+              },
+              "rev": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "followup",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "key",
+              "rev",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
               "verb": {
                 "const": "other",
                 "type": "string"
@@ -3122,6 +6816,285 @@
             "type": "object"
           }
         ]
+      },
+      "QuestionDeadline": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "instruction": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "instruction"
+        ],
+        "type": "object"
+      },
+      "QuestionDetail": {
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestionAnswer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "asked_at": {
+            "type": "string"
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "deadline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestionDeadline"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "description": "At most five blocks, each bounded to 8 KiB by the reader.",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceBlock"
+            },
+            "type": "array"
+          },
+          "from": {
+            "$ref": "#/components/schemas/QuestionFrom"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionHistory"
+            },
+            "type": "array"
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/InboxKind"
+          },
+          "needed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionOption"
+            },
+            "type": "array"
+          },
+          "place": {
+            "$ref": "#/components/schemas/QuestionPlace"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recommendation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rev": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/InboxState"
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "thread": {
+            "items": {
+              "$ref": "#/components/schemas/Followup"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "rev",
+          "state",
+          "kind",
+          "blocking",
+          "from",
+          "asked_at",
+          "text",
+          "options",
+          "place",
+          "evidence",
+          "thread",
+          "history"
+        ],
+        "type": "object"
+      },
+      "QuestionFrom": {
+        "properties": {
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
+      "QuestionHistory": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "by",
+          "at",
+          "text"
+        ],
+        "type": "object"
+      },
+      "QuestionOption": {
+        "properties": {
+          "cost": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "description": "Zero-based index into this detail's evidence blocks.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recommended": {
+            "type": "boolean"
+          },
+          "unblocks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "label",
+          "unblocks",
+          "recommended"
+        ],
+        "type": "object"
+      },
+      "QuestionPlace": {
+        "properties": {
+          "goal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanPosition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "waiting": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionWaiting"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "waiting"
+        ],
+        "type": "object"
+      },
+      "QuestionWaiting": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WaitKind"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "kind"
+        ],
+        "type": "object"
       },
       "QueueCommand": {
         "oneOf": [
@@ -3528,6 +7501,311 @@
         ],
         "type": "object"
       },
+      "ReviewAnnotation": {
+        "properties": {
+          "base": {
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationMessage"
+            },
+            "type": "array"
+          },
+          "path": {
+            "type": "string"
+          },
+          "range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LineRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resolved": {
+            "type": "boolean"
+          },
+          "revision": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run": {
+            "type": "string"
+          },
+          "side": {
+            "$ref": "#/components/schemas/AnnotationSide"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "run",
+          "base",
+          "head",
+          "path",
+          "side",
+          "resolved",
+          "stale",
+          "messages"
+        ],
+        "type": "object"
+      },
+      "ReviewCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sha": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "approve",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "sha"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "escalate": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "request-changes",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "text",
+              "escalate"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "notes": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sha": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "verdict",
+                "type": "string"
+              },
+              "verdict": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "sha",
+              "verdict"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "discard",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ReviewDetail": {
+        "properties": {
+          "acceptance": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "annotations": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewAnnotation"
+            },
+            "type": "array"
+          },
+          "approvable": {
+            "type": "boolean"
+          },
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            },
+            "type": "array"
+          },
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "candidate_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewFile"
+            },
+            "type": "array"
+          },
+          "gate_log_tail": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "report": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "verdicts": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewVerdict"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "task",
+          "state",
+          "verdicts",
+          "files",
+          "acceptance",
+          "gate_log_tail",
+          "artifacts",
+          "annotations",
+          "approvable"
+        ],
+        "type": "object"
+      },
+      "ReviewFile": {
+        "properties": {
+          "added": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deleted": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "added",
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "ReviewVerdict": {
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "by": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "by",
+          "sha",
+          "verdict",
+          "stale"
+        ],
+        "type": "object"
+      },
       "RunCommand": {
         "oneOf": [
           {
@@ -3674,6 +7952,367 @@
           "other"
         ],
         "type": "string"
+      },
+      "SeenAdvance": {
+        "properties": {
+          "through": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "through"
+        ],
+        "type": "object"
+      },
+      "SeenCursor": {
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "through": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "through"
+        ],
+        "type": "object"
+      },
+      "SendAck": {
+        "properties": {
+          "entry": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/MessageState"
+          }
+        },
+        "required": [
+          "entry",
+          "state",
+          "replayed"
+        ],
+        "type": "object"
+      },
+      "SendAttachment": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "const": "upload",
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "upload": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "upload",
+              "sha256"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "link",
+                "type": "string"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SessionItem": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "const": "text",
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "tool",
+                "type": "string"
+              },
+              "tool": {
+                "$ref": "#/components/schemas/ToolLine"
+              }
+            },
+            "required": [
+              "kind",
+              "tool"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "answer": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/QuestionAnswer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "key": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "question_card",
+                "type": "string"
+              },
+              "options": {
+                "items": {
+                  "$ref": "#/components/schemas/QuestionOption"
+                },
+                "type": "array"
+              },
+              "rev": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "key",
+              "rev",
+              "text",
+              "options"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SessionMessage": {
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SessionItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "author",
+          "items"
+        ],
+        "type": "object"
+      },
+      "SessionPage": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "machine": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/SessionMessage"
+            },
+            "type": "array"
+          },
+          "older": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reply_refusal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replyable": {
+            "type": "boolean"
+          },
+          "role": {
+            "type": "string"
+          },
+          "run": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "messages",
+          "replyable"
+        ],
+        "type": "object"
+      },
+      "SettingsSnapshot": {
+        "properties": {
+          "assistant_models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelChoice"
+            },
+            "type": "array"
+          },
+          "assistant_profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "config_hash": {
+            "type": "string"
+          },
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/GrantLine"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "listener": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ListenerInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mode": {
+            "$ref": "#/components/schemas/OperatingMode"
+          },
+          "profiles": {
+            "default": [],
+            "description": "Exact configured profiles, separate from assistant-compatible model choices.",
+            "items": {
+              "$ref": "#/components/schemas/ProfileChoice"
+            },
+            "type": "array"
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "store": {
+            "type": "string"
+          },
+          "summary_profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workspace",
+          "store",
+          "host",
+          "mode",
+          "grants",
+          "assistant_models",
+          "config_hash",
+          "rev"
+        ],
+        "type": "object"
       },
       "SetupCommand": {
         "oneOf": [
@@ -3828,6 +8467,13 @@
           "cursor": {
             "$ref": "#/components/schemas/BoardCursor"
           },
+          "scope": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "topic": {
             "$ref": "#/components/schemas/Topic"
           }
@@ -3840,6 +8486,13 @@
       },
       "SubClose": {
         "properties": {
+          "scope": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "topic": {
             "$ref": "#/components/schemas/Topic"
           }
@@ -3972,6 +8625,307 @@
             "type": "object"
           },
           {
+            "description": "One bounded page in flight; `left` contains removed row IDs.",
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "items": {
+                  "$ref": "#/components/schemas/InboxRow"
+                },
+                "type": "array"
+              },
+              "topic": {
+                "const": "inbox",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One bounded page in flight; `left` contains removed row IDs.",
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "items": {
+                  "$ref": "#/components/schemas/PlanRow"
+                },
+                "type": "array"
+              },
+              "topic": {
+                "const": "plans",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One bounded page in flight; `left` contains removed row IDs.",
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "items": {
+                  "$ref": "#/components/schemas/AgentRow"
+                },
+                "type": "array"
+              },
+              "topic": {
+                "const": "agents",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One bounded page in flight; `left` contains removed row IDs.",
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "items": {
+                  "$ref": "#/components/schemas/AssistantRow"
+                },
+                "type": "array"
+              },
+              "topic": {
+                "const": "assistant",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One bounded page in flight; `left` contains removed row IDs.",
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "items": {
+                  "$ref": "#/components/schemas/UsageRow"
+                },
+                "type": "array"
+              },
+              "topic": {
+                "const": "usage",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One bounded page in flight; `left` contains removed row IDs.",
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "items": {
+                  "$ref": "#/components/schemas/SettingsSnapshot"
+                },
+                "type": "array"
+              },
+              "topic": {
+                "const": "settings",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One bounded page in flight; `left` contains removed row IDs.",
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "live": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/LiveText"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "items": {
+                  "$ref": "#/components/schemas/ThreadEntry"
+                },
+                "type": "array"
+              },
+              "scope": {
+                "type": "string"
+              },
+              "topic": {
+                "const": "thread",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "scope",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "topic": {
                 "const": "other",
@@ -3987,6 +8941,13 @@
       },
       "SubOpen": {
         "properties": {
+          "scope": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "since": {
             "anyOf": [
               {
@@ -4012,6 +8973,13 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "scope": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "topic": {
             "$ref": "#/components/schemas/Topic"
@@ -4375,6 +9343,162 @@
           },
           {
             "properties": {
+              "base": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "effort": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "headless": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "dispatch",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "headless"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "run": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "retry",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "reply",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "owner_ok": {
+                "type": "boolean"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "edit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "owner_ok"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "revert",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "unstick",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
               "verb": {
                 "const": "other",
                 "type": "string"
@@ -4387,14 +9511,753 @@
           }
         ]
       },
+      "TaskDependency": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "satisfied": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "satisfied"
+        ],
+        "type": "object"
+      },
+      "TaskDetail": {
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            },
+            "type": "array"
+          },
+          "body_excerpt": {
+            "type": "string"
+          },
+          "dependencies": {
+            "items": {
+              "$ref": "#/components/schemas/TaskDependency"
+            },
+            "type": "array"
+          },
+          "hold": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskHold"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "log_tail": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "owner_next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_revision": {
+            "description": "The canonical owner revision, never a projection row revision.",
+            "type": "string"
+          },
+          "park": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskHold"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanPosition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/RailStep"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "owner_revision",
+          "title",
+          "status",
+          "body_excerpt",
+          "stages",
+          "dependencies",
+          "artifacts",
+          "log_tail"
+        ],
+        "type": "object"
+      },
+      "TaskHold": {
+        "properties": {
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TaskProgress": {
+        "properties": {
+          "completed": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "completed",
+          "total"
+        ],
+        "type": "object"
+      },
+      "TaskRun": {
+        "properties": {
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "TerminalSnapshot": {
+        "properties": {
+          "captured_at": {
+            "type": "string"
+          },
+          "lines": {
+            "description": "At most 200 captured lines, not a writable or live terminal.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "live": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "lines",
+          "captured_at",
+          "live"
+        ],
+        "type": "object"
+      },
+      "ThreadEntry": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/AttachmentFact"
+            },
+            "type": "array"
+          },
+          "card": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EntryCard"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EntryKind"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/ContextRef"
+            },
+            "type": "array"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/ToolLine"
+            },
+            "type": "array"
+          },
+          "typed_at": {
+            "description": "Original owner-typed RFC 3339 time; `at` remains the canonical receipt/order time.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "rev",
+          "at",
+          "kind",
+          "tools",
+          "links"
+        ],
+        "type": "object"
+      },
+      "TimelineAction": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "text"
+        ],
+        "type": "object"
+      },
+      "TimelineBy": {
+        "enum": [
+          "task",
+          "agent",
+          "other"
+        ],
+        "type": "string"
+      },
+      "TimelineKind": {
+        "enum": [
+          "run",
+          "gate",
+          "review",
+          "land",
+          "ask",
+          "held",
+          "idle",
+          "unavailable",
+          "other"
+        ],
+        "type": "string"
+      },
+      "TimelineLane": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineSegment"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "segments"
+        ],
+        "type": "object"
+      },
+      "TimelinePage": {
+        "properties": {
+          "lanes": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineLane"
+            },
+            "type": "array"
+          },
+          "last_visit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_actions": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineAction"
+            },
+            "type": "array"
+          },
+          "pm": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineAction"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "lanes",
+          "owner_actions",
+          "pm"
+        ],
+        "type": "object"
+      },
+      "TimelineSegment": {
+        "properties": {
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TimelineKind"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ToolLine": {
+        "properties": {
+          "elapsed_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "failed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "input": {
+            "type": "string"
+          },
+          "output": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool",
+          "input"
+        ],
+        "type": "object"
+      },
       "Topic": {
         "enum": [
           "health",
           "board",
           "classic",
+          "inbox",
+          "plans",
+          "agents",
+          "assistant",
+          "usage",
+          "settings",
+          "thread",
           "other"
         ],
         "type": "string"
+      },
+      "UploadAck": {
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "received": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "upload": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "upload",
+          "received",
+          "bytes",
+          "ready",
+          "replayed"
+        ],
+        "type": "object"
+      },
+      "UsageDay": {
+        "properties": {
+          "by_profile": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileUsage"
+            },
+            "type": "array"
+          },
+          "day": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "day",
+          "by_profile"
+        ],
+        "type": "object"
+      },
+      "UsagePoint": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "cost_basis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CostBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "used": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at"
+        ],
+        "type": "object"
+      },
+      "UsageRow": {
+        "properties": {
+          "connection": {
+            "type": "string"
+          },
+          "cost_basis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CostBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "limit": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "limit_basis": {
+            "$ref": "#/components/schemas/LimitBasis"
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resets_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "today_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "used": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "week_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "window": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "connection",
+          "limit_basis",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "UsageSeries": {
+        "properties": {
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/UsageDay"
+            },
+            "type": "array"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderSeries"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "providers",
+          "days"
+        ],
+        "type": "object"
       },
       "Via": {
         "description": "`Entry::via` today, minus `owner_action` (owner-action children never route).",
@@ -4408,6 +10271,36 @@
           "other"
         ],
         "type": "string"
+      },
+      "WaitKind": {
+        "enum": [
+          "you",
+          "plan",
+          "info",
+          "other"
+        ],
+        "type": "string"
+      },
+      "WaitReason": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "retry_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "text"
+        ],
+        "type": "object"
       },
       "Welcome": {
         "properties": {
@@ -4439,7 +10332,7 @@
   },
   "info": {
     "title": "Corral daemon protocol",
-    "version": "1.0"
+    "version": "1.1"
   },
   "methods": [
     {
@@ -4893,6 +10786,17 @@
       "name": "sub.open",
       "params": [
         {
+          "name": "scope",
+          "required": false,
+          "schema": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
           "name": "since",
           "required": false,
           "schema": {
@@ -4961,7 +10865,14 @@
           },
           "x-required-in": [
             0,
-            1
+            1,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
           ]
         },
         {
@@ -4985,7 +10896,14 @@
           "x-required-in": [
             0,
             1,
-            2
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
           ]
         },
         {
@@ -4999,8 +10917,29 @@
           },
           "x-required-in": [
             0,
-            1
+            1,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
           ]
+        },
+        {
+          "name": "live",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveText"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
         },
         {
           "name": "more",
@@ -5010,7 +10949,14 @@
           },
           "x-required-in": [
             0,
-            1
+            1,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
           ]
         },
         {
@@ -5043,12 +10989,71 @@
                   "$ref": "#/components/schemas/Health"
                 },
                 "type": "array"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/InboxRow"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PlanRow"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AgentRow"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AssistantRow"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/UsageRow"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SettingsSnapshot"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ThreadEntry"
+                },
+                "type": "array"
               }
             ]
           },
           "x-required-in": [
             0,
-            1
+            1,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ]
+        },
+        {
+          "name": "scope",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            9
           ]
         },
         {
@@ -5082,6 +11087,34 @@
                 "type": "string"
               },
               {
+                "const": "inbox",
+                "type": "string"
+              },
+              {
+                "const": "plans",
+                "type": "string"
+              },
+              {
+                "const": "agents",
+                "type": "string"
+              },
+              {
+                "const": "assistant",
+                "type": "string"
+              },
+              {
+                "const": "usage",
+                "type": "string"
+              },
+              {
+                "const": "settings",
+                "type": "string"
+              },
+              {
+                "const": "thread",
+                "type": "string"
+              },
+              {
                 "const": "other",
                 "type": "string"
               }
@@ -5108,6 +11141,17 @@
           }
         },
         {
+          "name": "scope",
+          "required": false,
+          "schema": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
           "name": "topic",
           "required": true,
           "schema": {
@@ -5129,6 +11173,17 @@
           "required": true,
           "schema": {
             "$ref": "#/components/schemas/BoardCursor"
+          }
+        },
+        {
+          "name": "scope",
+          "required": false,
+          "schema": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         {
@@ -5167,6 +11222,17 @@
     {
       "name": "sub.close",
       "params": [
+        {
+          "name": "scope",
+          "required": false,
+          "schema": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         {
           "name": "topic",
           "required": true,
@@ -5647,6 +11713,1416 @@
         "$ref": "#/components/schemas/PairRefused"
       },
       "x-wire-errors": []
+    },
+    {
+      "name": "app.session",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AppSession"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/AppSessionRequest"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "act.preview",
+      "params": [
+        {
+          "name": "command",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Command"
+          }
+        },
+        {
+          "name": "expect",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expect"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ActPreview"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/ActPreviewRequest"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "act.submit",
+      "params": [
+        {
+          "name": "cmd_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "command",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Command"
+          }
+        },
+        {
+          "name": "confirm",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfirmProof"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        {
+          "name": "expect",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expect"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        {
+          "name": "expires_at",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "issued_at",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CmdResult"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/ActSubmit"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "confirm_required",
+          "message": "confirm_required"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "expired",
+          "message": "expired"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "act.result",
+      "params": [
+        {
+          "name": "abandon_if_absent",
+          "required": true,
+          "schema": {
+            "description": "For an absent id, write an abandoned tombstone that refuses late submits.",
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "cmd_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "wait_ms",
+          "required": true,
+          "schema": {
+            "description": "Wait for an in-flight command, at most 25_000.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CmdResult"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/CmdResultQuery"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "detail.get",
+      "params": [
+        {
+          "name": "before",
+          "required": false,
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "by",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/TimelineBy"
+          },
+          "x-required-in": [
+            8
+          ]
+        },
+        {
+          "name": "entry",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            12
+          ]
+        },
+        {
+          "name": "from",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            3,
+            8
+          ]
+        },
+        {
+          "name": "id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            1,
+            2,
+            3,
+            6,
+            7,
+            12
+          ]
+        },
+        {
+          "name": "key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            0,
+            11
+          ]
+        },
+        {
+          "name": "kind",
+          "required": true,
+          "schema": {
+            "anyOf": [
+              {
+                "const": "question",
+                "type": "string"
+              },
+              {
+                "const": "task",
+                "type": "string"
+              },
+              {
+                "const": "plan",
+                "type": "string"
+              },
+              {
+                "const": "plan_diff",
+                "type": "string"
+              },
+              {
+                "const": "review",
+                "type": "string"
+              },
+              {
+                "const": "review_file",
+                "type": "string"
+              },
+              {
+                "const": "session",
+                "type": "string"
+              },
+              {
+                "const": "terminal",
+                "type": "string"
+              },
+              {
+                "const": "timeline",
+                "type": "string"
+              },
+              {
+                "const": "burnup",
+                "type": "string"
+              },
+              {
+                "const": "usage_series",
+                "type": "string"
+              },
+              {
+                "const": "artifact",
+                "type": "string"
+              },
+              {
+                "const": "attachment",
+                "type": "string"
+              },
+              {
+                "const": "filings",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        {
+          "name": "path",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            5
+          ]
+        },
+        {
+          "name": "period",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            10
+          ]
+        },
+        {
+          "name": "scope",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            9
+          ]
+        },
+        {
+          "name": "task",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            4,
+            5,
+            11
+          ]
+        },
+        {
+          "name": "to",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            3,
+            8
+          ]
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DetailReply"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/DetailGet"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "expired",
+          "message": "expired"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "changes.page",
+      "params": [
+        {
+          "name": "after",
+          "required": false,
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "before",
+          "required": false,
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "limit",
+          "required": true,
+          "schema": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ChangesPage"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/ChangesQuery"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "seen.advance",
+      "params": [
+        {
+          "name": "through",
+          "required": true,
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SeenCursor"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SeenAdvance"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "device.set_authority",
+      "params": [
+        {
+          "name": "authority",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/DeviceAuthority"
+          }
+        },
+        {
+          "name": "device",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DeviceInfo"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/DeviceSetAuthority"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "revoked",
+          "message": "revoked"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "assistant.send",
+      "params": [
+        {
+          "name": "attachments",
+          "required": false,
+          "schema": {
+            "items": {
+              "$ref": "#/components/schemas/SendAttachment"
+            },
+            "type": "array"
+          }
+        },
+        {
+          "name": "cmd_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "context",
+          "required": true,
+          "schema": {
+            "items": {
+              "$ref": "#/components/schemas/ContextRef"
+            },
+            "type": "array"
+          }
+        },
+        {
+          "name": "target",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AskTarget"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "thread",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "typed_at",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SendAck"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/AssistantSend"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "assistant.cancel",
+      "params": [
+        {
+          "name": "cmd_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CancelAck"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/AssistantCancel"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "attachment.begin",
+      "params": [
+        {
+          "name": "bytes",
+          "required": true,
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        {
+          "name": "kind",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AttachmentKind"
+          }
+        },
+        {
+          "name": "media_type",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "sha256",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "upload",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/UploadAck"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/AttachmentBegin"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "attachment.put",
+      "params": [
+        {
+          "name": "data",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "offset",
+          "required": true,
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        {
+          "name": "upload",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/UploadAck"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/AttachmentPut"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "attachment.discard",
+      "params": [
+        {
+          "name": "upload",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/AttachmentDiscard"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "assistant.warm",
+      "params": [
+        {
+          "name": "thread",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/AssistantWarm"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "assistant.stop",
+      "params": [
+        {
+          "name": "session",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "turn",
+          "required": true,
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/AssistantStop"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "assistant.session",
+      "params": [
+        {
+          "name": "op",
+          "required": true,
+          "schema": {
+            "anyOf": [
+              {
+                "const": "new",
+                "type": "string"
+              },
+              {
+                "const": "end",
+                "type": "string"
+              },
+              {
+                "const": "take_over",
+                "type": "string"
+              },
+              {
+                "const": "set_profile",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        {
+          "name": "profile",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "x-required-in": [
+            3
+          ]
+        },
+        {
+          "name": "session",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            1,
+            2
+          ]
+        },
+        {
+          "name": "task",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "thread",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            3
+          ]
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssistantRow"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/AssistantSessionOp"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "prompt.preview",
+      "params": [
+        {
+          "name": "choice",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/PromptChoice"
+          }
+        },
+        {
+          "name": "key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "rev",
+          "required": true,
+          "schema": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ActPreview"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PromptPreview"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "expired",
+          "message": "expired"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "prompt.answer",
+      "params": [
+        {
+          "name": "choice",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/PromptChoice"
+          }
+        },
+        {
+          "name": "cmd_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "confirm",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfirmProof"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        {
+          "name": "key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "rev",
+          "required": true,
+          "schema": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CmdResult"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PromptAnswer"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "confirm_required",
+          "message": "confirm_required"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "expired",
+          "message": "expired"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "device.page",
+      "params": [
+        {
+          "name": "after",
+          "required": false,
+          "schema": {
+            "description": "Resume strictly after this canonical device ID.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "limit",
+          "required": true,
+          "schema": {
+            "description": "At most DEVICE_PAGE_LIMIT_MAX; replies also obey APP_CONTROL_MAX.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DevicePage"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/DevicePageQuery"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
     }
   ],
   "openrpc": "1.3.2",
@@ -5654,6 +13130,7 @@
     "$ref": "#/components/schemas/ErrorCode"
   },
   "x-framing": {
+    "app_control_max": 61440,
     "control_max": 61440,
     "data_max": 32768
   }

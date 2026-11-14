@@ -1,6 +1,6 @@
 //! The screens over the model, one module per destination, and the routing between them: a
-//! destination's screen, or on desktop and terminal the page above it. Disconnected routes
-//! show an unavailable frame; browser Settings keeps Connection available for pairing.
+//! destination's screen, or on desktop and terminal the page above it. Routes corrald does not
+//! serve show a frame that says why; browser Settings keeps Connection available for pairing.
 
 pub mod agents;
 pub mod assistant;
@@ -15,7 +15,7 @@ pub mod usage;
 
 use nsh_core::prelude::*;
 
-use crate::model::{DataState, Destination, Form, Page};
+use crate::model::{Availability, DataState, Destination, Form, Live, Page, Route};
 use crate::state::AppState;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color, row_height, text_size};
@@ -37,14 +37,15 @@ pub struct PhonePage {
     pub scroll: bool,
 }
 
-/// The destination's screen; the disconnected frame while no daemon answers. Made again only
-/// when the data state crosses that line, so a screen keeps its own state otherwise.
+/// The destination's screen; the unavailable frame while no daemon serves it. Made again only
+/// when the data state or the destination's availability changes, so a screen keeps its own
+/// state otherwise.
 pub fn destination(app: AppState, destination: Destination) -> AnyElement {
-    let data = computed(move || app.data.get());
+    let gate = computed(move || (app.data.get(), unavailable(app, destination)));
     dynamic(move || {
-        let data = data.get();
+        let (_, unavailable) = gate.get();
         untracked(move || {
-            if unavailable(data, destination) {
+            if unavailable {
                 frame(app, destination)
             } else {
                 screen(app, destination)
@@ -54,38 +55,55 @@ pub fn destination(app: AppState, destination: Destination) -> AnyElement {
 }
 
 /// The content container's page on desktop and terminal: the top page when there is one
-/// (the focused question, a session, a thread), else the destination's screen. Tasks and
-/// plans are selected in place there, so their destination's screen shows them. Made again
-/// only when the route itself changes; the screens track their own state.
+/// (the focused question, a session, a thread), else the destination's screen. Tasks, plans
+/// and reviews are selected in place there, so their destination's screen shows them. Made
+/// again only when the route itself changes; the screens track their own state.
 pub fn content(app: AppState) -> AnyElement {
-    let route = computed(move || (app.destination(), app.page(), app.data.get()));
+    let route = computed(move || {
+        let destination = app.destination();
+        let top = app.nav.with(|nav| nav.pages.last().cloned());
+        (
+            destination,
+            top,
+            app.data.get(),
+            unavailable(app, destination),
+        )
+    });
     dynamic(move || {
-        let (destination, page, data) = route.get();
+        let (destination, top, data, unavailable) = route.get();
         untracked(move || {
-            if unavailable(data, destination)
-                || (data == DataState::Daemon
-                    && matches!(
-                        page,
-                        Some(Page::Question | Page::Session(_) | Page::Thread(_))
-                    ))
-            {
+            if unavailable {
                 return frame(app, destination);
             }
-            match page {
-                Some(Page::Question) => inbox::question(app),
-                Some(Page::Session(_)) => agents::session(app),
-                Some(Page::Thread(_)) => assistant::thread(app),
-                Some(Page::Task(_) | Page::Plan(_)) | None => screen(app, destination),
+            match (data, top) {
+                (DataState::Daemon, Some(Route::Live(Live::Question(key)))) => {
+                    inbox::live_question(app, key)
+                }
+                (DataState::Daemon, Some(Route::Live(Live::Session(id)))) => {
+                    agents::live_session(app, id)
+                }
+                (DataState::Daemon, Some(Route::Live(Live::Thread(id)))) => {
+                    assistant::live_thread(app, id)
+                }
+                (DataState::Fixture, Some(Route::Page(Page::Question))) => inbox::question(app),
+                (DataState::Fixture, Some(Route::Page(Page::Session(_)))) => agents::session(app),
+                (DataState::Fixture, Some(Route::Page(Page::Thread(_)))) => assistant::thread(app),
+                // Pages of the other source never render: its destination shows instead.
+                _ => screen(app, destination),
             }
         })
     })
 }
 
-fn unavailable(data: DataState, destination: Destination) -> bool {
-    (data == DataState::Disconnected
-        && !(destination == Destination::Settings && crate::client::pairing_supported()))
-        || (data == DataState::Daemon
-            && !matches!(destination, Destination::Now | Destination::Settings))
+/// Tracked: whether the destination shows the unavailable frame instead of its screen.
+fn unavailable(app: AppState, destination: Destination) -> bool {
+    match app.data.get() {
+        DataState::Disconnected => {
+            !(destination == Destination::Settings && crate::client::pairing_supported())
+        }
+        DataState::Daemon => app.available(destination) != Availability::Ready,
+        DataState::Fixture => false,
+    }
 }
 
 /// Each destination's own screen.
@@ -157,8 +175,8 @@ impl Frame {
     }
 }
 
-/// The disconnected frame: the destination's label as the title (test_id "page-title"), then
-/// the snapshot's line (test_id "page-body").
+/// The unavailable frame: the destination's label as the title (test_id "page-title"), then
+/// why it is unavailable (test_id "page-body"): no connection, or what corrald does not serve.
 fn frame(app: AppState, destination: Destination) -> AnyElement {
     let frame = Frame::of(app.form);
     let head = view()
@@ -181,14 +199,21 @@ fn frame(app: AppState, destination: Destination) -> AnyElement {
                 .number_of_lines(1),
         );
     let body = view().px(px(frame.pad_x)).pt(px(frame.body_pad_y)).child(
-        text(move || app.snapshot().body_line(destination).into_owned())
-            .test_id("page-body")
-            .text_size(px(text_size(app.form)))
-            .text_color(color(if app.form == Form::Terminal {
-                Token::Ink
+        text(move || {
+            if app.daemon() {
+                app.feed
+                    .with(|feed| crate::model::health::unavailable_line(feed, destination))
             } else {
-                Token::Ink3
-            })),
+                app.snapshot().body_line(destination).into_owned()
+            }
+        })
+        .test_id("page-body")
+        .text_size(px(text_size(app.form)))
+        .text_color(color(if app.form == Form::Terminal {
+            Token::Ink
+        } else {
+            Token::Ink3
+        })),
     );
     view()
         .size_full()

@@ -1,11 +1,12 @@
-//! Assessment: the evidence tabs and the selected artifact (the diff hunk with line numbers, the
-//! file excerpt, the gate log tail, the rendered screenshot), and their loading and error looks.
+//! Assessment: the evidence tabs and the selected artifact (a diff hunk with line numbers, a
+//! file excerpt, a log tail, the fixture's rendered screenshot, or why a reference could not be
+//! resolved), and their loading, empty and error looks.
 
 use nsh_core::prelude::*;
 
 use super::{button, code, press, rich_at, ring, words};
 use crate::model::board::LineKind;
-use crate::model::inbox::{Assessment, DiffLine, Evidence, EvidenceBody, EvidenceTab};
+use crate::model::inbox::{Assessment, DiffLine, EvidenceBody, EvidenceTab};
 use crate::model::{Form, Hue, Rich};
 use crate::state::AppState;
 use crate::ui::kit::chip::illus;
@@ -41,19 +42,17 @@ pub(super) fn assessment(app: AppState, part: Assessment) -> AnyElement {
             &failure.body,
             failure.retry.map(|retry| button(app, &retry)),
         ),
+        Assessment::Empty { note } => words(
+            app,
+            note,
+            if app.form == Form::Phone { 13.5 } else { 12.5 },
+            Token::Ink3,
+        )
+        .into_element(),
         Assessment::Ready { label, tabs, body } => view()
             .child(tab_row(app, label, tabs))
             .child(artifact(app, body))
             .into_element(),
-    }
-}
-
-fn evidence_id(evidence: Evidence) -> &'static str {
-    match evidence {
-        Evidence::Diff => "seg-evidence-diff",
-        Evidence::File => "seg-evidence-file",
-        Evidence::Log => "seg-evidence-log",
-        Evidence::Shot => "seg-evidence-shot",
     }
 }
 
@@ -86,7 +85,7 @@ fn tab_button(app: AppState, tab: EvidenceTab) -> AnyElement {
     let on = tab.selected;
     let words_of = words(
         app,
-        tab.label,
+        tab.label.clone(),
         if form == Form::Phone { 13.5 } else { 12.0 },
         if on || form == Form::Terminal {
             Token::Ink
@@ -111,7 +110,7 @@ fn tab_button(app: AppState, tab: EvidenceTab) -> AnyElement {
             }),
             ..AccessibilityState::default()
         })
-        .test_id(evidence_id(tab.evidence))
+        .test_id(&tab.test_id)
         .on_press(press(app, tab.action.clone()));
     let item = match form {
         Form::Terminal => item.when(on, |v| v.child(text("▸").text_color(color(Token::Ink)))),
@@ -134,23 +133,31 @@ fn tab_button(app: AppState, tab: EvidenceTab) -> AnyElement {
 fn artifact(app: AppState, body: EvidenceBody) -> AnyElement {
     let form = app.form;
     let note_size = if form == Form::Phone { 13.0 } else { 11.5 };
+    let note_line = move |note: Rich| {
+        view()
+            .mt(px(6.0))
+            .child(rich_at(app, &note, note_size, color(Token::Ink3)))
+    };
     match body {
-        EvidenceBody::Diff { hunk, lines, note } => view()
-            .child(file_line(app, hunk.file, None))
-            .child(diff(app, hunk.at, lines))
-            .child(
-                view()
-                    .mt(px(6.0))
-                    .child(rich_at(app, &note, note_size, color(Token::Ink3))),
-            )
+        EvidenceBody::Diff {
+            file,
+            at,
+            lines,
+            note,
+        } => view()
+            .child(file_line(app, file, None))
+            .child(diff(app, at, lines))
+            .child(note_line(note))
             .into_element(),
         EvidenceBody::Text {
             file,
             attribution,
             lines,
+            note,
         } => view()
             .child(file_line(app, file, attribution))
             .child(terminal_box(app, &lines, false, None))
+            .children(note.map(note_line))
             .into_element(),
         EvidenceBody::Shot {
             file,
@@ -159,7 +166,7 @@ fn artifact(app: AppState, body: EvidenceBody) -> AnyElement {
             cursor,
             note,
         } => view()
-            .child(file_line(app, file, Some(attribution)))
+            .child(file_line(app, file.into(), Some(attribution)))
             .child(terminal_box(app, &lines, cursor, Some(420.0)))
             .child(
                 view()
@@ -167,11 +174,15 @@ fn artifact(app: AppState, body: EvidenceBody) -> AnyElement {
                     .child(words(app, note, note_size, Token::Ink3)),
             )
             .into_element(),
+        EvidenceBody::Unresolved { file, reason } => view()
+            .child(file_line(app, file, None))
+            .child(words(app, reason, note_size, Token::Ink3))
+            .into_element(),
     }
 }
 
 /// The artifact's path in mono ink-3 (`.ev-file`), cut at the end, its illustrative tag after.
-fn file_line(app: AppState, file: &'static str, attribution: Option<&'static str>) -> AnyElement {
+fn file_line(app: AppState, file: String, attribution: Option<&'static str>) -> AnyElement {
     view()
         .flex_row()
         .items_center()
@@ -190,11 +201,13 @@ fn file_line(app: AppState, file: &'static str, attribution: Option<&'static str
 /// The hunk (`.diff`): its header on the sunken ground, then numbered lines in mono, additions
 /// and deletions on the ok and failure grounds with their sign in that colour. The phone drops
 /// the old-number column; a terminal shows the unified lines, signs and code in their colour.
-fn diff(app: AppState, at: &'static str, lines: Vec<DiffLine>) -> AnyElement {
+/// An excerpt served without a hunk header has no header row.
+fn diff(app: AppState, at: String, lines: Vec<DiffLine>) -> AnyElement {
     let form = app.form;
+    let header = (!at.is_empty()).then_some(at);
     if form == Form::Terminal {
         return view()
-            .child(term::quiet(at).truncate())
+            .children(header.map(|at| term::quiet(at).truncate()))
             .children(lines.into_iter().map(|line| terminal_line(app, line)))
             .into_element();
     }
@@ -206,15 +219,15 @@ fn diff(app: AppState, at: &'static str, lines: Vec<DiffLine>) -> AnyElement {
         .border_1()
         .border_color(color(Token::Rule))
         .bg(color(Token::Surface))
-        .child(
+        .children(header.map(|at| {
             view()
                 .px(px(10.0))
                 .py(px(3.0))
                 .bg(color(Token::BgSunk))
                 .border_b_1()
                 .border_b_color(color(Token::Rule))
-                .child(code(app, at, 11.5, Token::Ink3).truncate()),
-        )
+                .child(code(app, at, 11.5, Token::Ink3).truncate())
+        }))
         .child(
             scroll()
                 .max_h(px(box_height - 22.0))

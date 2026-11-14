@@ -4,6 +4,8 @@
 //! for its lifetime: the owner guards accept it in place of the shell check, and its events are
 //! attributed to the owner via `assistant:A-<n>` with the cited owner message. Any other
 //! process that inherits the variable (one the command starts in turn) ignores it.
+//! Device-origin reservations recheck authenticated provenance and current authority at the
+//! child claim boundary too, closing revocation races between reservation and execution.
 pub mod kinds;
 
 use std::path::{Path, PathBuf};
@@ -38,6 +40,10 @@ pub struct ViaAssistant {
     pub confirmed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirmation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Who an owner-level command acts for: the owner's own entry point, or an assistant that
@@ -179,15 +185,14 @@ pub fn claim(
     corral_core::assistant::validate_id(session)?;
     let me = effects::executor()?;
     store.settle_assistant_container(session, |assistant, ended| {
-        let Some(index) = assistant
-            .state
-            .receipts
-            .iter()
-            .position(|r| r.request_id == request && r.op == "owner_action")
+        let Some(receipt) =
+            crate::agent::assistant_receipt(store, session, &assistant.state, request)?
         else {
             return Ok(None);
         };
-        let receipt = &assistant.state.receipts[index];
+        if receipt.op != "owner_action" {
+            return Ok(None);
+        }
         let Some(executor) = receipt.executor.clone() else {
             return Ok(None);
         };
@@ -201,7 +206,7 @@ pub fn claim(
         )?;
         super::workflow::boundary::require_ordinary(store, session, assistant)?;
         ensure!(
-            receipt.state == ReceiptState::Reserved && started(receipt).is_none(),
+            receipt.state == ReceiptState::Reserved && started(&receipt).is_none(),
             "owner_action_unclaimed: {request} already started its command"
         );
         let expected: Vec<String> = serde_json::from_value(receipt.result["argv"].clone())
@@ -212,10 +217,52 @@ pub fn claim(
         );
         let text = |key: &str| receipt.result[key].as_str().unwrap_or_default().to_owned();
         let input = text("input");
-        let owner_message = assistant
+        let entry = assistant
             .owner_input(&input)
-            .map(|entry| entry.text.clone())
             .with_context(|| format!("owner_action_unclaimed: {input} left the journal"))?;
+        let origin = crate::agent::app_runtime::input::recheck(store, assistant, entry)?;
+        ensure!(
+            entry.sha256 == text("sha256"),
+            "owner_action_unclaimed: owner words changed"
+        );
+        let owner_message = entry.text.clone();
+        if origin.as_ref().is_some_and(|p| p.confirm_class()) {
+            let confirmation = receipt.result["confirmation"]
+                .as_str()
+                .context("owner_action_unclaimed: attachment input requires confirmation")?;
+            let answer = assistant
+                .owner_input(confirmation)
+                .context("owner_action_unclaimed: confirmation left the journal")?;
+            ensure!(
+                receipt.result["confirmed"] == true
+                    && answer.text == "y"
+                    && assistant
+                        .confirmation(request, &text("command"))
+                        .is_some_and(|entry| entry.id == answer.id),
+                "owner_action_unclaimed: attachment input requires exact affirmative confirmation"
+            );
+            crate::agent::ops::owner_prompt::check_attachment_confirmation(
+                store,
+                entry,
+                answer,
+                request,
+                &text("command"),
+            )?;
+        }
+        if let Some(origin) = &origin
+            && let Some(confirmation) = receipt.result["confirmation"].as_str()
+        {
+            let answer = assistant
+                .owner_input(confirmation)
+                .context("owner_action_unclaimed: confirmation left the journal")?;
+            let confirmed = crate::agent::app_runtime::input::recheck(store, assistant, answer)?
+                .context("owner_action_unclaimed: confirmation has no device provenance")?;
+            ensure!(
+                confirmed.device == origin.device
+                    && answer.generation == receipt.identity.generation,
+                "owner_action_unclaimed: confirmation belongs to a different device or generation"
+            );
+        }
         let via = ViaAssistant {
             session: session.into(),
             generation: receipt.identity.generation,
@@ -226,8 +273,15 @@ pub fn claim(
             owner_message,
             confirmed: receipt.result["confirmed"].as_bool().unwrap_or(false),
             confirmation: receipt.result["confirmation"].as_str().map(str::to_owned),
+            device: origin.as_ref().map(|origin| origin.device.clone()),
+            name: origin.as_ref().map(|origin| origin.name.clone()),
         };
-        let receipt = &mut assistant.state.receipts[index];
+        let receipt = assistant
+            .state
+            .receipts
+            .iter_mut()
+            .find(|r| r.request_id == request)
+            .context("owner_action_unclaimed: reservation left the active journal")?;
         if receipt.evidence.len() >= EVIDENCE_MAX {
             receipt.evidence.remove(0);
         }

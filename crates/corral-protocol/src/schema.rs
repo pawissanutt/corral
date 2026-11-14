@@ -88,7 +88,8 @@ fn document() -> Value {
     ];
     use device::*;
     use rpc::ErrorCode::{
-        Busy, Conflict, Expired, Internal, InvalidParams, NotFound, Refused, Revoked, Unavailable,
+        Busy, ConfirmRequired, Conflict, Expired, Internal, InvalidParams, NotFound, Refused,
+        Revoked, Unavailable,
     };
     let methods = vec![
         method::<Hello, Welcome>(
@@ -227,6 +228,204 @@ fn document() -> Value {
         ),
         method::<PairDone, ()>(&mut generator, PAIR_DONE, true, &[]),
         method::<PairRefused, ()>(&mut generator, PAIR_REFUSED, true, &[]),
+        method::<app::AppSessionRequest, app::AppSession>(
+            &mut generator,
+            app::APP_SESSION,
+            false,
+            &common,
+        ),
+        method::<app::ActPreviewRequest, app::ActPreview>(
+            &mut generator,
+            app::ACT_PREVIEW,
+            false,
+            &[InvalidParams, Refused, Conflict, Unavailable, Internal],
+        ),
+        method::<app::ActSubmit, cmd::CmdResult>(
+            &mut generator,
+            app::ACT_SUBMIT,
+            false,
+            &[
+                InvalidParams,
+                Refused,
+                ConfirmRequired,
+                Conflict,
+                Busy,
+                Expired,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<cmd::CmdResultQuery, cmd::CmdResult>(
+            &mut generator,
+            app::ACT_RESULT,
+            false,
+            &[InvalidParams, Unavailable, Internal],
+        ),
+        method::<detail::DetailGet, detail::DetailReply>(
+            &mut generator,
+            app::DETAIL_GET,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Refused,
+                Expired,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<app::ChangesQuery, app::ChangesPage>(
+            &mut generator,
+            app::CHANGES_PAGE,
+            false,
+            &[InvalidParams, Unavailable, Internal],
+        ),
+        method::<app::SeenAdvance, app::SeenCursor>(
+            &mut generator,
+            app::SEEN_ADVANCE,
+            false,
+            &[InvalidParams, Unavailable, Internal],
+        ),
+        method::<app::DeviceSetAuthority, DeviceInfo>(
+            &mut generator,
+            app::DEVICE_SET_AUTHORITY,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Refused,
+                Revoked,
+                Conflict,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<assistant::AssistantSend, assistant::SendAck>(
+            &mut generator,
+            assistant::ASSISTANT_SEND,
+            false,
+            &[
+                InvalidParams,
+                Refused,
+                Conflict,
+                Busy,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<assistant::AssistantCancel, assistant::CancelAck>(
+            &mut generator,
+            assistant::ASSISTANT_CANCEL,
+            false,
+            &[
+                InvalidParams,
+                Refused,
+                Conflict,
+                Busy,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<attachment::AttachmentBegin, attachment::UploadAck>(
+            &mut generator,
+            attachment::ATTACHMENT_BEGIN,
+            false,
+            &[
+                InvalidParams,
+                Refused,
+                Conflict,
+                Busy,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<attachment::AttachmentPut, attachment::UploadAck>(
+            &mut generator,
+            attachment::ATTACHMENT_PUT,
+            false,
+            &[
+                InvalidParams,
+                Refused,
+                Conflict,
+                Busy,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<attachment::AttachmentDiscard, ()>(
+            &mut generator,
+            attachment::ATTACHMENT_DISCARD,
+            false,
+            &[InvalidParams, Refused, Unavailable, Internal],
+        ),
+        method::<assistant::AssistantWarm, ()>(
+            &mut generator,
+            assistant::ASSISTANT_WARM,
+            false,
+            &[InvalidParams, Refused, Busy, Unavailable, Internal],
+        ),
+        method::<assistant::AssistantStop, ()>(
+            &mut generator,
+            assistant::ASSISTANT_STOP,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Refused,
+                Conflict,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<assistant::AssistantSessionOp, rows::AssistantRow>(
+            &mut generator,
+            assistant::ASSISTANT_SESSION,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Refused,
+                Conflict,
+                Busy,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<assistant::PromptPreview, app::ActPreview>(
+            &mut generator,
+            assistant::PROMPT_PREVIEW,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Refused,
+                Conflict,
+                Expired,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<assistant::PromptAnswer, cmd::CmdResult>(
+            &mut generator,
+            assistant::PROMPT_ANSWER,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Refused,
+                ConfirmRequired,
+                Conflict,
+                Expired,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<DevicePageQuery, DevicePage>(
+            &mut generator,
+            DEVICE_PAGE,
+            false,
+            &[InvalidParams, Refused, Unavailable, Internal],
+        ),
     ];
     // Include envelopes and framing alongside every reachable method payload.
     generator.subschema_for::<rpc::Request>();
@@ -236,11 +435,11 @@ fn document() -> Value {
     generator.subschema_for::<rpc::ErrorCode>();
     json!({
         "openrpc": "1.3.2",
-        "info": {"title": "Corral daemon protocol", "version": "1.0"},
+        "info": {"title": "Corral daemon protocol", "version": format!("{PROTO_MAJOR}.{PROTO_MINOR}")},
         "methods": methods,
         "components": {"schemas": generator.take_definitions(true)},
         "x-error-code-schema": {"$ref": "#/components/schemas/ErrorCode"},
-        "x-framing": {"control_max": frame::CONTROL_MAX, "data_max": frame::DATA_MAX},
+        "x-framing": {"control_max": frame::CONTROL_MAX, "data_max": frame::DATA_MAX, "app_control_max": app::APP_CONTROL_MAX},
     })
 }
 
@@ -270,34 +469,34 @@ fn sub_delta_catalog_preserves_union_parameters_and_requiredness() {
         .find(|method| method["name"] == SUB_DELTA)
         .unwrap();
     let params = delta["params"].as_array().unwrap();
-    let names: Vec<_> = params
-        .iter()
-        .map(|param| param["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        names,
-        [
-            "as_of", "cursor", "epoch", "left", "more", "rev", "rows", "seq", "topic"
-        ]
-    );
     let param = |name: &str| params.iter().find(|param| param["name"] == name).unwrap();
-    let topic = param("topic");
-    assert_eq!(topic["required"], true);
-    // Branches: 0 board, 1 health, 2 classic, 3 other.
-    assert_eq!(topic["schema"]["anyOf"].as_array().unwrap().len(), 4);
-    let rows = param("rows");
-    assert_eq!(rows["required"], false);
-    assert_eq!(rows["x-required-in"], json!([0, 1]));
-    assert_eq!(rows["schema"]["anyOf"].as_array().unwrap().len(), 2);
-    for name in ["cursor", "left", "more"] {
-        assert_eq!(param(name)["required"], false, "{name}");
-        assert_eq!(param(name)["x-required-in"], json!([0, 1]), "{name}");
+    assert_eq!(param("topic")["required"], true);
+    let schema = schemars::schema_for!(SubDelta);
+    let value = serde_json::to_value(schema).unwrap();
+    let branches = value["oneOf"].as_array().unwrap();
+    let requiring = |field: &str| -> Vec<usize> {
+        branches
+            .iter()
+            .enumerate()
+            .filter_map(|(index, branch)| {
+                branch["required"]
+                    .as_array()
+                    .is_some_and(|fields| fields.iter().any(|value| value == field))
+                    .then_some(index)
+            })
+            .collect()
+    };
+    for field in ["rows", "cursor", "epoch", "left", "more", "scope"] {
+        assert_eq!(param(field)["required"], false, "{field}");
+        assert_eq!(
+            param(field)["x-required-in"],
+            json!(requiring(field)),
+            "{field}"
+        );
     }
-    let epoch = param("epoch");
-    assert_eq!(epoch["required"], false);
-    assert_eq!(epoch["x-required-in"], json!([0, 1, 2]));
-    for name in ["rev", "seq", "as_of"] {
-        assert_eq!(param(name)["required"], false, "{name}");
-        assert_eq!(param(name)["x-required-in"], json!([2]), "{name}");
-    }
+    let rows = param("rows")["schema"]["anyOf"].as_array().unwrap();
+    assert!(
+        rows.len() > 2,
+        "app topic rows must remain distinct alternatives"
+    );
 }

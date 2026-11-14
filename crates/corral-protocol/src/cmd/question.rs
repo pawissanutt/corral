@@ -45,6 +45,11 @@ pub enum QuestionCommand {
         instruction: String,
         json: bool,
     },
+    Followup {
+        key: String,
+        rev: u32,
+        text: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -57,6 +62,7 @@ impl QuestionCommand {
             Self::Escalate { .. } => "escalate",
             Self::Cancel { .. } => "cancel",
             Self::Deadline { .. } => "deadline",
+            Self::Followup { .. } => "followup",
             Self::Other => "other",
         }
     }

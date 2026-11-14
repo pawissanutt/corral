@@ -1,4 +1,7 @@
+//! Native transport for shared app state; only device administration is native-specific.
+//! Reconnect and offline waits retain the same state and accept durable chat intents.
 use super::{
+    app::{self, AppState, Outgoing},
     core::Event,
     credentials, map,
     requests::{self, ClientRequest},
@@ -8,38 +11,38 @@ use crate::model::{
     daemon::Feed,
     devices::{DeviceLink, Pairing},
 };
-use corral_protocol::{device::*, rpc::ErrorCode, subscription::Topic};
+use corral_protocol::{device::*, rpc::ErrorCode};
 use nsh_core::prelude::*;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::{path::PathBuf, time::Duration};
 
-type Outgoing = (&'static str, Value);
-
 pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
     let (sender, receiver) = std::sync::mpsc::channel();
     requests::install(sender);
     spawn(async move {
+        let mut state = AppState::new();
+        state.disconnected(feed);
+        let mut enrol = None;
         feed.update(|feed| feed.host = hostname());
         let socket = match socket {
             Ok(socket) => socket,
             Err(problem) => {
                 feed.update(|feed| feed.link_lost(problem));
-                return;
+                loop {
+                    offline_requests(feed, &mut state, &receiver, &mut enrol);
+                    tick(feed);
+                    timer(Duration::from_millis(250)).await;
+                }
             }
         };
         let mut failures = 0usize;
         let mut suspended = false;
-        let mut enrol = None;
         loop {
             if suspended {
                 // Revoked devices stay quiet until the owner explicitly enrols again.
                 while enrol.is_none() {
-                    while let Ok(request) = receiver.try_recv() {
-                        if matches!(request, ClientRequest::Enrol { .. }) {
-                            enrol = Some(request);
-                        }
-                    }
+                    offline_requests(feed, &mut state, &receiver, &mut enrol);
                     tick(feed);
                     if enrol.is_none() {
                         timer(Duration::from_millis(250)).await;
@@ -47,13 +50,13 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                 }
                 suspended = false;
             }
+            offline_requests(feed, &mut state, &receiver, &mut enrol);
             tick(feed);
             feed.update(|feed| feed.connecting(socket.to_string_lossy().into_owned()));
             let path = socket.clone();
             let enrolling = enrol.is_some();
             let connected = blocking(move || {
-                let (mut session, welcome) = Session::connect(&path)?;
-                session.open(Topic::Health)?;
+                let (session, welcome) = Session::connect(&path)?;
                 let capable = welcome.caps.iter().any(|cap| cap == DEVICE_V1);
                 let saved = if capable && !enrolling {
                     credentials::load(&welcome.daemon.store)
@@ -68,18 +71,18 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
             match connected {
                 Ok((mut session, welcome, capable, saved)) => {
                     let store = welcome.daemon.store.clone();
+                    state.welcomed(feed, &welcome);
                     feed.update(|feed| {
                         feed.welcome_received(welcome.daemon.store, map::health(welcome.health))
                     });
                     let mut current = None;
                     let mut outgoing = Vec::new();
-                    let mut open_board = false;
                     if !capable {
                         feed.update(|feed| feed.device = DeviceLink::Failed("corrald is too old for device enrolment; upgrade corral and restart the daemon.".into()));
                     } else {
                         match saved {
                             Ok(Some(id)) => {
-                                outgoing.push((DEVICE_ATTACH, json!({"device": id})));
+                                outgoing.push((DEVICE_ATTACH, json!({"device": id}), None));
                                 current = Some(id);
                                 feed.update(|feed| feed.device = DeviceLink::Busy);
                             }
@@ -91,27 +94,15 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                     }
                     let mut idle = 0u8;
                     loop {
-                        if capable {
-                            for request in enrol.take().into_iter().chain(receiver.try_iter()) {
-                                if matches!(request, ClientRequest::Enrol { .. }) {
-                                    feed.update(|feed| feed.device = DeviceLink::Busy);
-                                }
-                                if let Some(request) = encode_request(request) {
-                                    outgoing.push(request);
-                                }
-                            }
-                        } else {
-                            for _ in receiver.try_iter() {}
+                        for request in enrol.take().into_iter().chain(receiver.try_iter()) {
+                            dispatch_request(feed, &mut state, request, capable, &mut outgoing);
                         }
+                        state.filter_outgoing(&mut outgoing);
                         let sends = std::mem::take(&mut outgoing);
-                        let opens = std::mem::take(&mut open_board);
                         let next = blocking(move || {
                             let result = (|| {
-                                if opens {
-                                    session.open(Topic::Board)?;
-                                }
-                                for (method, params) in sends {
-                                    session.request(method, params)?;
+                                for (method, params, tag) in sends {
+                                    session.request_tagged(method, params, tag)?;
                                 }
                                 Ok::<_, String>(session.next())
                             })();
@@ -129,26 +120,20 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                         };
                         session = returned;
                         tick(feed);
-                        match event {
-                            Event::Health(health) => {
-                                feed.update(|feed| feed.health_received(map::health(health)))
-                            }
-                            Event::Board {
-                                epoch,
-                                rows,
-                                left,
-                                replacement,
-                            } => {
+                        if app::handles(&event) {
+                            if matches!(&event, Event::Board { .. }) {
                                 failures = 0;
-                                feed.update(|feed| {
-                                    feed.board_received(
-                                        epoch,
-                                        rows.into_iter().map(map::task).collect(),
-                                        &left,
-                                        replacement,
-                                    )
-                                });
                             }
+                            match state.event(feed, event) {
+                                Ok(next) => outgoing.extend(next),
+                                Err(problem) => {
+                                    feed.update(|feed| feed.link_lost(problem));
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
+                        match event {
                             Event::Idle => {
                                 idle = idle.wrapping_add(1);
                                 if idle.is_multiple_of(4) {
@@ -164,6 +149,7 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                                         outgoing.push((
                                             PAIR_STATUS,
                                             json!({"pair_id": pair_id, "wait_ms": 0}),
+                                            None,
                                         ));
                                     }
                                 }
@@ -183,27 +169,44 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                                     break;
                                 }
                             }
-                            Event::Reply { method, outcome } => {
-                                match reply(feed, &store, &mut current, method, outcome).await {
-                                    Ok(effects) => {
-                                        outgoing.extend(effects.outgoing);
-                                        open_board |= effects.open_board;
-                                        if effects.revoked {
-                                            suspended = true;
-                                            break;
-                                        }
+                            Event::Reply {
+                                method, outcome, ..
+                            } => match reply(feed, &store, &mut current, method, outcome).await {
+                                Ok(effects) => {
+                                    outgoing.extend(effects.outgoing);
+                                    if effects.disconnected {
+                                        state.disconnected(feed);
                                     }
-                                    Err(problem) => {
-                                        feed.update(|feed| feed.link_lost(problem));
+                                    if effects.ready {
+                                        outgoing.extend(state.ready(feed));
+                                    }
+                                    if effects.revoked {
+                                        suspended = true;
                                         break;
                                     }
                                 }
+                                Err(problem) => {
+                                    feed.update(|feed| feed.link_lost(problem));
+                                    break;
+                                }
+                            },
+                            Event::Health(_)
+                            | Event::Board { .. }
+                            | Event::Rows { .. }
+                            | Event::Reset { .. }
+                            | Event::TopicError { .. }
+                            | Event::Live { .. } => {
+                                feed.update(|feed| {
+                                    feed.link_lost("unhandled daemon application event".into())
+                                });
+                                break;
                             }
                         }
                     }
                 }
                 Err(problem) => feed.update(|feed| feed.link_lost(problem)),
             }
+            state.disconnected(feed);
             if !suspended {
                 let delay = match failures {
                     0 => 1,
@@ -212,30 +215,77 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                     _ => 10,
                 };
                 failures = failures.saturating_add(1);
-                timer(Duration::from_secs(delay)).await;
+                for _ in 0..delay * 4 {
+                    offline_requests(feed, &mut state, &receiver, &mut enrol);
+                    tick(feed);
+                    timer(Duration::from_millis(250)).await;
+                }
             }
         }
     });
 }
 
-fn encode_request(input: ClientRequest) -> Option<Outgoing> {
-    Some(match input {
-        ClientRequest::Enrol { name } => (
-            DEVICE_ENROL,
-            json!({"name": name, "app_version": env!("CARGO_PKG_VERSION")}),
-        ),
-        ClientRequest::Revoke { device } => (DEVICE_REVOKE, json!({"device": device})),
-        ClientRequest::PairBegin => (PAIR_BEGIN, json!({})),
-        ClientRequest::PairConfirm { pair_id } => (PAIR_CONFIRM, json!({"pair_id": pair_id})),
-        ClientRequest::PairCancel { pair_id } => (PAIR_CANCEL, json!({"pair_id": pair_id})),
-        ClientRequest::Pair { .. } | ClientRequest::Forget => return None,
-    })
+fn dispatch_request(
+    feed: Signal<Feed>,
+    state: &mut AppState,
+    input: ClientRequest,
+    devices: bool,
+    outgoing: &mut Vec<Outgoing>,
+) {
+    let device = match input {
+        ClientRequest::Enrol { name } => {
+            if devices {
+                feed.update(|feed| feed.device = DeviceLink::Busy);
+            }
+            (
+                DEVICE_ENROL,
+                json!({"name": name, "app_version": env!("CARGO_PKG_VERSION")}),
+                None,
+            )
+        }
+        ClientRequest::Revoke { device } => (DEVICE_REVOKE, json!({"device": device}), None),
+        ClientRequest::PairBegin => (PAIR_BEGIN, json!({}), None),
+        ClientRequest::PairConfirm { pair_id } => (PAIR_CONFIRM, json!({"pair_id": pair_id}), None),
+        ClientRequest::PairCancel { pair_id } => (PAIR_CANCEL, json!({"pair_id": pair_id}), None),
+        ClientRequest::Pair { .. } | ClientRequest::Forget => return,
+        request => {
+            outgoing.extend(state.request(feed, request));
+            return;
+        }
+    };
+    if devices {
+        outgoing.push(device);
+    }
+}
+
+fn offline_requests(
+    feed: Signal<Feed>,
+    state: &mut AppState,
+    receiver: &std::sync::mpsc::Receiver<ClientRequest>,
+    enrol: &mut Option<ClientRequest>,
+) {
+    for request in receiver.try_iter() {
+        match request {
+            request @ ClientRequest::Enrol { .. } => *enrol = Some(request),
+            ClientRequest::Revoke { .. }
+            | ClientRequest::PairBegin
+            | ClientRequest::PairConfirm { .. }
+            | ClientRequest::PairCancel { .. }
+            | ClientRequest::Pair { .. }
+            | ClientRequest::Forget => {}
+            request => {
+                // AppState alone decides which offline intents are durable.
+                let _ = state.request(feed, request);
+            }
+        }
+    }
 }
 
 #[derive(Default)]
 struct Effects {
     outgoing: Vec<Outgoing>,
-    open_board: bool,
+    ready: bool,
+    disconnected: bool,
     revoked: bool,
 }
 
@@ -254,6 +304,7 @@ async fn reply(
     let result = match outcome {
         Ok(result) => result,
         Err((code, message)) => {
+            effects.disconnected = [DEVICE_ATTACH, DEVICE_ENROL].contains(&method);
             if method == DEVICE_ATTACH && code == ErrorCode::Revoked {
                 let id = current.clone().unwrap_or_default();
                 feed.update(|feed| feed.revoked(id));
@@ -291,6 +342,7 @@ async fn reply(
                     .await
                     .map_err(|error| error.to_string())?;
                 if let Err(problem) = saved {
+                    effects.disconnected = true;
                     feed.update(|feed| {
                         feed.device = DeviceLink::Failed(format!(
                             "Enrolled as {}, but the id could not be saved: {problem}",
@@ -306,14 +358,10 @@ async fn reply(
                     name: info.name,
                 }
             });
-            effects.open_board = true;
-            effects.outgoing.push((DEVICE_LIST, json!({})));
+            effects.ready = true;
+            effects.outgoing.push(app::devices());
         }
-        DEVICE_LIST => {
-            let rows: Vec<DeviceInfo> = decode(result)?;
-            feed.update(|feed| feed.devices_received(rows.into_iter().map(map::device).collect()));
-        }
-        DEVICE_REVOKE => effects.outgoing.push((DEVICE_LIST, json!({}))),
+        DEVICE_REVOKE => effects.outgoing.push(app::devices()),
         PAIR_BEGIN => {
             let offer: PairOffer = decode(result)?;
             feed.update(|feed| {
@@ -328,7 +376,7 @@ async fn reply(
         PAIR_STATUS => {
             let status: PairStatus = decode(result)?;
             if matches!(status.state, PairState::Paired { .. }) {
-                effects.outgoing.push((DEVICE_LIST, json!({})));
+                effects.outgoing.push(app::devices());
             }
             feed.update(|feed| {
                 let pairing = map::pairing(status, &mut feed.pairing);
@@ -342,9 +390,11 @@ async fn reply(
                 }
                 _ => None,
             }) {
-                effects
-                    .outgoing
-                    .push((PAIR_STATUS, json!({"pair_id": pair_id, "wait_ms": 0})));
+                effects.outgoing.push((
+                    PAIR_STATUS,
+                    json!({"pair_id": pair_id, "wait_ms": 0}),
+                    None,
+                ));
             }
         }
         _ => {}
@@ -360,7 +410,8 @@ fn tick(feed: Signal<Feed>) {
             feed.tick(
                 seconds,
                 format!("{:02}:{:02}", local.hour(), local.minute()),
-            )
+            );
+            feed.date = local.date().to_string();
         });
     }
 }

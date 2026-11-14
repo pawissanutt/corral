@@ -2,23 +2,39 @@
 //! Render `composer`, `drawer`, `thread`, `agents`, `thread_header`, `hotkey_window` and
 //! `share_sheet`; dispatch their typed actions with `State::act`. Timers call `State::tick`.
 //! `LABELS` and `FILED_LABELS` supply captions for the structured records, including field labels.
-//! All fixtures are illustrative except the linked board facts and protocol vocabulary.
+//! Fixtures are illustrative except the linked board facts and protocol vocabulary; with the
+//! daemon, the `live_*` builders read `daemon::Feed` and `State::act_live` returns the canonical
+//! sends, commands and prompt answers instead.
 
+mod actions;
+mod attach;
 mod cards;
 mod data;
 mod labels;
+mod live;
+mod live_act;
+mod live_cards;
+mod live_filings;
+mod live_thread;
 mod surfaces;
 mod thread;
 mod views;
 
+pub use actions::*;
+pub use attach::*;
 pub use cards::*;
 pub use data::*;
 pub use labels::*;
+pub use live::*;
+pub use live_act::*;
+pub use live_cards::*;
+pub use live_filings::*;
+pub use live_thread::*;
 pub use surfaces::*;
 pub use thread::*;
 pub use views::*;
 
-use crate::model::effect::{Conn, Effect, Env, Page, Risk};
+use crate::model::effect::{Conn, Effect, Env, Page};
 use crate::model::nav::{AskTarget, Form};
 
 /// The Assistant studio switch, not a composer mode.
@@ -270,8 +286,10 @@ pub struct State {
     pub saved_now: bool,
     /// Last fixture question was withdrawn.
     pub withdrawn: bool,
-    /// Open thread, initially A-7.
+    /// Open fixture thread, initially A-7.
     pub thread: &'static str,
+    /// Daemon-mode requests in flight and edits in progress.
+    pub live: LiveState,
 }
 
 impl Default for State {
@@ -291,12 +309,13 @@ impl Default for State {
             saved_now: false,
             withdrawn: false,
             thread: "A-7",
+            live: LiveState::default(),
         }
     }
 }
 
 impl State {
-    /// Selects the session opened by the app's `Page::Thread` navigation.
+    /// Selects the fixture session opened by the app's `Page::Thread` navigation.
     pub fn open_thread(&mut self, id: &'static str) {
         self.thread = id;
         self.model_menu = false;
@@ -581,6 +600,31 @@ impl State {
             Action::Confirm(risk, name) => vec![Effect::Confirm(risk, name.map(str::to_owned))],
             Action::Open(page) => vec![Effect::Open(page)],
             Action::Grant(grant) => vec![Effect::Toast(grant.outcome(env).into())],
+            // Live records exist only with the daemon; the fixture has nothing to send.
+            Action::OpenLive(_)
+            | Action::PickProfile { .. }
+            | Action::Stop { .. }
+            | Action::EndSession(_)
+            | Action::ConfirmEnd(_)
+            | Action::NewSession
+            | Action::FileEntry(_)
+            | Action::WithdrawEntry(_)
+            | Action::Answer { .. }
+            | Action::Choose { .. }
+            | Action::EditIdea(_)
+            | Action::SaveIdea { .. }
+            | Action::MergeIdea(_)
+            | Action::MergeInto { .. }
+            | Action::DiscardIdea(_)
+            | Action::WithdrawPm { .. }
+            | Action::Recover(_)
+            | Action::RetryThread(_)
+            | Action::FilingsPage(_)
+            | Action::Attach(_)
+            | Action::AttachLink
+            | Action::Unattach(_)
+            | Action::CancelSend(_)
+            | Action::OpenAttachment { .. } => Vec::new(),
         }
     }
 
@@ -679,77 +723,6 @@ impl State {
         }
         true
     }
-}
-
-/// Composer keys after the input adapter decodes modifiers; Shift+Enter remains a text edit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Key {
-    /// Escape closes the model list before closing Ask.
-    Escape,
-    /// Enter without Shift submits.
-    Send,
-    /// Ctrl/Command+Shift+M cycles configured models.
-    CycleModel,
-    /// Ctrl/Command+Shift+P toggles the app-owned target.
-    ToggleTarget,
-}
-
-/// App-owned changes requested by a composer key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyOutcome {
-    /// Effects to execute after the reducer.
-    pub effects: Vec<Effect>,
-    /// New target when the target shortcut was used.
-    pub target: Option<AskTarget>,
-    /// Clear the app's draft after a nonblank submission.
-    pub clear_draft: bool,
-}
-
-/// Commands attached to content; the renderer need not infer behavior from button labels.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Action {
-    /// Open Ask with optional replacement context.
-    OpenAsk(Option<&'static str>),
-    /// Toggle model list visibility.
-    ToggleModelMenu,
-    /// Select a configured profile.
-    PickModel(&'static str),
-    /// Remove bounded context.
-    Unchip,
-    /// Close Ask and clear its chip/list.
-    CloseAsk,
-    /// Open A-7 in Agents.
-    OpenQuickThread,
-    /// Open another assistant session.
-    OpenThread(&'static str),
-    /// Submit the app's draft to its selected target.
-    Send,
-    /// Submit a named session's own composer without affecting the quick-thread target.
-    SendToThread(&'static str),
-    /// Change the studio host state; Answering resumes streaming.
-    SetMode(Mode),
-    /// File pending messages without a model.
-    FileNow,
-    /// Withdraw pending messages.
-    Withdraw,
-    /// Enter or leave filed-field editing.
-    Edit(Option<&'static str>),
-    /// Set or close the share sheet step.
-    Share(Option<ShareStep>),
-    /// Set global-hotkey content.
-    Hotkey(HotkeyState),
-    /// Open the main window's quick thread.
-    HotkeyOpen,
-    /// Show an illustrative outcome.
-    Toast(&'static str),
-    /// Prompt for a merge destination.
-    Merge(&'static str),
-    /// Ask the app for fresh device confirmation.
-    Confirm(Risk, Option<&'static str>),
-    /// Open a linked record.
-    Open(Page),
-    /// Answer a write-permission prompt.
-    Grant(Grant),
 }
 
 #[cfg(test)]

@@ -1,12 +1,14 @@
 //! Changes: the time feed since this device's last visit, a mark for each kind of event, each
-//! new event opening its task, then the per-device seen line and what came before it.
+//! event opening its task, then the per-device seen line and what came before it. In the Daemon
+//! state the feed is corrald's durable change lines with their attribution, the filters narrow
+//! it, older pages load on request, and Mark seen moves this device's own seen cursor.
 
 use nsh_core::prelude::*;
 
-use crate::model::Form;
-use crate::model::work::{self, Changes};
+use crate::model::work::{self, Action, ChangeFilter, Changes};
+use crate::model::{Form, PhoneTab};
 use crate::screens::now::feed::{row, seen_line};
-use crate::screens::now::parts::{dim_when, model_button, stale};
+use crate::screens::now::parts::{act, dim_when, model_button, pressable, quiet, stale};
 use crate::state::AppState;
 use crate::ui::kit::button::seg;
 use crate::ui::kit::chip::illus;
@@ -20,7 +22,16 @@ const MEASURE: f32 = 900.0;
 /// filters and Mark seen) over the scrolling feed. Phone: the shell heads the pushed page; this
 /// is its scrolling body, the filters over the feed.
 pub fn screen(app: AppState) -> AnyElement {
+    let form = app.form;
     let changes = computed(move || {
+        if app.daemon() {
+            let device = app.device_name();
+            return app.feed.with(|feed| {
+                app.work.with(|state| {
+                    work::live_changes(state, feed, device.as_deref(), form, PhoneTab::More)
+                })
+            });
+        }
         let env = app.env();
         app.work.with(|state| work::changes(state, env))
     });
@@ -28,76 +39,91 @@ pub fn screen(app: AppState) -> AnyElement {
     let body = dim_when(view(), stale)
         .child(dynamic(move || changes.with(|changes| feed(app, changes))))
         .into_element();
-    if app.form == Form::Phone {
+    if form == Form::Phone {
         let content = view()
             .child(
                 view()
                     .px(px(16.0))
                     .pt(px(4.0))
                     .pb(px(8.0))
-                    .child(filters(app, changes)),
+                    .gap(px(8.0))
+                    .child(filters(app, changes))
+                    .child(dynamic(move || {
+                        changes.with(|changes| {
+                            changes.mark_seen.as_ref().map(|button| {
+                                view()
+                                    .flex_row()
+                                    .child(model_button(app, button, "btn-mark-seen".into(), false))
+                                    .into_element()
+                            })
+                        })
+                    })),
             )
             .child(body)
             .into_element();
         return pane(app, "changes", content);
     }
-    let (title, subtitle, mark_seen) = untracked(|| {
+    let heading = computed(move || {
         changes.with(|changes| {
             (
                 changes.title,
-                changes.subtitle.map(str::to_owned),
+                changes.subtitle.clone(),
                 changes.mark_seen.clone(),
+                inline_cells(changes.title, changes),
             )
         })
     });
-    let mark = move || {
-        mark_seen
+    let mark = move |button: &Option<work::Button>| {
+        button
             .as_ref()
             .map(|button| model_button(app, button, "btn-mark-seen".into(), false))
     };
-    if app.form == Form::Desktop {
-        let mut actions = vec![filters(app, changes)];
-        actions.extend(mark());
+    if form == Form::Desktop {
         return view()
             .flex_1()
             .min_h(px(0.0))
-            .child(head(app, title, subtitle, actions))
+            .child(dynamic(move || {
+                heading.with(|(title, subtitle, mark_seen, _)| {
+                    let mut actions = vec![filters(app, changes)];
+                    actions.extend(mark(mark_seen));
+                    head(app, *title, subtitle.clone(), actions)
+                })
+            }))
             .child(pane(app, "changes", body))
             .into_element();
     }
     // A terminal keeps every label whole: the filters sit beside the title while the row holds
     // them, and take a row of their own under it when it does not.
-    let need = untracked(|| changes.with(|changes| inline_cells(title, changes)));
     let width = signal(0.0_f32);
-    let beside = computed(move || {
-        let points = width.get();
-        points <= 0.0 || points / term::cells(1.0).0 >= need
-    });
     view()
         .flex_1()
         .min_h(px(0.0))
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
         .child(dynamic(move || {
-            if beside.get() {
-                let mut actions = vec![filters(app, changes)];
-                actions.extend(mark());
-                return head(app, title, subtitle.clone(), actions);
-            }
-            view()
-                .child(head(
-                    app,
-                    title,
-                    subtitle.clone(),
-                    mark().into_iter().collect(),
-                ))
-                .child(
-                    view()
-                        .flex_row()
-                        .px(term::cells(1.0))
-                        .child(filters(app, changes)),
-                )
-                .child(term::hrule())
-                .into_element()
+            let points = width.get();
+            heading.with(|(title, subtitle, mark_seen, need)| {
+                let beside = points <= 0.0 || points / term::cells(1.0).0 >= *need;
+                if beside {
+                    let mut actions = vec![filters(app, changes)];
+                    actions.extend(mark(mark_seen));
+                    return head(app, *title, subtitle.clone(), actions);
+                }
+                view()
+                    .child(head(
+                        app,
+                        *title,
+                        subtitle.clone(),
+                        mark(mark_seen).into_iter().collect(),
+                    ))
+                    .child(
+                        view()
+                            .flex_row()
+                            .px(term::cells(1.0))
+                            .child(filters(app, changes)),
+                    )
+                    .child(term::hrule())
+                    .into_element()
+            })
         }))
         .child(pane(app, "changes", body))
         .into_element()
@@ -120,32 +146,36 @@ fn inline_cells(title: &str, changes: &Changes) -> f32 {
     let mark = changes
         .mark_seen
         .as_ref()
-        .map_or(0.0, |button| 2.0 + count(&*button.label) + 2.0);
+        .map_or(0.0, |button| 2.0 + count(&button.label) + 2.0);
     1.0 + count(title) + 2.0 + SUBTITLE_CELLS + 2.0 + filters + mark + 1.0
 }
 
-/// The model's filters as a segmented control. The mock's filters have no handler: the selection
-/// stays where the model puts it.
+/// The model's filters as a segmented control: picking one narrows the feed.
 fn filters(app: AppState, changes: Memo<Changes>) -> AnyElement {
-    changes.with_untracked(|changes| {
-        let options: Vec<(usize, &'static str)> = changes
+    let options: Vec<(ChangeFilter, &'static str)> = changes.with_untracked(|changes| {
+        changes
             .filters
             .iter()
-            .enumerate()
-            .map(|(index, filter)| (index, filter.label))
-            .collect();
-        let selected = changes
-            .filters
-            .iter()
-            .position(|filter| filter.selected)
-            .unwrap_or(0);
-        seg(app, &options, move || selected, |_| {}, "seg-changes")
-    })
+            .map(|filter| (filter.filter, filter.label))
+            .collect()
+    });
+    seg(
+        app,
+        &options,
+        move || app.work.with(|state| state.filter),
+        move |filter| act(app, Action::Filter(filter)),
+        "seg-changes",
+    )
 }
 
-/// The recent events, the seen line, the dimmed history and the illustrative note.
+/// The recent events, the seen line, the dimmed history, the older-page control and the notes.
 fn feed(app: AppState, changes: &Changes) -> AnyElement {
     let form = app.form;
+    if changes.recent.is_empty() && changes.history.is_empty() {
+        if let Some(notice) = &changes.notice {
+            return quiet(app, notice.clone());
+        }
+    }
     let recent = changes
         .recent
         .iter()
@@ -157,7 +187,7 @@ fn feed(app: AppState, changes: &Changes) -> AnyElement {
         .enumerate()
         .map(|(index, event)| row(app, event, format!("change-seen-{index}")));
     let mut events: Vec<AnyElement> = recent.collect();
-    events.push(seen_line(app, changes.seen_line));
+    events.push(seen_line(app, changes.seen_line.clone()));
     events.extend(history);
     view()
         .child(
@@ -166,6 +196,14 @@ fn feed(app: AppState, changes: &Changes) -> AnyElement {
                 .when(form == Form::Desktop, |feed| feed.max_w(px(MEASURE)))
                 .children(events),
         )
+        .children(changes.older.as_ref().map(|older| {
+            view()
+                .flex_row()
+                .px(px(if form == Form::Terminal { 8.0 } else { 16.0 }))
+                .py(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
+                .child(pressable(app, older, false))
+                .into_element()
+        }))
         .children(changes.illustrative.map(|note| {
             view()
                 .flex_row()

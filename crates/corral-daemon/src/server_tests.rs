@@ -72,6 +72,7 @@ fn subscriber(store: &Store) -> UnixStream {
         SubOpen {
             topic: Topic::Board,
             since: None,
+            scope: None,
         },
     );
     stream
@@ -138,6 +139,7 @@ fn subscription_pages_once_per_ack_and_nonacking_client_cannot_delay_a_pass() {
                 wire::SUB_CLOSE,
                 SubClose {
                     topic: Topic::Board,
+                    scope: None,
                 },
             );
             break;
@@ -148,6 +150,7 @@ fn subscription_pages_once_per_ack_and_nonacking_client_cannot_delay_a_pass() {
             SubAck {
                 topic: Topic::Board,
                 cursor: page.cursor,
+                scope: None,
             },
         );
     }
@@ -210,6 +213,7 @@ fn second_store_write_pushes_only_changed_row_without_another_pass() {
         SubAck {
             topic: Topic::Board,
             cursor: initial.cursor,
+            scope: None,
         },
     );
     let other = Store::open(&fixture.root).unwrap();
@@ -235,6 +239,7 @@ fn second_store_write_pushes_only_changed_row_without_another_pass() {
             SubAck {
                 topic: Topic::Board,
                 cursor: page.cursor,
+                scope: None,
             },
         );
     };
@@ -270,6 +275,7 @@ fn oversized_board_pages_are_halved_below_control_frame_limit() {
         .open(SubOpen {
             topic: Topic::Board,
             since: None,
+            scope: None,
         })
         .unwrap();
     let (mut server, mut client) = UnixStream::pair().unwrap();
@@ -289,6 +295,7 @@ fn oversized_board_pages_are_halved_below_control_frame_limit() {
             .ack(SubAck {
                 topic: Topic::Board,
                 cursor: page.cursor,
+                scope: None,
             })
             .unwrap();
     }
@@ -377,6 +384,7 @@ fn health_subscriber_that_acks_receives_no_delta_for_clock_ticks() {
         .open(SubOpen {
             topic: Topic::Health,
             since: None,
+            scope: None,
         })
         .unwrap();
     let (mut server, mut client) = UnixStream::pair().unwrap();
@@ -394,6 +402,7 @@ fn health_subscriber_that_acks_receives_no_delta_for_clock_ticks() {
         .ack(SubAck {
             topic: Topic::Health,
             cursor,
+            scope: None,
         })
         .unwrap();
     for age in [2, 3] {
@@ -460,6 +469,7 @@ fn classic_topic_pushes_latest_rev_once() {
     let ack = |rev| SubAck {
         topic: Topic::Classic,
         cursor: corral_protocol::board::BoardCursor { rev, after: None },
+        scope: None,
     };
     let shared = Shared::new();
     publish_classic(&shared, 1);
@@ -468,6 +478,7 @@ fn classic_topic_pushes_latest_rev_once() {
         .open(SubOpen {
             topic: Topic::Classic,
             since: None,
+            scope: None,
         })
         .unwrap();
     assert_eq!(shared.classic_subscribers.load(Ordering::Relaxed), 1);

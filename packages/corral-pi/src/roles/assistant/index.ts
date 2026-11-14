@@ -14,17 +14,19 @@ import { assistantShellRefusal } from "./guard.ts";
 import { ownerActionTool } from "./owner-action.ts";
 import { installWriteGuard } from "./paths.ts";
 
+import { ideaFileTool } from "./idea-file.ts";
 export const CONTRACT_ASSET = "assets/assistant-contract.md";
 export const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "grep", "find", "ls", "bash"];
 const LOOKUP = receiptLookupTool();
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission", ...memoryTools.map((tool) => tool.op)];
+const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission", "idea_file", ...memoryTools.map((tool) => tool.op)];
 
 export function assistantRole(root: string): RoleModule {
   return {
     role: "assistant",
     upstreamTools: UPSTREAM,
     corralOps: OPS,
-    tools: (context) => context.todo === true ? [LOOKUP, ownerActionTool, ...memoryTools, sessionTodoTool] : [LOOKUP, ownerActionTool, ...memoryTools],
+    tools: (context) => [LOOKUP, ownerActionTool, ...memoryTools,
+      ...(context.todo === true ? [sessionTodoTool] : []), ...(context.daemonHosted ? [ideaFileTool] : [])],
     contract: (context) => {
       const contract = `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n`
         + requestContract(root, context.todo) + "\n\n" + askUserContract(context);

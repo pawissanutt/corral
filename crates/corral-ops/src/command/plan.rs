@@ -95,12 +95,64 @@ impl Verb for PlanCommand {
                 let task = crate::plan_policy_set(ctx, &id, required)?;
                 cx.out.json_pretty(&task)?;
             }
+            Self::Accept {
+                id,
+                revision,
+                owner_ok,
+                notes,
+            } => {
+                anyhow::ensure!(owner_ok, "owner approval required to accept the plan");
+                let (_, warnings) = crate::plan_review::verdict_report_checked(
+                    ctx,
+                    &id,
+                    &crate::PlanVerdict {
+                        plan: &revision,
+                        attempt: None,
+                        verdict: corral_core::Verdict::Approve,
+                        notes: notes.as_deref().unwrap_or("Owner accepted this plan."),
+                    },
+                    &|task| require_revision(task, &revision),
+                )?;
+                for warning in warnings {
+                    cx.out.err_line(format_args!("{warning}"));
+                }
+                cx.out.line(format_args!("{id}: plan accepted"));
+            }
+            Self::RequestChanges { id, revision, text } => {
+                let (_, warnings) = crate::plan_review::verdict_report_checked(
+                    ctx,
+                    &id,
+                    &crate::PlanVerdict {
+                        plan: &revision,
+                        attempt: None,
+                        verdict: corral_core::Verdict::Changes,
+                        notes: &text,
+                    },
+                    &|task| require_revision(task, &revision),
+                )?;
+                for warning in warnings {
+                    cx.out.err_line(format_args!("{warning}"));
+                }
+                cx.out.line(format_args!("{id}: plan changes requested"));
+            }
             Self::Other => return Err(super::unknown_command("other")),
         }
         Ok(())
     }
 
     fn touches_runtime(&self) -> bool {
-        matches!(self, Self::Cancel { .. })
+        matches!(
+            self,
+            Self::Cancel { .. } | Self::Accept { .. } | Self::RequestChanges { .. }
+        )
     }
+}
+
+fn require_revision(task: &corral_core::Task, revision: &str) -> Result<()> {
+    if task.plans.last().is_none_or(|plan| plan.id != revision) {
+        return Err(
+            corral_core::backend::ApplyError::Precondition("plan revision changed".into()).into(),
+        );
+    }
+    Ok(())
 }

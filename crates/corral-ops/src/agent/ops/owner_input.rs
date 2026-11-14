@@ -2,6 +2,8 @@
 //! `owner_input` records one pane-typed owner message, a selected dialog answer, or the owner's
 //! answer to a confirmation the host rendered, before the text reaches the model. `owner_action` may cite only these
 //! entries; corral wakes, inbox deliveries, PM outcomes and recovery notices never become one.
+//! Daemon-hosted generations cannot assert pane interaction: only app_runtime::input writes
+//! their authenticated device input. Existing interactive pane hosts retain this event path.
 use anyhow::Result;
 use corral_core::agent::{AgentRole, ReceiptEffect, paths};
 use corral_core::assistant::{NewOwnerInput, OWNER_INPUT_TEXT_MAX, OwnerInputSource};
@@ -104,12 +106,16 @@ pub(crate) fn journal(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         bad("malformed owner_input payload; expected fields: kind, source, text, sha256, truncated?, command?, answers?")
     })?;
     validate(envelope, &payload)?;
+    let session = envelope.identity.assistant.clone().unwrap_or_default();
+    ctx.store
+        .inspect_assistant_container(&session, |assistant, _| {
+            require_interactive(assistant, envelope.identity.generation)
+        })?;
     let container = admission::container_of(&envelope.identity);
     let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
         Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
         Admission::New(admitted) => admitted,
     };
-    let session = envelope.identity.assistant.clone().unwrap_or_default();
     let input = NewOwnerInput {
         generation: envelope.identity.generation,
         turn: envelope.identity.turn,
@@ -122,6 +128,7 @@ pub(crate) fn journal(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         request: envelope.request_id.clone(),
     };
     receipts::commit_assistant(ctx, &admitted, move |assistant| {
+        require_interactive(assistant, envelope.identity.generation)?;
         let entry = assistant.journal_owner_input(&session, input);
         Ok(Commit {
             result: json!({"kind": "owner_input", "input": entry.id, "source": entry.source,
@@ -133,4 +140,20 @@ pub(crate) fn journal(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             post_pending: Vec::new(),
         })
     })
+}
+
+fn require_interactive(
+    assistant: &corral_core::assistant::AssistantContainer,
+    generation: u32,
+) -> Result<()> {
+    if assistant
+        .state
+        .generation(generation)
+        .is_some_and(|g| g.daemon_hosted)
+    {
+        return Err(bad(
+            "daemon-hosted assistants cannot fabricate owner input; device input is journaled by the daemon",
+        ));
+    }
+    Ok(())
 }
