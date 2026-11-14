@@ -11,7 +11,7 @@ mod sections;
 
 use nsh_core::prelude::*;
 
-use crate::model::{Destination, Form, SettingsSection};
+use crate::model::{DataState, Destination, Form, SettingsSection};
 use crate::screens::PhonePage;
 use crate::state::AppState;
 use crate::ui::kit::page::body;
@@ -42,7 +42,9 @@ pub fn screen(app: AppState) -> AnyElement {
 /// it and keeps the Ask button over it.
 pub fn section_phone(app: AppState, section: SettingsSection) -> PhonePage {
     let body = match section {
-        SettingsSection::Devices if !untracked(|| app.daemon()) => devices::phone(app),
+        SettingsSection::Devices if untracked(|| app.data.get() == DataState::Fixture) => {
+            devices::phone(app)
+        }
         other => page(app, other),
     };
     PhonePage {
@@ -58,6 +60,11 @@ pub fn section_phone(app: AppState, section: SettingsSection) -> PhonePage {
 
 /// The section's content on the current form.
 fn page(app: AppState, section: SettingsSection) -> AnyElement {
+    if untracked(|| app.data.get() == DataState::Disconnected)
+        && section != SettingsSection::Connection
+    {
+        return super::frame(app, Destination::Settings);
+    }
     if untracked(|| app.daemon()) {
         if let Some(line) = crate::model::settings::daemon_section_notice(section) {
             return parts::frame(

@@ -9,7 +9,7 @@ use super::parts::{
     act, cell, first_heading, frame, model_button, mono_cell, read, ring, test_id, under,
 };
 use crate::model::settings::{self, ConnectionCard, ConnectionView, LocalQueueRow, QueueRule};
-use crate::model::{Form, Hue};
+use crate::model::{DataState, Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::button::ButtonOptions;
 use crate::ui::kit::chip::{chip, illus};
@@ -25,6 +25,15 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 /// local queue when there is one, the policy table. Phone: the cards two to a row. Terminal:
 /// one card per row, the pressed one banded by NSH.
 pub fn page(app: AppState) -> AnyElement {
+    if untracked(|| app.data.get() == DataState::Disconnected) && crate::client::pairing_supported()
+    {
+        return frame(
+            app,
+            "Connection",
+            12.0,
+            vec![super::enrolment::pair_browser(app)],
+        );
+    }
     if untracked(|| app.daemon()) {
         let details = dynamic(move || {
             let rows = app.feed.with(settings::daemon_connection_details);

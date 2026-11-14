@@ -1,7 +1,6 @@
 //! The screens over the model, one module per destination, and the routing between them: a
-//! destination's screen, or on desktop and terminal the page above it. With no daemon at all
-//! (`DataState::Disconnected`) every route shows one frame instead: the title and the
-//! snapshot's line saying corrald cannot be reached.
+//! destination's screen, or on desktop and terminal the page above it. Disconnected routes
+//! show an unavailable frame; browser Settings keeps Connection available for pairing.
 
 pub mod agents;
 pub mod assistant;
@@ -83,7 +82,8 @@ pub fn content(app: AppState) -> AnyElement {
 }
 
 fn unavailable(data: DataState, destination: Destination) -> bool {
-    data == DataState::Disconnected
+    (data == DataState::Disconnected
+        && !(destination == Destination::Settings && crate::client::pairing_supported()))
         || (data == DataState::Daemon
             && !matches!(destination, Destination::Now | Destination::Settings))
 }
