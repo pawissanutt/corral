@@ -85,6 +85,9 @@ pub struct RowQuery {
     pub current_only: bool,
     pub open_only: bool,
     pub newest_first: bool,
+    /// Run/review-run records intersecting `[from, to)`, selected before paging.
+    /// `None` preserves the ordinary key-index query.
+    pub overlaps: Option<(jiff::Timestamp, jiff::Timestamp)>,
 }
 
 impl RowQuery {
@@ -98,6 +101,7 @@ impl RowQuery {
             current_only: false,
             open_only: false,
             newest_first: false,
+            overlaps: None,
         }
     }
 
@@ -155,6 +159,17 @@ impl RowQuery {
                 .is_none_or(|token| row.index.contains(token))
             && (!self.current_only || row.current)
             && (!self.open_only || row.open)
+            && self.overlaps.is_none_or(|(from, to)| {
+                let started = row.doc["started"]
+                    .as_str()
+                    .and_then(|at| at.parse::<jiff::Timestamp>().ok());
+                let ended = row.doc["ended"]
+                    .as_str()
+                    .and_then(|at| at.parse::<jiff::Timestamp>().ok());
+                matches!(row.part, TaskPart::Run | TaskPart::ReviewRun)
+                    && started.is_some_and(|at| at < to)
+                    && ended.is_none_or(|at| at >= from)
+            })
     }
 }
 
@@ -172,7 +187,7 @@ pub struct TaskQuery {
     pub order: TaskOrder,
 }
 
-/// Events in ascending seq order matching every given filter.
+/// Events matching every filter, in seq order unless `chronological` is selected.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EventQuery {
     pub after: Option<EventSeq>,
@@ -182,9 +197,18 @@ pub struct EventQuery {
     /// Empty matches every kind.
     pub kinds: Vec<String>,
     pub run: Option<String>,
+    /// Also include legacy events without a recorded run when `run` is specified.
+    pub include_runless: bool,
     pub newest_first: bool,
     /// Excludes malformed legacy rows before paging.
     pub valid_only: bool,
+    /// Inclusive timestamp lower bound and exclusive timestamp upper bound.
+    pub since: Option<jiff::Timestamp>,
+    pub until: Option<jiff::Timestamp>,
+    /// Order by `(timestamp, seq)` instead of seq, in the requested direction.
+    /// Time-filtered readers use the corresponding timestamp indexes; default
+    /// sequence readers retain their existing order and exclusive seq bounds.
+    pub chronological: bool,
 }
 
 /// Condition runs in `opened_seq` order.

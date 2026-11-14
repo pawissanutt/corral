@@ -23,6 +23,17 @@ The app remains a separate Cargo workspace and uses an app-local client on `corr
 
 The daemon hosts assistant sessions; Ask also targets the PM inbox. Settings exposes configured profiles and the assistant model selection, while provider availability and quotas remain reported only where known. The app guide documents attachments, reconnect and result recovery.
 
+Timeline reads use indexed half-open timestamp windows (including owner/PM points),
+overlapping recorded sessions, and predecessor phase state. Completed historical
+attempts do not consume the window's lifecycle budget. Crossing phases keep their
+recorded start and session attribution; events at the exclusive upper bound are not
+applied, so an unclosed phase is open as of that bound, not ended at the reader's clock.
+Needs-me context includes decision receipts since the last unconditional close:
+one answered decision does not imply that every pending decision was answered.
+The existing task/window/context safety budgets still fail explicitly for genuinely
+oversized selections. Burnup remains cumulative over real task creation and landing
+events; a Timeline date range does not narrow its totals.
+
 Private smoke has launched the native terminal and paired packaged Chromium against a private daemon, with matching trusted-side pairing codes and a live seven-task board and connected Settings. It does not establish the full browser journeys or root gate. GTK desktop and a physical phone have not been built or tested on this host; phone web layout remains in scope.
 
 The architecture's section 1 and its phases are historical proposals, not a current inventory. Its proposed alternate rollover summary profile is not a canonical supported setting. Do not plan the already implemented daemon and command router again from scratch.

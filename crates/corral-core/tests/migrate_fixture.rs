@@ -199,6 +199,7 @@ fn a_real_board_migrates_to_ordinary_rows_run_keyed_events_and_valid_receipts() 
             run: Some(run.clone()),
             newest_first: false,
             valid_only: false,
+            ..EventQuery::default()
         };
         let mut found = 0;
         let mut page = PageReq::first(500);

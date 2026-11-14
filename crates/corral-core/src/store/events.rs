@@ -540,6 +540,7 @@ impl Store {
             run: run.map(str::to_owned),
             newest_first: false,
             valid_only: true,
+            ..EventQuery::default()
         };
         view.events(&query, PageReq::first(limit))?
             .items

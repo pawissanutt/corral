@@ -202,6 +202,7 @@ impl Store {
             current_only: false,
             open_only: false,
             newest_first: false,
+            overlaps: None,
         };
         let view = self.view()?;
         let mut docs = Vec::new();

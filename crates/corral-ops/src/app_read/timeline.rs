@@ -5,9 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail, ensure};
-use corral_core::backend::{
-    HeadQuery, PageReq, RowQuery, TaskHeader, TaskNum, TaskOrder, TaskPart, TaskQuery,
-};
+use corral_core::backend::{HeadQuery, PageReq, TaskHeader, TaskNum, TaskOrder, TaskQuery};
 use corral_core::{Actor, Event, RunHead};
 use corral_protocol::detail::{
     Burnup, BurnupPoint, DetailBody, TimelineAction, TimelineBy, TimelineKind, TimelineLane,
@@ -18,7 +16,14 @@ use jiff::Timestamp;
 use crate::Ctx;
 use crate::phases::{Phase, Span};
 
+#[path = "timeline_history.rs"]
+mod history;
+
+#[cfg(not(test))]
 const PAGE: u32 = 256;
+// Exercise continuation with a small fixture, rather than hundreds of test events.
+#[cfg(test)]
+const PAGE: u32 = 4;
 const MAX_TASKS: usize = 20_000;
 const MAX_ROWS: usize = 100_000;
 const PHASE_EVENTS: &[&str] = &[
@@ -109,35 +114,6 @@ fn header(ctx: &Ctx, id: &str) -> Result<TaskHeader> {
         .head(TaskNum(num))?
         .map(|doc| doc.header)
         .with_context(|| format!("task {id} not found"))
-}
-
-fn run_rows(ctx: &Ctx, task: &TaskHeader, budget: &mut usize) -> Result<Vec<(String, RunHead)>> {
-    let view = ctx.store.view()?;
-    let mut runs = Vec::new();
-    for part in [TaskPart::Run, TaskPart::ReviewRun] {
-        let query = RowQuery::part(part);
-        let mut page = PageReq::first(PAGE);
-        loop {
-            let found = view
-                .rows(task.num, &query, page.clone())
-                .context("reading recorded timeline runs")?;
-            *budget += found.items.len();
-            ensure!(
-                *budget <= MAX_ROWS,
-                "unavailable: timeline exceeds {MAX_ROWS} recorded rows; select a narrower range"
-            );
-            for row in found.items {
-                let run: RunHead =
-                    serde_json::from_value(row.doc).context("decoding timeline run")?;
-                runs.push((row.key, run));
-            }
-            match found.next {
-                Some(next) => page.after = Some(next),
-                None => break,
-            }
-        }
-    }
-    Ok(runs)
 }
 
 fn events(ctx: &Ctx, task: Option<&str>, kinds: &[&str], budget: &mut usize) -> Result<Vec<Event>> {
@@ -262,8 +238,16 @@ fn sorted_lanes(lanes: BTreeMap<String, TimelineLane>) -> Vec<TimelineLane> {
     lanes
         .into_values()
         .map(|mut lane| {
-            lane.segments
-                .sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
+            // All endpoints are Timestamp's UTC rendering. Removing the trailing
+            // Z makes an integral second sort before fractions of that second.
+            fn key(at: &Option<String>) -> Option<&str> {
+                at.as_deref().map(|at| at.trim_end_matches('Z'))
+            }
+            lane.segments.sort_by(|a, b| {
+                key(&a.from)
+                    .cmp(&key(&b.from))
+                    .then_with(|| key(&a.to).cmp(&key(&b.to)))
+            });
             lane
         })
         .collect()
@@ -338,6 +322,7 @@ pub(super) fn timeline(ctx: &Ctx, from: &str, to: &str, by: TimelineBy) -> Resul
     let mut owner_actions = Vec::new();
     let mut pm = Vec::new();
     let mut budget = 0;
+    let point_events = history::read(ctx, &history::query(None, Some(from), to), &mut budget)?;
     let mut tasks: BTreeMap<_, _> = headers(ctx, None, Some(from))?
         .into_iter()
         .map(|task| (task.id.clone(), task))
@@ -345,20 +330,88 @@ pub(super) fn timeline(ctx: &Ctx, from: &str, to: &str, by: TimelineBy) -> Resul
     for task in indexed_headers(ctx, HeadQuery::Open { project: None })? {
         tasks.insert(task.id.clone(), task);
     }
+    let view = ctx.store.view()?;
+    for id in point_events
+        .iter()
+        .filter_map(|event| event.task.as_deref())
+        .collect::<BTreeSet<_>>()
+    {
+        if tasks.contains_key(id) {
+            continue;
+        }
+        if let Ok(id) = corral_core::Store::normalize_id(id)
+            && let Some(num) = id.strip_prefix("T-").and_then(|num| num.parse().ok())
+            && let Some(doc) = view.head(TaskNum(num))?
+        {
+            tasks.insert(doc.header.id.clone(), doc.header);
+        }
+    }
     ensure!(
         tasks.len() <= MAX_TASKS,
         "unavailable: timeline range exceeds {MAX_TASKS} tasks"
     );
     for task in tasks.into_values() {
-        if task.created >= to || (!task.is_open() && task.fields.updated < from) {
+        if task.created >= to {
             continue;
         }
-        let runs = run_rows(ctx, &task, &mut budget)?;
-        let task_events = events(ctx, Some(&task.id), PHASE_EVENTS, &mut budget)?;
+        let mut task_events = history::phase_window(ctx, &task.id, from, to, &mut budget)?;
+        let dispatch = history::dispatch(ctx, &task.id, from, &mut budget)?;
+        let floor = dispatch.as_ref().map(|event| event.ts);
+        let dispatch_run = dispatch
+            .as_ref()
+            .and_then(|event| event.detail["run"].as_str())
+            .map(str::to_owned);
+        if let Some(event) = dispatch {
+            task_events.push(event);
+        }
+        let mut runs = BTreeMap::new();
+        history::run_rows(
+            ctx,
+            &task,
+            Some((from, to)),
+            &task_events,
+            &mut runs,
+            &mut budget,
+        )?;
+        let legacy_run = dispatch_run.or_else(|| {
+            runs.iter()
+                .filter(|(key, run)| !key.contains('/') && run.started < from)
+                .max_by_key(|(_, run)| run.started)
+                .map(|(_, run)| run.id.clone())
+        });
+        let ids: BTreeSet<_> = runs
+            .iter()
+            .filter(|(key, run)| !key.contains('/') && run.started < from)
+            .map(|(_, run)| run.id.clone())
+            .chain(
+                task_events
+                    .iter()
+                    .filter_map(|event| event.detail["run"].as_str().map(str::to_owned)),
+            )
+            .collect();
+        for run in &ids {
+            task_events.extend(history::context(
+                ctx,
+                &task.id,
+                run,
+                legacy_run.as_deref() == Some(run.as_str()),
+                floor,
+                from,
+                &mut budget,
+            )?);
+        }
+        task_events.extend(history::queue(ctx, &task.id, from, &mut budget)?);
+        task_events.sort_by_key(|event| (event.ts, event.seq));
+        task_events.dedup_by_key(|event| event.seq);
+        // Context can name a reviewer session that ended before the range.
+        history::run_rows(ctx, &task, None, &task_events, &mut runs, &mut budget)?;
         let head = ctx.store.head(&task.id)?;
-        // The projector obtains historical dispatch windows from events. A shell avoids
-        // assembling transcripts, checkpoint bodies or unrelated task histories.
-        let shell = head.to_shell_task()?;
+        let mut shell = head.to_shell_task()?;
+        shell.runs = runs
+            .iter()
+            .filter(|(key, _)| !key.contains('/'))
+            .map(|(_, run)| Ok(serde_json::from_value(serde_json::to_value(run)?)?))
+            .collect::<Result<Vec<_>>>()?;
         let refs: Vec<_> = task_events.iter().collect();
         let mut spans = crate::phases::task_phases(&shell, &refs);
         recorded_exits(&mut spans, &refs);
@@ -578,10 +631,7 @@ pub(super) fn timeline(ctx: &Ctx, from: &str, to: &str, by: TimelineBy) -> Resul
     }
     // Point actions carry actual authorship, including workspace events and owner verbs
     // outside the phase-pairing vocabulary; no PM interval is inferred from these points.
-    for event in events(ctx, None, &[], &mut budget)? {
-        if event.ts < from || event.ts >= to {
-            continue;
-        }
+    for event in point_events {
         let target = match event.actor {
             Some(Actor::Owner) => &mut owner_actions,
             Some(Actor::Pm) => &mut pm,
@@ -594,8 +644,6 @@ pub(super) fn timeline(ctx: &Ctx, from: &str, to: &str, by: TimelineBy) -> Resul
             source_ref: Some(format!("event:{}", event.seq)),
         });
     }
-    owner_actions.sort_by(|a, b| a.at.cmp(&b.at));
-    pm.sort_by(|a, b| a.at.cmp(&b.at));
     Ok(DetailBody::Timeline(TimelinePage {
         lanes: sorted_lanes(lanes),
         owner_actions,
@@ -663,3 +711,7 @@ pub(super) fn burnup(ctx: &Ctx, scope: &str) -> Result<DetailBody> {
         points,
     }))
 }
+
+#[cfg(test)]
+#[path = "timeline_tests.rs"]
+mod tests;

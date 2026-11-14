@@ -735,6 +735,7 @@ fn imported_rows_equal_a_v2_write_and_add_only_the_event_only_panes() {
         run: Some("R1".to_owned()),
         newest_first: false,
         valid_only: true,
+        ..EventQuery::default()
     };
     let kinds: Vec<String> = view
         .events(&query, PageReq::first(10))

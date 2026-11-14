@@ -90,9 +90,16 @@ workspace store. The daemon's static key does not: it is a private `0600`
 `$XDG_STATE_HOME/corral/<store-id>/identity.key` file (fallback `$HOME/.local/state`).
 Keep that state directory to preserve browser pins across daemon restarts.
 
-WebSocket sessions accept only hello, ping/bye, health reads and board/health
-subscriptions. Commands, opaque reads, nudges, shutdown and device administration are
-refused before dispatch. Existing CLI executable/build checks are unchanged.
+Enrolled WebSocket sessions negotiate typed app subscriptions, detail pages, assistant
+chat and permitted actions. Device authority, canonical revisions and confirmations
+are checked on the daemon. Generic CLI commands, opaque CLI reads, nudges, shutdown
+and trusted-side device administration remain refused on this carrier. Existing
+CLI executable/build checks are unchanged.
+
+Typed app topics publish coherent Store snapshots even if another writer commits
+while they are read; the next refresh catches up. Lease and command-journal
+bookkeeping does not invalidate cached topics.
+
 See [the app guide](../../apps/corral-app/README.md#live-data) for enrolment and recovery.
 
 
