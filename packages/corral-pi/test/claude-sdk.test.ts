@@ -190,7 +190,7 @@ test("retention aligns SDK and history markers, while summary requests disable c
     const { message } = await send(context);
     expect(message.stopReason).toBe("stop");
     const env = run.options[0]?.env;
-    expect(env?.CLAUDE_CODE_PROMPT_CACHE_TTL).toBe(retention === "none" ? "5m" : retention);
+    expect(env?.CLAUDE_CODE_PROMPT_CACHE_TTL).toBe(retention === "none" ? "1h" : retention);
     expect(env?.DISABLE_PROMPT_CACHING).toBe(retention === "none" ? "1" : undefined);
     expect(env?.FORCE_PROMPT_CACHING_5M).toBe(retention === "5m" ? "1" : undefined);
     const content = run.prompts[0]?.message.content;

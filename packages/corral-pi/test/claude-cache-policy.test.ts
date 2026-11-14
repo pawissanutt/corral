@@ -11,7 +11,8 @@ function history(size: number, ttl: "5m" | "1h" = "5m"): PromptBlock[] {
 }
 
 test("retention rejects unknown configuration instead of silently choosing a lifetime", () => {
-  expect(resolveCacheRetention(undefined, undefined)).toBe("5m");
+  expect(resolveCacheRetention(undefined, undefined)).toBe("1h");
+  expect(resolveCacheRetention("5m", undefined)).toBe("5m");
   expect(() => resolveCacheRetention("forever", undefined)).toThrow("claude_cache_retention_invalid");
   expect(resolveCacheRetention("1h", "none")).toBe("none");
 });
