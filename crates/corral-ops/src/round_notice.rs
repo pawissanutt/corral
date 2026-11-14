@@ -68,13 +68,27 @@ pub(crate) fn latest_review<T: corral_core::TaskRef + ?Sized>(
     )))
 }
 
+/// Order a persisted transition after its predecessor even across independent clocks.
+pub(crate) fn ordered_after(
+    at: jiff::Timestamp,
+    previous: Option<jiff::Timestamp>,
+) -> anyhow::Result<jiff::Timestamp> {
+    use anyhow::Context;
+    match previous {
+        Some(previous) if at <= previous => Ok(previous
+            .checked_add(jiff::SignedDuration::from_nanos(1))
+            .context("cannot order review transition after maximum timestamp")?),
+        _ => Ok(at),
+    }
+}
+
 /// The round a changes request reopens: one past the run's previous round, bound to the review
 /// attempt that returned the changes and the candidate they apply to.
-pub(crate) fn next_round(run: &Run, at: jiff::Timestamp) -> ChangesRound {
+pub(crate) fn next_round(run: &Run, at: jiff::Timestamp) -> anyhow::Result<ChangesRound> {
     let record = run.review.as_ref();
-    ChangesRound {
+    Ok(ChangesRound {
         n: run.changes_round.as_ref().map_or(1, |round| round.n + 1),
-        at,
+        at: ordered_after(at, record.map(|review| review.at))?,
         attempt: record
             .and(run.review_runs.last())
             .map(|child| child.id.clone()),
@@ -83,7 +97,7 @@ pub(crate) fn next_round(run: &Run, at: jiff::Timestamp) -> ChangesRound {
             .map(|record| record.sha.clone())
             .or_else(|| crate::gate::worktree_head(run))
             .unwrap_or_else(|| "unknown".into()),
-    }
+    })
 }
 
 fn round_identity(round: &ChangesRound) -> String {

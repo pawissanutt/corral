@@ -39,7 +39,10 @@ fn returned_for_changes(policy: SessionPolicy, change_candidate: bool) {
     let approval = before.review.as_ref().unwrap();
 
     // When the owner reopens that same run through the native changes transition.
-    let task = corral_ops::request_changes(&fx.ctx, &id, "address the finding").unwrap();
+    corral_core::clock::pin_thread(Some(approval.at));
+    let task = corral_ops::request_changes(&fx.ctx, &id, "address the finding");
+    corral_core::clock::pin_thread(None);
+    let task = task.unwrap();
 
     // Then history stays intact, but the contract is review/quick.
     assert_eq!(task.status, Status::Running);
@@ -169,7 +172,13 @@ fn renewed_approval_after_owner_changes_restores_landing_gate() {
     // Given a changes round and a fresh quick receipt on its changed candidate.
     let fx = Fx::new(true, |_| {});
     let id = approved(&fx);
-    corral_ops::request_changes(&fx.ctx, &id, "address the finding").unwrap();
+    let old_approval = fx.run(&id).review.unwrap().at;
+    corral_core::clock::pin_thread(Some(old_approval - jiff::SignedDuration::from_hours(1)));
+    let reopened = corral_ops::request_changes(&fx.ctx, &id, "address the finding");
+    corral_core::clock::pin_thread(None);
+    reopened.unwrap();
+    let round = fx.run(&id).changes_round.unwrap().at;
+    assert!(round > old_approval);
     fx.commit(&id, "finding.txt");
     let gate = fx.gate(&id);
     assert_eq!(gate.tier.as_ref().unwrap().tier, "quick");
@@ -178,7 +187,15 @@ fn renewed_approval_after_owner_changes_restores_landing_gate() {
     corral_ops::done(&fx.ctx, &id, SUMMARY).unwrap();
 
     // When the owner approves the new candidate.
-    corral_ops::verdict(&fx.ctx, &id, Verdict::Approve, "finding addressed").unwrap();
+    let approval = corral_ops::verdict_at(
+        &fx.ctx,
+        &id,
+        Verdict::Approve,
+        "finding addressed",
+        round - jiff::SignedDuration::from_hours(1),
+    )
+    .unwrap();
+    assert!(approval.at > round);
 
     // Then the retained changes round no longer masks landing/full.
     let task = fx.ctx.store.get(&id).unwrap();
