@@ -46,6 +46,7 @@ pub(super) fn cases() -> Vec<Case> {
                 OpKind::PurgeArtifact,
                 OpKind::Authorization,
                 OpKind::PutRecords,
+                OpKind::CommitPaidEpisode,
                 OpKind::Lifecycle,
                 OpKind::Claim,
                 OpKind::ScratchClose,
@@ -129,6 +130,7 @@ fn atomicity(make: MakeFixture<'_>) -> Result<()> {
 /// operation (which changes the operation's own state); the write computed from the old state
 /// conflicts either way.
 fn stale_preconditions(make: MakeFixture<'_>) -> Result<()> {
+    super::paid::atomic(make)?;
     let mut covered = BTreeSet::new();
     for kind in OpKind::ALL {
         let fx = make();

@@ -72,6 +72,7 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
         Admission::New(admitted) => admitted,
     };
+    let container = container.clone();
     let generation = envelope.identity.generation;
     let is_pm = envelope.identity.role == AgentRole::Pm;
     receipts::commit_selected(
@@ -87,8 +88,26 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 .current_generation()
                 .and_then(|g| g.connection.clone());
             let connection = binding.as_ref().map(|b| b.connection);
-            if let Some(connection) = connection {
+            if let Some(connection) = connection.filter(|c| !c.api_key()) {
                 connection.require_admission()?;
+            }
+            let mut paid = super::paid_budget::PaidBudget::load(
+                &ctx.store,
+                &container,
+                state,
+                binding.as_ref(),
+            )?;
+            if paid.is_some() && p.action != "state" {
+                let binding = binding
+                    .as_ref()
+                    .ok_or_else(|| bad("missing paid binding"))?;
+                if p.provider.as_deref() != Some(binding.connection.provider())
+                    || p.model.as_deref() != Some(binding.model.as_str())
+                {
+                    return Err(bad(
+                        "paid request model/provider differs from its authenticated binding",
+                    ));
+                }
             }
             let feature = state
                 .current_generation()
@@ -100,12 +119,18 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 .map(|f| BudgetLimits::from_settings(&f.settings))
                 .unwrap_or_default();
             // Retired generations carry their gap in the container's archive.
-            let legacy_usage_gap = state.legacy_usage_gap();
+            let legacy_usage_gap = state.legacy_usage_gap()
+                || paid.as_ref().is_some_and(|p| p.episode.legacy_usage_gap);
             let mut guard_paused = is_pm && crate::pm_usage_guard::paused(ctx, generation)?;
             let admitted = match p.action.as_str() {
                 "reserve" => {
                     if p.response.is_some() || p.tokens == 0 {
                         return Err(bad("reserve needs positive tokens and no response"));
+                    }
+                    if paid.is_some()
+                        && let Some(task) = container.task()
+                    {
+                        crate::hold::require_clear(&ctx.store, &ctx.store.head(task)?)?;
                     }
                     if guard_paused {
                         return Ok(Commit {
@@ -128,19 +153,40 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                             post_pending: Vec::new(),
                         });
                     }
-                    state.budget.reserve(
-                        BudgetRequest {
-                            connection,
-                            request: p.request,
-                            generation,
-                            tokens: p.tokens,
-                            usd_nanos: p.usd_nanos,
-                            priced: p.priced,
-                            unbounded: p.unbounded,
-                            response: None,
-                        },
-                        limits,
-                    )
+                    let request = BudgetRequest {
+                        connection,
+                        request: p.request,
+                        generation,
+                        tokens: p.tokens,
+                        usd_nanos: p.usd_nanos,
+                        priced: p.priced,
+                        unbounded: p.unbounded,
+                        response: None,
+                    };
+                    if let Some(paid) = &mut paid {
+                        // Reconcile the SAME physical request after a lost response. Never
+                        // manufacture another request identity or a second projection.
+                        if paid
+                            .episode
+                            .owners
+                            .iter()
+                            .any(|r| r.request == request.request)
+                        {
+                            paid.episode.reserve(&paid.link, &paid.owner, request)?
+                        } else {
+                            let mut projection = state.budget.clone();
+                            if projection.reserve(request.clone(), limits)
+                                && paid.episode.reserve(&paid.link, &paid.owner, request)?
+                            {
+                                state.budget = projection;
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                    } else {
+                        state.budget.reserve(request, limits)
+                    }
                 }
                 "settle" => {
                     let response = p
@@ -153,6 +199,16 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                         .any(|r| r.response.as_ref() == Some(&response));
                     let guard_response =
                         (is_pm && !duplicate && p.usage.is_some()).then(|| response.clone());
+                    if let Some(paid) = &mut paid {
+                        paid.episode.settle(
+                            &paid.link,
+                            &paid.owner,
+                            &p.request,
+                            response.clone(),
+                            p.tokens,
+                            p.usd_nanos,
+                        )?;
+                    }
                     state
                         .budget
                         .settle(&p.request, generation, response, p.tokens, p.usd_nanos)
@@ -178,9 +234,30 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 "state" => true,
                 _ => return Err(bad("unknown budget action")),
             };
+            if let Some(paid) = &paid {
+                paid.save(&ctx.store)?;
+            }
             let (tokens, usd_nanos) = state.budget.totals();
+            let paid_state = paid.as_ref().map(|p| json!({
+                "episode":p.episode.id, "epoch":p.episode.epoch,
+                "allowance_nanos":p.episode.approval.allowance_nanos,
+                "consumed_or_reserved_nanos":p.episode.ledger.totals().1,
+                "uncertain_requests":p.episode.ledger.requests.iter().filter(|r| r.response.is_none()).count(),
+            }));
+            let subscription_estimate_nanos = state
+                .budget
+                .requests
+                .iter()
+                .filter(|r| {
+                    r.connection.is_some_and(|c| {
+                        c.billing() == corral_core::connection::BillingMode::Subscription
+                    })
+                })
+                .fold(0u64, |n, r| n.saturating_add(r.usd_nanos));
             Ok(Commit {
-                result: json!({"admitted":admitted, "exhausted":state.budget.exhausted(limits),
+                result: json!({"admitted":admitted, "exhausted":state.budget.exhausted(limits)
+                    || paid.as_ref().is_some_and(|p| p.episode.ledger.totals().1 >= p.episode.approval.allowance_nanos),
+            "paid":paid_state, "subscription_estimate_nanos":subscription_estimate_nanos,
             "guard_paused":guard_paused,
             "connection":connection, "billing":connection.map(|c| c.billing()),
             "binding_digest":binding.as_ref().map(|b| &b.digest),

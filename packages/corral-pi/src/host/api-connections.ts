@@ -1,6 +1,6 @@
-// Guarded direct Pi clients. Only trusted host code may install the future financial adapter;
+// Guarded direct Pi clients. Only trusted host code may install the financial adapter;
 // no bootstrap field, credential, runtime override or model output is an admission receipt.
-import type { CredentialStore, Model, StreamFunction } from "@earendil-works/pi-ai";
+import type { AssistantMessage, CredentialStore, Model, StreamFunction } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { CONNECTIONS, type ApiConnectionId, connectionRules, isApiConnection, requirePaidAdmission, validApiKey } from "../auth/connections.ts";
@@ -12,12 +12,13 @@ import { guardedFetch } from "./restrict.ts";
 import { withProviderFailures } from "./provider-failure.ts";
 
 /** Invoked at EACH physical POST, including a pinned client's internal compatibility retry. */
+export interface ApiPermit { settle(message: AssistantMessage): Promise<void> }
 export type ApiAdmission = (request: {
   readonly binding: ConnectionBinding;
   readonly model: Model<import("@earendil-works/pi-ai").Api>;
   readonly context: Parameters<StreamFunction>[1];
   readonly options: Parameters<StreamFunction>[2];
-}) => Promise<void>;
+}) => Promise<void | ApiPermit>;
 
 export async function createApiCatalog(
   credentials: CredentialStore, binding: ConnectionBinding, send: Fetch,
@@ -56,6 +57,9 @@ export async function createApiCatalog(
     const output = Math.min(options?.maxTokens ?? model.maxTokens, model.maxTokens);
     if (!Number.isSafeInteger(output) || output <= 0) throw new Error("connection_invalid: unbounded API output");
     // Auth is pinned, not merely prefix checked: remove OAuth, env, headers and base-URL overrides.
+    // Each actual POST gets its own permit. Failed/compatibility attempts stay reserved;
+    // only the last physical attempt can own the successful stream completion.
+    const admission: { permit: ApiPermit | undefined } = { permit: undefined };
     const fetch: Fetch = async (input, init) => {
       if (await key() !== apiKey) throw new Error("credentials_unavailable: selected API credential changed before dispatch");
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
@@ -69,11 +73,14 @@ export async function createApiCatalog(
         payload = JSON.parse(init.body) as Record<string, unknown>;
       } catch { throw new Error("connection_invalid: unrecognized API request body"); }
       const limit = connection === "anthropic-api" ? payload.max_tokens : payload.max_output_tokens;
+      if (payload.service_tier !== undefined && payload.service_tier !== "default") {
+        throw new Error("budget_unpriced: paid request service tier is not bounded");
+      }
       if (payload.model !== model.id || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0 || limit > output) {
         throw new Error("connection_invalid: request changed the approved model/output bound");
       }
       if (!admit) requirePaidAdmission(connection);
-      else await admit({ binding, model, context, options: { ...options, maxTokens: output } });
+      else admission.permit = await admit({ binding, model, context, options: { ...options, maxTokens: output } }) || undefined;
       return guarded.fetch(input, init);
     };
     const pinnedOptions = {
@@ -83,6 +90,7 @@ export async function createApiCatalog(
     const source = withProviderFailures(connection, stream)({ ...model, headers: {} }, context, pinnedOptions);
     return (async function* () {
       for await (const event of source) {
+        if (event.type === "done" && event.reason !== "deferred") await admission.permit?.settle(event.message);
         // Provider/SDK error bodies may echo request auth; neither UI nor receipts may retain it.
         if (event.type === "error") {
           const error: typeof event.error = JSON.parse(JSON.stringify(event.error).replaceAll(apiKey, "<redacted>"));

@@ -17,6 +17,7 @@ pub(crate) mod owner_action;
 pub(crate) mod owner_ask;
 mod owner_input;
 pub(crate) mod owner_prompt;
+mod paid_budget;
 pub(crate) mod planning;
 pub(crate) mod pm;
 pub(crate) mod pm_actions;

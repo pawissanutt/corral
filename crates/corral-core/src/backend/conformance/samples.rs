@@ -574,6 +574,7 @@ pub(super) fn sample(kind: OpKind, fx: &Fixture) -> Result<Operation> {
                 reservations: Vec::new(),
             })
         }
+        OpKind::CommitPaidEpisode => return crate::backend::conformance::paid_sample(fx),
         OpKind::BindSession => Operation::BindSession(BindSession {
             socket: "/tmp/herdr.sock".to_owned(),
             binding: json!({"session": "main"}),

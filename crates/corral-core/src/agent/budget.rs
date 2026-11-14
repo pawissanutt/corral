@@ -92,10 +92,16 @@ impl BudgetLedger {
         tokens: u64,
         usd: u64,
     ) -> Result<(), String> {
+        let connection = self
+            .requests
+            .iter()
+            .find(|r| r.request == request && r.generation == generation)
+            .ok_or("unknown budget reservation")?
+            .connection;
         let duplicate = self
             .requests
             .iter()
-            .any(|r| r.response.as_ref() == Some(&response));
+            .any(|r| r.connection == connection && r.response.as_ref() == Some(&response));
         let entry = self
             .requests
             .iter_mut()

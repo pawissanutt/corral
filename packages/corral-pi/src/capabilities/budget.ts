@@ -4,6 +4,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { calculateCost, type Api, type Model, type StreamFunction, type StreamOptions, type Usage } from "@earendil-works/pi-ai";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { getServiceTierCostMultiplier } from "@earendil-works/pi-ai/api/openai-codex-responses";
+import type { ApiAdmission } from "../host/api-connections.ts";
 
 export interface BudgetReply extends Record<string, unknown> {
   admitted?: boolean;
@@ -75,6 +76,42 @@ export class RunBudget {
     for (const controller of this.active) controller.abort(new Error("budget_exhausted"));
     this.options.cancel();
   }
+  /** Trusted catalog adapter, called at EVERY physical paid POST, not once per logical
+   * stream. No episode/billing identity is sent: Rust resolves those from the host binding. */
+  readonly physical: ApiAdmission = async ({ binding, model, options }) => {
+    if (this.stopped) throw new Error("budget_exhausted: paid episode is stopped");
+    options?.signal?.throwIfAborted();
+    const request = randomUUID();
+    const tier = options && "serviceTier" in options ? options.serviceTier : undefined;
+    if (tier !== undefined && tier !== "default") throw new Error("budget_unpriced: paid service tier has no conservative bound");
+    const output = Math.min(options?.maxTokens ?? model.maxTokens, model.maxTokens);
+    const bound = reservation(model, output);
+    if (!bound.priced) throw new Error("budget_unpriced: paid attempt has no conservative price");
+    this.last = await this.options.record({ kind: "budget", action: "reserve", request, ...bound,
+      unbounded: false, provider: model.provider, model: binding.model });
+    const paid = this.last.paid;
+    if (this.last.admitted !== true || typeof paid !== "object" || paid === null
+        || !("episode" in paid) || typeof paid.episode !== "string" || paid.episode.length === 0
+        || !("epoch" in paid) || typeof paid.epoch !== "number" || !Number.isSafeInteger(paid.epoch) || paid.epoch <= 0
+        || this.last.connection !== binding.connection || this.last.binding_digest !== binding.digest) {
+      this.stop();
+      throw new Error("budget_exhausted: canonical paid admission refused");
+    }
+    // An admitted request may exactly fill the allowance. Do not abort that request merely
+    // because no further attempt can fit; a retry must obtain another physical permit.
+    options?.signal?.throwIfAborted();
+    let settled = false;
+    return { settle: async message => {
+      if (settled) throw new Error("budget_accounting_refused: physical attempt already settled");
+      const usage = actual(model, message.usage, 1);
+      if (!usage.tokens) return; // incomplete usage is still uncertain
+      const response = createHash("sha256").update(JSON.stringify([binding.connection, message.responseId ?? request])).digest("hex");
+      this.last = await this.options.record({ kind: "budget", action: "settle", request, response,
+        purpose: this.purpose(options), cache_lineage: options?.sessionId, ...usage, model: binding.model });
+      settled = true;
+      if (this.last.exhausted) this.stop();
+    } };
+  };
   async refresh(): Promise<void> {
     this.last = await this.options.record({ kind: "budget", action: "state", request: randomUUID() });
     if (this.last.exhausted) this.stop();

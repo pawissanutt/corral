@@ -10,6 +10,7 @@ mod cases_storage;
 mod cases_tasks;
 mod cases_views;
 mod lesson_rows;
+mod paid;
 mod question_events;
 mod samples;
 
@@ -107,6 +108,11 @@ pub fn cases() -> Vec<Case> {
     all.extend(question_events::cases());
     all.extend(lesson_rows::cases());
     all
+}
+
+/// Shared operation sample, also consumed by the SQLite integration fault fixtures.
+pub fn paid_sample(fx: &Fixture) -> Result<Operation> {
+    paid::sample(fx)
 }
 
 /// Runs one named case against fixtures from `make`.
