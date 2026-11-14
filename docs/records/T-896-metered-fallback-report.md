@@ -36,9 +36,9 @@ All commands used null stdin and synthetic/local fixtures. Raw logs are attached
 - `cargo test -p corral-ops --lib same_model_candidates_match -- --nocapture`: passed; its original-matcher failing-first log is attached separately.
 - In `packages/corral-pi`: `bun run typecheck` and `bun test src/host/paid-budget.test.ts test/budget.test.ts test/api-connections.test.ts`: passed, 12 tests / 206 assertions, approximately 0.7s.
 - Changed-file LSP diagnostics were attempted. Indexing deadlines/unlinked-file coverage were not treated as clean results; the targeted compiler and package typecheck above are the fallback verification.
-- The run's receipted **quick** gate is requested only after commit and final rebase. Its receipt/log supplies the post-rebase gate result; no other tier is run manually.
+- Receipted **quick** gates run only after commit and final rebase, once per round. The first stopped at the size check: the new SQLite code made `sqlite/tx.rs` 804 SLOC. Reservation collection now lives in `CommitPaidEpisode` and is shared by both backends, reducing that file below 800 without changing behavior. The next receipt/log supplies the post-rebase result; no other tier is run manually.
 
-Test cost: five new cheap unit/contract tests; the existing shared backend conformance case is extended. No new E2E, live-server, process-crash or load matrices. Observed new test bodies total well below one second, excluding compilation. Gate cost reporting remains authoritative.
+Test cost: the first quick gate reports exactly five new registrations (four Rust, one Bun), unmeasured there because the size check stopped before execution. Five new cheap unit/contract tests are independently measured above; the existing shared backend conformance case is extended. No new E2E, live-server, process-crash or load matrices. Observed new test bodies total well below one second, excluding compilation. Gate cost reporting remains authoritative.
 
 ## Disabled boundaries and T-897 integration
 

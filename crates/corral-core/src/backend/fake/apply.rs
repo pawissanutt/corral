@@ -649,13 +649,7 @@ fn op_reservations(op: &Operation) -> Vec<ReservationUse> {
         Operation::CreateTask(op) => op.reservations.clone(),
         Operation::AppendEvents(op) => op.reservations.clone(),
         Operation::PutRecords(op) => op.reservations.clone(),
-        Operation::CommitPaidEpisode(op) => op
-            .records
-            .reservations
-            .iter()
-            .chain(op.task.iter().flat_map(|t| &t.change.reservations))
-            .cloned()
-            .collect(),
+        Operation::CommitPaidEpisode(op) => op.reservations(),
         Operation::Claim(op) => op.reservations.clone(),
         other => other
             .task_change()
