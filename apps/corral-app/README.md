@@ -16,7 +16,7 @@ The app includes:
 
 The command palette's **Demo** group changes Connection, Data and Assistant states and opens the hotkey window, share sheet and lock-screen push demos. Open the palette with `Ctrl K`.
 
-The app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain, not a member of corral's workspace. Design sources are `/home/pawis/corral-app-design/REQUIREMENTS.md`, `ARCHITECTURE.md` and `mockup/`.
+The app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain, not a member of corral's workspace. The [design handoff](../../docs/app-design/README.md) contains the requirements, architecture proposal and runnable mockup, with their authority and implementation-status caveats.
 
 ## Quick start
 
