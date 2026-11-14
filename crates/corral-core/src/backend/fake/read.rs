@@ -388,23 +388,32 @@ impl ReadView for FakeView {
     }
 
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
-        let ordered: Box<dyn Iterator<Item = &std::sync::Arc<StoredEvent>> + '_> = if q.newest_first
-        {
-            Box::new(self.state.events.iter().rev())
-        } else {
-            Box::new(self.state.events.iter())
+        let matches = |e: &StoredEvent| {
+            (!q.valid_only || !e.malformed)
+                && q.after.is_none_or(|after| e.seq > after)
+                && q.before.is_none_or(|before| e.seq < before)
+                && (q.task.is_none() || e.event.task == q.task)
+                && (q.kinds.is_empty() || q.kinds.contains(&e.event.kind))
+                && (q.run.is_none()
+                    || e.event.run == q.run
+                    || (q.include_runless && e.event.run.is_none()))
+                && q.since.is_none_or(|at| e.event.ts >= at)
+                && q.until.is_none_or(|at| e.event.ts < at)
         };
-        let result = self.page(
-            ordered
-                .filter(|e| !q.valid_only || !e.malformed)
-                .filter(|e| q.after.is_none_or(|after| e.seq > after))
-                .filter(|e| q.before.is_none_or(|before| e.seq < before))
-                .filter(|e| q.task.is_none() || e.event.task == q.task)
-                .filter(|e| q.kinds.is_empty() || q.kinds.contains(&e.event.kind))
-                .filter(|e| q.run.is_none() || e.event.run == q.run)
-                .map(|e| StoredEvent::clone(e)),
-            &page,
-        )?;
+        let ordered: Box<dyn Iterator<Item = &std::sync::Arc<StoredEvent>> + '_> =
+            if q.chronological {
+                let mut events: Vec<_> = self.state.events.iter().filter(|e| matches(e)).collect();
+                events.sort_by_key(|e| (e.event.ts, e.seq));
+                if q.newest_first {
+                    events.reverse();
+                }
+                Box::new(events.into_iter())
+            } else if q.newest_first {
+                Box::new(self.state.events.iter().rev().filter(|e| matches(e)))
+            } else {
+                Box::new(self.state.events.iter().filter(|e| matches(e)))
+            };
+        let result = self.page(ordered.map(|e| StoredEvent::clone(e)), &page)?;
         for event in &result.items {
             let bytes =
                 serde_json::to_vec(&event.event.detail).map_err(|e| ViewError::Io(e.into()))?;

@@ -30,6 +30,7 @@ mod readers;
 mod row_indexes;
 mod run_worktrees;
 mod schema;
+mod time_queries;
 mod tx;
 mod tx_blobs;
 mod tx_storage;

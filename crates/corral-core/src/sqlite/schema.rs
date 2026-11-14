@@ -232,6 +232,10 @@ pub(super) fn init(conn: &mut Connection, workspace_id: &str) -> Result<()> {
     .context("create project updated index")?;
     tx.execute_batch(super::run_worktrees::INDEX)
         .context("create run worktree projection index")?;
+    tx.execute_batch(super::time_queries::EVENT_INDEXES)
+        .context("create event timestamp indexes")?;
+    tx.execute_batch(&super::time_queries::run_index())
+        .context("create run overlap index")?;
     let backfilled: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM meta WHERE key = 'question_event_outbox_v1')",
         [],

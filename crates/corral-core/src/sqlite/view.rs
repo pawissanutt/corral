@@ -129,7 +129,7 @@ impl Drop for SqliteView {
     }
 }
 
-fn bounds(req: &PageReq) -> Result<(usize, usize), ViewError> {
+pub(super) fn bounds(req: &PageReq) -> Result<(usize, usize), ViewError> {
     if req.limit == 0 {
         return Err(ViewError::Io(anyhow!("page limit must be positive")));
     }
@@ -454,6 +454,13 @@ impl ReadView for SqliteView {
         if q.open_only {
             filters.push("r.open = 1".to_owned());
         }
+        if let Some((from, to)) = q.overlaps {
+            filters.push("r.part IN ('run', 'review_run')".to_owned());
+            filters.push(format!("{} >= ?", super::time_queries::run_end()));
+            args.push(Sql::Text(ts(from)));
+            filters.push(format!("{} < ?", super::time_queries::run_time("started")));
+            args.push(Sql::Text(ts(to)));
+        }
         // Drive exact-token reads from the token's index range. An ordinary JOIN lets
         // SQLite scan the whole history family before testing the token, even for no match.
         let (from, key) = match &q.index {
@@ -465,6 +472,7 @@ impl ReadView for SqliteView {
                     "i.key",
                 )
             }
+            None if q.overlaps.is_some() => ("task_rows r INDEXED BY task_rows_run_time", "r.key"),
             None => (
                 match (q.current_only, q.open_only) {
                     (true, true) => "task_rows r INDEXED BY task_rows_current_open",
@@ -524,84 +532,20 @@ impl ReadView for SqliteView {
     }
 
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
-        let kinds: BTreeSet<_> = q.kinds.iter().collect();
-        if kinds.len() > 1 {
-            // Bound each indexed kind range before merging. An IN query can otherwise
-            // sort an owner's entire history before returning a small output page.
-            let (offset, limit) = bounds(&page)?;
-            let take = offset
-                .checked_add(limit)
-                .and_then(|n| n.checked_add(1))
-                .ok_or_else(|| ViewError::Io(anyhow!("event page overflow")))?;
-            let mut selects = Vec::new();
-            let mut args = Vec::new();
-            for kind in kinds {
-                let mut filters = vec!["kind = ?".to_owned()];
-                if q.valid_only {
-                    filters.push("malformed = 0".to_owned());
-                }
-                args.push(Sql::Text(kind.clone()));
-                if let Some(task) = &q.task {
-                    filters.push("task = ?".to_owned());
-                    args.push(Sql::Text(task.clone()));
-                }
-                if let Some(run) = &q.run {
-                    filters.push("run = ?".to_owned());
-                    args.push(Sql::Text(run.clone()));
-                }
-                if let Some(after) = q.after {
-                    filters.push("seq > ?".to_owned());
-                    args.push(Sql::Integer(int(after.0).or_view()?));
-                }
-                if let Some(before) = q.before {
-                    filters.push("seq < ?".to_owned());
-                    args.push(Sql::Integer(int(before.0).or_view()?));
-                }
-                let order = if q.newest_first { "DESC" } else { "ASC" };
-                selects.push(format!(
-                    "SELECT * FROM (SELECT {} FROM events{} ORDER BY seq {order} LIMIT {take})",
-                    load::EVENT_COLUMNS,
-                    where_clause(&filters)
-                ));
+        if q.chronological || q.since.is_some() || q.until.is_some() {
+            let (sql, args) = super::time_queries::events(q, &page)?;
+            let source_page = if q.chronological {
+                PageReq::first(page.limit)
+            } else {
+                page
+            };
+            let mut found = self.page(&source_page, &sql, args, |_, row| load::event(row))?;
+            if q.chronological && found.next.is_some() {
+                found.next = found.items.last().map(super::time_queries::cursor);
             }
-            let order = if q.newest_first { "DESC" } else { "ASC" };
-            let sql = format!(
-                "SELECT * FROM ({}) ORDER BY seq {order}",
-                selects.join(" UNION ALL ")
-            );
-            return self.page(&page, &sql, args, |_, row| load::event(row));
+            return Ok(found);
         }
-        let mut filters = Vec::new();
-        let mut args: Vec<Sql> = Vec::new();
-        if q.valid_only {
-            filters.push("malformed = 0".to_owned());
-        }
-        if let Some(after) = q.after {
-            filters.push("seq > ?".to_owned());
-            args.push(Sql::Integer(int(after.0).or_view()?));
-        }
-        if let Some(before) = q.before {
-            filters.push("seq < ?".to_owned());
-            args.push(Sql::Integer(int(before.0).or_view()?));
-        }
-        if let Some(task) = &q.task {
-            filters.push("task = ?".to_owned());
-            args.push(Sql::Text(task.clone()));
-        }
-        if !q.kinds.is_empty() {
-            filters.push(format!("kind IN ({})", placeholders(q.kinds.len())));
-            args.extend(text_args(&q.kinds));
-        }
-        if let Some(run) = &q.run {
-            filters.push("run = ?".to_owned());
-            args.push(Sql::Text(run.clone()));
-        }
-        let order = if q.newest_first { "DESC" } else { "ASC" };
-        let sql = format!(
-            "SELECT {} FROM events{} ORDER BY seq {order}",
-            load::EVENT_COLUMNS,
-            where_clause(&filters)
-        );
+        let (sql, args) = super::time_queries::sequence_events(q, &page)?;
         self.page(&page, &sql, args, |_, row| load::event(row))
     }
 

@@ -81,3 +81,80 @@ fn read_admission_is_bounded_without_waiting_for_the_worker() {
         .is_err()
     );
 }
+
+#[test]
+fn topics_publish_during_writes_and_ignore_lease_only_churn() -> Result<()> {
+    let fixture = crate::tests::Fixture::new();
+    let ctx = &fixture.ctx;
+    let original = ctx.store.create_assistant("pi", None, None, None)?;
+    let shared = Shared::new();
+    let _fixture = install(&shared);
+    let watch = watch(&shared, Key::new(Topic::Assistant, None)?)?;
+    let service = service(&shared)?;
+    let mut revision = 0;
+    let mut reads = 0;
+    let mut added = None;
+
+    refresh_with(ctx, &service, 0, &mut revision, |snapshot, topic| {
+        reads += 1;
+        let rows = rows::read(snapshot, topic)?;
+        // An independent writer can commit while a coherent topic is being read.
+        added = Some(ctx.store.create_assistant("pi", None, None, None)?);
+        Ok(rows)
+    })?;
+    let first = watch
+        .snapshot()?
+        .expect("a committed snapshot must not starve behind concurrent writes");
+    let Rows::Assistant(rows) = &first.rows else {
+        panic!("expected assistant snapshot");
+    };
+    assert_eq!(
+        rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+        vec![original.id.as_str()]
+    );
+
+    refresh_with(ctx, &service, 0, &mut revision, |snapshot, topic| {
+        reads += 1;
+        rows::read(snapshot, topic)
+    })?;
+    let second = watch.snapshot()?.unwrap();
+    let Rows::Assistant(rows) = &second.rows else {
+        panic!("expected assistant snapshot");
+    };
+    let actual: std::collections::BTreeSet<_> = rows.iter().map(|row| &row.id).collect();
+    assert_eq!(
+        actual,
+        std::collections::BTreeSet::from([&original.id, &added.as_ref().unwrap().id])
+    );
+    assert!(second.rev > first.rev);
+
+    ctx.store
+        .save_record("leases", "pm", &serde_json::json!({"held": true}))?;
+    refresh_with(ctx, &service, 0, &mut revision, |snapshot, topic| {
+        reads += 1;
+        rows::read(snapshot, topic)
+    })?;
+    assert_eq!(reads, 2, "lease bookkeeping must not repeat topic scans");
+    assert_eq!(watch.snapshot()?.unwrap().rev, second.rev);
+
+    ctx.store.save_record(
+        "test-other",
+        "change",
+        &serde_json::json!({"updated": true}),
+    )?;
+    let mut retired = Some(watch);
+    let mut renewed = None;
+    refresh_with(ctx, &service, 0, &mut revision, |snapshot, topic| {
+        let rows = rows::read(snapshot, topic)?;
+        drop(retired.take());
+        renewed = Some(super::watch(&shared, Key::new(Topic::Assistant, None)?)?);
+        Ok(rows)
+    })?;
+    refresh(ctx, &service, 0, &mut revision)?;
+    let renewed = renewed
+        .unwrap()
+        .snapshot()?
+        .expect("a renewed watch must not inherit a retired cache stamp without its data");
+    assert!(renewed.rows == second.rows);
+    Ok(())
+}

@@ -366,6 +366,16 @@ fn fail_watches(service: &Service, message: &str) {
 }
 
 fn refresh(ctx: &Ctx, service: &Service, generation: u64, revision: &mut u64) -> Result<()> {
+    refresh_with(ctx, service, generation, revision, rows::read)
+}
+
+fn refresh_with(
+    ctx: &Ctx,
+    service: &Service,
+    generation: u64,
+    revision: &mut u64,
+    mut read: impl FnMut(&Ctx, Topic) -> Result<Rows>,
+) -> Result<()> {
     let sequence = app_read::sequence(ctx)?;
     let stamp = (sequence, generation);
     let keys: Vec<Key> = service
@@ -377,20 +387,52 @@ fn refresh(ctx: &Ctx, service: &Service, generation: u64, revision: &mut u64) ->
         .map(|(key, _)| key.clone())
         .collect();
     for key in keys {
-        let rows = rows::read(ctx, key.topic());
-        // Comparison and destruction can be proportional to the topic, so keep them
-        // outside the publication lock inspected by connection threads.
-        let previous = {
+        let Some((checked_before, previous)) = ({
             let entries = service.entries.lock().unwrap_or_else(|e| e.into_inner());
-            entries
-                .get(&key)
-                .and_then(|entry| entry.published.as_ref())
-                .and_then(|result| result.as_ref().ok())
-                .map(Arc::clone)
+            entries.get(&key).map(|entry| {
+                (
+                    entry.checked,
+                    entry
+                        .published
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok())
+                        .map(Arc::clone),
+                )
+            })
+        }) else {
+            continue;
         };
-        let stable = app_read::sequence(ctx)? == sequence;
+        if let Some((after, config)) = checked_before
+            && config == generation
+        {
+            let (through, quiet) = ctx.read_step(|snapshot| {
+                let view = snapshot.store.view()?;
+                Ok((view.seq().0, crate::reader::unchanged(view.as_ref(), after)))
+            })?;
+            if quiet {
+                if let Some(entry) = service
+                    .entries
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_mut(&key)
+                    && entry.checked == checked_before
+                {
+                    entry.checked = Some((through, generation));
+                    continue;
+                }
+            }
+        }
+        // The sequence and rows belong to one pinned view. Publish that coherent
+        // result even if a writer commits meanwhile; the next refresh catches up.
+        let rows = ctx.read_step(|snapshot| {
+            let sequence = app_read::sequence(snapshot)?;
+            Ok((sequence, read(snapshot, key.topic())?))
+        });
+        // Compare and destroy outside the publication lock used by connections.
+        let mut checked = None;
         let publication = match rows {
-            Ok(rows) => {
+            Ok((sequence, rows)) => {
+                checked = Some((sequence, generation));
                 let changed = previous
                     .as_ref()
                     .is_none_or(|old| old.rows != rows || key.topic() == Topic::Thread);
@@ -413,12 +455,11 @@ fn refresh(ctx: &Ctx, service: &Service, generation: u64, revision: &mut u64) ->
             let Some(entry) = entries.get_mut(&key) else {
                 continue;
             };
-            if !stable {
-                entry.checked = None;
+            // A closed/reopened watch starts unchecked and needs its own publication.
+            if entry.checked != checked_before {
                 continue;
             }
-            let failed = publication.as_ref().is_some_and(|result| result.is_err());
-            entry.checked = if failed { None } else { Some(stamp) };
+            entry.checked = checked;
             publication.map(|value| entry.published.replace(value))
         };
         drop(retired);
