@@ -7,19 +7,19 @@ This app lives in the corral repository as `apps/corral-app/`. It is its own Car
 The app has three data states (`DataState`):
 
 - **Fixture** (default): the mockup's destination content from fixtures in `src/model/`: Inbox and its question handover sheet, Now, Changes, Plans, Agents and sessions, Review, Timeline, Usage, Settings, the Ask composer and assistant threads. Actions change local state only.
-- **Daemon**: a session with `corrald` over its Unix socket, on native builds started with `CORRAL_SOCKET` set to the socket's absolute path (`corral daemon socket` prints it). The daemon serves health and the board, so the health strip and Now are live; every other destination says the daemon does not serve it yet. Never show fixture content as daemon data. The app sends the daemon no commands.
+- **Daemon**: an enrolled native Unix session (`CORRAL_SOCKET`, peer-UID trust and a private `0600` device-id file), or a paired browser session over an explicitly enabled loopback WebSocket with pinned Noise IK. Health, Now and connection/device Settings are live; other destinations remain explicitly unavailable. Only the trusted native/CLI side administers devices. Neither app sends task/question commands.
 - **Disconnected**: the frame shown with no daemon.
 
-The web build cannot open a Unix socket: all client code is compiled out there and the Daemon state is not offered. The only crate the app takes from corral is `corral-protocol` (wire types), by path.
+The web build pairs once through Settings › Connection using a trusted-side offer and matching-code confirmation. Its encrypted credential and non-extractable wrapping key live in IndexedDB; only `corral.paired` is in NSH Storage. Revocation closes sessions and stops automatic reconnect. No LAN listener, relay or browser command executor is enabled.
 
-Replies to newly typed Ask messages are not simulated, as in the mockup. Only these NSH Storage keys persist: `corral.destination`, `corral.settings`, `corral.theme`, `corral.data`, `corral.conn`, `corral.mode` and `corral.now.layout`.
+Replies to newly typed Ask messages are not simulated, as in the mockup. NSH Storage keys are `corral.destination`, `corral.settings`, `corral.theme`, `corral.data`, `corral.conn`, `corral.mode`, `corral.now.layout` and the non-secret `corral.paired` marker.
 
 ## Module map
 
 - `src/lib.rs`: root `App`.
 - `src/model/`: pure Rust, with no `nsh_*` imports or I/O; holds data, wording, state, reducers and view builders for every form.
 - `src/model/daemon.rs`: owned data received from `corrald` (`Feed`: link, health, board) and its pure updates.
-- `src/client/`: the daemon session, native only: socket path, blocking session over `corral-protocol`, wire-to-model mapping, and the task that feeds `AppState::feed`.
+- `src/client/`: shared frame/session core, native Unix adapter and device-id persistence, browser WebSocket/Noise adapter and encrypted IndexedDB credentials, wire-to-model mapping, and root-owned tasks feeding `AppState::feed`.
 - `src/model/hue.rs`, `text.rs`, `effect.rs`: semantic colours, rich text, environment and reducer effects.
 - `src/model/nav.rs`, `health.rs`, `fixture.rs`, `commands.rs`: navigation, health and fixture snapshots, and palette commands.
 - `src/model/board/`: shared board snapshot, tasks, changes and review hunk.

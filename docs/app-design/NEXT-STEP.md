@@ -1,10 +1,10 @@
 # Next increment: enrolled native and browser connections
 
-Status: implementation plan, not an authorization to install a daemon, modify the owner's device registry or answer live questions. Follows [CONNECTION-CONTRACT.md](CONNECTION-CONTRACT.md) and the completed [transport experiment](TRANSPORT-PROOF.md). The experiment resolved Rust/wasm Noise feasibility; do not repeat it as the next deliverable.
+Status: implemented connection prerequisite, verified on private native-terminal and Chromium surfaces; see [verification receipt](#verification-receipt). This document retains the implementation contract and acceptance criteria. It does not authorize installing/enabling the owner's listener or answering live questions. Follows [CONNECTION-CONTRACT.md](CONNECTION-CONTRACT.md); the earlier [transport experiment](TRANSPORT-PROOF.md) was feasibility evidence, not the shipped app.
 
 ## Owner-observable result
 
-The actual NSH app connects to a private workspace daemon from its native and web builds, using persistent enrolled identities rather than disposable bootstrap keys. Both render live health and Now. A restart preserves enrolment; reconnect restores subscriptions; revocation closes the session and prevents reconnection. Neither app can execute a daemon mutation in this increment.
+The actual NSH app connects to a private workspace daemon from its native and web builds, using persistent enrolled identities rather than disposable bootstrap keys. Both render live health and Now. A restart preserves enrolment; reconnect restores subscriptions; revocation closes the session and prevents automatic reconnection. Neither app executes task/question mutations in this increment; trusted native device administration is explicitly supported.
 
 This completes the production connection prerequisite only. Phase 2a is not complete until the subsequent worker/PM question journey works on desktop and web. Keep the existing UI, all destinations and phone layouts; do not redesign the app or retire classic.
 
@@ -86,3 +86,37 @@ Use the lowest layer for each named defect. Do not reproduce the same boundary i
 This increment is done only when packages 1–4 work together; a listener, a paired key without an app, or another standalone crypto demo is insufficient. Update the app guide and current-state guidance to match shipped behavior and attach the actual native/browser receipts. Do not install or enable the owner's listener/service without a separate rollout instruction.
 
 Next, implement bounded Inbox/question-context readers, canonical worker/PM questions and follow-ups, then expose only their authorized answer operations through the existing command executor. Validate one winner across devices and uncertain-result recovery. Preserve the distinction between board change sequence, owner task revision and question revision. Ask remains Phase 2b as a complete chat flow; runtime migration, relay/push and classic retirement remain later work.
+
+## Verification receipt
+
+Observed on 2026-11-14, using a disposable two-task workspace, a fresh plugin-free
+herdr server and private daemon/state directories. No owner daemon or live herdr
+session was used or configured.
+
+- Root: protocol 7 tests, targeted daemon configuration 1 test, daemon 28 tests,
+  `cargo check -p corral`, and the specified five-package all-target Clippy command
+  with `-D warnings` passed.
+- App: `cargo test` passed 63 tests; the actual library built for
+  `wasm32-unknown-unknown`. The revoked-link regression was observed red then green:
+  revocation must clear the board **and** mark the link down.
+- Real `nsh run --target tui`: enrolled through Connection, loaded both fixture tasks,
+  saved the device-id file with mode `0600`, and loaded the board again after restart
+  without another enrolment. `--port 8791` kept its dev session separate from web 8790.
+- Real Chromium app: paired through the native Devices panel with matching SAS;
+  opened live data and rendered both tasks; reload restored the board without pairing.
+  IndexedDB inspection showed AES-GCM, a non-extractable key and a 12-byte IV.
+- Forgot the browser and paired again through `corral device pair`; the CLI displayed
+  the same SAS and accepted `y`. `device list` showed the native and both web records.
+- CLI revocation removed the browser's board and showed the revoked notice. Instrumented
+  real WebSocket construction observed zero reconnect attempts for more than two minutes.
+  Native revocation and revoked attach both showed the notice; the native health/link
+  state was also verified down after the regression fix.
+- The integrated daemon test covered reused pairing rejection, both board rows,
+  forbidden command/nudge/read/stop requests, live revoke, unknown-key reconnect
+  refusal and identity-file permissions. A real unexpected-Origin upgrade returned 403.
+- Browser surfaces were inspected at 1280×900 and 390×844, including the revoked
+  Connection recovery control. The Settings mechanical detector reported no findings.
+
+The private foreground daemon truthfully reported degraded (`unsupervised`, PM absent);
+this was not presented as healthy. GTK/native-window backends remain unverified on this
+host, and the worker/PM question milestone remains unimplemented.

@@ -109,9 +109,7 @@ impl AppState {
             share: signal(false),
             lock: signal(false),
         };
-        if configured {
-            crate::client::start(app.feed);
-        }
+        crate::client::start(app.feed);
         app.persist();
         app.install_toast_timer();
         if form != Form::Phone {

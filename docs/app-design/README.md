@@ -1,8 +1,8 @@
 # Corral app integration: design handoff
 
-Next increment: [app connection contract](CONNECTION-CONTRACT.md), covering independent client compatibility, authenticated native/browser transport, and the boundary between a feasibility proof and production device access. The [completed browser transport proof](TRANSPORT-PROOF.md) records real Rust/wasm Noise interoperability, read-only daemon delivery, rejection cases and what remains unimplemented.
+Implemented connection prerequisite: [app connection contract](CONNECTION-CONTRACT.md), covering independent client compatibility and authenticated native/browser transport. The [earlier transport proof](TRANSPORT-PROOF.md) remains historical feasibility evidence; production app wiring and private-surface verification are recorded in [enrolled native and browser connections](NEXT-STEP.md#verification-receipt).
 
-Implementation order and acceptance checks: [enrolled native and browser connections](NEXT-STEP.md). This is the production connection prerequisite; the worker/PM question journey remains the Phase 2a milestone that follows it.
+The worker/PM question journey remains the Phase 2a milestone that follows this connection increment.
 
 Imported from `/home/pawis/corral-app-design/` into branch `app-daemon-integration`, based on Corral commit `6f91ec1175e1ac1edc5ff5a568dd6620e4de824b`. This is a design handoff and next-step recommendation, not an implementation task contract or authorization to run agents, change automation, or install services.
 

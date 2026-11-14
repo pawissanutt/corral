@@ -10,28 +10,17 @@ use corral_protocol::{
     read::{ReadKind, ReadReply, ReadRequest},
     rpc,
 };
+#[cfg(test)]
 use serde::Serialize;
 use serde_json::Value;
 use std::os::unix::net::{UnixListener, UnixStream};
 
+use crate::conn::{IO_TIMEOUT, WorkerPermit, error, notify, reply};
 use crate::state::Shared;
+use crate::topics::Topics;
 
-const IO_TIMEOUT: Duration = Duration::from_secs(2);
-const MAX_CONNECTIONS: usize = 64;
+pub(crate) const MAX_CONNECTIONS: usize = 64;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
-
-#[path = "topics.rs"]
-mod topics;
-
-struct WorkerPermit(Arc<Shared>);
-
-impl Drop for WorkerPermit {
-    fn drop(&mut self) {
-        let mut state = self.0.lock();
-        state.workers -= 1;
-        self.0.changed.notify_all();
-    }
-}
 
 pub(crate) fn start(listener: UnixListener, shared: Arc<Shared>, store: &Path) -> Result<()> {
     listener
@@ -120,8 +109,25 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
         .context("setting client write timeout")?;
     let mut welcomed = false;
     let hello_deadline = Instant::now() + HELLO_TIMEOUT;
-    let mut topics = topics::Topics::new(&shared);
+    let mut topics = Topics::new(&shared);
+    let mut session = crate::devices::UnixSession {
+        via: "daemon",
+        attached: None,
+    };
     loop {
+        if session
+            .attached
+            .as_ref()
+            .is_some_and(|guard| guard.revoked.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return notify(
+                &mut stream,
+                wire::BYE,
+                wire::Bye {
+                    reason: wire::device::CLOSE_REVOKED.into(),
+                },
+            );
+        }
         if shared.lock().closed {
             return bye(&mut stream, &shared);
         }
@@ -191,6 +197,11 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
         match request.method.as_str() {
             wire::HELLO => match serde_json::from_value::<wire::Hello>(params) {
                 Ok(hello) if hello.proto.major == wire::PROTO_MAJOR => {
+                    session.via = match hello.client.kind.as_str() {
+                        "cli" => "cli",
+                        "app" => "app",
+                        _ => "daemon",
+                    };
                     reply(
                         &mut stream,
                         id,
@@ -207,6 +218,7 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
                                         || cap == wire::READ_V1
                                         || cap == wire::cmd::CMD_V1
                                         || cap == wire::CLASSIC_V1
+                                        || cap == wire::device::DEVICE_V1
                                 })
                                 .collect(),
                             daemon: wire::DaemonInfo {
@@ -358,12 +370,23 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
                     "invalid stop",
                 )?,
             },
-            _ => error(
-                &mut stream,
-                id,
-                rpc::ErrorCode::MethodNotFound,
-                "method_not_found",
-            )?,
+            other => {
+                if !crate::devices::serve_unix(
+                    &mut stream,
+                    &shared,
+                    id.clone(),
+                    other,
+                    params,
+                    &mut session,
+                )? {
+                    error(
+                        &mut stream,
+                        id,
+                        rpc::ErrorCode::MethodNotFound,
+                        "method_not_found",
+                    )?;
+                }
+            }
         }
     }
 }
@@ -461,60 +484,12 @@ fn serve_read(
     Ok(())
 }
 
-fn send(stream: &mut UnixStream, value: &impl Serialize) -> Result<()> {
-    let payload = serde_json::to_vec(value).context("encoding daemon response")?;
-    write_frame_until(
-        stream,
-        &Frame {
-            kind: FrameKind::Control,
-            stream: 0,
-            payload,
-        },
-        Instant::now() + IO_TIMEOUT,
-    )
-    .context("writing daemon response")
-}
-
-pub(crate) fn reply(stream: &mut UnixStream, id: Value, result: impl Serialize) -> Result<()> {
-    send(
-        stream,
-        &rpc::Response {
-            jsonrpc: rpc::JSONRPC.into(),
-            id,
-            outcome: rpc::ResponseOutcome::Result { result },
-        },
-    )
-}
-
-pub(crate) fn error(
-    stream: &mut UnixStream,
-    id: Value,
-    code: rpc::ErrorCode,
-    message: &str,
-) -> Result<()> {
-    let response: rpc::Response<Value> = rpc::Response {
-        jsonrpc: rpc::JSONRPC.into(),
-        id,
-        outcome: rpc::ResponseOutcome::Error {
-            error: rpc::Error {
-                code,
-                message: message.into(),
-                data: None,
-            },
-        },
-    };
-    send(stream, &response)
-}
-
 fn bye(stream: &mut UnixStream, shared: &Shared) -> Result<()> {
-    send(
+    notify(
         stream,
-        &rpc::Notification {
-            jsonrpc: rpc::JSONRPC.into(),
-            method: wire::BYE.into(),
-            params: wire::Bye {
-                reason: shared.bye_reason().into(),
-            },
+        wire::BYE,
+        wire::Bye {
+            reason: shared.bye_reason().into(),
         },
     )
 }

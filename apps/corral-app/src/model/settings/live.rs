@@ -3,11 +3,11 @@
 use crate::model::daemon::{self, Feed, Link};
 use crate::model::nav::SettingsSection;
 
-/// The daemon has no settings projection beyond connection facts and general guidance.
+/// The daemon serves connection facts, devices and general guidance.
 pub fn daemon_section_notice(section: SettingsSection) -> Option<String> {
     (!matches!(
         section,
-        SettingsSection::Connection | SettingsSection::General
+        SettingsSection::Connection | SettingsSection::Devices | SettingsSection::General
     ))
     .then(|| format!("corrald does not serve {} yet.", section.label()))
 }
@@ -25,8 +25,8 @@ pub fn daemon_connection_details(feed: &Feed) -> Vec<(&'static str, String)> {
             .to_owned(),
         ),
         (
-            "Socket",
-            feed.socket
+            "Endpoint",
+            feed.endpoint
                 .clone()
                 .unwrap_or_else(|| "not configured".into()),
         ),
@@ -35,6 +35,11 @@ pub fn daemon_connection_details(feed: &Feed) -> Vec<(&'static str, String)> {
             feed.store.clone().unwrap_or_else(|| "not received".into()),
         ),
     ];
+    #[cfg(unix)]
+    rows.push((
+        "Device id storage",
+        "Private 0600 file (not an OS keychain)".into(),
+    ));
     if let Some(health) = &feed.health {
         rows.push(("Daemon version", health.version.clone()));
         rows.push((
@@ -67,7 +72,7 @@ mod tests {
             let notice = daemon_section_notice(section);
             if matches!(
                 section,
-                SettingsSection::Connection | SettingsSection::General
+                SettingsSection::Connection | SettingsSection::Devices | SettingsSection::General
             ) {
                 assert!(notice.is_none());
             } else {

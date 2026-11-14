@@ -1,13 +1,24 @@
 //! The workspace's single synchronization loop owner.
+#[cfg(unix)]
+mod app;
 mod classic;
 #[cfg(unix)]
 mod commands;
+#[cfg(unix)]
+mod conn;
+#[cfg(unix)]
+mod devices;
 mod health;
+#[cfg(unix)]
+mod identity;
+mod pairing;
 mod projector;
 mod reader;
 #[cfg(unix)]
 mod server;
 mod state;
+#[cfg(unix)]
+mod topics;
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -176,7 +187,9 @@ fn run_loop(
         cleanup.projector = Some(projector::start(&ctx, &shared)?);
         reader::start(&ctx, &shared)?;
         commands::start(&ctx, &shared)?;
+        devices::start(&ctx, &shared, identity::state_root().ok())?;
         server::start(listener, Arc::clone(&shared), ctx.store.dir())?;
+        app::start(&ctx, &shared);
         let transitions = Arc::new(Mutex::new(health::Transitions::new()));
         transitions
             .lock()

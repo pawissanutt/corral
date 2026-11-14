@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 
 use crate::model::daemon::{DaemonLevel, Feed, Group, Link, PmLevel, RuntimeLevel};
+use crate::model::devices::DeviceLink;
 use crate::model::effect::{Conn, Effect};
 use crate::model::nav::{Destination, Form, SettingsSection};
 use crate::model::text::{Rich, span};
@@ -345,6 +346,10 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
         |name| Cow::Owned(format!("corrald · {name}")),
     );
     let name = workspace_name.unwrap_or("corrald").to_owned();
+    let device = match &feed.device {
+        DeviceLink::Enrolled { name, .. } => Some(name),
+        _ => feed.host.as_ref(),
+    };
     Snapshot::new(
         DataState::Daemon,
         Health {
@@ -360,20 +365,17 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
             path: feed
                 .workspace
                 .as_ref()
-                .or(feed.socket.as_ref())
+                .or(feed.endpoint.as_ref())
                 .cloned()
                 .unwrap_or_default()
                 .into(),
             autopilot: "",
-            device: feed
-                .host
-                .clone()
+            device: device
+                .cloned()
                 .map(Cow::Owned)
                 .unwrap_or(Cow::Borrowed("this device")),
-            via: feed
-                .host
-                .as_ref()
-                .map(|host| Cow::Owned(format!("via=app:{host}")))
+            via: device
+                .map(|name| Cow::Owned(format!("via=app:{name}")))
                 .unwrap_or(Cow::Borrowed("via=app")),
         }),
         Vec::new(),

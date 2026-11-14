@@ -49,6 +49,46 @@ after closing the loop, so a draining stop's reply is written before process exi
 Interrupted or aborted accepts retry; descriptor exhaustion retries after 500 ms.
 Other listener failures drain and exit nonzero so the service manager can restart.
 
+## Enrolled app connections
+
+Native apps use the existing peer-UID-checked Unix socket and enrol a device with
+`device.v1`. Browsers need the optional loopback listener, off by default:
+
+```toml
+[daemon]
+listen = "127.0.0.1:7841"
+web_origins = ["http://127.0.0.1:8790"]
+```
+
+Both values are read at daemon startup; edits require a restart. Origins match exactly,
+never as wildcards. HTTPS origins and HTTP loopback origins are supported; paths and
+insecure non-loopback origins are invalid. No public bootstrap endpoint or plaintext
+WebSocket-to-Unix proxy is exposed.
+
+- `corral device pair`: offer a short-lived code, wait for a browser, then confirm only
+  if its six-digit code matches. Settings › Devices in an enrolled native app can
+  offer and confirm the same flow.
+- `corral device list [--json]`: list native/browser records, including revoked ones.
+- `corral device revoke <id>`: revoke once and close every live session for that device.
+  Pair and revoke require the owner; list is read-only. An absent daemon exits 2.
+
+Pairing uses Noise IKpsk2 with a single-use token, a two-minute offer window and a
+separate two-minute confirmation window. Later sessions use pinned Noise IK.
+At most four offers/claims and eight app connections are live; the total connection
+cap remains 64. Sessions renew after one hour or 2^20 encrypted messages.
+The device registry is bounded to 256 records including revoked devices.
+
+Public device records and owner-attributed enrol/pair/revoke events live in the
+workspace store. The daemon's static key does not: it is a private `0600`
+`$XDG_STATE_HOME/corral/<store-id>/identity.key` file (fallback `$HOME/.local/state`).
+Keep that state directory to preserve browser pins across daemon restarts.
+
+WebSocket sessions accept only hello, ping/bye, health reads and board/health
+subscriptions. Commands, opaque reads, nudges, shutdown and device administration are
+refused before dispatch. Existing CLI executable/build checks are unchanged.
+See [the app guide](../../apps/corral-app/README.md#live-data) for enrolment and recovery.
+
+
 ## Incremental passes
 
 The daemon remembers, in memory only, what each sync step last saw: the store change

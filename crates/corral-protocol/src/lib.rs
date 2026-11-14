@@ -2,6 +2,7 @@
 pub mod board;
 pub mod classic;
 pub mod cmd;
+pub mod device;
 pub mod frame;
 pub mod health;
 pub mod read;
