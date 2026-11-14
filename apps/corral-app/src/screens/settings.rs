@@ -4,6 +4,8 @@
 
 mod connection;
 mod devices;
+mod enrolment;
+mod live_devices;
 mod parts;
 mod sections;
 
@@ -67,7 +69,13 @@ fn page(app: AppState, section: SettingsSection) -> AnyElement {
         }
     }
     match section {
-        SettingsSection::Devices => devices::page(app),
+        SettingsSection::Devices => {
+            if untracked(|| app.daemon()) {
+                live_devices::page(app)
+            } else {
+                devices::page(app)
+            }
+        }
         SettingsSection::Machines => sections::machines(app),
         SettingsSection::Connection => connection::page(app),
         SettingsSection::Notifications => sections::notifications(app),

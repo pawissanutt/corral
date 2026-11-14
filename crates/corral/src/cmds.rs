@@ -657,6 +657,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             }
         }
         Cmd::Daemon { cmd } => crate::daemon_cmd::run(&start_dir(&root)?, cmd, &entry),
+        Cmd::Device { cmd } => crate::device_cmd::run(&start_dir(&root)?, cmd, &entry),
         Cmd::Autopilot { action, json } => crate::mode_cmd::legacy(&inv, &action, json),
         Cmd::Pm { cmd } => crate::pm_cmd::run(&inv, cmd),
         Cmd::FocusBoard => crate::up::focus_board(&open(&root)?),

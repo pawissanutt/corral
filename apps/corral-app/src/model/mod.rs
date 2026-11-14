@@ -10,6 +10,8 @@ pub mod board;
 pub mod commands;
 /// Owned snapshots received from the daemon.
 pub mod daemon;
+/// Device enrolment, browser pairing and their settings views.
+pub mod devices;
 /// Reducer effects and environment switches.
 pub mod effect;
 /// Fixture snapshots for the shell.

@@ -86,6 +86,10 @@ fn document() -> Value {
         rpc::ErrorCode::Unauthenticated,
         rpc::ErrorCode::Internal,
     ];
+    use device::*;
+    use rpc::ErrorCode::{
+        Busy, Conflict, Expired, Internal, InvalidParams, NotFound, Refused, Revoked, Unavailable,
+    };
     let methods = vec![
         method::<Hello, Welcome>(
             &mut generator,
@@ -138,6 +142,91 @@ fn document() -> Value {
         method::<SubReset, ()>(&mut generator, SUB_RESET, true, &[]),
         method::<SubAck, ()>(&mut generator, SUB_ACK, false, &common),
         method::<SubClose, ()>(&mut generator, SUB_CLOSE, false, &common),
+        method::<DeviceEnrol, DeviceInfo>(
+            &mut generator,
+            DEVICE_ENROL,
+            false,
+            &[InvalidParams, Conflict, Refused, Unavailable, Internal],
+        ),
+        method::<DeviceAttach, DeviceInfo>(
+            &mut generator,
+            DEVICE_ATTACH,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Revoked,
+                Conflict,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<DeviceList, Vec<DeviceInfo>>(
+            &mut generator,
+            DEVICE_LIST,
+            false,
+            &[InvalidParams, Unavailable, Internal],
+        ),
+        method::<DeviceRevoke, DeviceInfo>(
+            &mut generator,
+            DEVICE_REVOKE,
+            false,
+            &[InvalidParams, NotFound, Conflict, Unavailable, Internal],
+        ),
+        method::<PairBegin, PairOffer>(
+            &mut generator,
+            PAIR_BEGIN,
+            false,
+            &[InvalidParams, Busy, Unavailable, Internal],
+        ),
+        method::<PairStatusQuery, PairStatus>(
+            &mut generator,
+            PAIR_STATUS,
+            false,
+            &[InvalidParams, NotFound, Expired, Unavailable, Internal],
+        ),
+        method::<PairConfirm, DeviceInfo>(
+            &mut generator,
+            PAIR_CONFIRM,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Expired,
+                Conflict,
+                Refused,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<PairCancel, ()>(
+            &mut generator,
+            PAIR_CANCEL,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Expired,
+                Conflict,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<PairClaim, PairClaimed>(
+            &mut generator,
+            PAIR_CLAIM,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Expired,
+                Conflict,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<PairDone, ()>(&mut generator, PAIR_DONE, true, &[]),
+        method::<PairRefused, ()>(&mut generator, PAIR_REFUSED, true, &[]),
     ];
     // Include envelopes and framing alongside every reachable method payload.
     generator.subschema_for::<rpc::Request>();

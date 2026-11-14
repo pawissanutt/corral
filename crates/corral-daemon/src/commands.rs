@@ -30,7 +30,7 @@ use corral_protocol::{
 use jiff::{SignedDuration, Timestamp};
 use serde_json::Value;
 
-use crate::server;
+use crate::conn;
 use crate::state::Shared;
 
 mod journal;
@@ -147,11 +147,11 @@ pub(crate) fn serve_submit(
     mut submit: CmdSubmit,
 ) -> Result<()> {
     if let Err((code, message)) = admit(&submit) {
-        return server::error(stream, id, code, &message);
+        return conn::error(stream, id, code, &message);
     }
     submit.caller.principal = Principal::LocalUser { uid: peer_uid };
     let Some(service) = service(shared) else {
-        return server::error(stream, id, ErrorCode::Unavailable, "unavailable");
+        return conn::error(stream, id, ErrorCode::Unavailable, "unavailable");
     };
     let cmd_id = submit.cmd_id.clone();
     let handoff = Arc::new(AtomicU8::new(QUEUED));
@@ -166,10 +166,10 @@ pub(crate) fn serve_submit(
     match service.jobs.try_send(job) {
         Ok(()) => {}
         Err(mpsc::TrySendError::Full(_)) => {
-            return server::error(stream, id, ErrorCode::Busy, "queue_full");
+            return conn::error(stream, id, ErrorCode::Busy, "queue_full");
         }
         Err(mpsc::TrySendError::Disconnected(_)) => {
-            return server::error(stream, id, ErrorCode::Unavailable, "unavailable");
+            return conn::error(stream, id, ErrorCode::Unavailable, "unavailable");
         }
     }
     let deadline = Instant::now() + REPLY_WAIT;
@@ -182,9 +182,9 @@ pub(crate) fn serve_submit(
                 ..answer
             },
             // The first submit of this id was refused before it executed; neither ran.
-            Some(None) => return server::error(stream, id, ErrorCode::Busy, "queue_timeout"),
+            Some(None) => return conn::error(stream, id, ErrorCode::Busy, "queue_timeout"),
         },
-        Ok(Reply::Refuse(code, message)) => return server::error(stream, id, code, message),
+        Ok(Reply::Refuse(code, message)) => return conn::error(stream, id, code, message),
         Err(problem) => {
             if handoff
                 .compare_exchange(QUEUED, CANCELLED, Ordering::AcqRel, Ordering::Acquire)
@@ -194,7 +194,7 @@ pub(crate) fn serve_submit(
                     mpsc::RecvTimeoutError::Timeout => (ErrorCode::Busy, "queue_timeout"),
                     mpsc::RecvTimeoutError::Disconnected => (ErrorCode::Unavailable, "unavailable"),
                 };
-                return server::error(stream, id, code, message);
+                return conn::error(stream, id, code, message);
             }
             // Taken: it may still be executing; the client re-queries with `cmd.result`.
             Answer::bare(CmdState::Running)
@@ -211,10 +211,10 @@ pub(crate) fn serve_result(
     query: CmdResultQuery,
 ) -> Result<()> {
     if !valid_cmd_id(&query.cmd_id) {
-        return server::error(stream, id, ErrorCode::InvalidParams, "invalid_cmd_id");
+        return conn::error(stream, id, ErrorCode::InvalidParams, "invalid_cmd_id");
     }
     let Some(service) = service(shared) else {
-        return server::error(stream, id, ErrorCode::Unavailable, "unavailable");
+        return conn::error(stream, id, ErrorCode::Unavailable, "unavailable");
     };
     let key = journal_key(peer_uid, &query.cmd_id);
     let wait = Duration::from_millis(u64::from(query.wait_ms.min(RESULT_WAIT_MAX_MS)));
@@ -222,7 +222,7 @@ pub(crate) fn serve_result(
         Ok(answer) => write_answer(stream, id, query.cmd_id, answer),
         Err(problem) => {
             eprintln!("corrald command result {key}: {problem:#}");
-            server::error(stream, id, ErrorCode::Unavailable, "journal_unavailable")
+            conn::error(stream, id, ErrorCode::Unavailable, "journal_unavailable")
         }
     }
 }
@@ -627,7 +627,7 @@ fn write_answer(stream: &mut UnixStream, id: Value, cmd_id: String, answer: Answ
         replayed,
     };
     let Some(output) = output else {
-        return server::reply(stream, id, result);
+        return conn::reply(stream, id, result);
     };
     let bytes = serde_json::to_vec(&output).context("encoding command output")?;
     let stream_id = 1;
@@ -637,7 +637,7 @@ fn write_answer(stream: &mut UnixStream, id: Value, cmd_id: String, answer: Answ
         frames: u32::try_from(bytes.len().div_ceil(DATA_MAX).max(1))
             .context("counting command output frames")?,
     });
-    server::reply(stream, id, result)?;
+    conn::reply(stream, id, result)?;
     let deadline = Instant::now() + OUTPUT_DEADLINE;
     let mut frame = Frame {
         kind: FrameKind::Data,

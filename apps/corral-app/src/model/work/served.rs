@@ -107,6 +107,12 @@ pub fn daemon_selection(state: &State, board: &daemon::Board, form: Form) -> Opt
 /// Who acts next in the Daemon state: loading placeholders while the first board is on its way,
 /// one quiet line while there is none or it is empty, else the groups.
 pub fn daemon_list(state: &State, feed: &daemon::Feed, form: Form) -> GroupedList {
+    if let Some(line) = feed.device.board_notice() {
+        return GroupedList {
+            notice: Some(line),
+            ..GroupedList::new(form)
+        };
+    }
     let board = &feed.board;
     if !board.complete {
         return match feed.link {
@@ -265,6 +271,41 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn unenrolled_or_revoked_device_hides_board_rows() {
+        use crate::model::devices::{DeviceLink, ENROL_FIRST, REVOKED};
+        use crate::model::work::{Inspector, daemon_inspector};
+
+        let state = State::default();
+        let mut feed = daemon::Feed::default();
+        feed.board_received(
+            1,
+            vec![
+                task("T-1", daemon::Group::Queued),
+                task("T-2", daemon::Group::NeedsYou),
+            ],
+            &[],
+            true,
+        );
+        for (device, notice) in [
+            (DeviceLink::Unenrolled, ENROL_FIRST),
+            (DeviceLink::Revoked { id: "dev-1".into() }, REVOKED),
+        ] {
+            feed.device = device;
+            let list = daemon_list(&state, &feed, Form::Desktop);
+            assert_eq!(list.notice, Some(notice));
+            assert!(list.groups.is_empty());
+            assert!(matches!(
+                daemon_inspector(&state, &feed, Form::Desktop),
+                Inspector::Quiet(line) if line == notice
+            ));
+        }
+        feed.revoked("dev-1".into());
+        assert_eq!(feed.link, daemon::Link::Down);
+        assert!(!feed.board.complete);
+        assert!(feed.board.tasks().is_empty());
     }
 
     #[test]

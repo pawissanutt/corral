@@ -199,6 +199,10 @@ pub struct Feed {
     pub problem: Option<String>,
     pub health: Option<DaemonHealth>,
     pub board: Board,
+    pub device: crate::model::devices::DeviceLink,
+    pub devices: Vec<crate::model::devices::DeviceRow>,
+    pub pairing: crate::model::devices::Pairing,
+    pub browser_pairing: crate::model::devices::BrowserPairing,
     pub now: u64,
     /// Local wall clock of `now`, HH:MM.
     pub clock: String,
@@ -210,12 +214,12 @@ pub struct Feed {
     pub workspace: Option<String>,
     /// This device's hostname, captured once when the client starts.
     pub host: Option<String>,
-    pub socket: Option<String>,
+    pub endpoint: Option<String>,
 }
 
 impl Feed {
-    pub fn connecting(&mut self, socket: String) {
-        self.socket = Some(socket);
+    pub fn connecting(&mut self, endpoint: String) {
+        self.endpoint = Some(endpoint);
         self.link = Link::Connecting;
         self.problem = Some("Waiting for the daemon board".into());
     }
@@ -262,6 +266,16 @@ impl Feed {
         } else {
             problem
         });
+    }
+
+    pub fn revoked(&mut self, id: String) {
+        self.device = crate::model::devices::DeviceLink::Revoked { id };
+        self.board = Board::default();
+        self.link_lost("This device was revoked.".into());
+    }
+
+    pub fn devices_received(&mut self, rows: Vec<crate::model::devices::DeviceRow>) {
+        self.devices = rows;
     }
 
     pub fn tick(&mut self, now: u64, clock: String) {

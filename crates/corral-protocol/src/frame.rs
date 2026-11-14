@@ -4,6 +4,7 @@ use std::io::{self, Read, Write};
 pub const CONTROL_MAX: usize = 60 * 1024;
 pub const DATA_MAX: usize = 32 * 1024;
 const HEADER_LEN: usize = 5;
+pub const MESSAGE_MAX: usize = HEADER_LEN + CONTROL_MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema)]
 #[repr(u8)]
@@ -31,6 +32,34 @@ fn validate(kind: FrameKind, len: usize) -> io::Result<()> {
         FrameKind::Credit if len == 4 => Ok(()),
         _ => Err(invalid("invalid frame payload length")),
     }
+}
+
+/// Encode one complete WebSocket plaintext, without the Unix length prefix.
+pub fn encode_message(frame: &Frame) -> io::Result<Vec<u8>> {
+    validate(frame.kind, frame.payload.len())?;
+    let mut bytes = Vec::with_capacity(HEADER_LEN + frame.payload.len());
+    bytes.push(frame.kind as u8);
+    bytes.extend_from_slice(&frame.stream.to_le_bytes());
+    bytes.extend_from_slice(&frame.payload);
+    Ok(bytes)
+}
+
+pub fn decode_message(bytes: &[u8]) -> io::Result<Frame> {
+    if bytes.len() < HEADER_LEN {
+        return Err(invalid("truncated frame"));
+    }
+    let kind = match bytes[0] {
+        0 => FrameKind::Control,
+        1 => FrameKind::Data,
+        2 => FrameKind::Credit,
+        _ => return Err(invalid("unknown frame kind")),
+    };
+    validate(kind, bytes.len() - HEADER_LEN)?;
+    Ok(Frame {
+        kind,
+        stream: u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]),
+        payload: bytes[HEADER_LEN..].to_vec(),
+    })
 }
 
 fn read_exact(r: &mut impl Read, bytes: &mut [u8]) -> io::Result<()> {
@@ -147,6 +176,43 @@ impl Write for DeadlineSocket<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_codec_rejects_bad_kinds_and_lengths() {
+        for (kind, payload) in [
+            (FrameKind::Control, b"{}".to_vec()),
+            (FrameKind::Data, vec![0, 255]),
+            (FrameKind::Credit, 42_u32.to_le_bytes().to_vec()),
+        ] {
+            let frame = Frame {
+                kind,
+                stream: 7,
+                payload,
+            };
+            assert_eq!(
+                decode_message(&encode_message(&frame).unwrap()).unwrap(),
+                frame
+            );
+        }
+        for bytes in [vec![0; 4], vec![255, 0, 0, 0, 0], vec![2, 0, 0, 0, 0, 0], {
+            let mut bytes = vec![1, 0, 0, 0, 0];
+            bytes.resize(HEADER_LEN + DATA_MAX + 1, 0);
+            bytes
+        }] {
+            assert_eq!(
+                decode_message(&bytes).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        assert!(
+            encode_message(&Frame {
+                kind: FrameKind::Credit,
+                stream: 0,
+                payload: vec![0]
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn frame_round_trip_rejects_unbounded_and_truncated_inputs() {

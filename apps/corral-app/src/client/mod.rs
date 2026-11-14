@@ -1,16 +1,27 @@
-//! Optional native daemon connection; fixtures do not start any socket work.
+//! Optional enrolled native and browser daemon connections.
+mod core;
+#[cfg(not(target_arch = "wasm32"))]
+mod credentials;
 #[cfg(not(target_arch = "wasm32"))]
 mod driver;
-#[cfg(not(target_arch = "wasm32"))]
 mod map;
+pub mod requests;
 #[cfg(not(target_arch = "wasm32"))]
 mod session;
 #[cfg(not(target_arch = "wasm32"))]
 mod socket;
 #[cfg(all(not(target_arch = "wasm32"), unix))]
 mod transport;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
-/// Whether CORRAL_SOCKET is nonempty. Always false on wasm.
+pub const PAIRED_KEY: &str = "corral.paired";
+
+pub fn pairing_supported() -> bool {
+    cfg!(target_arch = "wasm32")
+}
+
+/// Whether a native endpoint or a persisted browser pairing is configured.
 pub fn configured() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -18,7 +29,7 @@ pub fn configured() -> bool {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        false
+        nsh_core::storage::Storage::get_item(PAIRED_KEY).as_deref() == Some("1")
     }
 }
 
@@ -29,5 +40,5 @@ pub fn start(feed: nsh_core::prelude::Signal<crate::model::daemon::Feed>) {
         driver::start(feed, socket);
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = feed;
+    web::start(feed);
 }
