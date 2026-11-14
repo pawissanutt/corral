@@ -1180,9 +1180,10 @@ The host sets `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`: the SDK must not prepend
 snapshot before the replay on every query, invalidating cached history after an edit or commit.
 This also removes Claude Code's built-in commit/PR workflow and attribution reminders; corral's
 role contract and Git skill govern that workflow, and host tool results supply current Git state.
-The Claude Code preset, tool-denial hooks and private credentials remain. Five-minute caching is
-still the default. At host launch, `CORRAL_CLAUDE_CACHE_TTL=1h` selects one-hour retention;
-`5m` and `none` are the other accepted values. Invalid values are refused. Explicit per-request
+The Claude Code preset, tool-denial hooks and private credentials remain. One-hour caching is the
+default, matching Claude Code's subscription default, so a gate or build longer than five minutes
+does not force the next turn to rewrite the whole cache. At host launch, `CORRAL_CLAUDE_CACHE_TTL=5m`
+selects five-minute retention; `1h` and `none` are the other accepted values. Invalid values are refused. Explicit per-request
 Pi `cacheRetention` (`short`, `long`, `none`) takes precedence; one-off compaction summaries use
 `none`. The SDK and history markers always share a lifetime, with ambient Claude cache flags
 removed. One-hour cache writes have a higher API-equivalent price; changing retention is not a

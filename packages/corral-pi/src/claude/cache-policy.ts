@@ -2,7 +2,9 @@ import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
 
 export type PromptCacheTtl = "5m" | "1h";
 export type ClaudeCacheRetention = PromptCacheTtl | "none";
-export const DEFAULT_CACHE_TTL: PromptCacheTtl = "5m";
+// Claude Code's own subscription default. Each turn replays its prefix, so a gate or build longer than
+// five minutes would otherwise rewrite the whole cache on the next turn.
+export const DEFAULT_CACHE_TTL: PromptCacheTtl = "1h";
 
 /** Per-call policy (including Pi's no-cache summaries) wins over the host's explicit default. */
 export function resolveCacheRetention(

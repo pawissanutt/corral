@@ -35,7 +35,7 @@ test("question-state changes are live context, not mutations of the cached syste
 });
 
 test("Claude replay caches an unchanged text prefix before its moving suffix, with the SDK's TTL", () => {
-  const env = claudeEnvironment({ CLAUDE_CODE_PROMPT_CACHE_TTL: "1h" }, "synthetic", "/private");
+  const env = claudeEnvironment({ CLAUDE_CODE_PROMPT_CACHE_TTL: "5m", FORCE_PROMPT_CACHING_5M: "1" }, "synthetic", "/private");
   const cases: Message[][] = [
     [user("inspect"), result([{ type: "text", text: "file contents" }])],
     [user("inspect"), result([{ type: "text", text: "caption" },
@@ -51,8 +51,9 @@ test("Claude replay caches an unchanged text prefix before its moving suffix, wi
     expect(markers).toHaveLength(1);
     const at = markers[0];
     if (at === undefined) throw new Error("history breakpoint missing");
-    expect(first[at]).toMatchObject({ type: "text", cache_control: { type: "ephemeral", ttl: "5m" } });
-    expect(env.CLAUDE_CODE_PROMPT_CACHE_TTL).toBe("5m");
+    expect(first[at]).toMatchObject({ type: "text", cache_control: { type: "ephemeral", ttl: "1h" } });
+    expect(env.CLAUDE_CODE_PROMPT_CACHE_TTL).toBe("1h");
+    expect(env.FORCE_PROMPT_CACHING_5M).toBeUndefined();
     // Marker metadata may move; the content prefix at the old write position must not.
     const plain = (blocks: typeof first) => blocks.map((block) => block.type === "text"
       ? { type: block.type, text: block.text } : block);
