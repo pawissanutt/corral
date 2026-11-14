@@ -208,6 +208,7 @@ impl TaskMut for Task {
         state.binding = head.binding;
         state.todo = head.todo;
         state.question_hold = head.question_hold;
+        state.paid_episode = head.paid_episode;
         Ok(())
     }
     fn put_agent_record(
