@@ -71,6 +71,19 @@ pub struct DeviceRow {
     pub revoked: Option<String>,
 }
 
+/// Whether `Feed::devices` is corrald's current registry. Rows retained from an earlier session or
+/// seeded with this device alone are not; only a completed device-page walk on the current
+/// connection is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Registry {
+    /// Not listed on this connection yet: unpaired, unauthenticated, disconnected or pending.
+    #[default]
+    Unknown,
+    Current,
+    /// corrald refused or failed the listing.
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Pairing {
     #[default]

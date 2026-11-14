@@ -9,7 +9,7 @@ pub enum GroupKey {
     You,
     /// Gates, reviews and landing.
     Corral,
-    /// Producing worker runs.
+    /// Worker runs that have not ended; they may be idle or waiting.
     Worker,
     /// Waiting for dependency or capacity.
     Queued,
@@ -131,7 +131,7 @@ pub const GROUPS: &[Group] = &[
     },
     Group {
         key: GroupKey::Worker,
-        label: "Workers producing",
+        label: "Worker runs in progress",
         ids: &["T-871", "T-854"],
         extra: &[],
         more: 0,

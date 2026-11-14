@@ -100,13 +100,18 @@ On link loss, last known data is marked stale and subscriptions reconnect. Draft
 bounded assistant message outbox persist per device and store; queued sends retain their
 identity. Other offline actions are refused. An uncertain command result is recovered with
 the same command ID, not a new execution; conflicts and unknown results remain distinct.
+Settings counts devices only from a listing completed on the current connection, native or
+browser; before it, after a failed listing, or without an authenticated link, the count is
+shown as loading, unavailable or needing a connection, never as zero.
 
 Accepting a send into the durable outbox also retires its matching saved composer draft.
 Reloading or remounting the composer does not restore that sent text. Unsent drafts stay
 with their own quick thread or named session.
 
-The Upcoming bucket includes ideas, backlog and ready tasks; each row retains its canonical
-state. Task bodies are selectable Markdown source, without automatic image fetches or HTML.
+The Upcoming bucket includes ideas, backlog and ready tasks, and Worker runs in progress
+includes any run that has not ended, which may be idle or waiting; each row retains its
+canonical state, and Timeline waits name no owner unless one is known. Task bodies are
+selectable Markdown source, without automatic image fetches or HTML.
 
 Reopening a scoped subscription waits for the previous close response. Retired pages are
 neither displayed nor acknowledged; rapid reopen requests coalesce within the original

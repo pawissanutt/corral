@@ -194,7 +194,7 @@ pub fn plot(page: &TimelinePage, window: &Window, tz: &TimeZone) -> Plot {
                     ),
                     note: wait.then(|| {
                         let what = if kind == Kind::Ask {
-                            "waiting on you"
+                            "waiting"
                         } else {
                             "awaiting acceptance"
                         };
@@ -315,8 +315,8 @@ pub fn gaps(plot: &Plot, window: &Window, tz: &TimeZone) -> Vec<Gap> {
                 window.clock(s.end, tz)
             };
             let wording = match s.kind {
-                Kind::Ask => format!("waited on you for {}", duration(length)),
-                Kind::Held => format!("waited for your acceptance for {}", duration(length)),
+                Kind::Ask => format!("waited for {}", duration(length)),
+                Kind::Held => format!("waited for acceptance for {}", duration(length)),
                 _ => format!("idle for {} with no recorded work", duration(length)),
             };
             (
@@ -341,11 +341,9 @@ pub fn gaps(plot: &Plot, window: &Window, tz: &TimeZone) -> Vec<Gap> {
 /// What the gaps section says when nothing in the window waited an hour or more.
 pub fn empty_gaps_line(range: Range) -> &'static str {
     match range {
-        Range::Today => {
-            "Nothing waited on you, waited for acceptance or sat idle for an hour or more today."
-        }
+        Range::Today => "No wait, acceptance hold or idle stretch lasted an hour or more today.",
         Range::SevenDays => {
-            "Nothing waited on you, waited for acceptance or sat idle for an hour or more in the last seven days."
+            "No wait, acceptance hold or idle stretch lasted an hour or more in the last seven days."
         }
     }
 }

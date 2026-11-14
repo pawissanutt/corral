@@ -609,7 +609,9 @@ impl Driver {
                             name: credential.name.clone(),
                         };
                     });
-                    let outgoing = self.app.ready(self.feed);
+                    let mut outgoing = self.app.ready(self.feed);
+                    // Like a native attach: the device count stays unknown until this walk ends.
+                    outgoing.push(app::devices());
                     conn.flush_app(outgoing, now)?;
                 }
                 Role::Pair { credential, .. } => conn.core.request(

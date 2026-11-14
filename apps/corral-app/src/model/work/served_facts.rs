@@ -171,11 +171,11 @@ fn daemon_chips(feed: &daemon::Feed) -> Vec<SummaryChip> {
         if you == 0 { Hue::Neutral } else { Hue::You },
         you,
     ));
-    let moving = count(&[daemon::Group::Verifying, daemon::Group::Producing]);
+    let in_progress = count(&[daemon::Group::Verifying, daemon::Group::Producing]);
     chips.push(SummaryChip::new(
-        format!("{moving} moving"),
+        format!("{in_progress} in progress"),
         Hue::Neutral,
-        moving,
+        in_progress,
     ));
     let upcoming = count(&[daemon::Group::Queued, daemon::Group::Other]);
     chips.push(SummaryChip::new(

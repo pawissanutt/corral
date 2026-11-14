@@ -9,7 +9,7 @@ use super::{
 };
 use crate::model::{
     daemon::Feed,
-    devices::{DeviceLink, Pairing},
+    devices::{DeviceLink, Pairing, Registry},
 };
 use corral_protocol::{device::*, rpc::ErrorCode};
 use nsh_core::prelude::*;
@@ -361,7 +361,11 @@ async fn reply(
             effects.ready = true;
             effects.outgoing.push(app::devices());
         }
-        DEVICE_REVOKE => effects.outgoing.push(app::devices()),
+        DEVICE_REVOKE => {
+            // The listed registry no longer matches corrald until the refreshed walk completes.
+            feed.update(|feed| feed.registry = Registry::Unknown);
+            effects.outgoing.push(app::devices());
+        }
         PAIR_BEGIN => {
             let offer: PairOffer = decode(result)?;
             feed.update(|feed| {
@@ -376,6 +380,7 @@ async fn reply(
         PAIR_STATUS => {
             let status: PairStatus = decode(result)?;
             if matches!(status.state, PairState::Paired { .. }) {
+                feed.update(|feed| feed.registry = Registry::Unknown);
                 effects.outgoing.push(app::devices());
             }
             feed.update(|feed| {

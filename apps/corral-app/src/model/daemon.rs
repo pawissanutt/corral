@@ -314,6 +314,8 @@ pub struct Feed {
     pub drafts: BTreeMap<Id, String>,
     pub device: crate::model::devices::DeviceLink,
     pub devices: Vec<crate::model::devices::DeviceRow>,
+    /// Whether `devices` is the current registry, rather than retained or seeded rows.
+    pub registry: crate::model::devices::Registry,
     pub pairing: crate::model::devices::Pairing,
     pub browser_pairing: crate::model::devices::BrowserPairing,
     /// Pairing-link draft, held only in memory and never written to app preferences.
@@ -343,6 +345,7 @@ impl Feed {
 
     pub fn mark_stale(&mut self) {
         self.session = None;
+        self.registry = crate::model::devices::Registry::Unknown;
         for state in self.topics.values_mut() {
             state.stale = true;
             state.loading = false;
@@ -453,8 +456,10 @@ impl Feed {
         self.link_lost("This device was revoked.".into());
     }
 
+    /// A completed device-page walk on this connection: the whole current registry.
     pub fn devices_received(&mut self, rows: Vec<crate::model::devices::DeviceRow>) {
         self.devices = rows;
+        self.registry = crate::model::devices::Registry::Current;
     }
 
     /// Retires delivered sends whose acknowledged entry this device has seen in their thread:

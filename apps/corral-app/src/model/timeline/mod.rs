@@ -71,7 +71,7 @@ pub enum Kind {
     Idle,
     /// Stalled hatch (illustrative preview only).
     Stall,
-    /// Waiting-on-you hatch.
+    /// Waiting hatch; the owner of the wait is not encoded.
     Ask,
     /// Stale-verdict hatch (illustrative preview only).
     Stale,
@@ -420,7 +420,7 @@ pub fn legend(live: bool) -> Vec<LegendItem> {
             ("gate", Kind::Gate),
             ("review", Kind::Review),
             ("land", Kind::Land),
-            ("waiting on you", Kind::Ask),
+            ("waiting", Kind::Ask),
             ("awaiting acceptance", Kind::Held),
             ("idle", Kind::Idle),
             ("times not recorded", Kind::Unavailable),
@@ -431,7 +431,7 @@ pub fn legend(live: bool) -> Vec<LegendItem> {
             ("gate", Kind::Gate),
             ("review", Kind::Review),
             ("land", Kind::Land),
-            ("waiting on you", Kind::Ask),
+            ("waiting", Kind::Ask),
             ("idle", Kind::Idle),
             ("stale verdict", Kind::Stale),
             ("stall", Kind::Stall),

@@ -33,7 +33,7 @@ const GUIDE_GLYPH: char = '┊';
 
 /// The glyph a kind of segment fills its Cells with: a heavy line for run, double for gate, a
 /// dashed heavy line for review, squares for land, a faint dash for idle, crosses for a stall,
-/// `╱` for waiting on you, a shade for a stale verdict, a heavier shade for awaiting
+/// `╱` for waiting, a shade for a stale verdict, a heavier shade for awaiting
 /// acceptance and a faint dotted line where corral recorded no times.
 pub fn glyph(kind: Kind) -> char {
     match kind {
