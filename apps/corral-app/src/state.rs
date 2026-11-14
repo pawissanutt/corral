@@ -65,6 +65,8 @@ pub struct AppState {
 impl AppState {
     /// Restores preferences, starts root-owned persistence and toast timing, and binds non-phone keys.
     pub fn install(form: Form) -> AppState {
+        let pairing_link = crate::client::pairing_link();
+        let open_pairing = !matches!(&pairing_link, Ok(None));
         let mut nav = NavState::new(form);
         if let Some(destination) = preference(DESTINATION_KEY, Destination::from_slug) {
             nav.destination = destination;
@@ -72,19 +74,17 @@ impl AppState {
         if let Some(section) = preference(SETTINGS_KEY, SettingsSection::from_slug) {
             nav.settings = section;
         }
-        let configured = crate::client::configured();
-        let data = if configured {
-            DataState::Daemon
-        } else {
-            preference(DATA_KEY, DataState::from_slug)
-                .filter(|data| *data != DataState::Daemon)
-                .unwrap_or(DataState::Fixture)
-        };
+        let (data, feed) = startup(
+            &mut nav,
+            crate::client::configured(),
+            preference(DATA_KEY, DataState::from_slug),
+            pairing_link,
+        );
         let app = AppState {
             form,
             nav: signal(nav),
             data: signal(data),
-            feed: signal(daemon::Feed::default()),
+            feed: signal(feed),
             theme: signal(
                 preference(THEME_KEY, ThemeChoice::from_slug).unwrap_or(ThemeChoice::System),
             ),
@@ -110,6 +110,12 @@ impl AppState {
             lock: signal(false),
         };
         crate::client::start(app.feed);
+        if open_pairing {
+            // Phone sections are pushed by a navigation intent after the shell starts.
+            let _ = set_timeout(Duration::ZERO, move || {
+                app.go_settings(SettingsSection::Connection);
+            });
+        }
         app.persist();
         app.install_toast_timer();
         if form != Form::Phone {
@@ -535,6 +541,32 @@ impl AppState {
     }
 }
 
+fn startup(
+    nav: &mut NavState,
+    configured: bool,
+    preferred_data: Option<DataState>,
+    pairing_link: Result<Option<String>, &'static str>,
+) -> (DataState, daemon::Feed) {
+    let mut feed = daemon::Feed::default();
+    match pairing_link {
+        Ok(code) => feed.pairing_code = code,
+        Err(line) => {
+            feed.browser_pairing = crate::model::devices::BrowserPairing::Blocked(line);
+        }
+    }
+    let data = if feed.browser_pairing_pending() {
+        nav.go_settings(SettingsSection::Connection);
+        DataState::Fixture
+    } else if configured {
+        DataState::Daemon
+    } else {
+        preferred_data
+            .filter(|data| *data != DataState::Daemon)
+            .unwrap_or(DataState::Fixture)
+    };
+    (data, feed)
+}
+
 fn preference<T>(key: &str, parse: fn(&str) -> Option<T>) -> Option<T> {
     Storage::get_item(key).and_then(|value| parse(&value))
 }
@@ -549,5 +581,55 @@ fn appearance(choice: ThemeChoice) -> Appearance {
         ThemeChoice::System => Appearance::System,
         ThemeChoice::Light => Appearance::Light,
         ThemeChoice::Dark => Appearance::Dark,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::devices::{BrowserPairing, PairBrowser};
+
+    #[test]
+    fn explicit_pairing_link_overrides_old_identity_and_preferences_in_every_form() {
+        for form in [Form::Desktop, Form::Terminal, Form::Phone] {
+            let mut nav = NavState::new(form);
+            let (data, feed) = startup(
+                &mut nav,
+                true,
+                Some(DataState::Daemon),
+                Ok(Some("corral-pair-1.fixture".into())),
+            );
+            assert_eq!(data, DataState::Fixture);
+            assert_eq!(nav.destination, Destination::Settings);
+            assert_eq!(nav.settings, SettingsSection::Connection);
+            assert_eq!(nav.section_opens, 1);
+            assert_eq!(feed.pairing_code.as_deref(), Some("corral-pair-1.fixture"));
+            assert!(feed.browser_pairing_pending());
+            assert_eq!(feed.browser_pairing, BrowserPairing::Idle);
+            assert!(matches!(
+                crate::model::devices::pair_browser(&feed),
+                PairBrowser::Form { .. }
+            ));
+            assert_eq!(feed.link, daemon::Link::Connecting);
+        }
+    }
+
+    #[test]
+    fn uncleared_link_is_visibly_blocked_and_normal_startup_stays_unchanged() {
+        let mut nav = NavState::new(Form::Phone);
+        let (data, feed) = startup(&mut nav, true, None, Err("cannot clear fragment"));
+        assert_eq!(data, DataState::Fixture);
+        assert_eq!(nav.settings, SettingsSection::Connection);
+        assert!(feed.browser_pairing_pending());
+        assert_eq!(feed.pairing_code, None);
+        assert_eq!(
+            crate::model::devices::pair_browser(&feed),
+            PairBrowser::Blocked {
+                line: "cannot clear fragment"
+            },
+        );
+        let (data, feed) = startup(&mut nav, true, None, Ok(None));
+        assert_eq!(data, DataState::Daemon);
+        assert!(!feed.browser_pairing_pending());
     }
 }

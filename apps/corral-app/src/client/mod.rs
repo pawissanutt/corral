@@ -5,6 +5,8 @@ mod credentials;
 #[cfg(not(target_arch = "wasm32"))]
 mod driver;
 mod map;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod pairing_link;
 pub mod requests;
 #[cfg(not(target_arch = "wasm32"))]
 mod session;
@@ -19,6 +21,19 @@ pub const PAIRED_KEY: &str = "corral.paired";
 
 pub fn pairing_supported() -> bool {
     cfg!(target_arch = "wasm32")
+}
+
+/// Read an explicit browser pairing link, clearing its secret fragment before using it.
+/// This only prepares the form: pairing still requires the user's Pair action.
+pub fn pairing_link() -> Result<Option<String>, &'static str> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Ok(None)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        pairing_link::read()
+    }
 }
 
 /// Whether a native endpoint or a persisted browser pairing is configured.

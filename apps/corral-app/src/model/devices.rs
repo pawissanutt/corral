@@ -5,6 +5,31 @@ use crate::model::daemon::Feed;
 pub const ENROL_FIRST: &str = "Enrol this device in Settings › Connection to load the board.";
 pub const REVOKED: &str = "This device was revoked. Enrol it again in Settings › Connection.";
 pub const ENROL_FAILED: &str = "Device enrolment failed; see Settings › Connection.";
+pub const DAEMON_IDENTITY_FAILED: &str = "corrald did not prove its identity; forget this pairing and pair again if corrald was reinstalled.";
+
+/// Session closes never replace the stored daemon pin; identity failures require user action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowserSessionClose {
+    Revoked,
+    Failed(&'static str),
+    Renew,
+    Retry,
+}
+
+impl BrowserSessionClose {
+    pub fn received(reason: &str, handshaking: bool) -> Self {
+        use corral_protocol::device::*;
+        match reason {
+            CLOSE_REVOKED => Self::Revoked,
+            CLOSE_DEVICE_UNKNOWN => {
+                Self::Failed("corrald no longer recognises this browser; forget it and pair again.")
+            }
+            CLOSE_HANDSHAKE_FAILED if handshaking => Self::Failed(DAEMON_IDENTITY_FAILED),
+            CLOSE_SESSION_LIFETIME => Self::Renew,
+            _ => Self::Retry,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DeviceLink {
@@ -51,6 +76,7 @@ pub enum Pairing {
     Offered {
         pair_id: String,
         code: String,
+        url: Option<String>,
         /// Unix seconds.
         expires_at: u64,
     },
@@ -92,6 +118,8 @@ pub enum BrowserPairing {
         device: String,
     },
     Failed(String),
+    /// Address-bar sanitization failed; no pairing may start from this page.
+    Blocked(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,6 +170,7 @@ pub enum PairBrowser {
     Claimed { line: String },
     Paired { line: String },
     Failed { line: String },
+    Blocked { line: &'static str },
 }
 
 pub fn pair_browser(feed: &Feed) -> PairBrowser {
@@ -159,6 +188,7 @@ pub fn pair_browser(feed: &Feed) -> PairBrowser {
             line: format!("Paired as {device}."),
         },
         BrowserPairing::Failed(line) => PairBrowser::Failed { line: line.clone() },
+        BrowserPairing::Blocked(line) => PairBrowser::Blocked { line },
     }
 }
 
@@ -168,6 +198,7 @@ pub enum PairingPanel {
     Offered {
         pair_id: String,
         code: String,
+        url: Option<String>,
         line: String,
     },
     Claimed {
@@ -194,12 +225,19 @@ pub fn live_devices(feed: &Feed, web: bool) -> LiveDevices {
         Pairing::Offered {
             pair_id,
             code,
+            url,
             expires_at,
         } => PairingPanel::Offered {
             pair_id: pair_id.clone(),
             code: code.clone(),
+            url: url.clone(),
             line: format!(
-                "Paste this code in the browser's Settings › Connection. Expires in {} s.",
+                "{} Expires in {} s.",
+                if url.is_some() {
+                    "Open this link in the browser to prefill Settings › Connection."
+                } else {
+                    "Paste this code in the browser's Settings › Connection."
+                },
                 expires_at.saturating_sub(feed.now)
             ),
         },
@@ -226,5 +264,51 @@ pub fn live_devices(feed: &Feed, web: bool) -> LiveDevices {
         notice: web.then_some(
             "Manage devices from the desktop or terminal app, or with `corral device` in a terminal."
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use corral_protocol::device::*;
+
+    #[test]
+    fn rejected_pinned_handshake_stops_but_transport_closes_keep_retry_policy() {
+        // A changed daemon key rejects IK's first message: no responder message arrives.
+        // Both socket opening and the response-waiting stage are still handshaking.
+        for stage in ["opening", "handshake", "transport"] {
+            let handshaking = stage != "transport";
+            let close = BrowserSessionClose::received(CLOSE_HANDSHAKE_FAILED, handshaking);
+            if handshaking {
+                let BrowserSessionClose::Failed(line) = close else {
+                    panic!("{stage}: a rejected pinned handshake must not reconnect");
+                };
+                let mut feed = Feed::default();
+                feed.device = DeviceLink::Failed(line.into());
+                assert!(matches!(
+                    this_device(&feed, true),
+                    ThisDevice::Failed { line }
+                        if line.contains("forget this pairing and pair again")
+                ));
+            } else {
+                assert_eq!(close, BrowserSessionClose::Retry);
+            }
+            assert_eq!(
+                BrowserSessionClose::received("daemon_stopping", handshaking),
+                BrowserSessionClose::Retry,
+            );
+            assert_eq!(
+                BrowserSessionClose::received(CLOSE_SESSION_LIFETIME, handshaking),
+                BrowserSessionClose::Renew,
+            );
+            assert_eq!(
+                BrowserSessionClose::received(CLOSE_REVOKED, handshaking),
+                BrowserSessionClose::Revoked,
+            );
+            assert!(matches!(
+                BrowserSessionClose::received(CLOSE_DEVICE_UNKNOWN, handshaking),
+                BrowserSessionClose::Failed(_),
+            ));
+        }
     }
 }

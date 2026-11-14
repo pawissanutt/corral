@@ -13,11 +13,11 @@ Status: connection prerequisite implemented and verified on private native-termi
 
 | Property | Native local app | Browser |
 |---|---|---|
-| Carrier | Existing Unix socket | WebSocket on numeric loopback; no LAN listener in Phase 2a |
+| Carrier | Existing Unix socket | WebSocket on `127.0.0.1`; no LAN listener in Phase 2a |
 | Bootstrap | Explicit owner-selected socket; verify peer UID | Secure origin (`http://127.0.0.1` or HTTPS); exact configured Origin allowlist |
 | Identity | Enrol a device over the trusted Unix channel after peer verification | Owner-authorized enrolment binds a device public key and the daemon's pinned static key |
 | Application session | Server-issued device context bound to the enrolled local connection; no identity accepted from command fields | Noise IK authenticates the device static key against the registry before any application request |
-| Storage | Platform key store; any permitted file fallback is 0600 and visibly identified | Native browser key-store implementation required; no secret in URL, unprotected NSH Storage/localStorage, source files or a public bootstrap endpoint |
+| Storage | Platform key store; any permitted file fallback is 0600 and visibly identified | Encrypted browser key store; no long-lived secret in URLs, NSH Storage/localStorage, source files or public bootstrap endpoints. Owner-approved short-lived pairing codes may use a fragment that the app clears before pairing. |
 | Reconnect | Re-establish identity and subscriptions | Fresh Noise IK, then hello and subscriptions; no resumption from an unauthenticated cache |
 
 The local UID trust boundary remains explicit: this is not protection against a hostile process already running as the owner. Device enrolment and audit still distinguish legitimate app surfaces. Browser Origin checking is an additional boundary, never authentication by itself. Reject missing, `null`, unexpected or insecure Origins before upgrading; do not reflect arbitrary origins or enable wildcard CORS. Never expose an unencrypted WebSocket-to-Unix proxy.

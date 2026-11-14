@@ -320,6 +320,7 @@ async fn reply(
                 feed.pairing = Pairing::Offered {
                     pair_id: offer.pair_id,
                     code: offer.code,
+                    url: offer.url,
                     expires_at: map::timestamp(Some(&offer.expires_at)).unwrap_or(0),
                 }
             });
@@ -330,12 +331,7 @@ async fn reply(
                 effects.outgoing.push((DEVICE_LIST, json!({})));
             }
             feed.update(|feed| {
-                let mut pairing = map::pairing(status);
-                if let (Pairing::Offered { code, .. }, Pairing::Offered { code: previous, .. }) =
-                    (&mut pairing, &mut feed.pairing)
-                {
-                    *code = std::mem::take(previous);
-                }
+                let pairing = map::pairing(status, &mut feed.pairing);
                 feed.pairing = pairing;
             });
         }

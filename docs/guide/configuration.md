@@ -1003,7 +1003,7 @@ Workspace switches for `corrald`; see [daemon](daemon.md).
 |---|---|---|
 | `commands` | `true` | Whether the daemon executes owner and agent commands. `false` refuses them, so every client runs its commands locally. See [commands through the daemon](daemon.md#commands-through-the-daemon). |
 | `pass` | `"incremental"` | How the daemon's sync passes skip work. `"incremental"` runs a step or task only when an input changed or came due; `"audit"` makes every pass full and reports steps an incremental pass would have wrongly skipped; `"full"` makes every pass full. Applies from the next pass. The `sync-audit-on` and `sync-full-on` runtime files can only make it more conservative. See [incremental passes](daemon.md#incremental-passes). |
-| `listen` | absent (off) | Optional numeric loopback app WebSocket address, e.g. `"127.0.0.1:7841"` or `"[::1]:7841"`. Non-loopback addresses and hostnames are invalid. Read at startup; restart the daemon after changing it. |
+| `listen` | absent (off) | Optional local app WebSocket address, e.g. `"127.0.0.1:7841"`. Must use `127.0.0.1`: pairing codes carry only the port, and the browser dials that address. Other loopback addresses, IPv6, non-loopback addresses and hostnames are invalid. Read at startup; restart after changing it. |
 | `web_origins` | `[]` | Exact browser Origins allowed to upgrade. Accepts HTTPS hosts or HTTP `127.0.0.1`, `localhost`, `[::1]`, with an optional port and no path. Empty allows no browser. Read at startup; restart after changing it. See [enrolled app connections](daemon.md#enrolled-app-connections). |
 
 ```toml

@@ -114,15 +114,25 @@ pub(super) fn device(
 
 pub(super) fn pairing(
     status: corral_protocol::device::PairStatus,
+    previous: &mut crate::model::devices::Pairing,
 ) -> crate::model::devices::Pairing {
     use crate::model::devices::Pairing;
     use corral_protocol::device::PairState;
     match status.state {
-        PairState::Offered { expires_at } => Pairing::Offered {
-            pair_id: status.pair_id,
-            code: String::new(),
-            expires_at: timestamp(Some(&expires_at)).unwrap_or(0),
-        },
+        PairState::Offered { expires_at } => {
+            let (code, url) = match previous {
+                Pairing::Offered {
+                    pair_id, code, url, ..
+                } if *pair_id == status.pair_id => (std::mem::take(code), url.take()),
+                _ => (String::new(), None),
+            };
+            Pairing::Offered {
+                pair_id: status.pair_id,
+                code,
+                url,
+                expires_at: timestamp(Some(&expires_at)).unwrap_or(0),
+            }
+        }
         PairState::Claimed {
             name,
             app_version,
@@ -149,6 +159,42 @@ pub(super) fn pairing(
 mod tests {
     use super::*;
     use corral_protocol::board::{BoardNow, RailStep};
+
+    #[test]
+    fn offered_status_retains_link_and_code_only_for_the_same_pairing() {
+        use crate::model::daemon::Feed;
+        use crate::model::devices::{Pairing, PairingPanel, live_devices};
+        use corral_protocol::device::{PairState, PairStatus};
+
+        let mut previous = Pairing::Offered {
+            pair_id: "pair-a".into(),
+            code: "draft-code".into(),
+            url: Some("http://127.0.0.1:8790/#corral-pair=draft-code".into()),
+            expires_at: 1,
+        };
+        let status = |pair_id: &str| PairStatus {
+            pair_id: pair_id.into(),
+            state: PairState::Offered {
+                expires_at: "2030-01-01T00:00:00Z".into(),
+            },
+        };
+        for _ in 0..2 {
+            previous = pairing(status("pair-a"), &mut previous);
+            let feed = Feed {
+                pairing: previous.clone(),
+                ..Feed::default()
+            };
+            assert!(matches!(
+                live_devices(&feed, false).panel,
+                PairingPanel::Offered { code, url: Some(url), .. }
+                    if code == "draft-code" && url.ends_with("#corral-pair=draft-code")
+            ));
+        }
+        assert!(matches!(
+            pairing(status("pair-b"), &mut previous),
+            Pairing::Offered { code, url: None, .. } if code.is_empty()
+        ));
+    }
 
     #[test]
     fn estimated_row_maps_rfc3339_seconds_and_cost_flag() {

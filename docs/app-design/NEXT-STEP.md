@@ -12,7 +12,7 @@ This completes the production connection prerequisite only. Phase 2a is not comp
 
 - Loopback only. Network listening is explicit and off by default; no LAN, relay, phone packaging or service installation.
 - Native local enrolment uses the trusted Unix peer-UID boundary. Browser enrolment uses the architecture's single-use pairing token, Noise IKpsk2 and matching SAS confirmed on the trusted local surface. A browser cannot approve its own pending enrolment.
-- Subsequent browser sessions use pinned Noise IK. No secrets in URLs, public bootstrap JSON, unwrapped localStorage or source files. The proof's key provisioning must not be copied.
+- Subsequent browser sessions use pinned Noise IK. No long-lived secrets in URLs, public bootstrap JSON, unwrapped localStorage or source files. The owner-approved local pairing link carries only the short-lived single-use code in a fragment, cleared before pairing; explicit Pair and trusted-side confirmation remain required. The proof's key provisioning must not be copied.
 - Keep the existing CLI executable/build admission checks and fallback semantics. App protocol versions and capabilities are independent of executable identity; a claimed `kind = app` never establishes authentication.
 - App sessions expose only the explicit board/health read allowlist. Refuse commands, nudges, daemon administration, opaque executable-bound reads, host file access and runtime control before service dispatch. Add answer/follow-up permission only in the next increment.
 - Reuse the board projector, topic paging/ACKs, health facts, frame limits and existing operation/store boundaries. No second board derivation, store writer or proxy subprocess per client.
@@ -120,3 +120,19 @@ session was used or configured.
 The private foreground daemon truthfully reported degraded (`unsupervised`, PM absent);
 this was not presented as healthy. GTK/native-window backends remain unverified on this
 host, and the worker/PM question milestone remains unimplemented.
+
+## Live-rollout follow-up
+
+The owner subsequently authorized merging to `main`, installing the updated daemon
+and setting up the real workspace. Before enabling that listener, targeted security
+review found no server transport/allowlist blockers and identified client correctness
+issues: a rejected pinned handshake retried indefinitely, concurrent native credential
+mutations could lose another workspace's mapping, and non-canonical loopback binds
+could not be represented by the port-only pairing format.
+
+The fixes make failed pinned handshakes terminal and actionable, serialize private
+credential-map mutations with a retained interprocess lock, and restrict app listening
+to `127.0.0.1`. The owner selected local-only clickable pairing links rather than LAN
+access. Those links carry the short-lived code in a URL fragment, clear it from the
+address bar, prefill Connection, and never bypass explicit Pair or matching-code
+confirmation. Native device IDs and long-lived browser secrets remain out of URLs.

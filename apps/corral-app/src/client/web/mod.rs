@@ -11,7 +11,7 @@ use super::{
 };
 use crate::model::{
     daemon::Feed,
-    devices::{BrowserPairing, DeviceLink},
+    devices::{BrowserPairing, BrowserSessionClose, DAEMON_IDENTITY_FAILED, DeviceLink},
 };
 use corral_protocol::{
     self as wire,
@@ -88,7 +88,7 @@ pub(super) fn start(feed: Signal<Feed>) {
             retry_at: None,
         };
         driver.tick_clock();
-        if super::configured() {
+        if super::configured() && !feed.with_untracked(Feed::browser_pairing_pending) {
             match keystore::load().await {
                 Ok(Some(credential)) => {
                     driver.credential = Some(credential);
@@ -287,16 +287,27 @@ impl Driver {
                 self.connection = None;
                 self.retry_at = None;
                 self.credential = None;
+                let blocked = self.feed.with_untracked(|feed| match feed.browser_pairing {
+                    BrowserPairing::Blocked(line) => Some(line),
+                    _ => None,
+                });
                 let cleared = keystore::clear().await;
                 Storage::remove_item(PAIRED_KEY);
                 self.feed.update(|feed| {
                     *feed = Feed::default();
-                    if let Err(problem) = cleared {
+                    if let Some(line) = blocked {
+                        feed.browser_pairing = BrowserPairing::Blocked(line);
+                    } else if let Err(problem) = cleared {
                         feed.browser_pairing = BrowserPairing::Failed(problem);
                     }
                 });
             }
             Input::Request(ClientRequest::Pair { code, name }) => {
+                if self.feed.with_untracked(|feed| {
+                    matches!(feed.browser_pairing, BrowserPairing::Blocked(_))
+                }) {
+                    return;
+                }
                 self.connection = None;
                 self.retry_at = None;
                 self.feed
@@ -391,26 +402,28 @@ impl Driver {
                             "corrald closed the pairing connection ({reason})."
                         )),
                     );
-                } else if reason == CLOSE_REVOKED {
-                    self.retry_at = None;
-                    if let Some(credential) = &self.credential {
-                        self.feed.update(|feed| {
-                            feed.revoked(credential.device.clone());
-                            feed.link_lost("This browser was revoked.".into());
-                        });
-                    }
-                } else if reason == CLOSE_DEVICE_UNKNOWN {
-                    self.failed(
-                        false,
-                        Failure::Fatal(
-                            "corrald no longer recognises this browser; forget it and pair again."
-                                .into(),
-                        ),
-                    );
-                } else if reason == CLOSE_SESSION_LIFETIME {
-                    self.connect_session();
                 } else {
-                    self.lost(format!("corrald closed the connection ({code}: {reason})."));
+                    match BrowserSessionClose::received(
+                        &reason,
+                        matches!(conn.stage, Stage::Opening | Stage::Handshake),
+                    ) {
+                        BrowserSessionClose::Revoked => {
+                            self.retry_at = None;
+                            if let Some(credential) = &self.credential {
+                                self.feed.update(|feed| {
+                                    feed.revoked(credential.device.clone());
+                                    feed.link_lost("This browser was revoked.".into());
+                                });
+                            }
+                        }
+                        BrowserSessionClose::Failed(line) => {
+                            self.failed(false, Failure::Fatal(line.into()));
+                        }
+                        BrowserSessionClose::Renew => self.connect_session(),
+                        BrowserSessionClose::Retry => {
+                            self.lost(format!("corrald closed the connection ({code}: {reason})."))
+                        }
+                    }
                 }
             }
             Input::Opened { generation } => {
@@ -456,6 +469,7 @@ impl Driver {
                             Ok(()) => match Storage::set_item(PAIRED_KEY, "1") {
                                 Ok(()) => {
                                     self.feed.update(|feed| {
+                                        feed.pairing_code = None;
                                         feed.browser_pairing = BrowserPairing::Paired {
                                             device: credential.device.clone(),
                                         }
@@ -494,8 +508,9 @@ impl Driver {
                 .take()
                 .ok_or_else(|| "missing Noise handshake".to_owned())?;
             let mut payload = [0; 128];
-            let size = handshake.read_message(&bytes, &mut payload).map_err(|_| Failure::Fatal(
-                "corrald did not prove its identity; forget this pairing and pair again if corrald was reinstalled.".into()))?;
+            let size = handshake
+                .read_message(&bytes, &mut payload)
+                .map_err(|_| Failure::Fatal(DAEMON_IDENTITY_FAILED.into()))?;
             if size != 0 {
                 return Err(Failure::Fatal(
                     "corrald sent a Noise handshake payload".into(),

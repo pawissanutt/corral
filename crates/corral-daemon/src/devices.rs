@@ -48,12 +48,17 @@ impl DeviceRecord {
     }
 }
 
+struct AppListener {
+    port: u16,
+    origin: Option<String>,
+}
+
 pub(crate) struct Devices {
     store: Mutex<Store>,
     state_root: Option<PathBuf>,
     store_id: String,
     identity: Mutex<Option<Identity>>,
-    port: Mutex<Option<u16>>,
+    listener: Mutex<Option<AppListener>>,
     pub(crate) pairings: Pairings,
     sessions: Mutex<BTreeMap<u64, (String, Arc<AtomicBool>)>>,
     next: AtomicU64,
@@ -86,7 +91,7 @@ pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>, state_root: Option<PathBuf>
         state_root,
         store_id: corral_core::agent::paths::store_id(&ctx.store),
         identity: Mutex::new(None),
-        port: Mutex::new(None),
+        listener: Mutex::new(None),
         pairings: Pairings::default(),
         sessions: Mutex::new(BTreeMap::new()),
         next: AtomicU64::new(0),
@@ -132,8 +137,8 @@ impl Devices {
         Ok(loaded)
     }
 
-    pub(crate) fn set_port(&self, port: u16) {
-        *lock(&self.port) = Some(port);
+    pub(crate) fn set_listener(&self, port: u16, origin: Option<String>) {
+        *lock(&self.listener) = Some(AppListener { port, origin });
     }
 
     pub(crate) fn store_name(&self) -> String {
@@ -290,7 +295,8 @@ impl Devices {
     }
 
     pub(crate) fn pair_begin(&self, now: Instant) -> Result<PairOffer, DeviceError> {
-        let port = (*lock(&self.port)).ok_or_else(|| DeviceError::Unavailable("app_listener_off: set [daemon] listen and web_origins in .corral/corral.toml, then restart corrald".into()))?;
+        let listener = lock(&self.listener);
+        let listener = listener.as_ref().ok_or_else(|| DeviceError::Unavailable("app_listener_off: set [daemon] listen and web_origins in .corral/corral.toml, then restart corrald".into()))?;
         let identity = self.identity()?;
         let mut token = [0; 32];
         let mut pair_id = [0; 8];
@@ -299,7 +305,7 @@ impl Devices {
         let code = PairCode {
             daemon_public: identity.public,
             token,
-            port,
+            port: listener.port,
             pair_id,
         };
         let pair_id = code.pair_id_hex();
@@ -311,10 +317,16 @@ impl Devices {
                 "new pairing is not offered"
             )));
         };
+        let code = code.encode();
+        let url = listener
+            .origin
+            .as_ref()
+            .map(|origin| format!("{origin}/#{PAIR_LINK_FRAGMENT}{code}"));
         Ok(PairOffer {
             pair_id,
-            code: code.encode(),
+            code,
             expires_at,
+            url,
         })
     }
 

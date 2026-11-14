@@ -214,7 +214,12 @@ fn paired_browser_reads_board_and_revocation_closes_it() {
     .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    serve_listener(listener, Arc::clone(&shared), vec![ORIGIN.into()]).unwrap();
+    serve_listener(
+        listener,
+        Arc::clone(&shared),
+        vec![ORIGIN.into(), "https://corral.example".into()],
+    )
+    .unwrap();
 
     let error = upgrade(port, SESSION_PATH, "http://evil.example").unwrap_err();
     assert!(matches!(error, tungstenite::Error::Http(response) if response.status() == 403));
@@ -227,6 +232,14 @@ fn paired_browser_reads_board_and_revocation_closes_it() {
         serde_json::from_value(unix_call(&mut local, PAIR_BEGIN, PairBegin {})).unwrap();
     let code = PairCode::decode(&offer.code).unwrap();
     assert_eq!(code.port, port);
+    let url_code = offer
+        .url
+        .as_deref()
+        .unwrap()
+        .strip_prefix(&format!("{ORIGIN}/#{PAIR_LINK_FRAGMENT}"))
+        .unwrap();
+    assert_eq!(url_code, offer.code);
+    assert_eq!(PairCode::decode(url_code).unwrap(), code);
     let key = snow::Builder::new(NOISE_SESSION.parse().unwrap())
         .generate_keypair()
         .unwrap();
