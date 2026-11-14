@@ -6,11 +6,11 @@ This app lives in the corral repository as `apps/corral-app/`. It is its own Car
 
 The app has three data states (`DataState`):
 
-- **Fixture** (default): the mockup's destination content from fixtures in `src/model/`: Inbox and its question handover sheet, Now, Changes, Plans, Agents and sessions, Review, Timeline, Usage, Settings, the Ask composer and assistant threads. Actions change local state only.
+- **Fixture**: the explicit mockup preview, and the default for native builds without `CORRAL_SOCKET`. Destination content comes from fixtures in `src/model/`: Inbox and its question handover sheet, Now, Changes, Plans, Agents and sessions, Review, Timeline, Usage, Settings, the Ask composer and assistant threads. Actions change local state only.
 - **Daemon**: an enrolled native Unix session (`CORRAL_SOCKET`, peer-UID trust and a private `0600` device-id file), or a paired browser session over an explicitly enabled loopback WebSocket with pinned Noise IK. Health, Now and connection/device Settings are live; other destinations remain explicitly unavailable. Only the trusted native/CLI side administers devices. Neither app sends task/question commands.
-- **Disconnected**: the frame shown with no daemon.
+- **Disconnected**: no daemon connection. Unpaired browsers start here on Settings › Connection, with pairing available and without fixture dates, health or board rows; other destinations remain unavailable.
 
-The web build pairs once through Settings › Connection using a trusted-side offer and matching-code confirmation. Its encrypted credential and non-extractable wrapping key live in IndexedDB; only `corral.paired` is in NSH Storage. Revocation closes sessions and stops automatic reconnect. No LAN listener, relay or browser command executor is enabled.
+The web build opens Connection automatically until paired, ignoring older fixture/destination preferences. It pairs through that page using a trusted-side offer and matching-code confirmation. Its encrypted credential and non-extractable wrapping key live in IndexedDB; only `corral.paired` is in NSH Storage. Revocation closes sessions and stops automatic reconnect. Forget returns to disconnected Connection. No LAN listener, relay or browser command executor is enabled.
 
 Replies to newly typed Ask messages are not simulated, as in the mockup. NSH Storage keys are `corral.destination`, `corral.settings`, `corral.theme`, `corral.data`, `corral.conn`, `corral.mode`, `corral.now.layout` and the non-secret `corral.paired` marker.
 

@@ -1,8 +1,8 @@
 # Corral app
 
-Corral is a Rust app built on [NSH 0.5.0](https://nsh.dev), with desktop, web, phone and terminal forms. The crate is `nsh-app-corral` and its root component is `App`. By default it presents the interactive mockup's content using fixtures in `src/model/`, and actions change local state only. Enrolled native and paired browser builds can show `corrald`'s live health and board; see [Live data](#live-data).
+Corral is a Rust app built on [NSH 0.5.0](https://nsh.dev), with desktop, web, phone and terminal forms. The crate is `nsh-app-corral` and its root component is `App`. Unpaired browsers open Connection for pairing; paired browsers and enrolled native builds can show `corrald`'s live health and board. Native builds without `CORRAL_SOCKET` open the explicit fixture preview, where actions change local state only. See [Live data](#live-data).
 
-The app includes:
+Fixture mode includes:
 
 - **Inbox**: items needing attention and a question handover with evidence and answers.
 - **Now**: the workspace, task details and plan graph. **Changes** shows changes since the last visit.
@@ -49,6 +49,12 @@ A restart attaches that enrolled identity without asking again.
 
 ### Browser
 
+Opening the web app without a saved pairing goes straight to Settings › Connection,
+even if an older build saved a mockup destination or Fixture preference. Until paired,
+the shell reports **not connected**, without mockup dates, health or task counts.
+Other destinations do not fall back to mockup content. Fixture remains an explicit
+choice in the palette's Demo group.
+
 Enable the optional listener in the workspace's `.corral/corral.toml`, then restart
 `corrald`. It is off by default; the browser endpoint must bind `127.0.0.1`:
 
@@ -84,8 +90,9 @@ browser sessions can read only board and health.
 
 `corral device list [--json]` lists identities; `corral device revoke <id>` closes their
 live sessions and stops automatic reconnect. Native devices can explicitly enrol again.
-Browsers recover with **Forget this browser**, then pair again. Forget removes local
-credentials, not the daemon's record; revoke obsolete records from the trusted side.
+Browsers recover with **Forget this browser**, which returns to Connection for pairing.
+Forget removes local credentials, not the daemon's record; revoke obsolete records
+from the trusted side.
 
 The palette's Demo group still switches Data back to Fixture.
 

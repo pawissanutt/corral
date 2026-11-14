@@ -104,7 +104,7 @@ fn forget(app: AppState) -> AnyElement {
             "btn-forget-browser",
             move || {
                 let _ = send(ClientRequest::Forget);
-                app.set_data(DataState::Fixture);
+                app.set_data(DataState::Disconnected);
             },
         )],
     )
