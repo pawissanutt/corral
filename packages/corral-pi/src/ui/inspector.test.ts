@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { EventLog } from "../bridge/events.ts";
-import { InspectorActivity, inspectorActivity, inspectorContext, type InspectorSnapshot } from "./inspector.ts";
+import { InspectorActivity, inspectorContext, receiptLines, type InspectorSnapshot } from "./inspector.ts";
 import { TodoLedger } from "./todo.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
 import { NativePanels } from "./panels.ts";
@@ -32,21 +32,44 @@ const progress = (revision: number) => ({ revision, spec_revision: "spec", phase
   { id: "s", label: "Work", status: { state: "in_progress" as const }, criteria: ["C1"] },
 ] }] });
 
-test("event and receipt adapter retains actual outcomes, replay, gaps and bounded omission", () => {
+test("receipt observations keep outcome and nesting, bounded; unknown never reads as success; gaps and omissions in both modes", () => {
   const { events, activity, send } = adapter();
   events.emit("bound"); events.emit("turn_started", { turn: 2 }); events.emit("tool_denied");
   for (const state of ["committed", "rejected", "uncertain", "queued"]) send({ state, result: { code: "example" } });
   send({ state: "committed", replayed: true, result: { status: "started" } });
   send(undefined, { isError: true, content: [{ type: "text", text: "transport unavailable" }] });
+  send({ result: { status: "started" } });
   // Unauthenticated nested calls and non-Corral tools cannot inject receipt outcomes.
   send({ state: "committed" }, { parentToolCallId: "nested" });
   send({ state: "committed" }, { toolName: "read" });
-  expect(activity.snapshot().receipts).toHaveLength(6);
-  const lines = inspectorActivity(base(activity)).join("\n");
-  for (const text of ["rejected", "uncertain", "queued", "replayed", "transport unavailable", "Event gap: 1 missing", "not gate PASS"]) expect(lines).toContain(text);
+  const rows = activity.snapshot().receipts;
+  expect(rows.map(row => [row.tool, row.state, row.nested])).toEqual([
+    ["corral_gate", "committed", false], ["corral_gate", "rejected", false], ["corral_gate", "uncertain", false],
+    ["corral_gate", "queued", false], ["corral_gate", "committed", false], ["corral_gate", "no receipt", false],
+    ["corral_gate", "no receipt", false],
+  ]);
+  const now = Date.now(), text = (set: readonly { text: string }[]) => set.map(line => line.text).join("\n");
+  const first = receiptLines(base(activity), now);
+  const operations = first.lines.slice(first.lines.findIndex((line, index) => index > 0 && line.heading) + 1).slice(0, rows.length);
+  rows.forEach((row, index) => {
+    if (row.state !== "committed") expect(operations[index]!.text.split("  ")[1]?.[0]).not.toBe("✓");
+  });
+  // The exact records keep the observed summary and every retained event's time and kind; the readable lines read local time.
+  for (const observed of ["replayed", "transport unavailable"]) expect(text(first.raw)).toContain(observed);
+  for (const event of base(activity).events.events) {
+    expect(text(first.raw)).toContain(event.at); expect(text(first.raw)).toContain(event.kind);
+    expect(text(first.lines)).not.toContain(event.at);
+  }
   for (let n = 0; n < 30; n++) send({ state: "committed", result: { revision: n } });
   expect(activity.snapshot().receipts).toHaveLength(24);
-  expect(activity.snapshot().receiptsOmitted).toBe(12);
+  expect(activity.snapshot().receiptsOmitted).toBe(13);
+  const info = base(activity), shown = receiptLines(info, now);
+  expect(info.events.gap?.missing).toBe(1);
+  const page = info.events, gapless = { generation: page.generation, events: page.events, last: page.last, next: page.next, more: page.more };
+  for (const variant of [{ ...info, events: gapless }, { ...info, receiptsOmitted: 0 }]) {
+    const other = receiptLines(variant, now);
+    expect(text(other.lines)).not.toBe(text(shown.lines)); expect(text(other.raw)).not.toBe(text(shown.raw));
+  }
 });
 
 test("only authenticated, non-denied Code Mode children can feed receipt and ledger adapters", async () => {
@@ -68,7 +91,7 @@ test("only authenticated, non-denied Code Mode children can feed receipt and led
   await runChild({ ...child, tool: "read" }, () => send());
   expect(ledger.current?.revision).toBe(1); expect(activity.snapshot().receipts).toHaveLength(0);
   await runChild(child, () => send());
-  expect(ledger.current?.revision).toBe(2); expect(activity.snapshot().receipts).toHaveLength(1);
+  expect(ledger.current?.revision).toBe(2); expect(activity.snapshot().receipts.map(row => row.nested)).toEqual([true]);
 });
 
 test("canonical ledger adapters reject local assertions, rejected outcomes, late replay and stale reads", async () => {
@@ -102,7 +125,6 @@ test("disconnected/legacy inspectors and activity never present unknown as succe
     tokens: 0, tools: [], contextFiles: [], skills: [], ledger: ledger.current, ledgerStale: true, jobs: null,
     auxiliary: null, steering: 0, followUps: 0, inspector: info };
   expect(inspectorContext(info).join("\n")).toContain("legacy launch");
-  expect(inspectorActivity(info).join("\n")).toContain("No tool receipt observed");
   const panels = new NativePanels({ identity, cwd: ".", snapshot: () => snapshot });
   const root = panels.workbench.mount(new Text("", 0, 0));
   panels.workbench.openAgents();

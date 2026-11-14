@@ -1,61 +1,18 @@
-// The bound task's spec and status, read from `corral show --json`. Presentation only: the
-// task record is canonical; criteria shown here are the spec, never proof they passed.
-import { z } from "zod";
+// The bound task's spec and status, read from `corral show --json`. Presentation only: the task record is canonical;
+// criteria shown here are the spec, never proof they passed. The page is finished rows, each at most `width` cells:
+// a chip header with the read note, the title, then the task's own body sections, the criteria, the bound run and the
+// last comments. From SPLIT_MIN columns a facts column sits beside the prose. State words come from the shared helpers.
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
-import { plainLabel, type PanelLine } from "./panels-view.ts";
+import {
+  bold, chip, chipHeader, field, glyphRows, legacyRow, sectionRule, stateBanner, stateRow, wrap, type Tone,
+} from "./panel-parts.ts";
+import { splitRow } from "./panels-chrome.ts";
+import { pad, plainLabel, PANEL_CODE, PANEL_MUTED, PANEL_RULE, PANEL_TEXT } from "./panels-view.ts";
+import type { ReadState } from "./read-state.ts";
+import type { TaskRecord, TaskStore } from "./task-store.ts";
 
-const Text = z.string().max(65_536);
-const TaskSchema = z.object({
-  id: Text, title: Text, status: Text,
-  status_since: Text.optional(), kind: Text.nullable().optional(), size: Text.nullable().optional(),
-  difficulty: Text.nullable().optional(), priority: Text.nullable().optional(), project: Text.optional(),
-  body: Text.nullable().optional(),
-  criteria_progress: z.array(z.object({
-    criterion: z.object({ id: Text, required: z.boolean(), scenario: Text, expected: Text }),
-    steps: z.array(z.unknown()).default([]),
-    evidence: z.array(z.unknown()).default([]),
-  })).max(100).optional(),
-  runs: z.array(z.object({
-    id: Text, agent: Text.nullable().optional(), outcome: Text.nullable().optional(),
-    agent_state: Text.nullable().optional(), started: Text.nullable().optional(), ended: Text.nullable().optional(),
-    summary: Text.nullable().optional(),
-  })).max(200).default([]),
-  comments: z.array(z.object({ at: Text, author: Text, text: Text })).max(500).default([]),
-});
-export type TaskRecord = z.infer<typeof TaskSchema>;
-
-/** One cached, validated read. Rendering never does I/O. */
-export class TaskStore {
-  current: TaskRecord | undefined;
-  error: string | undefined;
-  stale = true; refreshing = false; checkedAt: number | undefined;
-  private active: Promise<void> | undefined; private version = 0; private disposed = false;
-  constructor(private readonly identity: HostIdentity, private readonly load: (() => Promise<unknown>) | undefined, private readonly changed: () => void) {}
-  get bound(): boolean { return !!this.identity.task && !!this.load; }
-  refresh(force = false): Promise<void> {
-    if (this.disposed || !this.bound) return Promise.resolve();
-    if (this.active) return this.active;
-    if (!force && !this.stale && this.checkedAt && Date.now() - this.checkedAt < 5000) return Promise.resolve();
-    const operation = this.read(); this.active = operation;
-    void operation.finally(() => { if (this.active === operation) this.active = undefined; });
-    return operation;
-  }
-  private async read(): Promise<void> {
-    const version = this.version;
-    this.refreshing = true; this.changed();
-    try {
-      if (!this.load) throw new Error("No task bound to this session");
-      const data = TaskSchema.parse(await this.load());
-      if (data.id !== this.identity.task) throw new Error("Task identity mismatch");
-      if (this.disposed || version !== this.version) return;
-      this.current = data; this.error = undefined; this.stale = false; this.checkedAt = Date.now();
-    } catch (error) {
-      if (this.disposed || version !== this.version) return;
-      this.error = error instanceof Error ? error.message : String(error); this.stale = true;
-    } finally { this.refreshing = false; if (!this.disposed) this.changed(); }
-  }
-  dispose(): void { this.disposed = true; this.version++; }
-}
+type TaskRun = TaskRecord["runs"][number];
 
 const STATUS_GLYPH: Readonly<Record<string, string>> = { running: "●", review: "◐", done: "✓", landed: "✓", blocked: "⚠", failed: "✗", backlog: "○", ready: "○", idea: "·" };
 export function statusChip(status: string): string {
@@ -70,19 +27,26 @@ export function taskHeadline(identity: HostIdentity, store: TaskStore): { readon
   return { id: data.id, title: plainLabel(data.title), chips: store.stale ? [...chips, "stale"] : chips };
 }
 
-const SECTION = /^#{1,3}\s+(.*)$/;
-/** Body sections in order; text before the first heading is "Summary". */
-function sections(body: string): { readonly heading: string; readonly lines: string[] }[] {
-  const result: { heading: string; lines: string[] }[] = [];
-  let current = { heading: "Summary", lines: [] as string[] };
-  for (const raw of body.split("\n")) {
-    const heading = SECTION.exec(raw);
-    if (heading) { if (current.lines.some(line => line.trim())) result.push(current); current = { heading: heading[1] ?? "", lines: [] }; continue; }
-    current.lines.push(raw);
-  }
-  if (current.lines.some(line => line.trim())) result.push(current);
-  return result;
+export interface TaskViewOptions {
+  readonly now: number;
+  /** Append the reading rules and, for a failed or retained read, the whole failure reason. */
+  readonly legend: boolean;
 }
+
+/** View width from which a facts column sits beside the prose. */
+const SPLIT_MIN = 105;
+const FACTS_WIDTH = 34;
+const FACT_LABEL = 10;
+const RUN_LABEL = 8;
+/** Prose is wrapped to at most this many cells. */
+const PROSE_MAX = 100;
+/** Below this width a criterion's counts take their own row instead of the right edge. */
+const COUNTS_INLINE = 64;
+const STATUS_TONE: Readonly<Record<string, Tone>> = { done: "ok", landed: "ok", failed: "bad", blocked: "warn" };
+
+const muted = (text: string) => PANEL_MUTED + text + PANEL_TEXT;
+const clean = (text: string) => text.replaceAll("\t", "  ").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+const fit = (row: string, width: number) => visibleWidth(row) > width ? truncateToWidth(row, width, "…") : row;
 
 function age(at: string | null | undefined, now: number): string {
   const time = at ? Date.parse(at) : NaN;
@@ -90,55 +54,226 @@ function age(at: string | null | undefined, now: number): string {
   const minutes = Math.max(0, Math.round((now - time) / 60_000));
   return minutes < 60 ? `${minutes}m` : minutes < 48 * 60 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`;
 }
+/** `10m ago`; an unreadable time is shown as recorded rather than dropped. */
+function when(at: string | null | undefined, now: number): string {
+  if (!at) return "";
+  const since = age(at, now);
+  return since ? `${since} ago` : plainLabel(at);
+}
 
-export function taskLines(identity: HostIdentity, store: TaskStore, now = Date.now()): PanelLine[] {
-  const rows: PanelLine[] = [];
-  const add = (text: string, tone?: PanelLine["tone"], extra: Partial<PanelLine> = {}) => rows.push({ text: plainLabel(text), ...(tone ? { tone } : {}), ...extra });
-  if (!identity.task) {
-    add(identity.role === "assistant" ? "No task bound · this assistant session holds no task" : "No task bound to this session", "muted");
-    return rows;
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+/** `text` cut into rows of at most `width` cells, at any character: code keeps its spaces. */
+function hardWrap(text: string, width: number): string[] {
+  const rows: string[] = [];
+  let row = "", used = 0;
+  for (const { segment } of GRAPHEMES.segment(text)) {
+    const cells = visibleWidth(segment);
+    if (row && used + cells > width) { rows.push(row); row = ""; used = 0; }
+    row += segment; used += cells;
   }
-  if (store.stale && store.error) add("STALE / unavailable: " + store.error, "warning");
-  else if (store.refreshing && !store.current) add("Reading task…", "muted");
-  const data = store.current;
-  if (!data) return rows;
-  const facts = [data.kind, data.size, data.difficulty, data.project].filter(Boolean).join(" · ");
-  add(`${data.status.replaceAll("_", " ")}${data.status_since ? ` for ${age(data.status_since, now)}` : ""}${facts ? " · " + facts : ""}`, "muted");
-  add("");
-  for (const section of sections(data.body ?? "")) {
-    add(section.heading, "accent", { heading: true });
-    for (const line of section.lines.join("\n").trim().split("\n")) {
-      const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
-      if (bullet) add("• " + (bullet[1] ?? ""), undefined, { indent: 1, continuationIndent: 3 });
-      else add(line);
+  rows.push(row);
+  return rows;
+}
+/** `first` before the first wrapped row of `text`, blanks of the same width before the rest. */
+function hanging(first: string, text: string, width: number): string[] {
+  const hang = visibleWidth(first);
+  const parts = text ? wrap(text, Math.max(1, width - hang)) : [""];
+  return parts.map((part, i) => (i ? " ".repeat(hang) : first) + part);
+}
+/** Free text, a line at a time, wrapped under `indent` blanks; runs of blank lines collapse to one. */
+function prose(text: string, indent: number, width: number): string[] {
+  const rows: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = plainLabel(raw);
+    if (!line) { if (rows.length && rows.at(-1) !== "") rows.push(""); continue; }
+    rows.push(...hanging(" ".repeat(indent), line, width));
+  }
+  while (rows.at(-1) === "") rows.pop();
+  return rows;
+}
+
+/** One body line: `first` leads its first row, `hang` blanks lead the wrapped rows. */
+interface BodyLine { readonly text: string; readonly first: string; readonly hang: number; readonly code: boolean }
+interface BodySection { readonly heading: string; readonly lines: readonly (BodyLine | null)[] }
+
+const SECTION = /^#{1,3}\s+(.*)$/;
+const FENCE = /^\s*(```|~~~)/;
+const BULLET = /^(\s*)([-*+]|\d{1,3}[.)])\s+(.*)$/;
+/**
+ * The body's own sections in order; text before the first heading is "Summary". Fenced code is kept verbatim, in
+ * order, and never read as headings; a bullet's indented lines continue it; `null` is one blank row.
+ */
+function sections(body: string): BodySection[] {
+  const result: BodySection[] = [];
+  let heading = "Summary", lines: (BodyLine | null)[] = [];
+  const close = () => {
+    while (lines.at(-1) === null) lines.pop();
+    while (lines[0] === null) lines.shift();
+    if (lines.length) result.push({ heading, lines });
+    lines = [];
+  };
+  let fenced = false, hang = 0;
+  for (const raw of body.split(/\r?\n/)) {
+    const text = clean(raw);
+    if (FENCE.test(text)) { fenced = !fenced; hang = 0; continue; }
+    if (fenced) { lines.push({ text: text.trimEnd(), first: "  ", hang: 2, code: true }); continue; }
+    const title = SECTION.exec(text);
+    if (title) { close(); heading = plainLabel(title[1] ?? "") || "Section"; hang = 0; continue; }
+    if (!text.trim()) { if (lines.length && lines.at(-1) !== null) lines.push(null); hang = 0; continue; }
+    const bullet = BULLET.exec(text);
+    if (bullet) {
+      const mark = bullet[2] ?? "-", depth = Math.min(4, Math.floor((bullet[1] ?? "").length / 2));
+      const first = `${" ".repeat(depth * 2)}${/^\d/.test(mark) ? mark : "•"} `;
+      hang = visibleWidth(first);
+      lines.push({ text: plainLabel(bullet[3] ?? ""), first, hang, code: false });
+      continue;
     }
-    add("");
+    if (hang && /^\s{2,}/.test(text)) { lines.push({ text: plainLabel(text), first: " ".repeat(hang), hang, code: false }); continue; }
+    hang = 0;
+    lines.push({ text: plainLabel(text), first: "", hang: 0, code: false });
   }
-  if (!data.body?.trim()) { add("No task description", "muted"); add(""); }
-  const criteria = data.criteria_progress ?? [];
-  if (criteria.length) {
-    add(`Criteria · ${criteria.length} in spec (proof lives in Proof, F10)`, "accent", { heading: true });
-    for (const c of criteria) {
-      add(`${c.criterion.required ? "☐" : "◇"} ${c.criterion.id} · ${c.criterion.expected}`, undefined, { continuationIndent: 2 });
-      add(`${c.steps.length} plan step${c.steps.length === 1 ? "" : "s"} · ${c.evidence.length} evidence record${c.evidence.length === 1 ? "" : "s"} · not a pass`, "muted", { indent: 2 });
-    }
-    add("");
+  close();
+  return result;
+}
+function bodyRows(lines: readonly (BodyLine | null)[], width: number): string[] {
+  return lines.flatMap(line => {
+    if (!line) return [""];
+    const room = Math.max(1, width - line.hang);
+    const parts = line.code ? hardWrap(line.text, room) : line.text ? wrap(line.text, room) : [""];
+    return parts.map((part, i) => (i ? " ".repeat(line.hang) : line.first) + (line.code ? PANEL_CODE + part + PANEL_TEXT : part));
+  });
+}
+
+/** `T-950  Usage redesign`: the id in bold, the title wrapped under itself; the id alone while the title is unread. */
+function titleRows(id: string, title: string | undefined, width: number): string[] {
+  const lead = visibleWidth(id) + 2;
+  if (!title) return [truncateToWidth(bold(id), width, "…")];
+  if (lead > Math.max(8, width - 12)) return [truncateToWidth(bold(id), width, "…"), ...wrap(title, width)];
+  return hanging(`${bold(id)}  `, title, width);
+}
+
+/** Facts of the run the page shows, in the order the record states them; a field the run lacks is left out. */
+function runFacts(run: TaskRun, now: number): [string, string][] {
+  const out: [string, string][] = [];
+  const add = (label: string, value: string | null | undefined) => { if (value) out.push([label, plainLabel(value)]); };
+  add("agent", run.agent); add("state", run.agent_state); add("outcome", run.outcome);
+  add("started", when(run.started, now)); add("ended", when(run.ended, now));
+  return out;
+}
+
+const counts = (steps: number | undefined, evidence: number | undefined) =>
+  [steps === undefined ? "steps unknown" : `${steps} step${steps === 1 ? "" : "s"}`, evidence === undefined ? "evidence unknown" : `${evidence} evidence`].join(" · ");
+
+/** The prose column: the body's sections, the criteria, the bound run and the last comments. */
+function proseRows(data: TaskRecord, identity: HostIdentity, width: number, now: number, wide: boolean): string[] {
+  const rows: string[] = [];
+  const text = Math.min(width, PROSE_MAX);
+  const open = (label: string, right: readonly string[] = []) => {
+    if (rows.length) rows.push("");
+    rows.push(sectionRule(label, width, right));
+  };
+  const body = sections(data.body ?? "");
+  for (const section of body) { open(section.heading); rows.push(...bodyRows(section.lines, text)); }
+  if (!body.length) { open("Summary"); rows.push(muted("○ No task description")); }
+
+  const criteria = data.criteria_progress;
+  open("Criteria · spec only, proof in F10", criteria?.length ? [`${criteria.length} · ☐ required · ◇ optional`] : []);
+  if (!criteria) rows.push(...legacyRow("criteria", "task record", text));
+  else if (!criteria.length) rows.push(...glyphRows("○ No criteria in this task's spec", text));
+  for (const c of criteria ?? []) {
+    const lead = `${c.criterion.required ? "☐" : "◇"} ${plainLabel(c.criterion.id)}  `, tally = muted(counts(c.steps?.length, c.evidence?.length));
+    if (width >= COUNTS_INLINE) {
+      const [first = "", ...rest] = hanging(lead, plainLabel(c.criterion.expected), width - visibleWidth(tally) - 2);
+      rows.push(splitRow(first, tally, width), ...rest);
+    } else rows.push(...hanging(lead, plainLabel(c.criterion.expected), width), `  ${tally}`);
+    if (plainLabel(c.criterion.scenario)) rows.push(...hanging("  ", `scenario · ${plainLabel(c.criterion.scenario)}`, width).map(muted));
   }
-  const run = data.runs.find(run => run.id === identity.run) ?? data.runs.at(-1);
-  if (run) {
-    add(`Run ${run.id}${run.id === identity.run ? " (this session)" : ""}`, "accent", { heading: true });
-    add([run.agent, run.agent_state ?? run.outcome, run.started ? `started ${age(run.started, now)} ago` : ""].filter(Boolean).join(" · "), "muted");
-    if (run.summary) for (const line of run.summary.split("\n")) add(line);
-    if (data.runs.length > 1) add(`${data.runs.length - 1} earlier run${data.runs.length === 2 ? "" : "s"}`, "muted");
-    add("");
+
+  const bound = identity.run, found = bound ? data.runs.find(run => run.id === bound) : undefined;
+  const run = found ?? data.runs.at(-1);
+  if (bound || run) {
+    open(`Run ${plainLabel(run?.id ?? bound ?? "")}${found ? " · this session" : ""}`);
+    if (bound && !found) rows.push(...glyphRows(`○ Run ${bound} is not in this task record${run ? ` · showing the latest run, ${run.id}` : " yet"}`, width));
+    if (run && !wide) for (const [label, value] of runFacts(run, now)) rows.push(...field(label, value, width, RUN_LABEL));
+    if (run?.summary?.trim()) rows.push(muted("summary"), ...prose(run.summary, 2, text));
+    const others = run ? data.runs.length - 1 : data.runs.length;
+    if (others > 0) rows.push(muted(`${others} ${run === data.runs.at(-1) ? "earlier" : "other"} run${others === 1 ? "" : "s"} · Browse history in F2`));
   }
+
   const comments = data.comments.slice(-3);
   if (comments.length) {
-    add(`Comments · last ${comments.length} of ${data.comments.length}`, "accent", { heading: true });
-    for (const comment of comments) {
-      add(`${comment.author} · ${age(comment.at, now)} ago`, "muted");
-      add(comment.text, undefined, { indent: 2, continuationIndent: 2 });
-    }
+    open(`Comments · last ${comments.length} of ${data.comments.length}`);
+    comments.forEach((comment, i) => {
+      if (i) rows.push("");
+      rows.push(...hanging("", muted(`${plainLabel(comment.author)} · ${when(comment.at, now)}`), text));
+      rows.push(...prose(comment.text, 2, text));
+    });
   }
+  return rows.map(row => fit(row, width));
+}
+
+/** The facts column: every task field as a label and value, then the bound run's. */
+function factRows(data: TaskRecord, identity: HostIdentity, width: number, now: number): string[] {
+  const rows = [sectionRule("Facts", width)];
+  const since = age(data.status_since, now);
+  const add = (label: string, value: string | null | undefined) => rows.push(...field(label, value ?? "", width, FACT_LABEL));
+  add("status", `${data.status.replaceAll("_", " ")}${since ? ` · for ${since}` : ""}`);
+  add("kind", data.kind); add("size", data.size); add("difficulty", data.difficulty); add("priority", data.priority); add("project", data.project);
+  const bound = identity.run, run = (bound ? data.runs.find(r => r.id === bound) : undefined) ?? data.runs.at(-1);
+  if (run) {
+    rows.push("", sectionRule("Run", width));
+    add("run", `${run.id}${run.id === bound ? " · this session" : ""}`);
+    for (const [label, value] of runFacts(run, now)) add(label, value);
+  }
+  return rows.map(row => fit(row, width));
+}
+
+/** The status chip, then (below SPLIT_MIN) the small chips; the shared header prepends the read-state chip and adds the read note. */
+function chipRow(data: TaskRecord | undefined, state: ReadState, width: number, now: number, wide: boolean): string[] {
+  const chips: string[] = [];
+  if (data) {
+    const since = age(data.status_since, now);
+    chips.push(chip(`${statusChip(data.status)}${since ? ` · ${since}` : ""}`, STATUS_TONE[data.status] ?? "none"));
+    if (!wide) for (const value of [data.kind, data.size, data.difficulty, data.priority, data.project]) if (value) chips.push(chip(value));
+  }
+  return chipHeader(chips, width, state, now);
+}
+
+function legend(state: ReadState, width: number): string[] {
+  const rows = ["", sectionRule("Reading rules", width), ...stateBanner(state, "task", width, true)];
+  for (const rule of [
+    "r rereads the task record; nothing on this page changes it.",
+    "Criteria are the spec: ☐ required, ◇ optional. Counts are plan steps and evidence records, never a pass; Proof (F10) holds the evidence.",
+    "Status, kind, size, difficulty, priority and project are the task's own fields. One that is missing was not recorded; it is never zero.",
+  ]) rows.push(...wrap(rule, width).map(muted));
   return rows;
+}
+
+function unboundWhy(identity: HostIdentity, state: ReadState): string {
+  if (state.reason === "no_reader") return "no task reader is attached to this session.";
+  return identity.role === "assistant" ? "this assistant session holds no task." : "this session has no task bound.";
+}
+
+/** The Task page as finished rows, each at most `width` cells. Never reads: it draws what `store` holds. */
+export function taskLines(identity: HostIdentity, store: TaskStore, width: number, options: TaskViewOptions): string[] {
+  const w = Math.max(1, Math.floor(width)), state = store.state, data = store.current, now = options.now;
+  const id = plainLabel(identity.task ?? "");
+  const rows: string[] = [];
+  if (state.phase === "not_applicable") {
+    if (id) rows.push(...titleRows(id, undefined, w));
+    rows.push(...stateRow(state, "task", w, unboundWhy(identity, state)));
+    return rows.map(row => fit(row, w));
+  }
+  const wide = w >= SPLIT_MIN;
+  rows.push(...chipRow(data, state, w, now, wide), ...titleRows(id, data && plainLabel(data.title), w), ...stateBanner(state, "task", w));
+  if (data) {
+    if (wide) {
+      const left = w - FACTS_WIDTH - 3, main = proseRows(data, identity, left, now, true), facts = factRows(data, identity, FACTS_WIDTH, now);
+      for (let i = 0; i < Math.max(main.length, facts.length); i++) rows.push(`${pad(main[i] ?? "", left)} ${PANEL_RULE}│${PANEL_TEXT} ${facts[i] ?? ""}`);
+    } else rows.push(...proseRows(data, identity, w, now, false));
+  } else if (state.phase === "failed") {
+    rows.push(...stateRow(state, "task", w, "○ No task content is shown · acceptance is not inferred"));
+  } else rows.push(...stateRow(state, "task", w));
+  if (options.legend) rows.push(...legend(state, w));
+  return rows.map(row => fit(row, w));
 }

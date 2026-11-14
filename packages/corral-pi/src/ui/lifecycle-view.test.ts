@@ -2,6 +2,7 @@ import { test, expect } from "bun:test";
 import { GRAPH_MIN, LifecycleView, type LifecycleSnapshot } from "./lifecycle-view.ts";
 import { VIEW_INSET } from "./frame.ts";
 import type { InspectorSnapshot } from "./inspector.ts";
+import { clock } from "./panel-parts.ts";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 const identity = { store: "s", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
 export function sample(): LifecycleSnapshot {
@@ -92,17 +93,35 @@ test("every caveat stays reachable behind the legend", async () => {
   expect(graph).toContain("No agent parent is inferred from conversation order");
   view.dispose();
 });
-test("read failures retain historical rows, foreign identities rejected and actions gated", async () => {
-  let fail = false;
-  const view = new LifecycleView(identity, async () => { if (fail) throw new Error("disconnected"); return sample(); }, () => undefined, () => true, () => {}, () => true);
-  await view.refresh(); fail = true; await view.refresh();
-  const text = plain(view.render(140)).join("\n");
-  expect(text).toContain("STALE");
-  expect(text).toContain("disconnected");
-  expect(text).toContain("Blocked root");
+test("a failed reread keeps the rows and their read time; with nothing retained the failure is stated, never an empty graph", async () => {
+  let fail = false, bound = true;
+  const view = new LifecycleView(identity, async () => { if (fail) throw new Error("db locked"); return sample(); }, () => undefined, () => bound, () => {}, () => true);
+  await view.refresh();
+  const readAt = view.state.readAt;
+  expect(view.state.phase).toBe("current");
+  for (const width of [44, 68, 101]) expect(plain(view.render(width)).join("\n")).toContain(clock(readAt ?? NaN));
+  fail = true; bound = false; await view.refresh();
+  expect(view.state).toMatchObject({ phase: "retained", readAt, error: "db locked" });
+  for (const width of [44, 68, 101]) {
+    const rows = view.render(width), text = plain(rows).join("\n");
+    expect(text).toContain(clock(readAt ?? NaN));
+    expect(text).toContain("db locked");
+    expect(text).toContain("host unbound");
+    expect(rows.every(row => visibleWidth(row) <= width)).toBe(true);
+  }
+  expect(plain(view.render(140)).join("\n")).toContain("Blocked root");
   expect(selectedRow(view.render(140))).toContain("T-001");
   const foreign = new LifecycleView(identity, async () => ({ ...sample(), task: "T-999" }), () => undefined, () => true, () => {}, () => false);
-  await foreign.refresh(); expect(foreign.current).toBeUndefined(); expect(foreign.handleInput("r")).toBe(false);
+  await foreign.refresh();
+  expect(foreign.current).toBeUndefined();
+  expect(foreign.state.phase).toBe("failed");
+  expect(plain(foreign.render(140)).join("\n")).toContain("T-999");
+  expect(selectedRow(foreign.render(140))).toBe("");
+  expect(foreign.handleInput("r")).toBe(false);
+  const unread = new LifecycleView({ store: "s", project: "demo", role: "worker", task: "T-001", generation: 1 }, async () => sample(), () => undefined, () => true, () => {}, () => true);
+  await unread.refresh();
+  expect(unread.state.phase).toBe("not_applicable");
+  expect(unread.current).toBeUndefined();
 });
 test("session timeline retains source generation/sequence, gaps and matching selected details", () => {
   const host: InspectorSnapshot = { session: "session-one", boundSession: "session-one", turn: 0, turnOpen: false,
@@ -120,4 +139,15 @@ test("session timeline retains source generation/sequence, gaps and matching sel
   expect(text).toContain("#522");
   expect(text.indexOf("521") < text.indexOf("522")).toBe(true);
   expect(plain(view.render(140)).join(" ")).toContain("NOT canonical task settlement");
+  // Another generation's log names both generations whole at every width, and none of its events is listed or selectable.
+  const later = new LifecycleView({ ...identity, generation: 2 }, undefined, () => undefined, () => true, () => {}, () => true, () => host);
+  later.mode = "timeline"; later.handleInput("h"); later.handleInput("j");
+  for (const width of [44, 68, 140]) {
+    const rows = later.render(width), mismatch = plain(rows).join(" ").replace(/\s+/g, " ");
+    expect(mismatch).toMatch(/generation 1\b/);
+    expect(mismatch).toMatch(/generation 2\b/);
+    expect(mismatch).not.toContain("#521");
+    expect(selectedRow(rows)).toBe("");
+    expect(rows.every(row => visibleWidth(row) <= width)).toBe(true);
+  }
 });

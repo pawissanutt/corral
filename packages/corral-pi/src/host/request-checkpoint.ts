@@ -3,7 +3,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
 
-import { ProgressSchema, type TodoProgress } from "../ui/todo-widget.ts";
+import { ProgressSchema, type TodoProgress } from "../ui/todo.ts";
 import { visibleReceipt } from "../tools/presentation.ts";
 
 export type RequestCheckpoint = Extract<AgentMessage, { role: "custom" }>;

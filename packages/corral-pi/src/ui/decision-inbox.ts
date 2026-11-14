@@ -1,5 +1,6 @@
 // Navigation over a bounded canonical read. No mutation, send-message or owner-event capability.
 import type { Role } from "../roles/types.ts";
+import { readState, type ReadState } from "./read-state.ts";
 export interface InboxItem {
   readonly kind: string; readonly task: string; readonly container: string | null;
   readonly key: string; readonly revision: string; readonly revision_kind: string;
@@ -27,13 +28,19 @@ export function inboxIdentity(item: InboxItem): string {
 }
 export class DecisionInbox {
   snapshot: InboxSnapshot | undefined; selected: string | undefined;
-  history = false; query = ""; error: string | undefined; refreshing = false;
+  history = false; query = ""; error: string | undefined; failedAt: number | undefined; refreshing = false;
   private active: Promise<void> | undefined; private disposed = false;
   private readonly abort = new AbortController();
   constructor(private readonly read: ((signal: AbortSignal) => Promise<unknown>) | undefined, private readonly changed: () => void) {}
-  get status(): string {
-    return this.error ? "STALE / unavailable: " + this.error : this.refreshing ? "Reading canonical inbox…"
-      : this.snapshot ? "Observed " + this.snapshot.observed_at : "Not loaded / unavailable";
+  /**
+   * Where the canonical read stands. The data's time is the snapshot's own `observed_at`; a snapshot kept after a
+   * failed reread is `retained`; a session without a reader has no inbox (`not_applicable`), never an empty one.
+   */
+  get state(): ReadState {
+    const observed = this.snapshot ? Date.parse(this.snapshot.observed_at) : Number.NaN;
+    return readState({ applicable: this.read !== undefined, reason: "no_reader", hasData: this.snapshot !== undefined,
+      stale: this.error !== undefined, refreshing: this.refreshing, checkedAt: Number.isFinite(observed) ? observed : undefined,
+      error: this.error, failedAt: this.failedAt });
   }
   get visible(): readonly InboxItem[] {
     const query = this.query.toLowerCase();
@@ -48,26 +55,27 @@ export class DecisionInbox {
     if (item) this.select(inboxIdentity(item));
   }
   refresh(): Promise<void> {
-    if (this.disposed) return Promise.resolve();
+    if (this.disposed || !this.read) return Promise.resolve();
     if (this.active) return this.active;
-    const read = this.load(); this.active = read;
+    const read = this.load(this.read); this.active = read;
     void read.finally(() => { if (this.active === read) this.active = undefined; });
     return read;
   }
-  private async load(): Promise<void> {
+  private async load(reader: (signal: AbortSignal) => Promise<unknown>): Promise<void> {
     this.refreshing = true; this.changed();
     try {
-      if (!this.read) throw new Error("Canonical reader unavailable in this host");
-      const snapshot = parse(await this.read(this.abort.signal));
+      const snapshot = parse(await reader(this.abort.signal));
       if (this.disposed) return;
-      this.snapshot = snapshot; this.error = undefined;
+      this.snapshot = snapshot; this.error = undefined; this.failedAt = undefined;
       // Never silently replace a selection removed by a refresh with another task.
       if (this.selected === undefined && this.visible[0]) this.selected = inboxIdentity(this.visible[0]);
-    } catch (error) { if (!this.disposed) this.error = error instanceof Error ? error.message : String(error); }
-    finally { this.refreshing = false; if (!this.disposed) this.changed(); }
+    } catch (error) {
+      if (!this.disposed) { this.error = error instanceof Error ? error.message : String(error); this.failedAt = Date.now(); }
+    } finally { this.refreshing = false; if (!this.disposed) this.changed(); }
   }
   /** Opens instructions only; caller must not execute them or submit them as owner input. */
   async answerFlow(captured: InboxItem, role: Role, project?: string): Promise<string> {
+    if (!this.read) throw new Error("Canonical reader unavailable in this host");
     // An in-flight read may predate this click. Always do a new read afterward.
     if (this.active) await this.active;
     await this.refresh();

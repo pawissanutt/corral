@@ -3,15 +3,26 @@
 // the caller's timeout) ends the dialog keeping whatever was answered, so a partial batch survives.
 // Unless freeText is false, an Other row takes the owner's own typed answer instead of an option;
 // with freeText true that row is a note on the chosen option. Drafts stay per question.
-import { Input, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable } from "@earendil-works/pi-tui";
+import { Input, matchesKey, type Component, type Focusable, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { askDialogFrame, type AskDialogFrame, type AskDialogKey, type AskDialogText, type AskDialogView } from "../ui/ask-dialog-view.ts";
+import { askDialogPlainLines } from "../ui/ask-dialog-plain.ts";
+import { choiceRows } from "../ui/build/choice-dock.ts";
 
 export type Choice = { label: string; description?: string };
 export type DialogQuestion = { question: string; header?: string; options: Choice[]; multiSelect?: boolean; freeText?: boolean };
 /** `selected` is empty for the owner's own typed answer, which is then the nonempty `text`. */
 export type DialogAnswer = { selected: string[]; text: string };
 export type DialogResult = { submitted: boolean; answers: (DialogAnswer | undefined)[] };
-/** `drafts` seeds each text row and receives every edit, so a caller can keep drafts across reopenings. */
-export type DialogOptions = { escape?: string; complete?: boolean; drafts?: string[] };
+/**
+ * `drafts` seeds each text row and receives every edit, so a caller can keep drafts across reopenings. `surface` is
+ * internal, never an SDK option: "plain" keeps the stock text dialog for hosts without native panels (default
+ * "panels"); `rows` bounds the panels card only.
+ */
+export type DialogOptions = { escape?: string; complete?: boolean; drafts?: string[]; rows?: () => number; surface?: "panels" | "plain" };
+/** Rows the rest of the screen keeps while the card is open, when the host gave no row figure of its own. */
+const CHROME_ROWS = 6;
+/** Body rows one wheel notch moves. */
+const WHEEL_ROWS = 3;
 
 const PASTE_START = "\x1b[200~";
 const PASTE_END = "\x1b[201~";
@@ -45,6 +56,10 @@ export class AskDialog implements Component, Focusable {
   private readonly inputs: Input[];
   private pasting = false;
   private finished = false;
+  private hint: AskDialogFrame["hint"] = { row: -1, hits: [] };
+  /** The first body row the owner paged to; undefined while the body follows the cursor. */
+  private scroll: number | undefined;
+  private window: AskDialogFrame["scroll"] = { start: 0, max: 0, page: 1 };
 
   /** `complete` keeps Submit until every question is answered; `escape` names what Esc does. */
   constructor(private readonly questions: DialogQuestion[], private readonly done: (result: DialogResult) => void,
@@ -98,6 +113,14 @@ export class AskDialog implements Component, Focusable {
 
   handleInput(data: string): void {
     if (this.finished) return;
+    // PgUp/PgDn page a clipped body without touching any answer; every other key is navigation or typing, which
+    // lets the body follow the cursor again.
+    if (this.options.surface !== "plain" && !this.pasting && (matchesKey(data, "pageUp") || matchesKey(data, "pageDown"))) {
+      this.scrollBy(matchesKey(data, "pageUp") ? -this.window.page : this.window.page);
+      this.changed();
+      return;
+    }
+    this.scroll = undefined;
     this.handle(data);
     this.changed();
   }
@@ -175,58 +198,94 @@ export class AskDialog implements Component, Focusable {
     } else if (this.questions[i]!.freeText === true) answer.text = this.note(i);
   }
 
-  render(width: number): string[] {
-    const w = Math.max(1, width);
-    const fit = (line: string) => truncateToWidth(line, w);
-    const wrap = (line: string) => wrapTextWithAnsi(line, Math.max(10, w)).map(fit);
-    const label = (q: DialogQuestion, i: number) => q.header ?? `Q${i + 1}`;
-    const escape = this.options.escape ?? "Esc send answered only";
-    const tabs = this.questions.map((q, i) => `${this.answers[i] ? "✓" : "○"} ${label(q, i)}`).concat("Submit")
-      .map((t, i) => (i === this.tab ? `[${t}]` : ` ${t} `)).join(" ");
-    const out = [fit(tabs), ""];
-    if (this.onSubmit) {
-      // Answers wrap in full here: this is where the owner inspects them before sending.
-      this.questions.forEach((q, i) => {
+  /** Read-only state for the answer card; reading it changes nothing in the dialog. */
+  view(): AskDialogView {
+    const q = this.questions[this.tab];
+    const label = (item: DialogQuestion, i: number) => item.header ?? `Q${i + 1}`;
+    const tabs = [
+      ...this.questions.map((item, i) => ({ label: label(item, i), answered: this.answers[i] !== undefined, active: i === this.tab, submit: false })),
+      { label: "Review", answered: false, active: this.onSubmit, submit: true },
+    ];
+    const esc = { key: "esc", label: (this.options.escape ?? "Esc send answered only").replace(/^esc\s+/i, ""), data: "\x1b" };
+    if (this.onSubmit || q === undefined) {
+      // Answers are shown in full here: this is where the owner inspects them before sending.
+      const unanswered = this.answers.filter((a) => a === undefined).length;
+      const required = this.options.complete === true;
+      const rows = this.questions.map((item, i) => {
         const a = this.answers[i];
-        const shown = !a ? "unanswered" : a.selected.length ? a.selected.join(", ") + (a.text ? ` (${a.text})` : "") : `Other: ${a.text}`;
-        out.push(...wrap(`${label(q, i)}: ${shown}`));
+        const answer = !a ? undefined : a.selected.length ? a.selected.join(", ") + (a.text ? ` (${a.text})` : "") : `Other: ${a.text}`;
+        return { label: label(item, i), answer };
       });
-      out.push("", ...wrap(`Enter submit · ←/→ revise · ${escape}`));
-      return out;
+      return { tabs, review: { rows, unanswered, required }, keys: [
+        { key: "⏎", label: required && unanswered > 0 ? "first unanswered" : "send answers", data: "\r" }, esc,
+        { key: "←", label: "revise", data: "\x1b[D" },
+      ] };
     }
-    const q = this.questions[this.tab]!;
-    out.push(...wrapTextWithAnsi(q.question, Math.max(10, w)).map(fit), "");
     const answer = this.answers[this.tab];
-    q.options.forEach((o, row) => {
-      const on = q.multiSelect ? this.picks[this.tab]!.has(o.label) : answer?.selected[0] === o.label;
-      const box = q.multiSelect ? (on ? "[x]" : "[ ]") : on ? "(•)" : "( )";
-      out.push(fit(`${row === this.cursor ? ">" : " "} ${box} ${o.label}`));
-      if (o.description) out.push(...wrapTextWithAnsi(o.description, Math.max(10, w - 8)).map((l) => fit(`        ${l}`)));
-    });
     const onText = this.cursor === q.options.length;
     const noting = this.noting(this.tab);
-    if (q.freeText !== false) {
-      const input = this.inputs[this.tab]!;
-      const box = noting ? "   " : answer && answer.selected.length === 0 ? "(•)" : "( )";
-      const prefix = `${onText ? ">" : " "} ${box} ${noting ? "Note" : "Other"}: `;
-      const room = Math.max(1, w - visibleWidth(prefix));
-      let field: string;
-      if (onText) {
-        // The input scrolls horizontally, keeping the caret and the text around it visible.
-        input.focused = this.focused;
-        field = input.render(room)[0] ?? "";
-      } else {
-        const draft = input.getValue();
-        field = draft ? truncateToWidth(draft, room) : noting ? "add a note" : "type your own answer";
-      }
-      out.push(fit(prefix + field));
-    }
+    const input = this.inputs[this.tab]!;
+    const own: AskDialogText | undefined = q.freeText === false ? undefined : {
+      kind: noting ? "note" : "other", cursor: onText, on: !noting && answer !== undefined && answer.selected.length === 0, draft: input.getValue(),
+      renderInput: (width) => { input.focused = this.focused; return input.render(Math.max(1, width))[0] ?? ""; },
+    };
+    const rows = this.rows(q);
     const chosen = !q.multiSelect && answer?.selected.length && answer.selected[0] === q.options[this.cursor]?.label;
-    const keys = onText ? `Enter ${noting ? "save note" : "use answer"} · ←/→ edit · Tab questions`
-      : q.multiSelect ? "Space toggle · Enter confirm · ←/→ questions"
-        : `Enter choose${chosen ? " · Space clear" : ""} · ←/→ questions`;
-    out.push("", ...wrap(`↑/↓ move · ${keys} · ${escape}`));
-    return out;
+    const space = q.multiSelect ? "toggle" : chosen ? "clear" : undefined;
+    // ↑↓ steps the way that still has a row; on the text row ←/→ are the caret's, so Tab leaves it.
+    const keys: AskDialogKey[] = [
+      { key: "⏎", label: onText ? (noting ? "save note" : "use answer") : q.multiSelect ? "confirm" : "choose", data: "\r" },
+      ...(!onText && space ? [{ key: "Space", label: space, data: " " }] : []),
+      esc,
+      onText ? { key: "Tab", label: "questions", data: "\t" } : { key: "←→", label: "questions", data: "\x1b[C" },
+      ...(rows > 1 ? [{ key: "↑↓", label: "select", data: this.cursor < rows - 1 ? "\x1b[B" : "\x1b[A" }] : []),
+    ];
+    return { tabs, keys, question: {
+      prompt: q.question, multiSelect: q.multiSelect === true,
+      options: q.options.map((o, row) => ({
+        label: o.label, ...(o.description ? { description: o.description } : {}), cursor: row === this.cursor,
+        on: q.multiSelect ? this.picks[this.tab]!.has(o.label) : answer?.selected[0] === o.label,
+      })),
+      ...(own ? { own } : {}),
+    } };
+  }
+
+  render(width: number): string[] {
+    if (this.options.surface === "plain") return askDialogPlainLines(this.view(), this.options.escape ?? "Esc send answered only", width);
+    const frame = askDialogFrame(this.view(), width, this.budget(), this.scroll);
+    this.hint = frame.hint;
+    this.window = frame.scroll;
+    return frame.lines;
+  }
+
+  /** The card's own rows: the host's figure, else a share of the terminal; unbounded when neither is known. */
+  private budget(): number {
+    const rows = this.options.rows?.() ?? (process.stdout.rows ? choiceRows(process.stdout.rows, CHROME_ROWS) : undefined);
+    return rows ?? Number.POSITIVE_INFINITY;
+  }
+
+  /** Pages the clipped body from where it is now; nothing happens while nothing is clipped. */
+  private scrollBy(rows: number): void {
+    if (this.window.max === 0) return;
+    this.scroll = Math.max(0, Math.min(this.window.max, (this.scroll ?? this.window.start) + rows));
+  }
+
+  /**
+   * A click on a key cap replays that key through the dialog's own input; the wheel pages a clipped body. Plain hosts
+   * draw no caps and keep the stock behaviour.
+   */
+  handleMouse(event: TuiMouseEvent): { readonly handled: boolean } | undefined {
+    if (this.options.surface === "plain") return undefined;
+    if (event.type === "wheel" && event.wheelDelta) {
+      this.scrollBy(Math.sign(event.wheelDelta) * WHEEL_ROWS);
+      this.changed();
+      return { handled: true };
+    }
+    if (event.type !== "click" || event.button !== "left" || event.shift || event.ctrl || event.alt || event.y !== this.hint.row) return undefined;
+    const hit = this.hint.hits.find((h) => event.x >= h.from && event.x < h.to);
+    if (!hit) return undefined;
+    this.handleInput(hit.data);
+    return { handled: true };
   }
 
   invalidate(): void {}

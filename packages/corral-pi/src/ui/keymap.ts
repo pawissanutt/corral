@@ -1,6 +1,6 @@
 // What each focus context offers, as footer hints and as the F1 keys list. Pi-owned keys come from the
 // configured keybindings, so a changed user binding changes the hint; panel keys are fixed.
-import { getKeybindings, visibleWidth, type KeyId, type Keybinding } from "@earendil-works/pi-tui";
+import { getKeybindings, matchesKey, visibleWidth, type KeyId, type Keybinding } from "@earendil-works/pi-tui";
 import type { ChromeTier } from "./header.ts";
 import { keyCap } from "./frame.ts";
 import { pad, PANEL_BG, PANEL_MUTED, PANEL_TEXT, plainLabel, RESET } from "./panels-view.ts";
@@ -29,6 +29,8 @@ export interface HintState {
   /** AgentsAction ids offered for the selected row; in `board`, the BoardAction ids offered. */
   readonly selection?: readonly string[];
   readonly authors?: boolean; readonly legend?: boolean; readonly history?: boolean; readonly timelineSource?: "task" | "host";
+  /** Usage only: `reread` while the collector applies (a bound task/run with a reader), `chart` while it has rows to draw. */
+  readonly usage?: { readonly reread: boolean; readonly chart: boolean };
   /** Build sessions only: who Enter reaches, whether a child can take a message, a waiting board plan, docked options. */
   readonly build?: {
     readonly target?: { readonly id: string; readonly answer: boolean }; readonly steerable: boolean;
@@ -97,6 +99,13 @@ export function piKey(id: string): string | undefined {
   const keys = getKeybindings();
   if (!keys.getDefinition(id as Keybinding)) return PI_DEFAULTS[id];
   return keys.getKeys(id as Keybinding)[0];
+}
+/** True when `data` is any key configured for the Pi binding `id` (its stock default when no binding table is installed). */
+export function piPressed(data: string, id: string): boolean {
+  const keys = getKeybindings();
+  const fallback = PI_DEFAULTS[id];
+  const bound: readonly string[] = keys.getDefinition(id as Keybinding) ? keys.getKeys(id as Keybinding) : fallback ? [fallback] : [];
+  return bound.some(key => matchesKey(data, key as KeyId));
 }
 // Bindings scoped to Pi's own selectors, where panel keys are inert, never collide with a panel key.
 const SCOPED = ["app.models.", "app.tree.", "tui.select."];
@@ -227,7 +236,7 @@ function viewHints(state: HintState): Hint[] {
         filter, letter("c", "compare"), letter("o", "project"), letter("r", "refresh"), ESC("chat"));
     case "task":
       return pick(UP_DOWN("scroll", "scroll"), letter("r", "refresh"), state.mode.lifecycle && letter("g", "graph"),
-        state.mode.lifecycle && letter("l", "events"), ESC("chat"));
+        state.mode.lifecycle && letter("l", "events"), legend, ESC("chat"));
     case "lifecycle":
       return pick(J_K("select", "select"), ESC("task"), letter("r", "reconcile"),
         state.timelineSource === "task" && letter("h", "host"), state.timelineSource === "host" && letter("c", "canonical"), legend);
@@ -239,8 +248,12 @@ function viewHints(state: HintState): Hint[] {
     case "inbox":
       return pick(J_K("select", "select"), ENTER("inspect"), state.mode.answer && letter("a", "answer flow", "answer"),
         letter("h", state.history ? "pending" : "history"), filter, letter("r", "reread"), letter("?", "legend"), ESC("chat"));
-    case "usage":
-      return pick(UP_DOWN("scroll", "scroll"), letter("c", "chart"), legend, letter("r", "refresh"), ESC("chat"));
+    case "usage": {
+      // Reread and token bars act on the collector; each shows only while the view says it can act. Absent means neither.
+      const usage = state.usage;
+      return pick(UP_DOWN("scroll", "scroll"),
+        ...escAfterFirst([usage?.reread === true && letter("r", "reread"), usage?.chart === true && letter("c", "token bars", "bars"), legend], "chat"));
+    }
     case "sidebar":
       return pick(pair("tab", "←→", "\x1b[C", "tab"), UP_DOWN("select", "select"), ENTER("open"), ESC("composer"));
     case "queue":
@@ -252,7 +265,10 @@ function viewHints(state: HintState): Hint[] {
         waiting > 0 && { id: "pick", key: waiting > 1 ? `1-${waiting}` : "1", label: "open" });
     }
     case "dialog":
-      return pick(UP_DOWN("select", "select"), ENTER("choose"), ESC("cancel"));
+      // A Pi dialog or selector card (owner dialog, model, effort, settings) draws its own keys in the one hint row under
+      // its card (owner-dialog-parts.ts `dialogHintRow`), and the panels' keys are inert while it is open: the footer repeats
+      // none of them and draws no cap that could not act.
+      return [];
     case "palette":
       return pick(UP_DOWN("select", "select"), ENTER("run"), ESC("close"));
     case "keys":
@@ -273,7 +289,7 @@ function viewHints(state: HintState): Hint[] {
   }
 }
 
-/** Dialogs, the palette, the keys list and pagers own their keys: their footer has no F2 or F1. */
+/** Dialogs, the palette, the keys list and pagers own their keys: their footer has no F2 or F1 (both are inert while a dialog is open). */
 export function footerBase(context: KeyContext): boolean {
   return context !== "dialog" && context !== "palette" && context !== "keys" && context !== "pager";
 }
@@ -397,6 +413,9 @@ export function keyGroups(mode: {
       pi("app.thinking.cycle", "Cycle the effort"),
       pi("app.thinking.toggle", "Show or hide thinking"),
       pi("app.tools.expand", "Expand or collapse tool output"),
+      // Pi runs a draft that starts with `!` or `!!` in the owner's shell; the composer title says where its output goes.
+      info("!cmd", build ? "Run cmd in your shell; its output goes to the parent (while the parent receives)" : "Run cmd in your shell; its output goes to the agent"),
+      info("!!cmd", build ? "Run cmd in your shell; its output stays here (while the parent receives)" : "Run cmd in your shell; its output stays here"),
     ) },
     { title: "Scroll", rows: rows(
       pageUp !== undefined && pageDown !== undefined && info(`${keyLabel(pageUp)}/${keyLabel(pageDown)}`, "Scroll Chat or the open view a page"),
@@ -446,7 +465,7 @@ export function keyGroups(mode: {
       mode.lifecycle && info("g", "Lifecycle graph"),
       mode.lifecycle && info("l", "Lifecycle events"),
       mode.lifecycle && info("h/c", "Events: host log or canonical record"),
-      mode.lifecycle && info("?", "Graph and events: show or hide the legend"),
+      info("?", mode.lifecycle ? "Show or hide the legend, here and in Graph and events" : "Show or hide the legend"),
     ) });
     groups.push({ title: "Proof", rows: rows(
       info("j/k", "Select a criterion"),

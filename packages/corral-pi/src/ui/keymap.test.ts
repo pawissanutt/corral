@@ -33,6 +33,11 @@ test("the footer ends with F1 and never overflows from 10 to 200 columns in ever
   }
 });
 
+test("while a dialog is open the footer draws no cap: the dialog's own hint row is the one home of its keys", () => {
+  expect(contextHints(state("dialog"))).toEqual([]);
+  expect(footerRow(contextHints(state("dialog")), chromeTier(120), 120, footerBase("dialog")).hits).toEqual([]);
+});
+
 test("the follow-up and tool hints follow a changed user binding", () => {
   const previous = getKeybindings();
   setKeybindings(new KeybindingsManager({ "app.tools.expand": "alt+o", "app.message.followUp": "ctrl+j" }));
@@ -223,6 +228,22 @@ test("in the choice, agent, board, lifecycle and artifacts footers Esc comes rig
   const exit = contextHints(state("choice", { build: { ...BUILD, exit: true } })).map(hint => hint.id);
   expect(exit.indexOf("f7")).toBeGreaterThan(exit.indexOf("escape"));
   expect(contextHints(state("choice", { build: BUILD })).some(hint => hint.id === "f7")).toBeFalse();
+});
+
+test("Usage advertises reread and token bars only when the view can act on them, never from the task binding alone", () => {
+  const bound = { taskBound: true, answer: false, lifecycle: true };
+  const keys = (usage: HintState["usage"]) => contextHints(state("usage", { mode: bound, ...(usage ? { usage } : {}) })).map(hint => hint.key);
+  // A task-bound session without a collector reader, or one whose flags were never supplied, offers neither.
+  for (const usage of [undefined, { reread: false, chart: false }]) {
+    expect(keys(usage)).not.toContain("r"); expect(keys(usage)).not.toContain("c");
+  }
+  // A readable collector with an empty usage facet can be reread but has no token bars to draw.
+  expect(keys({ reread: true, chart: false })).toContain("r"); expect(keys({ reread: true, chart: false })).not.toContain("c");
+  expect(keys({ reread: true, chart: true })).toContain("c");
+  for (const usage of [undefined, { reread: true, chart: false }, { reread: true, chart: true }]) {
+    const hints = contextHints(state("usage", { mode: bound, ...(usage ? { usage } : {}) }));
+    for (const width of FOOTER_WIDTHS) expect(footerRow(hints, chromeTier(width), width, true).hits.map(hit => hit.hint.id)).toContain("escape");
+  }
 });
 
 test("a focused view's footer leads with who has the keys; a click on the lead replays Tab", () => {

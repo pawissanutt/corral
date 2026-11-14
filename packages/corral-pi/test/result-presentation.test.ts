@@ -4,7 +4,7 @@ import { renderReceipt } from "../src/tools/presentation.ts";
 import type { CorralReceipt } from "../src/tools/corral.ts";
 import { buildPromptBlocks } from "../src/claude/prompt.ts";
 import { requestCheckpoint } from "../src/host/request-checkpoint.ts";
-import { ProgressSchema } from "../src/ui/todo-widget.ts";
+import { ProgressSchema } from "../src/ui/todo.ts";
 
 test("readable results retain recovery metadata, unfamiliar data and canonical state without escaping bodies", () => {
   const body = 'const path = "C:\\tmp";\n// € and \\"quotes\\"\n';

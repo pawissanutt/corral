@@ -8,7 +8,7 @@ import { LIVE_CHILD_STATES } from "../build/types.ts";
 import type { BuildPanelState, BuildUi } from "../build/types.ts";
 import { target } from "./chrome.ts";
 import type { ExtensionUIContext, InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
-import { HStack, VStack, ScrollView, Text, getKeybindings, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { HStack, VStack, ScrollView, getKeybindings, matchesKey, type Component, type OverlayOptions, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
 import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot, type ReviewBases } from "./review-store.ts";
@@ -25,7 +25,9 @@ import { InspectionStore } from "./inspection.ts";
 import { renderProof, SPLIT_MIN } from "./proof-view.ts";
 import { proofItems, type SectionId } from "./proof-parts.ts";
 import { usageBackAt, usageLines } from "./usage-view.ts";
-import { TaskStore, taskHeadline, taskLines } from "./task-view.ts";
+import { usageModel, type UsageIdentity } from "./usage-model.ts";
+import { TaskStore } from "./task-store.ts";
+import { taskHeadline, taskLines } from "./task-view.ts";
 import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
 import { InboxView } from "./inbox-view.ts";
 import { HistoryNavigator, type HistoryRead } from "./history.ts";
@@ -41,8 +43,9 @@ import { BoardView, boardDetailLines, type BoardAction } from "./build/board-vie
 import { childIdOf, childKey } from "./build/contract.ts";
 import { childActions, childAuthors, fleetExtras, steerable } from "./build/fleet-rows.ts";
 import type { SideSource } from "./sidebar.ts";
-import { plainLabel, styledPanelLine, PANEL_BG, PANEL_BLUE, PANEL_LINE, PANEL_TEXT, type PanelSnapshot } from "./panels-view.ts";
+import { plainLabel, PANEL_BG, PANEL_BLUE, PANEL_LINE, PANEL_TEXT, type PanelSnapshot } from "./panels-view.ts";
 import { rule, spinner, VIEW_INSET } from "./frame.ts";
+import { popupPlacement } from "./popup-placement.ts";
 
 /** Below this many terminal rows the rule under the tab row goes first. */
 export const RULE_ROWS = 16;
@@ -117,6 +120,12 @@ const LETTERS: Readonly<Record<string, string>> = { Conflict: "U", New: "?", Ren
 const CHILD_KEYS: Readonly<Record<string, "answer" | "steer" | "cancel" | "model">> = { a: "answer", s: "steer", x: "cancel", m: "model" };
 /** The most recent notices `recentNotices()` keeps for the F2 pager. */
 const NOTICE_LOG = 50;
+/** One logged notice: the sentence shown, its tone and time, and the exact raw detail it carried, if any. */
+export interface NoticeEntry {
+  readonly at: number; readonly text: string; readonly tone: Notice["tone"];
+  /** The unsanitised record (stack, exit text, receipt), kept whole for the Recent notices pager. */
+  readonly detail?: string;
+}
 
 /** Why this build session cannot file board tasks, or undefined when it can. */
 export function boardUnavailable(state: BuildPanelState | undefined): string | undefined {
@@ -242,7 +251,7 @@ export class NativeWorkbench {
   private readonly launchRoot: string;
   private shownNotice: Notice | undefined;
   private noticeTimer: ReturnType<typeof setTimeout> | undefined;
-  private readonly notices: { readonly at: number; readonly text: string; readonly tone: Notice["tone"] }[] = [];
+  private readonly notices: NoticeEntry[] = [];
   /** Whether the last header frame drew the current notice in its state place. */
   private noticeDrawn = false;
   /** Rows of the header in the last frame: the rail starts below them, the tab row and its rule. */
@@ -252,8 +261,8 @@ export class NativeWorkbench {
   get currentNotice(): Notice | undefined { return this.shownNotice; }
   /** True when the last header frame drew the current notice; the panels' toast shows it only while this is false. */
   get noticeInHeader(): boolean { return this.shownNotice !== undefined && this.noticeDrawn; }
-  /** The last NOTICE_LOG notices with their time, oldest first, for the F2 `Recent notices` pager. */
-  recentNotices(): readonly { readonly at: number; readonly text: string; readonly tone: Notice["tone"] }[] { return this.notices; }
+  /** The last NOTICE_LOG notices with their time and raw detail, oldest first, for the F2 `Recent notices` pager. */
+  recentNotices(): readonly NoticeEntry[] { return this.notices; }
   /** True while a pager or detail sheet the workbench opened is on screen; the footer lists its keys. */
   get pagerOpen(): boolean { return this.pagers > 0 || this.inboxView.sheetOpen; }
   /** Runs `show` (a read-only overlay) with the pager marked open. */
@@ -262,7 +271,7 @@ export class NativeWorkbench {
     try { await show(); } finally { this.pagers--; this.options.changed(); }
   }
   constructor(private readonly options: WorkbenchOptions) {
-    this.history = new HistoryNavigator(options.readHistory, options.canInteract);
+    this.history = new HistoryNavigator(options.readHistory, options.canInteract, (text, tone) => this.notice(text, tone), () => this.popupPlace());
     this.images = new NativeImageViewer(() => options.canInteract(), () => { this.focused = this.images.isOpen || this.view !== "conversation"; options.changed(); });
     const focused = () => this.focused;
     this.lifecycle = new LifecycleView(options.identity, options.lifecycle, () => options.snapshot()?.agents, () => options.snapshot()?.bound ?? false, options.changed,
@@ -322,7 +331,13 @@ export class NativeWorkbench {
       set: (root, head) => { if (persisted) persisted.set(root, head); else local.set(root, head); },
     };
   }
-  async openHistory(): Promise<void> { if (this.ui) await this.history.open(this.ui); }
+  /** History's list popup, then its read-only pagers; the footer lists the overlay's keys while any of them is open. */
+  async openHistory(): Promise<void> {
+    const ui = this.ui;
+    if (ui) await this.inPager(() => this.history.open(ui));
+  }
+  /** Where an overlay list (History) sits on the actual terminal, as the F1 and F2 popups do. */
+  popupPlace(): OverlayOptions { return popupPlacement(this.options.terminal?.()); }
   bind(ui: ExtensionUIContext): void {
     this.ui = ui; this.images.bind(); this.inboxView.bind(ui); void this.task.refresh();
     // A build session launches in its worktree; should the session record name another directory, Changes follows the record.
@@ -416,13 +431,14 @@ export class NativeWorkbench {
   }
   /**
    * Panel feedback for NOTICE_MS, in header row 1's state place (or the panels' toast when the header could not
-   * draw it), and kept with its time in `recentNotices()`. Pi's own notifications keep their native place.
+   * draw it), and kept with its time in `recentNotices()`. `detail` is the exact record behind the sentence (a stack,
+   * exit text, a receipt): the header and toast show only `text`, Recent notices shows both.
    */
-  notice(text: string, tone: Notice["tone"] = "text"): void {
+  notice(text: string, tone: Notice["tone"] = "text", detail?: string): void {
     clearTimeout(this.noticeTimer);
     const notice: Notice = { text: plainLabel(text), tone };
     this.shownNotice = notice; this.noticeDrawn = false;
-    this.notices.push({ at: Date.now(), text: notice.text, tone });
+    this.notices.push({ at: Date.now(), text: notice.text, tone, ...(detail ? { detail } : {}) });
     if (this.notices.length > NOTICE_LOG) this.notices.splice(0, this.notices.length - NOTICE_LOG);
     this.noticeTimer = setTimeout(() => this.clearNotice(notice), NOTICE_MS);
     this.noticeTimer.unref();
@@ -696,8 +712,11 @@ export class NativeWorkbench {
       return result;
     }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
     this.usageScroll = new ScrollView(inset({ render: width => {
-      const snapshot = this.options.snapshot();
-      return usageLines(this.inspection, snapshot?.budget, snapshot?.bound ?? false, width, this.usageChart, this.legend).map(row => row.text);
+      const snapshot = this.options.snapshot(), id = this.options.identity, build = snapshot?.build?.session.name;
+      const identity: UsageIdentity = { role: id.role, project: id.project, ...(id.task ? { task: id.task } : {}), ...(id.run ? { run: id.run } : {}),
+        ...(id.assistant ? { assistant: id.assistant } : {}), ...(build ? { build } : {}) };
+      return usageLines(usageModel({ identity, snapshot, inspection: this.inspection }), width,
+        { chart: this.usageChart, legend: this.legend, now: Date.now(), bodyRows: this.usageScroll?.viewportHeight ?? 0 }).map(row => row.text);
     }, handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
       if (usageBackAt(event.x, event.y)) this.back(); else { this.focusMain(); this.options.changed(); }
@@ -716,8 +735,7 @@ export class NativeWorkbench {
       if (row !== undefined) { this.revealInbox = false; queueMicrotask(() => { this.inboxScroll?.scrollTo(row, { disableFollow: true }); this.options.changed(); }); }
       return lines;
     }, handleMouse: event => this.inboxView.handleMouse(event), invalidate: () => this.inboxView.invalidate() }), { primary: true, follow: "none", scrollbar: "auto" });
-    this.taskScroll = new ScrollView(inset({ render: width => taskLines(this.options.identity, this.task)
-      .flatMap(row => new Text(styledPanelLine(row), 0, 0).render(width)), handleMouse: event => {
+    this.taskScroll = new ScrollView(inset({ render: width => taskLines(this.options.identity, this.task, width, { now: Date.now(), legend: this.legend }), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
       this.focusMain(); this.options.changed(); return { handled: true };
     }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
@@ -810,7 +828,9 @@ export class NativeWorkbench {
       const shown = this.view === "agent" ? this.agentKey : this.agentsView.entry()?.row.key;
       if (shown !== key || !this.agentRow(key)?.capabilities.transcript) throw new Error("Agent selection or binding changed during read");
       // Read-only bounded text, never an SDK switchSession/open/resume call; the pager replaces control characters.
-      await this.inPager(() => openPager(ui, { title: `Transcript · ${plainLabel(row.name)} · read-only`, lines: text.slice(0, 32 * 1024).split("\n"), wrap: true }));
+      await this.inPager(async () => {
+        await openPager(ui, { title: `Transcript · ${plainLabel(row.name)} · read-only`, lines: text.slice(0, 32 * 1024).split("\n"), wrap: true });
+      });
     } catch (error) {
       if (!this.scopeAbort.signal.aborted) this.notice(`Transcript unavailable: ${plainLabel(error instanceof Error ? error.message : String(error))}`, "warning");
     } finally { this.readingTranscript = false; this.options.changed(); }
@@ -916,6 +936,10 @@ export class NativeWorkbench {
     if (this.view === "agent") { const row = this.agentRow(this.agentKey); return row ? `${tab} › ${row.name}` : tab; }
     return PLACE[this.view] ?? tab;
   }
+  /** Usage's `c` draws token bars only while the collector applies and one of its scopes has collected usage. */
+  private get usageBars(): boolean {
+    return this.inspection.applicable && !!this.inspection.current?.usage?.rows.some(row => row.usage);
+  }
   /**
    * What the footer hints for `context`; the panels own the focus, the queue and the owner-question dock
    * (`questions` waiting). A view that has the keys leads its footer with its name.
@@ -931,6 +955,7 @@ export class NativeWorkbench {
       ...(selection ? { selection } : {}), ...(questions > 0 ? { questions } : {}), ...(lead !== undefined ? { lead } : {}),
       authors: (this.shownChanges?.authors.length ?? 0) > 0, legend: this.legend, history: this.inbox.history,
       ...(this.view === "timeline" ? { timelineSource: this.lifecycle.source } : {}),
+      ...(context === "usage" ? { usage: { reread: this.inspection.applicable, chart: this.usageBars } } : {}),
       ...(build && controller ? { build: {
         ...(target ? { target } : {}), steerable: build.fleet.snapshot().children.some(steerable),
         proposed: build.board.proposed() !== undefined, choices: controller.dialog()?.options.length ?? 0,
@@ -961,7 +986,8 @@ export class NativeWorkbench {
           return { path: file.path, letter: LETTERS[fileStatus(file)] ?? "M", added: stat?.added, removed: stat?.removed, ...flag };
         }),
       },
-      plan: { progress: snapshot?.ledger ?? null, stale: snapshot?.ledgerStale ?? false },
+      plan: { progress: snapshot?.ledger ?? null, stale: snapshot?.ledgerStale ?? false,
+        ...(snapshot?.ledgerContinued !== undefined ? { continued: snapshot.ledgerContinued } : {}) },
       bound: snapshot?.bound ?? false,
       color: agentColor,
       ...(this.focused && this.selectedAgent() ? { current: this.selectedAgent()!.key } : {}),
@@ -1051,9 +1077,11 @@ export class NativeWorkbench {
     if (view === "evidence" && matchesKey(data, "enter")) { this.proofEnter(); return true; }
     if (view === "artifacts" && this.artifacts.handleInput(data)) { this.artifactScroll?.scrollTo(0, { disableFollow: true }); return true; }
     if (matchesKey(data, "enter")) return true; // No Enter action here: nothing happens, Tab gives the keys to the composer.
-    if ((view === "evidence" || view === "agents" || view === "inbox" || view === "artifacts" || view === "usage" || view === "graph" || view === "timeline")
+    if ((view === "task" || view === "evidence" || view === "agents" || view === "inbox" || view === "artifacts" || view === "usage" || view === "graph" || view === "timeline")
       && data === "?") { this.legend = !this.legend; this.options.changed(); return true; }
-    if (view === "usage" && data === "c") { this.usageChart = !this.usageChart; this.options.changed(); return true; }
+    // Usage's r and c act only while the collector applies (and c only while a scope has usage); otherwise they do nothing.
+    if (view === "usage" && data === "c") { if (this.usageBars) { this.usageChart = !this.usageChart; this.options.changed(); } return true; }
+    if (view === "usage" && data === "r") { if (this.inspection.applicable) void this.inspection.refresh(true); return true; }
     const scroll = this.scrollOf(view);
     if (view === "inbox" && (data === "j" || data === "k" || matchesKey(data, "up") || matchesKey(data, "down"))) {
       this.inbox.move(data === "j" || matchesKey(data, "down") ? 1 : -1);
@@ -1062,14 +1090,16 @@ export class NativeWorkbench {
       this.options.changed(); return true;
     }
     if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) {
-      scroll?.scrollBy(matchesKey(data, "up") ? -3 : matchesKey(data, "down") ? 3 : matchesKey(data, "pageUp") ? -12 : 12); this.options.changed(); return true;
+      // A page is the viewport less one row of overlap, and a line step never exceeds the viewport, so no row is skipped.
+      const height = Math.max(1, scroll?.viewportHeight ?? 1), page = Math.max(1, height - 1), line = Math.min(3, height);
+      scroll?.scrollBy(matchesKey(data, "up") ? -line : matchesKey(data, "down") ? line : matchesKey(data, "pageUp") ? -page : page); this.options.changed(); return true;
     }
     if ((data === "j" || data === "k") && (view === "changes" || view === "evidence")) {
       if (view === "changes") void this.selectRelative(data === "j" ? 1 : -1);
       else this.criterionIndex = Math.max(0, Math.min(this.proofRows() - 1, this.criterionIndex + (data === "j" ? 1 : -1)));
       this.options.changed(); return true;
     }
-    if ((view === "evidence" || view === "usage") && data === "r") { void this.inspection.refresh(true); return true; }
+    if (view === "evidence" && data === "r") { void this.inspection.refresh(true); return true; }
     if (view === "task" && data === "r") { void this.task.refresh(true); return true; }
     if (view === "changes") {
       if (matchesKey(data, FILTER_KEY)) { void this.search(); return true; }

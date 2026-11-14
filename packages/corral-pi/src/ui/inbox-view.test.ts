@@ -2,10 +2,11 @@ import { expect, test } from "bun:test";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Text, stripTerminalSequences, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
-import { DecisionInbox, inboxIdentity, type InboxItem } from "./decision-inbox.ts";
+import { DecisionInbox, inboxIdentity, type InboxItem, type InboxSnapshot } from "./decision-inbox.ts";
 import { InboxView } from "./inbox-view.ts";
 import { NativeWorkbench } from "./workbench.ts";
 import { SPLIT_MIN } from "./proof-view.ts";
+import { clock } from "./panel-parts.ts";
 
 const item: InboxItem = { kind: "question", task: "T-1", container: "T-1/R2", key: "T-1/R2/Q1", revision: "7", revision_kind: "question_revision", state: "open", pending: true, scope: "demo", reason: "Which route?\x1b]52;c;unsafe\x07", responsible: "pm_or_owner", detail: ["blocking=false"], inspect: "corral question show T-1/R2/Q1 --json", response: "Existing trusted owner answer flow", pm_eligible: true };
 const read = async () => ({ version: 1, workspace: "/bound-workspace", observed_at: "2026-11-02T00:00:00Z", items: [item, { ...item, task: "T-2", key: "T-2/R1/Q1" }] });
@@ -38,6 +39,41 @@ test("the Inbox splits into list and detail from SPLIT_MIN main-view columns, th
     expect(screen(SPLIT_MIN - 1)).not.toContain("┬"); expect(screen(SPLIT_MIN - 1)).toContain("‹");
     for (const width of [SPLIT_MIN - 1, SPLIT_MIN]) for (const line of renderLayoutFrame(root, width, 40, () => {}).lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
   } finally { wb.dispose(); }
+});
+
+test("Inbox read states: a failure is never an empty inbox, empty snapshots draw no split, a failed reread keeps items and their time", async () => {
+  const observed = Date.now() - 120_000;
+  let value: InboxSnapshot = { version: 1, workspace: "/bound-workspace", observed_at: new Date(observed).toISOString(), items: [] };
+  let fail = true;
+  const store = new DecisionInbox(async () => { if (fail) throw new Error("corral inbox exited 1"); return value; }, () => {});
+  const view = new InboxView(store, "assistant", "demo", () => true, () => {}, () => {});
+  const screen = (width: number) => view.render(width).map(line => stripTerminalSequences(line)).join("\n");
+  try {
+    expect(screen(80)).not.toMatch(/pending \d/);
+    await store.refresh();
+    // The problem line is one clipped row; from 58 cells it carries the whole reason.
+    for (const width of [44, 58, 101, 140]) {
+      const text = screen(width);
+      expect(text).toContain(width >= 58 ? "corral inbox exited 1" : "could not be read"); expect(text).not.toContain("Nothing is waiting");
+      expect(text).not.toMatch(/pending \d/); expect(text).not.toContain("┬");
+    }
+    fail = false; await store.refresh();
+    for (const width of [44, 58, 101, 140]) {
+      const text = screen(width);
+      expect(text).toContain("Nothing is waiting"); expect(text).toContain("2m ago"); expect(text).not.toContain("┬");
+      for (const line of view.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+    store.history = true; expect(screen(140)).toContain("No items in this snapshot"); store.history = false;
+    value = { ...value, items: [item] }; await store.refresh();
+    store.query = "zzz"; expect(screen(140)).toContain("No item matches"); expect(screen(140)).not.toContain("┬");
+    store.query = ""; expect(screen(140)).toContain("┬");
+    fail = true; await store.refresh();
+    for (const width of [44, 58, 101, 140]) {
+      const text = screen(width);
+      expect(text).toContain("T-1/R2/Q1"); expect(text).toContain(clock(observed));
+      if (width >= 58) expect(text).toContain("corral inbox exited 1");
+    }
+  } finally { view.dispose(); }
 });
 
 test("literal item hit rows and details are read-only, bounded and sanitized", async () => {
