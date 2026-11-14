@@ -1,6 +1,6 @@
 # Next increment: enrolled native and browser connections
 
-Status: implemented connection prerequisite, verified on private native-terminal and Chromium surfaces; see [verification receipt](#verification-receipt). This document retains the implementation contract and acceptance criteria. It does not authorize installing/enabling the owner's listener or answering live questions. Follows [CONNECTION-CONTRACT.md](CONNECTION-CONTRACT.md); the earlier [transport experiment](TRANSPORT-PROOF.md) was feasibility evidence, not the shipped app.
+Status: connection prerequisite implemented and verified on private native-terminal and Chromium surfaces, then deployed to the owner's local workspace under separate rollout authorization; see [verification receipt](#verification-receipt) and [live rollout](#live-rollout-follow-up). This document retains the implementation contract and acceptance criteria. It does not authorize live task/question mutations. Follows [CONNECTION-CONTRACT.md](CONNECTION-CONTRACT.md); the earlier [transport experiment](TRANSPORT-PROOF.md) was feasibility evidence, not the shipped app.
 
 ## Owner-observable result
 
@@ -10,7 +10,7 @@ This completes the production connection prerequisite only. Phase 2a is not comp
 
 ## Fixed decisions
 
-- Loopback only. Network listening is explicit and off by default; no LAN, relay, phone packaging or service installation.
+- Loopback only. Network listening is explicit and off by default; no LAN, relay or phone packaging. Service installation requires separate owner authorization; the local rollout below records that approved exception.
 - Native local enrolment uses the trusted Unix peer-UID boundary. Browser enrolment uses the architecture's single-use pairing token, Noise IKpsk2 and matching SAS confirmed on the trusted local surface. A browser cannot approve its own pending enrolment.
 - Subsequent browser sessions use pinned Noise IK. No long-lived secrets in URLs, public bootstrap JSON, unwrapped localStorage or source files. The owner-approved local pairing link carries only the short-lived single-use code in a fragment, cleared before pairing; explicit Pair and trusted-side confirmation remain required. The proof's key provisioning must not be copied.
 - Keep the existing CLI executable/build admission checks and fallback semantics. App protocol versions and capabilities are independent of executable identity; a claimed `kind = app` never establishes authentication.
@@ -136,3 +136,49 @@ to `127.0.0.1`. The owner selected local-only clickable pairing links rather tha
 access. Those links carry the short-lived code in a URL fragment, clear it from the
 address bar, prefill Connection, and never bypass explicit Pair or matching-code
 confirmation. Native device IDs and long-lived browser secrets remain out of URLs.
+
+### Installed local setup — 2026-11-14
+
+Merged to local `main` as `dee4aeff`, with pairing-link and credential fixes in
+`19e40342` and test cleanup in `5e950e07`. Installed the release candidate, preserved
+the prior executable under `~/.local/state/corral/app-rollout/`, and restarted the
+existing workspace daemon service without changing its herdr socket binding.
+
+- Workspace: `/home/pawis/miti-workspace`.
+- Daemon: `corrald@st-102a13cc075bda04.service`; app listener `127.0.0.1:7841`.
+- Web: <http://127.0.0.1:8790/>; `corral-app-web` starts the enabled
+  `corral-app-web.service`. It serves the packaged site from `.nsh/out/Corral`
+  with a loopback-only static server, not NSH's externally bound dev server.
+- TUI: `corral-app-tui` resolves this workspace's daemon socket and runs
+  `nsh run --target tui --port 8791` from the app directory.
+- Both convenience launchers are installed in `~/.local/bin` on this workstation;
+  they are not shipped repository commands. Repackage with `nsh package --target web`
+  from `apps/corral-app` after changing web source.
+- A different browser/profile needs its own enrolment: run
+  `corral --root /home/pawis/miti-workspace device pair`, open the printed local
+  link, choose Pair, and confirm matching codes in the terminal. Use the same
+  `127.0.0.1:8790` origin to retain the browser's saved identity.
+
+Observed rollout proof:
+
+- Root targeted configuration/protocol/daemon tests, all-target Clippy for the five
+  affected root packages, and the release build passed. App tests, wasm library
+  build and `nsh package --target web` passed.
+- Native `ubuntu-main` and browser `ubuntu-main web` enrolled against the real
+  workspace. Both rendered 78 queued and 95 held rows, matching `corral list --view`.
+  Native process restart and browser reload restored the board without enrolment.
+- The browser link cleared its fragment and prefilled Connection without claiming;
+  only explicit Pair advanced the trusted CLI to matching-code confirmation.
+  A 390px viewport startup with an existing saved device also cleared the fragment
+  and routed to Connection without replacing that device.
+- Native credential and retained lock files were both owner-owned mode `0600`.
+  Both TCP listeners were bound only to `127.0.0.1`; the web service was enabled
+  and active. Final daemon health was healthy, herdr-tui ok, PM live.
+- The daemon initially reported the recorded PM host dead after rollout.
+  `corral pm relaunch --reason app_rollout_recovery --json` recovered its recorded
+  conversation; no fresh PM conversation or task/question test mutation was used.
+- Left the actual browser paired on live Now and stopped only the two native
+  verification sessions. The persistent daemon and web service remain running.
+
+This rollout does not expand the app's read-only scope: Inbox/question operations,
+Ask/chat and the unserved destinations remain unavailable on live data.
