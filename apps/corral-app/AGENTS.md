@@ -2,7 +2,7 @@
 
 ## Scope
 
-This app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain and is not a member of corral's workspace; corral's gate does not build or test it. Design sources are `/home/pawis/corral-app-design/REQUIREMENTS.md`, `ARCHITECTURE.md` and `mockup/`.
+This app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain and is not a member of corral's workspace; corral's gate does not build or test it. Design sources are in `docs/app-design/` at the repository root. Read its `README.md` for authority and implementation-status caveats before using `REQUIREMENTS.md`, `ARCHITECTURE.md` and `mockup/`.
 
 The app has three data states (`DataState`):
 

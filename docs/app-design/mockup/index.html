@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en" class="t-dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Corral app · interactive mockup</title>
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="sprite"></div>
+<header class="studio-bar" aria-label="Mockup controls">
+  <b>Corral app mockup</b>
+  <span class="sb-group"><span class="sb-label">Frame</span><span class="sb-seg"><button data-set="frame" data-val="desktop">Desktop 1440×900</button><button data-set="frame" data-val="phone">Phone 390×844</button><button data-set="frame" data-val="hotkey">Hotkey window</button></span></span>
+  <span class="sb-group"><span class="sb-label">Theme</span><span class="sb-seg"><button data-set="theme" data-val="dark">Dark</button><button data-set="theme" data-val="light">Light</button></span></span>
+  <span class="sb-group"><label class="sb-label" for="sb-health">Connection</label><select id="sb-health"><option value="healthy">healthy · direct</option><option value="degraded">degraded</option><option value="down">daemon down</option><option value="relay">relay · e2e</option><option value="offline">offline · last sync</option></select></span>
+  <span class="sb-group"><label class="sb-label" for="sb-data">Data</label><select id="sb-data"><option value="live">live</option><option value="loading">loading</option><option value="empty">empty</option><option value="error">error</option><option value="elsewhere">answered elsewhere</option></select></span>
+  <span class="sb-group"><label class="sb-label" for="sb-asst">Assistant</label><select id="sb-asst"><option value="answering">answering</option><option value="starting">starting (first use or restart)</option><option value="stopped">stopped · you stopped the turn</option><option value="down">waiting · host down</option><option value="load">waiting · machine load</option><option value="quota">waiting · provider quota</option></select></span>
+  <span class="sb-group"><button class="sb-seg" id="sb-lock" style="padding:3px 9px">Lock-screen push</button><button class="sb-seg" id="sb-share" style="padding:3px 9px">Share sheet</button></span>
+  <span class="sb-note">Snapshot 2026-11-07 22:12 + T-868 records · invented data marked illustrative · <span style="font-family:var(--mono)">/</span> Ask · <span style="font-family:var(--mono)">Ctrl K</span> commands</span>
+</header>
+<div class="stage" id="stage"></div>
+<script src="js/data.js"></script>
+<script src="js/ui.js"></script>
+<script>document.getElementById("sprite").innerHTML = U.SPRITE;</script>
+<script src="js/screens-work.js"></script>
+<script src="js/screens-plans.js"></script>
+<script src="js/screens-agents.js"></script>
+<script src="js/screens-review.js"></script>
+<script src="js/screens-settings.js"></script>
+<script src="js/screens-assistant.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
