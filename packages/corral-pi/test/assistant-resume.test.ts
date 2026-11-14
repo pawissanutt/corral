@@ -4,13 +4,18 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import { EventLog } from "../src/bridge/events.ts";
-import {
-  AssistantResume, type Chooser, type ResumeRow, SWITCH_NOTICE_FILE, SWITCH_REQUEST_FILE, choose, filterRows, resumeRows, rowLabel,
-  rowLines,
-} from "../src/host/assistant-resume.ts";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { AssistantResume, type Chooser, type ResumeRow, SWITCH_NOTICE_FILE, SWITCH_REQUEST_FILE, resumeRows } from "../src/host/assistant-resume.ts";
+import { chooseResume, resumePopupRows } from "../src/ui/resume-list.ts";
+
+interface Surface {
+  focused: boolean;
+  render(width: number): string[];
+  handleInput(data: string): void;
+  handleMouse?(event: unknown): unknown;
+}
 
 const LIST = [
   { session: "A-1", ended: null, live: true, focus: "workspace", summary: "current work", last_activity: "2026-11-04T10:00:00Z" },
@@ -37,13 +42,11 @@ function harness(lists: unknown[], pick: (rows: readonly ResumeRow[]) => ResumeR
     done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("rows carry A-ID, summary, last activity and availability, newest first, and search all of them", () => {
+test("rows carry A-ID, summary, last activity and availability, newest first", () => {
   const rows = resumeRows(LIST, "A-1");
   expect(rows.map(row => [row.id, row.availability])).toEqual([["A-1", "current"], ["A-2", "stopped"], ["A-4", "live"], ["A-3", "ended"]]);
-  expect(rowLabel(rows[1]!)).toBe("A-2 · storage spike · 2026-11-04 09:00 · stopped · resumable");
-  expect(rowLabel(rows[3]!)).toContain("focus T-12");
-  expect(filterRows(rows, "spike").map(row => row.id)).toEqual(["A-2"]);
-  expect(filterRows(rows, "ended").map(row => row.id)).toEqual(["A-3"]);
+  expect(rows[1]).toEqual({ id: "A-2", title: "storage spike", lastActivity: "2026-11-04T09:00:00Z", availability: "stopped" });
+  expect(rows[3]!.title).toBe("focus T-12");
   expect(() => resumeRows({}, "A-1")).toThrow("not a list");
 });
 
@@ -110,32 +113,70 @@ test("a busy host refuses before reading, and the supervisor's notice is shown o
   } finally { h.done(); }
 });
 
-test("the picker renders, searches and cancels from keyboard input", async () => {
-  const rows = resumeRows(LIST, "A-1");
-  const frames: string[][] = [];
+/** Runs `chooseResume` against a stand-in `ui.custom`; `steps` must end with a pick or Esc. */
+function drive(rows: readonly ResumeRow[], steps: (surface: Surface) => void, columns = 100): Promise<ResumeRow | undefined> {
   const ui = {
     custom: (factory: Parameters<ExtensionUIContext["custom"]>[0]) => new Promise(resolve => {
       const theme = { bold: (s: string) => s, fg: (_: string, s: string) => s };
-      const component = factory({ terminal: { rows: 24 }, requestRender: () => undefined } as never, theme as never, {} as never,
-        resolve as never) as { render(width: number): string[]; handleInput(data: string): void };
-      frames.push(component.render(100));
-      for (const key of "spike") component.handleInput(key);
-      frames.push(component.render(100));
-      component.handleInput("\r");
+      const surface = factory({ terminal: { rows: 24, columns }, requestRender: () => undefined } as never, theme as never, {} as never,
+        resolve as never) as unknown as Surface;
+      surface.focused = true;
+      steps(surface);
     }),
   } as unknown as ExtensionUIContext;
-  expect((await choose(ui, rows))?.id).toBe("A-2");
-  // Long and wide summaries are cut in terminal cells; activity and availability always remain.
-  for (const summary of ["x".repeat(120), "会".repeat(40)]) {
-    const row = resumeRows([{ ...LIST[1], summary }], "A-1")[0]!;
-    for (const width of [80, 30]) {
-      const lines = rowLines(row, width, "› ");
+  return chooseResume(ui, rows);
+}
+const type = (surface: Surface, text: string) => { for (const key of text) surface.handleInput(key); };
+const shown = (surface: Surface, width: number) => surface.render(width).map(line => stripTerminalSequences(line));
+const click = (y: number) => ({ type: "click", button: "left", x: 6, y, shift: false, alt: false, ctrl: false });
+
+test("searching by words, date or state narrows the list, and a stopped row is returned exactly", async () => {
+  const rows = resumeRows(LIST, "A-1");
+  expect(await drive(rows, surface => { type(surface, "spike"); surface.handleInput("\r"); })).toBe(rows[1]!);
+  for (const [query, id, other] of [["2026-11-03", "A-3", "A-2"], ["09:00", "A-2", "A-3"], ["another pane", "A-4", "A-2"]] as const) {
+    let frame = "";
+    await drive(rows, surface => { type(surface, query); frame = shown(surface, 100).join("\n"); surface.handleInput("\u001b"); });
+    expect([query, frame.includes(id), frame.includes(other)]).toEqual([query, true, false]);
+  }
+});
+
+test("current, live and ended rows stay listed but cannot be chosen", async () => {
+  const rows = resumeRows(LIST, "A-1");
+  for (const [query, id] of [["current work", "A-1"], ["elsewhere", "A-4"], ["T-12", "A-3"]] as const) {
+    let frame = "";
+    // Enter on such a row picks nothing, so the later Esc is what settles the promise.
+    const picked = await drive(rows, surface => {
+      type(surface, query);
+      frame = shown(surface, 100).join("\n");
+      surface.handleInput("\r");
+      surface.handleInput("\u001b");
+    });
+    expect([id, picked, frame.includes(id)]).toEqual([id, undefined, true]);
+  }
+});
+
+test("arrow keys move the selection and a second click chooses", async () => {
+  const rows = resumeRows(LIST, "A-1");
+  expect(await drive(rows, surface => { surface.handleInput("\u001b[B"); surface.handleInput("\r"); })).toBe(rows[1]!);
+  // A click maps through the rows as last drawn, so the driver renders first and finds the session's row where it is.
+  const clicked = await drive(rows, surface => {
+    const at = () => shown(surface, 100).findIndex(line => new RegExp(`^│.A-2\\s`).test(line));
+    surface.handleMouse?.(click(at()));
+    expect(shown(surface, 100)[at()]).toMatch(/^│▌A-2\s/);
+    surface.handleMouse?.(click(at()));
+  });
+  expect(clicked).toBe(rows[1]!);
+});
+
+test("a selected row keeps its whole title and exact time however long, and no row is wider than its width", () => {
+  for (const summary of ["x".repeat(500), "会".repeat(200)]) {
+    const [entry] = resumePopupRows(resumeRows([{ ...LIST[1], summary }], "A-1"));
+    for (const width of [76, 40]) {
+      const lines = entry!.lines(width, true).map(line => stripTerminalSequences(line));
       for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-      expect(lines.join(" ")).toContain("2026-11-04 09:00");
-      expect(lines.join(" ")).toContain("stopped · resumable");
+      const text = lines.join("\n");
+      expect(text).toContain("2026-11-04T09:00:00Z");
+      expect(text.replace(/[^x会]/g, "").length).toBeGreaterThanOrEqual(summary.length);
     }
   }
-  expect(frames[0]!.join("\n")).toContain("A-3 · focus T-12");
-  expect(frames[1]!.filter(line => line.includes("A-"))).toEqual(["› A-2 · storage spike · 2026-11-04 09:00 · stopped · resumable"]);
-  writeFileSync(join(tmpdir(), "corral-resume-frames.txt"), frames.map(frame => frame.join("\n")).join("\n---\n"));
 });

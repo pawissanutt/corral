@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { CURSOR_MARKER, renderFakeCursor, sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { COMPOSER_INSET, composerBar, composerBottom, composerRow, composerTitle, composerTop } from "./composer-chrome.ts";
+import { COMPOSER_INSET, composerBar, composerBottom, composerRow, composerTitle, composerTop, shellDisposition } from "./composer-chrome.ts";
 import { PANEL_BLUE, PANEL_LINE, PANEL_MUTED, type PanelSnapshot } from "./panels-view.ts";
 
 const snapshot: PanelSnapshot = {
@@ -97,4 +97,14 @@ test("a refused input shows its sanitized reason; started and handled input add 
   expect(composerTitle({ ...snapshot, input: { key: "terminal:6", disposition: "queued" } })).not.toBe(base);
   expect(composerTitle({ ...snapshot, input: { key: "terminal:7", disposition: "pending", reason: "preflight_pending" } })).not.toContain("preflight");
   expect(plain(composerTitle(snapshot, { label: "host-slots\x07", color: "\x1b[35m" }))).toContain("host-slots");
+});
+
+test("the shell disposition follows Pi's own `!`/`!!` reading of the submitted text", () => {
+  expect(shellDisposition("  !ls -la\n")).toBe("agent");
+  expect(shellDisposition("!!git status")).toBe("local");
+  // A bare prefix is a message Pi sends to the agent, not a command.
+  for (const draft of ["!", " !! ", "ls !", "hello"]) expect(shellDisposition(draft)).toBeUndefined();
+  // The shell names itself in place of the receiver, and the two dispositions read differently.
+  expect(plain(composerTitle(null, { label: "parent", color: PANEL_BLUE }, "agent"))).not.toContain("parent");
+  expect(plain(composerTitle(null, undefined, "agent"))).not.toBe(plain(composerTitle(null, undefined, "local")));
 });

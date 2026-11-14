@@ -100,7 +100,6 @@ function shell(columns: number, rows: number, state: () => PanelSnapshot | null,
   return {
     panels, physical, terminal, customs, ...installed,
     command: (name: string) => commands.get(name)?.("", context),
-    prompt: (event: "ui_prompt_start" | "ui_prompt_end") => handlers.get(event)?.({}, context),
     draft: () => draft, setDraft: (text: string) => { draft = text; },
     stop() { terminal.stop(); panels.dispose(); },
   };
@@ -250,7 +249,7 @@ test("a footer click replays its key, and the F1 list runs F8", async () => {
   } finally { h.stop(); }
 });
 
-test("the footer lists the keys of what is open: the palette, the keys list, a pager, or a Pi dialog", async () => {
+test("the footer lists the keys of what is open: the palette, the keys list or a pager", async () => {
   const h = shell(140, 46, () => snapshot({ jobs: [job("build", "running")] }), { identity: assistant });
   const footer = () => stripTerminalSequences(h.footer.render(140).at(-1) ?? "");
   const close = async () => { h.customs.at(-1)?.handleInput?.(KEY.esc); await settle(); };
@@ -268,10 +267,6 @@ test("the footer lists the keys of what is open: the palette, the keys list, a p
     expect(footer()).toMatch(/PgUp\/PgDn\s+page/); expect(footer()).toMatch(/esc\s+close/); expect(footer()).not.toMatch(/choose|F1/);
     await close();
     expect(footer()).toMatch(/F1\s+keys/);
-    // A prompt the panels did not open is Pi's dialog.
-    h.prompt("ui_prompt_start");
-    expect(footer()).toMatch(/⏎\s+choose/); expect(footer()).toMatch(/esc\s+cancel/);
-    h.prompt("ui_prompt_end");
   } finally { h.stop(); }
 });
 

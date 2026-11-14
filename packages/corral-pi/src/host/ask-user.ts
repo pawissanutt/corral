@@ -44,6 +44,10 @@ function normalize(q: Question): DialogQuestion {
 
 type DialogUi = Pick<ExtensionToolContext["ui"], "custom" | "select" | "input">;
 
+/** Where a dialog shows and how many rows it may take: presentation only, read at each open. The caller's
+ * escape, completion and drafts stay authoritative. */
+export type DialogPresentationSource = () => Pick<DialogOptions, "surface" | "rows">;
+
 /** One dialog for the whole batch; Escape, abort or timeout keeps what was answered. Undefined when the
  * host shows no custom component (a select-only or no-op UI context, or RPC mode). */
 export async function askDialog(ui: DialogUi, questions: DialogQuestion[], signal?: AbortSignal,
@@ -104,7 +108,7 @@ export async function sequential(ui: DialogUi, questions: DialogQuestion[], sign
 
 /** Dialogs are local to the owner's interactive pane, never a worker question flow. */
 export function askUserTool(record: (answer: string) => Promise<string>, pending?: Pick<PendingQuestions, "ask" | "withdraw">,
-  dialogBusy: () => boolean = () => false): ToolDefinition {
+  dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource): ToolDefinition {
   return {
     name: "ask_user", label: "Ask the owner", exposure: "model-only", executionMode: "sequential",
     description: "Ask the owner 1-4 focused choice questions together in one dialog instead of asking only in chat; "
@@ -152,7 +156,7 @@ export function askUserTool(record: (answer: string) => Promise<string>, pending
       }
       if (dialogBusy()) return { ...noAnswer(), details: { status: "no answer", reason: "another owner/permission dialog is open" } };
       const questions = params.questions.map(normalize);
-      const shown = (await askDialog(ctx.ui, questions, signal))?.answers;
+      const shown = (await askDialog(ctx.ui, questions, signal, presentation?.()))?.answers;
       if (signal?.aborted && shown === undefined) return noAnswer();
       const raw = shown ?? await sequential(ctx.ui, questions, signal);
       const answers: Answer[] = [];

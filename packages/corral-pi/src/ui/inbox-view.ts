@@ -5,7 +5,7 @@ import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { Role } from "../roles/types.ts";
 import { DecisionInbox, inboxIdentity, type InboxItem } from "./decision-inbox.ts";
-import { ago, bold, chip, chipRows, clock, field, listRow, sectionRule, toneColor, wrap, type Tone } from "./panel-parts.ts";
+import { bold, chip, chipHeader, chipRows, field, glyphRows, listRow, sectionRule, stateBanner, stateRow, toneColor, wrap, type Tone } from "./panel-parts.ts";
 import { splitRow } from "./panels-chrome.ts";
 import { pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_RULE, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
 import { LIST_WIDTH, SPLIT_MIN } from "./proof-view.ts";
@@ -50,27 +50,28 @@ export class InboxView implements Component {
   render(width: number): string[] {
     const lines: string[] = []; this.hits.clear(); this.rows.clear();
     const full = (text: string) => lines.push(...wrap(PANEL_TEXT + text, width));
-    const store = this.store, items = store.visible, snapshot = store.snapshot;
-    const chips = [chip("read only"), chip(`${store.history ? "all states" : "pending"} ${items.length}`, !store.history && items.length ? "warn" : "none"),
+    const store = this.store, state = store.state, items = store.visible, snapshot = store.snapshot;
+    if (state.phase === "not_applicable") return stateRow(state, "inbox", width, "no canonical inbox reader is attached to this session.");
+    // A count is drawn only from a snapshot: with nothing read the number of waiting items is unknown, not zero.
+    const chips = [chip("read only"), ...(snapshot ? [chip(`${store.history ? "all states" : "pending"} ${items.length}`, !store.history && items.length ? "warn" : "none")] : []),
       ...(store.query ? [chip(`filter ${store.query}`)] : [])];
-    const at = snapshot ? Date.parse(snapshot.observed_at) : Number.NaN, since = ago(at, Date.now());
-    const reads = since ? [`read ${clock(at)} (${since}) · r reread`, `read ${since} · r reread`, "r reread"] : ["not read · r reread", "r reread"];
-    const rows = chipRows(chips, width), last = rows.at(-1) ?? "";
-    const read = reads.find(r => visibleWidth(last) + 2 + visibleWidth(r) <= width);
-    lines.push(...rows.slice(0, -1), read ? splitRow(last, PANEL_MUTED + read + PANEL_TEXT, width) : last);
-    if (store.error) full(`${PANEL_WARNING}~ STALE / unavailable: ${plainLabel(store.error)}${PANEL_TEXT}`);
-    if (store.refreshing) full(`${PANEL_MUTED}Reading canonical inbox…${PANEL_TEXT}`);
+    lines.push(...chipHeader(chips, width, state, Date.now()), ...stateBanner(state, "inbox", width));
     if (this.legend()) {
-      full(`${PANEL_MUTED}Canonical attention and decisions for ${plainLabel(snapshot?.workspace ?? "an unavailable workspace")}. ⚑ pending · · closed or resolved.${PANEL_TEXT}`);
+      full(`${PANEL_MUTED}Canonical attention and decisions${snapshot ? ` for ${plainLabel(snapshot.workspace)}` : ""}. ⚑ pending · · closed or resolved.${PANEL_TEXT}`);
       full(`${PANEL_MUTED}Enter opens read-only detail; a rereads, revalidates and opens the existing answer-flow instructions. No panel action sends an answer or grants authority.${PANEL_TEXT}`);
     }
+    // Without a snapshot the state row is the whole body: reading, not read yet, or nothing (the problem line said it).
+    if (!snapshot) { lines.push(...stateRow(state, "canonical inbox", width)); return lines; }
     if (store.selected && !store.current) full(`${PANEL_WARNING}! Selected item no longer matches this view; choose an item with j/k.${PANEL_TEXT}`);
-    const empty = snapshot ? store.error ? "Retained snapshot has no matching items; current state unavailable."
-      : "No matching items in this canonical snapshot." : "Canonical inbox unavailable; r to retry.";
+    if (!items.length) {
+      const base = snapshot.items.some(item => store.history || item.pending);
+      lines.push(...glyphRows(store.query && base ? `○ No item matches “${store.query}”.`
+        : store.history ? "○ No items in this snapshot." : `○ Nothing is waiting for a decision in ${snapshot.workspace}.`, width));
+      return lines;
+    }
     const current = store.current, index = current ? items.indexOf(current) : -1;
 
     if (width + VIEW_INSET < SPLIT_MIN) {
-      if (!items.length) { full(PANEL_MUTED + empty + PANEL_TEXT); return lines; }
       const shown = current ?? items[0];
       if (!shown) return lines;
       const [glyph, tone] = stateOf(shown), right = `${toneColor(tone)}${glyph} ${fit(shown.state, 14)}${PANEL_TEXT} `;
@@ -84,15 +85,14 @@ export class InboxView implements Component {
     lines.push(`${PANEL_RULE}${"─".repeat(LIST_WIDTH)}┬${"─".repeat(Math.max(0, width - LIST_WIDTH - 1))}${PANEL_TEXT}`);
     const left: { text: string; id?: string }[] = [{ text: listRow(`${PANEL_MUTED}${store.history ? "ALL" : "PENDING"} ${items.length}`, `state${PANEL_TEXT}`, false, LIST_WIDTH) }];
     for (const item of items) {
-      const [glyph, tone] = stateOf(item), state = `${toneColor(tone)}${glyph} ${fit(item.state, 12)}${PANEL_TEXT}`;
-      const label = `${PANEL_TEXT}${fit(item.task, 12)} ${PANEL_MUTED}${fit(item.kind, LIST_WIDTH - 3 - 15 - visibleWidth(state))}${PANEL_TEXT}`;
-      const row = listRow(label, state, item === current, LIST_WIDTH);
+      const [glyph, tone] = stateOf(item), status = `${toneColor(tone)}${glyph} ${fit(item.state, 12)}${PANEL_TEXT}`;
+      const label = `${PANEL_TEXT}${fit(item.task, 12)} ${PANEL_MUTED}${fit(item.kind, LIST_WIDTH - 3 - 15 - visibleWidth(status))}${PANEL_TEXT}`;
+      const row = listRow(label, status, item === current, LIST_WIDTH);
       // listRow draws the bar in accent; an unfocused view keeps the bar but mutes it.
       left.push({ text: item === current && !this.focused() ? row.replace(PANEL_BLUE + "▌", PANEL_MUTED + "▌") : row, id: inboxIdentity(item) });
     }
-    if (!items.length) left.push({ text: listRow(`${PANEL_MUTED}none${PANEL_TEXT}`, "", false, LIST_WIDTH) });
     const detailWidth = Math.max(20, width - LIST_WIDTH - 2);
-    const right = current ? detail(current, detailWidth) : wrap(PANEL_MUTED + (items.length ? "Choose an item with j/k or a click." : empty) + PANEL_TEXT, detailWidth);
+    const right = current ? detail(current, detailWidth) : wrap(`${PANEL_MUTED}Choose an item with j/k or a click.${PANEL_TEXT}`, detailWidth);
     const start = lines.length;
     for (let i = 0; i < Math.max(left.length, right.length); i++) {
       const l = left[i];

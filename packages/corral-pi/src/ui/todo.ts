@@ -1,12 +1,40 @@
-// One host-side copy of the canonical ledger, read by the rich-mode widget and, for PM and
+// One host-side copy of the canonical ledger, read by the sidebar's Plan tab and, for PM and
 // assistant sessions, by the model's request summary, so both name the same plan and revision.
+// The Rust ledger owns every status; this module only reads, holds and re-reads it.
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { z } from "zod";
 
 import type { HostIdentity } from "../roles/types.ts";
-import { ProgressSchema, TodoWidget, type TodoProgress } from "./todo-widget.ts";
 import { observedCorralResult } from "./receipt-source.ts";
+
+const Status = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("pending") }),
+  z.object({ state: z.literal("in_progress") }),
+  z.object({ state: z.literal("done") }),
+  z.object({ state: z.literal("dropped"), reason: z.string() }),
+]);
+const Wait = z.object({
+  step: z.string(),
+  on: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("event"), event: z.string() }),
+    z.object({ kind: z.literal("owner"), question: z.string() }),
+  ]),
+});
+export const ProgressSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  spec_revision: z.string(),
+  phases: z.array(z.object({
+    id: z.string(), label: z.string(),
+    steps: z.array(z.object({
+      id: z.string(), label: z.string(), status: Status,
+      criteria: z.array(z.string()).default([]),
+    })),
+  })),
+  /** PM and assistant plans only: the plan identity the model's request summary names. */
+  plan: z.string().optional(),
+  waits: z.array(Wait).optional(),
+});
+export type TodoProgress = z.infer<typeof ProgressSchema>;
 
 const Receipt = z.object({
   state: z.literal("committed"),
@@ -124,46 +152,65 @@ export class TodoLedger {
   }
 }
 
-/** The rich-mode widget and `/todo`; `restoreOnStart` re-reads the ledger when the pane opens. */
-/** `hidden`: the side panel's Task row carries the plan, so the widget yields while it is visible. */
-export function installTodo(pi: ExtensionAPI, ledger: TodoLedger, restoreOnStart: boolean, hidden: () => boolean = () => false): void {
-  let widget: TodoWidget | undefined;
+/** The one plan presentation: the sidebar's Plan tab, in the rail or, below the rail's width, the drawer. */
+export interface PlanSurface {
+  /** Shows the Plan tab with the keys: the rail when it is on screen, else the open drawer. */
+  show(): void;
+  /** Shows the Plan tab and turns its page: negative back, positive forward. */
+  scroll(delta: number): void;
+  /** A panel notice in its tone; never a transcript line. */
+  notice(text: string, tone: "text" | "warning" | "error"): void;
+}
+
+/** What a failed or unconfirmed read leaves on screen, and why. */
+function staleNotice(ledger: TodoLedger, failure: string): string {
+  const reason = failure.split("\n")[0]?.trim() ?? "";
+  const lead = ledger.current ? `Plan is stale · showing revision ${ledger.current.revision}` : "Plan could not be read";
+  return reason ? `${lead} · ${reason}` : lead;
+}
+
+/**
+ * `/todo` shows the Plan tab, `/todo up|down` turn its page and `/todo refresh` rereads the canonical ledger.
+ * `restoreOnStart` rereads the ledger when the terminal UI opens. A failed or unconfirmed read is a warning
+ * notice on the surface; the last confirmed revision stays shown, marked stale.
+ */
+export function installPlanCommand(
+  pi: ExtensionAPI, ledger: TodoLedger, restoreOnStart: boolean, surface: () => PlanSurface | undefined,
+): void {
+  // Before the panels exist (or without them) a failure still reaches the owner through the SDK's notify.
   let ui: ExtensionUIContext | undefined;
   ledger.onChange((failure) => {
-    if (failure === undefined) {
-      widget?.update(ledger.current);
-      return;
-    }
-    widget?.failed();
-    ui?.notify(`Todo refresh failed: ${failure}`, "warning");
+    if (failure === undefined) return;
+    const text = staleNotice(ledger, failure), shown = surface();
+    if (shown) shown.notice(text, "warning");
+    else ui?.notify(text, "warning");
   });
   pi.on("session_start", async (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     ui = ctx.ui;
-    ui.setWidget("corral-todo", (tui, theme) => {
-      widget = new TodoWidget(theme, () => tui.terminal.rows, () => tui.requestRender());
-      if (ledger.current) widget.update(ledger.current);
-      else if (ledger.unavailable) widget.failed();
-      const shown = widget;
-      return { render: (width: number) => hidden() ? [] : shown.render(width),
-        handleMouse: (event: TuiMouseEvent) => hidden() ? undefined : shown.handleMouse(event),
-        invalidate: () => shown.invalidate() };
-    }, { placement: "aboveEditor" });
     if (restoreOnStart) await ledger.restore().catch(() => false);
   });
   pi.registerCommand("todo", {
-    description: "Toggle todo details; /todo up, down, or refresh",
+    description: "Show the plan in the sidebar; /todo up, down, or refresh",
     handler: async (args, ctx) => {
-      if (!widget) {
-        ctx.ui.notify("Todo visualization is available in the terminal UI.", "info");
+      const shown = surface();
+      if (!shown) {
+        ctx.ui.notify("The plan is shown in the terminal UI's sidebar.", "info");
         return;
       }
       switch (args.trim()) {
-        case "": widget.toggle(); break;
-        case "up": widget.scroll(-3); break;
-        case "down": widget.scroll(3); break;
-        case "refresh": await ledger.restore().catch(() => false); break;
-        default: ctx.ui.notify("Use /todo, /todo up, /todo down, or /todo refresh.", "info");
+        case "": shown.show(); break;
+        case "up": shown.scroll(-1); break;
+        case "down": shown.scroll(1); break;
+        case "refresh": {
+          // A failed read, or an unconfirmed outcome that overtook it, already said so through `onChange`.
+          const read = await ledger.restore().then(() => true, () => false);
+          if (!read || ledger.unavailable) break;
+          const current = ledger.current;
+          shown.notice(current ? `Plan refreshed · revision ${current.revision}` : "Plan refreshed · no plan yet", "text");
+          break;
+        }
+        default: shown.notice("Use /todo, /todo up, /todo down or /todo refresh", "warning");
       }
     },
   });

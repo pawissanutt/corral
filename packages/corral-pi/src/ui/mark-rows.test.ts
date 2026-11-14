@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import type { CustomEntry, EntryRenderer } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 
 import { MARK_ENTRY } from "../host/transcript-marks.ts";
 import type { TranscriptMark } from "../host/transcript-marks.ts";
-import { installMarkRows } from "./mark-rows.ts";
+import { installMarkRows, quietNote } from "./mark-rows.ts";
 
 const AT = new Date(2026, 10, 13, 14, 35).getTime();
 
@@ -66,4 +67,27 @@ test("every mark is one row collapsed and never wider than the terminal", () => 
       expect(visibleWidth(rows[0]!)).toBeLessThanOrEqual(width);
     }
   }
+});
+
+test("a quiet note is one row until a click or Ctrl+O opens every line of its text", () => {
+  // A raw failure longer than a mark's expanded cap: its tail must still be reachable, since nothing else draws it.
+  const trace = Array.from({ length: 60 }, (_, index) => `    at frame${index} (compact.js:${index + 1})`);
+  const raw = ["automatic compaction failed · context unchanged", "Auto-compaction failed: 529 overloaded", ...trace,
+    "Send /compact to try again."].join("\n");
+  type Expandable = Component & { setExpanded(expanded: boolean): void };
+  const plain = (note: Component) => note.render(60).map(line => stripTerminalSequences(line)).join("\n");
+  const clicked = quietNote(raw, "error", AT);
+  expect(clicked.render(60)).toHaveLength(1);
+  expect(plain(clicked)).toMatch(/^ ✗ automatic compaction failed/u);
+  clicked.handleMouse?.({ type: "click", button: "left" } as never);
+  expect(plain(clicked)).toContain("Auto-compaction failed: 529 overloaded");
+  expect(plain(clicked)).toContain("at frame59 (compact.js:60)");
+  expect(plain(clicked)).toContain("Send /compact to try again.");
+  expect(plain(clicked)).not.toContain("more rows");
+  // Pi's tool-output toggle reaches a row it holds directly.
+  const toggled = quietNote(raw, "error", AT) as Expandable;
+  toggled.setExpanded(true);
+  expect(plain(toggled)).toContain("at frame59 (compact.js:60)");
+  toggled.setExpanded(false);
+  expect(toggled.render(60)).toHaveLength(1);
 });

@@ -4,6 +4,7 @@ import { InspectionStore, type Inspection } from "./inspection.ts";
 import { renderProof, proofSplit, LIST_WIDTH } from "./proof-view.ts";
 import { proofItems } from "./proof-parts.ts";
 import { PANEL_SELECTED } from "./panels-view.ts";
+import { clock } from "./panel-parts.ts";
 
 const identity = { store: "s", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 3 };
 function data(): Inspection {
@@ -36,7 +37,9 @@ test("wide Proof: one chip row, selectable criteria and MORE rows with glyph lad
     const frame = proofSplit(store, 0, width, false, new Set(), now);
     for (const row of frame.lines) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
     const rule = frame.lines.findIndex(line => strip(line).includes("┬"));
-    expect(strip(frame.lines[0] ?? "")).toMatch(/^ gate ✓ .* review ~ approve · STALE /);
+    // The review's own staleness is its chip's word; the read itself is current, so no source-stale chip shows.
+    const head = strip(frame.lines[0] ?? "");
+    expect(head).toMatch(/^ gate ✓ /); expect(head).toMatch(/ review ~ approve · stale /); expect(head).not.toContain("! stale");
     expect(strip(frame.lines[rule - 1] ?? "")).toMatch(/ r reread\s*$/);
     expect(frame.lines.some(line => strip(line).includes("j/k criterion"))).toBe(false);
     const rows = [...frame.hits.entries()].sort(([a], [b]) => a - b);
@@ -84,10 +87,29 @@ test("Proof sections open in the detail pane and invalid proof stays inline", as
   store.dispose();
 });
 
-test("an unavailable read stays inline and infers no acceptance", async () => {
-  const store = new InspectionStore(identity, async () => { throw new Error("offline"); }, () => {});
+test("a failed read shows no evidence; a failed reread keeps the retained proof, its read time and the reason", async () => {
+  let fail = true;
+  const store = new InspectionStore(identity, async () => { if (fail) throw new Error("offline"); return data(); }, () => {});
   await store.refresh();
-  const text = stripTerminalSequences(proofSplit(store, 0, 140, false, new Set()).lines.join("\n"));
-  expect(text).toContain("STALE / unavailable: offline"); expect(text).toContain("no acceptance inferred");
+  expect(store.state.phase).toBe("failed");
+  const failed = proofSplit(store, 0, 140, false, new Set()).lines.map(strip);
+  expect(failed.join("\n")).toContain("offline"); expect(failed.join("\n")).toContain("acceptance is not inferred");
+  expect(failed.some(line => line.includes("┬"))).toBe(false);
+  fail = false; await store.refresh(true);
+  const readAt = store.checkedAt ?? 0, now = readAt + 120_000;
+  // Rows above the list or picker: the chip header and the problem line.
+  const top = (width: number) => {
+    const rows = renderProof(store, 0, width, false, new Set(), now).lines.map(strip);
+    return rows.slice(0, rows.findIndex(row => row.includes("┬") || row.includes("‹"))).join("\n");
+  };
+  for (const width of [44, 58, 101]) expect(top(width)).toContain("2m ago");
+  fail = true; await store.refresh(true);
+  expect(store.state.phase).toBe("retained"); expect(store.state.readAt).toBe(readAt);
+  for (const width of [44, 58, 101, 140]) {
+    const frame = renderProof(store, 0, width, false, new Set(), now);
+    for (const row of frame.lines) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+    expect(top(width)).toContain(clock(readAt)); expect(top(width)).toContain("offline");
+    expect(frame.lines.map(strip).some(row => row.includes("C1"))).toBe(true);
+  }
   store.dispose();
 });

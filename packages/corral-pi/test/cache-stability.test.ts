@@ -6,7 +6,7 @@ import { ReplayCache } from "../src/claude/cache.ts";
 import { buildPromptBlocks, type PromptBlock } from "../src/claude/prompt.ts";
 import { requestCheckpoint } from "../src/host/request-checkpoint.ts";
 import { summarize, summaryText } from "../src/host/request.ts";
-import { ProgressSchema } from "../src/ui/todo-widget.ts";
+import { ProgressSchema } from "../src/ui/todo.ts";
 
 const user = (content: string) => ({ role: "user" as const, content, timestamp: 0 });
 const progress = (revision: number) => ProgressSchema.parse({ plan: "P1", revision, spec_revision: "assistant:A-1",

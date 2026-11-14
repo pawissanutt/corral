@@ -4,7 +4,6 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { EventLog } from "../bridge/events.ts";
 import type { HistoryRequest } from "../tools/history.ts";
 
@@ -40,34 +39,6 @@ export function resumeRows(value: unknown, current: string): ResumeRow[] {
   return rows.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
 }
 
-const LABEL: Record<Availability, string> = {
-  current: "current · this pane", live: "live · host running elsewhere", ended: "ended · not resumable", stopped: "stopped · resumable",
-};
-const activity = (row: ResumeRow): string => row.lastActivity.slice(0, 16).replace("T", " ") || "unknown";
-export function rowLabel(row: ResumeRow): string {
-  return `${row.id} · ${row.title} · ${activity(row)} · ${LABEL[row.availability]}`;
-}
-
-/** Narrowest summary kept on the row's line; below it activity and availability get their own line. */
-const MIN_TITLE = 8;
-/**
- * One row in terminal cells: the summary is truncated so activity and availability always fit.
- * When `width` is too narrow for that, they move to a second, indented line.
- */
-export function rowLines(row: ResumeRow, width: number, marker: string): string[] {
-  const head = `${marker}${row.id} · `, tail = ` · ${activity(row)} · ${LABEL[row.availability]}`;
-  const room = width - visibleWidth(head) - visibleWidth(tail);
-  if (room >= MIN_TITLE) return [`${head}${truncateToWidth(row.title, room, "…")}${tail}`];
-  const indent = " ".repeat(visibleWidth(marker) + 2);
-  const state = `${indent}${LABEL[row.availability]}`, when = ` · ${activity(row)}`;
-  const details = visibleWidth(state) + visibleWidth(when) <= width ? [`${state}${when}`] : [state, `${indent}${activity(row)}`];
-  return [truncateToWidth(`${head}${row.title}`, width, "…"), ...details.map(line => truncateToWidth(line, width, "…"))];
-}
-export function filterRows(rows: readonly ResumeRow[], filter: string): ResumeRow[] {
-  const needle = filter.trim().toLowerCase();
-  return needle ? rows.filter(row => rowLabel(row).toLowerCase().includes(needle)) : [...rows];
-}
-
 /** Why a row cannot be resumed from here, or undefined when it is eligible. */
 export function ineligible(row: ResumeRow | undefined, id: string): string | undefined {
   if (!row) return `corral: ${id} is no longer an assistant session in this workspace`;
@@ -91,7 +62,8 @@ interface ResumeOptions {
   readonly idle: () => boolean;
   /** Marks the host closing and exits with RESUME_ASSISTANT_EXIT. */
   readonly request: () => void;
-  readonly choose?: Chooser;
+  /** The picker; a pick is revalidated here before anything is requested. */
+  readonly choose: Chooser;
 }
 
 export class AssistantResume {
@@ -133,7 +105,7 @@ export class AssistantResume {
         ui.notify("corral: no other assistant sessions in this workspace; /new opens one", "info");
         return;
       }
-      const chosen = await (o.choose ?? choose)(ui, rows);
+      const chosen = await o.choose(ui, rows);
       if (!chosen) { o.events.emit("assistant_resume_cancelled", {}); return; }
       // Revalidate at selection time; the supervisor checks again under the target's claim.
       let fresh: ResumeRow | undefined;
@@ -160,46 +132,3 @@ export class AssistantResume {
     } finally { this.busy = false; }
   }
 }
-
-/** A searchable list: type to filter, ↑↓ to move, Enter to select, Esc to cancel. */
-export const choose: Chooser = (ui, rows) => ui.custom<ResumeRow | undefined>((tui, theme, _keys, done) => {
-  let filter = "", index = 0;
-  const visible = () => filterRows(rows, filter);
-  return {
-    render: (width: number) => {
-      const shown = visible(), budget = Math.max(3, Math.min(12, tui.terminal.rows - 6));
-      index = Math.min(index, Math.max(0, shown.length - 1));
-      const cut = (line: string) => truncateToWidth(line, Math.max(1, width), "…");
-      const style = (row: ResumeRow, selected: boolean) => (line: string) =>
-        selected ? theme.fg("accent", line) : row.availability === "stopped" ? line : theme.fg("dim", line);
-      const lines = (i: number) => rowLines(shown[i]!, Math.max(1, width), i === index ? "› " : "  ");
-      // A window of whole rows around the selection, filling `budget` terminal lines.
-      let start = index, end = index + 1, used = shown.length ? lines(index).length : 0;
-      while (true) {
-        const below = end < shown.length ? lines(end).length : 0, above = start > 0 ? lines(start - 1).length : 0;
-        if (below && used + below <= budget && (end - index <= index - start || !above)) { used += below; end++; }
-        else if (above && used + above <= budget) { used += above; start--; }
-        else if (below && used + below <= budget) { used += below; end++; }
-        else break;
-      }
-      return [
-        cut(theme.bold(`Resume an assistant session (${shown.length}/${rows.length}) · the current conversation stays until you select`)),
-        cut(`Search: ${filter}▏`),
-        ...(shown.length ? shown.slice(start, end).flatMap((row, i) => lines(start + i).map(style(row, start + i === index)))
-          : [theme.fg("dim", cut("  No matching assistant sessions"))]),
-        cut(theme.fg("dim", "type to search · ↑↓ move · Enter resume · Esc cancel")),
-      ];
-    },
-    handleInput: (data: string) => {
-      const shown = visible();
-      if (matchesKey(data, "escape")) done(undefined);
-      else if (matchesKey(data, "enter")) { if (shown[index]) done(shown[index]); }
-      else if (matchesKey(data, "up")) index = shown.length ? (index + shown.length - 1) % shown.length : 0;
-      else if (matchesKey(data, "down")) index = shown.length ? (index + 1) % shown.length : 0;
-      else if (matchesKey(data, "backspace")) { filter = filter.slice(0, -1); index = 0; }
-      else if (data.length === 1 && data >= " " && data !== "\u007f") { filter += data; index = 0; }
-      tui.requestRender();
-    },
-    invalidate: () => undefined,
-  };
-});

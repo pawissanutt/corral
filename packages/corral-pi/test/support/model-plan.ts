@@ -1,6 +1,6 @@
 import type { Message } from "@earendil-works/pi-ai";
 import { z } from "zod";
-import { ProgressSchema } from "../../src/ui/todo-widget.ts";
+import { ProgressSchema } from "../../src/ui/todo.ts";
 import { visibleReceipt } from "../../src/tools/presentation.ts";
 
 const Receipt = z.object({ state: z.literal("committed"), result: z.object({ progress: ProgressSchema }) });

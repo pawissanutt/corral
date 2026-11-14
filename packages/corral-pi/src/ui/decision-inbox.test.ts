@@ -8,7 +8,7 @@ test("inbox refresh preserves exact selection, history and explicit read failure
   let value = snapshot([question, { ...question, key: "T-2/R1/Q1", state: "answered", pending: false, response: null }]);
   let fail = false;
   const store = new DecisionInbox(async () => { if (fail) throw new Error("offline"); return value; }, () => {});
-  expect(store.status).toContain("Not loaded");
+  expect(store.state.phase).toBe("never_read");
   await store.refresh(); expect(store.visible).toHaveLength(1);
   store.history = true; const historical = store.visible.find(item => item.key === "T-2/R1/Q1");
   if (!historical) throw new Error("missing history");
@@ -16,7 +16,8 @@ test("inbox refresh preserves exact selection, history and explicit read failure
   value = snapshot([...value.items].reverse()); await store.refresh();
   expect(store.current?.key).toBe("T-2/R1/Q1");
   fail = true; await store.refresh();
-  expect(store.status).toContain("STALE / unavailable");
+  expect(store.state).toMatchObject({ phase: "retained", error: "offline", readAt: Date.parse("2026-11-02T00:00:00Z") });
+  expect(store.state.failedAt).toBeDefined();
   expect(store.visible).toHaveLength(2);
   await expect(store.answerFlow(question, "worker")).rejects.toThrow("offline");
   store.dispose();
@@ -52,8 +53,12 @@ test("source namespaces cannot redirect selection or answer-flow validation to a
   store.dispose();
 });
 
-test("unknown schema is unavailable, never an empty successful inbox", async () => {
+test("unknown schema is a failed read, never an empty successful inbox; no reader is not applicable", async () => {
   const store = new DecisionInbox(async () => ({ version: 2, items: [] }), () => {});
-  await store.refresh(); expect(store.status).toContain("unavailable"); expect(store.snapshot).toBeUndefined();
+  await store.refresh(); expect(store.state.phase).toBe("failed"); expect(store.snapshot).toBeUndefined();
   store.dispose();
+  const absent = new DecisionInbox(undefined, () => {});
+  await absent.refresh(); expect(absent.state.phase).toBe("not_applicable");
+  await expect(absent.answerFlow(question, "assistant")).rejects.toThrow("reader unavailable");
+  absent.dispose();
 });
