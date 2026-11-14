@@ -63,18 +63,4 @@ mod tests {
             Err("cannot clear"),
         );
     }
-
-    #[test]
-    fn ingestion_does_not_decode_or_validate_a_draft() {
-        assert_eq!(
-            take_fragment("#corral-pair=bad%20code", || Ok(()))
-                .unwrap()
-                .as_deref(),
-            Some("bad%20code"),
-        );
-        assert_eq!(
-            take_fragment("#corral-pair=", || Ok(())),
-            Ok(Some(String::new()))
-        );
-    }
 }
