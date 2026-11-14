@@ -89,6 +89,17 @@ stale or missing report prints nothing, and compile, lint and Pi failures print 
   `plan_verify: true`; ordinary task gates carry false. Older contexts without the field run
   conservatively, not as though they had opted out.
 
+### SDK-free Darwin Rust checks
+
+Each installed Darwin target is checked with `cargo check --workspace --all-targets`.
+This is Rust/cfg coverage, not native compilation or linking. Only these invocations use
+`LIBSQLITE3_SYS_USE_PKG_CONFIG=1` and command-line Cargo `links` overrides for `zstd` and
+`ring_core_0_17_14_`: SQLite still copies its bundled Rust bindings, zstd uses checked-in
+bindings, and ring 0.17.14 generates no Rust or Rust cfg/env inputs. No Apple SDK is needed
+for these checks. Re-audit that contract when upgrading native dependencies (ring's `links`
+key is versioned). Never persist these overrides in Cargo config or use them for builds/tests;
+real builds still require the platform's native toolchain. See the [T-956 audit](../records/T-956-darwin-ring.md).
+
 ## Host nightly slow lane
 
 `scripts/slow_lane.py` is a host-invoked maintenance lane, **not another worker gate**. It:

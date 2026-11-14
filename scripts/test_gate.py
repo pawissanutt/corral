@@ -522,7 +522,8 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
                 checks = [e for e in entries if e["args"][0] == "check"]
                 self.assertEqual([e["args"] for e in checks], [
                     ["check", "--workspace", "--all-targets", "--target", target,
-                     "--config", f"target.{target}.zstd.rustc-link-lib=[]"]
+                     "--config", f"target.{target}.zstd.rustc-link-lib=[]",
+                     "--config", f"target.{target}.ring_core_0_17_14_.rustc-link-lib=[]"]
                     for target in installed
                 ])
                 for entry in checks:
@@ -556,10 +557,12 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
             if entry["args"][0] == "check":
                 target = entry["args"][entry["args"].index("--target") + 1]
                 # SQLite still copies bundled bindings in its linked build path;
-                # zstd's checked-in bindings need no generated build-script output.
+                # zstd/ring need no generated Rust or build-script cfg/env output.
                 self.assertEqual(entry["sqlite_pkg_config"], "1")
-                self.assertEqual(entry["args"][-2:],
-                                 ["--config", f"target.{target}.zstd.rustc-link-lib=[]"])
+                self.assertEqual(entry["args"][-4:], [
+                    "--config", f"target.{target}.zstd.rustc-link-lib=[]",
+                    "--config", f"target.{target}.ring_core_0_17_14_.rustc-link-lib=[]",
+                ])
             else:
                 # No override may reach native lint/test/build or docs commands.
                 self.assertEqual(entry["sqlite_pkg_config"], "0")
@@ -573,7 +576,8 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
             with self.subTest(target=target):
                 (self.repo / "commands.jsonl").unlink(missing_ok=True)
                 command = (f"check --workspace --all-targets --target {target}"
-                           + f" --config target.{target}.zstd.rustc-link-lib=[]")
+                           + f" --config target.{target}.zstd.rustc-link-lib=[]"
+                           + f" --config target.{target}.ring_core_0_17_14_.rustc-link-lib=[]")
                 # When the gate reaches the failed cross-check:
                 result = self.gate(PATH=path, INSTALLED_TARGETS="\n".join(targets),
                                    FAIL_COMMAND="cargo:" + command)
