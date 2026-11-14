@@ -25,6 +25,9 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("daemon nudge", &[], Refused),
     ("daemon stop", &[], Refused),
     ("daemon install", &["--print"], Refused),
+    ("device list", &["--json"], Read),
+    ("device pair", &[], Refused),
+    ("device revoke", &["fixture-device"], Refused),
     ("export tasks", &["out"], Refused),
     ("export events", &["--json"], Read),
     ("storage check", &[], Read),
@@ -733,6 +736,16 @@ fn every_command_variant_has_an_explicit_class() {
         args.extend_from_slice(extra);
         let out = fx.run(Some("A-1"), &args);
         let stderr = String::from_utf8_lossy(&out.stderr);
+        if cfg!(unix) && *path == "device list" {
+            // A missing daemon is reported after the read passes the entry guard.
+            assert_eq!(out.status.code(), Some(2), "{stderr}");
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout).trim(),
+                "corrald is not running"
+            );
+            assert!(!stderr.contains("assistant_refused"));
+            continue;
+        }
         if *path == "daemon status" {
             // A missing daemon is a successful read of down health, with exit status 2.
             assert_eq!(out.status.code(), Some(2), "{stderr}");
