@@ -11,6 +11,14 @@ pub struct CommitPaidEpisode {
     pub records: PutRecords,
 }
 impl CommitPaidEpisode {
+    pub fn reservations(&self) -> Vec<ReservationUse> {
+        self.records
+            .reservations
+            .iter()
+            .chain(self.task.iter().flat_map(|t| &t.change.reservations))
+            .cloned()
+            .collect()
+    }
     pub fn validate(&self) -> Result<(), ApplyError> {
         let episode: PaidEpisode = self
             .episode
