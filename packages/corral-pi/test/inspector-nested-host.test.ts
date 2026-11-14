@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { codeHost } from "./support/code-host.ts";
-import { inspectorActivity } from "../src/ui/inspector.ts";
+import { receiptLines } from "../src/ui/inspector.ts";
 import type { PanelSnapshot } from "../src/ui/panels-view.ts";
 
 const progress = (revision: number) => ({ revision, spec_revision: "spec", phases: [{ id: "p", label: "Implementation", steps: [
@@ -18,12 +18,13 @@ test("authenticated Code Mode children expose all receipt states and reconcile t
   const panels = fx.host.panels;
   if (!panels) throw new Error("rich fixture must provide native panels");
   const captured: string[] = [];
-  // Receipts are the host receipts and events observations; the plan renders in the sidebar's Plan tab.
+  // Receipts are the host receipts and events observations (their exact records); the plan renders in the sidebar's Plan tab.
   const snapshot = () => (panels as unknown as { options: { snapshot: () => PanelSnapshot | null } }).options.snapshot();
   const render = (tab: "Context" | "Plan") => {
     panels.sidebar.tab = "plan";
     const info = snapshot()?.inspector;
-    const text = stripTerminalSequences((tab === "Plan" ? panels.renderSidebar(110, 200) : info ? inspectorActivity(info) : []).join("\n"));
+    const text = stripTerminalSequences(tab === "Plan" ? panels.renderSidebar(110, 200).join("\n")
+      : info ? receiptLines(info, Date.now()).raw.map(line => line.text).join("\n") : "");
     captured.push(tab, text);
     return text;
   };
@@ -47,7 +48,7 @@ test("authenticated Code Mode children expose all receipt states and reconcile t
     const context = render("Context");
     for (const outcome of ["committed", "replayed", "rejected", "uncertain"]) expect(context).toContain(outcome);
     expect(context).toContain("Code Mode child");
-    expect(context).not.toContain("No tool receipt observed");
+    expect(snapshot()?.inspector?.receipts.some(row => row.nested && row.tool === "corral_ask")).toBeTrue();
     const plan = render("Plan");
     expect(plan).toContain("Work revision 2");
     expect(plan).not.toContain("stale");

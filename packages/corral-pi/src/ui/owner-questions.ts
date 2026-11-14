@@ -4,7 +4,7 @@
 // focus like the docked build choice; plain hosts keep it as a widget of its own.
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext, SessionProjection } from "@earendil-works/pi-coding-agent";
 import { decodeKittyPrintable, matchesKey, type Component, type KeyId, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { askDialog, sequential } from "../host/ask-user.ts";
+import { askDialog, sequential, type DialogPresentationSource } from "../host/ask-user.ts";
 import type { ChoiceAnswer, PendingQuestion, PendingQuestions } from "../host/pending-questions.ts";
 import { choiceLines, PASTE_START } from "./build/choice-dock.ts";
 import { freeKey, keyLabel } from "./keymap.ts";
@@ -183,7 +183,7 @@ export class OwnerQuestionUi {
   private readonly listeners = new Set<() => void>();
   constructor(private readonly questions: PendingQuestions, private readonly eligible: () => boolean,
     private readonly persist: (message: { customType: string; content: string; display: boolean }) => void,
-    private readonly claudeRoute: () => boolean = () => false) {}
+    private readonly claudeRoute: () => boolean = () => false, private readonly presentation?: DialogPresentationSource) {}
 
   /** Hands the card to the native panels' dock; call before `session_start`. */
   dock(): QuestionSource {
@@ -291,7 +291,9 @@ export class OwnerQuestionUi {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     const pending = this.visible();
-    this.ui?.setStatus("corral-owner-questions", pending.length ? `${pending.length} owner question(s) · /questions` : undefined);
+    // The native dock and header present the waiting questions; the status line is for plain hosts only.
+    const native = this.presentation?.().surface === "panels";
+    this.ui?.setStatus("corral-owner-questions", pending.length && !native ? `${pending.length} owner question(s) · /questions` : undefined);
     if (this.active?.id && !pending.some(q => q.id === this.active?.id && q.status === "pending")) this.active.abort.abort();
     const next = Math.min(...pending.filter(q => q.status === "pending").map(q => q.expires));
     if (Number.isFinite(next) && this.ctx) {
@@ -345,7 +347,8 @@ export class OwnerQuestionUi {
       ...(choice.freeText === undefined ? {} : { freeText: choice.freeText }) }));
     const drafts = this.drafts.get(q.id) ?? [];
     this.drafts.set(q.id, drafts);
-    const shown = await askDialog(ui, questions, signal, { escape: "Esc keeps it pending", complete: true, drafts });
+    const shown = await askDialog(ui, questions, signal,
+      { ...this.presentation?.(), escape: "Esc keeps it pending", complete: true, drafts });
     if (signal.aborted) return undefined;
     if (shown && !shown.submitted) return undefined;
     const raw = shown?.answers ?? await sequential(ui, questions, signal);

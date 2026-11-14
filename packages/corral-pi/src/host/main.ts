@@ -202,7 +202,7 @@ export async function runHost(config: HostConfig, overrides: {
     verbose: false, resumeHint: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
     ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation),
       userPresentation: (text, bubble) => presentHostNotice(text, bubble, delivered => session.hostDelivered(delivered)),
-      errorPresentation: errorPresenter(() => session.latestStopCause()) } : {}),
+      errorPresentation: errorPresenter(() => session.latestStopCause()), ...panels.presentation() } : {}),
   });
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();

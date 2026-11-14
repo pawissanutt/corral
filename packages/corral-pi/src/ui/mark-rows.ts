@@ -5,7 +5,8 @@
 // what passed between the owner and a child read the same way. Marks are custom entries: Pi draws them live and again
 // on resume, and they never reach the model. A collapsed row clips and never wraps; when the row is too narrow the
 // least useful facts drop first (re-billed tokens, tool calls, the time, the duration, the resume hint, the cost) and
-// the reason clips last. A click or Ctrl+O opens the full text.
+// the reason clips last. A click or Ctrl+O opens the full text. `quietNote` draws a note row for a line Pi hands
+// corral (`notice-route.ts`): it is held in the transcript directly, not journaled, and opens the same way.
 import type { CustomEntry, EntryRenderOptions, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
@@ -204,8 +205,11 @@ export function markLine(row: MarkRow, room: number): { readonly line: string; r
   return { line: truncateToWidth(line, W, "…") + RESET, whole };
 }
 
-/** Every row the mark draws at `width`: one clipped row collapsed; expanded, the full text and every wait. */
-export function markLines(row: MarkRow, width: number, expanded: boolean): string[] {
+/**
+ * Every row the mark draws at `width`: one clipped row collapsed; expanded, the full text and every wait, `maxRows`
+ * of them under the line before the rest is counted.
+ */
+export function markLines(row: MarkRow, width: number, expanded: boolean, maxRows = EXPANDED_ROWS): string[] {
   // The row kit's geometry: one cell of padding each side.
   const pad = Math.max(0, Math.min(1, Math.floor((width - 1) / 2))), room = Math.max(1, width - pad * 2), margin = " ".repeat(pad);
   const { line, whole } = markLine(row, room);
@@ -228,7 +232,7 @@ export function markLines(row: MarkRow, width: number, expanded: boolean): strin
     for (const part of text.split("\n")) body.push(...(part.trim() === "" ? [""] : wrapTextWithAnsi(part, inner).map(text => PANEL_TEXT + text)));
   }
   for (const label of row.list ?? []) body.push(PANEL_MUTED + truncateToWidth(`○ ${label}`, inner, "…"));
-  const shown = body.slice(0, EXPANDED_ROWS);
+  const shown = body.slice(0, maxRows);
   const more = body.length - shown.length;
   if (more > 0) shown.push(PANEL_MUTED + truncateToWidth(`… ${more} more rows`, inner, "…"));
   return [...rows, ...shown.map(text => indent + text + RESET)];
@@ -242,7 +246,8 @@ interface Opened { readonly base: boolean; readonly open: boolean }
 const opened = new WeakMap<object, Opened>();
 
 class MarkRows implements Component {
-  constructor(private readonly row: MarkRow, private readonly entry: object, private readonly base: boolean) {}
+  constructor(private readonly row: MarkRow, private readonly entry: object, protected base: boolean,
+    private readonly maxRows = EXPANDED_ROWS) {}
   private expanded(): boolean {
     const state = opened.get(this.entry);
     return state && state.base === this.base ? state.open : this.base;
@@ -254,8 +259,24 @@ class MarkRows implements Component {
     return { handled: true };
   }
   render(width: number): string[] {
-    return markLines(this.row, width, this.expanded());
+    return markLines(this.row, width, this.expanded(), this.maxRows);
   }
+}
+
+/**
+ * A note row held in the transcript itself: Pi's tool-output toggle (Ctrl+O) reaches it through `setExpanded`. It is
+ * the only place its text is drawn, so expanded it shows every row; the transcript scrolls.
+ */
+class QuietNote extends MarkRows {
+  setExpanded(expanded: boolean): void { this.base = expanded; }
+}
+
+/**
+ * One quiet note row in the run-mark geometry, for a line that is not a journal entry: the first line of `text` is the
+ * row, the time of `at` right; a click or Ctrl+O shows the whole text under it, wrapped, every line.
+ */
+export function quietNote(text: string, tone: NoteMark["tone"], at: number): Component {
+  return new QuietNote(noteRow({ kind: "note", at, tone, text }), {}, false, Number.POSITIVE_INFINITY);
 }
 
 const isText = (value: unknown): value is string => typeof value === "string";

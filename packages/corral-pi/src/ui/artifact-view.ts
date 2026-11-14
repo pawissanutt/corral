@@ -6,7 +6,10 @@ import { getCapabilities, getImageDimensions, matchesKey, stripTerminalSequences
 import type { HostIdentity } from "../roles/types.ts";
 import { pad, plainLabel, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_TEXT, PANEL_WARNING } from "./panels-view.ts";
 import { onSurface, VIEW_INSET } from "./frame.ts";
-import { backLine, bold, cells, chip, chipHeader, fitColumns, headerRow, listRow, sectionRule, toneColor, wrap, type Tone } from "./panel-parts.ts";
+import {
+  backLine, bold, cells, chip, chipHeader, fitColumns, headerRow, listRow, sectionRule, stateBanner, stateRow, toneColor, wrap, type Tone,
+} from "./panel-parts.ts";
+import { readState, type ReadState } from "./read-state.ts";
 import { SPLIT_MIN } from "./proof-view.ts";
 
 /**
@@ -77,7 +80,9 @@ interface Opened { readonly reference: string; readonly title: string; readonly 
  */
 export class ArtifactView implements Component {
   current: ArtifactCatalog | undefined;
-  error = "Catalog not read"; stale = true; refreshing = false;
+  refreshing = false;
+  /** The last read's failure in plain words, and when it failed; cleared by a successful read. */
+  private error: string | undefined; private failedAt: number | undefined;
   marks: string[] = [];
   compare = false;
   notice = "";
@@ -91,22 +96,34 @@ export class ArtifactView implements Component {
   private hitWidth = 0; private backTo = 0;
   private readAt: number | undefined;
   constructor(private readonly options: ArtifactViewOptions) {}
+  /** A catalog read exists for this session: a reader and a bound task and run. */
+  get applicable(): boolean { return !!this.options.load && !!this.options.identity.task && !!this.options.identity.run; }
+  /** Where the catalog read stands. Retained rows keep their read time after a failed reread. */
+  get state(): ReadState {
+    return readState({ applicable: this.applicable, reason: this.options.load ? "no_task_run" : "no_reader", hasData: this.current !== undefined, stale: false,
+      refreshing: this.refreshing, checkedAt: this.readAt, error: this.error, failedAt: this.failedAt });
+  }
+  /** Rereads the catalog; nothing to do when no read applies. */
   refresh(): Promise<void> {
-    if (this.active || this.disposed) return this.active ?? Promise.resolve();
+    if (this.active || this.disposed || !this.applicable) return this.active ?? Promise.resolve();
     this.active = this.read().finally(() => { this.active = undefined; });
     return this.active;
   }
   private async read(): Promise<void> {
-    const { identity } = this.options;
+    const { identity, load } = this.options;
+    if (!load) return;
     this.refreshing = true; this.options.changed();
     try {
-      if (!this.options.load || !identity.task || !identity.run) throw new Error("No canonical task/run bound to this host");
-      const data = Schema.parse(await this.options.load());
-      if (data.task !== identity.task || data.run !== identity.run) throw new Error("Artifact catalog identity mismatch");
+      const data = Schema.parse(await load());
+      if (data.task !== identity.task || data.run !== identity.run) throw new Error(`the read returned ${data.task} / ${data.run}, not this session's task and run`);
       if (this.disposed) return;
-      this.current = data; this.stale = false; this.error = ""; this.readAt = Date.now();
+      this.current = data; this.error = undefined; this.failedAt = undefined; this.readAt = Date.now();
       this.selected ??= data.artifacts[0]?.reference;
-    } catch (error) { if (!this.disposed) { this.stale = true; this.error = error instanceof Error ? error.message : String(error); } }
+    } catch (error) {
+      if (this.disposed) return;
+      this.error = error instanceof z.ZodError ? "the read returned data of an unexpected shape" : error instanceof Error ? error.message : String(error);
+      this.failedAt = Date.now();
+    }
     finally { this.refreshing = false; if (!this.disposed) this.options.changed(); }
   }
   private entry(reference: string | undefined): Entry | undefined {
@@ -299,24 +316,22 @@ export class ArtifactView implements Component {
     const lines: string[] = []; this.hits.clear();
     const full = (text: string) => lines.push(...wrap(PANEL_TEXT + text, width));
     const { identity } = this.options, data = this.current, items = data?.artifacts ?? [];
-    const back = backLine("Proof", "Artifacts", `${identity.task ?? "unbound"} / ${identity.run ?? "unbound"}`, width);
+    const back = backLine("Proof", "Artifacts", `${identity.task ?? "no task"} / ${identity.run ?? "no run"}`, width);
     this.backTo = back.to; lines.push(back.line);
-    const bound = this.options.bound(), stale = this.stale || !bound;
+    const state = this.state, legend = this.options.legend?.() ?? false;
     const absent = items.filter(a => !a.purged && !a.available).length, purged = items.filter(a => a.purged).length;
     lines.push(...chipHeader([
-      stale ? chip("~ stale", "warn") : chip("canonical catalog"),
-      ...(bound ? [] : [chip("! unbound", "warn")]),
-      ...(this.refreshing ? [chip("reading… rows retained")] : []),
+      ...(state.phase === "not_applicable" ? [] : [chip("canonical catalog")]),
       ...(data ? [chip(`${items.length} ${items.length === 1 ? "artifact" : "artifacts"}, newest first`)] : []),
       ...(absent ? [chip(`! ${absent} absent`, "warn")] : []),
       ...(purged ? [chip(`○ ${purged} purged`)] : []),
       ...(data?.more ? [chip(`! GAP: newest ${items.length} rows only`, "warn")] : []),
       ...(data ? [chip(data.head ? `HEAD ${plainLabel(data.head).slice(0, 12)}` : "HEAD unavailable")] : []),
       ...this.marks.map((m, i) => chip(`${i ? "B" : "A"} ${stripTerminalSequences(truncateToWidth(plainLabel(this.entry(m)?.title ?? m), 24, "…"))}`)),
-    ], width, this.readAt, Date.now()));
-    if (stale) full(`${PANEL_WARNING}~ STALE / disconnected · ${plainLabel(this.error || "retained catalog; reconcile")}${PANEL_TEXT}`);
+    ], width, state, Date.now(), { unbound: !this.options.bound() }));
+    lines.push(...stateBanner(state, "artifact catalog", width, legend));
     if (this.notice) full(PANEL_TEXT + plainLabel(this.notice));
-    if (this.options.legend?.()) {
+    if (legend) {
       full(`${PANEL_MUTED}Read-only canonical catalog at the last reconcile, not a live subscription. Viewers start only on Enter or o, never on focus or selection.${PANEL_TEXT}`);
       full(`${PANEL_MUTED}Bound worktree HEAD ${plainLabel(data?.head ?? "unavailable")} at read · a SHA, not a freshness verdict. Artifact rows record no candidate; only evidence links carry a registration HEAD.${PANEL_TEXT}`);
       full(`${PANEL_MUTED}✓ present · ! ABSENT: no snapshot file or live blob at read · ○ purged: metadata only. A and B mark the two artifacts chosen with m, in your selection order.${PANEL_TEXT}`);
@@ -324,7 +339,12 @@ export class ArtifactView implements Component {
       const caveat = CAVEAT.find(c => visibleWidth(c) <= width) ?? CAVEAT.at(-1) ?? "";
       lines.push(PANEL_MUTED + truncateToWidth(caveat, width, "…") + PANEL_TEXT);
     }
-    if (!data) { full(`${PANEL_MUTED}Unavailable · no empty catalog inferred${PANEL_TEXT}`); return lines; }
+    if (!data) {
+      const why = state.phase === "failed" ? "No catalog shown · nothing is inferred from its absence"
+        : identity.task && identity.run ? "this host has no artifact catalog reader." : "this session has no task run.";
+      lines.push(...stateRow(state, "artifact catalog", width, why));
+      return lines;
+    }
     if (!items.length) { full(`${PANEL_MUTED}${data.more ? "No rows in this window" : "No artifacts registered for this task"}${PANEL_TEXT}`); return lines; }
     if (this.selected !== undefined && !this.entry(this.selected)) full(`${PANEL_WARNING}! Selected artifact no longer in this window · j/k selects an existing row${PANEL_TEXT}`);
     const index = Math.max(0, items.findIndex(a => a.reference === this.selected)), entry = items[index];

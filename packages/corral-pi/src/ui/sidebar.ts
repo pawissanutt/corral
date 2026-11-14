@@ -4,9 +4,11 @@
 // movement, so new items never move it. Every state carries a glyph or word next to its colour. The
 // only key cap is the sidebar toggle's (`Ctrl+B`, or the key Panels chose); nothing here fills a
 // background except the selected row. Until the owner picks a tab the sidebar shows the most useful
-// one (`autoTab`), and never changes it while it has the focus.
+// one (`autoTab`), and never changes it while it has the focus. Plan is the session's one plan
+// presentation in every role and at every width; its full ledger opens in the shared pager.
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
-import type { TodoProgress } from "./todo-widget.ts";
+import { planStepDetail, STEP_GLYPH, WAIT_GLYPH, type PlanSource } from "./plan-detail.ts";
+import type { TodoProgress } from "./todo.ts";
 import { keyCap, rule, spinner } from "./frame.ts";
 import { COMPACT_COLUMNS } from "./header.ts";
 import { splitRow } from "./panels-chrome.ts";
@@ -29,15 +31,16 @@ export interface SideSource {
   readonly jobs: readonly SideJob[] | null;
   readonly files: { readonly scope: string; readonly state: "ok" | "loading" | "error" | "choose";
     readonly error?: string; readonly list: readonly SideFile[] };
-  readonly plan: { readonly progress: TodoProgress | null; readonly stale: boolean };
+  readonly plan: PlanSource;
   readonly bound: boolean;
   /** ANSI foreground for an agent hue index. */
   readonly color: (hue: number) => string;
   /** Key of the agent the Agents view selects while its list has the focus; its row is drawn selected. */
   readonly current?: string;
 }
+/** What Enter or a click on a row opens; `plan` is the plan's heading (`step` undefined) or one of its steps. */
 export type SideTarget = { readonly kind: "agent" | "job"; readonly key: string } | { readonly kind: "file"; readonly path: string }
-  | { readonly kind: "step"; readonly id: string } | { readonly kind: "scope" };
+  | { readonly kind: "plan"; readonly step: string | undefined } | { readonly kind: "scope" };
 /** A pointer target on one frame line; `from` inclusive, `to` exclusive, in cells from the frame's left edge. */
 export interface SideHit { readonly from: number; readonly to: number;
   readonly tab?: SideTab; readonly target?: SideTarget; readonly page?: -1 | 1; readonly toggle?: true }
@@ -127,7 +130,7 @@ function targetKey(target: SideTarget): string {
   switch (target.kind) {
     case "agent": case "job": return `${target.kind}:${target.key}`;
     case "file": return `file:${target.path}`;
-    case "step": return `step:${target.id}`;
+    case "plan": return target.step === undefined ? "plan" : `plan:${target.step}`;
     case "scope": return "scope";
   }
 }
@@ -207,26 +210,50 @@ function fileBlocks(source: SideSource): Block[] {
   });
 }
 
-function planBlocks(source: SideSource, fold: boolean): Block[] {
+/** At most three muted rows under the open step: its id and criteria, its waits, its drop reason. The pager has them all. */
+function detailRows(progress: TodoProgress, step: string): Row[] {
+  const facts = planStepDetail(progress, step);
+  if (!facts) return [];
+  const rows: Row[] = [{ left: "  " + PANEL_MUTED + facts.id + (facts.criteria.length ? ` · criteria ${facts.criteria.join(", ")}` : "") }];
+  for (const wait of facts.waits) {
+    rows.push({ left: "  " + (wait.kind === "owner" ? PANEL_WARNING : PANEL_MUTED) + WAIT_GLYPH[wait.kind] + " " + PANEL_MUTED + wait.text });
+  }
+  if (facts.droppedReason !== undefined) rows.push({ left: "  " + PANEL_MUTED + STEP_GLYPH.dropped + " dropped: " + facts.droppedReason });
+  return rows.slice(0, 3);
+}
+
+/**
+ * The Plan body. The plan's own item leads: the heading `PLAN <plan> · r<n>` (the id goes first when narrow),
+ * the `d/n done` count with `· stale`, and the legend of the wait marks the steps show. Under pressure (`fold`)
+ * that item is one row and finished steps fold into `✓ n done`. `open` names the step whose detail shows under it.
+ */
+function planBlocks(source: SideSource, fold: boolean, open?: string): Block[] {
   const { progress, stale } = source.plan;
-  const phases = progress?.phases ?? [], steps = phases.flatMap(phase => phase.steps);
-  if (!steps.length) return [note("no plan yet")];
-  const waits = new Map(progress?.waits?.map(wait => [wait.step, wait.on.kind] as const) ?? []);
+  if (!progress) return [note("no plan yet")];
+  const phases = progress.phases, steps = phases.flatMap(phase => phase.steps);
+  // A step waiting on both shows the owner's mark: that one needs the owner.
+  const waits = new Map<string, "owner" | "event">();
+  for (const wait of progress.waits ?? []) if (waits.get(wait.step) !== "owner") waits.set(wait.step, wait.on.kind);
   const done = steps.filter(step => step.status.state === "done").length;
-  const head = PANEL_MUTED + `${done}/${steps.length} done` + (stale ? PANEL_WARNING + " · stale" : "");
-  // The wait marks shown on the right are explained in the heading: on a row of their own, or after the
-  // count when finished steps fold under pressure.
+  const plan = progress.plan === undefined ? "" : plainLabel(progress.plan), revision = `r${progress.revision}`;
+  const count = steps.length ? PANEL_MUTED + `${done}/${steps.length} done` + (stale ? PANEL_WARNING + " · stale" : "")
+    : PANEL_MUTED + "no steps yet" + (stale ? PANEL_WARNING + " · stale" : "");
+  // Heading variants, longest first: the plan id goes, then the word PLAN.
+  const titles = [...(plan ? [`PLAN ${plan} · ${revision}`] : []), `PLAN ${revision}`, revision];
+  const title = (room: number) => PANEL_MUTED + (titles.find(text => visibleWidth(text) <= room) ?? revision);
+  // The wait marks shown on the right are explained here: on a row of their own, or after the count when folded.
   const marks = new Set(steps.filter(step => !fold || step.status.state !== "done").flatMap(step => {
     const kind = waits.get(step.id);
-    return kind === "owner" || kind === "event" ? [kind] : [];
+    return kind ? [kind] : [];
   }));
-  const blocks: Block[] = [!marks.size || !fold ? { rows: [{ left: head }] } : { rows: [{ left: (room: number) => {
-    const text = waitLegend(marks, room - visibleWidth(head) - 3);
-    return head + (text ? PANEL_MUTED + " · " + text : "");
-  } }] }];
-  if (marks.size && !fold) blocks.push({ rows: [{ left: (room: number) => waitLegend(marks, room) }] });
+  const rows: Row[] = fold ? [{ left: (room: number) => {
+    const lead = title(room - visibleWidth(count) - 3) + PANEL_MUTED + " · " + count;
+    const legend = marks.size ? waitLegend(marks, room - visibleWidth(lead) - 3) : "";
+    return lead + (legend ? PANEL_MUTED + " · " + legend : "");
+  } }] : [{ left: title }, { left: count }, ...(marks.size ? [{ left: (room: number) => waitLegend(marks, room) }] : [])];
+  const blocks: Block[] = [{ rows, item: { key: targetKey({ kind: "plan", step: undefined }), target: { kind: "plan", step: undefined } } }];
   // Under pressure finished steps fold into one line so the open ones stay in view.
-  if (fold && done) blocks.push({ rows: [{ left: PANEL_SUCCESS + "✓" + PANEL_MUTED + ` ${done} done` }] });
+  if (fold && done) blocks.push({ rows: [{ left: PANEL_SUCCESS + STEP_GLYPH.done + PANEL_MUTED + ` ${done} done` }] });
   let running = 0;
   for (const phase of phases) {
     const shown = phase.steps.filter(step => !fold || step.status.state !== "done");
@@ -234,12 +261,13 @@ function planBlocks(source: SideSource, fold: boolean): Block[] {
     if (phases.length > 1) blocks.push(heading(plainLabel(phase.label)));
     for (const step of shown) {
       const state = step.status.state, wait = waits.get(step.id);
-      const [mark, markColor, textColor]: readonly [string, string, string] = state === "done" ? ["✓", PANEL_SUCCESS, PANEL_MUTED]
-        : state === "in_progress" ? [spinner(Date.now(), running++), PANEL_BLUE, PANEL_TEXT] : state === "dropped" ? ["–", PANEL_MUTED, PANEL_MUTED]
-        : ["○", PANEL_MUTED, PANEL_TEXT];
-      const right = wait === "owner" ? PANEL_WARNING + "?" : wait === "event" ? PANEL_MUTED + "…" : "";
-      blocks.push({ rows: [{ left: markColor + mark + " " + textColor + plainLabel(step.label), ...(right ? { right } : {}) }],
-        item: { key: targetKey({ kind: "step", id: step.id }), target: { kind: "step", id: step.id } } });
+      const [mark, markColor, textColor]: readonly [string, string, string] = state === "done" ? [STEP_GLYPH.done, PANEL_SUCCESS, PANEL_MUTED]
+        : state === "in_progress" ? [spinner(Date.now(), running++), PANEL_BLUE, PANEL_TEXT]
+        : state === "dropped" ? [STEP_GLYPH.dropped, PANEL_MUTED, PANEL_MUTED] : [STEP_GLYPH.pending, PANEL_MUTED, PANEL_TEXT];
+      const right = wait === "owner" ? PANEL_WARNING + WAIT_GLYPH.owner : wait === "event" ? PANEL_MUTED + WAIT_GLYPH.event : "";
+      const target: SideTarget = { kind: "plan", step: step.id };
+      blocks.push({ rows: [{ left: markColor + mark + " " + textColor + plainLabel(step.label), ...(right ? { right } : {}) },
+        ...(step.id === open ? detailRows(progress, step.id) : [])], item: { key: targetKey(target), target } });
     }
   }
   return blocks;
@@ -464,6 +492,10 @@ export class Sidebar {
   }
 
   nextTab(): void { this.shift(1); }
+  /** Turns the active tab's page like PgUp/PgDn (`/todo up|down` on Plan): `direction` below 0 back, above 0 forward. */
+  page(direction: number, source: SideSource): void {
+    if (direction !== 0) this.turn(direction < 0 ? -1 : 1, this.items(source));
+  }
 
   handleKey(data: string, source: SideSource): { readonly handled: boolean; readonly open?: SideTarget; readonly leave?: boolean } {
     if (matchesKey(data, "left") || data === "h") { this.shift(-1); return { handled: true }; }
@@ -503,11 +535,21 @@ export class Sidebar {
     this.tab = TABS[(TABS.indexOf(this.tab) + delta + TABS.length) % TABS.length] ?? "context";
     this.changed();
   }
+  /**
+   * Plan folds finished steps when it overflows. While the sidebar has the focus the selected step shows its
+   * detail under it, unless that alone would make the plan overflow or the block cannot fit beside the pager row.
+   */
   private blocks(source: SideSource, capacity: number): Block[] {
     if (this.tab === "context") return contextBlocks(source);
     if (this.tab === "files") return fileBlocks(source);
-    const full = planBlocks(source, false);
-    return lineCount(full) > capacity ? planBlocks(source, true) : full;
+    const full = planBlocks(source, false), fold = lineCount(full) > capacity;
+    const base = fold ? planBlocks(source, true) : full;
+    if (!this.focused) return base;
+    const items = base.flatMap(block => block.item ? [block.item] : []), target = items[this.resolve(this.states.plan, items)]?.target;
+    if (target?.kind !== "plan" || target.step === undefined) return base;
+    const detailed = planBlocks(source, fold, target.step), key = targetKey(target);
+    const open = detailed.find(block => block.item?.key === key)?.rows.length ?? 0;
+    return (lineCount(base) > capacity || lineCount(detailed) <= capacity) && open <= capacity - 1 ? detailed : base;
   }
   private items(source: SideSource): Item[] {
     return this.blocks(source, this.states[this.tab].capacity).flatMap(block => block.item ? [block.item] : []);

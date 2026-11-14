@@ -7,11 +7,10 @@ import { assetRoot, readAsset } from "../src/roles/common/assets.ts";
 import { REQUEST_ASSET, REQUEST_OFF_ASSET, sessionTodoTool } from "../src/roles/common/todo.ts";
 import assistant from "../src/roles/assistant/index.ts";
 import pm from "../src/roles/pm/index.ts";
-import { ProgressSchema, TodoWidget } from "../src/ui/todo-widget.ts";
+import { ProgressSchema } from "../src/ui/todo.ts";
 
 const cases = JSON.parse(readFileSync(new URL("./fixtures/disposition-cases.json", import.meta.url), "utf8")) as
   { name: string; progress: unknown; disposition: unknown }[];
-const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 
 for (const item of cases) {
   test(`disposition mirrors corral-core: ${item.name}`, () => {
@@ -61,23 +60,6 @@ test("a stopped continuation is reported only for the revision it stopped", () =
   // Then only the current revision's stop reaches the summary.
   expect(summarize(progress, stopped)?.stopped).toBe("no_progress");
   expect(summarize(progress, { ...stopped, revision: 8 })?.stopped).toBeNull();
-});
-
-test("the widget and the model summary name the same plan identity and revision", () => {
-  // Given one canonical ledger.
-  const progress = plan(2);
-  const widget = new TodoWidget(theme, () => 40, () => {});
-  widget.update(progress);
-  // Then the widget header and the summary both say P3 at revision 9.
-  expect(widget.render(80)[0]).toContain("P3 r9");
-  expect(summaryText(summarize(progress, null)!)).toContain("P3 revision 9");
-});
-
-test("waits are visible in the expanded widget", () => {
-  const widget = new TodoWidget(theme, () => 80, () => {});
-  widget.update(plan(2));
-  widget.toggle();
-  expect(widget.render(200).join("\n")).toContain("Which project?");
 });
 
 const variants = [
