@@ -442,6 +442,8 @@ pub struct AgentHostHead {
     pub todo: Option<crate::RunProgress>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_hold: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paid_episode: Option<crate::paid_episode::PaidLink>,
 }
 
 impl AgentHostHead {
@@ -452,6 +454,7 @@ impl AgentHostHead {
             binding: state.binding.clone(),
             todo: state.todo.clone(),
             question_hold: state.question_hold.clone(),
+            paid_episode: state.paid_episode.clone(),
         }
     }
 }

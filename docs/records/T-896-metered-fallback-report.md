@@ -47,3 +47,18 @@ No owner credential was read or migrated, no external model request or quota pro
 Context-free API launch/preflight remains fail-closed. This member exposes the canonical accounting and transfer seams; **T-897 must install the normal six-role continuation/context/launch integration and wire `createApiCatalog(..., budget.physical)` before paid traffic can be enabled through separately approved configuration**. This report does not claim all-role end-to-end continuation. There is no owner-facing activation or allowance-revision workflow in this increment. Retired-generation ordinary settlements refuse; without a separately trusted durable-completion reconciler their reservations remain charged indefinitely.
 
 Lifecycle consumers must use their existing role delivery claim, persist the source native fence and `save_paid_episode` in the same Store transaction, bind the exact prepared successor normally, then atomically activate it. Money grants neither tool/action authority nor permission to replay uncertain work. Terminal/revocation integration must likewise close the episode and native binding together. An allowance/configuration reload must never create another root or reset this ledger.
+
+## Head-projection repair
+
+`AgentHostHead` retains the optional canonical paid-episode link when native lifecycle
+appends rewrite a container row. Its serde defaults keep legacy heads readable and omit
+absent links; full-task scalar edits copy the same field back into `AgentRunState`.
+
+`native_paid_episode_heads` covers activation, a head-only turn append, store reopen,
+full/head reconstruction and admission through the recovered link.
+`paid_replacement_preserves_independent_money_and_token_caps` carries settled and
+uncertain usage into a replacement with both existing caps enabled: precisely 50 tokens
+and 50,000 nanos remain, despite 150,000 nanos remaining in the separate paid allowance.
+It checks each cap independently and consumes exactly the remaining container allowance.
+These repair tests have not been compiled or run by the repair worker; the orchestrator
+must compile and execute them.
