@@ -114,7 +114,7 @@ test("Pi owns compaction and unexpected SDK compaction cannot bless a replay", a
   expect(message.errorMessage).toContain("claude_compaction_conflict");
   expect(message.diagnostics?.find(diagnostic => diagnostic.type === "claude_cache"))
     .toMatchObject({ details: { usageReported: false, inputTokens: null, hitRate: null } });
-  expect(run.options[0]?.settings).toEqual({ autoCompactEnabled: false });
+  expect(run.options[0]?.settings).toEqual({ autoCompactEnabled: false, autoMemoryEnabled: false });
   expect(run.closes).toBe(1);
 });
 
