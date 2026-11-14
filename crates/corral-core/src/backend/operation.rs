@@ -50,6 +50,7 @@ pub enum OpKind {
     Claim,
     ReleaseClaim,
     PutRecords,
+    CommitPaidEpisode,
     BindSession,
     ObserveCondition,
     ClearCondition,
@@ -69,7 +70,7 @@ pub enum OpKind {
 }
 
 impl OpKind {
-    pub const ALL: [OpKind; 33] = [
+    pub const ALL: [OpKind; 34] = [
         Self::CreateTask,
         Self::UpdateTask,
         Self::AppendEvents,
@@ -87,6 +88,7 @@ impl OpKind {
         Self::Claim,
         Self::ReleaseClaim,
         Self::PutRecords,
+        Self::CommitPaidEpisode,
         Self::BindSession,
         Self::ObserveCondition,
         Self::ClearCondition,
@@ -655,6 +657,7 @@ pub enum Operation {
     Claim(Claim),
     ReleaseClaim(ReleaseClaim),
     PutRecords(PutRecords),
+    CommitPaidEpisode(super::CommitPaidEpisode),
     BindSession(BindSession),
     ObserveCondition(ObserveCondition),
     ClearCondition(ClearCondition),
@@ -685,6 +688,7 @@ impl Operation {
             Self::Claim(_) => OpKind::Claim,
             Self::ReleaseClaim(_) => OpKind::ReleaseClaim,
             Self::PutRecords(_) => OpKind::PutRecords,
+            Self::CommitPaidEpisode(_) => OpKind::CommitPaidEpisode,
             Self::BindSession(_) => OpKind::BindSession,
             Self::ObserveCondition(_) => OpKind::ObserveCondition,
             Self::ClearCondition(_) => OpKind::ClearCondition,
@@ -708,6 +712,7 @@ impl Operation {
     pub fn task_change(&self) -> Option<&TaskChange> {
         match self {
             Self::UpdateTask(op) => Some(&op.change),
+            Self::CommitPaidEpisode(op) => op.task.as_ref().map(|task| &task.change),
             Self::Comment(op) => Some(&op.change),
             Self::Done(op) => Some(&op.change),
             Self::Verdict(op) => Some(&op.change),

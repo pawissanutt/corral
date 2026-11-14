@@ -44,6 +44,8 @@ pub mod launch;
 #[cfg(test)]
 mod nested_tests;
 pub(crate) mod ops;
+#[cfg(test)]
+mod paid_budget_tests;
 pub mod pi;
 pub mod pi_build;
 pub(crate) mod pm_event_wake;

@@ -128,6 +128,13 @@ fn op_reservations(op: &Operation) -> Vec<ReservationUse> {
         Operation::CreateTask(op) => op.reservations.clone(),
         Operation::AppendEvents(op) => op.reservations.clone(),
         Operation::PutRecords(op) => op.reservations.clone(),
+        Operation::CommitPaidEpisode(op) => op
+            .records
+            .reservations
+            .iter()
+            .chain(op.task.iter().flat_map(|t| &t.change.reservations))
+            .cloned()
+            .collect(),
         Operation::Claim(op) => op.reservations.clone(),
         other => other
             .task_change()
@@ -177,6 +184,20 @@ impl Tx<'_> {
                     self.append_event(event)?;
                 }
                 Ok(Outcome::Applied)
+            }
+            Operation::CommitPaidEpisode(op) => {
+                op.validate()?;
+                self.put_record(&op.episode)?;
+                for write in &op.records.writes {
+                    self.put_record(write)?;
+                }
+                for event in op.records.events {
+                    self.append_event(event)?;
+                }
+                match op.task {
+                    Some(task) => self.write_task(&task.change, task.form, Vec::new()),
+                    None => Ok(Outcome::Applied),
+                }
             }
             Operation::BindSession(op) => self.bind_session(op),
             Operation::ObserveCondition(op) => self.observe_condition(op),

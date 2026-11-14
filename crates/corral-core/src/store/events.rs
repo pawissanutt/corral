@@ -329,6 +329,14 @@ impl Store {
         let staged = std::mem::take(&mut *unit.gate.borrow_mut());
         change.reservations.extend(staged.reservations);
         let authorization = unit.authorization.borrow_mut().take();
+        anyhow::ensure!(
+            !change
+                .records
+                .iter()
+                .any(|w| w.area == crate::paid_episode::AREA)
+                || (authorization.is_none() && staged.start.is_none() && staged.result.is_none()),
+            "a paid financial commit cannot be hidden inside a gate/authorization operation"
+        );
         match (authorization, staged.start, staged.result) {
             (Some(_), _, Some(_)) => {
                 anyhow::bail!("a gate result cannot commit with an authorization")
@@ -355,7 +363,9 @@ impl Store {
                 attempt,
                 form,
             })),
-            (None, None, None) => Ok(Operation::UpdateTask(UpdateTask { change, form })),
+            (None, None, None) => {
+                Operation::UpdateTask(UpdateTask { change, form }).with_paid_episode()
+            }
         }
     }
 
@@ -399,11 +409,14 @@ impl Store {
         }
         self.db
             .backend
-            .apply(Operation::PutRecords(PutRecords {
-                writes,
-                events: Vec::new(),
-                reservations: Vec::new(),
-            }))
+            .apply(
+                Operation::PutRecords(PutRecords {
+                    writes,
+                    events: Vec::new(),
+                    reservations: Vec::new(),
+                })
+                .with_paid_episode()?,
+            )
             .map_err(super::write::apply_error)
             .context("writing records")?;
         Ok(())
@@ -461,11 +474,14 @@ impl Store {
             if !writes.is_empty() || !events.is_empty() {
                 self.db
                     .backend
-                    .apply(Operation::PutRecords(PutRecords {
-                        writes,
-                        events,
-                        reservations: Vec::new(),
-                    }))
+                    .apply(
+                        Operation::PutRecords(PutRecords {
+                            writes,
+                            events,
+                            reservations: Vec::new(),
+                        })
+                        .with_paid_episode()?,
+                    )
                     .map_err(super::write::apply_error)
                     .context("committing record unit")?;
             }

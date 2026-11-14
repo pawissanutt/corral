@@ -643,7 +643,9 @@ impl AvailabilityEpisode {
             if self.attempts.iter().any(|a| a.candidate == candidate.id) {
                 continue;
             }
-            let refusal = if exhausted_accounts.contains(candidate.connection.as_str()) {
+            let refusal = if let Some(reason) = crate::paid_fallback::refusal(self, candidate) {
+                Some(reason)
+            } else if exhausted_accounts.contains(candidate.connection.as_str()) {
                 Some("its connection shares the exhausted account quota".to_owned())
             } else if excluded_family(exclude_provider, candidate) {
                 Some("it would violate the cross-family review policy".to_owned())
@@ -742,9 +744,13 @@ impl crate::AvailabilityFallback {
             candidate.provider
         );
         match &candidate.cost {
-            crate::CandidateCost::Unknown | crate::CandidateCost::Subscription => ensure!(
+            crate::CandidateCost::Unknown => ensure!(
                 self.allow_unknown_subscription_cost && self.spending.is_none(),
                 "unknown cost requires explicit permission and cannot satisfy a numeric cap"
+            ),
+            crate::CandidateCost::Subscription => ensure!(
+                self.allow_unknown_subscription_cost,
+                "subscription estimates require explicit permission; they are not paid spending"
             ),
             crate::CandidateCost::Metered {
                 currency,

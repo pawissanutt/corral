@@ -65,6 +65,8 @@ pub mod model_family;
 pub mod obligations;
 pub mod operating;
 pub mod origin;
+pub mod paid_episode;
+pub mod paid_fallback;
 pub mod park;
 pub mod pins;
 pub mod plan;

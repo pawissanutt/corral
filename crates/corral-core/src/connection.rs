@@ -90,11 +90,12 @@ impl ConnectionId {
         Ok(connection)
     }
 
-    /// First member of T-888: canonical PaidEpisode admission has not landed yet.
+    /// Context-free launch/preflight cannot prove an episode or a safe role continuation.
+    /// Canonical budget admission uses its authenticated native binding instead.
     pub fn require_admission(self) -> Result<()> {
         ensure!(
             !self.api_key(),
-            "paid_admission_required: API connections are disabled until canonical metered admission is installed"
+            "paid_admission_required: API launch requires an approved canonical episode and configured role continuation lifecycle"
         );
         Ok(())
     }

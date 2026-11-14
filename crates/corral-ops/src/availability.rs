@@ -16,6 +16,7 @@ use serde_json::json;
 use crate::Ctx;
 
 mod executor;
+mod paid;
 mod review;
 pub(crate) use executor::{advance_all, review_continuation_due};
 pub(crate) use review::{
@@ -114,10 +115,20 @@ pub(crate) fn governed(ctx: &Ctx, run: &Run) -> bool {
 }
 
 fn matching<'a>(metadata: &'a ProfileMetadata, run: &Run) -> Option<&'a ExecutionCandidate> {
-    metadata.candidates.iter().find(|candidate| {
+    // A malformed frozen binding is not a legacy unbound run.
+    let frozen = paid::frozen(run).ok()?;
+    let selected = run.execution.as_ref().and_then(|s| s.candidate.as_ref());
+    let mut matches = metadata.candidates.iter().filter(|candidate| {
         run.harness.as_deref() == Some(candidate.harness.as_str())
             && run.model.as_deref() == Some(candidate.model.as_str())
-    })
+            && selected.is_none_or(|s| s.candidate == candidate.id)
+            && frozen.as_ref().is_none_or(|b| {
+                b.identity == candidate.connection
+                    && b.candidate.as_ref().is_none_or(|id| id == &candidate.id)
+            })
+    });
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
 }
 
 pub(crate) struct Failed<'a> {
@@ -260,7 +271,11 @@ pub(crate) fn assess(ctx: &Ctx, failed: &Failed<'_>, now: Timestamp) -> Result<A
                 candidate.model,
             );
             episode.advance(&candidate, &reason, now)?;
-            save(ctx, &episode)?;
+            if let Err(error) = paid::save_selection(ctx, &mut episode, failed, &candidate) {
+                return Ok(Assessment::Stop(format!(
+                    "paid fallback selection refused: {error:#}"
+                )));
+            }
             ctx.store.log_event(
                 task,
                 "availability_fallback_selected",
@@ -454,7 +469,9 @@ pub(crate) fn before_start(
         if skipped.len() > usize::try_from(policy.max_switches).unwrap_or(usize::MAX) {
             break;
         }
-        let refusal = if corral_core::excluded_family(exclude_provider, candidate) {
+        let refusal = if corral_core::paid_fallback::is_api(candidate) {
+            Some("paid fallback requires confirmed subscription quota, not a before-start access failure".to_owned())
+        } else if corral_core::excluded_family(exclude_provider, candidate) {
             Some("it would violate the cross-family review policy".to_owned())
         } else if let Err(error) = policy.admits(candidate) {
             Some(format!("{error:#}"))

@@ -107,6 +107,9 @@ pub struct AgentRunState {
     /// Cumulative reservations and settled usage; never rewind with a session cursor.
     #[serde(default)]
     pub budget: super::BudgetLedger,
+    /// Canonical financial lineage, never supplied by the host or recreated on restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paid_episode: Option<crate::paid_episode::PaidLink>,
     /// PM only: what retention kept of the generations it retired. Absent until the first
     /// retirement, which is one-way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,6 +134,7 @@ impl AgentRunState {
             rewinds: Vec::new(),
             usage_sessions: Vec::new(),
             budget: super::BudgetLedger::default(),
+            paid_episode: None,
             retired: None,
         }
     }
