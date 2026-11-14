@@ -78,6 +78,8 @@ pub struct Client {
     cmd_capable: bool,
     #[cfg(unix)]
     classic_capable: bool,
+    #[cfg(unix)]
+    device_capable: bool,
 }
 
 impl Client {
@@ -121,6 +123,7 @@ impl Client {
             read_capable: false,
             cmd_capable: false,
             classic_capable: false,
+            device_capable: false,
         };
         let welcome: Welcome = client.request_with_timeout(
             corral_protocol::HELLO,
@@ -134,6 +137,7 @@ impl Client {
                     corral_protocol::read::READ_V1.into(),
                     corral_protocol::cmd::CMD_V1.into(),
                     corral_protocol::CLASSIC_V1.into(),
+                    corral_protocol::device::DEVICE_V1.into(),
                 ],
                 client: ClientInfo {
                     kind: "cli".into(),
@@ -160,12 +164,96 @@ impl Client {
             .caps
             .iter()
             .any(|cap| cap == corral_protocol::CLASSIC_V1);
+        client.device_capable = welcome
+            .caps
+            .iter()
+            .any(|cap| cap == corral_protocol::device::DEVICE_V1);
         Ok(client)
     }
 
     #[cfg(not(unix))]
     pub fn connect_at(_socket: &Path) -> Result<Option<Self>> {
         Ok(None)
+    }
+
+    #[cfg(unix)]
+    fn require_devices(&self) -> Result<()> {
+        if !self.device_capable {
+            bail!("corrald does not offer device commands; restart it with this corral version");
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    pub fn pair_begin(&mut self) -> Result<corral_protocol::device::PairOffer> {
+        use corral_protocol::device::*;
+        self.require_devices()?;
+        self.request_with_timeout(PAIR_BEGIN, PairBegin {}, IO_TIMEOUT)
+    }
+
+    #[cfg(unix)]
+    pub fn pair_status(
+        &mut self,
+        pair_id: &str,
+        wait: Duration,
+    ) -> Result<corral_protocol::device::PairStatus> {
+        use corral_protocol::device::*;
+        self.require_devices()?;
+        let wait = wait.min(Duration::from_secs(25));
+        self.request_with_timeout(
+            PAIR_STATUS,
+            PairStatusQuery {
+                pair_id: pair_id.into(),
+                wait_ms: wait.as_millis() as u32,
+            },
+            wait + Duration::from_secs(5),
+        )
+    }
+
+    #[cfg(unix)]
+    pub fn pair_confirm(&mut self, pair_id: &str) -> Result<corral_protocol::device::DeviceInfo> {
+        use corral_protocol::device::*;
+        self.require_devices()?;
+        self.request_with_timeout(
+            PAIR_CONFIRM,
+            PairConfirm {
+                pair_id: pair_id.into(),
+            },
+            IO_TIMEOUT,
+        )
+    }
+
+    #[cfg(unix)]
+    pub fn pair_cancel(&mut self, pair_id: &str) -> Result<()> {
+        use corral_protocol::device::*;
+        self.require_devices()?;
+        self.request_with_timeout(
+            PAIR_CANCEL,
+            PairCancel {
+                pair_id: pair_id.into(),
+            },
+            IO_TIMEOUT,
+        )
+    }
+
+    #[cfg(unix)]
+    pub fn devices(&mut self) -> Result<Vec<corral_protocol::device::DeviceInfo>> {
+        use corral_protocol::device::*;
+        self.require_devices()?;
+        self.request_with_timeout(DEVICE_LIST, DeviceList {}, IO_TIMEOUT)
+    }
+
+    #[cfg(unix)]
+    pub fn revoke(&mut self, device: &str) -> Result<corral_protocol::device::DeviceInfo> {
+        use corral_protocol::device::*;
+        self.require_devices()?;
+        self.request_with_timeout(
+            DEVICE_REVOKE,
+            DeviceRevoke {
+                device: device.into(),
+            },
+            IO_TIMEOUT,
+        )
     }
 
     #[cfg(unix)]

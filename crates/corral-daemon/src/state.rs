@@ -26,6 +26,8 @@ pub(crate) struct Shared {
     /// The command service once `commands::start` ran; `None` answers `unavailable`.
     #[cfg(unix)]
     pub commands: Mutex<Option<std::sync::Arc<crate::commands::Service>>>,
+    #[cfg(unix)]
+    pub devices: Mutex<Option<std::sync::Arc<crate::devices::Devices>>>,
 }
 
 pub(crate) struct State {
@@ -37,6 +39,7 @@ pub(crate) struct State {
     pub projection_wake: u64,
     pub completed_seq: u64,
     pub workers: usize,
+    pub app_workers: usize,
     pub started: Option<Instant>,
     pub started_at: Option<String>,
     pub finished: Option<Instant>,
@@ -73,6 +76,8 @@ impl Shared {
             classic_force: AtomicBool::new(false),
             #[cfg(unix)]
             commands: Mutex::new(None),
+            #[cfg(unix)]
+            devices: Mutex::new(None),
             state: Mutex::new(State {
                 stop: false,
                 closed: false,
@@ -82,6 +87,7 @@ impl Shared {
                 completed_seq: 0,
                 projection_wake: 0,
                 workers: 0,
+                app_workers: 0,
                 started: None,
                 started_at: None,
                 finished: None,
@@ -114,6 +120,14 @@ impl Shared {
         self.projection
             .lock()
             .unwrap_or_else(|error| error.into_inner())
+    }
+
+    #[cfg(unix)]
+    pub fn devices(&self) -> Option<std::sync::Arc<crate::devices::Devices>> {
+        self.devices
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 
     pub fn epoch(&self) -> u64 {

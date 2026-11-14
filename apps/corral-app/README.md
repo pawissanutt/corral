@@ -1,6 +1,6 @@
 # Corral app
 
-Corral is a Rust app built on [NSH 0.5.0](https://nsh.dev), with desktop, web, phone and terminal forms. The crate is `nsh-app-corral` and its root component is `App`. By default it presents the interactive mockup's content using fixtures in `src/model/`, and actions change local state only. Started with a daemon socket, a native build shows `corrald`'s health and board instead; see [Live data](#live-data).
+Corral is a Rust app built on [NSH 0.5.0](https://nsh.dev), with desktop, web, phone and terminal forms. The crate is `nsh-app-corral` and its root component is `App`. By default it presents the interactive mockup's content using fixtures in `src/model/`, and actions change local state only. Enrolled native and paired browser builds can show `corrald`'s live health and board; see [Live data](#live-data).
 
 The app includes:
 
@@ -16,7 +16,7 @@ The app includes:
 
 The command palette's **Demo** group changes Connection, Data and Assistant states and opens the hotkey window, share sheet and lock-screen push demos. Open the palette with `Ctrl K`.
 
-The app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain, not a member of corral's workspace. Design sources are `/home/pawis/corral-app-design/REQUIREMENTS.md`, `ARCHITECTURE.md` and `mockup/`.
+The app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain, not a member of corral's workspace. The [design handoff](../../docs/app-design/README.md) contains the requirements, architecture proposal and runnable mockup, with their authority and implementation-status caveats.
 
 ## Quick start
 
@@ -29,6 +29,9 @@ nsh run --target tui
 ```
 
 The web development server is at http://127.0.0.1:8790/ and rebuilds on save.
+Use different dev-server ports when running both hosts: `nsh run --target web --port 8790`
+and `nsh run --target tui --port 8791`. NSH replaces an existing development session
+on the same port, even when its target differs.
 
 ## Live data
 
@@ -38,9 +41,48 @@ With a `corrald` running for the workspace (see `docs/guide/daemon.md` in this r
 CORRAL_SOCKET="$(corral daemon socket)" nsh run --target tui
 ```
 
-The app then opens in its Daemon data state. The health strip and Now come from the daemon and follow it as it changes; if the daemon goes away the last board stays, marked stale, and the app reconnects by itself. The daemon serves only health and the board today, so the other destinations say so, and the selected task shows the facts the board row carries (no steps, evidence or session yet). The app is read-only towards the daemon: it sends no commands.
+The native app opens in its Daemon data state. In Settings › Connection, name the device
+and press **Enrol** to load Now. The device id is stored in a private `0600` file at
+`$XDG_STATE_HOME/corral-app/devices.json` (fallback `$HOME/.local/state`), keyed by the
+daemon's store. This is a file fallback, not an OS keychain; Settings identifies it.
+A restart attaches that enrolled identity without asking again.
 
-The palette's Demo group switches Data back to Fixture. The web build cannot open a Unix socket and has no Daemon state.
+### Browser
+
+Enable the optional listener in the workspace's `.corral/corral.toml`, then restart
+`corrald`. It is off by default; only numeric loopback addresses are accepted:
+
+```toml
+[daemon]
+listen = "127.0.0.1:7841"
+web_origins = ["http://127.0.0.1:8790"]
+```
+
+Run `corral device pair`, or choose **Pair a browser** in the enrolled native app's
+Settings › Devices. Paste the offered code into the browser's Settings › Connection.
+Compare the six-digit codes on both devices, then confirm in the terminal or native
+app. A pairing code expires after two minutes; claiming it starts a separate two-minute
+confirmation window. The browser cannot confirm itself.
+
+Choose **Open live data** after pairing. Reload preserves the device and daemon pin:
+the browser stores its credential encrypted in IndexedDB with a non-extractable
+WebCrypto AES-GCM key. NSH Storage holds only the non-secret paired marker, never keys.
+The WebSocket carrier uses Noise IK; initial pairing uses single-use Noise IKpsk2.
+
+### Live behavior and revocation
+
+Health and Now follow the daemon on both carriers. On ordinary link loss the last board
+stays marked stale and reconnect restores subscriptions. Unserved destinations remain
+explicitly unavailable; no fixture content is presented as daemon data. Neither app
+sends task/question commands. Native device administration is separate from that boundary;
+browser sessions can read only board and health.
+
+`corral device list [--json]` lists identities; `corral device revoke <id>` closes their
+live sessions and stops automatic reconnect. Native devices can explicitly enrol again.
+Browsers recover with **Forget this browser**, then pair again. Forget removes local
+credentials, not the daemon's record; revoke obsolete records from the trusted side.
+
+The palette's Demo group still switches Data back to Fixture.
 
 ## Commands
 
@@ -76,7 +118,7 @@ Destination keys are `i` Inbox, `n` Now, `.` Changes, `p` Plans, `a` Agents, `r`
 - `docs/NSH-NOTES.md`: what NSH 0.5.0 does differently from what its docs suggest, with sources.
 - `docs/shots/`: renders of the content build; see Screenshots below.
 
-NSH Storage persists only `corral.destination`, `corral.settings`, `corral.theme`, `corral.data`, `corral.conn`, `corral.mode` and `corral.now.layout`.
+NSH Storage persists `corral.destination`, `corral.settings`, `corral.theme`, `corral.data`, `corral.conn`, `corral.mode`, `corral.now.layout` and the non-secret browser marker `corral.paired`.
 
 ## Screenshots
 
@@ -96,4 +138,4 @@ Native desktop backends are behind the off-by-default `desktop` Cargo feature be
 
 ## Not built
 
-Not built: a daemon transport for the web and phone builds (the daemon speaks only its Unix socket), any command to the daemon, live data for destinations other than Now, native window chrome, tray, system-level global hotkey, share and push integration, biometric confirmation and installer packaging. The hotkey window, share sheet and lock-screen push are local demos. The web package command produces a static site, not an installer.
+Not built: task/question commands to the daemon, live data for destinations other than Now and connection/device Settings, remote/LAN/relay transport, native window chrome, tray, system-level global hotkey, share and push integration, biometric confirmation and installer packaging. The hotkey window, share sheet and lock-screen push are local demos. The web package command produces a static site, not an installer. Native window-backend connection smoke remains unverified on this GTK-less host; terminal and Chromium journeys are recorded in [the connection increment](../../docs/app-design/NEXT-STEP.md#verification-receipt).

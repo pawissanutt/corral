@@ -95,6 +95,56 @@ pub(super) fn health(health: Health) -> DaemonHealth {
     }
 }
 
+pub(super) fn device(
+    info: corral_protocol::device::DeviceInfo,
+) -> crate::model::devices::DeviceRow {
+    use corral_protocol::device::DevicePlatform;
+    crate::model::devices::DeviceRow {
+        id: info.id,
+        name: info.name,
+        platform: match info.platform {
+            DevicePlatform::Native => "native",
+            DevicePlatform::Web => "web",
+            DevicePlatform::Other => "other",
+        },
+        enrolled: info.enrolled_at.chars().take(10).collect(),
+        revoked: info.revoked_at.map(|at| at.chars().take(10).collect()),
+    }
+}
+
+pub(super) fn pairing(
+    status: corral_protocol::device::PairStatus,
+) -> crate::model::devices::Pairing {
+    use crate::model::devices::Pairing;
+    use corral_protocol::device::PairState;
+    match status.state {
+        PairState::Offered { expires_at } => Pairing::Offered {
+            pair_id: status.pair_id,
+            code: String::new(),
+            expires_at: timestamp(Some(&expires_at)).unwrap_or(0),
+        },
+        PairState::Claimed {
+            name,
+            app_version,
+            sas,
+            expires_at,
+        } => Pairing::Claimed {
+            pair_id: status.pair_id,
+            name,
+            app_version,
+            sas,
+            expires_at: timestamp(Some(&expires_at)).unwrap_or(0),
+        },
+        PairState::Paired { device } => Pairing::Ended {
+            line: format!("Paired {}.", device.name),
+        },
+        PairState::Ended { reason } => Pairing::ended(&reason),
+        PairState::Other => Pairing::Ended {
+            line: "corrald returned an unsupported pairing state.".into(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

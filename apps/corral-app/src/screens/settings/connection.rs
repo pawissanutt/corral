@@ -26,28 +26,29 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 /// one card per row, the pressed one banded by NSH.
 pub fn page(app: AppState) -> AnyElement {
     if untracked(|| app.daemon()) {
-        return dynamic(move || {
+        let details = dynamic(move || {
             let rows = app.feed.with(settings::daemon_connection_details);
             untracked(move || {
-                frame(
+                qtable(
                     app,
-                    "Connection",
-                    12.0,
-                    vec![qtable(
-                        app,
-                        &[Width::Fixed(120.0), Width::Fill],
-                        rows.into_iter()
-                            .map(|(key, value)| {
-                                vec![
-                                    cell(app, key, Token::Ink3, false).into_element(),
-                                    mono_cell(app, value, Token::Ink).into_element(),
-                                ]
-                            })
-                            .collect(),
-                    )],
+                    &[Width::Fixed(120.0), Width::Fill],
+                    rows.into_iter()
+                        .map(|(key, value)| {
+                            vec![
+                                cell(app, key, Token::Ink3, false).into_element(),
+                                mono_cell(app, value, Token::Ink).into_element(),
+                            ]
+                        })
+                        .collect(),
                 )
             })
         });
+        return frame(
+            app,
+            "Connection",
+            12.0,
+            vec![super::enrolment::this_device(app), details],
+        );
     }
     let v = untracked(|| read(app, settings::connection));
     let title = if app.form == Form::Phone {
@@ -59,18 +60,18 @@ pub fn page(app: AppState) -> AnyElement {
         let v = read(app, settings::connection);
         untracked(move || report(app, &v))
     });
-    frame(
-        app,
-        title,
-        12.0,
-        vec![
-            first_heading(app, v.state_heading, None),
-            cards(app, &v.cards),
-            report,
-            h3(app, v.rules_heading, None),
-            rules(app, v.rules),
-        ],
-    )
+    let mut parts = Vec::new();
+    if crate::client::pairing_supported() {
+        parts.push(super::enrolment::pair_browser(app));
+    }
+    parts.extend([
+        first_heading(app, v.state_heading, None),
+        cards(app, &v.cards),
+        report,
+        h3(app, v.rules_heading, None),
+        rules(app, v.rules),
+    ]);
+    frame(app, title, 12.0, parts)
 }
 
 /// The state cards as one group of toggles, the pressed one the current connection.
