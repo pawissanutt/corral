@@ -36,6 +36,15 @@ pub const CMD_RESULT: &str = "cmd.result";
 /// Record area of the idempotency journal (core record store).
 pub const COMMANDS_AREA: &str = "app-commands";
 
+/// Daemon wait budget for app read-model requests.
+pub const APP_READ_WAIT_MS: u64 = 25_000;
+/// Default client deadline for app control requests.
+pub const APP_REQUEST_DEADLINE_MS: u64 = 5_000;
+/// Transport/reply allowance added to server-side waits (including `act.result`).
+pub const APP_REQUEST_MARGIN_MS: u64 = 5_000;
+/// Client deadline for app reads; a read timeout must not disconnect the session.
+pub const APP_READ_DEADLINE_MS: u64 = APP_READ_WAIT_MS + APP_REQUEST_MARGIN_MS;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "family", content = "args", rename_all = "snake_case")]
 // One value per submitted command; family sizes differ and boxing would change nothing on the wire.
@@ -147,6 +156,16 @@ impl Command {
             )
             | Self::Task(Task::Reply { .. } | Task::Comment { .. })
             | Self::Annotation(Annotation::Reply { .. }) => ActClass::Reply,
+            // Match canonical Status::parse normalization without allocating or depending on core.
+            Self::Task(Task::Move { status, .. })
+                if status
+                    .bytes()
+                    .filter(u8::is_ascii_alphabetic)
+                    .map(|byte| byte.to_ascii_lowercase())
+                    .eq(b"done".iter().copied()) =>
+            {
+                ActClass::Confirm
+            }
             Self::Task(
                 Task::New { .. }
                 | Task::Dispatch { .. }
@@ -154,17 +173,33 @@ impl Command {
                 | Task::Route { .. }
                 | Task::Hold { .. }
                 | Task::Release { .. }
-                | Task::Focus { .. },
+                | Task::Focus { .. }
+                | Task::Retry { .. }
+                | Task::Idea { .. }
+                | Task::Move { .. }
+                | Task::Unstick { .. }
+                | Task::WaiveReview { .. },
             )
             | Self::Question(
                 Question::Escalate { .. } | Question::Cancel { .. } | Question::Deadline { .. },
             )
             | Self::Queue(
-                Queue::Add { .. } | Queue::Remove { .. } | Queue::Pause {} | Queue::Resume {},
+                Queue::Add { .. }
+                | Queue::Remove { .. }
+                | Queue::Pause {}
+                | Queue::Resume {}
+                | Queue::Admit { .. },
             )
             | Self::Attention(Attention::Park { .. } | Attention::Unpark { .. })
             | Self::Plan(
-                Plan::RequestChanges { .. } | Plan::AddMember { .. } | Plan::MoveMember { .. },
+                Plan::RequestChanges { .. }
+                | Plan::AddMember { .. }
+                | Plan::MoveMember { .. }
+                | Plan::Cancel { .. }
+                | Plan::Policy { .. },
+            )
+            | Self::Review(
+                Review::RequestChanges { .. } | Review::Verdict { .. } | Review::Discard { .. },
             )
             | Self::Annotation(
                 Annotation::Open { .. } | Annotation::Resolve { .. } | Annotation::Reopen { .. },
@@ -179,22 +214,9 @@ impl Command {
                 | Session::Send { .. },
             )
             | Self::Message(Message::FileAsIdea { .. } | Message::Withdraw { .. }) => ActClass::Act,
-            Self::Task(
-                Task::Retry { .. }
-                | Task::Revert { .. }
-                | Task::Unstick { .. }
-                | Task::Move { .. }
-                | Task::Idea { .. }
-                | Task::WaiveReview { .. },
-            )
-            | Self::Queue(Queue::Admit { .. })
-            | Self::Plan(Plan::Accept { .. } | Plan::Cancel { .. } | Plan::Policy { .. })
-            | Self::Review(
-                Review::Approve { .. }
-                | Review::RequestChanges { .. }
-                | Review::Verdict { .. }
-                | Review::Discard { .. },
-            )
+            Self::Task(Task::Revert { .. })
+            | Self::Plan(Plan::Accept { .. })
+            | Self::Review(Review::Approve { .. })
             | Self::Session(Session::Stop { .. })
             | Self::Assistant(Assistant::PermissionsRevoke { .. }) => ActClass::Confirm,
             Self::Config(
@@ -433,3 +455,7 @@ mod tests {
         assert!(comment.is_known());
     }
 }
+
+#[cfg(test)]
+#[path = "app_class_tests.rs"]
+mod app_class_tests;

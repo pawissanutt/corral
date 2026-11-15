@@ -20,26 +20,48 @@ use crate::model::text::span;
 
 use super::evidence::artifact_ref;
 use super::live::{Shown, file_ref, review_ref, selected, short, task_ref};
-use super::live_files::draft_key;
+use super::live_files::{draft_key, patch_refusal};
 use super::view::{Button, ButtonStyle, Composer, DecideBar, StatusLine, button};
 use super::{Action, Compose, Intent, Sent, State};
 
 /// Why no command may be sent from this device right now, before any candidate check.
-fn device_refusal(feed: &Feed, env: Env) -> Option<String> {
+fn authority_refusal(feed: &Feed, env: Env, authority: Authority) -> Option<String> {
     if env.conn.refuses() || feed.link != Link::Up {
         return Some("Refused: needs a live connection. Nothing was sent.".into());
     }
     match &feed.session {
         None => Some("Waiting for the app session; nothing was sent.".into()),
-        Some(session) if !session.authority.act => Some(Authority::Act.refusal().into()),
+        Some(session)
+            if match authority {
+                Authority::Reply => !session.authority.reply,
+                Authority::Act => !session.authority.act,
+                Authority::Assistant => !session.authority.assistant,
+            } =>
+        {
+            Some(authority.refusal().into())
+        }
         Some(_) => None,
     }
+}
+
+fn device_refusal(feed: &Feed, env: Env) -> Option<String> {
+    authority_refusal(feed, env, Authority::Act)
+}
+
+pub(super) fn reply_refusal(feed: &Feed, env: Env) -> Option<String> {
+    authority_refusal(feed, env, Authority::Reply)
 }
 
 /// Why a decision on the shown candidate would not be bound to it.
 fn candidate_refusal(shown: &Shown) -> Option<String> {
     if shown.review.is_none() {
         return Some("The candidate's detail has not loaded; nothing was sent.".into());
+    }
+    if shown
+        .review_cache
+        .is_some_and(|cache| cache.stale || cache.loading || cache.error.is_some())
+    {
+        return Some("The candidate detail is last known. Refresh it before deciding.".into());
     }
     if shown.superseded() {
         return Some("A newer candidate was recorded; decide after the detail refreshes.".into());
@@ -86,7 +108,7 @@ fn approve_refusal(state: &State, feed: &Feed, shown: &Shown, env: Env) -> Optio
             let review = shown.review?;
             (!review.approvable).then(|| {
                 format!(
-                    "Not approvable while the candidate is {}.",
+                    "Approval is unavailable in state {}.",
                     review.state.replace('_', " ")
                 )
             })
@@ -113,11 +135,15 @@ fn intent_label(intent: &Intent) -> String {
 }
 
 /// The unsent note an intent carries and the composer it belongs to.
-fn note(intent: &Intent) -> Option<(String, &str)> {
-    match intent {
-        Intent::Changes { text } => Some(("changes".into(), text)),
-        Intent::Comment { at, text } => Some((draft_key(at), text)),
-        Intent::Reply { thread, text } => Some((format!("reply:{thread}"), text)),
+fn note(sent: &Sent) -> Option<(String, &str)> {
+    match &sent.intent {
+        Intent::Changes { text } => Some((sent.candidate.as_ref()?.draft("changes"), text)),
+        Intent::Comment { at, text } => Some((draft_key(sent.candidate.as_ref()?, at), text)),
+        Intent::Reply {
+            candidate,
+            thread,
+            text,
+        } => Some((candidate.draft(&format!("reply:{thread}")), text)),
         _ => None,
     }
 }
@@ -141,7 +167,7 @@ fn status_line(feed: &Feed, sent: &Sent) -> Option<StatusLine> {
                     "Edit again",
                     Action::Restore {
                         key: sent.key.clone(),
-                        draft: "changes".into(),
+                        draft: sent.candidate.as_ref()?.draft("changes"),
                         text: text.clone(),
                     },
                     ButtonStyle::Quiet,
@@ -174,7 +200,7 @@ fn status_line(feed: &Feed, sent: &Sent) -> Option<StatusLine> {
         | ActStatus::Conflict(_)
         | ActStatus::Abandoned => {
             let mut actions = Vec::new();
-            if let Some((draft, text)) = note(&sent.intent) {
+            if let Some((draft, text)) = note(sent) {
                 actions.push(button(
                     "Edit again",
                     Action::Restore {
@@ -301,14 +327,16 @@ pub(super) fn decide_bar(state: &State, feed: &Feed, shown: Option<&Shown>, env:
         attribution: device
             .filter(|_| !phone)
             .map(|device| vec![span(format!("actor=owner · via=app:{device}")).mono().dim()]),
-        composer: (state.changes.as_ref() == Some(shown.id())).then(|| Composer {
-            draft: "changes".into(),
-            target: Compose::Changes,
+        composer: state.changes.as_ref().filter(|at| at.task == *shown.id()).map(|at| Composer {
+            draft: at.draft("changes"),
+            target: Compose::Changes(at.clone()),
             placeholder: "What should the worker change? This goes to the worker as the next round's input.",
             label: "Request changes",
             send: "Send to worker",
             cancel: Some(button("Cancel", Action::CancelCompose, ButtonStyle::Quiet)),
-            refusal: decision_refusal,
+            refusal: if shown.matches(at) { decision_refusal } else {
+                Some("This note belongs to an older candidate. Reopen Request changes for the current one.".into())
+            },
         }),
         status: status_lines(state, feed, shown.id(), decision),
     }
@@ -349,13 +377,14 @@ impl State {
         effects
     }
 
-    fn send(&mut self, task: &Id, intent: Intent, act: Act) -> Vec<Effect> {
+    fn send(&mut self, shown: &Shown, intent: Intent, act: Act) -> Vec<Effect> {
         self.sent.push(Sent {
             key: act.key.clone(),
-            task: task.clone(),
+            task: shown.id().clone(),
+            candidate: shown.identity(),
             intent,
         });
-        vec![Effect::Act(act.about(Live::Review(task.clone())))]
+        vec![Effect::Act(act.about(Live::Review(shown.id().clone())))]
     }
 
     fn annotate(
@@ -374,8 +403,7 @@ impl State {
             Command::Annotation(AnnotationCommand::Other),
         );
         act.command = Command::Annotation(build(act.key.to_string()));
-        let task = shown.id().clone();
-        self.send(&task, intent, act)
+        self.send(shown, intent, act)
     }
 
     fn submit(
@@ -396,7 +424,12 @@ impl State {
         let task = shown.id().clone();
         match target {
             Compose::Fixture => Vec::new(),
-            Compose::Changes => {
+            Compose::Changes(candidate) => {
+                if !shown.matches(&candidate) {
+                    return toast(
+                        "The candidate changed. Reopen Request changes; nothing was sent.",
+                    );
+                }
                 let refusal = device_refusal(feed, env).or_else(|| candidate_refusal(shown));
                 let (Some(expect), None) = (shown.expect(), refusal.clone()) else {
                     return toast(refusal.unwrap_or_default());
@@ -411,25 +444,26 @@ impl State {
                     }),
                 )
                 .expect(expect);
-                self.send(&task, Intent::Changes { text }, act)
+                self.send(shown, Intent::Changes { text }, act)
             }
-            Compose::New(at) => {
-                if let Some(refusal) = comment_refusal(feed, shown, env) {
+            Compose::New { candidate, at } => {
+                if !shown.matches(&candidate) {
+                    return toast(
+                        "The candidate changed. Reopen a line on the current patch; nothing was sent.",
+                    );
+                }
+                if let Some(refusal) = comment_refusal(feed, shown, env)
+                    .or_else(|| patch_refusal(feed, shown, &at.path))
+                {
                     return toast(refusal);
                 }
-                let (Some(run), Some(review)) = (shown.run(), shown.review) else {
-                    return Vec::new();
-                };
-                let (Some(base), Some(head)) = (review.base.clone(), review.candidate_sha.clone())
-                else {
-                    return Vec::new();
-                };
+                let corral_protocol::detail::ReviewCandidate { run, base, head } =
+                    candidate.candidate;
                 self.composing = None;
                 let intent = Intent::Comment {
                     at: at.clone(),
                     text: text.clone(),
                 };
-                let run = run.to_owned();
                 self.annotate(shown, intent, "Comment", move |key| {
                     AnnotationCommand::Open {
                         id: task.to_string(),
@@ -451,13 +485,23 @@ impl State {
                     }
                 })
             }
-            Compose::Reply { thread, revision } => {
-                if let Some(refusal) = device_refusal(feed, env) {
+            Compose::Reply {
+                candidate,
+                thread,
+                revision,
+            } => {
+                if candidate.task != task {
+                    return toast(
+                        "This reply belongs to another task. Reopen its discussion; nothing was sent.",
+                    );
+                }
+                if let Some(refusal) = reply_refusal(feed, env) {
                     return toast(refusal);
                 }
                 let intent = Intent::Reply {
                     thread: thread.clone(),
                     text: text.clone(),
+                    candidate,
                 };
                 self.annotate(shown, intent, "Reply", move |key| {
                     AnnotationCommand::Reply {
@@ -543,7 +587,7 @@ impl State {
                 )
                 .expect(expect)
                 .confirmed();
-                self.send(&task, Intent::Approve { sha: full }, act)
+                self.send(shown, Intent::Approve { sha: full }, act)
             }
             Action::Retry => {
                 let act = Act::new(
@@ -555,7 +599,7 @@ impl State {
                     }),
                 )
                 .expect(expect);
-                self.send(&task, Intent::Retry, act)
+                self.send(shown, Intent::Retry, act)
             }
             Action::Discard => {
                 let act = Act::new(
@@ -566,7 +610,7 @@ impl State {
                 )
                 .expect(expect)
                 .confirmed();
-                self.send(&task, Intent::Discard, act)
+                self.send(shown, Intent::Discard, act)
             }
             _ => Vec::new(),
         }
@@ -616,7 +660,7 @@ impl State {
                 if self
                     .composing
                     .as_ref()
-                    .is_some_and(|(task, at)| *task == id && at.path == path)
+                    .is_some_and(|(candidate, at)| candidate.task == id && at.path == path)
                 {
                     self.composing = None;
                 }
@@ -630,8 +674,16 @@ impl State {
                 }),
                 target: None,
             }],
-            Action::Annotate(at) => {
-                self.composing = Some((id, at));
+            Action::Annotate { candidate, at } => {
+                if !shown.matches(&candidate) {
+                    return toast("The candidate changed. Reopen a line on the current patch.");
+                }
+                if let Some(refusal) = comment_refusal(feed, &shown, env)
+                    .or_else(|| patch_refusal(feed, &shown, &at.path))
+                {
+                    return toast(refusal);
+                }
+                self.composing = Some((candidate, at));
                 Vec::new()
             }
             Action::CancelCompose => {
@@ -640,10 +692,13 @@ impl State {
                 Vec::new()
             }
             Action::RequestChanges => {
-                self.changes = if self.changes.as_ref() == Some(&id) {
+                let Some(candidate) = shown.identity() else {
+                    return toast("Waiting for the candidate's identity; no composer was opened.");
+                };
+                self.changes = if self.changes.as_ref() == Some(&candidate) {
                     None
                 } else {
-                    Some(id)
+                    Some(candidate)
                 };
                 Vec::new()
             }
@@ -661,9 +716,12 @@ impl State {
                 if let Some(sent) = self.sent.iter().find(|sent| sent.key == key) {
                     match &sent.intent {
                         Intent::Comment { at, .. } => {
-                            self.composing = Some((sent.task.clone(), at.clone()));
+                            self.composing = sent
+                                .candidate
+                                .clone()
+                                .map(|candidate| (candidate, at.clone()));
                         }
-                        Intent::Changes { .. } => self.changes = Some(sent.task.clone()),
+                        Intent::Changes { .. } => self.changes = sent.candidate.clone(),
                         _ => {}
                     }
                 }

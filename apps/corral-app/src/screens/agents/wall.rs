@@ -476,6 +476,11 @@ fn tile(app: AppState, tile: &Tile) -> AnyElement {
         .into_element()
 }
 
+/// Cells the terminal row keeps for the state chip and for since: the chip's longest word,
+/// "unavailable", with its Cell either side and one to part it from the id; "4d ago" whole.
+const CHIP_COLUMN: f32 = 14.0;
+const SINCE_COLUMN: f32 = 8.0;
+
 /// A one-line row per agent: the desktop List mode and the terminal wall. Chip, id, title,
 /// what it does (left out on a narrow terminal grid), the feed and since.
 fn list_line(app: AppState, tile: &Tile) -> AnyElement {
@@ -538,7 +543,10 @@ fn list_line(app: AppState, tile: &Tile) -> AnyElement {
         || false,
         move || run(app, action.clone()),
         vec![
-            fixed(11.0, chip(app, tile.chip, tile.hue)),
+            fixed(
+                if terminal { CHIP_COLUMN } else { 11.0 },
+                chip(app, tile.chip, tile.hue),
+            ),
             fixed(
                 11.0,
                 words(tile.label.clone().into(), quiet, true).into_element(),
@@ -550,7 +558,7 @@ fn list_line(app: AppState, tile: &Tile) -> AnyElement {
                 words(tile.feed_short.clone().into(), quiet, false).into_element(),
             ),
             fixed(
-                if terminal { 5.0 } else { 6.0 },
+                if terminal { SINCE_COLUMN } else { 6.0 },
                 words(tile.since_short.clone().into(), quiet, true).into_element(),
             ),
         ],

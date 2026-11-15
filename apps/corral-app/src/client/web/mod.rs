@@ -265,17 +265,9 @@ impl Driver {
         self.connection = None;
         self.app.disconnected(self.feed);
         self.feed.update(|feed| feed.link_lost(problem));
-        let seconds = match self.failures {
-            0 => 1,
-            1 => 2,
-            2 => 5,
-            _ => 10,
-        };
+        let delay = super::requests::reconnect_delay_ms(self.failures);
         self.failures = self.failures.saturating_add(1);
-        self.retry_at = self
-            .credential
-            .as_ref()
-            .map(|_| self.now() + seconds * 1_000);
+        self.retry_at = self.credential.as_ref().map(|_| self.now() + delay);
     }
 
     fn failed(&mut self, pair: bool, failure: Failure) {
@@ -373,7 +365,17 @@ impl Driver {
                     return;
                 };
                 match conn.flush_app(outgoing, self.now()) {
-                    Ok(()) => self.connection = Some(conn),
+                    Ok(()) => match self.process_events(&mut conn, self.now()) {
+                        Ok(Action::Keep) => self.connection = Some(conn),
+                        Ok(Action::Stop) => {}
+                        Ok(Action::Paired(_)) => self.failed(
+                            false,
+                            Failure::Fatal(
+                                "Unexpected pairing completion during request admission.".into(),
+                            ),
+                        ),
+                        Err(failure) => self.failed(false, failure),
+                    },
                     Err(problem) => self.failed(false, Failure::Retry(problem)),
                 }
             }
@@ -398,6 +400,7 @@ impl Driver {
                         if let Some(method) = conn.core.expired(now) {
                             Err(format!("corrald {method} timed out"))
                         } else if !pair
+                            && !conn.core.has_pending()
                             && now.saturating_sub(conn.received.max(conn.pinged)) >= 15_000
                         {
                             conn.pinged = now;
@@ -411,7 +414,17 @@ impl Driver {
                     _ => Ok(()),
                 };
                 match result {
-                    Ok(()) => self.connection = Some(conn),
+                    Ok(()) => match self.process_events(&mut conn, now) {
+                        Ok(Action::Keep) => self.connection = Some(conn),
+                        Ok(Action::Stop) => {}
+                        Ok(Action::Paired(_)) => self.failed(
+                            pair,
+                            Failure::Fatal(
+                                "Unexpected pairing completion during timeout handling.".into(),
+                            ),
+                        ),
+                        Err(failure) => self.failed(pair, failure),
+                    },
                     Err(problem) => self.failed(pair, Failure::Retry(problem)),
                 }
             }
@@ -621,6 +634,10 @@ impl Driver {
                 )?,
             }
         }
+        self.process_events(conn, now)
+    }
+
+    fn process_events(&mut self, conn: &mut Connection, now: u64) -> Result<Action, Failure> {
         while let Some(event) = conn.core.next_event() {
             if matches!(conn.role, Role::Session) && app::handles(&event) {
                 if matches!(&event, Event::Board { .. }) {

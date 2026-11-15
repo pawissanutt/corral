@@ -174,6 +174,9 @@ fn rolled_quick_thread_never_shows_the_previous_generations_reply_as_its_own() {
         card: None,
         attachments: Vec::new(),
         typed_at: None,
+        part: None,
+        completion: None,
+        cost_basis: None,
     };
     for done in [true, false] {
         let mut thread = crate::model::daemon::ThreadSnapshot::default();
@@ -349,6 +352,9 @@ fn a_new_quick_generation_streaming_before_its_row_is_never_labelled_as_the_old_
         card: None,
         attachments: Vec::new(),
         typed_at: None,
+        part: None,
+        completion: None,
+        cost_basis: None,
     };
     let mut thread = crate::model::daemon::ThreadSnapshot::default();
     thread.entries.insert(asked.id.as_str().into(), asked);
@@ -396,6 +402,9 @@ fn a_thread_lists_each_filed_task_once_however_many_entries_record_it() {
         card,
         attachments: Vec::new(),
         typed_at: None,
+        part: None,
+        completion: None,
+        cost_basis: None,
     };
     let idea = |task: &str| EntryCard::Idea {
         task: task.into(),

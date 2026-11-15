@@ -10,6 +10,34 @@ use super::{
     changes_notice, daemon_status, feed_filters, stamp,
 };
 
+/// Whether an unseen count is canonical or only the rows this device has loaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnseenCount {
+    pub count: u64,
+    pub total: bool,
+}
+
+/// Event sequences are cursors, not counts. A server total belongs to its seen cursor.
+pub fn unseen_count(feed: &Feed) -> UnseenCount {
+    let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
+    if let Some((cursor, count)) = feed.changes_unseen
+        && cursor == through
+    {
+        return UnseenCount { count, total: true };
+    }
+    UnseenCount {
+        count: feed
+            .changes
+            .range((
+                std::ops::Bound::Excluded(through),
+                std::ops::Bound::Unbounded,
+            ))
+            .filter(|(_, line)| super::live_context::owner_relevant(line))
+            .count() as u64,
+        total: false,
+    }
+}
+
 /// When this device last saw the feed, in local time, if it ever did.
 fn last_visit(feed: &Feed) -> Option<String> {
     feed.seen
@@ -38,6 +66,7 @@ pub fn live_changes(
         .changes
         .values()
         .rev()
+        .filter(|line| super::live_context::owner_relevant(line))
         .filter(|line| state.filter.admits_class(&line.class))
     {
         if line.seq > through {
@@ -46,7 +75,7 @@ pub fn live_changes(
             history.push(change_row(line, feed, false));
         }
     }
-    let unseen = feed.changes.range(through.saturating_add(1)..).count();
+    let unseen = unseen_count(feed);
     let device_words = device.map_or_else(|| "this device".to_owned(), |name| name.to_owned());
     let seen_line = match (&visit, phone) {
         (Some(at), true) => format!("last visit {at}"),
@@ -55,10 +84,10 @@ pub fn live_changes(
         (None, false) => format!("nothing marked seen on {device_words} yet"),
     };
     let subtitle = (!phone).then(|| {
-        let events = match unseen {
-            1 => "1 new event".to_owned(),
-            count => format!("{count} new events"),
-        };
+        let qualifier = if unseen.total { "" } else { "loaded unseen " };
+        let events = format!("{} {qualifier}{}event{}", unseen.count,
+            if unseen.total { "new " } else { "" },
+            if unseen.count == 1 { "" } else { "s" });
         match &visit {
             Some(at) => format!(
                 "since this device's last visit {at} · {events} · the seen-cursor is per device: marking seen here leaves your other devices' marks"
@@ -133,6 +162,10 @@ mod tests {
             seq,
             at: "2026-11-14T10:00:00Z".into(),
             class: class.into(),
+            kind: corral_protocol::app::ChangeKind::Other,
+            from: None,
+            to: None,
+            failed: false,
             task: Some(format!("T-{seq}")),
             text: format!("T-{seq} · {class}"),
             actor: "owner".into(),
@@ -166,5 +199,57 @@ mod tests {
         let changes = live_changes(&state, &feed, None, Form::Desktop, PhoneTab::More);
         assert_eq!(ids(&changes.recent), ["T-4"]);
         assert_eq!(ids(&changes.history), ["T-1"]);
+    }
+
+    #[test]
+    fn changes_show_typed_owner_moves_and_failures_not_system_bookkeeping() {
+        use crate::model::board::{ChangeKind as MarkKind, Mark};
+        use corral_protocol::app::ChangeKind;
+        let mut feed = Feed::default();
+        feed.capabilities.insert(CHANGES_V1.into());
+        let mut moved = line(101, "work");
+        moved.kind = ChangeKind::Moved;
+        moved.from = Some("backlog".into());
+        moved.to = Some("ready".into());
+        let mut failed = line(102, "gate");
+        failed.kind = ChangeKind::Gate;
+        failed.failed = true;
+        feed.changes
+            .extend([(101, moved), (102, failed), (103, line(103, "other"))]);
+        feed.changes_head = 100_000;
+        feed.seen = Some(SeenCursor {
+            through: 100,
+            at: None,
+        });
+        feed.changes_unseen = Some((100, 500));
+        let view = live_changes(
+            &State::default(),
+            &feed,
+            None,
+            Form::Terminal,
+            PhoneTab::More,
+        );
+        assert_eq!(view.recent.len(), 2);
+        assert_eq!(view.recent[0].kind, MarkKind::Mark(Mark::Fail));
+        assert!(view.recent[1].text.contains("backlog"));
+        assert!(view.recent[1].text.contains("ready"));
+        assert!(!view.recent[1].text.contains("T-101"));
+        assert_eq!(
+            unseen_count(&feed),
+            UnseenCount {
+                count: 500,
+                total: true
+            }
+        );
+        feed.changes_unseen = None;
+        assert_eq!(
+            unseen_count(&feed),
+            UnseenCount {
+                count: 2,
+                total: false
+            }
+        );
+        feed.changes_unseen = Some((99, 501));
+        assert!(!unseen_count(&feed).total);
     }
 }

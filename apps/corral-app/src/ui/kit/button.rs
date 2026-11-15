@@ -36,7 +36,8 @@ pub enum ButtonKind {
 }
 
 /// The variants of [`button_with`].
-#[derive(Debug, Clone, Copy, Default)]
+/// No `Debug`: [`ElementRef`] has none.
+#[derive(Clone, Copy, Default)]
 pub struct ButtonOptions {
     /// A leading icon in the words' colour (desktop 14 pt, phone 18 pt; none in a terminal).
     pub icon: Option<Icon>,
@@ -56,6 +57,9 @@ pub struct ButtonOptions {
     /// Desktop shows it after the label, a terminal before it as its key line reads; a phone,
     /// with no keyboard to press it on, leaves it out.
     pub key_hint: Option<&'static str>,
+    /// A handle the caller focuses the button by (`ElementRef::focus`): the confirmation moves
+    /// the keyboard focus to its safe choice once the dialog has laid out.
+    pub focus: Option<ElementRef>,
 }
 
 /// A button with the form's metrics: desktop 30 pt high, 12 pt padding; phone at least 44 pt
@@ -128,6 +132,7 @@ pub fn button_with(
     let target = press_target()
         .disabled(options.disabled)
         .on_press(move |_: &()| on_press())
+        .when_some(options.focus, |b, handle| b.element_ref(&handle))
         .when(bare, |b| b.accessibility_label(label))
         .flex_row()
         .items_center()

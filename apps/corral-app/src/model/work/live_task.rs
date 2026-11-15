@@ -92,7 +92,7 @@ pub enum Fact {
     Text(Rich),
     /// Task ids that open the task.
     Tasks(Vec<Dependency>),
-    /// The owner's control: answering the open question.
+    /// The owner's canonical attention destination (question, review, plan or task).
     Answer(Button),
 }
 
@@ -169,6 +169,9 @@ pub fn daemon_inspector(state: &State, feed: &Feed, selected: &Selection, form: 
         return Inspector::Quiet(line);
     }
     if !feed.board.complete {
+        if super::served_facts::board_problem(feed).is_some() {
+            return Inspector::Quiet(super::served::BOARD_UNAVAILABLE);
+        }
         return match feed.link {
             Link::Down => Inspector::Quiet(NO_BOARD),
             Link::Connecting | Link::Up => Inspector::Loading,
@@ -201,7 +204,7 @@ fn stage(task: &daemon::Task, index: usize, now: u64) -> Stage {
     let active = step.mark == Mark::Active;
     let detail = [
         step.sha7.clone().unwrap_or_default(),
-        daemon::age(step.at, now),
+        super::when::age(step.at, now),
     ]
     .into_iter()
     .filter(|part| !part.is_empty())
@@ -417,23 +420,15 @@ pub fn live_story(state: &State, feed: &Feed, task: &daemon::Task, form: Form) -
     let mut facts: Vec<(&'static str, Fact)> = Vec::new();
 
     let mut doing = vec![span(standing.now.clone())];
-    let age = daemon::age(task.since, feed.now);
+    let age = super::when::age(task.since, feed.now);
     if !age.is_empty() {
         doing.push(span(format!(" · for {age}")).dim());
     }
     facts.push(("Now", Fact::Text(doing)));
 
-    let question = task_question(feed, &task.id);
-    let asked = question.is_some();
-    if let Some(question) = question {
-        facts.push((
-            "You",
-            Fact::Answer(Button::new(
-                format!("Answer {question}"),
-                Press::Open(Live::Question(question)),
-                ButtonKind::Primary,
-            )),
-        ));
+    let asked = task_question(feed, &task.id).is_some();
+    if let Some(button) = super::served::attention_button(feed, &task.id) {
+        facts.push(("You", Fact::Answer(button)));
     } else if let Some(next) = detail.and_then(|detail| detail.owner_next.clone()) {
         facts.push(("You", Fact::Text(vec![span(next).hue(Hue::You)])));
     } else if detail.is_some() && key != GroupKey::You {

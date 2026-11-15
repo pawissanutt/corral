@@ -62,6 +62,11 @@ fn board_notice(feed: &Feed) -> Option<Notice> {
     if let Some(line) = feed.device.board_notice() {
         return Some(Notice::Quiet(line));
     }
+    if !feed.board.complete
+        && let Some(problem) = super::served_facts::board_problem(feed)
+    {
+        return Some(Notice::Said(problem));
+    }
     (!feed.board.complete).then_some(Notice::Quiet(if feed.link == Link::Down {
         super::NO_BOARD
     } else {
@@ -239,17 +244,67 @@ pub fn class_kind(class: &str) -> ChangeKind {
     }
 }
 
+/// Older daemons may serve bookkeeping rows without a typed owner-feed kind.
+pub(super) fn owner_relevant(line: &ChangeLine) -> bool {
+    line.kind != corral_protocol::app::ChangeKind::Other
+        || matches!(
+            line.class.as_str(),
+            "work"
+                | "gate"
+                | "review"
+                | "land"
+                | "attention"
+                | "question"
+                | "comment"
+                | "annotation"
+                | "automation"
+                | "policy"
+                | "queue"
+                | "plan"
+        )
+}
+
+fn event_kind(line: &ChangeLine) -> ChangeKind {
+    use corral_protocol::app::ChangeKind as Wire;
+    if line.failed {
+        return ChangeKind::Mark(crate::model::board::Mark::Fail);
+    }
+    match line.kind {
+        Wire::Attention | Wire::Question => ChangeKind::Message,
+        Wire::Gate | Wire::Review | Wire::Land | Wire::Annotation => {
+            ChangeKind::Mark(crate::model::board::Mark::Na)
+        }
+        Wire::Created | Wire::Moved | Wire::Work | Wire::Queue => ChangeKind::Start,
+        _ => class_kind(&line.class),
+    }
+}
+
 /// One daemon change as a feed row: its local time, its task (opening it), its words without
 /// the leading task id the row already shows, and corrald's attribution.
 pub fn change_row(line: &ChangeLine, feed: &Feed, unseen: bool) -> FeedRow {
     let id = line.task.clone().unwrap_or_default();
-    let text = line
+    let words = line
         .text
         .strip_prefix(id.as_str())
-        .and_then(|rest| rest.strip_prefix(" · "))
         .filter(|_| !id.is_empty())
-        .unwrap_or(&line.text)
-        .to_owned();
+        .and_then(|rest| rest.strip_prefix(" · ").or_else(|| rest.strip_prefix(' ')))
+        .unwrap_or(&line.text);
+    let text = match (&line.kind, &line.from, &line.to) {
+        (corral_protocol::app::ChangeKind::Moved, Some(from), Some(to)) => {
+            format!(
+                "moved {} → {}",
+                from.replace('_', " "),
+                to.replace('_', " ")
+            )
+        }
+        _ if words
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') =>
+        {
+            words.replace('_', " ")
+        }
+        _ => words.to_owned(),
+    };
     let by = match (line.actor.is_empty(), line.via.is_empty()) {
         (true, true) => None,
         (false, true) => Some(line.actor.clone()),
@@ -263,7 +318,7 @@ pub fn change_row(line: &ChangeLine, feed: &Feed, unseen: bool) -> FeedRow {
             .as_deref()
             .map(|task| Press::Open(Live::Task(Id::from(task)))),
         id,
-        kind: class_kind(&line.class),
+        kind: event_kind(line),
         text,
         by,
         unseen,
@@ -327,6 +382,7 @@ pub fn daemon_since(feed: &Feed) -> Since {
         .changes
         .range(through.saturating_add(1)..)
         .rev()
+        .filter(|(_, line)| owner_relevant(line))
         .take(SINCE_ROWS)
         .map(|(_, line)| change_row(line, feed, true))
         .collect();

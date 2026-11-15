@@ -19,7 +19,7 @@ use nsh_core::prelude::*;
 
 use crate::model::inbox::{self, Action, Button, ButtonKind as ModelKind, Src, State};
 use crate::model::{Destination, Env, Form, Hue, Id, Rich};
-use crate::screens::PhonePage;
+use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -138,13 +138,12 @@ fn phone_page(app: AppState, key: Key) -> PhonePage {
     let body_key = key.clone();
     PhonePage {
         title: title.into(),
-        back: Destination::Inbox.label(),
         body: sheet::gate(app, key.clone(), move |app| {
             sheet::phone_body(app, body_key.clone())
         }),
         trailing: Some(sheet::ask_icon(app, key.clone())),
-        bar: Some(decide::decide(app, key, false)),
-        ask: true,
+        bar: Some(PhoneBar::always(decide::decide(app, key, false))),
+        ask: false,
         scroll: true,
     }
 }

@@ -2,7 +2,9 @@
 use anyhow::{Context, Result};
 use corral_core::assistant::AssistantSession;
 use corral_core::assistant::threads::{Message, Thread};
-use corral_protocol::assistant::{ContextRef, EntryCard, EntryKind, MessageState, ThreadEntry};
+use corral_protocol::assistant::{
+    ContextRef, EntryCard, EntryKind, EntryPart, MessageState, ThreadEntry,
+};
 use corral_protocol::rows::{
     AssistantKind, AssistantLocation, AssistantRow, AssistantState, WaitReason,
 };
@@ -97,6 +99,29 @@ fn state(session: &AssistantSession, head: Option<&Thread>) -> AssistantState {
     }
 }
 
+fn title_text(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let title: String = line
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(120)
+        .collect();
+    (!title.trim().is_empty()).then_some(title)
+}
+
+fn title(ctx: &Ctx, session: &AssistantSession, head: Option<&Thread>) -> Result<String> {
+    if let Some(title) = title_text(&session.summary) {
+        return Ok(title);
+    }
+    if head.is_some_and(|head| head.next > 1) {
+        let first = ctx.store.app_message(&format!("{}/M1", session.id))?;
+        if let Some(title) = title_text(&first.text) {
+            return Ok(title);
+        }
+    }
+    Ok(format!("{} · {}", session.id, session.focus))
+}
+
 /// The session's row without usage.
 fn base_row(ctx: &Ctx, session: &AssistantSession, head: Option<Thread>) -> Result<AssistantRow> {
     let id = session.id.as_str();
@@ -108,6 +133,20 @@ fn base_row(ctx: &Ctx, session: &AssistantSession, head: Option<Thread>) -> Resu
         .generation(container.state.binding.generation)
         .is_some_and(|g| g.daemon_hosted);
     let state = state(session, head.as_ref());
+    // Match `assistant_stats`/CLI: a saved ready state or pane is not a live host.
+    let live = session.ended.is_none() && super::super::pi::host_alive(&container.state)?;
+    let state = if !live
+        && matches!(
+            state,
+            AssistantState::Ready
+                | AssistantState::Working
+                | AssistantState::Waiting
+                | AssistantState::Stopping
+        ) {
+        AssistantState::Cold
+    } else {
+        state
+    };
     let turn = container.state.turns.last().map(|t| t.seq);
     let row = AssistantRow {
         id: id.into(),
@@ -119,10 +158,10 @@ fn base_row(ctx: &Ctx, session: &AssistantSession, head: Option<Thread>) -> Resu
         title: if quick {
             "Quick thread".into()
         } else {
-            format!("{id} · {}", session.focus)
+            title(ctx, session, head.as_ref())?
         },
         state,
-        live_in: if session.ended.is_some() {
+        live_in: if !live {
             AssistantLocation::None
         } else if hosted {
             AssistantLocation::Daemon
@@ -185,6 +224,9 @@ pub(crate) fn sessions_with_usage(
 }
 
 fn text_parts(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        return vec![text];
+    }
     let mut parts = Vec::new();
     let mut rest = text;
     while !rest.is_empty() {
@@ -200,7 +242,9 @@ fn text_parts(text: &str) -> Vec<&str> {
 
 fn entries(ctx: &Ctx, snapshot: &cards::Snapshot, message: &Message) -> Result<Vec<ThreadEntry>> {
     let mut rows = Vec::new();
-    for (part, text) in text_parts(&message.text).into_iter().enumerate() {
+    let owner_parts = text_parts(&message.text);
+    let owner_total = owner_parts.len() as u32;
+    for (part, text) in owner_parts.into_iter().enumerate() {
         rows.push(ThreadEntry {
             id: if part == 0 {
                 message.id.clone()
@@ -221,6 +265,15 @@ fn entries(ctx: &Ctx, snapshot: &cards::Snapshot, message: &Message) -> Result<V
             state: Some(message_state(message)),
             model: message.model.clone(),
             cost_usd: None,
+            cost_basis: None,
+            completion: None,
+            part: Some(EntryPart {
+                id: message.id.clone(),
+                index: part as u32,
+                total: owner_total,
+                bytes: message.text.len() as u64,
+                complete: true,
+            }),
             tools: Vec::new(),
             links: message
                 .context
@@ -266,7 +319,11 @@ fn entries(ctx: &Ctx, snapshot: &cards::Snapshot, message: &Message) -> Result<V
         });
     }
     if let Some(reply) = &message.reply {
-        for (part, text) in text_parts(reply).into_iter().enumerate() {
+        let answer_parts = text_parts(reply);
+        let answer_total = answer_parts.len() as u32;
+        let completion = super::turns::completion(ctx, message)?;
+        let (cost_usd, cost_basis) = super::turns::cost(&snapshot.costs, message);
+        for (part, text) in answer_parts.into_iter().enumerate() {
             rows.push(ThreadEntry {
                 id: format!("{}/answer/{part}", message.id),
                 rev: message.rev,
@@ -289,8 +346,17 @@ fn entries(ctx: &Ctx, snapshot: &cards::Snapshot, message: &Message) -> Result<V
                 text: Some(text.into()),
                 state: None,
                 model: message.model.clone(),
-                cost_usd: None,
                 tools: Vec::new(),
+                cost_usd: if part == 0 { cost_usd } else { None },
+                cost_basis: if part == 0 { cost_basis } else { None },
+                completion,
+                part: Some(EntryPart {
+                    id: format!("{}/answer/0", message.id),
+                    index: part as u32,
+                    total: answer_total,
+                    bytes: reply.len() as u64,
+                    complete: message.state == "done" || message.state == "pm_replied",
+                }),
                 links: Vec::new(),
                 attachments: Vec::new(),
                 card: None,
@@ -310,6 +376,9 @@ fn entries(ctx: &Ctx, snapshot: &cards::Snapshot, message: &Message) -> Result<V
             state: None,
             model: None,
             cost_usd: None,
+            cost_basis: None,
+            completion: None,
+            part: None,
             tools: Vec::new(),
             links: Vec::new(),
             attachments: Vec::new(),

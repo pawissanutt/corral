@@ -304,7 +304,13 @@ fn dock(
             let key = tab.panel.as_str();
             tab_label(app, title(app, &titles, key), tab.active, key)
         })
-        .render_panel(move |panel: &DockPanel| frame(app, panel.id.as_str()))
+        .render_panel(move |panel: &DockPanel| {
+            let key = panel.id.as_str().to_owned();
+            let shown = computed(move || {
+                layout.with(|arranged| layout::displayed(arranged).contains(&key.as_str()))
+            });
+            frame(app, panel.id.as_str(), shown)
+        })
         .into_element()
 }
 
@@ -354,7 +360,11 @@ fn panes(app: AppState, axis: Axis, titles: &Titles) -> AnyElement {
             })
             .border_color(color(Token::Rule))
             .child(tab_bar(view(), form).child(bar))
-            .child(view().flex_1().min_h(px(0.0)).child(frame(app, key)))
+            .child(view().flex_1().flex_col().min_h(px(0.0)).child(frame(
+                app,
+                key,
+                computed(|| true),
+            )))
     };
     let divider = match (terminal, side_by_side) {
         (true, true) => Some(term::vrule()),
@@ -454,11 +464,60 @@ fn grip(active: bool) -> AnyElement {
 
 /// A panel: its content scrolling on the page's ground, dimmed while the board is stale. In a
 /// terminal it starts with the line under its tabs, which reaches the lines on either side of the
-/// panel and joins them.
-fn frame(app: AppState, key: &str) -> AnyElement {
+/// panel and joins them. Only a panel `shown` has content: a tab group's hidden panels leave no
+/// invisible controls in the focus order. On desktop, where the scroll indicator shows only while
+/// scrolling, a fade at the bottom says there is more below.
+fn frame(app: AppState, key: &str, shown: Memo<bool>) -> AnyElement {
     let terminal = app.form == Form::Terminal;
     let stale = stale(app);
-    let content = match key {
+    let panel = key.to_owned();
+    let content = dynamic(move || {
+        shown
+            .get()
+            .then(|| untracked(|| panel_content(app, &panel)))
+    });
+    let scroller = element_ref();
+    let more = signal(false);
+    if app.form == Form::Desktop {
+        watch_scroll(
+            move || scroller.node(),
+            move |at: &ScrollEvent| {
+                more.set(at.content_size.height.0 - at.offset.y.0 - at.size.height.0 > 1.0);
+            },
+        );
+    }
+    // The dock lays the panel out as a one-cell grid, which would give a second child (the
+    // terminal's line) a row of its own and leave the scroll view its content's height: the
+    // panel is the cell's one child, a column filling it.
+    view()
+        .flex_1()
+        .min_h(px(0.0))
+        .min_w(px(0.0))
+        .child(
+            view()
+                .relative()
+                .flex_1()
+                .flex_col()
+                .min_h(px(0.0))
+                .min_w(px(0.0))
+                .bg(color(Token::Bg))
+                .when(terminal, |panel| panel.child(term::hrule()))
+                .child(
+                    scroll()
+                        .test_id(&format!("now-{key}"))
+                        .element_ref(&scroller)
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(dim_when(view(), stale).child(content)),
+                )
+                .child(dynamic(move || more.get().then(fade))),
+        )
+        .into_element()
+}
+
+/// The panel's content for its key.
+fn panel_content(app: AppState, key: &str) -> AnyElement {
+    match key {
         layout::WHO => list::list(app),
         layout::GOALS => list::goals(app),
         layout::STORY => inspector::panel(app, Some(NowTab::Story)),
@@ -470,18 +529,23 @@ fn frame(app: AppState, key: &str) -> AnyElement {
         layout::LIVE => context::live(app),
         layout::GRAPH => context::graph(app),
         _ => view().into_element(),
-    };
+    }
+}
+
+/// The bottom of a panel whose content runs on: the page's ground fading in over 28 pt, under
+/// the last visible row. It takes no presses and says nothing to screen readers, which reach
+/// the rows below by themselves.
+fn fade() -> AnyElement {
     view()
-        .size_full()
-        .flex_col()
-        .bg(color(Token::Bg))
-        .when(terminal, |panel| panel.child(term::hrule()))
-        .child(
-            scroll()
-                .test_id(&format!("now-{key}"))
-                .flex_1()
-                .min_h(px(0.0))
-                .child(dim_when(view(), stale).child(content)),
-        )
+        .absolute()
+        .left(px(0.0))
+        .right(px(0.0))
+        .bottom(px(0.0))
+        .h(px(28.0))
+        .pointer_events(PointerEvents::None)
+        .accessibility_elements_hidden(true)
+        .bg_linear_to_b()
+        .gradient_from(color(Token::Bg).opacity(0.0))
+        .gradient_to(color(Token::Bg))
         .into_element()
 }

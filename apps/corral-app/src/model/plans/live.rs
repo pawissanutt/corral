@@ -171,6 +171,9 @@ fn list_row(feed: &Feed, row: &WirePlan, selected: Option<&Id>, phone: bool) -> 
     let id = Id::from(&row.id);
     let tracking = matches!(row.state, WireState::Executing | WireState::Complete);
     let sub = match row.state {
+        WireState::Drafting => vec![span("drafting").dim()],
+        WireState::Reviewing => vec![span("in plan review").dim()],
+        WireState::PlanFailed => vec![span("plan failed").hue(Hue::Fail)],
         WireState::Awaiting => vec![
             span(match &row.revision {
                 Some(rev) => format!("revision {rev} · {} members", row.members_total),
@@ -422,6 +425,9 @@ pub(super) fn stale_line(cache: &DetailCache, feed: &Feed) -> Option<String> {
 /// The state chip of a served plan.
 pub(super) fn state_chip(state: WireState) -> Chip {
     let (label, hue) = match state {
+        WireState::Drafting => ("drafting", Hue::Neutral),
+        WireState::Reviewing => ("in plan review", Hue::Corral),
+        WireState::PlanFailed => ("plan failed", Hue::Fail),
         WireState::Awaiting => ("needs you", Hue::You),
         WireState::Executing => ("executing", Hue::Corral),
         WireState::Approved => ("approved", Hue::Neutral),
@@ -504,7 +510,13 @@ pub fn live_detail(state: &State, plan: Option<&Id>, feed: &Feed, env: Env) -> D
             Detail::Awaiting(live_doc::awaiting(state, feed, id, row, detail, stale, env))
         }
         WireState::Approved => Detail::Approved(live_role::approved(id, row, detail, stale, env)),
-        WireState::Executing | WireState::Complete | WireState::Cancelled | WireState::Other => {
+        WireState::Drafting
+        | WireState::Reviewing
+        | WireState::PlanFailed
+        | WireState::Executing
+        | WireState::Complete
+        | WireState::Cancelled
+        | WireState::Other => {
             Detail::Executing(executing(state, feed, id, row, detail, stale, env))
         }
     }

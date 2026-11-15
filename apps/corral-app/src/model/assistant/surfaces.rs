@@ -480,6 +480,16 @@ pub fn prompt_pane(prompt: Prompt, env: Env) -> PromptPane {
             Prompt::Confirmation => PromptCard::Confirmation(mode_pause_card()),
         },
         note: "One answer wins: answering here also settles it in the quick thread on every device.",
-        open: button("Open the quick thread", Action::OpenQuickThread),
+        open: button(
+            "Open the quick thread",
+            Action::OpenPrompt {
+                thread: super::ThreadRef::Fixture("A-7"),
+                key: match prompt {
+                    Prompt::Permission => "permission",
+                    Prompt::Confirmation => "confirmation",
+                }
+                .into(),
+            },
+        ),
     }
 }

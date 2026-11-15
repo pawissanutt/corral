@@ -135,6 +135,9 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
             return Ok(());
         }
         if welcomed {
+            if let Some(guard) = &session.attached {
+                guard.flush_authority(&mut stream)?;
+            }
             topics.flush(&mut stream)?;
         }
         // Poll before reading so idle clients survive between requests, while a partial
@@ -447,7 +450,16 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
             },
             other => {
                 if crate::app::dispatch::is_method(other)
-                    && (other != wire::device::DEVICE_LIST || session.via == "app")
+                    && (session.via == "app"
+                        || !matches!(
+                            other,
+                            wire::device::DEVICE_LIST
+                                | wire::device::DEVICE_REVOKE
+                                | wire::device::PAIR_BEGIN
+                                | wire::device::PAIR_STATUS
+                                | wire::device::PAIR_CONFIRM
+                                | wire::device::PAIR_CANCEL
+                        ))
                 {
                     crate::app::dispatch::serve(
                         &mut stream,

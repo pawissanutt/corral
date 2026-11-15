@@ -93,6 +93,26 @@ pub struct AssistantStop {
     pub turn: u64,
 }
 
+/// Acceptance is not proof of abort; only canonical `ThreadEntry.completion` attests settlement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StopAck {
+    pub session: String,
+    pub turn: u64,
+    pub outcome: StopOutcome,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StopOutcome {
+    Accepted,
+    /// The requested turn is no longer running, not necessarily because it was aborted.
+    AlreadyStopped,
+    Failed,
+    #[serde(other)]
+    Other,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum AssistantSessionOp {
@@ -171,6 +191,29 @@ pub enum MessageState {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct EntryPart {
+    /// Semantic message ID; answers use the live stream's `<message>/answer/0` anchor.
+    pub id: String,
+    /// Zero-based transport part position, independent of page boundaries.
+    pub index: u32,
+    pub total: u32,
+    /// Whole canonical content length in UTF-8 bytes at this revision.
+    pub bytes: u64,
+    /// No more content will be appended. All `total` parts must still be collected.
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnCompletion {
+    Completed,
+    Aborted,
+    Failed,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadEntry {
     pub id: String,
     pub rev: u64,
@@ -184,8 +227,17 @@ pub struct ThreadEntry {
     pub text: Option<String>,
     pub state: Option<MessageState>,
     pub model: Option<String>,
+    /// One semantic answer's amount, carried only by part zero. None means unknown, never zero.
     pub cost_usd: Option<f64>,
     pub tools: Vec<ToolLine>,
+    /// Absent on older servers; continuation IDs remain readable as legacy transport parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<EntryPart>,
+    /// Canonical host settlement, never inferred from a Stop request or a generic done stream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<TurnCompletion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_basis: Option<crate::board::CostBasis>,
     pub links: Vec<ContextRef>,
     pub card: Option<EntryCard>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -240,6 +292,10 @@ pub enum EntryCard {
         rev: u32,
         options: Vec<QuestionOption>,
         answer: Option<QuestionAnswer>,
+        /// Submit `QuestionCommand::Answer` using this key/rev, owner=true and option=None.
+        /// False after settlement; old servers omit this capability.
+        #[serde(default)]
+        accepts_text: bool,
     },
     Prompt {
         key: String,

@@ -13,7 +13,7 @@ pub struct BoardRow {
     /// Run, gate, review, land, in that order.
     pub rail: [RailStep; 4],
     pub now: BoardNow,
-    /// Unknown for a legacy bare dispatch-hold flag.
+    /// Recorded hold reason, or the CLI's canonical owner-dispatch-hold cause.
     pub held_reason: Option<String>,
     pub questions: u64,
     /// At most four unresolved attention ledger keys.

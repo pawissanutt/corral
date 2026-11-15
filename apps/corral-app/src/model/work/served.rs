@@ -19,6 +19,8 @@ use super::{
 pub const NO_BOARD: &str = "No board received from corrald yet.";
 /// Said instead of the list when the daemon's board holds no task.
 pub const EMPTY_BOARD: &str = "Nothing on the board.";
+/// The board failed before producing any rows; the status banner carries the reason and retry.
+pub(super) const BOARD_UNAVAILABLE: &str = "Board unavailable.";
 /// Said instead of the list when no task on the board serves the chosen goal.
 pub const NO_GOAL_TASKS: &str = "No task on the board serves this goal.";
 
@@ -170,6 +172,12 @@ pub fn daemon_list(
     }
     let board = &feed.board;
     if !board.complete {
+        if super::served_facts::board_problem(feed).is_some() {
+            return GroupedList {
+                notice: Some(BOARD_UNAVAILABLE),
+                ..GroupedList::new(form)
+            };
+        }
         return match feed.link {
             Link::Down => GroupedList {
                 notice: Some(NO_BOARD),
@@ -260,8 +268,31 @@ pub fn task_question(feed: &daemon::Feed, task: &str) -> Option<Id> {
     use corral_protocol::rows::InboxState;
     feed.inbox
         .values()
-        .find(|row| row.task.as_deref() == Some(task) && row.state == InboxState::Open)
+        .find(|row| {
+            row.task.as_deref() == Some(task)
+                && row.state == InboxState::Open
+                && crate::model::inbox::is_question(row)
+        })
         .map(|row| Id::from(row.id.as_str()))
+}
+
+/// Reuse Inbox's canonical routing for every kind of open task attention.
+pub(super) fn task_attention(feed: &daemon::Feed, task: &str) -> Option<Live> {
+    crate::model::inbox::ordered(feed)
+        .into_iter()
+        .filter(|row| row.task.as_deref() == Some(task) && crate::model::inbox::is_open(row))
+        .find_map(crate::model::inbox::target)
+}
+
+pub(super) fn attention_button(feed: &daemon::Feed, task: &str) -> Option<Button> {
+    let target = task_attention(feed, task)?;
+    let label = match &target {
+        Live::Question(id) => format!("Answer {id}"),
+        Live::Review(_) => "Review candidate".into(),
+        Live::Plan(_) => "Review plan".into(),
+        _ => "Open task".into(),
+    };
+    Some(Button::new(label, Press::Open(target), ButtonKind::Primary))
 }
 
 impl State {
@@ -313,8 +344,7 @@ impl State {
             "enter" | "Enter" => {
                 let task = selection(self, chosen, tasks, form)
                     .and_then(|id| tasks.iter().find(|task| task.id == *id))?;
-                let open = task_question(feed, &task.id)
-                    .map(Live::Question)
+                let open = task_attention(feed, &task.id)
                     .or_else(|| task_session(feed, task).map(Live::Session));
                 Some(open.map(Effect::OpenLive).into_iter().collect())
             }
@@ -518,6 +548,10 @@ mod tests {
                     at: "2026-11-14T10:00:00Z".into(),
                     class: "queue".into(),
                     task: Some(id.into()),
+                    kind: corral_protocol::app::ChangeKind::Other,
+                    from: None,
+                    to: None,
+                    failed: false,
                     text: format!("{id} · queued"),
                     actor: "corrald".into(),
                     via: "daemon".into(),
@@ -544,5 +578,132 @@ mod tests {
             })
             .collect();
         assert_eq!(changed, ["T-2"]);
+    }
+
+    #[test]
+    fn task_attention_routes_inspector_and_enter_without_inventing_questions() {
+        use corral_protocol::rows::{InboxKind, InboxRow, InboxState};
+        let row_task = task("T-1", daemon::Group::NeedsYou);
+        let tasks = [&row_task];
+        let mut state = State::default();
+        for (kind, expected, question) in [
+            (InboxKind::Review, Live::Review(Id::new("T-1")), false),
+            (InboxKind::PlanAcceptance, Live::Plan(Id::new("T-9")), false),
+            (InboxKind::Stuck, Live::Task(Id::new("T-1")), false),
+            (
+                InboxKind::WorkerQuestion,
+                Live::Question(Id::new("item")),
+                true,
+            ),
+        ] {
+            let mut feed = daemon::Feed::default();
+            feed.inbox.insert(
+                Id::new("item"),
+                InboxRow {
+                    id: "item".into(),
+                    kind,
+                    task: Some("T-1".into()),
+                    plan: Some("T-9".into()),
+                    project: None,
+                    title: String::new(),
+                    from: String::new(),
+                    asked_at: None,
+                    needed_by: None,
+                    blocking: true,
+                    state: InboxState::Open,
+                    question_rev: question.then_some(1),
+                    answerable: question,
+                    unanswerable_reason: None,
+                    attention: None,
+                    rev: 1,
+                },
+            );
+            assert_eq!(task_question(&feed, "T-1").is_some(), question);
+            let story = super::super::live_story(&state, &feed, &row_task, Form::Desktop);
+            let button = story
+                .facts
+                .iter()
+                .find_map(|(_, fact)| match fact {
+                    super::super::Fact::Answer(button) => Some(button),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(button.action, Some(Press::Open(expected.clone())));
+            let effects = state
+                .key_tasks("Enter", None, &tasks, &feed, Form::Desktop)
+                .unwrap();
+            assert_eq!(effects, [Effect::OpenLive(expected)]);
+        }
+    }
+
+    #[test]
+    fn board_topic_failure_stops_loading_and_marks_retained_rows_last_known() {
+        use crate::model::daemon::{ClientError, TopicState};
+        let mut feed = daemon::Feed {
+            link: Link::Up,
+            ..daemon::Feed::default()
+        };
+        let mut state = State::default();
+        let selected = Selection::default();
+        feed.topics.insert(
+            "board".into(),
+            TopicState {
+                loading: false,
+                stale: true,
+                error: Some(ClientError {
+                    code: "failed".into(),
+                    message: "topic rejected".into(),
+                }),
+            },
+        );
+        let list = daemon_list(&state, &feed, &selected, Form::Desktop);
+        assert!(list.notice.is_some());
+        assert!(list.groups.is_empty());
+        let status = super::super::daemon_status(&feed);
+        let banner = status.banner.unwrap();
+        assert!(format!("{:?}", banner.text).contains("topic rejected"));
+        assert_eq!(banner.actions[0].action, Some(Press::RetryBoard));
+        assert_eq!(
+            state.press(
+                Press::RetryBoard,
+                &feed,
+                Env {
+                    conn: Conn::Healthy,
+                    mode: DataMode::Live,
+                    form: Form::Desktop,
+                }
+            ),
+            [Effect::RetryTopic("board".into())]
+        );
+        assert!(
+            super::super::daemon_live(&state, &feed, &selected, Form::Desktop)
+                .selected_note
+                .is_some()
+        );
+        assert!(
+            super::super::daemon_plan(&state, &feed, &selected, Form::Desktop)
+                .empty
+                .is_some()
+        );
+
+        feed.board_received(1, vec![task("T-1", daemon::Group::Queued)], &[], true);
+        assert!(
+            !daemon_list(&state, &feed, &selected, Form::Desktop)
+                .groups
+                .is_empty()
+        );
+        assert!(super::super::daemon_status(&feed).dimmed);
+        assert!(super::super::daemon_status(&feed).as_of.is_some());
+        feed.topics.insert(
+            "board".into(),
+            TopicState {
+                loading: true,
+                ..TopicState::default()
+            },
+        );
+        assert!(super::super::daemon_status(&feed).dimmed);
+        feed.topics.insert("board".into(), TopicState::default());
+        assert!(!super::super::daemon_status(&feed).dimmed);
+        assert!(super::super::daemon_status(&feed).banner.is_none());
     }
 }

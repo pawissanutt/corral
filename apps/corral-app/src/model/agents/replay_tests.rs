@@ -131,3 +131,87 @@ fn provider_error_item_is_dropped() {
     assert_eq!(marker.hue, Hue::Fail);
     assert!(marker.words.contains("429 rate limited"));
 }
+
+#[test]
+fn recorded_tool_calls_settle_from_their_result_by_call_id() {
+    use crate::model::board::Mark;
+
+    let call = |id: &str, arguments: &str, state| SessionItem::ToolCall {
+        call_id: id.into(),
+        name: "corral_session".into(),
+        arguments: arguments.into(),
+        summary: arguments.into(),
+        state,
+        paired: false,
+        call: None,
+        output: None,
+        result: None,
+        elapsed_ms: None,
+        diff: None,
+        content: None,
+    };
+    for (state, mark) in [
+        (SessionToolState::Done, Mark::Done),
+        (SessionToolState::Failed, Mark::Fail),
+    ] {
+        let mut feed = feed(vec![
+            call(
+                "finished",
+                r#"{"command":"echo ready\nmore"}"#,
+                SessionToolState::Running,
+            ),
+            call(
+                "still-running",
+                r#"{"command":"wait"}"#,
+                SessionToolState::Running,
+            ),
+        ]);
+        let mut result = call("finished", "", state);
+        if let SessionItem::ToolCall { output, result, .. } = &mut result {
+            *output = Some("ready".into());
+            *result = Some(r#"{"ok":true}"#.into());
+        }
+        let target = DetailRef::Session { id: ID.into() };
+        let DetailBody::Session(page) = feed
+            .details
+            .get_mut(&daemon::detail_key(&target))
+            .unwrap()
+            .merged
+            .as_mut()
+            .unwrap()
+        else {
+            panic!("session page")
+        };
+        page.messages.push(SessionMessage {
+            author: "tool".into(),
+            at: Some("2026-11-15T10:00:01Z".into()),
+            items: vec![result],
+            model: None,
+            stop_reason: None,
+            usage: None,
+        });
+        let page = shown(&feed);
+        let tools: Vec<_> = page
+            .messages
+            .iter()
+            .flat_map(|message| &message.items)
+            .filter_map(|item| match item {
+                MessageItem::Tool(tool) => Some(tool),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tools.len(),
+            2,
+            "the result must settle the call, not add a second row"
+        );
+        assert_eq!(tools[0].mark, mark);
+        assert_eq!(tools[0].failed, state == SessionToolState::Failed);
+        assert_eq!(tools[0].summary, "echo ready");
+        assert_eq!(
+            tools[1].mark,
+            Mark::Active,
+            "a different id must stay running"
+        );
+    }
+}

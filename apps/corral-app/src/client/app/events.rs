@@ -53,6 +53,7 @@ impl AppState {
                 feed.update(|feed| {
                     if topic == Topic::Board {
                         feed.begin_epoch(epoch);
+                        feed.projection_ready = false;
                         feed.link = Link::Connecting;
                         feed.problem = Some("Waiting for the replacement board snapshot.".into());
                     }
@@ -131,6 +132,10 @@ impl AppState {
         let result = match outcome {
             Ok(value) => value,
             Err((code, message)) => {
+                if method == APP_SESSION {
+                    // A valid RPC failure must not strand a heartbeat-healthy bootstrap.
+                    return Err(format!("App session initialization failed: {message}"));
+                }
                 let outer_code = value(code);
                 let error = ClientError {
                     code: error_data
@@ -292,6 +297,15 @@ impl AppState {
                     }
                 }
                 feed.update(|feed| {
+                    if page.head >= feed.changes_head
+                        && feed
+                            .seen
+                            .as_ref()
+                            .is_none_or(|seen| page.seen.through >= seen.through)
+                    {
+                        feed.seen_received(page.seen.clone());
+                        feed.changes_unseen = page.unseen.map(|unseen| (page.seen.through, unseen));
+                    }
                     for line in page.lines {
                         feed.changes.insert(line.seq, line);
                     }
@@ -306,7 +320,6 @@ impl AppState {
                     if after.is_none() {
                         feed.changes_older = page.older;
                     }
-                    feed.seen = Some(page.seen);
                 });
                 if after.is_some() && last.is_some_and(|last| last < head) {
                     return Ok(self.poll_changes(feed));
@@ -316,7 +329,7 @@ impl AppState {
             SEEN_ADVANCE => {
                 let seen: SeenCursor = decode(result)?;
                 feed.update(|feed| {
-                    feed.seen = Some(seen.clone());
+                    feed.seen_received(seen.clone());
                     if let Some(session) = &mut feed.session {
                         session.seen = seen;
                     }

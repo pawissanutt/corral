@@ -69,6 +69,8 @@ pub struct LiveState {
     pub new_session_failed: Option<String>,
     /// Turns asked to stop, by session.
     pub stopping: BTreeMap<String, u64>,
+    /// Stop request correlation and exact turn; acceptance alone never proves an abort.
+    pub stop_ops: BTreeMap<Id, (String, u64)>,
     /// The named session whose End is being confirmed on this device.
     pub confirm_end: Option<String>,
     /// Ends sent, by session.
@@ -125,8 +127,48 @@ pub fn subject(kind: &str, id: &str) -> String {
 }
 
 impl State {
-    /// Records the reply to a session operation by its key, returning what follows from it: a
-    /// new session's thread opens once corrald created it. Unchanged replies change nothing.
+    /// A failed Stop releases only its own turn, so the current answer can be retried.
+    pub fn stop_failed(&mut self, session: &str, turn: u64) {
+        if self.live.stopping.get(session) == Some(&turn) {
+            self.live.stopping.remove(session);
+        }
+    }
+
+    pub fn settle_stop(
+        &mut self,
+        key: &Id,
+        operation: &crate::model::daemon::Operation,
+    ) -> Vec<Effect> {
+        use corral_protocol::assistant::{StopAck, StopOutcome};
+        if operation.loading {
+            return Vec::new();
+        }
+        let Some((session, turn)) = self.live.stop_ops.remove(key) else {
+            return Vec::new();
+        };
+        let failure = if let Some(error) = &operation.error {
+            Some(error.message.clone())
+        } else {
+            match operation.decode::<StopAck>() {
+                Some(ack) if ack.session == session && ack.turn == turn => match ack.outcome {
+                    StopOutcome::Accepted | StopOutcome::AlreadyStopped => None,
+                    StopOutcome::Failed | StopOutcome::Other => Some(
+                        ack.reason
+                            .unwrap_or_else(|| "Stop was not accepted.".into()),
+                    ),
+                },
+                _ => Some("Stop replied without a matching acknowledgement.".into()),
+            }
+        };
+        if let Some(why) = failure {
+            self.stop_failed(&session, turn);
+            vec![Effect::Toast(why)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Records a session operation's outcome, opening a created session once it arrives.
     pub fn settle(&mut self, key: &Id, outcome: OpOutcome) -> Vec<Effect> {
         if self.live.new_session.as_ref() == Some(key) {
             return match outcome {
@@ -303,6 +345,19 @@ impl State {
 
     /// Runs one daemon-mode action from any builder.
     pub fn act_live(&mut self, action: Action, feed: &Feed) -> Vec<Effect> {
+        if matches!(
+            &action,
+            Action::NewSession
+                | Action::ConfirmEnd(_)
+                | Action::PickProfile { .. }
+                | Action::Stop { .. }
+        ) && !feed.ready()
+        {
+            self.live.confirm_end = None;
+            return vec![Effect::Toast(
+                "Not sent: needs an authenticated, synchronized connection to corrald.".into(),
+            )];
+        }
         match action {
             Action::ToggleModelMenu => {
                 self.model_menu = !self.model_menu;
@@ -312,14 +367,26 @@ impl State {
                 self.model_menu = false;
                 vec![Effect::CloseAsk]
             }
-            Action::OpenQuickThread | Action::HotkeyOpen => vec![
-                Effect::CloseAsk,
-                Effect::OpenLive(Live::Thread(Id::from(QUICK))),
-            ],
+            Action::OpenQuickThread | Action::HotkeyOpen => {
+                self.clear_anchor();
+                vec![
+                    Effect::CloseAsk,
+                    Effect::OpenLive(Live::Thread(Id::from(QUICK))),
+                ]
+            }
             Action::OpenLive(live @ Live::Thread(_)) => {
+                self.clear_anchor();
                 vec![Effect::CloseAsk, Effect::OpenLive(live)]
             }
             Action::OpenLive(live) => vec![Effect::OpenLive(live)],
+            Action::OpenPrompt {
+                thread: super::ThreadRef::Live(scope),
+                key,
+            } => {
+                self.anchor = Some((super::ThreadRef::Live(scope.clone()), key));
+                vec![Effect::CloseAsk, Effect::OpenLive(Live::Thread(scope))]
+            }
+            Action::OpenPrompt { .. } => Vec::new(),
             Action::PickProfile { thread, profile } => self.pick(thread, profile, feed),
             Action::Stop { session, turn } => {
                 self.live.stopping.insert(session.clone(), turn);

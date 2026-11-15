@@ -15,7 +15,7 @@ use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::text::span;
 use crate::model::{Form, Id};
-use crate::screens::PhonePage;
+use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with, seg};
@@ -184,6 +184,9 @@ pub fn page(app: AppState, session: Memo<Session>, id: Option<Id>) -> AnyElement
     });
     view()
         .size_full()
+        .flex_1()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
         .flex_col()
         .when(app.form != Form::Terminal, |page| page.bg(color(Token::Bg)))
         .child(top)
@@ -663,9 +666,8 @@ fn phone_terminal(app: AppState, session: Memo<Session>) -> AnyElement {
 pub fn phone(app: AppState, session: Memo<Session>, id: Option<Id>) -> PhonePage {
     let daemon = id.is_some();
     let draft = draft_for(app, session, id);
-    let (title, back, toggle) = untracked(move || {
-        session.with(|s| (s.phone_title.clone(), s.back_label, s.toggle.clone()))
-    });
+    let (title, toggle) =
+        untracked(move || session.with(|s| (s.phone_title.clone(), s.toggle.clone())));
     let has_terminal = computed(move || session.with(|s| s.terminal.is_some()));
     let terminal = move || session.with(|s| s.view == View::Terminal && s.terminal.is_some());
     let switcher = dynamic(move || {
@@ -785,10 +787,9 @@ pub fn phone(app: AppState, session: Memo<Session>, id: Option<Id>) -> PhonePage
     };
     PhonePage {
         title,
-        back,
         body,
         trailing: Some(trailing),
-        bar: Some(docked),
+        bar: Some(PhoneBar::always(docked)),
         ask: false,
         scroll: !daemon,
     }

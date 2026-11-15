@@ -3,6 +3,7 @@
 //! holds the connection banner and the current page, with the Ask drawer, the palette, the
 //! confirmation and the toast over it.
 
+use nsh_core::AccessibilityCurrent;
 use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
@@ -14,7 +15,9 @@ use crate::screens;
 use crate::shell::{banner, confirmation, section_short, sidebar_collapsed, stale, toast};
 use crate::state::AppState;
 use crate::ui::ask;
-use crate::ui::atoms::{HealthLayout, count, health_line, key_hint, nav_row, nav_row_icon};
+use crate::ui::atoms::{
+    HealthLayout, count, destination_spoken, health_line, key_hint, nav_row, nav_row_icon,
+};
 use crate::ui::composer::ask_surface;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::palette::palette;
@@ -141,6 +144,7 @@ fn sidebar(
 ) -> AnyElement {
     let rows = Destination::ALL.map(|d| destination_row(app, destination, d));
     view()
+        .role(AccessibilityRole::Navigation)
         .w(px(SIDEBAR_WIDTH))
         .flex_shrink_0()
         .min_h(px(0.0))
@@ -167,8 +171,8 @@ fn sidebar(
         .into_element()
 }
 
-/// Folds or unfolds the sidebar; its glyph points the way it will move.
-/// test_id "sidebar-toggle".
+/// Folds or unfolds the sidebar, drawn as a window with its sidebar (a back chevron would read
+/// as leaving the page); it says whether the labels are shown. test_id "sidebar-toggle".
 fn sidebar_toggle(app: AppState, collapsed: Memo<bool>) -> AnyElement {
     let ink = color(Token::ShellInk);
     view()
@@ -185,16 +189,13 @@ fn sidebar_toggle(app: AppState, collapsed: Memo<bool>) -> AnyElement {
         .focus_visible(focus_ring)
         .role(AccessibilityRole::Button)
         .label("Show or hide sidebar labels")
+        .accessibility_state(move || AccessibilityState {
+            expanded: Some(!collapsed.get() || app.sidebar_peeking()),
+            ..AccessibilityState::default()
+        })
         .test_id("sidebar-toggle")
         .on_press(move || app.toggle_sidebar())
-        .child(dynamic(move || {
-            let glyph = if collapsed.get() && !app.sidebar_peeking() {
-                Icon::Chevron
-            } else {
-                Icon::Back
-            };
-            icon(glyph, 16.0, color(Token::ShellInk2))
-        }))
+        .child(icon(Icon::Sidebar, 16.0, color(Token::ShellInk2)))
         .into_element()
 }
 
@@ -239,13 +240,18 @@ fn peek(
 
 /// The folded sidebar: Ask and the palette, then each destination as its icon with its count,
 /// and the Settings sections as short names under Settings. Every control keeps its full name
-/// for assistive technology, and the palette lists them all.
+/// (and a destination its count) for assistive technology, shows its name and key in a hint
+/// while the pointer rests on it, and the palette lists them all.
 fn rail(app: AppState, destination: Memo<Destination>) -> AnyElement {
     let ink = color(Token::ShellInk);
     let rows = Destination::ALL.map(|d| {
         rail_button(
             app,
-            d.label(),
+            Hint {
+                name: d.label(),
+                key: Some(d.key().to_string()),
+            },
+            destination_spoken(app, d),
             format!("nav-{}", d.slug()),
             move || destination.get() == d,
             move || app.go(d),
@@ -261,6 +267,7 @@ fn rail(app: AppState, destination: Memo<Destination>) -> AnyElement {
         .into_element()
     });
     view()
+        .role(AccessibilityRole::Navigation)
         .w(px(RAIL_WIDTH))
         .flex_shrink_0()
         .min_h(px(0.0))
@@ -272,7 +279,11 @@ fn rail(app: AppState, destination: Memo<Destination>) -> AnyElement {
         .child(
             rail_button(
                 app,
-                ASK_LABEL,
+                Hint {
+                    name: ASK_LABEL,
+                    key: Some(ASK_KEY.to_owned()),
+                },
+                move || SharedString::from(ASK_LABEL),
                 "ask-open".into(),
                 || false,
                 move || app.open_ask(),
@@ -283,7 +294,11 @@ fn rail(app: AppState, destination: Memo<Destination>) -> AnyElement {
         .child(
             rail_button(
                 app,
-                PALETTE_HINT,
+                Hint {
+                    name: PALETTE_HINT,
+                    key: Some(PALETTE_KEY.to_owned()),
+                },
+                move || SharedString::from(PALETTE_HINT),
                 "palette-open".into(),
                 || false,
                 move || app.open_palette(),
@@ -317,9 +332,11 @@ fn rail_sections(app: AppState) -> AnyElement {
                 app.nav
                     .with(|nav| nav.destination == Destination::Settings && nav.settings == section)
             };
+            let name = section.label();
             rail_button(
                 app,
-                section.label(),
+                Hint { name, key: None },
+                move || SharedString::from(name),
                 format!("settings-{}", section.slug()),
                 selected,
                 move || app.go_settings(section),
@@ -341,15 +358,24 @@ fn rail_sections(app: AppState) -> AnyElement {
         .into_element()
 }
 
-/// One square control of the rail, tinted while selected, named for assistive technology.
+/// What a rail control's hint shows: its full name and, where it has one, its key.
+struct Hint {
+    name: &'static str,
+    key: Option<String>,
+}
+
+/// One square control of the rail, tinted while selected (the current page for assistive
+/// technology), named by `spoken`, with its [`Hint`] while the pointer rests on it.
 fn rail_button(
     app: AppState,
-    label: &'static str,
+    hint: Hint,
+    spoken: impl Fn() -> SharedString + 'static,
     test_id: String,
     selected: impl Fn() -> bool + 'static,
     on_press: impl Fn() + 'static,
 ) -> View {
     let ink = color(Token::ShellInk);
+    let selected = computed(selected);
     view()
         .relative()
         .w(px(RAIL_BUTTON))
@@ -362,7 +388,7 @@ fn rail_button(
         .transition_colors()
         .duration(120.0_f32)
         .bg(move || {
-            if selected() {
+            if selected.get() {
                 ink.opacity(0.14)
             } else {
                 AdaptiveColor::TRANSPARENT
@@ -372,9 +398,44 @@ fn rail_button(
         .active(move |s| s.bg(ink.opacity(0.18)))
         .focus_visible(focus_ring)
         .role(AccessibilityRole::Button)
-        .label(label)
+        .label(spoken)
+        .accessibility_state(move || AccessibilityState {
+            current: selected.get().then_some(AccessibilityCurrent::Page),
+            ..AccessibilityState::default()
+        })
         .test_id(&test_id)
+        .tooltip(rail_hint(hint))
         .on_press(on_press)
+}
+
+/// The rail's hint (as the timeline chart's): the name in ink on the surface, the key after it
+/// in the quiet mono. It repeats the control's name, so screen readers skip it.
+fn rail_hint(hint: Hint) -> AnyElement {
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .px(px(8.0))
+        .py(px(4.0))
+        .rounded(px(RADIUS_CONTROL))
+        .bg(color(Token::Surface))
+        .border_1()
+        .border_color(color(Token::Rule2))
+        .accessibility_elements_hidden(true)
+        .child(
+            text(hint.name)
+                .number_of_lines(1u32)
+                .text_size(px(11.5))
+                .text_color(color(Token::Ink)),
+        )
+        .children(hint.key.map(|key| {
+            text(key)
+                .number_of_lines(1u32)
+                .font_family(FONT_MONO)
+                .text_size(px(10.5))
+                .text_color(color(Token::Ink3))
+        }))
+        .into_element()
 }
 
 fn project(app: AppState, ws: Workspace) -> AnyElement {
@@ -494,6 +555,7 @@ fn destination_row(app: AppState, destination: Memo<Destination>, d: Destination
         app,
         Icon::destination(d),
         d.label(),
+        destination_spoken(app, d),
         format!("nav-{}", d.slug()),
         move || destination.get() == d,
         Some(trailing),
@@ -554,7 +616,8 @@ fn device_footer(app: AppState, ws: Workspace) -> AnyElement {
 
 /// The connection banner over the page, then the page, dimmed while the board is stale; over
 /// them the Ask drawer, the palette, the confirmation and the toast, which the contract wants
-/// as the container's last children so they cover the page and nothing else.
+/// as the container's last children so they cover the page and nothing else. The page is a
+/// landmark named by its destination (NSH has no main role), beside the sidebar's navigation.
 fn content(app: AppState) -> AnyElement {
     view()
         .flex_1()
@@ -566,6 +629,8 @@ fn content(app: AppState) -> AnyElement {
         .child(banner(app))
         .child(
             view()
+                .role(AccessibilityRole::Region)
+                .label(move || SharedString::from(app.destination().label()))
                 .flex_1()
                 .min_w(px(0.0))
                 .min_h(px(0.0))

@@ -131,6 +131,7 @@ pub(crate) fn press_id(press: &Press) -> String {
         Press::Goal(_) => "btn-goal".into(),
         Press::Seen(_) => "btn-mark-seen".into(),
         Press::Older(_) => "btn-older".into(),
+        Press::RetryBoard => "btn-retry-board".into(),
     }
 }
 

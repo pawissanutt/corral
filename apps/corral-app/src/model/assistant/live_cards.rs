@@ -274,7 +274,7 @@ pub(super) fn prompt_body(
                     button: control,
                     requires_presence,
                     presence_prompt: requires_presence
-                        .then_some("a fresh confirmation on this device"),
+                        .then_some("a confirmation tap and daemon device-bound proof; no biometric or PIN check"),
                 }
             })
             .collect()
@@ -316,7 +316,7 @@ pub(super) fn prompt_body(
             .collect(),
         choices,
         presence_note: needs_presence.then_some(
-            "The two standing grants ask for a fresh confirmation on this device first; Allow once and Deny do not.",
+            "Standing grants require a confirmation tap and daemon device-bound proof; no biometric or PIN check. Allow once and Deny do not require this extra confirmation.",
         ),
         timer_note: (!settled).then(|| {
             "This prompt stays answerable here and in Inbox on every device; one answer wins.".into()
@@ -563,7 +563,10 @@ pub fn live_prompt_pane(state: &State, feed: &Feed, scope: &str, key: &str) -> L
         note: "One answer wins: answering here also settles it in the thread on every device.",
         open: button(
             "Open the thread",
-            Action::OpenLive(Live::Thread(Id::from(scope))),
+            Action::OpenPrompt {
+                thread: super::ThreadRef::Live(Id::from(scope)),
+                key: key.to_owned(),
+            },
         ),
     })
 }

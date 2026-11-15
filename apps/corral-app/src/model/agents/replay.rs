@@ -266,7 +266,11 @@ fn head(author: &str, at: Option<&str>) -> Rich {
     head
 }
 
-fn message(message: &SessionMessage, cx: Cx<'_>) -> Message {
+fn message(
+    message: &SessionMessage,
+    cx: Cx<'_>,
+    pairs: &std::collections::BTreeMap<&str, super::replay_pairs::Pair<'_>>,
+) -> Message {
     let (letter, hue) = avatar(&message.author);
     let author = if letter == "Y" {
         "you".to_owned()
@@ -298,8 +302,17 @@ fn message(message: &SessionMessage, cx: Cx<'_>) -> Message {
                 false,
                 cx,
             ))),
-            SessionItem::ToolCall { .. } => {
-                items.extend(replay_tool::call(item, &key, rest, cx).map(MessageItem::Tool));
+            SessionItem::ToolCall { call_id, .. } => {
+                if let Some(pair) = pairs.get(call_id.as_str()) {
+                    if std::ptr::eq(item, pair.first) {
+                        items.extend(
+                            replay_tool::call(&pair.item, &key, pair.rest, cx)
+                                .map(MessageItem::Tool),
+                        );
+                    }
+                } else {
+                    items.extend(replay_tool::call(item, &key, rest, cx).map(MessageItem::Tool));
+                }
             }
             SessionItem::BashExecution { .. } => {
                 items.extend(replay_tool::bash(item, &key, rest, cx).map(MessageItem::Tool));
@@ -419,13 +432,18 @@ pub(super) fn transcript(
         }
     });
     let recorded: &[SessionMessage] = body.map_or(&[], |page| page.messages.as_slice());
+    let pairs = super::replay_pairs::collect(recorded, feed);
     // The live turn follows the latest messages; an earlier page is not where it stands.
     let (live, after) = match feed.live.get(id.as_str()) {
         Some(turn) if !earlier && body.is_some() => overlay(turn, recorded, cx),
         _ => (Vec::new(), Vec::new()),
     };
     Transcript {
-        messages: recorded.iter().map(|m| message(m, cx)).collect(),
+        messages: recorded
+            .iter()
+            .map(|m| message(m, cx, &pairs))
+            .filter(|message| !message.items.is_empty() || message.footer.is_some())
+            .collect(),
         older: cache
             .and_then(older_token)
             .map(|_| Action::Older(id.clone())),

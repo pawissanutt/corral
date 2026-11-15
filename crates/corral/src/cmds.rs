@@ -352,6 +352,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
     let open = |root: &Option<PathBuf>| entry.open(&start_dir(root)?);
     let inv = crate::invocation::Invocation::new(&entry, &root);
     match cmd {
+        Cmd::Ask(args) => crate::ask_cmd::run(&start_dir(&root)?, args, &entry),
         Cmd::Mode(args) => crate::mode_cmd::run(&inv, args),
         Cmd::Session(args) => crate::session_cmd::run(&inv, args),
         Cmd::Inbox(args) => crate::inbox_cmd::run(&inv, args),

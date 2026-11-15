@@ -202,10 +202,10 @@ impl Action {
     }
 }
 
-/// Keyboard names consumed by the inbox and focused-question handlers (NSH naming).
-pub const KEYS: &[&str] = &[
-    "j", "k", "down", "up", "enter", "f", "1", "2", "3", "4", "5", "6", "7", "8", "9", "e",
-];
+/// The inbox's letter commands, bound wherever the focus is outside a text field: `f` opens the
+/// selected row, `e` cycles a question's evidence. Its list keys (moves, Enter, digits) are
+/// `commands::list_keys`, bound only while the list has the focus.
+pub const KEYS: &[&str] = &["f", "e"];
 
 impl State {
     /// Resolve the fixture's elsewhere override without losing its stored answer state.

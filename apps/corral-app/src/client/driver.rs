@@ -208,14 +208,9 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
             }
             state.disconnected(feed);
             if !suspended {
-                let delay = match failures {
-                    0 => 1,
-                    1 => 2,
-                    2 => 5,
-                    _ => 10,
-                };
+                let delay = super::requests::reconnect_delay_ms(failures);
                 failures = failures.saturating_add(1);
-                for _ in 0..delay * 4 {
+                for _ in 0..delay.div_ceil(250) {
                     offline_requests(feed, &mut state, &receiver, &mut enrol);
                     tick(feed);
                     timer(Duration::from_millis(250)).await;
@@ -322,7 +317,10 @@ async fn reply(
                 });
                 *current = None;
             } else if [DEVICE_ATTACH, DEVICE_ENROL].contains(&method) {
-                feed.update(|feed| feed.device = DeviceLink::Failed(message));
+                feed.update(|feed| feed.device = DeviceLink::Failed(message.clone()));
+                if method == DEVICE_ATTACH {
+                    return Err(format!("Device attach failed: {message}"));
+                }
             } else if [PAIR_BEGIN, PAIR_STATUS, PAIR_CONFIRM, PAIR_CANCEL].contains(&method) {
                 feed.update(|feed| feed.pairing = Pairing::Ended { line: message });
             } else {

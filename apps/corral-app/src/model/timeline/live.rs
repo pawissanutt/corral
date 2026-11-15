@@ -425,6 +425,7 @@ mod tests {
             owner_actions: vec![],
             pm: vec![],
             last_visit: None,
+            completeness: Default::default(),
         };
         let plot = plot(&page, &window, &tz);
         let lane = &plot.lanes[0];

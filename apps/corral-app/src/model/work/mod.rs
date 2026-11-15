@@ -320,6 +320,8 @@ pub enum Press {
     Seen(u64),
     /// Fetch the page of changes before `seq`.
     Older(u64),
+    /// Reopen the failed board subscription.
+    RetryBoard,
 }
 
 impl From<Action> for Press {
@@ -377,8 +379,10 @@ impl Button {
 /// Worker-hue feed glyph for a worker-start event.
 pub const START_MARK: &str = "▶";
 
-/// NSH key names handled by the Now workspace.
-pub const KEYS: &[&str] = &["j", "k", "down", "up", "enter", "tab"];
+/// Now's letter command, bound wherever the focus is outside a text field: `]` brings the
+/// inspector's next tab forward (Tab stays the platform's focus key). The list keys (moves,
+/// Enter) are `commands::list_keys`, bound only while the list has the focus.
+pub const KEYS: &[&str] = &["]"];
 
 impl State {
     /// Select a fixture task for every Now panel; navigation is the app's responsibility.
@@ -467,6 +471,7 @@ impl State {
             }],
             Press::Run { task, verb } => self.run(task, verb, feed),
             Press::Recover(key) => vec![Effect::Recover(key)],
+            Press::RetryBoard => vec![Effect::RetryTopic("board".into())],
             Press::Goal(goal) => {
                 self.goal = goal;
                 Vec::new()
@@ -529,7 +534,7 @@ impl State {
         };
     }
 
-    /// Port Now's j/k, arrows, Enter and cycling Tab handler for the fixture preview.
+    /// Port Now's j/k, arrows, Enter and inspector-tab handler for the fixture preview.
     ///
     /// `page` prevents handling keys for another domain's pushed page. Collapsed summaries
     /// and extra plan/PM rows are not keyboard-selectable, as in the mockup. Empty/elsewhere
@@ -571,12 +576,14 @@ impl State {
                 }
                 Some(Vec::new())
             }
-            "enter" | "Enter" => Some(vec![Effect::Open(if self.sel == "T-868" {
-                Page::Question
-            } else {
-                Page::Session(self.sel)
-            })]),
-            "tab" | "Tab" => {
+            // The question task opens its decision; any other shows its session in the
+            // inspector, on Now, so Escape has no other destination to come back from.
+            "enter" | "Enter" if self.sel == "T-868" => Some(vec![Effect::Open(Page::Question)]),
+            "enter" | "Enter" => {
+                self.now_tab = NowTab::Session;
+                Some(Vec::new())
+            }
+            "]" => {
                 self.cycle_tab();
                 Some(Vec::new())
             }

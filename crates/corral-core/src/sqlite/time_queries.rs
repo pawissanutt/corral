@@ -213,6 +213,29 @@ pub(super) fn sequence_events(
     ))
 }
 
+pub(super) fn count_events(query: &EventQuery) -> Result<(String, Vec<Sql>), ViewError> {
+    let kinds: BTreeSet<_> = query.kinds.iter().map(String::as_str).collect();
+    let kinds: Vec<_> = if kinds.is_empty() {
+        vec![None]
+    } else {
+        kinds.into_iter().map(Some).collect()
+    };
+    let mut selects = Vec::with_capacity(kinds.len());
+    let mut args = Vec::new();
+    for kind in kinds {
+        let (filters, values) = sequence_filters(query, kind)?;
+        args.extend(values);
+        selects.push(format!("SELECT count(*) AS n FROM events{filters}"));
+    }
+    Ok((
+        format!(
+            "SELECT coalesce(sum(n), 0) FROM ({})",
+            selects.join(" UNION ALL ")
+        ),
+        args,
+    ))
+}
+
 fn sequence_filters(
     query: &EventQuery,
     kind: Option<&str>,
@@ -245,6 +268,14 @@ fn sequence_filters(
             "run = ?"
         });
         args.push(Sql::Text(run.clone()));
+    }
+    if let Some(at) = query.since {
+        filters.push("ts >= ?");
+        args.push(Sql::Text(ts(at)));
+    }
+    if let Some(at) = query.until {
+        filters.push("ts < ?");
+        args.push(Sql::Text(ts(at)));
     }
     let clause = if filters.is_empty() {
         String::new()

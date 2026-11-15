@@ -27,6 +27,7 @@ mod live_reply;
 mod live_session;
 mod replay;
 mod replay_marks;
+mod replay_pairs;
 #[cfg(test)]
 mod replay_tests;
 mod replay_tool;
@@ -174,7 +175,7 @@ impl Default for State {
         Self {
             session: "T-868",
             view: View::Transcript,
-            live_view: View::Terminal,
+            live_view: View::Transcript,
             mode: Mode::Wall,
             expanded: BTreeSet::new(),
             replies: BTreeMap::new(),

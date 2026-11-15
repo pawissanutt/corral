@@ -53,7 +53,6 @@ pub fn section_phone(app: AppState, section: SettingsSection) -> PhonePage {
     };
     PhonePage {
         title: section.label().to_owned(),
-        back: Destination::Settings.label(),
         body,
         trailing: None,
         bar: None,
@@ -67,7 +66,7 @@ fn page(app: AppState, section: SettingsSection) -> AnyElement {
     if untracked(|| app.data.get() == DataState::Disconnected)
         && section != SettingsSection::Connection
     {
-        return super::frame(app, Destination::Settings);
+        return super::frame(app, Destination::Settings, false);
     }
     if untracked(|| app.daemon()) {
         return match section {

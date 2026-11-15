@@ -739,6 +739,7 @@ pub(super) fn entry_message(entry: corral_protocol::assistant::ThreadEntry) -> S
                 rev,
                 options,
                 answer,
+                ..
             } => items.push(SessionItem::QuestionCard {
                 key,
                 rev,

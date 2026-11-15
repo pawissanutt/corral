@@ -14,6 +14,7 @@ use crate::ui::composer::composer;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::chip::chip;
+use crate::ui::kit::page_phone::short_window;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
@@ -322,7 +323,9 @@ const ESC: &str = "Esc";
 
 /// The phone sheet's panel (`.asksheet`): a grab handle, "Ask" with the quick-thread link and
 /// Close, the composer; riding on the software keyboard, which its field raises as it opens, and
-/// clear of the home indicator while the keyboard is down.
+/// clear of the home indicator while the keyboard is down. Held sideways, the little height
+/// goes to the field: the grab handle gives way (the sheet still swipes down) and the sides
+/// keep clear of the notch.
 pub(crate) fn phone_panel(app: AppState) -> AnyElement {
     let head = head(app);
     let label = head.with_untracked(|h| h.label);
@@ -341,6 +344,9 @@ pub(crate) fn phone_panel(app: AppState) -> AnyElement {
         .label(label)
         .child(
             view()
+                .pl_safe_area()
+                .pr_safe_area()
+                .style_when(short_window, |s| s.pt(px(6.0)))
                 .pb(move || {
                     if keyboard_height() > px(0.0) {
                         px(0.0)
@@ -357,7 +363,8 @@ pub(crate) fn phone_panel(app: AppState) -> AnyElement {
                         .mb(px(4.0))
                         .rounded(px(3.0))
                         .bg(color(Token::Rule2))
-                        .accessibility_elements_hidden(true),
+                        .accessibility_elements_hidden(true)
+                        .style_when(short_window, |s| s.hidden()),
                 )
                 .child(dynamic(move || {
                     let head = head.get();

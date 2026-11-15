@@ -17,36 +17,58 @@ use nsh_core::prelude::*;
 
 use crate::model::{Availability, DataState, Destination, Form, Live, Page, Route};
 use crate::state::AppState;
+use crate::ui::kit::page;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color, row_height, text_size};
 
-/// What a phone page gives the phone shell, which draws the header, the scroll, the tab bar
-/// or the page's own bar, and the floating Ask button.
+/// What a phone page gives the phone shell, which draws the header (its back control names the
+/// page under it in the shell's stack), the scroll, the tab bar or the page's own bar, and the
+/// floating Ask button.
 pub struct PhonePage {
     pub title: String,
-    /// The back control's label: "Inbox", "Now", "Agents", "Plans", "More", "Settings".
-    pub back: &'static str,
     pub body: AnyElement,
     /// A control at the header's trailing edge (the "Ask about this" icon).
     pub trailing: Option<AnyElement>,
-    /// A pinned bar that replaces the tab bar (the decide bar, a docked composer).
-    pub bar: Option<AnyElement>,
-    /// Whether the floating Ask button shows over this page (false where a composer is docked).
+    /// A pinned bar that replaces the tab bar while it shows (the decide bar, a docked composer).
+    pub bar: Option<PhoneBar>,
+    /// Whether the floating Ask button shows over this page: false where a composer is docked
+    /// or the header already asks about the page, so a page offers one Ask.
     pub ask: bool,
     /// True: the shell scrolls `body` and adds the Ask clearance. False: the page scrolls itself.
     pub scroll: bool,
 }
 
+/// A phone page's own bar and whether it shows now. A page whose bar comes and goes with its
+/// state (a plan that awaits acceptance once its detail arrives) keeps the tab bar while it
+/// has none.
+pub struct PhoneBar {
+    pub shown: Memo<bool>,
+    pub view: AnyElement,
+}
+
+impl PhoneBar {
+    /// A bar that shows for as long as its page does.
+    pub fn always(view: AnyElement) -> PhoneBar {
+        PhoneBar {
+            shown: computed(|| true),
+            view,
+        }
+    }
+}
+
 /// The destination's screen; the unavailable frame while no daemon serves it. Made again only
 /// when the data state or the destination's availability changes, so a screen keeps its own
 /// state otherwise.
-pub fn destination(app: AppState, destination: Destination) -> AnyElement {
+///
+/// `root` is a phone tab's root: its unavailable frame keeps the head's search button, so a
+/// disconnected phone still reaches the palette (the way into the fixture preview).
+pub fn destination(app: AppState, destination: Destination, root: bool) -> AnyElement {
     let gate = computed(move || (app.data.get(), unavailable(app, destination)));
     dynamic(move || {
         let (_, unavailable) = gate.get();
         untracked(move || {
             if unavailable {
-                frame(app, destination)
+                frame(app, destination, root)
             } else {
                 screen(app, destination)
             }
@@ -73,7 +95,7 @@ pub fn content(app: AppState) -> AnyElement {
         let (destination, top, data, unavailable) = route.get();
         untracked(move || {
             if unavailable {
-                return frame(app, destination);
+                return frame(app, destination, false);
             }
             match (data, top) {
                 (DataState::Daemon, Some(Route::Live(Live::Question(key)))) => {
@@ -177,27 +199,33 @@ impl Frame {
 
 /// The unavailable frame: the destination's label as the title (test_id "page-title"), then
 /// why it is unavailable (test_id "page-body"): no connection, or what corrald does not serve.
-fn frame(app: AppState, destination: Destination) -> AnyElement {
+/// A phone tab root (`root`) sets the title as the large head with search, like its own screen.
+fn frame(app: AppState, destination: Destination, root: bool) -> AnyElement {
     let frame = Frame::of(app.form);
-    let head = view()
-        .flex_row()
-        .flex_none()
-        .items_center()
-        .px(px(frame.pad_x))
-        .py(px(frame.head_pad_y))
-        .when_some(frame.head_height, |head, height| head.h(px(height)))
-        .when(frame.rule == Rule::Border, |head| {
-            head.border_b_1().border_color(color(Token::Rule))
-        })
-        .child(
-            text(destination.label())
-                .test_id("page-title")
-                .role(AccessibilityRole::Header)
-                .text_size(px(text_size(app.form) * frame.title_scale))
-                .font_weight(FontWeight::BOLD)
-                .text_color(color(Token::Ink))
-                .number_of_lines(1),
-        );
+    let head = if root && app.form == Form::Phone {
+        page::head(app, destination.label(), None, vec![page::search(app)])
+    } else {
+        view()
+            .flex_row()
+            .flex_none()
+            .items_center()
+            .px(px(frame.pad_x))
+            .py(px(frame.head_pad_y))
+            .when_some(frame.head_height, |head, height| head.h(px(height)))
+            .when(frame.rule == Rule::Border, |head| {
+                head.border_b_1().border_color(color(Token::Rule))
+            })
+            .child(
+                text(destination.label())
+                    .test_id("page-title")
+                    .role(AccessibilityRole::Header)
+                    .text_size(px(text_size(app.form) * frame.title_scale))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(color(Token::Ink))
+                    .number_of_lines(1),
+            )
+            .into_element()
+    };
     let body = view().px(px(frame.pad_x)).pt(px(frame.body_pad_y)).child(
         text(move || {
             if app.daemon() {

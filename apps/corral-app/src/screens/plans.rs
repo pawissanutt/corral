@@ -24,7 +24,7 @@ use crate::model::plans::{
 };
 use crate::model::text::{flat, span};
 use crate::model::{Form, Id};
-use crate::screens::PhonePage;
+use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -40,6 +40,9 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 pub use live::{live_graph, live_plan_phone};
 
 const RING: f32 = 2.0;
+/// The most member glyphs a terminal row shows; a longer plan ends its strip in "+n", so the id
+/// and title keep their room.
+const TERM_SQUARES: usize = 8;
 
 /// The list column's width beside the detail, and on a desktop screen narrower than
 /// `LIST_BESIDE` (about 420 pt of detail beside the full list), its compact width.
@@ -106,35 +109,58 @@ pub fn screen(app: AppState) -> AnyElement {
     }
 }
 
-/// The pushed fixture plan page on the phone (`Page::Plan`): the model's title and back label,
-/// the detail as the body, the Ask control for an executing tracker, and the decide bar in place
-/// of the tab bar while the plan awaits acceptance.
+/// The pushed fixture plan page on the phone (`Page::Plan`): the model's title, the detail as
+/// the body, the Ask control for an executing tracker, and the decide bar in place of the tab
+/// bar while the plan awaits acceptance.
 pub fn plan_phone(app: AppState) -> PhonePage {
     let env = app.env();
     let page = app.plans.with(|state| plans::phone_page(state, env));
     phone_page(app, page, None)
 }
 
-/// A phone page from the model's page: its title, Ask in the navigation bar, the detail as the
-/// body, and the decide bar while a revision awaits acceptance. `plan` names a served plan.
+/// A phone page from the model's page: its title, Ask in the navigation bar (which then stands
+/// for the floating Ask), the detail as the body, and the decide bar whenever the detail shown
+/// awaits acceptance, so a served plan opened while its detail was loading gains Accept and
+/// Changes once it arrives. `plan` names a served plan.
 fn phone_page(app: AppState, page: plans::PhonePage, plan: Option<Id>) -> PhonePage {
-    let decides = match &page.detail {
-        plans::Detail::Awaiting(_) => true,
-        plans::Detail::Diff(diff) => diff.decide.is_some(),
-        _ => false,
-    };
     let trailing = page
         .right
         .zip(page.right_label)
         .map(|(button, label)| icon_command(app, &button, label));
+    let shown = {
+        let plan = plan.clone();
+        computed(move || {
+            let env = app.env();
+            app.plans.with(|state| {
+                if app.daemon() {
+                    app.feed
+                        .with(|feed| decides(&plans::live_detail(state, plan.as_ref(), feed, env)))
+                } else {
+                    decides(&plans::detail(state, env))
+                }
+            })
+        })
+    };
     PhonePage {
         title: page.title,
-        back: page.back_label,
         body: detail::phone_body(app, plan.clone()),
+        ask: trailing.is_none(),
         trailing,
-        bar: decides.then(|| detail::phone_bar(app, plan)),
-        ask: true,
+        bar: Some(PhoneBar {
+            shown,
+            view: detail::phone_bar(app, plan),
+        }),
         scroll: true,
+    }
+}
+
+/// Whether a plan's detail offers Accept and Changes: a revision awaiting acceptance, or its
+/// diff while it still does.
+fn decides(detail: &plans::Detail) -> bool {
+    match detail {
+        plans::Detail::Awaiting(_) => true,
+        plans::Detail::Diff(diff) => diff.decide.is_some(),
+        _ => false,
     }
 }
 
@@ -204,7 +230,6 @@ fn target_id(action: &Action) -> String {
             LiveAction::Resolve { .. } => "plan-decision-input".into(),
             LiveAction::Document(_) => "btn-open-document".into(),
             LiveAction::Overview(_) => "btn-close-document".into(),
-            LiveAction::MoreDiff(_) => "btn-more-diff".into(),
             LiveAction::Retry(_) => "btn-retry".into(),
             LiveAction::Recover(_) => "btn-check-result".into(),
         },
@@ -288,16 +313,26 @@ fn square_glyph(state: SquareState, hue: Hue) -> (&'static str, AdaptiveColor) {
 }
 
 /// A member strip (`.sq`): one 7 by 12 pt square per member, 2 pt apart, in member order;
-/// a terminal shows one glyph per member. Hidden from screen readers: the row says it.
+/// a terminal shows one glyph per member up to `TERM_SQUARES`, then how many more. Hidden from
+/// screen readers: the row says it.
 fn squares(app: AppState, members: &[MemberSquare]) -> AnyElement {
     if app.form == Form::Terminal {
+        let drawn = if members.len() > TERM_SQUARES {
+            TERM_SQUARES - 2
+        } else {
+            members.len()
+        };
         let mut line = text("")
             .flex_shrink_0()
             .number_of_lines(1u32)
             .accessibility_elements_hidden(true);
-        for square in members {
+        for square in members.iter().take(drawn) {
             let (glyph, ink) = square_glyph(square.state, square.hue);
             line = line.child(text(glyph).text_color(ink));
+        }
+        if drawn < members.len() {
+            line = line
+                .child(text(format!("+{}", members.len() - drawn)).text_color(color(Token::Ink3)));
         }
         return line.into_element();
     }
@@ -619,17 +654,17 @@ fn phone_cells(app: AppState, row: &PlanRow) -> Vec<AnyElement> {
     ]
 }
 
-/// One line of Cells: dot, id, title, strip, progress. The sub line is left to the detail,
-/// which states the unmapped criteria in full.
+/// One line of Cells: dot, the id whole, title, strip, progress in a column of its own. The sub
+/// line is left to the detail, which states the unmapped criteria in full.
 fn terminal_cells(app: AppState, row: &PlanRow) -> Vec<AnyElement> {
     let mut cells = vec![
         dot(app, row.hue),
         view()
-            .w(term::cells(8.0))
+            .min_w(term::cells(8.0))
             .flex_shrink_0()
             .child(
                 text(row.id_label.clone())
-                    .truncate()
+                    .number_of_lines(1u32)
                     .text_color(color(Token::Ink3)),
             )
             .into_element(),
@@ -642,7 +677,15 @@ fn terminal_cells(app: AppState, row: &PlanRow) -> Vec<AnyElement> {
     if !row.members.is_empty() {
         cells.push(squares(app, &row.members));
     }
-    cells.extend(progress(app, row, 13.0));
+    cells.extend(progress(app, row, 13.0).map(|figures| {
+        view()
+            .flex_row()
+            .justify_end()
+            .flex_shrink_0()
+            .min_w(term::cells(5.0))
+            .child(figures)
+            .into_element()
+    }));
     cells
 }
 

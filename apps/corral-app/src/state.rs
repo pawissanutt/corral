@@ -1,16 +1,17 @@
-//! App signals, persistence and key routing. Domain reducers stay pure; this layer applies their
-//! effects in order and owns transient confirmations, overlays and toast timing. The live bridge
-//! to corrald (`live`) dispatches typed commands, details and assistant calls.
+//! App signals, persistence and effect dispatch. Domain reducers stay pure; this layer applies
+//! their effects in order and owns transient confirmations, overlays and toast timing. The live
+//! bridge to corrald (`live`) dispatches typed commands, details and assistant calls; `keys`
+//! routes the keyboard.
 
 mod attach;
+mod keys;
 mod live;
 mod sidebar;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use corral_protocol::assistant::ContextRef;
-use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 use nsh_core::storage::Storage;
 
@@ -25,10 +26,6 @@ use crate::model::{
 const DESTINATION_KEY: &str = "corral.destination";
 const SETTINGS_KEY: &str = "corral.settings";
 const THEME_KEY: &str = "corral.theme";
-const DATA_KEY: &str = "corral.data";
-/// How `DATA_KEY` remembers the fixture preview, written only once it has been chosen. Older
-/// builds stored `fixture` there by default, which is no choice and so restores nothing.
-const PREVIEW: &str = "preview";
 const CONN_KEY: &str = "corral.conn";
 const MODE_KEY: &str = "corral.mode";
 const NOW_LAYOUT_KEY: &str = "corral.now.layout";
@@ -96,6 +93,12 @@ pub struct AppState {
     pub sidebar: Signal<SidebarPref>,
     /// The labels opened over the content from the rail while narrow; never persisted.
     sidebar_peek: Signal<bool>,
+    /// On the app's root view: the keyboard focus being anywhere in the app.
+    pub focus_root: ElementRef,
+    /// On the destination's keyboard list (Now's, Inbox's): its keys act while the focus is in
+    /// it, or nowhere.
+    pub list_keys: ElementRef,
+    key_focus: Signal<keys::KeyFocus>,
 }
 
 impl AppState {
@@ -113,7 +116,6 @@ impl AppState {
             &mut nav,
             crate::client::pairing_supported(),
             crate::client::configured(),
-            Storage::get_item(DATA_KEY).as_deref(),
             pairing_link,
         );
         let open_pairing = nav.section_opens > 0;
@@ -156,6 +158,9 @@ impl AppState {
             share: signal(false),
             lock: signal(false),
             sidebar_peek: signal(false),
+            focus_root: element_ref(),
+            list_keys: element_ref(),
+            key_focus: signal(keys::KeyFocus::default()),
         };
         crate::client::start(app.feed);
         app.follow_browser_pairing();
@@ -570,61 +575,9 @@ impl AppState {
             set_color_scheme(appearance(choice));
             remember(THEME_KEY, choice.slug());
         });
-        effect(move || remember(DATA_KEY, remembered_data(self.data.get())));
         effect(move || remember(CONN_KEY, self.conn.get().slug()));
         effect(move || remember(MODE_KEY, self.mode.get().slug()));
         effect(move || remember(SIDEBAR_KEY, self.sidebar.get().slug()));
-    }
-
-    fn bind_keys(self) {
-        let typing = KeyOptions {
-            when: When::NotEditing,
-            ..KeyOptions::default()
-        };
-        let anywhere = KeyOptions {
-            when: When::Always,
-            ..KeyOptions::default()
-        };
-        let mut keys: BTreeSet<&'static str> = ["/", "?", "`"].into_iter().collect();
-        keys.extend(
-            Destination::ALL
-                .into_iter()
-                .filter_map(commands::destination_key),
-        );
-        for domain in [inbox::KEYS, work::KEYS, plans::KEYS, review::KEYS] {
-            keys.extend(domain.iter().copied());
-        }
-        for key in keys {
-            // NSH names a shifted character by its unshifted key.
-            let stroke = if key == "?" { "shift+/" } else { key };
-            on_key_with(stroke, typing, move |_| self.press_key(key));
-        }
-        on_key_with("mod+k", anywhere, move |_| {
-            if self.is_open(Overlay::Palette) {
-                self.close(Overlay::Palette);
-            } else {
-                self.open_palette();
-            }
-        });
-        on_key_with("escape", anywhere, move |_| self.close_newest());
-        on_key_with("mod+b", typing, move |_| self.toggle_sidebar());
-        on_key_with("mod+shift+m", anywhere, move |_| {
-            match self.data.get_untracked() {
-                DataState::Fixture => {
-                    let mut effects = Vec::new();
-                    self.assistant.update(|state| effects = state.cycle_model());
-                    self.run(effects);
-                    return;
-                }
-                DataState::Disconnected => return,
-                DataState::Daemon => {}
-            }
-            let top = self.nav.with_untracked(|nav| nav.live().cloned());
-            let ask_open = self.nav.with_untracked(|nav| nav.is_open(Overlay::Ask));
-            self.reduce(self.assistant, |state, feed, _, env| {
-                state.cycle_model_live(top.as_ref(), ask_open, feed, env)
-            });
-        });
     }
 
     /// The fixture session's transcript/terminal switch, or the live selected session's.
@@ -651,104 +604,12 @@ impl AppState {
             self.open(Page::Session(session));
         }
     }
-
-    fn press_key(&self, key: &str) {
-        if self.confirm.get_untracked().is_some()
-            || self.confirmation.with_untracked(Option::is_some)
-            || self.nav.with_untracked(|nav| nav.newest().is_some())
-        {
-            return;
-        }
-        match key {
-            "/" => {
-                self.open_ask();
-                return;
-            }
-            "?" => {
-                self.open_palette();
-                return;
-            }
-            "`" => {
-                self.toggle_session();
-                return;
-            }
-            _ => {}
-        }
-        // Without a connection no destination is served, so only destination keys answer.
-        let effects = match self.data.get_untracked() {
-            DataState::Daemon => self.key_live(key),
-            DataState::Fixture => self.key_fixture(key),
-            DataState::Disconnected => None,
-        };
-        if let Some(effects) = effects {
-            self.run(effects);
-        } else if let Some(destination) = Destination::ALL
-            .into_iter()
-            .find(|destination| commands::destination_key(*destination) == Some(key))
-        {
-            self.go(destination);
-        }
-    }
-
-    /// Routes a key to the served destination's live reducer with the feed and selection.
-    fn key_live(&self, key: &str) -> Option<Vec<Effect>> {
-        let destination = self.nav.with_untracked(|nav| nav.destination);
-        if untracked(|| self.available(destination)) != crate::model::Availability::Ready {
-            return None;
-        }
-        let (top, selection) = self
-            .nav
-            .with_untracked(|nav| (nav.live().cloned(), nav.selection.clone()));
-        let top = top.as_ref();
-        let env = self.env_untracked();
-        let mut effects = None;
-        self.feed.with_untracked(|feed| match destination {
-            Destination::Now => self.work.update(|state| {
-                effects = state.key_live(key, top, &selection, feed, env);
-            }),
-            Destination::Inbox => self.inbox.update(|state| {
-                effects = state.key_live(key, top, &selection, feed, env);
-            }),
-            Destination::Plans => self.plans.update(|state| {
-                effects = state.key_live(key, top, &selection, feed, env);
-            }),
-            Destination::Review => self.review.update(|state| {
-                effects = state.key_live(key, top, &selection, feed, env);
-            }),
-            _ => {}
-        });
-        effects
-    }
-
-    /// Routes a key to the fixture preview's reducers.
-    fn key_fixture(&self, key: &str) -> Option<Vec<Effect>> {
-        let page = self.nav.with_untracked(NavState::page);
-        let env = self.env_untracked();
-        let mut effects = None;
-        match (self.nav.with_untracked(|nav| nav.destination), page) {
-            (Destination::Inbox, None | Some(Page::Question)) => self
-                .inbox
-                .update(|state| effects = state.key(key, page, env)),
-            (Destination::Now, _) => self
-                .work
-                .update(|state| effects = state.key(key, page, env)),
-            (Destination::Plans, _) => self
-                .plans
-                .update(|state| effects = state.key(key, page, env)),
-            (Destination::Review, _) => self
-                .review
-                .update(|state| effects = state.key(key, page, env)),
-            _ => {}
-        }
-        effects
-    }
 }
 
 fn startup(
     nav: &mut NavState,
     browser: bool,
     configured: bool,
-    stored_data: Option<&str>,
     pairing_link: Result<Option<String>, &'static str>,
 ) -> (DataState, daemon::Feed) {
     let mut feed = daemon::Feed::default();
@@ -758,27 +619,17 @@ fn startup(
             feed.browser_pairing = crate::model::devices::BrowserPairing::Blocked(line);
         }
     }
-    // The fixture preview is never a fallback: only an explicit, remembered Demo choice
-    // restores it, and only where no connection is configured.
+    // The fixture preview is never a fallback and never outlives the launch it was chosen in:
+    // a restart is live or disconnected, so its healthy-looking facts cannot pass for live.
     let data = if feed.browser_pairing_pending() || (browser && !configured) {
         nav.go_settings(SettingsSection::Connection);
         DataState::Disconnected
     } else if configured {
         DataState::Daemon
-    } else if stored_data == Some(PREVIEW) {
-        DataState::Fixture
     } else {
         DataState::Disconnected
     };
     (data, feed)
-}
-
-/// What `DATA_KEY` remembers of a source.
-fn remembered_data(data: DataState) -> &'static str {
-    match data {
-        DataState::Fixture => PREVIEW,
-        other => other.slug(),
-    }
 }
 
 fn preference<T>(key: &str, parse: fn(&str) -> Option<T>) -> Option<T> {
@@ -807,26 +658,21 @@ mod tests {
     fn unpaired_browser_opens_connection_instead_of_restoring_mockup() {
         let mut nav = NavState::new(Form::Desktop);
         nav.destination = Destination::Now;
-        let (data, _) = startup(&mut nav, true, false, Some(PREVIEW), Ok(None));
+        let (data, _) = startup(&mut nav, true, false, Ok(None));
         assert_eq!(nav.destination, Destination::Settings);
         assert_eq!(nav.settings, SettingsSection::Connection);
         assert_eq!(data, DataState::Disconnected);
     }
 
     #[test]
-    fn startup_never_falls_back_to_the_fixture_preview() {
-        // `fixture` is what older builds stored by default, not a choice.
-        for stored_data in [None, Some("fixture"), Some("daemon"), Some("disconnected")] {
-            let mut nav = NavState::new(Form::Terminal);
-            let (data, _) = startup(&mut nav, false, false, stored_data, Ok(None));
-            assert_eq!(data, DataState::Disconnected, "{stored_data:?}");
+    fn restart_never_restores_the_fixture_preview() {
+        for form in [Form::Desktop, Form::Terminal] {
+            let mut nav = NavState::new(form);
+            let (data, _) = startup(&mut nav, false, false, Ok(None));
+            assert_eq!(data, DataState::Disconnected);
+            let (data, _) = startup(&mut nav, false, true, Ok(None));
+            assert_eq!(data, DataState::Daemon);
         }
-        let chosen = Some(remembered_data(DataState::Fixture));
-        let mut nav = NavState::new(Form::Terminal);
-        let (data, _) = startup(&mut nav, false, true, chosen, Ok(None));
-        assert_eq!(data, DataState::Daemon);
-        let (data, _) = startup(&mut nav, false, false, chosen, Ok(None));
-        assert_eq!(data, DataState::Fixture);
     }
 
     #[test]
@@ -837,7 +683,6 @@ mod tests {
                 &mut nav,
                 true,
                 true,
-                Some("daemon"),
                 Ok(Some("corral-pair-1.fixture".into())),
             );
             assert_eq!(nav.destination, Destination::Settings);
@@ -857,7 +702,7 @@ mod tests {
     #[test]
     fn uncleared_link_is_visibly_blocked_and_normal_startup_stays_unchanged() {
         let mut nav = NavState::new(Form::Phone);
-        let (_, feed) = startup(&mut nav, true, true, None, Err("cannot clear fragment"));
+        let (_, feed) = startup(&mut nav, true, true, Err("cannot clear fragment"));
         assert_eq!(nav.settings, SettingsSection::Connection);
         assert!(feed.browser_pairing_pending());
         assert_eq!(feed.pairing_code, None);
@@ -867,7 +712,7 @@ mod tests {
                 line: "cannot clear fragment"
             },
         );
-        let (data, feed) = startup(&mut nav, true, true, None, Ok(None));
+        let (data, feed) = startup(&mut nav, true, true, Ok(None));
         assert_eq!(data, DataState::Daemon);
         assert!(!feed.browser_pairing_pending());
     }

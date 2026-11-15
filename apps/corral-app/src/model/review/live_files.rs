@@ -12,14 +12,14 @@ use crate::model::id::Id;
 use crate::model::nav::Form;
 use crate::model::text::span;
 
-use super::decide::{comment_refusal, status_lines};
+use super::decide::{comment_refusal, reply_refusal, status_lines};
 use super::diff::{Anchor, line_index, parse_patch};
 use super::live::{Shown, file_ref, short, when};
 use super::view::{
     ButtonStyle, CommentView, Composer, DiffView, FileBody, FileView, HunkView, MessageView,
     button, chip, hunk_content,
 };
-use super::{Action, Compose, Intent, Layout, LineAt, State};
+use super::{Action, CandidateAt, Compose, Intent, Layout, LineAt, State};
 
 /// Where a thread or new comment sits in a file's shown lines.
 #[derive(Clone, Copy)]
@@ -82,7 +82,7 @@ fn thread_view(
         }
         _ => false,
     };
-    let refusal = comment_refusal(feed, shown, env);
+    let refusal = reply_refusal(feed, env);
     let (composer, actions) = if thread.resolved {
         (
             None,
@@ -96,10 +96,19 @@ fn thread_view(
             )],
         )
     } else {
+        let candidate = CandidateAt {
+            task: shown.id().clone(),
+            candidate: corral_protocol::detail::ReviewCandidate {
+                run: thread.run.clone(),
+                base: thread.base.clone(),
+                head: thread.head.clone(),
+            },
+        };
         (
             Some(Composer {
-                draft: format!("reply:{id}"),
+                draft: candidate.draft(&format!("reply:{id}")),
                 target: Compose::Reply {
+                    candidate,
                     thread: id.clone(),
                     revision: thread.revision,
                 },
@@ -130,37 +139,64 @@ fn thread_view(
     }
 }
 
-fn new_comment(state: &State, feed: &Feed, shown: &Shown, at: &LineAt, env: Env) -> CommentView {
+fn new_comment(
+    state: &State,
+    feed: &Feed,
+    shown: &Shown,
+    candidate: &CandidateAt,
+    at: &LineAt,
+    env: Env,
+) -> CommentView {
     let target = at.clone();
     let concerns =
         move |intent: &Intent| matches!(intent, Intent::Comment { at, .. } if *at == target);
     CommentView {
-        key: draft_key(at),
+        key: draft_key(candidate, at),
         anchor: Some(format!("{} {}", side_word(at.old_side), at.line)),
         messages: Vec::new(),
         chips: Vec::new(),
         composer: Some(Composer {
-            draft: draft_key(at),
-            target: Compose::New(at.clone()),
+            draft: draft_key(candidate, at),
+            target: Compose::New {
+                candidate: candidate.clone(),
+                at: at.clone(),
+            },
             placeholder: "Comment on this line as owner…",
             label: "New line comment",
             send: "Comment",
             cancel: Some(button("Cancel", Action::CancelCompose, ButtonStyle::Quiet)),
-            refusal: comment_refusal(feed, shown, env),
+            refusal: if !shown.matches(candidate) {
+                Some("This composer belongs to an older candidate. Reopen a line on the current patch.".into())
+            } else {
+                comment_refusal(feed, shown, env).or_else(|| patch_refusal(feed, shown, &at.path))
+            },
         }),
         actions: Vec::new(),
         status: status_lines(state, feed, shown.id(), concerns),
     }
 }
 
-/// The draft key of a new comment on `at`.
-pub(super) fn draft_key(at: &LineAt) -> String {
-    format!(
+/// The task/candidate-scoped draft key of a new comment.
+pub(super) fn draft_key(candidate: &CandidateAt, at: &LineAt) -> String {
+    candidate.draft(&format!(
         "new:{}:{}{}",
         at.path,
         if at.old_side { "o" } else { "n" },
         at.line
-    )
+    ))
+}
+
+/// Line actions must be bound to a current patch carrying the same immutable identity.
+pub(super) fn patch_refusal(feed: &Feed, shown: &Shown, path: &str) -> Option<String> {
+    let current = feed.detail(&file_ref(shown.id(), path)).is_some_and(|cache| {
+        !cache.stale && !cache.loading && cache.error.is_none()
+            && matches!(cache.body(), Some(DetailBody::ReviewFile(page))
+                if page.path == path && page.candidate.as_ref().is_some_and(|candidate| shown.matches_candidate(candidate)))
+    });
+    (!current).then(|| {
+        "The patch is last known or belongs to another candidate. Refresh it before commenting."
+            .into()
+    })
 }
 
 fn collapsed_label(file: &ReviewFile, threads: usize) -> String {
@@ -199,6 +235,7 @@ fn file_view(
         discussions: Vec::new(),
         loose: Vec::new(),
         annotatable: false,
+        candidate: None,
         body: FileBody::Collapsed(button(
             collapsed_label(file, threads.len()),
             Action::Expand(file.path.clone()),
@@ -237,7 +274,9 @@ fn file_view(
         },
         ButtonStyle::Quiet,
     ));
-    view.annotatable = true;
+    let patch_note = patch_refusal(feed, shown, &file.path);
+    view.annotatable = patch_note.is_none() && comment_refusal(feed, shown, env).is_none();
+    view.candidate = patch_note.is_none().then(|| shown.identity()).flatten();
     let mut placed: Vec<Vec<Anchor>> = vec![Vec::new(); parsed.hunks.len()];
     let place = |old_side: bool, line: u32| {
         parsed.hunks.iter().enumerate().find_map(|(hunk, parsed)| {
@@ -251,7 +290,7 @@ fn file_view(
         let at = thread
             .range
             .as_ref()
-            .filter(|_| !thread.stale)
+            .filter(|_| !thread.stale && patch_note.is_none())
             .and_then(|range| place(thread.side == AnnotationSide::Old, range.end));
         match at {
             Some(at) => placed[at.hunk].push(Anchor {
@@ -264,18 +303,21 @@ fn file_view(
     let composing = state
         .composing
         .as_ref()
-        .filter(|(task, at)| task == id && at.path == file.path)
-        .map(|(_, at)| at);
-    let mut extra: Vec<(CommentView, &LineAt)> = Vec::new();
-    if let Some(at) = composing {
-        extra.push((new_comment(state, feed, shown, at, env), at));
+        .filter(|(candidate, at)| candidate.task == *id && at.path == file.path);
+    let mut extra: Vec<(CommentView, &LineAt, bool)> = Vec::new();
+    if let Some((candidate, at)) = composing {
+        extra.push((
+            new_comment(state, feed, shown, candidate, at, env),
+            at,
+            patch_note.is_none() && shown.matches(candidate),
+        ));
     }
     // A sent comment stays at its line with its status until corrald's thread replaces it.
     for sent in state.sent.iter().filter(|sent| sent.task == *id) {
         let Intent::Comment { at, text } = &sent.intent else {
             continue;
         };
-        if at.path != file.path || composing == Some(at) {
+        if at.path != file.path || composing.is_some_and(|(_, current)| current == at) {
             continue;
         }
         let status = status_lines(state, feed, id, |intent| *intent == sent.intent);
@@ -294,12 +336,23 @@ fn file_view(
             actions: Vec::new(),
             status,
         };
-        extra.push((comment, at));
+        extra.push((
+            comment,
+            at,
+            patch_note.is_none()
+                && sent
+                    .candidate
+                    .as_ref()
+                    .is_some_and(|candidate| shown.matches(candidate)),
+        ));
     }
-    for (comment, at) in extra {
+    for (comment, at, same_candidate) in extra {
         let discussion = view.discussions.len();
         view.discussions.push(comment);
-        match place(at.old_side, at.line) {
+        match same_candidate
+            .then(|| place(at.old_side, at.line))
+            .flatten()
+        {
             Some(spot) => placed[spot.hunk].push(Anchor {
                 after: spot.after,
                 discussion,
@@ -308,6 +361,9 @@ fn file_view(
         }
     }
     let mut notes = parsed.notes;
+    if let Some(note) = patch_note {
+        notes.insert(0, note);
+    }
     if parsed.hunks.is_empty() && notes.is_empty() {
         notes.push("No textual changes are served for this file.".into());
     }

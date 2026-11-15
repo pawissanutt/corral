@@ -6,8 +6,8 @@ use nsh_base::{CommandEntry, CommandGroup, CommandItem, SheetEvent, command, dia
 use nsh_core::prelude::*;
 
 use crate::model::commands::{
-    self as palette_model, Action, PALETTE_FOOTER, PALETTE_HINTS, PALETTE_PLACEHOLDER,
-    palette_empty,
+    self as palette_model, Action, PALETTE_FOOTER, PALETTE_PLACEHOLDER, palette_empty,
+    palette_hints,
 };
 use crate::model::{Destination, Form, Overlay};
 use crate::state::AppState;
@@ -197,9 +197,9 @@ fn command_list(app: AppState) -> AnyElement {
         .when(form != Form::Terminal, |c| {
             c.search_prefix(icon(Icon::Search, 16.0, color(Token::Ink3)))
         })
-        .when(form == Form::Desktop, |c| c.footer(footer()))
+        .when(form == Form::Desktop, |c| c.footer(footer(query)))
         .when(form == Form::Terminal, |c| {
-            c.header(terminal_header()).search_prefix(
+            c.header(terminal_header(query)).search_prefix(
                 view()
                     .w(term::cells(2.0))
                     .flex_shrink_0()
@@ -211,8 +211,9 @@ fn command_list(app: AppState) -> AnyElement {
     view().test_id("palette-input").child(list).into_element()
 }
 
-/// One command's row: its label, its key at the trailing edge where it has one. The one in effect
-/// is `checked` for screen readers only, as the mock marks none.
+/// One command's row: its label, its key at the trailing edge where it has one (a phone, with no
+/// keyboard to press it on, leaves the key out). The one in effect is `checked` for screen
+/// readers only, as the mock marks none.
 fn row(
     app: AppState,
     entry: &CommandEntry,
@@ -240,17 +241,17 @@ fn row(
                 .text_size(px(size))
                 .text_color(color(Token::Ink)),
         )
-        .when_some(key_of(&entry.id), |v, keys| {
-            v.child(match form {
-                // Plain and bold: a cap on every row would stack into a column of fills that
-                // the highlighted row's band runs into.
-                Form::Terminal => text(keys)
+        .when_some(key_of(&entry.id), |v, keys| match form {
+            // Plain and bold: a cap on every row would stack into a column of fills that the
+            // highlighted row's band runs into.
+            Form::Terminal => v.child(
+                text(keys)
                     .flex_shrink_0()
                     .font_weight(FontWeight::BOLD)
-                    .text_color(color(Token::Ink))
-                    .into_element(),
-                Form::Desktop | Form::Phone => key_hint(keys),
-            })
+                    .text_color(color(Token::Ink)),
+            ),
+            Form::Desktop => v.child(key_hint(keys)),
+            Form::Phone => v,
         });
     // A terminal draws the highlighted row's band itself.
     if form == Form::Terminal {
@@ -318,7 +319,7 @@ fn empty(app: AppState, query: &str) -> AnyElement {
 
 /// The terminal palette's first row: what it is, then its keys as the key line shows keys. The
 /// title is its own text, so NSH sets no default title into the frame above it.
-fn terminal_header() -> AnyElement {
+fn terminal_header(query: Signal<String>) -> AnyElement {
     view()
         .flex_row()
         .items_center()
@@ -331,18 +332,24 @@ fn terminal_header() -> AnyElement {
                 .font_weight(FontWeight::BOLD)
                 .text_color(color(Token::Ink)),
         )
-        .children(PALETTE_HINTS.into_iter().map(|(keys, words)| {
+        .child(dynamic(move || {
+            let hints = palette_hints(query.with(String::is_empty));
             view()
                 .flex_row()
-                .child(term::space(2.0))
-                .child(term::legend(keys, words))
+                .children(hints.into_iter().map(|(keys, words)| {
+                    view()
+                        .flex_row()
+                        .child(term::space(2.0))
+                        .child(term::legend(keys, words))
+                }))
+                .into_element()
         }))
         .into_element()
 }
 
 /// The palette's own keys under the list on desktop, the model's attribution at the trailing
 /// edge.
-fn footer() -> AnyElement {
+fn footer(query: Signal<String>) -> AnyElement {
     let hint = |keys: &'static str, words: &'static str| {
         view()
             .flex_row()
@@ -364,7 +371,15 @@ fn footer() -> AnyElement {
         .py(px(8.0))
         .border_t(px(1.0))
         .border_color(color(Token::Rule))
-        .children(PALETTE_HINTS.map(|(keys, words)| hint(keys, words)))
+        .child(dynamic(move || {
+            let hints = palette_hints(query.with(String::is_empty));
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(14.0))
+                .children(hints.map(|(keys, words)| hint(keys, words)))
+                .into_element()
+        }))
         .child(view().flex_1().min_w(px(0.0)))
         .child(
             text(PALETTE_FOOTER)

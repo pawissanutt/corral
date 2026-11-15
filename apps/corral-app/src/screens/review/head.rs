@@ -18,6 +18,11 @@ use super::{Ctx, command, rich_at};
 
 /// A struck verdict of an older candidate sits a step back (`opacity: .8`).
 const OLD_VERDICT_OPACITY: f32 = 0.8;
+/// Terminal verdict columns, in Cells: who ("pi-terra"), SHA (eight hex and a mark), time
+/// ("Nov 14 09:56").
+const TERM_WHO: f32 = 10.0;
+const TERM_SHA: f32 = 10.0;
+const TERM_TIME: f32 = 12.0;
 
 /// A page notice (loading, stale, failed, superseded) with its refresh control.
 pub(super) fn notice_row(cx: &Ctx, line: &Notice) -> AnyElement {
@@ -127,7 +132,9 @@ pub(super) fn flush_h3(app: AppState, label: impl Into<SharedString>) -> AnyElem
 }
 
 /// One verdict. Desktop: the mockup's columns (mark 16, who 56, SHA 78, time 44, result).
-/// Phone: the mark, then who · SHA time with the tag, the result under it. Terminal: one line.
+/// Phone: the mark, then who · SHA time with the tag, the result under it. Terminal: one line
+/// of columns a Cell apart, then the tag before the result, so the result is what gives way
+/// when the line runs short.
 fn verdict_row(app: AppState, verdict: &VerdictView) -> AnyElement {
     let form = app.form;
     let old = verdict.mark == Mark::Stale;
@@ -198,41 +205,62 @@ fn verdict_row(app: AppState, verdict: &VerdictView) -> AnyElement {
                     .child(rich_at(app, &verdict.text, 13.0, Token::Ink, false)),
             )
             .into_element(),
-        Form::Terminal => view()
-            .flex_row()
-            .items_center()
-            .h(term::rows(1.0))
-            .child(mark(app, verdict.mark, Hue::Neutral))
-            .child(term::space(1.0))
-            .child(
-                view().w(term::cells(7.0)).flex_shrink_0().child(
+        Form::Terminal => {
+            let column = |cells: f32, content: AnyElement| {
+                view()
+                    .flex_row()
+                    .w(term::cells(cells))
+                    .flex_shrink_0()
+                    .child(content)
+                    .child(term::space(1.0))
+                    .into_element()
+            };
+            view()
+                .flex_row()
+                .items_center()
+                .h(term::rows(1.0))
+                .child(mark(app, verdict.mark, Hue::Neutral))
+                .child(term::space(1.0))
+                .child(column(
+                    TERM_WHO + 1.0,
                     text(verdict.who.clone())
+                        .flex_shrink(1.0)
+                        .min_w(px(0.0))
                         .truncate()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(color(Token::Ink)),
-                ),
-            )
-            .child(
-                view()
-                    .w(term::cells(10.0))
-                    .flex_shrink_0()
-                    .child(rich_at(app, &verdict.sha, 0.0, Token::Ink, true).truncate()),
-            )
-            .child(
-                view()
-                    .w(term::cells(12.0))
-                    .flex_shrink_0()
-                    .child(term::quiet(verdict.time.clone())),
-            )
-            .child(
-                view()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .child(rich_at(app, &verdict.text, 0.0, Token::Ink, false).truncate()),
-            )
-            .when(tag.is_some(), |row| row.child(term::space(1.0)))
-            .children(tag)
-            .into_element(),
+                        .text_color(color(Token::Ink))
+                        .into_element(),
+                ))
+                .child(column(
+                    TERM_SHA + 1.0,
+                    rich_at(app, &verdict.sha, 0.0, Token::Ink, true)
+                        .truncate()
+                        .into_element(),
+                ))
+                .child(column(
+                    TERM_TIME + 1.0,
+                    term::quiet(verdict.time.clone())
+                        .flex_shrink(1.0)
+                        .min_w(px(0.0))
+                        .truncate()
+                        .into_element(),
+                ))
+                .children(tag.map(|tag| {
+                    view()
+                        .flex_row()
+                        .flex_shrink_0()
+                        .child(tag)
+                        .child(term::space(1.0))
+                        .into_element()
+                }))
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(rich_at(app, &verdict.text, 0.0, Token::Ink, false).truncate()),
+                )
+                .into_element()
+        }
     }
 }
 

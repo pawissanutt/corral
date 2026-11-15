@@ -286,12 +286,15 @@ impl AppState {
             })
         })
     }
-    pub(super) fn release_upload_bytes(&mut self, request: &AssistantSend) {
-        for item in &request.attachments {
-            if let SendAttachment::Upload { upload, .. } = item {
-                self.uploads.remove(upload);
+    pub(super) fn release_upload_bytes(&mut self, feed: Signal<Feed>, request: &AssistantSend) {
+        feed.update(|feed| {
+            for item in &request.attachments {
+                if let SendAttachment::Upload { upload, .. } = item {
+                    self.uploads.remove(upload);
+                    feed.uploads.remove(upload.as_str());
+                }
             }
-        }
+        });
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn attach_path(

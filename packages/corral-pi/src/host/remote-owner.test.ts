@@ -242,6 +242,14 @@ test("remote app identities stay bounded and character-safe through canonical tu
       }
     }
     expect(transport.requests).toBe(entries.length);
+    const costs = host.session.sessionManager.getEntries().flatMap(entry => {
+      if (entry.type !== "custom" || entry.customType !== "corral_cost_turn") return [];
+      return [z.object({ phase: z.enum(["start", "end"]), generation: z.number(), turn: z.number() }).parse(entry.data)];
+    });
+    expect(costs).toEqual(entries.flatMap((_, index) => [
+      { phase: "start", generation: identity.generation, turn: index + 1 },
+      { phase: "end", generation: identity.generation, turn: index + 1 },
+    ]));
     const deliveries = host.session.sessionManager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "corral_remote_owner");
     expect(deliveries.map(entry => entry.type === "custom" ? z.object({ key: z.string() }).parse(entry.data).key : undefined)).toEqual(entries);
     expect(calls.filter(item => item.receipt.state === "rejected")).toEqual([]);

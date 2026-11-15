@@ -40,6 +40,8 @@ struct DeviceRecord {
     authority: Option<DeviceAuthority>,
     #[serde(default)]
     seen: SeenCursor,
+    #[serde(default)]
+    authority_revision: u64,
 }
 
 impl DeviceRecord {
@@ -72,6 +74,12 @@ struct AppListener {
     origin: Option<String>,
 }
 
+struct RegisteredSession {
+    device: String,
+    revoked: Arc<AtomicBool>,
+    authority_revision: Arc<AtomicU64>,
+}
+
 pub(crate) struct Devices {
     store: Mutex<Store>,
     state_root: Option<PathBuf>,
@@ -79,7 +87,7 @@ pub(crate) struct Devices {
     identity: Mutex<Option<Identity>>,
     listener: Mutex<Option<AppListener>>,
     pub(crate) pairings: Pairings,
-    sessions: Mutex<BTreeMap<u64, (String, Arc<AtomicBool>)>>,
+    sessions: Mutex<BTreeMap<u64, RegisteredSession>>,
     next: AtomicU64,
 }
 
@@ -88,18 +96,48 @@ pub(crate) struct SessionGuard {
     id: u64,
     pub(crate) device: String,
     pub(crate) revoked: Arc<AtomicBool>,
+    authority_revision: Arc<AtomicU64>,
+    notified_revision: AtomicU64,
+}
+
+impl SessionGuard {
+    pub(crate) fn flush_authority(&self, conn: &mut dyn conn::Conn) -> Result<()> {
+        let revision = self.authority_revision.load(Ordering::Acquire);
+        if revision != self.notified_revision.load(Ordering::Relaxed) {
+            conn::notify(
+                conn,
+                SESSION_AUTHORITY_CHANGED,
+                SessionAuthorityChanged {
+                    device: self.device.clone(),
+                    revision,
+                },
+            )?;
+            self.notified_revision.store(revision, Ordering::Relaxed);
+        }
+        Ok(())
+    }
 }
 
 impl Drop for SessionGuard {
     fn drop(&mut self) {
-        if let Some((device, _)) = lock(&self.devices.sessions).remove(&self.id) {
-            debug_assert_eq!(device, self.device);
+        if let Some(session) = lock(&self.devices.sessions).remove(&self.id) {
+            debug_assert_eq!(session.device, self.device);
         }
     }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn attribute(store: &Store, via: &str) -> Result<()> {
+    store.set_attribution(Actor::Owner, via)?;
+    if let Some(id) = via.strip_prefix("app:")
+        && let Some(record) = AREA.load(store, id)?
+    {
+        store.set_attribution_detail("device", json!({"device": id, "name": record.name}))?;
+    }
+    Ok(())
 }
 
 pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>, state_root: Option<PathBuf>) -> Result<()> {
@@ -182,7 +220,7 @@ impl Devices {
         let (name, app_version) = validate(name, app_version)?;
         let base = lock(&self.store);
         let store = base.reattributed();
-        store.set_attribution(Actor::Owner, via)?;
+        attribute(&store, via)?;
         let _guard = store
             .try_lock("devices")?
             .ok_or(DeviceError::Conflict("device_registry_busy"))?;
@@ -217,6 +255,7 @@ impl Devices {
                 admin: true,
             }),
             seen: SeenCursor::default(),
+            authority_revision: 0,
         };
         let (event, platform) = if public.is_some() {
             ("device_paired", "web")
@@ -243,15 +282,25 @@ impl Devices {
         self.enrol(name, app_version, None, via)
     }
 
-    fn register(self: &Arc<Self>, device: String) -> SessionGuard {
+    fn register(self: &Arc<Self>, device: String, revision: u64) -> SessionGuard {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let revoked = Arc::new(AtomicBool::new(false));
-        lock(&self.sessions).insert(id, (device.clone(), Arc::clone(&revoked)));
+        let authority_revision = Arc::new(AtomicU64::new(revision));
+        lock(&self.sessions).insert(
+            id,
+            RegisteredSession {
+                device: device.clone(),
+                revoked: Arc::clone(&revoked),
+                authority_revision: Arc::clone(&authority_revision),
+            },
+        );
         SessionGuard {
             devices: Arc::clone(self),
             id,
             device,
             revoked,
+            authority_revision,
+            notified_revision: AtomicU64::new(revision),
         }
     }
 
@@ -270,7 +319,7 @@ impl Devices {
         if record.platform == DevicePlatform::Web {
             return Err(DeviceError::Conflict("device_is_web"));
         }
-        let guard = self.register(device.into());
+        let guard = self.register(device.into(), record.authority_revision);
         Ok((record.info(device.into()), guard))
     }
 
@@ -285,7 +334,7 @@ impl Devices {
                 && record.revoked_at.is_none()
                 && record.public_key.as_deref() == Some(&public)
             {
-                let guard = self.register(id.clone());
+                let guard = self.register(id.clone(), record.authority_revision);
                 return Ok((record.info(id), guard));
             }
         }
@@ -304,7 +353,7 @@ impl Devices {
     pub(crate) fn revoke(&self, device: &str, via: &str) -> Result<DeviceInfo, DeviceError> {
         let base = lock(&self.store);
         let store = base.reattributed();
-        store.set_attribution(Actor::Owner, via)?;
+        attribute(&store, via)?;
         let _guard = store
             .try_lock("devices")?
             .ok_or(DeviceError::Conflict("device_registry_busy"))?;
@@ -322,9 +371,9 @@ impl Devices {
                 )
             })?;
         }
-        for (id, revoked) in lock(&self.sessions).values() {
-            if id == device {
-                revoked.store(true, Ordering::Release);
+        for session in lock(&self.sessions).values() {
+            if session.device == device {
+                session.revoked.store(true, Ordering::Release);
             }
         }
         Ok(record.info(device.into()))
@@ -390,7 +439,26 @@ impl Devices {
             return Err(DeviceError::Refused("admin_only"));
         }
         let mut record = self.active(&store, &request.device)?;
+        let previous = record.authority();
+        if admin == request.device
+            && [
+                (previous.reply, request.authority.reply),
+                (previous.act, request.authority.act),
+                (previous.assistant, request.authority.assistant),
+                (previous.assistant_act, request.authority.assistant_act),
+                (previous.admin, request.authority.admin),
+            ]
+            .iter()
+            .any(|(before, after)| !before && *after)
+        {
+            return Err(DeviceError::Refused("cannot_raise_own_authority"));
+        }
         store.set_attribution(Actor::Owner, &format!("app:{admin}"))?;
+        store.set_attribution_detail("device", json!({"device": admin, "name": caller.name}))?;
+        record.authority_revision = record
+            .authority_revision
+            .checked_add(1)
+            .ok_or(DeviceError::Limit("authority_revision_limit"))?;
         record.authority = Some(request.authority);
         store.records_transaction(|| {
             AREA.save(&store, &request.device, &record)?;
@@ -399,10 +467,18 @@ impl Devices {
                 "device_authority_changed",
                 json!({
                     "device": request.device, "authority": record.authority,
+                    "revision": record.authority_revision,
                     "by_device": admin, "name": caller.name,
                 }),
             )
         })?;
+        for session in lock(&self.sessions).values() {
+            if session.device == request.device {
+                session
+                    .authority_revision
+                    .store(record.authority_revision, Ordering::Release);
+            }
+        }
         Ok(record.info(request.device))
     }
 
@@ -450,6 +526,10 @@ impl Devices {
         result
     }
 }
+
+#[cfg(test)]
+#[path = "devices_authority_tests.rs"]
+mod authority_tests;
 
 #[derive(Debug)]
 pub(crate) enum DeviceError {

@@ -85,6 +85,8 @@ pub enum Action {
     OpenQuickThread,
     /// Open another fixture assistant session.
     OpenThread(&'static str),
+    /// Open a thread at the Inbox decision rather than its newest message.
+    OpenPrompt { thread: ThreadRef, key: String },
     /// Submit the app's draft to its selected target.
     Send,
     /// Submit a named fixture session's own composer without affecting the quick-thread target.

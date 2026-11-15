@@ -115,6 +115,14 @@ pub struct ChangeLine {
     pub seq: u64,
     pub at: String,
     pub class: String,
+    #[serde(default)]
+    pub kind: ChangeKind,
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub failed: bool,
     pub task: Option<String>,
     pub text: String,
     pub actor: String,
@@ -127,6 +135,34 @@ pub struct ChangesPage {
     pub head: u64,
     pub older: Option<u64>,
     pub seen: SeenCursor,
+    /// Exact owner-relevant totals, independent of page size and history cursor.
+    /// Unknown only when talking to an older daemon.
+    #[serde(default)]
+    pub total: Option<u64>,
+    #[serde(default)]
+    pub unseen: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeKind {
+    Created,
+    Moved,
+    Work,
+    Gate,
+    Review,
+    Land,
+    Attention,
+    Question,
+    Comment,
+    Annotation,
+    Automation,
+    Policy,
+    Queue,
+    Plan,
+    #[default]
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

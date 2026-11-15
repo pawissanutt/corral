@@ -95,6 +95,9 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
                 return Ok(());
             }
         } else if welcomed {
+            if let Some(guard) = &session {
+                guard.flush_authority(&mut conn)?;
+            }
             topics.flush(&mut conn)?;
         }
         let frame = match conn.recv() {

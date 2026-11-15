@@ -161,6 +161,50 @@ pub(crate) fn preview(
     Ok(preview)
 }
 
+pub(crate) fn authority_preview(
+    shared: &Shared,
+    device: &str,
+    change: corral_protocol::app::DeviceSetAuthority,
+) -> AppResult<ActPreview> {
+    let (_, authority) = authenticate(shared, device)?;
+    if !authority.admin {
+        return Err(error(ErrorCode::Refused, "admin_only"));
+    }
+    authenticate(shared, &change.device)?;
+    let service = service(shared).ok_or_else(|| error(ErrorCode::Unavailable, "unavailable"))?;
+    issue(
+        &service,
+        device,
+        digest(&("app.device_authority.v1", device, &change))?,
+        ActClass::Confirm,
+        vec![format!("Update authority for device {}", change.device)],
+    )
+}
+
+pub(crate) fn set_authority(
+    shared: &Shared,
+    device: &str,
+    request: corral_protocol::device::DeviceAuthorityChange,
+) -> AppResult<corral_protocol::device::DeviceInfo> {
+    let (_, authority) = authenticate(shared, device)?;
+    if !authority.admin {
+        return Err(error(ErrorCode::Refused, "admin_only"));
+    }
+    // Requiring proof whenever admin is set also closes a concurrent revoke/regrant race.
+    if request.change.authority.admin {
+        let service =
+            service(shared).ok_or_else(|| error(ErrorCode::Unavailable, "unavailable"))?;
+        let expected = digest(&("app.device_authority.v1", device, &request.change))?;
+        consume(&service, device, &expected, request.confirm.as_ref())
+            .map_err(|reason| error(ErrorCode::ConfirmRequired, reason))?;
+    }
+    shared
+        .devices()
+        .ok_or_else(|| error(ErrorCode::Unavailable, "unavailable"))?
+        .set_authority(device, request.change)
+        .map_err(|problem| problem.wire())
+}
+
 /// App proofs supplement, never replace, the canonical finite-scope grant approval.
 fn operation_preview(
     service: &Service,
@@ -700,3 +744,7 @@ pub(super) fn accept_prompt(
 #[cfg(test)]
 #[path = "app_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "app_authority_tests.rs"]
+mod authority_tests;

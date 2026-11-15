@@ -227,7 +227,7 @@ pub(super) fn call(item: &SessionItem, key: &str, rest: Rest<'_>, cx: Cx<'_>) ->
     let body: Vec<Section> = [
         changed.as_deref().and_then(|body| diff("diff", body)),
         content.as_deref().and_then(|body| written("content", body)),
-        text("arguments", arguments),
+        text("arguments", &pretty(arguments)),
         text("output", output),
         call.as_deref()
             .and_then(|body| text("recorded call", &pretty(body))),
@@ -242,7 +242,14 @@ pub(super) fn call(item: &SessionItem, key: &str, rest: Rest<'_>, cx: Cx<'_>) ->
     Some(Tool {
         mark,
         name: words(name),
-        summary: summary.clone(),
+        summary: {
+            let target = target(arguments);
+            if target.is_empty() {
+                target_summary(summary)
+            } else {
+                target
+            }
+        },
         outcome,
         failed,
         note,
@@ -333,11 +340,29 @@ fn target(args: &str) -> String {
     else {
         return String::new();
     };
-    TARGETS
+    let value = TARGETS
         .iter()
-        .find_map(|name| fields.get(*name).and_then(serde_json::Value::as_str))
-        .map(|value| first_line(value).0.to_owned())
-        .unwrap_or_default()
+        .find_map(|name| fields.get(*name))
+        .or_else(|| fields.values().next());
+    match value {
+        Some(serde_json::Value::String(value)) => first_line(value).0.to_owned(),
+        Some(serde_json::Value::Array(values)) => values
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Some(serde_json::Value::Object(fields)) => format!("{} fields", fields.len()),
+        Some(value) => value.to_string(),
+        None => String::new(),
+    }
+}
+
+fn target_summary(summary: &str) -> String {
+    if summary.trim_start().starts_with('{') {
+        target(summary)
+    } else {
+        first_line(summary).0.to_owned()
+    }
 }
 
 /// A call of the live turn, in its state, with the tail of its output so far.

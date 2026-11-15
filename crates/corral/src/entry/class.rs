@@ -72,6 +72,7 @@ pub fn planning_safe(cmd: &Cmd) -> bool {
 )]
 pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
     match cmd {
+        Cmd::Ask(_) => Refused,
         Cmd::Export { what } => match what {
             ExportCmd::Events { .. } => Read,
             ExportCmd::Tasks { .. } => Refused,

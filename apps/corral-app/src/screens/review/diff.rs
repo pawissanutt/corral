@@ -92,18 +92,19 @@ fn file_block(cx: &Ctx, file: &FileView) -> AnyElement {
         .into_element()
 }
 
-/// `.ev-file`: the mono path with its counts, the illustrative tag, then Ask and Collapse at
-/// the trailing edge.
+/// `.ev-file`: the mono path with its counts, cut in the middle so its root and file name both
+/// stay, the illustrative tag, then Ask and Collapse at the trailing edge. A phone has no room
+/// for all of them on one line: the path takes the whole first line, the rest the second.
 fn file_head(cx: &Ctx, file: &FileView) -> AnyElement {
     let app = cx.app;
-    let terminal = app.form == Form::Terminal;
-    let mut parts = vec![
-        rich_at(app, &file.heading, 11.5, Token::Ink2, true)
-            .truncate()
-            .into_element(),
-    ];
+    let form = app.form;
+    let path = rich_at(app, &file.heading, 11.5, Token::Ink2, true)
+        .truncate()
+        .text_overflow(EllipsizeMode::Middle)
+        .into_element();
+    let mut parts = Vec::with_capacity(6);
     if let Some(tag) = file.illustrative {
-        if terminal {
+        if form == Form::Terminal {
             parts.push(term::space(1.0));
         }
         parts.push(illus(app, tag));
@@ -111,12 +112,22 @@ fn file_head(cx: &Ctx, file: &FileView) -> AnyElement {
     parts.push(view().flex_1().min_w(px(0.0)).into_element());
     parts.extend(file.ask.iter().map(|ask| command(cx, ask)));
     parts.extend(file.collapse.iter().map(|collapse| command(cx, collapse)));
-    view()
-        .flex_row()
-        .items_center()
-        .when(!terminal, |head| head.gap(px(8.0)).mb(px(6.0)))
-        .children(parts)
-        .into_element()
+    let row = view().flex_row().items_center();
+    match form {
+        Form::Terminal => row.child(path).children(parts).into_element(),
+        Form::Desktop => row
+            .gap(px(8.0))
+            .mb(px(6.0))
+            .child(path)
+            .children(parts)
+            .into_element(),
+        Form::Phone => view()
+            .gap(px(2.0))
+            .mb(px(6.0))
+            .child(path)
+            .child(row.gap(px(8.0)).children(parts))
+            .into_element(),
+    }
 }
 
 /// A line where a patch would be: loading, or why it is not shown.
@@ -198,7 +209,10 @@ fn line_at(file: &FileView, line: &NumberedLine, old_side: bool) -> Option<LineA
 
 /// Makes a code row open a new comment on its line when the file allows it.
 fn pressable(cx: &Ctx, file: &FileView, line: &NumberedLine, old_side: bool, row: View) -> View {
-    let Some(at) = line_at(file, line, old_side).filter(|_| file.annotatable) else {
+    let (Some(candidate), Some(at)) = (
+        file.candidate.clone(),
+        line_at(file, line, old_side).filter(|_| file.annotatable),
+    ) else {
         return row;
     };
     let label = format!(
@@ -206,8 +220,9 @@ fn pressable(cx: &Ctx, file: &FileView, line: &NumberedLine, old_side: bool, row
         if at.old_side { "old line" } else { "line" },
         at.line
     );
-    let test_id = button_id(&Action::Annotate(at.clone()));
-    let press = act(cx, Action::Annotate(at));
+    let action = Action::Annotate { candidate, at };
+    let test_id = button_id(&action);
+    let press = act(cx, action);
     row.cursor_pointer()
         .role(AccessibilityRole::Button)
         .label(label)
@@ -405,14 +420,22 @@ fn sign(form: Form, line: &NumberedLine) -> AnyElement {
         .into_element()
 }
 
+/// The code of a row, wrapping inside its column rather than cut at its edge: a narrow window
+/// or a phone shows the whole line over as many rows as it takes, the gutters and the tint
+/// running down beside it, each side of a split row wrapping on its own.
 fn code_cell(form: Form, line: &NumberedLine) -> AnyElement {
     let (before, word, after) = pieces(line);
     view()
         .flex_1()
         .min_w(px(0.0))
         .pr(px(10.0))
-        .child(clip(
-            code_text(form, "")
+        .child(
+            text("")
+                .flex_shrink(1.0)
+                .min_w(px(0.0))
+                .font_family(FONT_MONO)
+                .text_size(px(code_size(form)))
+                .line_height(px(LINE))
                 .text_color(color(Token::Ink))
                 .child(before.to_owned())
                 .children(word.map(|word| {
@@ -421,7 +444,7 @@ fn code_cell(form: Form, line: &NumberedLine) -> AnyElement {
                         .rounded(px(2.0))
                 }))
                 .child(after.to_owned()),
-        ))
+        )
         .into_element()
 }
 

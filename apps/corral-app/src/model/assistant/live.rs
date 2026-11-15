@@ -310,6 +310,9 @@ fn served_chip(feed: &Feed, scope: &str) -> Chip {
         return Chip::new("waiting on you", Hue::You);
     }
     let (label, hue) = match row.state {
+        AssistantState::Cold if super::live_parts::has_history(feed, scope, row) => {
+            ("idle · resumes on your message", Hue::Neutral)
+        }
         AssistantState::Cold => ("not started · starts on your message", Hue::Neutral),
         AssistantState::Starting => ("starting", Hue::Corral),
         AssistantState::Ready => ("live", Hue::Worker),
@@ -722,7 +725,7 @@ pub fn live_thread_header(state: &State, feed: &Feed, scope: &str) -> ThreadHead
     ThreadHeader {
         title: match row {
             _ if quick => quick_title(feed),
-            Some(row) => format!("{} · {}", row.id, row.title),
+            Some(row) => format!("{} · {}", row.id, super::live_parts::title(feed, row)),
             None => scope.to_owned(),
         },
         phone_title: if quick {
@@ -754,8 +757,7 @@ fn latest(feed: &Feed, scope: &str) -> (Option<(String, String)>, Option<String>
     let Some(thread) = feed.threads.get(scope) else {
         return (None, None);
     };
-    let mut entries: Vec<_> = thread.entries.values().collect();
-    entries.sort_by(|a, b| a.at.cmp(&b.at).then_with(|| a.id.cmp(&b.id)));
+    let entries = super::live_parts::assemble(&thread.entries);
     use corral_protocol::assistant::EntryKind;
     let owner = entries
         .iter()
@@ -801,7 +803,7 @@ pub fn live_agents(state: &State, feed: &Feed, can_send: bool) -> Agents {
             let focus = row.focus.as_deref().unwrap_or("−");
             SessionRow {
                 id: row.id.clone(),
-                title: row.title.clone(),
+                title: super::live_parts::title(feed, row).into_owned(),
                 desktop_facts: format!(
                     "{} · focus {focus} · {cost} · {} waiting",
                     location(Some(row)),
@@ -839,7 +841,7 @@ pub fn live_agents(state: &State, feed: &Feed, can_send: bool) -> Agents {
             id: quick_id(feed).unwrap_or_else(|| QUICK.to_owned()),
             title: quick_title(feed),
             row_title: "Quick thread",
-            last_line: answer.unwrap_or_else(|| chip.label.clone()),
+            last_line: answer.unwrap_or_else(|| "No assistant reply yet.".into()),
             state: chip,
             pinned: "assistant · pinned",
             last_question: owner.as_ref().map_or_else(String::new, |(_, text)| {

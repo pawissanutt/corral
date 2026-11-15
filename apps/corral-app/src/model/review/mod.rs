@@ -9,6 +9,8 @@
 //! preconditions. Confirm-class decisions (approve, request changes, retry, discard) always go
 //! through corrald's preview and a fresh confirmation on this device. Render the builders'
 //! fields without consulting state again.
+//! Patches and new-comment composers carry the same immutable run/base/head identity. An older
+//! daemon that omits a patch identity can still be read, but cannot safely accept line actions.
 
 mod data;
 mod decide;
@@ -19,6 +21,8 @@ mod live_files;
 mod replay;
 mod view;
 
+#[cfg(test)]
+mod candidate_tests;
 pub use data::{
     Acceptance, CANDIDATES, Candidate, Comment, FILES, File, GATE_LOG, GATE_LOG_NOTE, HunkSource,
     LogLine, REPORT, Report, SCREENSHOT, Screenshot, SourceLine, VERDICTS, Verdict,
@@ -71,6 +75,21 @@ pub enum Tab {
     /// Gate output.
     Log,
 }
+/// A task and the immutable coding candidate an action or draft belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateAt {
+    pub task: Id,
+    pub candidate: corral_protocol::detail::ReviewCandidate,
+}
+
+impl CandidateAt {
+    pub(super) fn draft(&self, suffix: &str) -> String {
+        format!(
+            "{}:{}:{}:{}:{suffix}",
+            self.task, self.candidate.run, self.candidate.base, self.candidate.head
+        )
+    }
+}
 
 /// A line of a served file a new comment is anchored to.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -84,12 +103,16 @@ pub struct LineAt {
 /// What a composer's Send submits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Compose {
-    /// A new line comment on the shown candidate.
-    New(LineAt),
+    /// A new line comment on the patch's captured candidate.
+    New { candidate: CandidateAt, at: LineAt },
     /// A reply to a thread at the revision the owner read.
-    Reply { thread: Id, revision: u32 },
-    /// The request-changes note for the worker.
-    Changes,
+    Reply {
+        candidate: CandidateAt,
+        thread: Id,
+        revision: u32,
+    },
+    /// The request-changes note for this candidate.
+    Changes(CandidateAt),
     /// The fixture replay's thread, which sends nothing.
     Fixture,
 }
@@ -102,19 +125,36 @@ pub struct Sent {
     /// The candidate's task.
     pub task: Id,
     pub intent: Intent,
+    /// The original candidate, retained even when a failed note is restored later.
+    pub candidate: Option<CandidateAt>,
 }
 
 /// What a sent command was for, with the owner's words so an unsent note can be restored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Intent {
-    Approve { sha: String },
-    Changes { text: String },
+    Approve {
+        sha: String,
+    },
+    Changes {
+        text: String,
+    },
     Retry,
     Discard,
-    Comment { at: LineAt, text: String },
-    Reply { thread: Id, text: String },
-    Resolve { thread: Id },
-    Reopen { thread: Id },
+    Comment {
+        at: LineAt,
+        text: String,
+    },
+    Reply {
+        candidate: CandidateAt,
+        thread: Id,
+        text: String,
+    },
+    Resolve {
+        thread: Id,
+    },
+    Reopen {
+        thread: Id,
+    },
 }
 
 /// Review's own state. The selected candidate is the root's live selection; what is expanded,
@@ -128,9 +168,9 @@ pub struct State {
     /// Served files whose patches are shown, by candidate task.
     pub expanded: BTreeSet<(Id, String)>,
     /// The line a new comment is being written on.
-    pub composing: Option<(Id, LineAt)>,
+    pub composing: Option<(CandidateAt, LineAt)>,
     /// The candidate whose request-changes note is open.
-    pub changes: Option<Id>,
+    pub changes: Option<CandidateAt>,
     /// Artifacts whose contents are shown, by candidate task and catalog key.
     pub opened: BTreeSet<(Id, String)>,
     /// Commands sent from this page, oldest first.
@@ -165,7 +205,10 @@ pub enum Action {
         hunk: Option<String>,
     },
     /// Start a new comment on a served line.
-    Annotate(LineAt),
+    Annotate {
+        candidate: CandidateAt,
+        at: LineAt,
+    },
     /// Close the new comment or the request-changes note without sending.
     CancelCompose,
     /// Send a composer's text.

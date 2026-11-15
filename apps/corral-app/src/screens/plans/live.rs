@@ -1,11 +1,13 @@
-//! Daemon-mode plumbing for Plans: keeping a shown plan's detail (and its open diff) loaded and
-//! current, the pushed phone page of a served plan, and the plan graph Now's panel embeds.
+//! Daemon-mode plumbing for Plans: keeping a shown plan's detail (and its open diff) loaded,
+//! current and pinned in the client's cache, the pushed phone page of a served plan, and the
+//! plan graph Now's panel embeds.
 
 use corral_protocol::detail::DetailRef;
 use corral_protocol::rows::PlanState as WireState;
 use nsh_core::prelude::*;
 
 use crate::model::act::{self, ActStatus};
+use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 use crate::model::plans::{self, Action, Button, GraphInput, Lens, LiveAction};
 use crate::model::text::span;
@@ -17,15 +19,36 @@ use crate::ui::kit::text::dim;
 
 use super::{command, graph};
 
-/// What keeps one served plan current: its row revision, whether its copy went stale (a
-/// reconnect), the diff open on it, and whether a command about it lost to a newer revision.
+/// What the client's cache holds of a detail. Missing covers a copy the cache let go of, so a
+/// shown plan whose copy was dropped is asked for again rather than left loading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cached {
+    Missing,
+    Loading,
+    Current,
+    Stale,
+    Failed,
+}
+
+fn cached(feed: &Feed, target: &DetailRef) -> Cached {
+    match feed.detail(target) {
+        None => Cached::Missing,
+        Some(cache) if cache.loading => Cached::Loading,
+        Some(cache) if cache.error.is_some() => Cached::Failed,
+        Some(cache) if cache.stale => Cached::Stale,
+        Some(_) => Cached::Current,
+    }
+}
+
+/// What keeps one served plan current: its row revision, what the cache holds of it and of the
+/// diff open on it, and whether a command about it lost to a newer revision.
 #[derive(Debug, Clone, PartialEq)]
 struct Want {
     plan: Id,
     rev: Option<u64>,
-    stale: bool,
+    cached: Cached,
     diff: Option<DetailRef>,
-    diff_stale: bool,
+    diff_cached: Cached,
     conflict: bool,
 }
 
@@ -49,15 +72,10 @@ fn want(app: AppState, plan: Id) -> Want {
     };
     app.feed.with(|feed| Want {
         rev: feed.plans.get(plan.as_str()).map(|row| row.rev),
-        stale: feed
-            .detail(&DetailRef::Plan {
-                id: plan.to_string(),
-            })
-            .is_some_and(|cache| cache.stale),
-        diff_stale: diff
+        cached: cached(feed, &plan_ref(&plan)),
+        diff_cached: diff
             .as_ref()
-            .and_then(|target| feed.detail(target))
-            .is_some_and(|cache| cache.stale),
+            .map_or(Cached::Missing, |target| cached(feed, target)),
         conflict: keys
             .iter()
             .any(|key| matches!(act::status(feed, key), Some(ActStatus::Conflict(_)))),
@@ -66,9 +84,16 @@ fn want(app: AppState, plan: Id) -> Want {
     })
 }
 
-/// Loads the plan (and its open diff) when first shown or gone stale, and revalidates it when
-/// its row revision moves or a command about it met a newer revision. Never refetches on an
-/// error by itself: the detail offers Retry.
+fn plan_ref(plan: &Id) -> DetailRef {
+    DetailRef::Plan {
+        id: plan.to_string(),
+    }
+}
+
+/// Loads the plan (and its open diff) when first shown, gone stale or dropped from the cache,
+/// and revalidates it when its row revision moves or a command about it met a newer revision.
+/// A failed request is fetched again only when the plan is shown anew: the detail offers Retry.
+/// While shown, the plan and its diff are pinned, so the cache keeps them over older details.
 fn keep_current(app: AppState, plan: impl Fn() -> Option<Id> + 'static) {
     let wanted = computed(move || {
         if !app.daemon() {
@@ -77,29 +102,50 @@ fn keep_current(app: AppState, plan: impl Fn() -> Option<Id> + 'static) {
         plan().map(|id| want(app, id))
     });
     let last = stored(None::<Want>);
+    let pinned = stored(Vec::<DetailRef>::new());
     effect(move || {
         let Some(now) = wanted.get() else {
             return;
         };
         let before = last.replace(Some(now.clone()));
-        let target = DetailRef::Plan {
-            id: now.plan.to_string(),
-        };
+        let target = plan_ref(&now.plan);
         untracked(|| {
-            let moved = before.as_ref().is_some_and(|before| {
-                before.plan == now.plan
-                    && (before.rev != now.rev || (!before.conflict && now.conflict))
-            });
+            let fresh = before.as_ref().is_none_or(|before| before.plan != now.plan);
+            let moved = !fresh
+                && before.as_ref().is_some_and(|before| {
+                    before.rev != now.rev || (!before.conflict && now.conflict)
+                });
+            pin(app, pinned, [Some(target.clone()), now.diff.clone()]);
             if moved {
                 app.refresh(target);
-            } else {
+            } else if fresh || now.cached != Cached::Failed {
                 app.load(target);
             }
-            if let Some(diff) = now.diff.clone() {
+            if let Some(diff) = now.diff.clone()
+                && (fresh || now.diff_cached != Cached::Failed)
+            {
                 app.load(diff);
             }
         });
     });
+    // The owner may already be letting go of its values when this runs.
+    cleanup(move || {
+        for gone in pinned.try_with(std::mem::take).unwrap_or_default() {
+            app.watch_detail(gone, false);
+        }
+    });
+}
+
+/// Pins `wanted` in the client's cache and lets go of what was pinned before and no longer is.
+fn pin(app: AppState, pinned: Stored<Vec<DetailRef>>, wanted: [Option<DetailRef>; 2]) {
+    let wanted: Vec<DetailRef> = wanted.into_iter().flatten().collect();
+    let was = pinned.replace(wanted.clone());
+    for gone in was.iter().filter(|target| !wanted.contains(target)) {
+        app.watch_detail(gone.clone(), false);
+    }
+    for new in wanted.iter().filter(|target| !was.contains(target)) {
+        app.watch_detail(new.clone(), true);
+    }
 }
 
 /// Keeps the desktop and terminal detail's plan current: the root selection, or the first plan.
@@ -110,8 +156,9 @@ pub(super) fn keep_selected_loaded(app: AppState) {
     });
 }
 
-/// Keeps the published plans' details loaded so their list rows can show member strips;
-/// revalidates one when its row revision moves.
+/// Keeps the executing plans' details loaded so their list rows can show member strips;
+/// revalidates one when its row revision moves. A complete plan's members have all landed, and
+/// a long history of them would crowd the bounded cache, so its detail loads when it is opened.
 pub(super) fn keep_rows_loaded(app: AppState) {
     let rows = computed(move || {
         if !app.daemon() {
@@ -120,7 +167,7 @@ pub(super) fn keep_rows_loaded(app: AppState) {
         app.feed.with(|feed| {
             feed.plans
                 .values()
-                .filter(|row| matches!(row.state, WireState::Executing | WireState::Complete))
+                .filter(|row| matches!(row.state, WireState::Executing))
                 .map(|row| (Id::from(&row.id), row.rev))
                 .collect::<Vec<_>>()
         })
@@ -131,7 +178,7 @@ pub(super) fn keep_rows_loaded(app: AppState) {
         let before = last.replace(now.clone());
         untracked(|| {
             for (id, rev) in &now {
-                let target = DetailRef::Plan { id: id.to_string() };
+                let target = plan_ref(id);
                 if before.iter().any(|(was, old)| was == id && old != rev) {
                     app.refresh(target);
                 } else {

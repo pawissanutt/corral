@@ -43,6 +43,12 @@ pub struct QuestionOption {
     pub recommended: bool,
     /// Zero-based index into this detail's evidence blocks.
     pub evidence: Option<usize>,
+    /// No option-specific consequence was recorded or safely derived.
+    #[serde(default)]
+    pub consequence_missing: bool,
+    /// At least one consequence field was inferred from canonical task dependencies.
+    #[serde(default)]
+    pub consequence_derived: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -102,6 +108,10 @@ pub enum EvidenceBody {
     LogTail {
         lines: Vec<String>,
         truncated: bool,
+    },
+    /// Catalog reference only; bytes use the bounded Artifact detail reader.
+    Image {
+        artifact: super::ArtifactRef,
     },
     Unresolved {
         reason: String,

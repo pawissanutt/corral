@@ -13,7 +13,7 @@ use nsh_core::prelude::*;
 use crate::model::act::{Confirmable, PreviewState};
 use crate::model::board::Mark;
 use crate::model::commands::{
-    CONFIRM_CANCEL, CONFIRM_EFFECT_HEADING, CONFIRM_PRESENCE, CONFIRM_SUB, act_confirm_label,
+    CONFIRM_CANCEL, CONFIRM_CHECK, CONFIRM_EFFECT_HEADING, CONFIRM_SUB, act_confirm_label,
     act_confirm_word, confirm_label, confirm_word, risk,
 };
 use crate::model::health::{ConnectionBanner, connection_banner, daemon_connection_banner};
@@ -87,14 +87,15 @@ pub fn stale(app: AppState) -> bool {
     app.data.get() != DataState::Disconnected && app.env().conn.refuses()
 }
 
-/// A desktop window narrower than this folds the sidebar to its rail of icons, whatever was
-/// chosen while wide: below it the labels would leave the page too little room.
-const DESKTOP_NARROW: f32 = 900.0;
+/// A desktop window this narrow or narrower folds the sidebar to its rail of icons, whatever was
+/// chosen while wide: the page's content needs about 760 pt beside the labels' 208, and a tablet
+/// held either way lands at or under this width. The rail and its peek keep the sidebar there.
+const DESKTOP_NARROW: f32 = 1024.0;
 
 /// Whether the measured window or grid is too narrow for the sidebar's labels (tracked).
 pub fn sidebar_narrow(app: AppState) -> bool {
     match app.form {
-        Form::Desktop => window().width.0 < DESKTOP_NARROW,
+        Form::Desktop => window().width.0 <= DESKTOP_NARROW,
         Form::Terminal => crate::ui::term::narrow(),
         Form::Phone => false,
     }
@@ -237,7 +238,7 @@ fn live_modal(app: AppState) -> Modal {
             label: act_confirm_label(&title, app.form),
             cancel: CONFIRM_CANCEL.to_owned(),
             word: act_confirm_word(&title),
-            check: (app.form == Form::Phone).then(|| CONFIRM_PRESENCE.to_owned()),
+            check: (app.form == Form::Phone).then(|| CONFIRM_CHECK.to_owned()),
             on_confirm: Rc::new(move || app.confirm_yes()),
         }),
         title,
@@ -309,7 +310,7 @@ fn confirm_modal(app: AppState) -> Modal {
             label: confirm_label(kind, app.form),
             cancel: CONFIRM_CANCEL.to_owned(),
             word: confirm_word(kind),
-            check: (app.form == Form::Phone).then(|| CONFIRM_PRESENCE.to_owned()),
+            check: (app.form == Form::Phone).then(|| CONFIRM_CHECK.to_owned()),
             on_confirm: Rc::new(move || app.confirm_yes()),
         }),
     }

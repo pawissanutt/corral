@@ -17,6 +17,10 @@ use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
 /// One sweep of the skeleton's pulse, as the mockup's `.skel` shimmer.
 const PULSE_MS: f32 = 1400.0;
+/// A load that takes longer than this says so in words under its skeleton; a quicker one never
+/// flashes them.
+const CAPTION_DELAY_MS: f32 = 600.0;
+const CAPTION_FADE_MS: f32 = 200.0;
 
 /// A notice (`.notice`): the sentence on its tone's ground with an optional trailing action.
 /// Desktop: padding 10 14, radius 8, 10 pt between text and action. Phone: the same at
@@ -163,18 +167,20 @@ pub fn empty(
 
 /// The loading skeleton (`.skel`): one bar per `(width, height)`, the width a fraction of the
 /// row (0.4 is 40 %), the height in desktop points (10 is a text line). Desktop and phone:
-/// radius 4 bars on `surface-2`, 8 pt apart, pulsing slowly (not under reduced motion).
-/// Terminal: bands a whole number of rows high (one per 16 points), no pulse. Hidden from
-/// screen readers, which hear the container's label "Loading"; test_id "skeleton".
+/// radius 4 bars in the rule colour (surface-2 barely parted from the page), 8 pt apart,
+/// pulsing slowly (not under reduced motion). Terminal: bands a whole number of rows high (one
+/// per 16 points), no pulse. Hidden from screen readers, which hear the container's label
+/// "Loading"; test_id "skeleton". For the placeholder of a cell or a row among others; a
+/// region whose whole content is loading uses [`loading`], which says so.
 pub fn skeleton(app: AppState, bars: &[(f32, f32)]) -> AnyElement {
     let form = app.form;
     let bars = bars.iter().map(|&(width, height)| {
         let bar = view()
             .w(relative(width.clamp(0.0, 1.0)))
-            .bg(color(Token::Surface2))
             .accessibility_elements_hidden(true);
         if form == Form::Terminal {
             return bar
+                .bg(color(Token::Surface2))
                 .h(term::rows((height / 16.0).round().max(1.0)))
                 .into_element();
         }
@@ -182,7 +188,8 @@ pub fn skeleton(app: AppState, bars: &[(f32, f32)]) -> AnyElement {
             MotionSpec::new(KeyframeTiming::new(PULSE_MS).infinite())
                 .values(MotionChannel::Opacity, [1.0, 0.55, 1.0]),
         );
-        bar.h(px(height))
+        bar.bg(color(Token::Rule))
+            .h(px(height))
             .rounded(px(4.0))
             .bind_motion(&pulse)
             .into_element()
@@ -192,6 +199,39 @@ pub fn skeleton(app: AppState, bars: &[(f32, f32)]) -> AnyElement {
         .label("Loading")
         .gap(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
         .children(bars.collect::<Vec<_>>())
+        .into_element()
+}
+
+/// A region whose content is loading: the [`skeleton`] of `bars`, then `caption` ("Loading
+/// inbox…") in the quiet ink, which fades in once the wait passes [`CAPTION_DELAY_MS`] so a quick
+/// load never flashes it. The region is a status, so screen readers announce the caption
+/// politely as it comes in. test_id "loading".
+pub fn loading(app: AppState, caption: impl Into<SharedString>, bars: &[(f32, f32)]) -> AnyElement {
+    let caption: SharedString = caption.into();
+    let form = app.form;
+    let words = text(caption.clone())
+        .number_of_lines(1u32)
+        .text_color(color(Token::Ink3));
+    let words = if form == Form::Terminal {
+        words.into_element()
+    } else {
+        let arrive = motion().entering(
+            MotionSpec::new(KeyframeTiming::new(CAPTION_FADE_MS).delay(CAPTION_DELAY_MS))
+                .values(MotionChannel::Opacity, [0.0, 1.0]),
+        );
+        words
+            .font_family(FONT_TEXT)
+            .text_size(px(12.0))
+            .bind_motion(&arrive)
+            .into_element()
+    };
+    view()
+        .test_id("loading")
+        .role(AccessibilityRole::Summary)
+        .label(caption)
+        .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
+        .child(skeleton(app, bars))
+        .child(words)
         .into_element()
 }
 

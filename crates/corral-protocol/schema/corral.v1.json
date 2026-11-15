@@ -1165,6 +1165,16 @@
         ],
         "type": "object"
       },
+      "AttentionActor": {
+        "enum": [
+          "owner",
+          "pm",
+          "worker",
+          "external",
+          "other"
+        ],
+        "type": "string"
+      },
       "AttentionCommand": {
         "oneOf": [
           {
@@ -1283,6 +1293,46 @@
             "type": "object"
           }
         ]
+      },
+      "AttentionDestination": {
+        "enum": [
+          "inbox",
+          "now",
+          "plans",
+          "review",
+          "other"
+        ],
+        "type": "string"
+      },
+      "AttentionMove": {
+        "properties": {
+          "command": {
+            "description": "A CLI hint, never permission to execute a command on the client.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "destination": {
+            "$ref": "#/components/schemas/AttentionDestination"
+          },
+          "next_step": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "whose_move": {
+            "$ref": "#/components/schemas/AttentionActor"
+          }
+        },
+        "required": [
+          "whose_move",
+          "reason",
+          "next_step",
+          "destination"
+        ],
+        "type": "object"
       },
       "BoardAgent": {
         "properties": {
@@ -1421,7 +1471,7 @@
             "$ref": "#/components/schemas/BoardGroup"
           },
           "held_reason": {
-            "description": "Unknown for a legacy bare dispatch-hold flag.",
+            "description": "Recorded hold reason, or the CLI's canonical owner-dispatch-hold cause.",
             "type": [
               "string",
               "null"
@@ -1491,6 +1541,18 @@
       },
       "Burnup": {
         "properties": {
+          "completeness": {
+            "$ref": "#/components/schemas/UsageCompleteness",
+            "default": {
+              "partial": true,
+              "reason": "coverage_unknown",
+              "scanned_from": null,
+              "scanned_rows": 0,
+              "scanned_to": null,
+              "undated_entries": 0,
+              "unpriced_entries": 0
+            }
+          },
           "points": {
             "items": {
               "$ref": "#/components/schemas/BurnupPoint"
@@ -1706,6 +1768,26 @@
         ],
         "type": "object"
       },
+      "ChangeKind": {
+        "enum": [
+          "created",
+          "moved",
+          "work",
+          "gate",
+          "review",
+          "land",
+          "attention",
+          "question",
+          "comment",
+          "annotation",
+          "automation",
+          "policy",
+          "queue",
+          "plan",
+          "other"
+        ],
+        "type": "string"
+      },
       "ChangeLine": {
         "properties": {
           "actor": {
@@ -1716,6 +1798,21 @@
           },
           "class": {
             "type": "string"
+          },
+          "failed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "from": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChangeKind",
+            "default": "other"
           },
           "seq": {
             "format": "uint64",
@@ -1730,6 +1827,13 @@
           },
           "text": {
             "type": "string"
+          },
+          "to": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "via": {
             "type": "string"
@@ -1768,6 +1872,25 @@
           },
           "seen": {
             "$ref": "#/components/schemas/SeenCursor"
+          },
+          "total": {
+            "default": null,
+            "description": "Exact owner-relevant totals, independent of page size and history cursor.\nUnknown only when talking to an older daemon.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "unseen": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -3361,6 +3484,11 @@
           },
           {
             "properties": {
+              "accepts_text": {
+                "default": false,
+                "description": "Submit `QuestionCommand::Answer` using this key/rev, owner=true and option=None.\nFalse after settlement; old servers omit this capability.",
+                "type": "boolean"
+              },
               "answer": {
                 "anyOf": [
                   {
@@ -3499,6 +3627,43 @@
           "other"
         ],
         "type": "string"
+      },
+      "EntryPart": {
+        "properties": {
+          "bytes": {
+            "description": "Whole canonical content length in UTF-8 bytes at this revision.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "description": "No more content will be appended. All `total` parts must still be collected.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Semantic message ID; answers use the live stream's `<message>/answer/0` anchor.",
+            "type": "string"
+          },
+          "index": {
+            "description": "Zero-based transport part position, independent of page boundaries.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "index",
+          "total",
+          "bytes",
+          "complete"
+        ],
+        "type": "object"
       },
       "Error": {
         "properties": {
@@ -3641,6 +3806,23 @@
               "kind",
               "lines",
               "truncated"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Catalog reference only; bytes use the bounded Artifact detail reader.",
+            "properties": {
+              "artifact": {
+                "$ref": "#/components/schemas/ArtifactRef"
+              },
+              "kind": {
+                "const": "image",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "artifact"
             ],
             "type": "object"
           },
@@ -4146,6 +4328,8 @@
           "review",
           "stuck",
           "escalated",
+          "owner_decision",
+          "pm_action",
           "other"
         ],
         "type": "string"
@@ -4160,6 +4344,18 @@
               "string",
               "null"
             ]
+          },
+          "attention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttentionMove"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Canonical next mover and blocker; absent only for older producers."
           },
           "blocking": {
             "type": "boolean"
@@ -5440,6 +5636,18 @@
       },
       "PatchPage": {
         "properties": {
+          "candidate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewCandidate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Present for candidate-bound review patches; absent on plan diffs and older daemons."
+          },
           "patch": {
             "description": "At most 48 KiB; remaining text is fetched with DetailReply.next.",
             "type": "string"
@@ -6058,12 +6266,31 @@
         "oneOf": [
           {
             "enum": [
-              "awaiting",
               "executing",
               "complete",
               "cancelled",
               "other"
             ],
+            "type": "string"
+          },
+          {
+            "const": "drafting",
+            "description": "No submitted revision is waiting for the owner; planning or changes remain.",
+            "type": "string"
+          },
+          {
+            "const": "reviewing",
+            "description": "A submitted document still needs independent review or automatic processing.",
+            "type": "string"
+          },
+          {
+            "const": "plan_failed",
+            "description": "Planning or its review failed or escalated, not an acceptance request.",
+            "type": "string"
+          },
+          {
+            "const": "awaiting",
+            "description": "A submitted, unapproved document is waiting for the owner's decision.",
             "type": "string"
           },
           {
@@ -6564,6 +6791,23 @@
       },
       "ProfileUsage": {
         "properties": {
+          "completeness": {
+            "$ref": "#/components/schemas/UsageCompleteness",
+            "default": {
+              "partial": true,
+              "reason": "coverage_unknown",
+              "scanned_from": null,
+              "scanned_rows": 0,
+              "scanned_to": null,
+              "undated_entries": 0,
+              "unpriced_entries": 0
+            }
+          },
+          "connection": {
+            "default": "",
+            "description": "Empty only for legacy senders or an unknown connection.",
+            "type": "string"
+          },
           "cost_basis": {
             "anyOf": [
               {
@@ -7175,6 +7419,16 @@
       },
       "QuestionOption": {
         "properties": {
+          "consequence_derived": {
+            "default": false,
+            "description": "At least one consequence field was inferred from canonical task dependencies.",
+            "type": "boolean"
+          },
+          "consequence_missing": {
+            "default": false,
+            "description": "No option-specific consequence was recorded or safely derived.",
+            "type": "boolean"
+          },
           "cost": {
             "type": [
               "string",
@@ -7729,6 +7983,26 @@
           "resolved",
           "stale",
           "messages"
+        ],
+        "type": "object"
+      },
+      "ReviewCandidate": {
+        "description": "Immutable identity of the coding candidate whose patch is being displayed.",
+        "properties": {
+          "base": {
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "base",
+          "head"
         ],
         "type": "object"
       },
@@ -11125,7 +11399,29 @@
               }
             ]
           },
+          "completion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TurnCompletion"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical host settlement, never inferred from a Stop request or a generic done stream."
+          },
+          "cost_basis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CostBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "cost_usd": {
+            "description": "One semantic answer's amount, carried only by part zero. None means unknown, never zero.",
             "format": "double",
             "type": [
               "number",
@@ -11155,6 +11451,17 @@
               "string",
               "null"
             ]
+          },
+          "part": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EntryPart"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent on older servers; continuation IDs remain readable as legacy transport parts."
           },
           "rev": {
             "format": "uint64",
@@ -11280,6 +11587,18 @@
       },
       "TimelinePage": {
         "properties": {
+          "completeness": {
+            "$ref": "#/components/schemas/UsageCompleteness",
+            "default": {
+              "partial": true,
+              "reason": "coverage_unknown",
+              "scanned_from": null,
+              "scanned_rows": 0,
+              "scanned_to": null,
+              "undated_entries": 0,
+              "unpriced_entries": 0
+            }
+          },
           "lanes": {
             "items": {
               "$ref": "#/components/schemas/TimelineLane"
@@ -11393,6 +11712,15 @@
         ],
         "type": "string"
       },
+      "TurnCompletion": {
+        "enum": [
+          "completed",
+          "aborted",
+          "failed",
+          "other"
+        ],
+        "type": "string"
+      },
       "UploadAck": {
         "properties": {
           "bytes": {
@@ -11424,6 +11752,54 @@
         ],
         "type": "object"
       },
+      "UsageCompleteness": {
+        "description": "Scan coverage accompanies every monetary/token total, including known subtotals.\nThe scanned instants are the earliest/latest dated facts examined, not proof\nthat every record between them was examined. `partial` covers omitted records.",
+        "properties": {
+          "partial": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scanned_from": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scanned_rows": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scanned_to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "undated_entries": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unpriced_entries": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "partial",
+          "scanned_rows",
+          "unpriced_entries",
+          "undated_entries"
+        ],
+        "type": "object"
+      },
       "UsageDay": {
         "properties": {
           "by_profile": {
@@ -11446,6 +11822,18 @@
         "properties": {
           "at": {
             "type": "string"
+          },
+          "completeness": {
+            "$ref": "#/components/schemas/UsageCompleteness",
+            "default": {
+              "partial": true,
+              "reason": "coverage_unknown",
+              "scanned_from": null,
+              "scanned_rows": 0,
+              "scanned_to": null,
+              "undated_entries": 0,
+              "unpriced_entries": 0
+            }
           },
           "cost_basis": {
             "anyOf": [
@@ -11484,6 +11872,81 @@
         ],
         "type": "object"
       },
+      "UsageQuota": {
+        "description": "Provider evidence is not a numerical allowance. An exhaustion observation can\nname a reset while its limit, consumption and headroom remain unknown.",
+        "properties": {
+          "completeness": {
+            "$ref": "#/components/schemas/UsageCompleteness",
+            "default": {
+              "partial": true,
+              "reason": "coverage_unknown",
+              "scanned_from": null,
+              "scanned_rows": 0,
+              "scanned_to": null,
+              "undated_entries": 0,
+              "unpriced_entries": 0
+            }
+          },
+          "exhausted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "headroom": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resets_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "used": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "window": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "type": "object"
+      },
       "UsageRow": {
         "properties": {
           "connection": {
@@ -11518,6 +11981,13 @@
               "null"
             ]
           },
+          "quotas": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/UsageQuota"
+            },
+            "type": "array"
+          },
           "resets_at": {
             "type": [
               "string",
@@ -11528,6 +11998,18 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "today_completeness": {
+            "$ref": "#/components/schemas/UsageCompleteness",
+            "default": {
+              "partial": true,
+              "reason": "coverage_unknown",
+              "scanned_from": null,
+              "scanned_rows": 0,
+              "scanned_to": null,
+              "undated_entries": 0,
+              "unpriced_entries": 0
+            }
           },
           "today_usd": {
             "format": "double",
@@ -11542,6 +12024,18 @@
               "number",
               "null"
             ]
+          },
+          "week_completeness": {
+            "$ref": "#/components/schemas/UsageCompleteness",
+            "default": {
+              "partial": true,
+              "reason": "coverage_unknown",
+              "scanned_from": null,
+              "scanned_rows": 0,
+              "scanned_to": null,
+              "undated_entries": 0,
+              "unpriced_entries": 0
+            }
           },
           "week_usd": {
             "format": "double",
@@ -11567,6 +12061,18 @@
       },
       "UsageSeries": {
         "properties": {
+          "completeness": {
+            "$ref": "#/components/schemas/UsageCompleteness",
+            "default": {
+              "partial": true,
+              "reason": "coverage_unknown",
+              "scanned_from": null,
+              "scanned_rows": 0,
+              "scanned_to": null,
+              "undated_entries": 0,
+              "unpriced_entries": 0
+            }
+          },
           "days": {
             "items": {
               "$ref": "#/components/schemas/UsageDay"

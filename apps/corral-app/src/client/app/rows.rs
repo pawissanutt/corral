@@ -106,8 +106,9 @@ impl AppState {
                     feed.retire_echoed_sends();
                 });
                 if let Some(live) = live {
-                    self.live(feed, scope, live)?;
+                    Self::live_update(feed, &scope, live)?;
                 }
+                self.touch_thread(feed, &scope);
                 Topic::Thread
             }
             SubDelta::Session {
@@ -128,6 +129,7 @@ impl AppState {
                         gap.is_some(),
                     );
                 });
+                self.touch_session(feed, &scope);
                 Topic::Session
             }
             _ => return Ok(vec![]),
@@ -143,7 +145,9 @@ impl AppState {
             );
             feed.synced = Some(feed.clock.clone());
         });
-        Ok(self.invalidate(feed, topic, &changed))
+        let outgoing = self.invalidate(feed, topic, &changed);
+        self.trim_retained(feed);
+        Ok(outgoing)
     }
     pub(super) fn board(
         &mut self,
@@ -207,24 +211,27 @@ impl AppState {
             outgoing.extend(self.detail_request(
                 feed,
                 requests::new_id(),
-                DetailGet {
-                    target,
-                    etag: None,
-                    page: None,
-                },
+                self.retained.selected(target),
             ));
         }
         outgoing
     }
     pub(super) fn live(
-        &self,
+        &mut self,
         feed: Signal<Feed>,
         scope: String,
         fragment: LiveText,
     ) -> Result<(), String> {
+        let result = Self::live_update(feed, &scope, fragment);
+        self.touch_thread(feed, &scope);
+        self.trim_retained(feed);
+        result
+    }
+
+    fn live_update(feed: Signal<Feed>, scope: &str, fragment: LiveText) -> Result<(), String> {
         let mut problem = None;
         feed.update(|feed| {
-            let thread = feed.threads.entry(scope.into()).or_default();
+            let thread = feed.threads.entry(Id::new(scope)).or_default();
             let replace = thread
                 .live
                 .as_ref()

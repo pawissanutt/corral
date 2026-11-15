@@ -11,38 +11,66 @@
 //! Spacing in a terminal collapses (a gap of 16 points is one Cell, padding never more than
 //! two), so exact runs of Cells are fixed-width spaces, not gaps.
 
+use std::borrow::Cow;
+
 use nsh_core::EllipsizeMode;
 use nsh_core::element::cell_size;
 use nsh_core::prelude::*;
 
-use crate::model::{Segment, Snapshot, Tone};
+use crate::model::{Overlay, Segment, Snapshot, Tone};
 use crate::state::AppState;
 use crate::ui::tokens::{Token, color, tone};
 
 /// One Cell at the default Cell size, where the surface reports none yet.
 const COLUMN: f32 = 8.0;
 const ROW: f32 = 16.0;
-/// A grid at least this wide gives the sidebar its full width and Ask half the content.
+/// A grid at least this wide gives the sidebar its full width and docks Ask beside the page. The
+/// sidebar folds while Ask docks, so the page keeps half of the rest: 49 Cells at 110.
 const WIDE_COLUMNS: f32 = 110.0;
-/// A grid narrower than this folds an automatic sidebar to its rail.
-const NARROW_COLUMNS: f32 = 80.0;
+/// A grid this wide or narrower folds an automatic sidebar to its rail: beside the labels, a list
+/// would have to leave its detail or crush it (80 columns gave the labels 24 of 80 Cells).
+const FOLD_COLUMNS: f32 = 100.0;
 /// The folded sidebar: its lines, a selection bar, the count, the key.
 const RAIL_COLUMNS: f32 = 10.0;
+/// The unfolded sidebar: on a wide grid room for "This device <name>" in its bottom line and the
+/// autopilot state on one row; otherwise the longest Settings section on its indent.
+const SIDEBAR_WIDE_COLUMNS: f32 = 32.0;
+const SIDEBAR_COLUMNS: f32 = 24.0;
+/// The content frame's two lines.
+const FRAME_COLUMNS: f32 = 2.0;
+/// The least a detail keeps beside its list; on a narrower page the list stacks above it.
+const DETAIL_COLUMNS: f32 = 40.0;
+/// On a wide page a list grows to this share of it, up to `LIST_MAX_COLUMNS`, so its names stop
+/// being cut while the detail has more room than it can use.
+const LIST_SHARE: f32 = 0.4;
+const LIST_MAX_COLUMNS: f32 = 80.0;
 /// Longer than any line a terminal shows; the view a line sits in clips it.
 const LINE_CELLS: usize = 400;
-/// The box-drawing glyphs `─` and `│` in UTF-8.
+/// The glyphs `─`, `│` and `░` in UTF-8.
 const ACROSS_GLYPH: [u8; 3] = [0xE2, 0x94, 0x80];
 const DOWN_GLYPH: [u8; 3] = [0xE2, 0x94, 0x82];
+const SHADE_GLYPH: [u8; 3] = [0xE2, 0x96, 0x91];
 
-const ACROSS_BYTES: [u8; 3 * LINE_CELLS] = {
-    let mut bytes = [0; 3 * LINE_CELLS];
+/// `glyph` (three bytes of UTF-8) over and over.
+const fn repeated<const N: usize>(glyph: [u8; 3]) -> [u8; N] {
+    let mut bytes = [0; N];
     let mut at = 0;
-    while at < bytes.len() {
-        bytes[at] = ACROSS_GLYPH[at % 3];
+    while at < N {
+        bytes[at] = glyph[at % 3];
         at += 1;
     }
     bytes
-};
+}
+
+const fn utf8(bytes: &'static [u8]) -> &'static str {
+    match std::str::from_utf8(bytes) {
+        Ok(line) => line,
+        Err(_) => "",
+    }
+}
+
+const ACROSS_BYTES: [u8; 3 * LINE_CELLS] = repeated(ACROSS_GLYPH);
+const SHADE_BYTES: [u8; 3 * LINE_CELLS] = repeated(SHADE_GLYPH);
 /// `│` on each row, one row apart: every row of the text one glyph, as NSH reads a divider.
 const DOWN_BYTES: [u8; 4 * LINE_CELLS - 1] = {
     let mut bytes = [b'\n'; 4 * LINE_CELLS - 1];
@@ -55,14 +83,9 @@ const DOWN_BYTES: [u8; 4 * LINE_CELLS - 1] = {
     }
     bytes
 };
-const ACROSS: &str = match std::str::from_utf8(&ACROSS_BYTES) {
-    Ok(line) => line,
-    Err(_) => "",
-};
-const DOWN: &str = match std::str::from_utf8(&DOWN_BYTES) {
-    Ok(line) => line,
-    Err(_) => "",
-};
+const ACROSS: &str = utf8(&ACROSS_BYTES);
+const SHADE: &str = utf8(&SHADE_BYTES);
+const DOWN: &str = utf8(&DOWN_BYTES);
 
 /// The width of `n` Cells, in points.
 pub fn cells(n: f32) -> Points {
@@ -86,35 +109,99 @@ pub fn grid_rows() -> usize {
     (window().height.0 / row + 0.01).floor().max(0.0) as usize
 }
 
-/// Whether the grid is wide enough for the full sidebar and a half-width Ask (tracked).
+/// Whether the grid is wide enough for the full sidebar and Ask docked beside the page (tracked).
 pub fn wide() -> bool {
-    columns() as f32 >= WIDE_COLUMNS
+    is_wide(columns())
 }
 
 /// Whether the grid is narrow enough that the sidebar folds to its rail (tracked).
 pub fn narrow() -> bool {
-    (columns() as f32) < NARROW_COLUMNS
+    folds(columns())
 }
 
-/// Whether this app's terminal sidebar shows as the rail of keys and counts (tracked): always on
-/// a narrow grid, unless its labels were asked for there for the moment (a terminal cannot lay
+fn is_wide(columns: usize) -> bool {
+    columns as f32 >= WIDE_COLUMNS
+}
+
+fn folds(columns: usize) -> bool {
+    columns as f32 <= FOLD_COLUMNS
+}
+
+/// Whether Ask is open docked beside the page (tracked); on a grid short of [`wide`] it takes the
+/// whole content frame and the page steps out while it is open.
+pub fn ask_docked(app: AppState) -> bool {
+    app.is_open(Overlay::Ask) && wide()
+}
+
+/// Whether the automatic sidebar folds to its rail (tracked): on a narrow grid, and while Ask
+/// docks, which takes half the content; with the labels' width gone too the page beside Ask
+/// would be left a sliver.
+pub fn sidebar_folds(app: AppState) -> bool {
+    narrow() || ask_docked(app)
+}
+
+/// Whether this app's terminal sidebar shows as the rail of keys and counts (tracked): always
+/// while it folds, unless its labels were asked for there for the moment (a terminal cannot lay
 /// them over the page without leaving the page's cut words beside them).
 pub fn sidebar_collapsed(app: AppState) -> bool {
-    app.sidebar.get().collapsed(narrow()) && !(narrow() && app.sidebar_peeking())
+    let folds = sidebar_folds(app);
+    app.sidebar.get().collapsed(folds) && !(folds && app.sidebar_peeking())
 }
 
-/// The sidebar's width in Cells, its lines included (tracked): folded, the rail of each
-/// destination's count and key; on a wide grid room for "This device <name>" in its bottom
-/// line and the autopilot state on one row; otherwise the longest Settings section on its
-/// indent.
+/// The sidebar's width in Cells, its lines included (tracked).
 pub fn sidebar_columns(app: AppState) -> f32 {
-    if sidebar_collapsed(app) {
+    sidebar_width(sidebar_collapsed(app), wide())
+}
+
+fn sidebar_width(collapsed: bool, wide: bool) -> f32 {
+    if collapsed {
         RAIL_COLUMNS
-    } else if wide() {
-        32.0
+    } else if wide {
+        SIDEBAR_WIDE_COLUMNS
     } else {
-        24.0
+        SIDEBAR_COLUMNS
     }
+}
+
+/// The page's width in Cells (tracked): the grid less the sidebar and the content frame's lines,
+/// and only half of that while Ask docks beside it.
+pub fn page_columns(app: AppState) -> f32 {
+    page_room(columns(), sidebar_columns(app), ask_docked(app))
+}
+
+/// Whether a list of `list` Cells (its natural width) sits beside its detail on this page
+/// (tracked): only while the detail keeps its least width after it and the line between them.
+/// Otherwise the list stacks above the detail; it is never left out.
+pub fn beside(app: AppState, list: f32) -> bool {
+    holds_beside(page_columns(app), list)
+}
+
+/// The width in Cells of a list beside its detail (tracked): its natural `list` width, growing
+/// with a wide page.
+pub fn list_columns(app: AppState, list: f32) -> f32 {
+    list_room(page_columns(app), list)
+}
+
+fn page_room(columns: usize, sidebar: f32, docked: bool) -> f32 {
+    let content = (columns as f32 - sidebar - FRAME_COLUMNS).max(0.0);
+    // Docked Ask takes half the row, its own line included.
+    if docked {
+        (content / 2.0).floor()
+    } else {
+        content
+    }
+}
+
+fn holds_beside(page: f32, list: f32) -> bool {
+    page >= list + 1.0 + DETAIL_COLUMNS
+}
+
+fn list_room(page: f32, list: f32) -> f32 {
+    (page * LIST_SHARE)
+        .round()
+        .min(LIST_MAX_COLUMNS)
+        .min(page - 1.0 - DETAIL_COLUMNS)
+        .max(list)
 }
 
 /// `n` blank Cells in a row.
@@ -134,6 +221,21 @@ pub fn blank() -> AnyElement {
 
 /// A divider across its parent: `─` from edge to edge, joined to the lines its ends touch.
 pub fn hrule() -> AnyElement {
+    glyph_row(ACROSS)
+}
+
+/// A placeholder `rows_high` rows deep, drawn in `░` to the width its caller sets: where the
+/// desktop pulses a bar, a terminal that draws no bands would otherwise show nothing loading.
+pub fn shade(rows_high: usize) -> View {
+    view()
+        .flex_shrink_0()
+        .min_w(px(0.0))
+        .accessibility_elements_hidden(true)
+        .children((0..rows_high.max(1)).map(|_| glyph_row(SHADE)))
+}
+
+/// One row of `glyphs` across its parent, clipped at its edge.
+fn glyph_row(glyphs: &'static str) -> AnyElement {
     view()
         .h(rows(1.0))
         .flex_shrink_0()
@@ -141,7 +243,7 @@ pub fn hrule() -> AnyElement {
         .overflow_hidden()
         .accessibility_elements_hidden(true)
         .child(
-            text(ACROSS)
+            text(glyphs)
                 .absolute()
                 .top(px(0.0))
                 .left(px(0.0))
@@ -234,7 +336,9 @@ pub fn key_cap(keys: impl Into<SharedString>) -> AnyElement {
         .bg(color(Token::Surface))
         .accessibility_elements_hidden(true)
         .child(
+            // The key is what the cap is for: a short line drops names, never a key's letters.
             text(keys.into())
+                .flex_shrink_0()
                 .number_of_lines(1u32)
                 .font_weight(FontWeight::BOLD)
                 .text_color(color(Token::Ink)),
@@ -280,25 +384,78 @@ const BRAND: &str = "◉ Corral";
 const GAP: usize = 2;
 const SEPARATOR: usize = 3;
 
-/// What the top bar shows at its width. Nothing is ever cut: the path gives way first, then
-/// reach, attention and the clock, then the brand; the source label never goes, shortened to
-/// its first word at the last, so fixture data never passes for live.
+/// What the top bar shows at its width. Nothing is ever cut: whole parts give way, the least
+/// telling first. The path, reach and attention go; then the source label's middle (the
+/// workspace's name, the sidebar's title already) and the brand; then the values of healthy
+/// segments (their `●` says it); then the date, before the clock's time; then every segment's
+/// value, the marks' shapes still telling a warning and a failure apart. The source label never
+/// goes, kept to its first word at the last, so fixture data never passes for live.
 struct Bar<'a> {
     brand: bool,
     path: Option<&'a str>,
     reach: Option<&'a str>,
     attention: Option<&'a str>,
     clock: Option<&'a str>,
-    /// What shows of the source label, and the label itself.
-    source: Option<(&'a str, &'a str)>,
+    values: Values,
+    /// The source label and how much of it shows.
+    source: Option<(&'a str, Label)>,
+}
+
+/// Which health segments keep their value after their name.
+#[derive(Debug, Clone, Copy)]
+enum Values {
+    All,
+    /// Those not healthy.
+    Unwell,
+    Hidden,
+}
+
+impl Values {
+    fn shows(self, segment_tone: Tone) -> bool {
+        match self {
+            Values::All => true,
+            Values::Unwell => segment_tone != Tone::Ok,
+            Values::Hidden => false,
+        }
+    }
+}
+
+/// How much of the source label shows: whole; its first and last parts; its first word.
+#[derive(Debug, Clone, Copy)]
+enum Label {
+    Whole,
+    Ends,
+    First,
+}
+
+/// Between the parts of the source label (`corrald · <workspace> · <day>`).
+const LABEL_SEPARATOR: &str = " · ";
+
+fn shown(full: &str, label: Label) -> Cow<'_, str> {
+    match label {
+        Label::Whole => Cow::Borrowed(full),
+        Label::Ends => match (
+            full.split_once(LABEL_SEPARATOR),
+            full.rsplit_once(LABEL_SEPARATOR),
+        ) {
+            (Some((first, rest)), Some((_, last))) if rest != last => {
+                Cow::Owned(format!("{first}{LABEL_SEPARATOR}{last}"))
+            }
+            _ => Cow::Borrowed(full),
+        },
+        Label::First => Cow::Borrowed(full.split_whitespace().next().unwrap_or(full)),
+    }
 }
 
 fn width(content: &str) -> usize {
     content.chars().count()
 }
 
-fn segment_width(segment: &Segment) -> usize {
-    width(mark(segment.tone)) + 1 + width(&segment.name) + 1 + width(&segment.value)
+fn segment_width(segment: &Segment, value: bool) -> usize {
+    width(mark(segment.tone))
+        + 1
+        + width(&segment.name)
+        + if value { 1 + width(&segment.value) } else { 0 }
 }
 
 /// Items `GAP` apart; zero for none.
@@ -319,11 +476,12 @@ impl<'a> Bar<'a> {
             reach: health.reach.as_deref().filter(|_| connected),
             attention: health.attention.as_deref().filter(|_| connected),
             clock: health.clock.as_deref().filter(|_| connected),
+            values: Values::All,
             source: health
                 .source
                 .as_deref()
                 .filter(|_| connected)
-                .map(|source| (source, source)),
+                .map(|source| (source, Label::Whole)),
         }
     }
 
@@ -333,32 +491,41 @@ impl<'a> Bar<'a> {
             .flatten()
     }
 
+    fn source_shown(&self) -> Option<Cow<'a, str>> {
+        self.source.map(|(full, label)| shown(full, label))
+    }
+
     /// The Cells the bar takes: the band (a Cell of padding each side, the brand and path and the
     /// line after them, the segments, the least room before reach, attention and the clock),
     /// then the source label with a Cell each side.
-    fn width(&self, segments: usize) -> usize {
+    fn width(&self, segments: &[Segment]) -> usize {
         let left = self
             .brand
             .then(|| group([width(BRAND)].into_iter().chain(self.path.map(width))))
             .flatten()
             .map_or(0, |left| left + SEPARATOR);
+        let segments = group(
+            segments
+                .iter()
+                .map(|segment| segment_width(segment, self.values.shows(segment.tone))),
+        )
+        .unwrap_or(0);
         let meta = group(self.meta().map(width)).unwrap_or(0);
-        let source = self.source.map_or(0, |(shown, _)| 2 + width(shown));
+        let source = self.source_shown().map_or(0, |shown| 2 + width(&shown));
         2 + left + segments + SEPARATOR + meta + source
     }
 
-    fn fit(mut self, segments: usize, room: usize) -> Bar<'a> {
-        let steps: [fn(&mut Bar<'a>); 6] = [
+    fn fit(mut self, segments: &[Segment], room: usize) -> Bar<'a> {
+        let steps: [fn(&mut Bar<'a>); 9] = [
             |bar| bar.path = None,
             |bar| bar.reach = None,
             |bar| bar.attention = None,
-            |bar| bar.clock = None,
+            |bar| bar.source = bar.source.map(|(full, _)| (full, Label::Ends)),
             |bar| bar.brand = false,
-            |bar| {
-                bar.source = bar
-                    .source
-                    .map(|(_, full)| (full.split_whitespace().next().unwrap_or(full), full))
-            },
+            |bar| bar.values = Values::Unwell,
+            |bar| bar.source = bar.source.map(|(full, _)| (full, Label::First)),
+            |bar| bar.clock = None,
+            |bar| bar.values = Values::Hidden,
         ];
         for step in steps {
             if self.width(segments) <= room {
@@ -399,8 +566,7 @@ pub fn top_bar(app: AppState) -> AnyElement {
 
 fn bar(snapshot: &Snapshot, room: usize) -> Vec<AnyElement> {
     let segments = &snapshot.health.segments;
-    let segments_width = group(segments.iter().map(segment_width)).unwrap_or(0);
-    let fitted = Bar::of(snapshot).fit(segments_width, room);
+    let fitted = Bar::of(snapshot).fit(segments, room);
     let mut band = Vec::new();
     if fitted.brand {
         band.push(
@@ -428,7 +594,7 @@ fn bar(snapshot: &Snapshot, room: usize) -> Vec<AnyElement> {
         if at > 0 {
             band.push(space(GAP as f32));
         }
-        band.push(health_segment(segment));
+        band.push(health_segment(segment, fitted.values.shows(segment.tone)));
     }
     band.push(
         view()
@@ -474,13 +640,14 @@ fn bar(snapshot: &Snapshot, room: usize) -> Vec<AnyElement> {
             .children(band)
             .into_element(),
     ];
-    parts.extend(fitted.source.map(|(shown, full)| {
+    let source = fitted.source_shown();
+    parts.extend(fitted.source.zip(source).map(|((full, _), shown)| {
         view()
             .flex_row()
             .flex_shrink_0()
             .px(cells(1.0))
             .child(
-                text(shown.to_owned())
+                text(shown.into_owned())
                     .test_id("health-source")
                     .label(full.to_owned())
                     .number_of_lines(1u32)
@@ -492,15 +659,20 @@ fn bar(snapshot: &Snapshot, room: usize) -> Vec<AnyElement> {
 }
 
 /// `● name value`: the mark in the tone; a warning or failure also has its words in the tone
-/// and bold, so it reads as one without colour.
-fn health_segment(segment: &Segment) -> AnyElement {
+/// and bold, so it reads as one without colour. Short of room the value gives way to the mark.
+fn health_segment(segment: &Segment, value: bool) -> AnyElement {
     let loud = matches!(segment.tone, Tone::Warn | Tone::Fail);
+    let words = if value {
+        format!(" {} {}", segment.name, segment.value)
+    } else {
+        format!(" {}", segment.name)
+    };
     text(mark(segment.tone))
         .flex_shrink_0()
         .number_of_lines(1u32)
         .text_color(tone(segment.tone))
         .child(
-            text(format!(" {} {}", segment.name, segment.value))
+            text(words)
                 .text_color(if loud {
                     tone(segment.tone)
                 } else {
@@ -509,4 +681,53 @@ fn health_segment(segment: &Segment) -> AnyElement {
                 .when(loud, |t| t.font_weight(FontWeight::BOLD)),
         )
         .into_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The least the page keeps beside docked Ask: a list or a detail still reads at this width.
+    const ASK_PAGE_COLUMNS: f32 = 48.0;
+    /// The natural list widths of the terminal's list-and-detail pages (Review, Plans, Inbox,
+    /// Now), in Cells.
+    const LISTS: [f32; 4] = [25.0, 32.0, 33.0, 44.0];
+
+    #[test]
+    fn sidebar_folds_on_an_eighty_column_grid() {
+        assert!(folds(80));
+        assert!(folds(100));
+        assert!(!folds(WIDE_COLUMNS as usize));
+    }
+
+    #[test]
+    fn docked_ask_never_squeezes_a_detail_beside_its_list() {
+        for columns in 60..=240 {
+            if is_wide(columns) {
+                // While Ask docks the sidebar folds to its rail.
+                let page = page_room(columns, sidebar_width(true, true), true);
+                assert!(page >= ASK_PAGE_COLUMNS, "{columns} columns: page {page}");
+            }
+            for (sidebar, docked) in [
+                (RAIL_COLUMNS, false),
+                (RAIL_COLUMNS, true),
+                (SIDEBAR_COLUMNS, false),
+                (SIDEBAR_WIDE_COLUMNS, false),
+                (SIDEBAR_WIDE_COLUMNS, true),
+            ] {
+                let page = page_room(columns, sidebar, docked);
+                for list in LISTS {
+                    if holds_beside(page, list) {
+                        let width = list_room(page, list);
+                        assert!(width >= list, "{columns} columns: list {width} < {list}");
+                        assert!(
+                            page - width - 1.0 >= DETAIL_COLUMNS,
+                            "{columns} columns, sidebar {sidebar}, docked {docked}: detail {}",
+                            page - width - 1.0
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

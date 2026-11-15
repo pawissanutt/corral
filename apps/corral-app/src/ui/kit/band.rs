@@ -15,6 +15,9 @@ const MARGIN: f32 = 44.0;
 /// The margin's word: 10 pt capitals, spaced .14 em.
 const WORD_SIZE: f32 = 10.0;
 const WORD_TRACKING: f32 = 1.4;
+/// The box the word is measured in: wider than the longest band word at this size, which a
+/// box as narrow as the margin would cut to "SITU…".
+const WORD_BOX: f32 = 240.0;
 
 /// A handover band: `letter` ("S") and `word` ("Situation") beside or above `content`.
 /// Desktop: a 44 pt margin on the sunken ground, ruled off on its right, the letter in 17 pt
@@ -239,7 +242,7 @@ pub fn band_head(
                     }),
             )
             .child(view().flex_1().min_w(px(0.0)))
-            .when_some(note, |row, note| row.child(term::quiet(note)))
+            .when_some(note, |row, note| row.child(terminal_note(note)))
             .into_element(),
     }
 }
@@ -247,6 +250,8 @@ pub fn band_head(
 /// The desktop margin's word, turned a quarter to read upwards. A turned text keeps its
 /// unturned box in the layout, so the box is measured and the holder takes the word's length as
 /// its height, the word centred on it; the word shows once measured, never at its unturned place.
+/// The word is laid out in a box far wider than the margin, so it is measured at its full length
+/// ("RECOMMENDATION") rather than cut to the margin's 44 pt before it turns.
 fn upright_word(word: SharedString) -> AnyElement {
     let measured = signal(None::<(f32, f32)>);
     let length = move || measured.get().map_or(0.0, |(width, _)| width);
@@ -254,33 +259,52 @@ fn upright_word(word: SharedString) -> AnyElement {
         .w_full()
         .h(move || px(length()))
         .child(
-            text(word)
+            view()
                 .absolute()
-                .number_of_lines(1u32)
-                .uppercase()
-                .font_family(FONT_TEXT)
-                .text_size(px(WORD_SIZE))
-                .letter_spacing(px(WORD_TRACKING))
-                .text_color(color(Token::Ink4))
-                .left(move || {
-                    px(measured
-                        .get()
-                        .map_or(0.0, |(width, _)| (MARGIN - width) / 2.0))
-                })
-                .top(move || {
-                    px(measured
-                        .get()
-                        .map_or(0.0, |(width, height)| (width - height) / 2.0))
-                })
-                .rotate(deg(-90.0))
-                .on_layout(move |frame: &Bounds<Points>| {
-                    let size = (frame.size.width.0, frame.size.height.0);
-                    if measured.get_untracked() != Some(size) {
-                        measured.set(Some(size));
-                    }
-                })
-                .style_when(move || measured.get().is_none(), |s| s.invisible()),
+                .left(px(0.0))
+                .top(px(0.0))
+                .w(px(WORD_BOX))
+                .child(
+                    text(word)
+                        .absolute()
+                        .number_of_lines(1u32)
+                        .uppercase()
+                        .font_family(FONT_TEXT)
+                        .text_size(px(WORD_SIZE))
+                        .letter_spacing(px(WORD_TRACKING))
+                        .text_color(color(Token::Ink4))
+                        .left(move || {
+                            px(measured
+                                .get()
+                                .map_or(0.0, |(width, _)| (MARGIN - width) / 2.0))
+                        })
+                        .top(move || {
+                            px(measured
+                                .get()
+                                .map_or(0.0, |(width, height)| (width - height) / 2.0))
+                        })
+                        .rotate(deg(-90.0))
+                        .on_layout(move |frame: &Bounds<Points>| {
+                            let size = (frame.size.width.0, frame.size.height.0);
+                            if measured.get_untracked() != Some(size) {
+                                measured.set(Some(size));
+                            }
+                        })
+                        .style_when(move || measured.get().is_none(), |s| s.invisible()),
+                ),
         )
+        .into_element()
+}
+
+/// A terminal band head's note: a Cell after the room before it, so it never meets the word,
+/// and cut with an ellipsis when the row runs short, as the word keeps its full length.
+fn terminal_note(note: String) -> AnyElement {
+    view()
+        .flex_row()
+        .flex_shrink(1.0)
+        .min_w(px(0.0))
+        .child(term::space(1.0))
+        .child(term::quiet(note).flex_shrink(1.0).min_w(px(0.0)).truncate())
         .into_element()
 }
 
@@ -299,6 +323,6 @@ fn word_row(word: SharedString, note: Option<String>) -> AnyElement {
                 .text_color(color(Token::Ink)),
         )
         .child(view().flex_1().min_w(px(0.0)))
-        .when_some(note, |row, note| row.child(term::quiet(note)))
+        .when_some(note, |row, note| row.child(terminal_note(note)))
         .into_element()
 }

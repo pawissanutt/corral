@@ -201,6 +201,8 @@ pub enum Effect {
         session: Id,
         on: bool,
     },
+    /// Retire and reopen a failed subscription on its current authenticated connection.
+    RetryTopic(String),
     Changes(ChangesQuery),
     Seen(SeenAdvance),
     /// Send a message in the one chat, with the attachment refs it carries.

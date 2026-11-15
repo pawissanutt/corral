@@ -1641,7 +1641,7 @@ export class HostSession {
   }
 
   private costTurn(marker: { phase: "start"; key: string | null; queued?: true } | { phase: "end" }): void {
-    if (this.options.identity.role !== "pm") return;
+    if (this.options.identity.role !== "pm" && this.options.identity.role !== "assistant") return;
     try {
       this.session.sessionManager.appendCustomEntry("corral_cost_turn", {
         generation: this.options.identity.generation, turn: this.turn, ...marker,

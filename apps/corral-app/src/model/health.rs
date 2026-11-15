@@ -345,16 +345,14 @@ pub fn connection_banner(conn: Conn, form: Form) -> Option<ConnectionBanner> {
 /// The live reducer environment, independent of persisted demo switches.
 pub fn daemon_env(feed: &Feed, form: Form) -> crate::model::effect::Env {
     use crate::model::effect::{DataMode, Env};
-    let conn = if feed.link == Link::Down {
+    let conn = if !feed.ready() {
         Conn::Down
-    } else if feed
-        .health
-        .as_ref()
-        .is_some_and(|health| health.level == DaemonLevel::Degraded)
-    {
-        Conn::Degraded
     } else {
-        Conn::Healthy
+        match feed.health.as_ref().map(|health| health.level) {
+            Some(DaemonLevel::Healthy) => Conn::Healthy,
+            Some(DaemonLevel::Degraded) => Conn::Degraded,
+            _ => Conn::Down,
+        }
     };
     Env {
         conn,
@@ -365,16 +363,22 @@ pub fn daemon_env(feed: &Feed, form: Form) -> crate::model::effect::Env {
 
 /// Projects the last daemon reading without borrowing session-owned strings.
 pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
-    let down = feed.link == Link::Down;
-    // Health arrives only once this device is authenticated; before that the device's own
-    // standing is the truth, not an endless "connecting".
-    let refused = feed.health.is_none() && matches!(feed.device, DeviceLink::Failed(_));
-    let (value, tone): (Cow<'static, str>, Tone) = if down {
-        ("not reachable".into(), Tone::Fail)
-    } else if refused {
+    let down = !feed.ready();
+    let refused = matches!(feed.device, DeviceLink::Failed(_));
+    let (value, tone): (Cow<'static, str>, Tone) = if refused {
         ("not connected".into(), Tone::Fail)
-    } else if feed.health.is_none() && feed.device == DeviceLink::Unenrolled {
+    } else if feed.transport_ready && feed.device == DeviceLink::Unenrolled {
         ("not enrolled".into(), Tone::Warn)
+    } else if down {
+        (
+            if feed.link == Link::Down {
+                "not reachable"
+            } else {
+                "connecting"
+            }
+            .into(),
+            Tone::Warn,
+        )
     } else {
         match feed.health.as_ref().map(|health| health.level) {
             Some(DaemonLevel::Healthy) => ("healthy".into(), Tone::Ok),
@@ -501,7 +505,7 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
 
 /// Live connection warnings never offer a simulated daemon restart.
 pub fn daemon_connection_banner(feed: &Feed, form: Form) -> Option<ConnectionBanner> {
-    let (tone, text, label) = if feed.link == Link::Down {
+    let (tone, text, label) = if !feed.ready() {
         let stale = if feed.board.complete {
             feed.synced.as_ref().map_or_else(
                 || " Showing the last received board, marked stale.".to_owned(),

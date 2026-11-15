@@ -204,6 +204,10 @@ pub fn refusal_words(code: &str) -> String {
         "ended" => "the session has ended".into(),
         "not_owned" => "corral does not own this session's pane".into(),
         "no_pane" => "this session has no pane".into(),
+        "no_supported_session_reply" => {
+            "this session cannot receive app messages; no supported live host or pane is available"
+                .into()
+        }
         "adopted_pane" => {
             "you opened this pane yourself, so corral never types into or closes it".into()
         }

@@ -56,8 +56,14 @@ fn frame(id: u64, method: &str, params: impl Serialize) -> Frame {
 
 fn unix_call(stream: &mut UnixStream, method: &str, params: impl Serialize) -> Value {
     write_frame(stream, &frame(1, method, params)).unwrap();
-    let response = read_frame(stream).unwrap().unwrap();
-    let response: rpc::Response = serde_json::from_slice(&response.payload).unwrap();
+    let response = loop {
+        let frame = read_frame(stream).unwrap().unwrap();
+        let response: Value = serde_json::from_slice(&frame.payload).unwrap();
+        if response.get("id").is_some() {
+            break serde_json::from_value::<rpc::Response>(response).unwrap();
+        }
+        assert_eq!(response["method"], SESSION_AUTHORITY_CHANGED);
+    };
     match response.outcome {
         rpc::ResponseOutcome::Result { result } => result,
         rpc::ResponseOutcome::Error { error } => panic!("{method}: {error:?}"),
@@ -346,13 +352,29 @@ fn paired_browser_reads_board_and_revocation_closes_it() {
     let unix_detail = unix_call(&mut local, wire::app::DETAIL_GET, &detail);
     assert_eq!(web_detail["result"]["etag"], unix_detail["etag"]);
     assert_eq!(web_detail["result"]["body"], unix_detail["body"]);
+    let authority_change = json!({
+        "device": native.id, "authority": native.authority,
+    });
+    let preview = browser.call(DEVICE_AUTHORITY_PREVIEW, &authority_change);
+    assert_eq!(preview["result"]["class"], "confirm");
     let browser_admin = browser.call(
         wire::app::DEVICE_SET_AUTHORITY,
         json!({
             "device": native.id, "authority": native.authority,
+            "confirm": {
+                "preview_id": preview["result"]["preview_id"],
+                "digest": preview["result"]["digest"],
+            },
         }),
     );
     assert_eq!(browser_admin["result"]["id"], native.id);
+    let offer = browser.call(PAIR_BEGIN, PairBegin {});
+    let pair_id = &offer["result"]["pair_id"];
+    assert!(pair_id.is_string());
+    let status = browser.call(PAIR_STATUS, json!({"pair_id": pair_id, "wait_ms": 0}));
+    assert_eq!(status["result"]["pair_id"], *pair_id);
+    let cancelled = browser.call(PAIR_CANCEL, json!({"pair_id": pair_id}));
+    assert!(cancelled.get("error").is_none(), "{cancelled}");
     let devices_first = browser.call(DEVICE_PAGE, json!({"after": null, "limit": 1}));
     assert_eq!(
         devices_first["result"]["devices"].as_array().unwrap().len(),
@@ -397,11 +419,8 @@ fn paired_browser_reads_board_and_revocation_closes_it() {
         assert_eq!(refused["error"]["code"], "refused");
         assert_eq!(refused["error"]["message"], "app_method_refused");
     }
-    unix_call(
-        &mut local,
-        DEVICE_REVOKE,
-        DeviceRevoke { device: device.id },
-    );
+    let revoked = browser.call(DEVICE_REVOKE, DeviceRevoke { device: device.id });
+    assert!(revoked.get("error").is_none(), "{revoked}");
     browser.closed(CLOSE_REVOKED);
     let (mut unknown, _) = noise_start(&code, &key.private, false);
     assert!(

@@ -56,12 +56,15 @@ pub(super) fn load_changes(app: AppState) {
 }
 
 /// The desktop and terminal list column: a scrolling pane, rows made again as the model changes.
+/// It is the destination's keyboard list (`AppState::list_keys`).
 pub(super) fn column(app: AppState) -> AnyElement {
     let list = blind(app, inbox::inbox_list);
+    let revealed = stored(None::<String>);
     let content = view()
+        .element_ref(&app.list_keys)
         .when(app.form == Form::Desktop, |v| v.pt(px(6.0)).pb(px(14.0)))
         .role(AccessibilityRole::List)
-        .child(live(list, move |list| list_body(app, list)))
+        .child(live(list, move |list| list_body(app, list, revealed)))
         .into_element();
     pane(app, "inbox-list", content)
 }
@@ -141,7 +144,8 @@ impl Kind {
     }
 }
 
-fn list_body(app: AppState, list: InboxList) -> AnyElement {
+/// The list's rows; `revealed` is the row last scrolled into view as the selection.
+fn list_body(app: AppState, list: InboxList, revealed: Stored<Option<String>>) -> AnyElement {
     let form = app.form;
     match list {
         InboxList::Loading {
@@ -186,7 +190,11 @@ fn list_body(app: AppState, list: InboxList) -> AnyElement {
                 None,
             ))
             .children(nothing.map(|state| empty_state(app, state)))
-            .children(items.into_iter().map(|item| row(app, item)))
+            .children(
+                items
+                    .into_iter()
+                    .map(|item| selectable(app, item, revealed)),
+            )
             .child(
                 view()
                     .when(form == Form::Desktop, |v| v.mt(px(6.0)))
@@ -300,6 +308,26 @@ fn row_label(item: &NeedYouItem) -> String {
         item.meta,
         item.age
     )
+}
+
+/// A needs-you row. The selected one, when the selection has just moved to it, scrolls into the
+/// list's view, so a keyboard move never leaves it off screen; one already in view stays put.
+fn selectable(app: AppState, item: NeedYouItem, revealed: Stored<Option<String>>) -> AnyElement {
+    if !item.selected {
+        return row(app, item);
+    }
+    let before = revealed.replace(Some(item.test_id.clone()));
+    let moved = before.as_deref() != Some(item.test_id.as_str());
+    let handle = element_ref();
+    if moved {
+        after_answer(move || {
+            handle.reveal(RevealOptions::default().vertical(ScrollAlignment::Nearest));
+        });
+    }
+    view()
+        .element_ref(&handle)
+        .child(row(app, item))
+        .into_element()
 }
 
 /// A needs-you row. Desktop: the dot, then the lead line, the title in semibold and the meta

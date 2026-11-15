@@ -167,6 +167,9 @@ impl ReadView for SharedView {
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
         self.view().events(q, page)
     }
+    fn count_events(&self, q: &EventQuery) -> Result<u64, ViewError> {
+        self.view().count_events(q)
+    }
     fn conditions(
         &self,
         q: &ConditionQuery,

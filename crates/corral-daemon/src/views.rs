@@ -95,6 +95,7 @@ enum Job {
     ),
     Changes(
         app::ChangesQuery,
+        app::SeenCursor,
         mpsc::SyncSender<Result<app::ChangesPage>>,
     ),
     Thread(String, Option<u64>, mpsc::SyncSender<Result<ThreadPage>>),
@@ -217,6 +218,7 @@ pub(crate) fn detail(
 pub(crate) fn changes(
     shared: &Shared,
     query: app::ChangesQuery,
+    seen: app::SeenCursor,
 ) -> Result<mpsc::Receiver<Result<app::ChangesPage>>> {
     ensure!(
         query.limit > 0 && query.limit <= 200,
@@ -226,7 +228,7 @@ pub(crate) fn changes(
         !matches!((query.after, query.before), (Some(after), Some(before)) if after >= before),
         "invalid: changes after must precede before"
     );
-    enqueue(shared, |reply| Job::Changes(query, reply))
+    enqueue(shared, |reply| Job::Changes(query, seen, reply))
 }
 
 pub(crate) fn thread(
@@ -330,8 +332,8 @@ fn serve(ctx: &Ctx, job: Job) {
         Job::Detail(query, reply) => {
             let _ = reply.send(app_read::read(ctx, &query).and_then(bounded));
         }
-        Job::Changes(query, reply) => {
-            let _ = reply.send(app_read::changes(ctx, &query).and_then(bounded));
+        Job::Changes(query, seen, reply) => {
+            let _ = reply.send(app_read::changes(ctx, &query, &seen).and_then(bounded));
         }
         Job::Thread(scope, before, reply) => {
             let result = corral_ops::agent::app_runtime::thread(ctx, &scope, before, 100).and_then(
@@ -354,7 +356,7 @@ fn reject(job: Job, message: &str) {
         Job::Detail(_, reply) => {
             let _ = reply.send(Err(anyhow!(message.to_owned())));
         }
-        Job::Changes(_, reply) => {
+        Job::Changes(_, _, reply) => {
             let _ = reply.send(Err(anyhow!(message.to_owned())));
         }
         Job::Thread(_, _, reply) => {

@@ -1,12 +1,12 @@
 //! Indexed range events and sufficient pre-range phase state, not task lifetime replay.
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use corral_core::backend::{EventQuery, PageReq, RowQuery, TaskHeader, TaskPart};
 use corral_core::{Event, RunHead};
 use jiff::Timestamp;
 
-use super::{MAX_ROWS, PAGE, PHASE_EVENTS};
+use super::{PAGE, PHASE_EVENTS, budget::Budget};
 use crate::Ctx;
 
 fn project(row: corral_core::backend::StoredEvent) -> Result<Event> {
@@ -36,7 +36,10 @@ pub(super) fn query(task: Option<&str>, since: Option<Timestamp>, until: Timesta
     }
 }
 
-pub(super) fn read(ctx: &Ctx, query: &EventQuery, budget: &mut usize) -> Result<Vec<Event>> {
+pub(super) fn read(ctx: &Ctx, query: &EventQuery, budget: &mut Budget) -> Result<Vec<Event>> {
+    if budget.exhausted() {
+        return Ok(Vec::new());
+    }
     let view = ctx.store.view()?;
     let mut page = PageReq::first(PAGE);
     let mut events = Vec::new();
@@ -44,25 +47,20 @@ pub(super) fn read(ctx: &Ctx, query: &EventQuery, budget: &mut usize) -> Result<
         let found = view
             .events(query, page.clone())
             .context("reading timeline time index")?;
-        charge(budget, found.items.len())?;
+        if !budget.admit(found.items.len()) {
+            return Ok(events);
+        }
         events.reserve(found.items.len());
         for row in found.items {
-            events.push(project(row)?);
+            let event = project(row)?;
+            budget.observe(event.ts);
+            events.push(event);
         }
         match found.next {
             Some(next) => page.after = Some(next),
             None => return Ok(events),
         }
     }
-}
-
-fn charge(budget: &mut usize, count: usize) -> Result<()> {
-    *budget += count;
-    ensure!(
-        *budget <= MAX_ROWS,
-        "unavailable: timeline window/context exceeds {MAX_ROWS} events; select a narrower range"
-    );
-    Ok(())
 }
 
 /// A predecessor lookup decodes only its examined candidates, including rejected
@@ -73,8 +71,11 @@ fn last(
     query: &EventQuery,
     kinds: &[&str],
     accepts: impl Fn(&Event) -> bool,
-    budget: &mut usize,
+    budget: &mut Budget,
 ) -> Result<Option<Event>> {
+    if budget.exhausted() {
+        return Ok(None);
+    }
     let view = ctx.store.view()?;
     let query = EventQuery {
         kinds: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
@@ -84,9 +85,12 @@ fn last(
     let mut page = PageReq::first(1);
     loop {
         let found = view.events(&query, page.clone())?;
-        charge(budget, found.items.len())?;
+        if !budget.admit(found.items.len()) {
+            return Ok(None);
+        }
         for row in found.items {
             let event = project(row)?;
+            budget.observe(event.ts);
             if accepts(&event) {
                 return Ok(Some(event));
             }
@@ -102,7 +106,7 @@ pub(super) fn dispatch(
     ctx: &Ctx,
     task: &str,
     from: Timestamp,
-    budget: &mut usize,
+    budget: &mut Budget,
 ) -> Result<Option<Event>> {
     last(
         ctx,
@@ -134,7 +138,7 @@ pub(super) fn context(
     include_runless: bool,
     floor: Option<Timestamp>,
     from: Timestamp,
-    budget: &mut usize,
+    budget: &mut Budget,
 ) -> Result<Vec<Event>> {
     let query = EventQuery {
         run: Some(run.to_owned()),
@@ -240,10 +244,13 @@ pub(super) fn context(
         let mut page = PageReq::first(1);
         loop {
             let events = view.events(&open_query, page.clone())?;
-            charge(budget, events.items.len())?;
+            if !budget.admit(events.items.len()) {
+                break;
+            }
             let mut opened = false;
             for row in events.items {
                 let event = project(row)?;
+                budget.observe(event.ts);
                 if close
                     .as_ref()
                     .is_some_and(|close| (event.ts, event.seq) <= (close.ts, close.seq))
@@ -312,7 +319,7 @@ pub(super) fn phase_window(
     task: &str,
     from: Timestamp,
     to: Timestamp,
-    budget: &mut usize,
+    budget: &mut Budget,
 ) -> Result<Vec<Event>> {
     let query = EventQuery {
         kinds: PHASE_EVENTS.iter().map(|kind| (*kind).to_owned()).collect(),
@@ -326,7 +333,7 @@ pub(super) fn queue(
     ctx: &Ctx,
     task: &str,
     from: Timestamp,
-    budget: &mut usize,
+    budget: &mut Budget,
 ) -> Result<Vec<Event>> {
     let query = query(Some(task), None, from);
     let close = last(
@@ -345,9 +352,12 @@ pub(super) fn queue(
     let mut page = PageReq::first(1);
     loop {
         let found = view.events(&query, page.clone())?;
-        charge(budget, found.items.len())?;
+        if !budget.admit(found.items.len()) {
+            return Ok(Vec::new());
+        }
         for row in found.items {
             let event = project(row)?;
+            budget.observe(event.ts);
             if close
                 .as_ref()
                 .is_none_or(|close| (event.ts, event.seq) > (close.ts, close.seq))
@@ -368,8 +378,11 @@ pub(super) fn run_rows(
     range: Option<(Timestamp, Timestamp)>,
     events: &[Event],
     runs: &mut BTreeMap<String, RunHead>,
-    budget: &mut usize,
+    budget: &mut Budget,
 ) -> Result<()> {
+    if budget.exhausted() {
+        return Ok(());
+    }
     let view = ctx.store.view()?;
     let mut queries = Vec::new();
     if let Some(range) = range {
@@ -431,14 +444,13 @@ pub(super) fn run_rows(
                 .context("reading recorded timeline run window")?;
             #[cfg(test)]
             super::tests::record_run_rows(found.items.len());
-            *budget += found.items.len();
-            ensure!(
-                *budget <= MAX_ROWS,
-                "unavailable: timeline exceeds {MAX_ROWS} recorded rows; select a narrower range"
-            );
+            if !budget.admit(found.items.len()) {
+                return Ok(());
+            }
             for row in found.items {
                 let run: RunHead =
                     serde_json::from_value(row.doc).context("decoding timeline run")?;
+                budget.observe(run.started);
                 runs.insert(row.key, run);
             }
             match found.next {
@@ -464,11 +476,9 @@ pub(super) fn run_rows(
         )?;
         #[cfg(test)]
         super::tests::record_run_rows(found.items.len());
-        *budget += found.items.len();
-        ensure!(
-            *budget <= MAX_ROWS,
-            "unavailable: timeline run context exceeds {MAX_ROWS} rows"
-        );
+        if !budget.admit(found.items.len()) {
+            return Ok(());
+        }
         for row in found.items {
             runs.insert(row.key, serde_json::from_value(row.doc)?);
         }

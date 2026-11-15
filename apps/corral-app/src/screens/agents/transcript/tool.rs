@@ -33,8 +33,19 @@ fn mono(content: impl Into<SharedString>, size: f32, ink: Token) -> Text {
         .text_color(color(ink))
 }
 
+/// The cells a terminal row keeps for the tool's name at least, so the names line up and the
+/// arguments, not the name, give way; a longer name keeps its room up to `NAME_MAX`.
+const NAME_MIN: usize = 12;
+const NAME_MAX: usize = 24;
+
+/// The summary on one line: a recorded argument can carry newlines and runs of spaces.
+fn one_line(words: &str) -> String {
+    words.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub(super) fn tool(app: AppState, tool: &Tool, n: usize) -> AnyElement {
     let form = app.form;
+    let summary = one_line(&tool.summary);
     let outcome_ink = if tool.failed {
         Token::Fail
     } else {
@@ -47,10 +58,23 @@ pub(super) fn tool(app: AppState, tool: &Tool, n: usize) -> AnyElement {
             .h(term::rows(1.0))
             .child(mark(app, tool.mark, Hue::Neutral))
             .child(term::space(1.0))
-            .child(term::quiet(tool.name.clone()))
+            .child(
+                view()
+                    .flex_row()
+                    .flex_shrink_0()
+                    .w(term::cells(
+                        tool.name.chars().count().clamp(NAME_MIN, NAME_MAX) as f32,
+                    ))
+                    .child(
+                        term::quiet(tool.name.clone())
+                            .flex_shrink(1.0)
+                            .truncate()
+                            .min_w(px(0.0)),
+                    ),
+            )
             .child(term::space(1.0))
             .child(
-                text(tool.summary.clone())
+                text(summary)
                     .flex_1()
                     .min_w(px(0.0))
                     .truncate()
@@ -128,7 +152,7 @@ pub(super) fn tool(app: AppState, tool: &Tool, n: usize) -> AnyElement {
         )
         .child(mono(tool.name.clone(), 11.0, Token::Ink3).flex_shrink_0())
         .child(
-            mono(tool.summary.clone(), 11.5, Token::Ink)
+            mono(summary, 11.5, Token::Ink)
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate(),

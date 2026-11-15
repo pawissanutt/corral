@@ -549,6 +549,13 @@ impl ReadView for SqliteView {
         self.page(&page, &sql, args, |_, row| load::event(row))
     }
 
+    fn count_events(&self, q: &EventQuery) -> Result<u64, ViewError> {
+        let (sql, args) = super::time_queries::count_events(q)?;
+        let guard = self.fresh()?;
+        let count: i64 = guard.query_row(&sql, params_from_iter(args), |row| row.get(0))?;
+        u64::try_from(count).map_err(|error| ViewError::Io(error.into()))
+    }
+
     fn conditions(
         &self,
         q: &ConditionQuery,

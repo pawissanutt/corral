@@ -24,7 +24,8 @@ const DISCLOSURE: &str = " ▾";
 /// The pill naming the model of the next message, `label` its accessible name. Pressing it opens
 /// or closes the list; while `at` is a popup the open list hangs from `row` (the control row the
 /// pill sits in), so it lines up with the row's start as the mockup's does. Pressing outside the
-/// list closes it; Esc closes it before it closes Ask (the app's Escape order).
+/// list closes it; Esc closes it before it closes Ask (the app's Escape order). A list closed
+/// from the keyboard hands the focus back to the pill.
 pub(crate) fn pill(
     app: AppState,
     label: &'static str,
@@ -35,6 +36,18 @@ pub(crate) fn pill(
 ) -> AnyElement {
     let form = app.form;
     let open = move || menu.with(Option::is_some);
+    let pill = element_ref();
+    // Whether the keyboard focus is on one of the list's options: closing it then would leave
+    // the focus nowhere, so it goes back to the pill. A press elsewhere moved it already.
+    let inside = signal(false);
+    let was_open = stored(false);
+    effect(move || {
+        let now = open();
+        if was_open.replace(now) && !now && inside.get_untracked() {
+            inside.set(false);
+            after_answer(move || pill.focus());
+        }
+    });
     let words = text(format!("{name}{DISCLOSURE}"))
         .number_of_lines(1u32)
         .text_color(move || {
@@ -46,6 +59,7 @@ pub(crate) fn pill(
         });
     let face = view()
         .test_id("btn-model")
+        .element_ref(&pill)
         .role(AccessibilityRole::Button)
         .label(label)
         .accessibility_state(move || AccessibilityState {
@@ -120,7 +134,7 @@ pub(crate) fn pill(
                 })
                 .child(dynamic(move || {
                     menu.get()
-                        .map(|list| untracked(|| model_list(app, &list, false)))
+                        .map(|list| untracked(|| model_list(app, &list, false, inside)))
                 }))
         })),
     };
@@ -134,22 +148,60 @@ pub(crate) fn pill(
 
 /// The open list inline under the control row (the phone sheet's), nothing while it is closed.
 pub(crate) fn inline_list(app: AppState, menu: Memo<Option<ModelList>>) -> AnyElement {
+    // Only the phone sheet shows the list inline, where touch leaves no keyboard focus to return.
+    let inside = signal(false);
     dynamic(move || {
         menu.get()
-            .map(|list| untracked(|| model_list(app, &list, true)))
+            .map(|list| untracked(|| model_list(app, &list, true, inside)))
     })
 }
 
 /// The profiles in cycling order, the current one checked, then the footer naming where the list
 /// is configured and, in the fixture preview, the illustrative tag. A listbox; each profile an
-/// option with its selected state, `model-<n>`.
-fn model_list(app: AppState, list: &ModelList, inline: bool) -> AnyElement {
+/// option with its selected state, `model-<n>`. Opening it puts the keyboard focus on the
+/// current profile; Up and Down move between profiles, Enter and Space pick the focused one.
+/// `inside` follows whether an option has the focus.
+fn model_list(app: AppState, list: &ModelList, inline: bool, inside: Signal<bool>) -> AnyElement {
     let form = app.form;
+    let options: Vec<ElementRef> = list.options.iter().map(|_| element_ref()).collect();
+    let at = signal(
+        list.options
+            .iter()
+            .position(|option| option.selected)
+            .unwrap_or(0),
+    );
+    {
+        let options = options.clone();
+        let first = at.get_untracked();
+        after_answer(move || {
+            if let Some(option) = options.get(first) {
+                option.focus();
+            }
+        });
+    }
+    for (key, step) in [("down", 1_isize), ("up", -1)] {
+        let options = options.clone();
+        // Only while an option has the focus: the composer's field keeps its own arrows.
+        effect(move || {
+            if !inside.get() {
+                return;
+            }
+            let options = options.clone();
+            on_key(key, move |_| {
+                let last = options.len().saturating_sub(1);
+                let next = at.get_untracked().saturating_add_signed(step).min(last);
+                if let Some(option) = options.get(next) {
+                    option.focus();
+                }
+            });
+        });
+    }
     let rows = list
         .options
         .iter()
+        .zip(options)
         .enumerate()
-        .map(|(index, option)| row(app, index, option, inline));
+        .map(|(index, (option, handle))| row(app, index, option, inline, handle, at, inside));
     let foot = view()
         .flex_row()
         .flex_wrap()
@@ -197,8 +249,17 @@ fn model_list(app: AppState, list: &ModelList, inline: bool) -> AnyElement {
 }
 
 /// One profile: the check on the current one, its name over the model and effort, its note at the
-/// trailing edge. Picking it closes the list and applies the profile to the next message.
-fn row(app: AppState, index: usize, option: &ModelOption, inline: bool) -> AnyElement {
+/// trailing edge. Picking it closes the list and applies the profile to the next message. It
+/// tells `at` and `inside` when the keyboard focus reaches or leaves it.
+fn row(
+    app: AppState,
+    index: usize,
+    option: &ModelOption,
+    inline: bool,
+    handle: ElementRef,
+    at: Signal<usize>,
+    inside: Signal<bool>,
+) -> AnyElement {
     let form = app.form;
     let action = option.action.clone();
     let check = if option.selected {
@@ -208,6 +269,7 @@ fn row(app: AppState, index: usize, option: &ModelOption, inline: bool) -> AnyEl
     };
     let item = view()
         .test_id(&format!("model-{index}"))
+        .element_ref(&handle)
         .role(AccessibilityRole::Option)
         .label(option.name.clone())
         .accessibility_state(AccessibilityState {
@@ -215,6 +277,11 @@ fn row(app: AppState, index: usize, option: &ModelOption, inline: bool) -> AnyEl
             ..AccessibilityState::default()
         })
         .on_press(move || act(app, action.clone()))
+        .on_focus(move || {
+            at.set(index);
+            inside.set(true);
+        })
+        .on_blur(move || inside.set(false))
         .flex_row()
         .items_center()
         .cursor_pointer();

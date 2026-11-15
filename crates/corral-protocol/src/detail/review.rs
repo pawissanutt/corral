@@ -4,6 +4,14 @@ use crate::cmd::annotation::{AnnotationSide, LineRange};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Immutable identity of the coding candidate whose patch is being displayed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReviewCandidate {
+    pub run: String,
+    pub base: String,
+    pub head: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewDetail {
     pub task: String,
