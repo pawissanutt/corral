@@ -27,6 +27,12 @@ retains it. Duplicate receipt IDs cannot spend twice. A fresh retry, reused conv
 model change or availability continuation cannot clear accumulated coding repairs.
 Availability recovery references the interrupted attempt and consumes no coding repair.
 
+Paid role continuation is separately opt-in through `fallback.paid_roles` (empty by
+default). Ordinary retries use the current run's scalar paid link and, for native runs,
+a keyed continuation intent lookup; they do not hydrate task history or open a paid
+closure transaction unless a link or intent exists. Checkpoint payload reads for paid
+handoffs are restricted to the interrupted run's newest checkpoint.
+
 The task's first adopted allowance freezes its policy and current/configured stronger
 profile pair. Later configuration edits affect future allowances, not an active one.
 Existing `profile-repairs` records are imported. If older corrective work has no staged
