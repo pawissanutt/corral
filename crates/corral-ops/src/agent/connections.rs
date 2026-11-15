@@ -38,7 +38,6 @@ pub fn validate(
                 && Some(binding.connection.provider()) == provider,
             "connection_invalid: host spec disagrees with binding"
         );
-        binding.connection.require_admission()?;
     } else {
         ensure!(
             provider != Some("openai"),

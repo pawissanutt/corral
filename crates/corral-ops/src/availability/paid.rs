@@ -20,20 +20,22 @@ pub(super) fn selected(
     if !corral_core::paid_fallback::is_api(candidate) {
         return Ok(None);
     }
-    // Other role-attempt mapping belongs to role-continuations. Never infer a worker root
-    // for a reviewer/planner/PM by using a coincidentally equal run/model identity.
     ensure!(
-        failed.role == corral_core::ProfileRole::Implementation,
+        matches!(
+            failed.role,
+            corral_core::ProfileRole::Implementation
+                | corral_core::ProfileRole::ImplementationReview
+        ),
         "paid role continuation lifecycle is not configured"
     );
-    let state = failed
-        .run
-        .agent_host
-        .as_ref()
+    let container = source_container(ctx, failed)?;
+    let task = ctx.store.get(failed.task)?;
+    let state = corral_core::agent::container_state(&task, &container)
         .context("paid fallback needs a native predecessor")?;
-    let link = state.paid_episode.as_ref().context(
-        "paid fallback has no approved canonical episode; keys do not authorize spending",
-    )?;
+    let link = state
+        .paid_episode
+        .as_ref()
+        .context("paid fallback has no approved canonical episode")?;
     let episode = ctx.store.paid_episode(&link.episode)?;
     let binding = state
         .current_generation()
@@ -42,10 +44,7 @@ pub(super) fn selected(
     episode.owner(
         link,
         &PaidBinding {
-            container: corral_core::agent::ContainerRef::Worker {
-                task: failed.task.into(),
-                run: failed.run.id.clone(),
-            },
+            container,
             generation: state.binding.generation,
             binding,
         },
@@ -92,6 +91,29 @@ pub(super) fn save_selection(
     failed: &Failed<'_>,
     candidate: &ExecutionCandidate,
 ) -> Result<()> {
+    if corral_core::paid_fallback::is_api(candidate) {
+        let container = source_container(ctx, failed)?;
+        let task = ctx.store.get(failed.task)?;
+        let target = match &container {
+            corral_core::agent::ContainerRef::Reviewer { run, .. } => task
+                .runs
+                .iter()
+                .find(|r| &r.id == run)
+                .and_then(|r| r.review.as_ref())
+                .map(|r| r.sha.clone()),
+            _ => None,
+        };
+        super::policy::ensure_root(
+            ctx,
+            &container,
+            &failed.run.agent,
+            &super::continuation::SubjectRevision {
+                task: Some(failed.task.into()),
+                spec_revision: Some(crate::plan_spec_revision(&task)?),
+                target,
+            },
+        )?;
+    }
     ctx.store.records_transaction(|| {
         if let Some(link) = selected(ctx, failed, candidate)? {
             // A reference alongside the availability journal, never a copied balance.
@@ -99,5 +121,30 @@ pub(super) fn save_selection(
                 .save_record("availability-paid", &episode.id, &link)?;
         }
         super::save(ctx, episode)
+    })
+}
+
+fn source_container(ctx: &Ctx, failed: &Failed<'_>) -> Result<corral_core::agent::ContainerRef> {
+    use corral_core::agent::ContainerRef;
+    if failed.role == corral_core::ProfileRole::Implementation {
+        return Ok(ContainerRef::Worker {
+            task: failed.task.into(),
+            run: failed.run.id.clone(),
+        });
+    }
+    ensure!(
+        failed.role == corral_core::ProfileRole::ImplementationReview,
+        "paid role continuation lifecycle is not configured"
+    );
+    let task = ctx.store.get(failed.task)?;
+    let parent = task
+        .runs
+        .iter()
+        .find(|r| r.review_runs.iter().any(|c| c.id == failed.run.id))
+        .context("paid review predecessor has no parent")?;
+    Ok(ContainerRef::Reviewer {
+        task: failed.task.into(),
+        run: parent.id.clone(),
+        review: failed.run.id.clone(),
     })
 }

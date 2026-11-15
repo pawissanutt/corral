@@ -92,6 +92,7 @@ fn profile(candidates: Vec<ExecutionCandidate>, role: ProfileRole) -> Profile {
             candidates,
             fallback: (switches > 0).then(|| AvailabilityFallback {
                 automatic: true,
+                paid_roles: BTreeSet::new(),
                 approved_providers: providers,
                 max_switches: switches,
                 allow_unknown_subscription_cost: true,

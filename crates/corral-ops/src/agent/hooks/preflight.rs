@@ -61,7 +61,7 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
     consulted("preflight");
     let connection = crate::agent::connections::explicit(resolved)?;
     if let Some(binding) = &connection {
-        binding.connection.require_admission()?;
+        crate::availability::continuation::require_preflight(&ctx.store, role, binding)?;
     }
     corral_core::check_corral_pi_vendor(&resolved.profile, resolved.vendor.as_deref())?;
     corral_core::check_corral_pi_metered_opt_in(

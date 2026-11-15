@@ -52,6 +52,7 @@ fn general() -> (tempfile::TempDir, Config, ProfileMetadata) {
         ],
         fallback: Some(AvailabilityFallback {
             automatic: true,
+            paid_roles: BTreeSet::new(),
             approved_providers: BTreeSet::from(["openai".into(), "anthropic".into()]),
             max_switches: 2,
             allow_unknown_subscription_cost: true,
