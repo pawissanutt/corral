@@ -430,14 +430,23 @@ fn awaiting_turn(fx: &Fx, id: &str) {
 fn unattended_marks_blocking_or_awaiting_questions_once_per_revision() {
     let fx = fx();
     let (id, first) = worker(&fx);
-    let blocking = ask_ok(&fx, &first, "c1", true);
+    // The ordered process clock can run ahead of the raw wall clock after a backward step.
+    let blocking = corral_core::clock::with_test_wall(
+        || "2099-01-01T00:00:00Z".parse().unwrap(),
+        || ask_ok(&fx, &first, "c1", true),
+    );
     let (quiet, quiet_worker) = worker(&fx);
     let waiting = ask_ok(&fx, &quiet_worker, "c1", false);
     let (review_task, reviewer) = reviewer(&fx);
     let reviewing = ask_ok(&fx, &reviewer, "r1", true);
-    let soon = Timestamp::now() + SignedDuration::from_secs(60);
+    let asked_at = [&blocking, &waiting, &reviewing]
+        .map(|key| question(&fx, key).asked.at)
+        .into_iter()
+        .max()
+        .unwrap();
+    let soon = asked_at + SignedDuration::from_secs(60);
     assert!(super::unattended(&fx.ctx, &id, soon).unwrap().is_empty());
-    let later = Timestamp::now() + SignedDuration::from_secs(601);
+    let later = asked_at + SignedDuration::from_secs(600);
 
     assert_eq!(
         super::unattended(&fx.ctx, &id, later).unwrap(),

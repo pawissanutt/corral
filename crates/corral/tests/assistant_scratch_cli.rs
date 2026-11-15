@@ -399,9 +399,9 @@ fn owner_gc_keeps_a_scratch_its_own_calling_shell_still_uses() {
         ],
     );
     let path = fx.root.join(".worktrees/A-1-resident");
-    // GC compares both the end time and HEAD's commit time with its clock. Set both
-    // explicitly in the past: an immediately preceding wall-clock step backwards would
-    // otherwise make even a zero-day idle interval negative, before the cwd guard runs.
+    // GC uses the latest of session creation/end, scratch creation and HEAD's commit.
+    // Age every input so a backward wall-clock step cannot make zero-day idle negative
+    // before the cwd guard runs.
     let old = "2000-01-01T00:00:00Z";
     std::fs::write(path.join("resident.txt"), "resident\n").unwrap();
     git(&path, &["add", "resident.txt"], None);
@@ -411,7 +411,12 @@ fn owner_gc_keeps_a_scratch_its_own_calling_shell_still_uses() {
     corral_core::Store::open(&fx.root)
         .unwrap()
         .update_assistant("A-1", |session| {
-            session.ended = Some(old.parse().unwrap());
+            let old = old.parse().unwrap();
+            session.created = old;
+            session.ended = Some(old);
+            for scratch in &mut session.scratch {
+                scratch.created = old;
+            }
             Ok(())
         })
         .unwrap();

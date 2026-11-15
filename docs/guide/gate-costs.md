@@ -4,6 +4,11 @@ Tests are budgeted by cost and judged by defect-catching value, not count. Never
 failing test to go green. The placement/reviewer rules live in `AGENTS.md` and the shipped
 worker/reviewer contracts. Test-cost justification belongs in the candidate's change report.
 
+Time-based fixtures must use the recorded activity's clock, not a fresh raw wall-clock
+reading: Corral's ordered timestamps can stay ahead after a host clock steps backwards.
+For idle-GC fixtures, age every activity input, including session and scratch creation,
+not just the session end and HEAD commit.
+
 ## Quarantined tests
 
 `.config/gate-quarantine.toml` lists exact nextest identities, their fixing tasks and reasons.
