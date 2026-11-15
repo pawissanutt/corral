@@ -578,6 +578,7 @@ pub(super) fn awaiting(
     });
     AwaitingView {
         header: Header {
+            plan: Some(id.clone()),
             chips: vec![state_chip(WireState::Awaiting), review_chip],
             id: rev.map_or_else(|| id.to_string(), |rev| format!("{id} {rev}")),
             title: title(id, row),
@@ -617,6 +618,7 @@ pub(super) fn document_view(
     actions.extend(diff_toggle(state, id, detail));
     DocumentView {
         header: Header {
+            plan: Some(id.clone()),
             chips: vec![state_chip(detail.state)],
             id: detail
                 .revision
@@ -715,6 +717,7 @@ pub(super) fn diff(
     }));
     DiffView {
         header: Header {
+            plan: Some(id.clone()),
             chips: vec![Chip {
                 label: "revision diff".into(),
                 hue: Hue::Neutral,

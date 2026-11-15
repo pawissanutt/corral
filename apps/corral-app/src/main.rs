@@ -18,6 +18,8 @@ fn main() -> impl std::process::Termination {
             title: "Corral".to_owned(),
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             app_id: "com.example.corral".to_owned(),
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            single_instance: true,
             size: (480, 640),
             ..Default::default()
         },

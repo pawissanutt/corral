@@ -57,6 +57,8 @@ pub struct Task {
     pub rail: [Step; 4],
     pub now: String,
     pub now_code: String,
+    /// Unix seconds since the task's canonical age origin, independent of its current state.
+    pub age_since: Option<u64>,
     /// Unix seconds since when `now` holds.
     pub since: Option<u64>,
     pub held_reason: Option<String>,
@@ -301,8 +303,12 @@ pub struct Feed {
     pub transport_ready: bool,
     pub projection_ready: bool,
     pub capabilities: BTreeSet<String>,
+    /// Invalidates pending confirmations when this device's authority changes.
+    pub authority_revision: u64,
     pub date: String,
     pub inbox: BTreeMap<Id, InboxRow>,
+    /// Driver-supplied local timezone; absent when the platform cannot determine it.
+    pub time_zone: Option<jiff::tz::TimeZone>,
     pub plans: BTreeMap<Id, PlanRow>,
     pub agents: BTreeMap<Id, AgentRow>,
     pub assistants: BTreeMap<Id, AssistantRow>,
@@ -338,6 +344,7 @@ pub struct Feed {
     /// Pairing-link draft, held only in memory and never written to app preferences.
     pub pairing_code: Option<String>,
     pub now: u64,
+    pub push: Option<corral_protocol::device::PushStatus>,
     /// Local wall clock of `now`, HH:MM.
     pub clock: String,
     /// Local wall clock of the last daemon message.
@@ -572,6 +579,7 @@ mod tests {
             now: "queued".into(),
             now_code: "queued".into(),
             since: None,
+            age_since: None,
             held_reason: None,
             questions: 0,
             attention: vec![],

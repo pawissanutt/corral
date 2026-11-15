@@ -722,7 +722,7 @@ pub(super) fn terminal(ctx: &Ctx, id: &str) -> Result<DetailBody> {
     );
     let screen = ctx
         .herdr
-        .pane_screen(pane)
+        .pane_terminal(pane, corral_protocol::detail::TERMINAL_ROWS_MAX)
         .context("reading live terminal screen")?
         .with_context(|| format!("not_found: terminal pane {pane} is gone"))?;
     Ok(DetailBody::Terminal(super::terminal_screen::snapshot(

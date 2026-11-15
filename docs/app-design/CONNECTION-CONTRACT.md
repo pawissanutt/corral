@@ -1,4 +1,4 @@
-# App connection contract: Phase 2a
+# App connection contract
 
 Status: enrolled native Unix and paired Noise WebSocket sessions implement the app connection and typed domain APIs. Private terminal and packaged Chromium smoke has covered pairing and live board/Settings, not every journey or the full gate; see the [app guide](../../apps/corral-app/README.md). Product authority remains [REQUIREMENTS.md](REQUIREMENTS.md), especially D7, D11, D17–D18 and R3, R8–R10, R17. This contract grants no permission to act on live owner data.
 
@@ -13,7 +13,7 @@ Status: enrolled native Unix and paired Noise WebSocket sessions implement the a
 
 | Property | Native local app | Browser |
 |---|---|---|
-| Carrier | Existing Unix socket | WebSocket on `127.0.0.1`; no LAN listener in Phase 2a |
+| Carrier | Existing Unix socket | Explicit numeric-interface WebSocket; remote browser access uses operator-provided TLS/WSS |
 | Bootstrap | Explicit owner-selected socket; verify peer UID | Secure origin (`http://127.0.0.1` or HTTPS); exact configured Origin allowlist |
 | Identity | Enrol a device over the trusted Unix channel after peer verification | Owner-authorized enrolment binds a device public key and the daemon's pinned static key |
 | Application session | Server-issued device context bound to the enrolled local connection; no identity accepted from command fields | Noise IK authenticates the device static key against the registry before any application request |
@@ -23,6 +23,39 @@ Status: enrolled native Unix and paired Noise WebSocket sessions implement the a
 The local UID trust boundary remains explicit: this is not protection against a hostile process already running as the owner. Device enrolment and audit still distinguish legitimate app surfaces. Browser Origin checking is an additional boundary, never authentication by itself. Reject missing, `null`, unexpected or insecure Origins before upgrading; do not reflect arbitrary origins or enable wildcard CORS. Never expose an unencrypted WebSocket-to-Unix proxy.
 
 Pairing uses single-use Noise IKpsk2 and trusted-side SAS confirmation; ordinary sessions use pinned Noise IK. Revocation closes sessions and prevents automatic reconnect.
+
+Direct reach remains opt-in: absent `[daemon] listen` opens no TCP socket. One concrete
+unicast IPv4/IPv6 address may be configured; wildcard and multicast binds are rejected.
+Remote browser pairing additionally requires `web_endpoint = "wss://host[:port]"` and an
+HTTPS-served app on an exact `web_origins` entry. A TLS reverse proxy or Tailscale Serve
+preserves Origin and forwards the protocol paths; Noise remains end-to-end inside TLS.
+Plain LAN HTTP origins remain invalid, with no insecure-origin override.
+
+`PairOffer.reach` carries `ReachHint { reach, endpoint }`; its existing fragment-only URL
+is suitable for QR encoding. Version-2 pairing codes carry the endpoint alongside the
+pinned daemon key, token, port and pair id; version-1 loopback codes still decode.
+`DeviceInfo.last_seen` and `.reach` are additive/serde-default facts. Last seen is coarse
+authenticated activity (not availability); device listings report the last final hop,
+while `app.session.device.reach` is the current SessionGuard's carrier. A local TLS
+terminator is observed as loopback; no untrusted forwarded header asserts remote reach.
+
+`push.v1` is an additive authenticated-device capability: `push.status`,
+`push.subscribe` and `push.unsubscribe` apply only to the session's own device.
+Subscriptions and selected `PushKind`s persist per device, opt-in/off by default, and
+revocation clears them. `PushStatus` exposes availability, the public VAPID key,
+enabled kinds, last push-service acceptance and a sanitized failure, never endpoint/key
+secrets. The daemon's fixed Web Push payload is ECE-encrypted; the shipped browser
+module service worker displays content-free text and opens/focuses the app. Browser
+notification permission starts synchronously from the opt-in gesture. The push-service
+origin is explicitly allow-listed, redirects are refused, I/O is deadline-bounded,
+and the durable per-device reservation limits sends to one per minute. It watches
+canonical open owner moves, not transport presence or fixture data.
+
+Web Push needs same-origin HTTPS/loopback hosting of the module script, browser support
+and the browser vendor's external push service. It does not create remote reach or a
+dead-man. Relay rendezvous, native publisher APNs/FCM delivery and detecting an absent
+daemon still require independently hosted TLS infrastructure; see the
+[operator setup and limits](../guide/daemon.md#opt-in-web-push).
 
 ## Version and feature negotiation
 

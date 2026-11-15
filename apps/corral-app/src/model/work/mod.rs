@@ -19,8 +19,20 @@ mod live_task;
 mod served;
 mod served_facts;
 mod standing;
+mod verb_build;
+mod verb_forms;
+mod verbs;
 mod views;
 mod when;
+
+pub use verb_forms::VerbComposer;
+pub use verbs::{Record, Verb, VerbAction, VerbField, palette_record, record_verbs};
+#[cfg(test)]
+mod verb_tests;
+
+/// Shared loading caption for an inspector awaiting its task detail.
+pub const INSPECTOR_LOADING: &str = "Loading task…";
+pub const VERB_MENU_LABEL: &str = "Actions";
 
 pub use data::*;
 pub use inspector::*;
@@ -36,14 +48,11 @@ pub use when::*;
 
 use std::borrow::Cow;
 
-use corral_protocol::app::{ChangesQuery, SeenAdvance};
-use corral_protocol::cmd::{Command, Expect, task::TaskCommand};
-
-use crate::model::act::{self, Act};
 use crate::model::daemon;
 use crate::model::effect::{Effect, Env, Page};
 use crate::model::nav::{Destination, SettingsSection};
 use crate::model::{Id, Live};
+use corral_protocol::app::{ChangesQuery, SeenAdvance};
 
 /// The selected inspector tab, in the mockup's cycling order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -154,41 +163,6 @@ impl ChangeFilter {
     }
 }
 
-/// A task command Now offers when the task's state allows it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TaskVerb {
-    /// Set the owner's dispatch hold on a queued task.
-    Hold,
-    /// Release the task's hold.
-    Release,
-    /// Run the task again after its run failed.
-    Retry { run: Option<String> },
-}
-
-impl TaskVerb {
-    /// The command's title, as its button and receipt name it.
-    pub fn title(&self, task: &str) -> String {
-        match self {
-            Self::Hold => format!("Hold {task}"),
-            Self::Release => format!("Release {task}"),
-            Self::Retry { .. } => format!("Retry {task}"),
-        }
-    }
-
-    fn command(&self, task: &str) -> TaskCommand {
-        let id = task.to_owned();
-        match self {
-            Self::Hold => TaskCommand::Hold { id, reason: None },
-            Self::Release => TaskCommand::Release { id },
-            Self::Retry { run } => TaskCommand::Retry {
-                id,
-                run: run.clone(),
-                profile: None,
-            },
-        }
-    }
-}
-
 /// The task command this device last sent from Now for one task, kept to show its status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sent {
@@ -228,6 +202,10 @@ pub struct State {
     pub goal: Option<String>,
     /// Task commands sent from Now, newest last.
     pub sent: Vec<Sent>,
+    /// A structured action bound to the record revision at the time it was opened.
+    pub composer: Option<VerbComposer>,
+    /// The selected record's keyboard-opened action menu.
+    pub menu: Option<Record>,
 }
 
 impl Default for State {
@@ -243,6 +221,8 @@ impl Default for State {
             filter: ChangeFilter::All,
             goal: None,
             sent: Vec::new(),
+            composer: None,
+            menu: None,
         }
     }
 }
@@ -307,11 +287,14 @@ pub enum Press {
         about: Live,
         rev: Option<u64>,
     },
-    /// Send a task command, preconditioned on the task's owner revision.
-    Run {
-        task: Id,
-        verb: TaskVerb,
+    /// Start a canonical record action, opening its structured composer when needed.
+    Verb {
+        record: Record,
+        verb: Verb,
     },
+    SubmitVerb(Vec<String>),
+    CancelVerb,
+    CloseMenu,
     /// Ask corrald for the result of a command whose outcome is unknown, under its own id.
     Recover(Id),
     /// Narrow the daemon list to a goal, or show every goal.
@@ -352,6 +335,8 @@ pub struct Button {
     pub enabled: bool,
     /// The mockup's button emphasis.
     pub kind: ButtonKind,
+    /// Why an offered canonical action is currently unavailable.
+    pub reason: Option<String>,
 }
 
 impl Button {
@@ -366,6 +351,7 @@ impl Button {
             action: Some(action.into()),
             enabled: true,
             kind,
+            reason: None,
         }
     }
 
@@ -469,7 +455,16 @@ impl State {
                 text: None,
                 target: None,
             }],
-            Press::Run { task, verb } => self.run(task, verb, feed),
+            Press::Verb { record, verb } => self.start_verb(record, verb, feed),
+            Press::SubmitVerb(values) => self.submit_verb(values, feed),
+            Press::CancelVerb => {
+                self.composer = None;
+                Vec::new()
+            }
+            Press::CloseMenu => {
+                self.menu = None;
+                Vec::new()
+            }
             Press::Recover(key) => vec![Effect::Recover(key)],
             Press::RetryBoard => vec![Effect::RetryTopic("board".into())],
             Press::Goal(goal) => {
@@ -488,41 +483,6 @@ impl State {
     /// The last command sent from Now for `task`, if any.
     pub fn sent_for(&self, task: &str) -> Option<&Sent> {
         self.sent.iter().rev().find(|sent| sent.task == *task)
-    }
-
-    /// Builds the task command against the loaded detail's owner revision. Nothing is sent
-    /// without that revision, nor while this task's previous command has no known outcome: a
-    /// new identity after an uncertain one could run the change twice.
-    fn run(&mut self, task: Id, verb: TaskVerb, feed: &daemon::Feed) -> Vec<Effect> {
-        if let Some(previous) = self.sent_for(&task)
-            && act::status(feed, &previous.key).is_some_and(|status| status.uncertain())
-        {
-            return vec![Effect::Toast(format!(
-                "{} has no known result yet; nothing new was sent.",
-                previous.title
-            ))];
-        }
-        let Some(detail) = loaded_task(feed, &task) else {
-            return vec![Effect::Toast(format!(
-                "{task} detail has not loaded; nothing was sent."
-            ))];
-        };
-        let act = Act::new(verb.title(&task), Command::Task(verb.command(&task)))
-            .expect(Expect::TaskRevision {
-                task: task.to_string(),
-                revision: detail.owner_revision.clone(),
-            })
-            .about(Live::Task(task.clone()));
-        self.sent.retain(|sent| sent.task != task);
-        self.sent.push(Sent {
-            task,
-            key: act.key.clone(),
-            title: act.title.clone(),
-        });
-        if self.sent.len() > SENT_KEPT {
-            self.sent.remove(0);
-        }
-        vec![Effect::Act(act)]
     }
 
     /// Moves the inspector to its next tab, wrapping from Session back to Story.
@@ -647,9 +607,9 @@ mod tests {
         let mut feed = daemon::Feed::default();
         let mut state = State::default();
         let effects = state.press(
-            Press::Run {
-                task: Id::from("T-9"),
-                verb: TaskVerb::Release,
+            Press::Verb {
+                record: Record::Task(Id::from("T-9")),
+                verb: Verb::Release,
             },
             &feed,
             env,
@@ -674,9 +634,9 @@ mod tests {
             },
         );
         let effects = state.press(
-            Press::Run {
-                task: Id::from("T-9"),
-                verb: TaskVerb::Release,
+            Press::Verb {
+                record: Record::Task(Id::from("T-9")),
+                verb: Verb::Release,
             },
             &feed,
             env,

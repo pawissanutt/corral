@@ -199,7 +199,7 @@ fn delta_paging_and_cache_reload_cannot_lose_same_revision_rows_or_removals() {
     assert!(Projection::load(&path).is_none());
     std::fs::write(
         &path,
-        serde_json::to_vec(&json!({"version": 2, "projection": projection})).unwrap(),
+        serde_json::to_vec(&json!({"version": 1, "projection": projection})).unwrap(),
     )
     .unwrap();
     assert!(Projection::load(&path).is_none());

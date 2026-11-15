@@ -10,9 +10,10 @@ use std::rc::Rc;
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
-use crate::model::Form;
 use crate::model::agents::{Action, Ask, Bar, Control, Session, Weight};
 use crate::model::hue::Hue;
+use crate::model::{Form, Id};
+use crate::screens::assistant::session_verbs;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::chip::chip;
@@ -24,10 +25,43 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 use super::run;
 
-/// The bar, redrawn only when it changes: a new screen or transcript page leaves its focus.
+/// The bar, redrawn only when it changes: a new screen or transcript page leaves its focus. An
+/// assistant session served by corrald has its canonical record verbs (Revoke permissions)
+/// under the controls.
 pub fn bar(app: AppState, session: Memo<Session>) -> AnyElement {
     let shown = computed(move || session.with(|s| s.controls.clone()));
-    dynamic(move || shown.with(|bar| strip(app, bar)))
+    let assistant = computed(move || {
+        let id = session.with(|s| s.id.clone());
+        let served = app.daemon()
+            && app.feed.with(|feed| {
+                feed.assistants.contains_key(id.as_str())
+                    || feed
+                        .agents
+                        .get(id.as_str())
+                        .is_some_and(|row| row.role == "assistant")
+            });
+        served.then_some(id)
+    });
+    view()
+        .flex_none()
+        .child(dynamic(move || shown.with(|bar| strip(app, bar))))
+        .child(dynamic(move || {
+            assistant.get().map(|id| {
+                let verbs = session_verbs(app, Id::from(id.as_str()));
+                match app.form {
+                    Form::Terminal => view().px(term::cells(1.0)).child(verbs),
+                    Form::Phone => view().px(px(16.0)).pb(px(8.0)).child(verbs),
+                    Form::Desktop => view()
+                        .px(px(18.0))
+                        .py(px(6.0))
+                        .border_b_1()
+                        .border_b_color(color(Token::Rule))
+                        .child(verbs),
+                }
+                .into_element()
+            })
+        }))
+        .into_element()
 }
 
 /// In a terminal, Esc presses Cancel while the bar offers it and nothing is open over the page;

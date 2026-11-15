@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 
 use corral_protocol::board::RailGlyph;
 use corral_protocol::detail::{DetailBody, DetailRef, PlanDetail, PlanMember};
-use corral_protocol::rows::{InboxState, PlanRole, PlanRow as WirePlan, PlanState as WireState};
+use corral_protocol::rows::{PlanRole, PlanRow as WirePlan, PlanState as WireState};
 
 use super::live_role::{linked, linked_id, linked_label, role_line};
 use super::view::{pipeline, pipeline_marks, square};
@@ -17,16 +17,20 @@ use super::{
 };
 use crate::model::board::{Mark, Rail};
 use crate::model::daemon::{DetailCache, Feed, Group, Link};
-use crate::model::effect::{Effect, Env};
+use crate::model::effect::Env;
 use crate::model::hue::Hue;
+use crate::model::inbox::{is_open, owner_moves};
 use crate::model::nav::Form;
 use crate::model::text::span;
 use crate::model::work::when;
 use crate::model::{Id, Live, Selection};
 
 /// The list's sections, in display order, with their heading hue.
-const SECTIONS: [(&str, WireState, Hue); 6] = [
+const SECTIONS: [(&str, WireState, Hue); 9] = [
     ("Awaiting your acceptance", WireState::Awaiting, Hue::You),
+    ("Planning failed", WireState::PlanFailed, Hue::Fail),
+    ("Drafting", WireState::Drafting, Hue::Neutral),
+    ("In plan review", WireState::Reviewing, Hue::Corral),
     ("Executing", WireState::Executing, Hue::Corral),
     // An approved design may already have published its tracker, so not "not started".
     ("Approved", WireState::Approved, Hue::Neutral),
@@ -249,13 +253,8 @@ pub(super) fn rail(member: &PlanMember) -> Rail {
 
 /// The open canonical question a member waits on, by key.
 pub(super) fn open_question(feed: &Feed, task: &str) -> Option<Id> {
-    feed.inbox
-        .values()
-        .find(|row| {
-            row.task.as_deref() == Some(task)
-                && row.question_rev.is_some()
-                && matches!(row.state, InboxState::Open)
-        })
+    owner_moves(feed)
+        .find(|row| row.task.as_deref() == Some(task) && row.question_rev.is_some() && is_open(row))
         .map(|row| Id::from(&row.id))
 }
 
@@ -265,7 +264,7 @@ fn member_group(feed: &Feed, member: &PlanMember) -> Option<Group> {
 }
 
 fn needs_you(feed: &Feed, member: &PlanMember) -> bool {
-    member_group(feed, member) == Some(Group::NeedsYou) || open_question(feed, &member.id).is_some()
+    owner_moves(feed).any(|row| row.task.as_deref() == Some(member.id.as_str()))
 }
 
 fn squares(feed: &Feed, detail: &PlanDetail) -> Vec<MemberSquare> {
@@ -510,13 +509,10 @@ pub fn live_detail(state: &State, plan: Option<&Id>, feed: &Feed, env: Env) -> D
             Detail::Awaiting(live_doc::awaiting(state, feed, id, row, detail, stale, env))
         }
         WireState::Approved => Detail::Approved(live_role::approved(id, row, detail, stale, env)),
-        WireState::Drafting
-        | WireState::Reviewing
-        | WireState::PlanFailed
-        | WireState::Executing
-        | WireState::Complete
-        | WireState::Cancelled
-        | WireState::Other => {
+        WireState::Drafting | WireState::Reviewing | WireState::PlanFailed => Detail::Planning(
+            super::planning::view(id, row, detail, stale, env.form == Form::Phone),
+        ),
+        WireState::Executing | WireState::Complete | WireState::Cancelled | WireState::Other => {
             Detail::Executing(executing(state, feed, id, row, detail, stale, env))
         }
     }
@@ -529,7 +525,7 @@ pub(super) fn title(id: &Id, row: Option<&WirePlan>) -> String {
 
 /// Header commands for a published plan: Ask (in the phone's navigation bar instead), the
 /// document when served, and the design a tracker came from.
-fn tracker_actions(
+pub(super) fn tracker_actions(
     id: &Id,
     row: Option<&WirePlan>,
     detail: &PlanDetail,
@@ -676,6 +672,7 @@ fn executing(
     };
     ExecutingView {
         header: Header {
+            plan: Some(id.clone()),
             chips: vec![state_chip(detail.state)],
             id: id.to_string(),
             title: title(id, row),
@@ -713,7 +710,7 @@ pub fn live_phone_page(state: &State, id: &Id, feed: &Feed, env: Env) -> PhonePa
             ..env
         },
     );
-    let published = matches!(detail, Detail::Executing(_));
+    let published = matches!(detail, Detail::Executing(_) | Detail::Planning(_));
     PhonePage {
         title: match &detail {
             Detail::Awaiting(_) => "Plan review".into(),
@@ -721,8 +718,6 @@ pub fn live_phone_page(state: &State, id: &Id, feed: &Feed, env: Env) -> PhonePa
             Detail::Document(_) => "Plan document".into(),
             _ => id.to_string(),
         },
-        back_label: "Plans",
-        back: Effect::Back,
         right: published.then(|| {
             Button::new(
                 "Ask about this",

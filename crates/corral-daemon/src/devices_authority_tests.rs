@@ -83,8 +83,8 @@ fn authority_changes_notify_every_connected_target_session_without_reconnect() {
     let web = devices
         .enrol("Browser", "test", Some(&[9; 32]), "test")
         .unwrap();
-    let (_, first) = devices.attach_key(&[9; 32]).unwrap();
-    let (_, second) = devices.attach_key(&[9; 32]).unwrap();
+    let (_, first) = devices.attach_key(&[9; 32], DeviceReach::Loopback).unwrap();
+    let (_, second) = devices.attach_key(&[9; 32], DeviceReach::Loopback).unwrap();
     let (_, other) = devices.attach(&admin.id).unwrap();
     let mut frames = Capture::default();
     first.flush_authority(&mut frames).unwrap();

@@ -9,8 +9,18 @@ The app's Settings › Assistant shows configured profiles and lets an authorize
 choose the assistant profile, edit models and manage profile copies through the daemon.
 The composer's model selector offers `corral-pi` profiles that name a model and switches
 on the next message. The daemon host still needs a working provider configuration and
-authentication; listing a model is not proof of access or a successful execution. The
-historical app design's alternate rollover summary profile is not a canonical setting.
+authentication; listing a model is not proof of access or a successful execution.
+`assistant.summary_profile` optionally names a `corral-pi` profile for the shared quick
+thread's rollover summary. Each rollover makes one summary request using that profile's
+model, effort and connection, recording its profile, tokens and cost separately from
+conversation responses. When unset, summaries use the thread's current model. Set it with
+`corral config set assistant.summary_profile pi-luna`, or choose it in Settings › Assistant;
+changes apply when the assistant host next starts. Provider setup and spending admission
+remain required, including for summaries; a configured profile does not bypass them.
+Paid-API profiles are not eligible for independent rollover summaries: the summary has
+no separate canonical paid-continuation episode. Settings reports that refusal rather
+than treating profile selection as spending approval. Subscription, local and explicitly
+configured Bedrock profiles keep their existing credential, capability and budget checks.
 See the [app guide](../apps/corral-app/README.md) for connection and platform limits.
 
 ## Read and prepare

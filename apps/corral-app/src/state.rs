@@ -4,6 +4,8 @@
 //! routes the keyboard.
 
 mod attach;
+mod confirmation;
+mod devices;
 mod keys;
 mod live;
 mod sidebar;
@@ -79,6 +81,9 @@ pub struct AppState {
     /// Live commands sent from here whose receipt has not been shown yet, and where each
     /// stands with this device's confirmation.
     watching: Signal<BTreeMap<Id, (Confirmable, live::Watch)>>,
+    /// Revision under which the open device-bound preview was requested.
+    confirmation_revision: Signal<u64>,
+    device_ops: Signal<BTreeMap<Id, devices::DeviceOperation>>,
     /// Assistant session operations by their caller key, to the client's correlation.
     sessions: Signal<BTreeMap<Id, Id>>,
     /// A receipt that expires 3.4 seconds after the most recent toast call.
@@ -151,6 +156,8 @@ impl AppState {
             ask_field_error: signal(None),
             root: Owner::current(),
             watching: signal(BTreeMap::new()),
+            confirmation_revision: signal(0),
+            device_ops: signal(BTreeMap::new()),
             sessions: signal(BTreeMap::new()),
             confirm: signal(None),
             toast: signal_with(None, SignalEquals::Never),
@@ -166,7 +173,7 @@ impl AppState {
         app.follow_browser_pairing();
         if open_pairing {
             // Phone sections are pushed by a navigation intent after the shell starts.
-            let _ = set_timeout(Duration::ZERO, move || {
+            set_timeout(Duration::ZERO, move || {
                 app.go_settings(SettingsSection::Connection);
             });
         }
@@ -175,6 +182,9 @@ impl AppState {
         app.watch_receipts();
         app.follow_sidebar();
         app.latch_previews();
+        app.follow_cached_feed();
+        app.follow_authority();
+        app.watch_device_receipts();
         if form != Form::Phone {
             app.bind_keys();
         }
@@ -276,9 +286,8 @@ impl AppState {
         });
     }
 
-    /// Opens Ask and requests composer focus without discarding its current context. Against
-    /// corrald it opens only when the daemon hosts the assistant for the app; a daemon not yet
-    /// reached (cold boot offline, still connecting) is not a refusal, just not available yet.
+    /// Opens Ask without discarding its context or draft. Disconnected startup still opens
+    /// the drawer so it can explain the missing connection without showing fixture data.
     pub fn open_ask(&self) {
         use crate::model::Availability;
         let refusal = untracked(|| {
@@ -298,7 +307,7 @@ impl AppState {
                     Availability::Connecting => Some("Connecting to corrald; Ask opens once it answers."),
                 }
             }),
-            DataState::Disconnected => Some("Ask needs a connection to corrald."),
+            DataState::Disconnected => None,
             _ => None,
         }
         });
@@ -344,6 +353,10 @@ impl AppState {
             self.confirm_no();
             return;
         }
+        if self.work.with_untracked(|state| state.menu.is_some()) {
+            self.work.update(|state| state.menu = None);
+            return;
+        }
         if self.ask_field.with_untracked(Option::is_some) {
             self.close_attach_field();
             return;
@@ -377,7 +390,7 @@ impl AppState {
             self.lock.set(false);
         }
         // A live confirmation never outlives its source.
-        self.confirmation.set(None);
+        self.invalidate_confirmations();
         self.data.set(state);
     }
 
@@ -415,6 +428,17 @@ impl AppState {
                     self.go_settings(SettingsSection::Connection);
                     self.set_data(DataState::Disconnected);
                 });
+            }
+        });
+    }
+
+    /// A restored namespace remains daemon data after link loss clears its live session.
+    /// Observe only cache identity transitions so an explicit fixture choice stays explicit.
+    fn follow_cached_feed(self) {
+        let cached = computed(move || self.feed.with(cached_namespace));
+        effect(move || {
+            if cached.get() && self.data.get_untracked() == DataState::Disconnected {
+                untracked(|| self.set_data(DataState::Daemon));
             }
         });
     }
@@ -538,6 +562,9 @@ impl AppState {
                 self.share.set(false);
                 self.lock.set(true);
             }
+            Action::Work(press) => self.act(self.work, |state, env| {
+                state.press(press, &self.feed.get_untracked(), env)
+            }),
         }
     }
 
@@ -606,6 +633,11 @@ impl AppState {
     }
 }
 
+fn cached_namespace(feed: &daemon::Feed) -> bool {
+    feed.store.is_some()
+        && (feed.session.is_some() || !feed.capabilities.is_empty() || feed.board.complete)
+}
+
 fn startup(
     nav: &mut NavState,
     browser: bool,
@@ -653,6 +685,26 @@ fn appearance(choice: ThemeChoice) -> Appearance {
 mod tests {
     use super::*;
     use crate::model::devices::{BrowserPairing, PairBrowser};
+
+    #[test]
+    fn offline_cached_namespace_survives_session_invalidation() {
+        let mut feed = daemon::Feed {
+            store: Some("/workspace/.corral".into()),
+            ..Default::default()
+        };
+        feed.capabilities
+            .insert(corral_protocol::app::ACT_V1.into());
+        feed.mark_stale();
+        feed.link = daemon::Link::Down;
+        assert!(feed.session.is_none());
+        assert!(cached_namespace(&feed));
+        feed.capabilities.clear();
+        assert!(!cached_namespace(&feed));
+        feed.board.complete = true;
+        assert!(cached_namespace(&feed));
+        feed.store = None;
+        assert!(!cached_namespace(&feed));
+    }
 
     #[test]
     fn unpaired_browser_opens_connection_instead_of_restoring_mockup() {

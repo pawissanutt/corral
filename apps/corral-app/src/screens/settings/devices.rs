@@ -2,7 +2,6 @@
 //! code, the key exchange payload) and the paired devices with their reach, attribution and
 //! permission. The phone opens the QR and the join view as sheets.
 
-use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use super::parts::{
@@ -27,9 +26,8 @@ use crate::ui::kit::text::rich;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
-/// The QR tile's side and its quiet zone (`.qr`: 210 pt, padding 12).
-const QR_SIDE: f32 = 210.0;
-const QR_PAD: f32 = 12.0;
+/// The QR tile's side (`.qr`: 210 pt).
+pub(super) const QR_SIDE: f32 = 210.0;
 /// A terminal cannot draw the QR: this line stands in its place.
 const TERMINAL_QR: &str = "QR: open Devices in the desktop or phone app to show it";
 
@@ -56,7 +54,7 @@ pub fn page(app: AppState) -> AnyElement {
                 view()
                     .w(px(230.0))
                     .flex_shrink_0()
-                    .child(qr(v.qr, v.qr_note))
+                    .child(qr(app, v.qr, v.qr_note))
                     .child(view().mt(px(6.0)).child(illus(app, v.qr_note))),
             )
             .child(steps)
@@ -499,47 +497,15 @@ fn phone_device(app: AppState, device: &DeviceView) -> AnyElement {
         .into_element()
 }
 
-/// The illustrative QR (`.qr`): dark modules on a pale tile in both appearances, as a code
-/// stays readable to a camera. The tile and the modules are the shell's ink and ground, the
-/// one pair that keeps its light-over-dark order in both themes. One element for screen
-/// readers, named by its note.
-fn qr(cells: [[bool; 29]; 29], note: &'static str) -> AnyElement {
-    let inner = QR_SIDE - 2.0 * QR_PAD;
-    let module = inner / 29.0;
-    // Runs of dark modules in a row as one rectangle each, on whole points, so no seams show.
-    let drawing = canvas(move || {
-        let mut painter = Painter::new().fill_style(for_appearance(color(Token::Shell)));
-        for (y, row) in cells.iter().enumerate() {
-            let top = (y as f32 * module).round();
-            let bottom = ((y + 1) as f32 * module).round();
-            let mut x = 0;
-            while x < row.len() {
-                if !row[x] {
-                    x += 1;
-                    continue;
-                }
-                let start = x;
-                while x < row.len() && row[x] {
-                    x += 1;
-                }
-                let left = (start as f32 * module).round();
-                let right = (x as f32 * module).round();
-                painter = painter.fill_rect(px(left), px(top), px(right - left), px(bottom - top));
-            }
-        }
-        painter
-    })
-    .size(px(inner));
-    view()
-        .size(px(QR_SIDE))
-        .flex_shrink_0()
-        .p(px(QR_PAD))
-        .rounded(px(8.0))
-        .bg(color(Token::ShellInk))
-        .role(AccessibilityRole::Image)
-        .label(note)
-        .child(drawing)
-        .into_element()
+/// The illustrative QR (`.qr`), on the shared tile; one element for screen readers, named by
+/// its note.
+fn qr(app: AppState, cells: [[bool; 29]; 29], note: &'static str) -> AnyElement {
+    super::qr::tile(
+        app,
+        cells.iter().map(|row| row.to_vec()).collect(),
+        QR_SIDE,
+        note.into(),
+    )
 }
 
 /// One of the phone's pairing sheets, shown while the model's sheet is `which`; closing it
@@ -574,7 +540,7 @@ fn sheet_content(app: AppState, which: Sheet) -> Modal {
                     view()
                         .items_center()
                         .gap(px(10.0))
-                        .child(qr(cells, note))
+                        .child(qr(app, cells, note))
                         .child(illus(app, note)),
                 )
                 .child(view().mt(px(16.0)).child(steps(app, &items)))

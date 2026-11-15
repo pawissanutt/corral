@@ -526,6 +526,35 @@ fn detail(state: &State, feed: &Feed, shown: &Shown, env: Env, width: f32) -> De
                 .collect()
         })
         .unwrap_or_default();
+    if let Some(review) = shown.review {
+        verdicts.splice(
+            0..0,
+            review.gates.iter().map(|gate| {
+                let text = gate
+                    .text
+                    .as_deref()
+                    .filter(|text| !text.is_empty())
+                    .map_or_else(
+                        || gate.verdict.clone(),
+                        |text| format!("{} · {text}", gate.verdict),
+                    );
+                let time = gate
+                    .at
+                    .as_deref()
+                    .map(|at| when(at, feed))
+                    .unwrap_or_default();
+                verdict_view(
+                    phone,
+                    &gate.by,
+                    short(&gate.sha),
+                    &time,
+                    verdict_mark(&gate.verdict),
+                    &text,
+                    gate.stale,
+                )
+            }),
+        );
+    }
     if let Some(review) = shown.review.filter(|review| review.approvable) {
         let sha = review
             .candidate_sha
@@ -603,7 +632,6 @@ pub fn live_page(
         title: shown
             .as_ref()
             .map_or_else(|| "Review".into(), |shown| shown.id().to_string()),
-        back_label: phone.then_some("Back"),
         phone,
         stale,
         conn: env.conn,
@@ -653,6 +681,7 @@ mod tests {
             now: "blocked".into(),
             now_code: "blocked".into(),
             since: None,
+            age_since: None,
             held_reason: None,
             questions: 0,
             attention: Vec::new(),

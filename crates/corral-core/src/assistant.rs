@@ -1,7 +1,7 @@
 //! Workspace-scoped assistant records. No task, run, queue entry or coding slot is allocated.
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +31,9 @@ pub struct AssistantCfg {
     /// The corral-pi profile assistants run; unset means the PM's profile (`pm.agent`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Quick-thread rollover summaries use this profile; unset keeps the session's current model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary_profile: Option<String>,
     /// Live assistant hosts `corral pi --assistant` may reach before it needs `--over-cap`.
     pub max_live: u32,
     /// Scratch worktrees the workspace may hold across all sessions.
@@ -43,6 +46,7 @@ impl Default for AssistantCfg {
     fn default() -> Self {
         Self {
             agent: None,
+            summary_profile: None,
             max_live: 4,
             scratch_max: 8,
             scratch_idle_days: 7,
@@ -54,6 +58,32 @@ impl AssistantCfg {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
+}
+
+/// Summary calls do not create a second paid-continuation episode or spending authority.
+pub fn resolve_summary_profile(
+    config: &crate::Config,
+    name: &str,
+) -> Result<crate::ResolvedProfile> {
+    let resolved = config.resolve_profile(
+        &crate::ProfileChoice {
+            profile: Some(name.to_owned()),
+            ..crate::ProfileChoice::default()
+        },
+        None,
+        None,
+    )?;
+    ensure!(
+        crate::is_corral_pi(&resolved.harness) && resolved.model.is_some(),
+        "summary_profile_unavailable: summaries require a corral-pi profile with a model"
+    );
+    ensure!(
+        !resolved
+            .connection_binding()?
+            .is_some_and(|binding| binding.connection.api_key()),
+        "summary_profile_unavailable: paid-API summaries have no independent canonical spending episode; select a subscription profile"
+    );
+    Ok(resolved)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -620,5 +650,27 @@ impl Store {
             self.log_event(None, "assistant_ended", serde_json::json!({"session": id}))
         })?;
         Ok(session)
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::AssistantCfg;
+
+    #[test]
+    fn summary_profile_is_optional_and_unknown_assistant_fields_are_rejected() {
+        let config: AssistantCfg = toml::from_str("summary_profile = 'pi-luna'").unwrap();
+        assert_eq!(config.summary_profile.as_deref(), Some("pi-luna"));
+        assert_eq!(AssistantCfg::default().summary_profile, None);
+        assert!(toml::from_str::<AssistantCfg>("summary_profiel = 'pi-luna'").is_err());
+    }
+
+    #[test]
+    fn summary_profile_cannot_grant_independent_paid_api_spending() {
+        let config: crate::Config = toml::from_str(
+            "[profiles.summary]\nharness = 'corral-pi'\nmodel = 'gpt-6-luna'\nvendor = 'openai'\nconnection = 'openai-api'\n",
+        ).unwrap();
+        let error = super::resolve_summary_profile(&config, "summary").unwrap_err();
+        assert!(error.to_string().contains("paid-API summaries"));
     }
 }

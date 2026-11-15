@@ -7,8 +7,9 @@ use crate::model::Form;
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::plans::{Story, StoryField, StoryStage};
+use crate::model::text::span;
 use crate::state::AppState;
-use crate::ui::kit::chip::chip;
+use crate::ui::kit::chip::{chip, illus};
 use crate::ui::kit::marks::{hue_ink, mark};
 use crate::ui::kit::table::{kv, steps};
 use crate::ui::kit::text::{h3, mono, plain, rich, rich_small};
@@ -30,7 +31,7 @@ pub(super) fn story(app: AppState, inspector: &Story) -> AnyElement {
             view()
                 .when(!terminal, |v| v.mb(px(14.0)))
                 .when(!inspector.context.is_empty(), |v| {
-                    v.child(rich_small(app, &inspector.context))
+                    v.child(context(app, inspector))
                 }),
         )
         .when(!inspector.stages.is_empty(), |v| {
@@ -80,6 +81,26 @@ pub(super) fn story(app: AppState, inspector: &Story) -> AnyElement {
         .when(!inspector.buttons.is_empty(), |v| {
             v.child(commands(app, inspector))
         })
+        .into_element()
+}
+
+/// The context line, then its note (an invented machine name) set apart after a "·" as the
+/// italic illustrative tag, so it never reads as part of the sentence.
+fn context(app: AppState, inspector: &Story) -> AnyElement {
+    let Some(note) = inspector.context_note else {
+        return rich_small(app, &inspector.context);
+    };
+    let terminal = app.form == Form::Terminal;
+    view()
+        .flex_row()
+        .flex_wrap()
+        .items_baseline()
+        .when(!terminal, |line| line.gap_x(px(6.0)))
+        .child(rich_small(app, &inspector.context))
+        .when(terminal, |line| line.child(term::space(1.0)))
+        .child(rich_small(app, &vec![span("·").dim()]))
+        .when(terminal, |line| line.child(term::space(1.0)))
+        .child(illus(app, note))
         .into_element()
 }
 

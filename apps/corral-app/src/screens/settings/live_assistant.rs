@@ -12,7 +12,9 @@ use nsh_core::prelude::*;
 
 use super::enrolment::{bound_field, group};
 use super::live_sections::{act_line, in_flight, refusal, snapshot_section};
-use super::parts::{button_row, cell, first_heading, intro, mono_cell, ring, space};
+use super::parts::{
+    Record, button_row, cell, first_heading, intro, mono_cell, records, ring, space,
+};
 use crate::model::settings::live::{self, LiveProfile};
 use crate::model::settings::profiles::{self, ManagedProfile, ProfileField};
 use crate::model::settings::{ADD_PROFILE, remove_slot};
@@ -57,8 +59,12 @@ pub fn page(app: AppState) -> AnyElement {
             parts.push(space(app, 8.0));
             parts.push(add(app, settings.clone()));
         }
-        parts.push(h3(app, "When the quick thread rolls over", None));
-        parts.push(cell(app, live::summary_line(settings), Token::Ink3, false).into_element());
+        parts.push(h3(
+            app,
+            "When the quick thread rolls over",
+            Some("assistant.summary_profile".into()),
+        ));
+        parts.push(super::live_summary::summary(app, settings, editable));
         parts
     })
 }
@@ -79,11 +85,34 @@ fn selector(app: AppState, settings: &SettingsSnapshot, editable: bool) -> AnyEl
         Form::Desktop => &[Width::Fixed(230.0), Width::Fill, Width::Fixed(200.0)],
         Form::Phone | Form::Terminal => &[Width::Fixed(96.0), Width::Fill, Width::Fill],
     };
-    qtable(
+    table(
         app,
         widths,
         rows.into_iter()
             .map(|row| selector_row(app, settings, row, editable))
+            .collect(),
+    )
+}
+
+/// Rows of three cells (what leads, its details, its controls) as a table; on a phone, where
+/// three columns break names and model ids mid-token, as records with the details under the
+/// name and the controls on its line.
+pub(super) fn table(app: AppState, widths: &[Width], rows: Vec<Vec<AnyElement>>) -> AnyElement {
+    if app.form != Form::Phone {
+        return qtable(app, widths, rows);
+    }
+    records(
+        rows.into_iter()
+            .filter_map(|row| {
+                let mut cells = row.into_iter();
+                let lead = cells.next()?;
+                let under = cells.next().into_iter().collect();
+                Some(Record {
+                    lead,
+                    under,
+                    end: cells.next(),
+                })
+            })
             .collect(),
     )
 }
@@ -160,7 +189,7 @@ fn configured(app: AppState, settings: SettingsSnapshot, editable: bool) -> AnyE
                 Form::Desktop => &[Width::Fixed(200.0), Width::Fill, Width::Fixed(230.0)],
                 Form::Phone | Form::Terminal => &[Width::Fixed(96.0), Width::Fill, Width::Fill],
             };
-            qtable(
+            table(
                 app,
                 widths,
                 rows.into_iter()

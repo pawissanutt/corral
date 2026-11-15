@@ -44,8 +44,9 @@ pub struct Story {
     pub plan: Option<String>,
     /// Changed-since-last-visit chip, absent for the compact queued story.
     pub changed: Option<Chip>,
-    /// Task's context line with illustrative-machine attribution when applicable.
+    /// Task context, excluding the separate illustrative-machine note.
     pub context: Rich,
+    pub context_note: Option<&'static str>,
     /// Delivery stepper, omitted for queued tasks without steps.
     pub stages: Vec<StoryStage>,
     /// Progress heading, absent for the queued-member variant.
@@ -116,6 +117,7 @@ pub fn story(id: &'static str) -> Story {
             None
         },
         context: vec![],
+        context_note: None,
         stages: vec![],
         progress: None,
         progress_count: None,
@@ -146,11 +148,12 @@ pub fn story(id: &'static str) -> Story {
         return view;
     }
     if let Some(machine) = t.machine {
-        view.context = vec![
-            span(format!("{} · on {machine} ", t.agent.unwrap_or(""))),
-            span("machine name illustrative").dim(),
-            span(format!(" · started {}", t.started.unwrap_or(""))),
-        ];
+        view.context = vec![span(format!(
+            "{} · on {machine} · started {}",
+            t.agent.unwrap_or(""),
+            t.started.unwrap_or("")
+        ))];
+        view.context_note = Some("machine name illustrative");
     }
     let sha = match id {
         "T-890" => "1751bd2",

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::{CACHE_FILE, Projection};
 use crate::Ctx;
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 #[derive(Serialize)]
 struct CacheRef<'a> {

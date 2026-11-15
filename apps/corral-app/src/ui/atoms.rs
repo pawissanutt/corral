@@ -7,15 +7,17 @@
 //! because the same atom sits on the shell in the sidebar and on a page in the content.
 //!
 //! The health line never cuts a segment or the source label. When a line runs out of room, reach
-//! gives way first, then attention, then the clock, decided from the line's own measured width.
+//! gives way first, then attention, then the clock, decided from the line's own measured width;
+//! on the phone strip reach (R10) holds longest: attention, then the clock, give way before it.
 //! A warning segment is outlined and a failing one filled, so either reads without its colour;
 //! the daemon's segment and the reach press through to Settings › Connection, and so does the
 //! whole phone strip.
 
 use nsh_core::AccessibilityCurrent;
+use nsh_core::element::Idiom;
 use nsh_core::prelude::*;
 
-use crate::model::{Destination, Form, Segment, SettingsSection, Snapshot, Tone};
+use crate::model::{Destination, Form, Segment, SettingsSection, Snapshot, Tone, compact_segments};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::term::cells;
@@ -23,10 +25,15 @@ use crate::ui::tokens::{FONT_MONO, Token, color, row_height, text_size};
 
 /// Text size of the health line and of shell captions on desktop, as in the mock.
 const CAPTION: f32 = 11.5;
-/// The phone strip's smaller text, so the four segments share one row on a 390 pt phone.
-const STRIP_CAPTION: f32 = 10.5;
+/// The desktop bar's source tag, a step under its caption.
+const SOURCE_CAPTION: f32 = 10.5;
+/// The phone strip's text, the desktop caption's size; a narrow phone folds healthy runtimes.
+const STRIP_CAPTION: f32 = 11.5;
 /// Height of each row of the phone strip.
-const STRIP_ROW: f32 = 18.0;
+const STRIP_ROW: f32 = 20.0;
+/// Below this window width the strip's segments no longer share one row at its text size, so
+/// healthy runtimes fold into one segment.
+const NARROW_STRIP: f32 = 400.0;
 const FOCUS_RING: f32 = 2.0;
 /// Space before reach, attention, clock and source in the desktop bar.
 const BAR_GAP: f32 = 12.0;
@@ -48,14 +55,34 @@ const SOURCE: usize = 3;
 const SEGMENTS: usize = 4;
 /// Reach, attention and clock give way, in that order; the source label never does.
 const GIVE_WAY: usize = 3;
+/// On the phone strip attention gives way first, then the clock, then reach as a last resort.
+const STRIP_GIVE_WAY: [usize; 3] = [ATTENTION, CLOCK, REACH];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HealthLayout {
     /// The desktop top bar: one row on the shell colours.
     Bar,
-    /// The phone strip under the status bar: the segments, then reach, attention and clock with
-    /// the source label at the trailing edge.
+    /// The phone strip under the status bar: the segments, then attention and clock, with reach
+    /// and the source label at the trailing edge.
     Strip,
+}
+
+/// The touch target's floor (Apple's and the mock's 44 pt).
+pub const TOUCH_TARGET: f32 = 44.0;
+
+/// The desktop shell on a touch tablet (lib.rs gives a large tablet the desktop shell): there is
+/// no pointer to aim finely, so its controls take the touch target's height.
+pub fn touch_shell() -> bool {
+    untracked(idiom) == Idiom::Pad
+}
+
+/// A control's height: `height` with a pointer, at least the touch target on a tablet.
+pub fn control_height(height: f32) -> f32 {
+    if touch_shell() {
+        height.max(TOUCH_TARGET)
+    } else {
+        height
+    }
 }
 
 /// The health line for the current snapshot: segments (tone dot, name, value), then reach (a
@@ -80,7 +107,11 @@ pub fn health_line(app: AppState, layout: HealthLayout) -> AnyElement {
             })
             .on_press(move || app.go_settings(SettingsSection::Connection))
             .gap(px(2.0))
-            .child(dynamic(move || strip(app, &app.snapshot())))
+            .child({
+                // Only crossing the width rebuilds the strip, not every resize.
+                let narrow = computed(|| window().width.0 < NARROW_STRIP);
+                dynamic(move || strip(app, &app.snapshot(), narrow.get()))
+            })
             .into_element(),
     }
 }
@@ -224,7 +255,7 @@ fn row(
         .items_center()
         .flex_shrink_0()
         .gap(px(look.gap))
-        .h(px(row_height(form)))
+        .h(px(control_height(row_height(form))))
         .px(px(look.pad))
         .rounded(px(look.radius))
         .cursor_pointer()
@@ -459,9 +490,10 @@ impl Fit {
         self.widths.set(widths);
     }
 
-    /// How many of reach, attention and clock give way, from the front, so that what stays fits
-    /// the room; `needed(from)` is the width the line takes once the first `from` have gone.
-    /// Nothing gives way before the line has been measured.
+    /// How many of the parts that may give way go, in the line's order (reach, attention, clock
+    /// in the bar; [`STRIP_GIVE_WAY`] on the strip), so that what stays fits the room;
+    /// `needed(from)` is the width the line takes once the first `from` have gone. Nothing gives
+    /// way before the line has been measured.
     fn give_way(self, needed: impl Fn(usize) -> f32) -> usize {
         self.room.get().map_or(0, |room| {
             (0..GIVE_WAY)
@@ -488,15 +520,18 @@ fn bar_needed(present: [bool; 4], widths: [f32; 5], from: usize) -> f32 {
             .sum::<f32>()
 }
 
-/// The phone strip's second row width once the first `from` parts have given way: the parts
-/// kept on the left, each with the least space after it, and the source label.
+/// The phone strip's second row width once the first `from` of [`STRIP_GIVE_WAY`] have given
+/// way: the parts kept, each with the least space after it, and the source label.
 fn strip_needed(present: [bool; 4], widths: [f32; 5], from: usize) -> f32 {
-    kept(present, widths, from)
-        .map(|(part, width)| {
+    let gone = &STRIP_GIVE_WAY[..from.min(STRIP_GIVE_WAY.len())];
+    [ATTENTION, CLOCK, REACH, SOURCE]
+        .into_iter()
+        .filter(|part| present[*part] && !gone.contains(part))
+        .map(|part| {
             if part == SOURCE {
-                width
+                widths[part]
             } else {
-                width + STRIP_GAP
+                widths[part] + STRIP_GAP
             }
         })
         .sum()
@@ -597,18 +632,22 @@ fn bar(app: AppState, snapshot: &Snapshot, fit: Fit) -> Vec<AnyElement> {
     parts
 }
 
-/// Row 1: the four segments, wrapping whole segments if a phone is too narrow for them. Row 2:
-/// reach, attention and clock on the left, the source label at the trailing edge.
-fn strip(app: AppState, snapshot: &Snapshot) -> Vec<AnyElement> {
+/// Row 1: the segments, wrapping whole segments if a phone is too narrow for them; on a
+/// `narrow` one healthy runtimes share one segment. Row 2: attention and clock on the left,
+/// reach and the source label at the trailing edge.
+fn strip(app: AppState, snapshot: &Snapshot, narrow: bool) -> Vec<AnyElement> {
+    let segments = if narrow {
+        compact_segments(&snapshot.health)
+    } else {
+        snapshot.health.segments.clone()
+    };
     let segments = view()
         .flex_row()
         .flex_wrap()
         .items_center()
         .gap_y(px(2.0))
         .children(
-            snapshot
-                .health
-                .segments
+            segments
                 .iter()
                 .enumerate()
                 .map(|(at, segment)| shell_segment(segment, true, at == 0)),
@@ -621,8 +660,8 @@ fn strip(app: AppState, snapshot: &Snapshot) -> Vec<AnyElement> {
     rows
 }
 
-/// The strip's second row. The source label wins the room: reach gives way first, then
-/// attention, then the clock.
+/// The strip's second row. The source label wins the room: attention gives way first, then the
+/// clock, then reach.
 fn strip_extras(app: AppState, extras: &Extras<'_>, present: [bool; 4]) -> AnyElement {
     let fit = Fit::new();
     let cut = computed(move || {
@@ -631,21 +670,19 @@ fn strip_extras(app: AppState, extras: &Extras<'_>, present: [bool; 4]) -> AnyEl
     });
     let parts = extras.parts();
     let e2e = extras.e2e;
-    let left = parts[..SOURCE]
-        .iter()
-        .enumerate()
-        .filter_map(|(part, content)| {
-            content.map(|content| {
-                fitted(
-                    fit,
-                    part,
-                    move || cut.get() > part,
-                    shell_part(app, part, content, e2e, STRIP_CAPTION),
-                )
-                .mr(px(STRIP_GAP))
-                .into_element()
-            })
-        });
+    let item = |part: usize| {
+        let order = STRIP_GIVE_WAY.iter().position(|&gives| gives == part);
+        parts[part].map(|content| {
+            fitted(
+                fit,
+                part,
+                move || order.is_some_and(|order| cut.get() > order),
+                shell_part(app, part, content, e2e, STRIP_CAPTION),
+            )
+            .mr(px(STRIP_GAP))
+            .into_element()
+        })
+    };
     view()
         .flex_row()
         .items_center()
@@ -653,12 +690,13 @@ fn strip_extras(app: AppState, extras: &Extras<'_>, present: [bool; 4]) -> AnyEl
         .min_w(px(0.0))
         .overflow_hidden()
         .on_layout(move |frame: &Bounds<Points>| fit.room.set(Some(frame.size.width.0)))
-        .children(left)
+        .children(item(ATTENTION))
+        .children(item(CLOCK))
         .child(spacer())
-        .children(
-            parts[SOURCE]
-                .map(|source| fitted(fit, SOURCE, || false, shell_source(source)).into_element()),
-        )
+        .children(item(REACH))
+        .children(parts[SOURCE].map(|source| {
+            fitted(fit, SOURCE, || false, shell_source(source, STRIP_CAPTION)).into_element()
+        }))
         .into_element()
 }
 
@@ -742,6 +780,7 @@ fn to_connection(
     filled: bool,
 ) -> AnyElement {
     face.role(AccessibilityRole::Button)
+        .when(touch_shell(), |v| v.min_h(px(TOUCH_TARGET)))
         .label(label)
         .test_id(test_id)
         .cursor_pointer()
@@ -811,7 +850,7 @@ fn shell_part(app: AppState, part: usize, content: &str, e2e: bool, size: f32) -
             .child(shell_caption(content, Token::ShellInk2, size))
             .into_element(),
         CLOCK => shell_clock(content, size),
-        _ => shell_source(content),
+        _ => shell_source(content, SOURCE_CAPTION),
     }
 }
 
@@ -836,14 +875,14 @@ fn shell_clock(content: &str, size: f32) -> AnyElement {
 }
 
 /// The source label as the mock's snapshot tag: an outlined held-tone tag, so fixture data never
-/// reads as live.
-fn shell_source(content: &str) -> AnyElement {
+/// reads as live. Its words are `size`: a step under the bar's caption, the strip's own size.
+fn shell_source(content: &str, size: f32) -> AnyElement {
     let held = on_shell(Token::Held);
     view()
         .flex_row()
         .items_center()
         .flex_shrink_0()
-        .h(px(17.0))
+        .h(px(size + 6.5))
         .px(px(6.0))
         .rounded(px(3.0))
         .border_1()
@@ -852,7 +891,7 @@ fn shell_source(content: &str) -> AnyElement {
             text(content.to_owned())
                 .test_id("health-source")
                 .number_of_lines(1u32)
-                .text_size(px(10.5))
+                .text_size(px(size))
                 .letter_spacing(px(0.2))
                 .text_color(held),
         )

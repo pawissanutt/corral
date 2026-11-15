@@ -1,6 +1,6 @@
 //! Device-scoped owner text and recovery identities; never keys, tokens or proofs.
+use super::durable;
 use corral_protocol::assistant::{AssistantSend, MESSAGE_TEXT_MAX};
-use nsh_core::storage::Storage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -47,70 +47,273 @@ pub(super) struct Command {
     #[serde(default)]
     pub error: Option<(String, String)>,
 }
+impl Command {
+    pub(super) fn is_settled(&self) -> bool {
+        self.result.as_ref().is_some_and(|result| {
+            matches!(
+                result.state,
+                corral_protocol::cmd::CmdState::Done
+                    | corral_protocol::cmd::CmdState::Failed
+                    | corral_protocol::cmd::CmdState::Conflict
+                    | corral_protocol::cmd::CmdState::Abandoned
+            )
+        }) || self.error.as_ref().is_some_and(|(code, _)| {
+            code.starts_with("authority_")
+                || matches!(
+                    code.as_str(),
+                    "refused"
+                        | "revoked"
+                        | "invalid_params"
+                        | "conflict"
+                        | "admin_only"
+                        | "not_app_safe"
+                )
+        })
+    }
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(super) struct Saved {
     pub drafts: BTreeMap<String, String>,
     pub messages: BTreeMap<String, Message>,
     pub commands: BTreeMap<String, Command>,
+    #[serde(default)]
+    pub cancelled: std::collections::BTreeSet<String>,
 }
 pub(super) struct Outbox {
     key: String,
+    pub revision: u64,
     pub saved: Saved,
 }
 impl Outbox {
-    pub fn load(store: &str, device: &str) -> Result<Self, String> {
-        let mut key = String::from("corral.outbox.v1.");
-        for byte in store.bytes().chain([0]).chain(device.bytes()) {
-            use std::fmt::Write;
-            let _ = write!(key, "{byte:02x}");
-        }
-        let saved = match Storage::get_item(&key) {
-            None => Saved::default(),
-            Some(text) if text.len() <= MAX_BYTES => serde_json::from_str(&text)
-                .map_err(|error| format!("Cannot read this device's saved messages: {error}"))?,
-            Some(_) => return Err("This device's saved messages exceed the storage bound.".into()),
+    pub async fn load_async(store: &str, device: &str) -> Result<Self, String> {
+        let key = namespace_key(store, device);
+        let legacy_key = format!(
+            "corral.outbox.v1.{}",
+            key.trim_start_matches("namespace/").trim_end_matches('/')
+        );
+        let legacy = nsh_core::storage::Storage::get_item(&legacy_key);
+        let (saved, revision) = durable::transaction(|records| {
+            if records.contains_key(&format!("forgotten/{key}")) {
+                return Err("This local identity was forgotten. Pair or enrol again before saving owner words.".into());
+            }
+            if records.contains_key(&format!("{key}meta")) {
+                return decode_records(records, &key);
+            }
+            let migrated = format!("migrated/{key}");
+            let saved = if records.contains_key(&migrated) { Saved::default() }
+                else if let Some(text) = &legacy {
+                    if text.len() > MAX_BYTES { return Err("Legacy outbox exceeds 1 MiB; owner words were not discarded.".into()); }
+                    serde_json::from_str(text).map_err(|error| format!("Cannot migrate saved owner words: {error}"))?
+                } else { Saved::default() };
+            validate(&saved)?;
+            records.extend(encode_records(&saved, &key)?);
+            records.insert(migrated, Value::Bool(true));
+            Ok(saved)
+        }).await?;
+        nsh_core::storage::Storage::remove_item(&legacy_key);
+        let outbox = Self {
+            key,
+            saved,
+            revision,
         };
-        let outbox = Self { key, saved };
         outbox.validate()?;
         Ok(outbox)
     }
     fn validate(&self) -> Result<(), String> {
-        if self.saved.messages.len() > MAX_MESSAGES
-            || self.saved.drafts.len() > MAX_DRAFTS
-            || self.saved.commands.len() > MAX_COMMANDS
-            || self
-                .saved
-                .drafts
-                .values()
-                .any(|text| text.len() > MESSAGE_TEXT_MAX)
-            || self
-                .saved
-                .messages
-                .values()
-                .any(|message| !valid_message(&message.request))
+        validate(&self.saved)
+    }
+    pub async fn refresh(&mut self) -> Result<bool, String> {
+        let (revision, records) = durable::read().await?;
+        if revision == self.revision {
+            return Ok(false);
+        }
+        let saved = decode_records(&records, &self.key)?;
+        validate(&saved)?;
+        self.saved = saved;
+        self.revision = revision;
+        Ok(true)
+    }
+    pub async fn update_async(&mut self, mut change: impl FnMut(&mut Saved)) -> Result<(), String> {
+        self.update_checked(|saved| {
+            change(saved);
+            Ok(())
+        })
+        .await
+    }
+    pub async fn update_checked(
+        &mut self,
+        mut change: impl FnMut(&mut Saved) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let key = &self.key;
+        let (saved, revision) = durable::transaction(|records| {
+            if records.contains_key(&format!("forgotten/{key}")) {
+                return Err("This identity was forgotten by another app instance. Nothing was sent or saved.".into());
+            }
+            let mut saved = decode_records(records, key)?;
+            change(&mut saved)?;
+            compact_settled(&mut saved)?;
+            validate(&saved)?;
+            let revision = records.get(&format!("{key}meta")).and_then(|meta| meta["revision"].as_u64()).unwrap_or(0);
+            let mut encoded = encode_records(&saved, key)?;
+            encoded.insert(format!("{key}meta"), serde_json::json!({
+                "revision": revision.checked_add(1).ok_or("Namespace revision overflow")?,
+                "bytes": serde_json::to_vec(&saved).map_err(|e|e.to_string())?.len()
+            }));
+            records.retain(|record, _| !record.starts_with(key));
+            records.extend(encoded);
+            prune_settled(records, key)?;
+            Ok(saved)
+        }).await?;
+        self.saved = saved;
+        self.revision = revision;
+        Ok(())
+    }
+    #[cfg(test)]
+    pub fn load(store: &str, device: &str) -> Result<Self, String> {
+        durable::wait(Self::load_async(store, device))
+    }
+    #[cfg(test)]
+    pub fn update(&mut self, change: impl FnMut(&mut Saved)) -> Result<(), String> {
+        durable::wait(self.update_async(change))
+    }
+}
+
+pub(super) fn namespace_key(store: &str, device: &str) -> String {
+    use std::fmt::Write;
+    let mut key = String::from("namespace/");
+    for byte in store.bytes().chain([0]).chain(device.bytes()) {
+        let _ = write!(key, "{byte:02x}");
+    }
+    key.push('/');
+    key
+}
+
+fn decode_records(records: &durable::Records, key: &str) -> Result<Saved, String> {
+    let read = |kind: &str| -> Result<BTreeMap<String, Value>, String> {
+        let prefix = format!("{key}{kind}/");
+        Ok(records
+            .range(prefix.clone()..)
+            .take_while(|(key, _)| key.starts_with(&prefix))
+            .map(|(key, value)| (key[prefix.len()..].to_owned(), value.clone()))
+            .collect())
+    };
+    Ok(Saved {
+        drafts: serde_json::from_value(
+            serde_json::to_value(read("draft")?).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        messages: serde_json::from_value(
+            serde_json::to_value(read("message")?).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        commands: serde_json::from_value(
+            serde_json::to_value(read("command")?).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        cancelled: read("cancelled")?.into_keys().collect(),
+    })
+}
+
+fn encode_records(saved: &Saved, key: &str) -> Result<durable::Records, String> {
+    let mut records = BTreeMap::new();
+    for (id, draft) in &saved.drafts {
+        records.insert(format!("{key}draft/{id}"), Value::String(draft.clone()));
+    }
+    for (id, message) in &saved.messages {
+        records.insert(
+            format!("{key}message/{id}"),
+            serde_json::to_value(message).map_err(|e| e.to_string())?,
+        );
+    }
+    for id in &saved.cancelled {
+        records.insert(format!("{key}cancelled/{id}"), Value::Bool(true));
+    }
+    for (id, command) in &saved.commands {
+        records.insert(
+            format!("{key}command/{id}"),
+            serde_json::to_value(command).map_err(|e| e.to_string())?,
+        );
+    }
+    let bytes = serde_json::to_vec(saved)
+        .map_err(|error| error.to_string())?
+        .len();
+    records.insert(format!("{key}meta"), serde_json::json!({"bytes":bytes}));
+    Ok(records)
+}
+
+fn validate(saved: &Saved) -> Result<(), String> {
+    if saved.messages.len() > MAX_MESSAGES
+        || saved.drafts.len() > MAX_DRAFTS
+        || saved.commands.len() > MAX_COMMANDS
+        || saved
+            .drafts
+            .values()
+            .any(|text| text.len() > MESSAGE_TEXT_MAX)
+        || saved
+            .messages
+            .values()
+            .any(|message| !valid_message(&message.request))
+    {
+        return Err("This device's offline outbox is full.".into());
+    }
+    if serde_json::to_vec(saved)
+        .map_err(|error| error.to_string())?
+        .len()
+        > MAX_BYTES
+    {
+        return Err("This device's offline outbox is full (1 MiB).".into());
+    }
+    Ok(())
+}
+
+fn prune_settled(records: &mut durable::Records, active: &str) -> Result<(), String> {
+    // Only terminal command receipts are disposable. Owner words and uncertain IDs are not.
+    records.retain(|key, value| {
+        if key.starts_with(active) || !key.contains("/command/") {
+            return true;
+        }
+        serde_json::from_value::<Command>(value.clone())
+            .ok()
+            .is_none_or(|command| !command.is_settled())
+    });
+    let empty: Vec<_> = records
+        .keys()
+        .filter(|key| key.ends_with("/meta") && !key.starts_with(active))
+        .filter(|key| {
+            let prefix = key.trim_end_matches("meta");
+            !records
+                .keys()
+                .any(|other| other != *key && other.starts_with(prefix))
+        })
+        .cloned()
+        .collect();
+    for key in empty {
+        records.remove(&key);
+    }
+    let metadata: Vec<_> = records
+        .keys()
+        .filter(|key| {
+            key.starts_with("namespace/") && key.ends_with("/meta") && !key.starts_with(active)
+        })
+        .cloned()
+        .collect();
+    for key in metadata {
+        let saved = decode_records(records, key.trim_end_matches("meta"))?;
+        let bytes = serde_json::to_vec(&saved)
+            .map_err(|error| error.to_string())?
+            .len();
+        if let Some(meta) = records.get_mut(&key)
+            && meta["bytes"].as_u64() != Some(bytes as u64)
         {
-            return Err("This device's offline outbox is full.".into());
+            let revision = meta["revision"]
+                .as_u64()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or("Namespace revision overflow")?;
+            *meta = serde_json::json!({"bytes":bytes,"revision":revision});
         }
-        Ok(())
     }
-    fn persist(&self) -> Result<(), String> {
-        self.validate()?;
-        let text = serde_json::to_string(&self.saved).map_err(|error| error.to_string())?;
-        if text.len() > MAX_BYTES {
-            return Err("This device's offline outbox is full (1 MiB).".into());
-        }
-        Storage::set_item(&self.key, &text)
-            .map_err(|error| format!("Cannot save this device's outbox: {error}"))
-    }
-    pub fn update(&mut self, change: impl FnOnce(&mut Saved)) -> Result<(), String> {
-        let previous = self.saved.clone();
-        change(&mut self.saved);
-        if let Err(error) = self.persist() {
-            self.saved = previous;
-            return Err(error);
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
 pub(super) fn valid_message(request: &AssistantSend) -> bool {
@@ -154,6 +357,25 @@ fn valid_link(url: &str) -> bool {
         })
 }
 
+fn compact_settled(saved: &mut Saved) -> Result<(), String> {
+    while saved.commands.len() > MAX_COMMANDS
+        || serde_json::to_vec(saved)
+            .map_err(|error| error.to_string())?
+            .len()
+            > MAX_BYTES
+    {
+        let Some(id) = saved
+            .commands
+            .iter()
+            .find(|(_, command)| command.is_settled())
+            .map(|(id, _)| id.clone())
+        else {
+            break;
+        };
+        saved.commands.remove(&id);
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::super::requests::ClientRequest;
@@ -194,3 +416,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "outbox_tests.rs"]
+mod transaction_tests;

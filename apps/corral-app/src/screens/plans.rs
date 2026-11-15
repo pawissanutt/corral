@@ -14,6 +14,7 @@ mod graph;
 mod live;
 mod story;
 mod tracker;
+mod verbs;
 
 use nsh_core::prelude::*;
 
@@ -30,14 +31,18 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::illus;
 use crate::ui::kit::marks::{dot, hue_ink};
-use crate::ui::kit::notice::{empty, error, notice, skeleton};
+use crate::ui::kit::notice::{empty, error, loading, notice};
 use crate::ui::kit::page::{Width, columns, group_head, head, pane, search};
 use crate::ui::kit::rows::list_row;
 use crate::ui::kit::text::rich_small;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
+/// The plan graph renderer, for other destinations that draw a plan's members (Inbox's question
+/// sheet); presses go through the Plans actions.
+pub(crate) use graph::drawing as plan_graph;
 pub use live::{live_graph, live_plan_phone};
+pub(crate) use verbs::menu_trigger;
 
 const RING: f32 = 2.0;
 /// The most member glyphs a terminal row shows; a longer plan ends its strip in "+n", so the id
@@ -266,15 +271,15 @@ fn command(app: AppState, button: &plans::Button, wide: bool) -> AnyElement {
     )
 }
 
-/// An icon-only control in the phone's navigation bar (`.pnav .rt button`): 36 by 44 pt, the
-/// chat icon in ink-2, named by `label`.
+/// An icon-only control in the phone's navigation bar (`.pnav .rt button`): 44 by 44 pt, the
+/// phone's touch-target floor, the chat icon in ink-2, named by `label`.
 fn icon_command(app: AppState, button: &plans::Button, label: &'static str) -> AnyElement {
     let action = button.action.clone();
     view()
         .flex_row()
         .items_center()
         .justify_center()
-        .min_w(px(36.0))
+        .min_w(px(44.0))
         .min_h(px(44.0))
         .rounded(px(10.0))
         .role(AccessibilityRole::Button)
@@ -353,23 +358,27 @@ fn squares(app: AppState, members: &[MemberSquare]) -> AnyElement {
         .into_element()
 }
 
-/// The grouped list (`.list`): a loading, empty, error or stale notice where corrald says so,
-/// then each section's head in its hue with its count, then its rows.
+/// The grouped list (`.list`), the destination's keyboard list (`AppState::list_keys`): a
+/// loading, empty, error or stale notice where corrald says so, then each section's head in its
+/// hue with its count, then its rows.
 fn list(app: AppState) -> AnyElement {
-    dynamic(move || {
+    // The plan last scrolled into view: a refresh that keeps the selection leaves the scroll
+    // where the reader put it.
+    let revealed = stored(None::<Id>);
+    let terminal = app.form == Form::Terminal;
+    let rows = dynamic(move || {
         let content = content(app);
-        let top = if app.form == Form::Desktop { 6.0 } else { 0.0 };
         let (lead, sections) = match &content.notice {
             Some(ListNotice::Loading) => (
                 Some(
                     view()
-                        .px(px(if app.form == Form::Terminal {
-                            0.0
-                        } else {
-                            16.0
-                        }))
+                        .px(px(if terminal { 0.0 } else { 16.0 }))
                         .py(px(8.0))
-                        .child(skeleton(app, &[(0.7, 12.0), (0.5, 10.0), (0.6, 12.0)]))
+                        .child(loading(
+                            app,
+                            plans::LIST_LOADING,
+                            &[(0.7, 12.0), (0.5, 10.0), (0.6, 12.0)],
+                        ))
                         .into_element(),
                 ),
                 vec![],
@@ -383,11 +392,7 @@ fn list(app: AppState) -> AnyElement {
             Some(ListNotice::Stale(line)) => (
                 Some(
                     view()
-                        .px(px(if app.form == Form::Terminal {
-                            0.0
-                        } else {
-                            12.0
-                        }))
+                        .px(px(if terminal { 0.0 } else { 12.0 }))
                         .pb(px(6.0))
                         .child(notice(app, Hue::Held, &vec![span(line.as_str())], None))
                         .into_element(),
@@ -397,24 +402,26 @@ fn list(app: AppState) -> AnyElement {
             None => (None, content.sections.clone()),
         };
         view()
-            .pt(px(top))
-            .pb(px(if app.form == Form::Terminal {
-                0.0
-            } else {
-                14.0
-            }))
             .children(lead)
             .children(
                 sections
                     .iter()
-                    .map(|section| group(app, section))
+                    .map(|section| group(app, section, revealed))
                     .collect::<Vec<_>>(),
             )
             .into_element()
-    })
+    });
+    view()
+        .element_ref(&app.list_keys)
+        .pt(px(if app.form == Form::Desktop { 6.0 } else { 0.0 }))
+        .pb(px(if terminal { 0.0 } else { 14.0 }))
+        .role(AccessibilityRole::List)
+        .label(untracked(|| content(app).title))
+        .child(rows)
+        .into_element()
 }
 
-fn group(app: AppState, section: &ListSection) -> AnyElement {
+fn group(app: AppState, section: &ListSection, revealed: Stored<Option<Id>>) -> AnyElement {
     let trailing = section.illustrative.map(|label| illus(app, label));
     view()
         .child(group_head(
@@ -429,7 +436,7 @@ fn group(app: AppState, section: &ListSection) -> AnyElement {
             section
                 .rows
                 .iter()
-                .map(|row| plan_row(app, row))
+                .map(|row| plan_row(app, row, revealed))
                 .collect::<Vec<_>>(),
         )
         .into_element()
@@ -447,11 +454,11 @@ fn row_label(row: &PlanRow) -> String {
     parts.join(", ")
 }
 
-fn plan_row(app: AppState, row: &PlanRow) -> AnyElement {
+fn plan_row(app: AppState, row: &PlanRow, revealed: Stored<Option<Id>>) -> AnyElement {
     let action = row.action.clone();
     let selected = row.selected;
     let id = target_id(&action);
-    match app.form {
+    let drawn = match app.form {
         Form::Desktop => desktop_row(app, row),
         Form::Phone => list_row(
             app,
@@ -469,7 +476,32 @@ fn plan_row(app: AppState, row: &PlanRow) -> AnyElement {
             move || press(app, action.clone()),
             terminal_cells(app, row),
         ),
+    };
+    // A served plan's row carries its commands in its context menu (RC-03); the fixture's rows
+    // are local demo presses with no daemon commands.
+    let drawn = if matches!(row.action, Action::Live(_)) {
+        verbs::row_menu(app, row.id.clone(), drawn)
+    } else {
+        drawn
+    };
+    if selected {
+        revealing(row.id.clone(), revealed, drawn)
+    } else {
+        drawn
     }
+}
+
+/// The selected row, scrolled into the list's view when the selection has just moved to it, so
+/// a key press never leaves it off screen; a row already in view stays put.
+fn revealing(id: Id, revealed: Stored<Option<Id>>, row: AnyElement) -> AnyElement {
+    let before = revealed.replace(Some(id.clone()));
+    let handle = element_ref();
+    if before.as_ref() != Some(&id) {
+        after_answer(move || {
+            handle.reveal(RevealOptions::default().vertical(ScrollAlignment::Nearest));
+        });
+    }
+    view().element_ref(&handle).child(row).into_element()
 }
 
 /// The title line of a row: the title cut to fit and the synthetic tag after it.
@@ -605,37 +637,57 @@ fn desktop_row(app: AppState, row: &PlanRow) -> AnyElement {
         .into_element()
 }
 
-/// The phone row (`.prow`): the dot, then `id · title` and the progress, and under them the
-/// strip and the sub line.
+/// The phone row (`.prow`): the dot, then `id · title`, the title free to take two lines (at
+/// 16 pt one line holds too few characters to tell like plans apart), and under them the strip,
+/// the sub line and the progress.
 fn phone_cells(app: AppState, row: &PlanRow) -> Vec<AnyElement> {
-    let first = view()
+    let title = view()
         .flex_row()
-        .items_center()
+        .items_baseline()
         .gap(px(8.0))
         .child(
-            view()
+            text(row.id_label.clone())
+                .flex_shrink_0()
+                .number_of_lines(1u32)
+                .font_family(FONT_MONO)
+                .tabular_nums()
+                .text_size(px(13.0))
+                .text_color(color(Token::Ink3)),
+        )
+        .child(
+            text(row.title.clone())
                 .flex_1()
                 .min_w(px(0.0))
-                .flex_row()
-                .items_baseline()
-                .gap(px(8.0))
-                .child(
-                    text(row.id_label.clone())
-                        .flex_shrink_0()
-                        .number_of_lines(1u32)
-                        .font_family(FONT_MONO)
-                        .tabular_nums()
-                        .text_size(px(13.0))
-                        .text_color(color(Token::Ink3)),
-                )
-                .child(view().flex_1().min_w(px(0.0)).child(title_line(
-                    app,
-                    row,
-                    16.0,
-                    FontWeight::SEMIBOLD,
-                ))),
+                .number_of_lines(2u32)
+                .font_family(FONT_TEXT)
+                .text_size(px(16.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(color(Token::Ink)),
         )
-        .children(progress(app, row, 12.0));
+        .children(row.illustrative.map(|label| illus(app, label)));
+    let figures = progress(app, row, 12.0);
+    let meta = (!row.members.is_empty() || !row.sub.is_empty() || figures.is_some()).then(|| {
+        view()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .min_w(px(0.0))
+            .when(!row.members.is_empty(), |line| {
+                line.child(squares(app, &row.members))
+            })
+            // The sentence takes the room between the strip and the figures, so the figures
+            // keep the trailing edge even when there is no sentence.
+            .child(
+                view()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .when(!row.sub.is_empty(), |cell| {
+                        cell.child(rich_small(app, &row.sub))
+                    }),
+            )
+            .children(figures)
+            .into_element()
+    });
     vec![
         view()
             .w(px(12.0))
@@ -647,9 +699,9 @@ fn phone_cells(app: AppState, row: &PlanRow) -> Vec<AnyElement> {
         view()
             .flex_1()
             .min_w(px(0.0))
-            .gap(px(2.0))
-            .child(first)
-            .children(sub_line(app, row))
+            .gap(px(3.0))
+            .child(title)
+            .children(meta)
             .into_element(),
     ]
 }
@@ -696,3 +748,7 @@ fn status_ink(hue: Hue) -> AdaptiveColor {
         _ => hue_ink(hue),
     }
 }
+
+#[cfg(test)]
+#[path = "plans_tests.rs"]
+mod tests;

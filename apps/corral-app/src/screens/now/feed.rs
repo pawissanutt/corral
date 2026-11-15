@@ -78,13 +78,19 @@ fn column(form: Form, points: f32, terminal_cells: f32, child: AnyElement) -> An
 /// `test_id` names it.
 pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement {
     let form = app.form;
-    let ink = color(if event.dim {
-        Token::Ink3
-    } else if event.unseen || form == Form::Terminal {
-        Token::Ink
+    // A failed change keeps the failure's colour in its words too, so it is not read past.
+    let failed = event.kind == ChangeKind::Mark(Mark::Fail);
+    let ink = if event.dim {
+        color(Token::Ink3)
+    } else if failed {
+        hue_ink(Hue::Fail)
     } else {
-        Token::Ink2
-    });
+        color(if event.unseen || form == Form::Terminal {
+            Token::Ink
+        } else {
+            Token::Ink2
+        })
+    };
     let words = text(event.text.clone())
         .flex_1()
         .min_w(px(0.0))

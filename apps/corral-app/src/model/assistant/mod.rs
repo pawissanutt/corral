@@ -19,6 +19,8 @@ mod live_parts;
 mod live_thread;
 #[cfg(test)]
 mod parts_tests;
+#[cfg(test)]
+mod question_tests;
 mod surfaces;
 mod thread;
 mod views;
@@ -661,6 +663,7 @@ impl State {
             | Action::WithdrawEntry(_)
             | Action::Answer { .. }
             | Action::Choose { .. }
+            | Action::AnswerText { .. }
             | Action::EditIdea(_)
             | Action::SaveIdea { .. }
             | Action::MergeIdea(_)

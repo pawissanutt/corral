@@ -652,9 +652,12 @@ impl Core {
         }
         batch.epoch = Some(epoch);
         batch.bytes = batch.bytes.saturating_add(page_bytes);
-        if topic == Topic::Session {
+        if matches!(topic, Topic::Session | Topic::Terminal) {
             if scope.is_none() {
-                return Err("session delta has no scope".into());
+                return Err("scoped session delta has no scope".into());
+            }
+            if topic == Topic::Terminal && value["more"].as_bool() != Some(false) {
+                return Err("terminal delta is not a complete capture".into());
             }
             let cursor = serde_json::from_value(value["cursor"].clone()).map_err(decode)?;
             let replacement = batch.replacement;
@@ -798,3 +801,7 @@ fn decode(error: serde_json::Error) -> String {
 #[cfg(test)]
 #[path = "topic_error_tests.rs"]
 mod topic_error_tests;
+
+#[cfg(test)]
+#[path = "terminal_tests.rs"]
+mod terminal_tests;

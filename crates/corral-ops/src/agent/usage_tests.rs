@@ -674,3 +674,39 @@ fn compaction_and_branch_summary_usage_counts_once_toward_the_run() {
     );
     assert_eq!(tokens(&second), tokens(&first));
 }
+
+#[test]
+fn quick_summary_usage_keeps_its_profile_model_and_connection_without_switching_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    write_session(
+        &path,
+        &[
+            r#"{"type":"model_change","modelId":"conversation-model","provider":"anthropic"}"#,
+            r#"{"type":"compaction","id":"s1","details":{"summaryProfile":"cheap","summaryModel":"gpt-6-luna","summaryProvider":"openai-codex"},"usage":{"input":20,"output":2,"cost":{"total":0.01}}}"#,
+            r#"{"type":"message","id":"m1","message":{"role":"assistant","usage":{"input":30,"output":3}}}"#,
+        ],
+    );
+    let mut entries = BTreeMap::new();
+    read_session(&path, "s", None, &mut entries, true, &BTreeMap::new()).unwrap();
+    let summary = entries
+        .values()
+        .find(|entry| entry.profile.is_some())
+        .unwrap();
+    assert_eq!(summary.profile.as_deref(), Some("cheap"));
+    assert_eq!(summary.model.as_deref(), Some("gpt-6-luna"));
+    assert_eq!(
+        summary.connection,
+        Some(corral_core::connection::ConnectionId::OpenaiSubscription)
+    );
+    assert_eq!(summary.reported_usd, Some(0.01));
+    let conversation = entries
+        .values()
+        .find(|entry| entry.profile.is_none())
+        .unwrap();
+    assert_eq!(conversation.model.as_deref(), Some("conversation-model"));
+    assert_eq!(
+        conversation.connection,
+        Some(corral_core::connection::ConnectionId::AnthropicSubscription)
+    );
+}

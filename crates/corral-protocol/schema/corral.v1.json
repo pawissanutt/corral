@@ -1426,6 +1426,14 @@
       },
       "BoardRow": {
         "properties": {
+          "age_since": {
+            "default": null,
+            "description": "CLI card age: current run start while Running, otherwise last task update.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "agent": {
             "anyOf": [
               {
@@ -3297,11 +3305,30 @@
           "id": {
             "type": "string"
           },
+          "last_seen": {
+            "default": null,
+            "description": "Coarse RFC3339 time of authenticated activity, not an online indicator.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },
           "platform": {
             "$ref": "#/components/schemas/DevicePlatform"
+          },
+          "reach": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeviceReach"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "revoked_at": {
             "type": [
@@ -3369,6 +3396,16 @@
         "enum": [
           "native",
           "web",
+          "other"
+        ],
+        "type": "string"
+      },
+      "DeviceReach": {
+        "enum": [
+          "unix",
+          "loopback",
+          "lan",
+          "tailscale",
           "other"
         ],
         "type": "string"
@@ -5485,6 +5522,13 @@
           "pair_id": {
             "type": "string"
           },
+          "reach": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ReachHint"
+            },
+            "type": "array"
+          },
           "url": {
             "type": [
               "string",
@@ -6775,6 +6819,13 @@
               "null"
             ]
           },
+          "summary_refusal": {
+            "description": "A configured profile may be unsuitable for an independent quick-thread summary request.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "workspace": {
             "description": "A workspace entry exists, including partial overrides of inherited profiles.",
             "type": "boolean"
@@ -7674,6 +7725,22 @@
         ],
         "type": "object"
       },
+      "ReachHint": {
+        "properties": {
+          "endpoint": {
+            "description": "WebSocket base URL, without an application path or credentials.",
+            "type": "string"
+          },
+          "reach": {
+            "$ref": "#/components/schemas/DeviceReach"
+          }
+        },
+        "required": [
+          "reach",
+          "endpoint"
+        ],
+        "type": "object"
+      },
       "ReadKind": {
         "enum": [
           "pm_next",
@@ -8159,6 +8226,14 @@
             },
             "type": "array"
           },
+          "gates": {
+            "default": [],
+            "description": "Canonical gate receipts, independent of human or agent reviewer verdicts.",
+            "items": {
+              "$ref": "#/components/schemas/ReviewGate"
+            },
+            "type": "array"
+          },
           "report": {
             "type": [
               "string",
@@ -8211,6 +8286,42 @@
           "path",
           "added",
           "deleted"
+        ],
+        "type": "object"
+      },
+      "ReviewGate": {
+        "description": "A run's latest gate receipt, retained even when it checked an older candidate.\n`by` names its recorded commands; `text` contains failure or stale diagnostics.\nCombined canonical output remains available in `ReviewDetail::gate_log_tail`.",
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "by": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "by",
+          "sha",
+          "verdict",
+          "stale"
         ],
         "type": "object"
       },
@@ -10444,6 +10555,53 @@
           },
           {
             "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "scope": {
+                "type": "string"
+              },
+              "snapshot": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/TerminalSnapshot"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Complete bounded replacement window; absent on an unavailable pane."
+              },
+              "topic": {
+                "const": "terminal",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "scope",
+              "epoch",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
               "topic": {
                 "const": "other",
                 "type": "string"
@@ -11107,6 +11265,16 @@
               }
             ]
           },
+          "park_revision": {
+            "default": null,
+            "description": "Revision of the active canonical park, for revision-bound unpark actions.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "plan_context": {
             "anyOf": [
               {
@@ -11351,7 +11519,7 @@
             "type": "string"
           },
           "lines": {
-            "description": "At most 200 captured lines, not a writable or live terminal.",
+            "description": "Latest bounded scrollback plus screen, in display order. Stream pages replace this\nwindow, never append repeated screen rows. Recorded gates remain non-live captures.",
             "items": {
               "type": "string"
             },
@@ -11708,6 +11876,7 @@
           "settings",
           "thread",
           "session",
+          "terminal",
           "other"
         ],
         "type": "string"
@@ -12706,7 +12875,8 @@
             7,
             8,
             9,
-            10
+            10,
+            11
           ]
         },
         {
@@ -12738,8 +12908,19 @@
             7,
             8,
             9,
-            10
+            10,
+            11
           ]
+        },
+        {
+          "name": "error",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         {
           "name": "events",
@@ -12831,7 +13012,8 @@
             7,
             8,
             9,
-            10
+            10,
+            11
           ]
         },
         {
@@ -12929,7 +13111,8 @@
           },
           "x-required-in": [
             9,
-            10
+            10,
+            11
           ]
         },
         {
@@ -12944,6 +13127,21 @@
           "x-required-in": [
             2
           ]
+        },
+        {
+          "name": "snapshot",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TerminalSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Complete bounded replacement window; absent on an unavailable pane."
+          }
         },
         {
           "name": "topic",
@@ -12992,6 +13190,10 @@
               },
               {
                 "const": "session",
+                "type": "string"
+              },
+              {
+                "const": "terminal",
                 "type": "string"
               },
               {

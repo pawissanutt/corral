@@ -41,6 +41,7 @@ pub(crate) struct Service {
     entries: Mutex<BTreeMap<String, Entry>>,
     revisions: Arc<AtomicU64>,
     thread: Mutex<Option<JoinHandle<()>>>,
+    pub(super) terminal: Arc<super::terminal::Service>,
 }
 
 struct Buffer {
@@ -199,7 +200,9 @@ pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>) -> Result<()> {
         entries: Mutex::default(),
         revisions: Arc::default(),
         thread: Mutex::default(),
+        terminal: Arc::default(),
     });
+    service.terminal.start(&ctx, shared)?;
     let worker = Arc::clone(&service);
     let shared_worker = Arc::clone(shared);
     let thread = std::thread::Builder::new()
@@ -225,11 +228,13 @@ pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>) -> Result<()> {
 
 pub(crate) fn join(shared: &Shared) {
     let service = lock(&shared.session_live).clone();
-    if let Some(service) = service
-        && let Some(thread) = lock(&service.thread).take()
-        && thread.join().is_err()
-    {
-        eprintln!("corrald session live worker failed");
+    if let Some(service) = service {
+        if let Some(thread) = lock(&service.thread).take()
+            && thread.join().is_err()
+        {
+            eprintln!("corrald session live worker failed");
+        }
+        service.terminal.join();
     }
 }
 

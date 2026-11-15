@@ -9,7 +9,7 @@ use super::{
 };
 use crate::model::{
     daemon::Feed,
-    devices::{DeviceLink, Pairing, Registry},
+    devices::{DeviceLink, Pairing},
 };
 use corral_protocol::{device::*, rpc::ErrorCode};
 use nsh_core::prelude::*;
@@ -22,6 +22,9 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
     requests::install(sender);
     spawn(async move {
         let mut state = AppState::new();
+        if let Err(problem) = state.boot(feed, None).await {
+            feed.update(|feed| feed.problem = Some(problem));
+        }
         state.disconnected(feed);
         let mut enrol = None;
         feed.update(|feed| feed.host = hostname());
@@ -30,7 +33,7 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
             Err(problem) => {
                 feed.update(|feed| feed.link_lost(problem));
                 loop {
-                    offline_requests(feed, &mut state, &receiver, &mut enrol);
+                    offline_requests(feed, &mut state, &receiver, &mut enrol).await;
                     tick(feed);
                     timer(Duration::from_millis(250)).await;
                 }
@@ -42,7 +45,7 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
             if suspended {
                 // Revoked devices stay quiet until the owner explicitly enrols again.
                 while enrol.is_none() {
-                    offline_requests(feed, &mut state, &receiver, &mut enrol);
+                    offline_requests(feed, &mut state, &receiver, &mut enrol).await;
                     tick(feed);
                     if enrol.is_none() {
                         timer(Duration::from_millis(250)).await;
@@ -50,7 +53,7 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                 }
                 suspended = false;
             }
-            offline_requests(feed, &mut state, &receiver, &mut enrol);
+            offline_requests(feed, &mut state, &receiver, &mut enrol).await;
             tick(feed);
             feed.update(|feed| feed.connecting(socket.to_string_lossy().into_owned()));
             let path = socket.clone();
@@ -95,7 +98,8 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                     let mut idle = 0u8;
                     loop {
                         for request in enrol.take().into_iter().chain(receiver.try_iter()) {
-                            dispatch_request(feed, &mut state, request, capable, &mut outgoing);
+                            dispatch_request(feed, &mut state, request, capable, &mut outgoing)
+                                .await;
                         }
                         state.filter_outgoing(&mut outgoing);
                         let sends = std::mem::take(&mut outgoing);
@@ -124,7 +128,7 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                             if matches!(&event, Event::Board { .. }) {
                                 failures = 0;
                             }
-                            match state.event(feed, event) {
+                            match state.event_async(feed, event).await {
                                 Ok(next) => outgoing.extend(next),
                                 Err(problem) => {
                                     feed.update(|feed| feed.link_lost(problem));
@@ -137,6 +141,7 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                             Event::Idle => {
                                 idle = idle.wrapping_add(1);
                                 if idle.is_multiple_of(4) {
+                                    state.refresh_local(feed).await;
                                     if let Some(pair_id) =
                                         feed.with_untracked(|feed| match &feed.pairing {
                                             Pairing::Offered { pair_id, .. }
@@ -163,6 +168,9 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                                     && params["reason"] == CLOSE_REVOKED
                                 {
                                     if let Some(id) = current.clone() {
+                                        if let Err(problem) = state.forget_local(feed).await {
+                                            feed.update(|feed| feed.problem = Some(problem));
+                                        }
                                         feed.update(|feed| feed.revoked(id));
                                     }
                                     suspended = true;
@@ -181,6 +189,9 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                                         outgoing.extend(state.ready(feed));
                                     }
                                     if effects.revoked {
+                                        if let Err(problem) = state.forget_local(feed).await {
+                                            feed.update(|feed| feed.problem = Some(problem));
+                                        }
                                         suspended = true;
                                         break;
                                     }
@@ -211,7 +222,7 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                 let delay = super::requests::reconnect_delay_ms(failures);
                 failures = failures.saturating_add(1);
                 for _ in 0..delay.div_ceil(250) {
-                    offline_requests(feed, &mut state, &receiver, &mut enrol);
+                    offline_requests(feed, &mut state, &receiver, &mut enrol).await;
                     tick(feed);
                     timer(Duration::from_millis(250)).await;
                 }
@@ -220,7 +231,7 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
     });
 }
 
-fn dispatch_request(
+async fn dispatch_request(
     feed: Signal<Feed>,
     state: &mut AppState,
     input: ClientRequest,
@@ -238,13 +249,8 @@ fn dispatch_request(
                 None,
             )
         }
-        ClientRequest::Revoke { device } => (DEVICE_REVOKE, json!({"device": device}), None),
-        ClientRequest::PairBegin => (PAIR_BEGIN, json!({}), None),
-        ClientRequest::PairConfirm { pair_id } => (PAIR_CONFIRM, json!({"pair_id": pair_id}), None),
-        ClientRequest::PairCancel { pair_id } => (PAIR_CANCEL, json!({"pair_id": pair_id}), None),
-        ClientRequest::Pair { .. } | ClientRequest::Forget => return,
         request => {
-            outgoing.extend(state.request(feed, request));
+            outgoing.extend(state.request_async(feed, request).await);
             return;
         }
     };
@@ -253,24 +259,20 @@ fn dispatch_request(
     }
 }
 
-fn offline_requests(
+async fn offline_requests(
     feed: Signal<Feed>,
     state: &mut AppState,
     receiver: &std::sync::mpsc::Receiver<ClientRequest>,
     enrol: &mut Option<ClientRequest>,
 ) {
+    state.refresh_local(feed).await;
     for request in receiver.try_iter() {
         match request {
             request @ ClientRequest::Enrol { .. } => *enrol = Some(request),
-            ClientRequest::Revoke { .. }
-            | ClientRequest::PairBegin
-            | ClientRequest::PairConfirm { .. }
-            | ClientRequest::PairCancel { .. }
-            | ClientRequest::Pair { .. }
-            | ClientRequest::Forget => {}
+            ClientRequest::Pair { .. } => {}
             request => {
                 // AppState alone decides which offline intents are durable.
-                let _ = state.request(feed, request);
+                let _ = state.request_async(feed, request).await;
             }
         }
     }
@@ -359,47 +361,6 @@ async fn reply(
             effects.ready = true;
             effects.outgoing.push(app::devices());
         }
-        DEVICE_REVOKE => {
-            // The listed registry no longer matches corrald until the refreshed walk completes.
-            feed.update(|feed| feed.registry = Registry::Unknown);
-            effects.outgoing.push(app::devices());
-        }
-        PAIR_BEGIN => {
-            let offer: PairOffer = decode(result)?;
-            feed.update(|feed| {
-                feed.pairing = Pairing::Offered {
-                    pair_id: offer.pair_id,
-                    code: offer.code,
-                    url: offer.url,
-                    expires_at: map::timestamp(Some(&offer.expires_at)).unwrap_or(0),
-                }
-            });
-        }
-        PAIR_STATUS => {
-            let status: PairStatus = decode(result)?;
-            if matches!(status.state, PairState::Paired { .. }) {
-                feed.update(|feed| feed.registry = Registry::Unknown);
-                effects.outgoing.push(app::devices());
-            }
-            feed.update(|feed| {
-                let pairing = map::pairing(status, &mut feed.pairing);
-                feed.pairing = pairing;
-            });
-        }
-        PAIR_CONFIRM | PAIR_CANCEL => {
-            if let Some(pair_id) = feed.with_untracked(|feed| match &feed.pairing {
-                Pairing::Offered { pair_id, .. } | Pairing::Claimed { pair_id, .. } => {
-                    Some(pair_id.clone())
-                }
-                _ => None,
-            }) {
-                effects.outgoing.push((
-                    PAIR_STATUS,
-                    json!({"pair_id": pair_id, "wait_ms": 0}),
-                    None,
-                ));
-            }
-        }
         _ => {}
     }
     Ok(effects)
@@ -415,6 +376,7 @@ fn tick(feed: Signal<Feed>) {
                 format!("{:02}:{:02}", local.hour(), local.minute()),
             );
             feed.date = local.date().to_string();
+            feed.time_zone = Some(local.time_zone().clone());
         });
     }
 }

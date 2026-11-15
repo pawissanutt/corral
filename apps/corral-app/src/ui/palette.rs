@@ -6,10 +6,9 @@ use nsh_base::{CommandEntry, CommandGroup, CommandItem, SheetEvent, command, dia
 use nsh_core::prelude::*;
 
 use crate::model::commands::{
-    self as palette_model, Action, PALETTE_FOOTER, PALETTE_PLACEHOLDER, palette_empty,
-    palette_hints,
+    self as palette_model, Action, PALETTE_PLACEHOLDER, palette_empty, palette_hints,
 };
-use crate::model::{Destination, Form, Overlay};
+use crate::model::{Destination, Form, Overlay, work};
 use crate::state::AppState;
 use crate::ui::atoms::key_hint;
 use crate::ui::icons::{Icon, icon};
@@ -347,8 +346,7 @@ fn terminal_header(query: Signal<String>) -> AnyElement {
         .into_element()
 }
 
-/// The palette's own keys under the list on desktop, the model's attribution at the trailing
-/// edge.
+/// The palette's own keys under the list on desktop.
 fn footer(query: Signal<String>) -> AnyElement {
     let hint = |keys: &'static str, words: &'static str| {
         view()
@@ -380,15 +378,6 @@ fn footer(query: Signal<String>) -> AnyElement {
                 .children(hints.map(|(keys, words)| hint(keys, words)))
                 .into_element()
         }))
-        .child(view().flex_1().min_w(px(0.0)))
-        .child(
-            text(PALETTE_FOOTER)
-                .flex_shrink_0()
-                .number_of_lines(1u32)
-                .font_family(FONT_TEXT)
-                .text_size(px(11.0))
-                .text_color(color(Token::Ink3)),
-        )
         .into_element()
 }
 
@@ -401,9 +390,17 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
     let env = app.env();
     let conn = env.conn;
     let mode = env.mode;
-    let rows = app
-        .feed
-        .with(|feed| palette_model::filtered(query, crate::client::configured(), data, feed));
+    let record = palette_record(app);
+    let rows = app.feed.with(|feed| {
+        palette_model::filtered(
+            query,
+            crate::client::configured(),
+            data,
+            feed,
+            record.as_ref(),
+            app.form,
+        )
+    });
     rows.into_iter()
         .map(|command| {
             let checked = match command.action {
@@ -426,6 +423,7 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
 
 /// Resolves selection through the same pure command table that produced the displayed row.
 fn run(app: AppState, id: &str, query: &str) {
+    let record = untracked(|| palette_record(app));
     let action = app.feed.with_untracked(|feed| {
         palette_model::run(
             id,
@@ -433,11 +431,20 @@ fn run(app: AppState, id: &str, query: &str) {
             crate::client::configured(),
             app.data.get_untracked(),
             feed,
+            record.as_ref(),
+            app.form,
         )
     });
     if let Some(action) = action {
         app.run_command(action);
     }
+}
+
+/// The record the palette's verbs act on: the open live page, else the current destination's
+/// selection.
+fn palette_record(app: AppState) -> Option<work::Record> {
+    app.nav
+        .with(|nav| work::palette_record(nav.destination, &nav.selection, nav.live()))
 }
 
 /// The key cap of the model row, without duplicating shortcut decisions in the renderer.

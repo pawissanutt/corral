@@ -1,12 +1,12 @@
-//! Settings › Machines, Notifications, Assistant, Autopilot & grants and General, and the
-//! phone's root list of sections.
+//! Settings › Machines, Notifications, Assistant and Autopilot & grants of the fixture preview,
+//! and the phone's root list of sections.
 
 use nsh_base::toggle;
 use nsh_core::prelude::*;
 
 use super::parts::{
-    act, action_button, cell, first_heading, frame, intro, mono_cell, read, ring, space, test_id,
-    under,
+    Record, act, action_button, cell, first_heading, frame, intro, mono_cell, read, records, ring,
+    space, test_id, under,
 };
 use crate::model::settings::{self, AssistantView, NotificationView, OwnerView};
 use crate::model::{DataState, Form, Hue};
@@ -188,8 +188,25 @@ pub fn assistant(app: AppState) -> AnyElement {
 }
 
 /// The selector's profiles: name in bold, model in quiet mono, then the default's chip or
-/// Remove at the trailing edge.
+/// Remove at the trailing edge. Phone: each profile a record, its model under its name.
 fn profiles(app: AppState, v: &AssistantView) -> AnyElement {
+    let end = |row: &settings::ProfileView| match (&row.chip, &row.remove) {
+        (Some((label, hue)), _) => chip(app, *label, *hue),
+        (None, Some(button)) => action_button(app, button),
+        (None, None) => view().into_element(),
+    };
+    if app.form == Form::Phone {
+        return records(
+            v.profiles
+                .iter()
+                .map(|row| Record {
+                    lead: cell(app, row.profile.name, Token::Ink, true).into_element(),
+                    end: Some(end(row)),
+                    under: vec![mono_cell(app, row.profile.model, Token::Ink3).into_element()],
+                })
+                .collect(),
+        );
+    }
     let widths: &[Width] = match app.form {
         Form::Desktop => &[Width::Fixed(230.0), Width::Fill, Width::Fixed(220.0)],
         Form::Phone | Form::Terminal => &[Width::Fixed(96.0), Width::Fill, Width::Fill],
@@ -198,11 +215,6 @@ fn profiles(app: AppState, v: &AssistantView) -> AnyElement {
         .profiles
         .iter()
         .map(|row| {
-            let end = match (&row.chip, &row.remove) {
-                (Some((label, hue)), _) => chip(app, *label, *hue),
-                (None, Some(button)) => action_button(app, button),
-                (None, None) => view().into_element(),
-            };
             vec![
                 cell(app, row.profile.name, Token::Ink, true).into_element(),
                 mono_cell(app, row.profile.model, Token::Ink3).into_element(),
@@ -210,7 +222,7 @@ fn profiles(app: AppState, v: &AssistantView) -> AnyElement {
                     .flex_1()
                     .flex_row()
                     .justify_end()
-                    .child(end)
+                    .child(end(row))
                     .into_element(),
             ]
         })
@@ -219,13 +231,9 @@ fn profiles(app: AppState, v: &AssistantView) -> AnyElement {
 }
 
 /// The rollover summary: which profile writes it and at what price, and what runs when it
-/// cannot.
+/// cannot. Phone: each fact a record, its label over its value and detail.
 fn summary(app: AppState, v: &AssistantView) -> AnyElement {
     let s = &v.summary;
-    let widths: &[Width] = match app.form {
-        Form::Desktop => &[Width::Fixed(224.0), Width::Fixed(260.0), Width::Fill],
-        Form::Phone | Form::Terminal => &[Width::Fill, Width::Fill, Width::Fill],
-    };
     let writer = view()
         .flex_1()
         .min_w(px(0.0))
@@ -236,6 +244,30 @@ fn summary(app: AppState, v: &AssistantView) -> AnyElement {
         .child(cell(app, s.profile, Token::Ink, true))
         .child(mono_cell(app, s.model, Token::Ink3))
         .into_element();
+    if app.form == Form::Phone {
+        return records(vec![
+            Record {
+                lead: cell(app, s.label, Token::Ink3, false).into_element(),
+                end: None,
+                under: vec![
+                    writer,
+                    cell(app, s.detail, Token::Ink3, false).into_element(),
+                ],
+            },
+            Record {
+                lead: cell(app, s.fallback_label, Token::Ink3, false).into_element(),
+                end: None,
+                under: vec![
+                    cell(app, s.fallback, Token::Ink, false).into_element(),
+                    cell(app, s.fallback_detail, Token::Ink3, false).into_element(),
+                ],
+            },
+        ]);
+    }
+    let widths: &[Width] = match app.form {
+        Form::Desktop => &[Width::Fixed(224.0), Width::Fixed(260.0), Width::Fill],
+        Form::Phone | Form::Terminal => &[Width::Fill, Width::Fill, Width::Fill],
+    };
     let rows = vec![
         vec![
             cell(app, s.label, Token::Ink, false).into_element(),
@@ -254,11 +286,6 @@ fn summary(app: AppState, v: &AssistantView) -> AnyElement {
 /// Autopilot & grants: the owner-only explanation.
 pub fn autopilot(app: AppState) -> AnyElement {
     owner(app, untracked(|| read(app, settings::autopilot)))
-}
-
-/// General: the owner-only explanation.
-pub fn general(app: AppState) -> AnyElement {
-    owner(app, untracked(|| read(app, settings::general)))
 }
 
 fn owner(app: AppState, v: OwnerView) -> AnyElement {

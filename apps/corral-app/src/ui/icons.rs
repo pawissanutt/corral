@@ -34,6 +34,7 @@ const QR: ImageAsset = asset!("icons/qr.svg");
 const SIGNAL: ImageAsset = asset!("icons/signal.svg");
 const BATTERY: ImageAsset = asset!("icons/batt.svg");
 const SIDEBAR: ImageAsset = asset!("icons/sidebar.svg");
+const PLUS: ImageAsset = asset!("icons/plus.svg");
 
 /// The mock's sprite (`ui.js`, `i-*`). `Ask` is the sprite's `i-chat` speech bubble.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -74,6 +75,8 @@ pub enum Icon {
     Battery,
     /// A window with its sidebar: the desktop's control that shows or hides the sidebar labels.
     Sidebar,
+    /// The phone composer's attachments menu.
+    Plus,
 }
 
 impl Icon {
@@ -131,6 +134,7 @@ impl Icon {
             Icon::Signal => SIGNAL,
             Icon::Battery => BATTERY,
             Icon::Sidebar => SIDEBAR,
+            Icon::Plus => PLUS,
         }
     }
 }

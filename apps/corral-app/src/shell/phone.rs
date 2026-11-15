@@ -19,7 +19,7 @@ use nsh_core::{
 };
 
 use self::nav::{Entry, Nav};
-use super::{banner, confirmation, lock, stale, toast};
+use super::{confirmation, lock, stale, toast};
 use crate::{
     model::{
         Availability, DataState, Destination, Live, Overlay, Page, PhoneTab, Route,
@@ -34,6 +34,7 @@ use crate::{
         composer,
         icons::{Icon, icon},
         kit::{
+            notice,
             page::{head, pushed_head, search},
             page_phone::{follow_scroll, page_scroll, short_window},
             rows::list_row,
@@ -99,6 +100,7 @@ pub fn shell(app: AppState) -> AnyElement {
         .child(ask::share(app))
         .child(palette::palette(app))
         .child(confirmation(app))
+        .child(crate::screens::now::verb_composer(app))
         .child(when(
             move || app.lock.get(),
             move || {
@@ -166,7 +168,8 @@ fn unless_covered(nav: Nav, position: usize, part: View) -> View {
         .accessibility_elements_hidden(covered)
 }
 
-/// A tab's root carries its own large title on every platform, so no header shows over it.
+/// A tab's root carries its own large title on every platform, so no header shows over it; the
+/// connection banner sits under that title.
 fn root(nav: Nav, tab: PhoneTab) -> Screen {
     let app = nav.app;
     let body = match tab.destination() {
@@ -176,6 +179,7 @@ fn root(nav: Nav, tab: PhoneTab) -> Screen {
             screens::destination(app, destination, true),
             None,
             true,
+            false,
             false,
         ),
         None => more_list(nav),
@@ -187,44 +191,46 @@ fn root(nav: Nav, tab: PhoneTab) -> Screen {
         .child(unless_covered(nav, 0, view().flex_1().min_h(px(0.0))).child(body))
 }
 
-/// The page an entry shows. Against corrald a live record opens its domain's live page, a
-/// destination its served screen (or the frame saying why it is not), and a fixture page left
-/// over from the preview only its destination. Without a connection every page is its
+/// The page an entry shows, and whether it starts with its own large-title head (which draws the
+/// connection banner under the title). Against corrald a live record opens its domain's live
+/// page, a destination its served screen (or the frame saying why it is not), and a fixture page
+/// left over from the preview only its destination. Without a connection every page is its
 /// destination's frame, and Settings keeps its sections (browser pairing lives in Connection).
-fn page_of(app: AppState, entry: Entry) -> PhonePage {
+fn page_of(app: AppState, entry: Entry) -> (PhonePage, bool) {
+    let pushed = |page: PhonePage| (page, false);
     match untracked(|| app.data.get()) {
         DataState::Daemon => {
             return match entry {
                 Entry::Page(Route::Live(live))
                     if untracked(|| app.available(live.owner())) == Availability::Ready =>
                 {
-                    live_page(app, live)
+                    pushed(live_page(app, live))
                 }
                 Entry::Page(route) => destination_page(app, route.owner()),
                 Entry::Destination(destination) => destination_page(app, destination),
-                Entry::Section(section) => settings::section_phone(app, section),
+                Entry::Section(section) => pushed(settings::section_phone(app, section)),
             };
         }
         DataState::Disconnected => {
             return match entry {
                 Entry::Page(route) => destination_page(app, route.owner()),
                 Entry::Destination(destination) => destination_page(app, destination),
-                Entry::Section(section) => settings::section_phone(app, section),
+                Entry::Section(section) => pushed(settings::section_phone(app, section)),
             };
         }
         DataState::Fixture => {}
     }
     match entry {
-        Entry::Page(Route::Page(Page::Question)) => inbox::question_phone(app),
-        Entry::Page(Route::Page(Page::Task(_))) => now::task_phone(app),
-        Entry::Page(Route::Page(Page::Plan(_))) => plans::plan_phone(app),
-        Entry::Page(Route::Page(Page::Session(_))) => agents::session_phone(app),
-        Entry::Page(Route::Page(Page::Thread(_))) => assistant::thread_phone(app),
+        Entry::Page(Route::Page(Page::Question)) => pushed(inbox::question_phone(app)),
+        Entry::Page(Route::Page(Page::Task(_))) => pushed(now::task_phone(app)),
+        Entry::Page(Route::Page(Page::Plan(_))) => pushed(plans::plan_phone(app)),
+        Entry::Page(Route::Page(Page::Session(_))) => pushed(agents::session_phone(app)),
+        Entry::Page(Route::Page(Page::Thread(_))) => pushed(assistant::thread_phone(app)),
         // A live record never opens over the fixture preview: its destination shows instead.
         Entry::Page(Route::Live(live)) => destination_page(app, live.owner()),
-        Entry::Destination(Destination::Review) => review::page_phone(app),
+        Entry::Destination(Destination::Review) => pushed(review::page_phone(app)),
         Entry::Destination(destination) => destination_page(app, destination),
-        Entry::Section(section) => settings::section_phone(app, section),
+        Entry::Section(section) => pushed(settings::section_phone(app, section)),
     }
 }
 
@@ -240,30 +246,35 @@ fn live_page(app: AppState, live: Live) -> PhonePage {
     }
 }
 
-/// A destination pushed over More: its screen, or the frame that says why it is unavailable.
-fn destination_page(app: AppState, destination: Destination) -> PhonePage {
-    PhonePage {
+/// A destination pushed over More: its screen, which starts with its large-title head, or the
+/// frame that says why it is unavailable.
+fn destination_page(app: AppState, destination: Destination) -> (PhonePage, bool) {
+    let page = PhonePage {
         title: destination.label().to_owned(),
         body: screens::destination(app, destination, false),
         trailing: None,
         bar: None,
         ask: true,
         scroll: false,
-    }
+    };
+    (page, true)
 }
 
 /// A pushed page: the head with its back control naming the page under it (the system's on iOS
 /// and Android), then the page in its frame.
 fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
     let app = nav.app;
-    let PhonePage {
-        title,
-        body,
-        trailing,
-        bar,
-        ask,
-        scroll,
-    } = page_of(app, entry.clone());
+    let (
+        PhonePage {
+            title,
+            body,
+            trailing,
+            bar,
+            ask,
+            scroll,
+        },
+        headed,
+    ) = page_of(app, entry.clone());
     nav.register(depth, &entry, &title, bar.as_ref().map(|bar| bar.shown));
     let position = depth + 1;
     // A served assistant thread's subject moves while it stays pushed (the quick thread rolls
@@ -302,14 +313,15 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
     };
     page.child(
         unless_covered(nav, position, view().flex_1().min_h(px(0.0)))
-            .child(frame(app, None, body, bar, ask, scroll)),
+            .child(frame(app, None, body, bar, ask, scroll, !headed)),
     )
 }
 
-/// What every page sits in: an optional head, the connection banner, the body (faded while the
-/// board is stale, scrolled here when the page asks for it), the floating Ask button over its
-/// bottom edge, and the page's own bar under it. The Ask button steps aside while the reader
-/// moves down the rows, and on a short window while the page's bar shows.
+/// What every page sits in: an optional head, the connection banner when the page has no
+/// large-title head of its own to draw it under, the body (faded while the board is stale,
+/// scrolled here when the page asks for it), the floating Ask button over its bottom edge, and
+/// the page's own bar under it. The Ask button steps aside while the reader moves down the rows,
+/// and on a short window while the page's bar shows.
 fn frame(
     app: AppState,
     head: Option<AnyElement>,
@@ -317,6 +329,7 @@ fn frame(
     bar: Option<PhoneBar>,
     ask: bool,
     scroll: bool,
+    banner: bool,
 ) -> AnyElement {
     let content = if scroll {
         follow_scroll(app.form, nsh_core::prelude::scroll())
@@ -337,7 +350,7 @@ fn frame(
         .min_h(px(0.0))
         .bg(color(Token::Bg))
         .children(head)
-        .child(banner(app))
+        .when(banner, |v| v.child(notice::connection(app)))
         .child(
             view()
                 .flex_1()
@@ -421,6 +434,7 @@ fn more_list(nav: Nav) -> AnyElement {
             .into_element(),
         None,
         true,
+        false,
         false,
     )
 }

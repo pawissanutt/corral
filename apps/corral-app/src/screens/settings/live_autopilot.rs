@@ -28,7 +28,7 @@ pub fn page(app: AppState) -> AnyElement {
         if source.refusal.is_some() {
             parts.push(space(app, 10.0));
         }
-        let mut rows = vec![("Operating mode", live::mode_label(settings.mode).to_owned())];
+        let mut rows = vec![("Operating mode", live::mode_line(settings))];
         rows.extend(live::switches(settings));
         parts.push(facts(app, rows));
         parts.push(space(app, 12.0));

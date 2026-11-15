@@ -1,5 +1,6 @@
 //! The three shells, the only idiom-specific code, and what every shell mounts once over its
-//! pages: the connection banner, the toast and the fresh confirmation.
+//! pages: the toast and the fresh confirmation. The connection banner is the kit's
+//! (`kit::notice::connection`): a phone page sets it under its large title.
 
 pub mod desktop;
 pub mod lock;
@@ -16,70 +17,12 @@ use crate::model::commands::{
     CONFIRM_CANCEL, CONFIRM_CHECK, CONFIRM_EFFECT_HEADING, CONFIRM_SUB, act_confirm_label,
     act_confirm_word, confirm_label, confirm_word, risk,
 };
-use crate::model::health::{ConnectionBanner, connection_banner, daemon_connection_banner};
-use crate::model::{DataState, Form, Hue, SettingsSection, Tone, work};
+use crate::model::{DataState, Form, Hue, SettingsSection, work};
 use crate::state::AppState;
-use crate::ui::kit::button::{ButtonKind, button};
-use crate::ui::kit::notice;
 use crate::ui::kit::overlay::{self, Confirm, Modal};
 use crate::ui::kit::table::steps;
 use crate::ui::kit::text::{h3, label_value, mono, plain};
 use crate::ui::tokens::{Token, color};
-
-/// The connection banner over the page while the connection is degraded, down or offline;
-/// nothing while it is healthy or on the relay. Its buttons run the model's effects (Details,
-/// Diagnostics and Queue open Settings › Connection; Restart corrald answers with a toast).
-/// The phone's has no buttons. test_id "conn-banner", buttons "btn-<label>".
-pub fn banner(app: AppState) -> AnyElement {
-    // Disconnected has no banner: the health line and each page already say so.
-    let shown = computed(move || match app.data.get() {
-        DataState::Daemon => app
-            .feed
-            .with(|feed| daemon_connection_banner(feed, app.form)),
-        DataState::Fixture => connection_banner(app.env().conn, app.form),
-        DataState::Disconnected => None,
-    });
-    dynamic(move || {
-        let banner = shown.get()?;
-        Some(untracked(move || banner_face(app, banner)))
-    })
-}
-
-fn banner_face(app: AppState, banner: ConnectionBanner) -> AnyElement {
-    let ConnectionBanner {
-        tone,
-        text,
-        buttons,
-    } = banner;
-    let actions = buttons
-        .into_iter()
-        .map(|item| {
-            let effect = item.effect;
-            button(
-                app,
-                item.label,
-                if item.quiet {
-                    ButtonKind::Quiet
-                } else {
-                    ButtonKind::Ghost
-                },
-                format!("btn-{}", item.label.to_lowercase().replace(' ', "-")),
-                move || app.run(vec![effect.clone()]),
-            )
-        })
-        .collect();
-    notice::banner(app, tone_hue(tone), &text, actions)
-}
-
-/// The banner's tone as the kit's hue: warn is held, failure fails, the offline notice plain.
-fn tone_hue(tone: Tone) -> Hue {
-    match tone {
-        Tone::Ok => Hue::Ok,
-        Tone::Warn => Hue::Held,
-        Tone::Fail => Hue::Fail,
-        Tone::Muted => Hue::Neutral,
-    }
-}
 
 /// Whether the board shows as stale: corrald down or this device offline, where what shows is
 /// the last known state (the mock's `.is-stale`). Disconnected shows no earlier state to fade.
@@ -96,7 +39,7 @@ const DESKTOP_NARROW: f32 = 1024.0;
 pub fn sidebar_narrow(app: AppState) -> bool {
     match app.form {
         Form::Desktop => window().width.0 <= DESKTOP_NARROW,
-        Form::Terminal => crate::ui::term::narrow(),
+        Form::Terminal => crate::ui::term::sidebar_folds(app),
         Form::Phone => false,
     }
 }

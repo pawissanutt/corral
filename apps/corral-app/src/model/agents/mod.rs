@@ -513,7 +513,8 @@ pub enum Note {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fill {
     Ready,
-    Loading,
+    /// Still loading; the words say what ("Loading agents…") once the wait is noticeable.
+    Loading(&'static str),
     Empty {
         heading: &'static str,
         paragraph: String,
@@ -745,7 +746,6 @@ pub struct Session {
     pub switch_key: &'static str,
     pub switch_hint: &'static str,
     pub phone_title: String,
-    pub back_label: &'static str,
     pub desktop_back_label: &'static str,
     pub back: Action,
     pub view: View,

@@ -74,7 +74,7 @@ pub(super) fn situation_notice(
                         clock(&answer.at, feed.now),
                         what(detail, answer.option.as_deref(), &answer.text)
                     )),
-                    span(format!("actor=owner via={}", answer.via)).mono(),
+                    span(super::provenance(feed, &answer.by, answer.device.as_deref(), &answer.via)),
                     span(". Other devices and the PM pane now show it answered."),
                 ],
                 (None, Some(sent)) => vec![span(format!(
@@ -90,12 +90,12 @@ pub(super) fn situation_notice(
             let body = match (&detail.answer, row_answer) {
                 (Some(answer), _) => vec![
                     span(format!("Answered by {} at {} with {} · ", answer.by, clock(&answer.at, feed.now), what(detail, answer.option.as_deref(), &answer.text))),
-                    span(format!("via={}", answer.via)).mono(),
+                    span(super::provenance(feed, &answer.by, answer.device.as_deref(), &answer.via)),
                     span(". This copy is read-only; one answer wins across devices and the PM pane."),
                 ],
                 (None, Some((by, via, at))) => vec![
                     span(format!("Answered by {by} at {} · ", clock(at, feed.now))),
-                    span(format!("via={via}")).mono(),
+                    span(super::provenance(feed, by, None, via)),
                     span(". This copy is read-only; one answer wins across devices and the PM pane."),
                 ],
                 (None, None) => vec![span("Answered elsewhere. This copy is read-only.")],

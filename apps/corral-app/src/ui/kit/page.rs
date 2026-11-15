@@ -15,7 +15,7 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::state::AppState;
-use crate::ui::kit::page_phone;
+use crate::ui::kit::{notice, page_phone};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -24,9 +24,12 @@ pub use crate::ui::kit::page_phone::{card, group_head, pushed_head, search, sect
 /// Room the phone leaves under scrolling content for the floating Ask button (`.askfab`), so the
 /// last row stays pressable above it.
 const ASK_CLEARANCE: f32 = 64.0;
-/// Desktop points per terminal Cell for a fixed column: a 400 pt list keeps 33 Cells, which
-/// leaves the detail room beside it on a 120-column grid.
+/// Desktop points per terminal Cell for a fixed column: a 400 pt list keeps 33 Cells.
 const POINTS_PER_COLUMN_CELL: f32 = 12.0;
+/// Stacked in a terminal, a list takes two parts of the height and the column it leads to three,
+/// so the detail keeps the most rows while the list still shows several.
+const STACKED_LIST_SHARE: f32 = 2.0;
+const STACKED_MAIN_SHARE: f32 = 3.0;
 /// A part that gives way in a head row is shrunk this many times faster than the title, so the
 /// title keeps its words until the part is gone.
 const GIVE_WAY_SHRINK: f32 = 1000.0;
@@ -35,6 +38,9 @@ const GIVE_WAY_SHRINK: f32 = 1000.0;
 const SUB_MIN_WIDTH: f32 = 48.0;
 /// Scrolled further than this, a phone root page's large title folds to its bar size.
 const COLLAPSE_AFTER: f32 = 40.0;
+/// On a short window (a phone held sideways) a phone page bar stands 48 pt: its 44 pt buttons,
+/// the rule above them, and what is left split above and below.
+const SHORT_BAR_PAD: f32 = (48.0 - 44.0 - 1.0) / 2.0;
 
 /// How wide a column is: the rest of the row, or fixed (desktop points, as the mockup's grid
 /// columns: `400`, `340`, `300`).
@@ -48,10 +54,12 @@ pub enum Width {
 /// edge. Desktop: a 46 pt row under a rule, title 15 pt bold, sub 12 pt quiet on one line; as
 /// the row runs short the sub line gives way first (cut, then gone), the title last. Phone: the
 /// large title (`.plarge`, 30 pt) with the actions at its trailing edge, on its last line (pass
-/// [`search`] there on the tab roots); the sub line is left out, as the mockup's phone heads
-/// have none. Terminal: one row, the title bold and never cut, the actions at the end, the sub
-/// line quiet between them taking what room is left: cut with an ellipsis, gone below six Cells;
-/// a joined rule under it. The title carries test_id "page-title" and the header role.
+/// [`search`] there on the tab roots), and the connection banner under it, as the mockup puts
+/// it; the sub line is left out, as the mockup's phone heads have none. The phone shell draws no
+/// banner of its own over a page that leads with this head. Terminal: one row, the title bold
+/// and never cut, the actions at the end, the sub line quiet between them taking what room is
+/// left: cut with an ellipsis, gone below six Cells; a joined rule under it. The title carries
+/// test_id "page-title" and the header role.
 pub fn head(
     app: AppState,
     title: impl Into<SharedString>,
@@ -75,7 +83,11 @@ pub fn head(
             .child(spacer())
             .child(actions_row(form, actions, 8.0))
             .into_element(),
-        Form::Phone => phone_head(title, actions),
+        Form::Phone => view()
+            .flex_none()
+            .child(phone_head(title, actions))
+            .child(notice::connection(app))
+            .into_element(),
         Form::Terminal => view()
             .flex_none()
             .child(
@@ -133,14 +145,15 @@ fn phone_head(title: SharedString, actions: Vec<AnyElement>) -> AnyElement {
 }
 
 /// The handover head (`.qhead`): a meta row of chips and short texts, the title, an optional
-/// note under it, the actions beside the title. Desktop: padding 14 24 11 under a rule, meta
-/// 12 pt wrapping (6 pt rows, 10 pt apart), title 19 pt bold at line height 1.3, wrapping.
+/// note under it, the actions beside them. Desktop: padding 14 24 11 under a rule, meta
+/// 12 pt wrapping (6 pt rows, 10 pt apart) with the actions at its trailing edge, as the
+/// mockup's "Ask about this" sits, title 19 pt bold at line height 1.3, wrapping.
 /// Phone: a page band (`.pband`): meta chips wrapping 6 pt apart, title 20 pt bold at line
 /// height 1.25, wrapping, the note 13 pt quiet (the mockup moves "from worker … ago" there),
 /// actions in a row under it. Terminal: the meta row, the title in bold, wrapping, the note
-/// quiet, a joined rule under them. Where the title and its actions do not fit on one line the
-/// actions move under the title, and wrap among themselves, rather than squeezing the title
-/// to a few letters a line. The title has test_id "qhead-title".
+/// quiet, a joined rule under them. Where the terminal's title and its actions do not fit on
+/// one line the actions move under the title, and wrap among themselves, rather than
+/// squeezing the title to a few letters a line. The title has test_id "qhead-title".
 pub fn qhead(
     app: AppState,
     meta: Vec<AnyElement>,
@@ -163,19 +176,19 @@ pub fn qhead(
             .pb(px(11.0))
             .border_b(px(1.0))
             .border_color(color(Token::Rule))
-            .child(meta_row(form, meta))
             .child(
                 view()
                     .flex_row()
                     .flex_wrap()
                     .items_center()
-                    .gap_x(px(12.0))
-                    .gap_y(px(8.0))
-                    .mt(px(6.0))
-                    .child(title)
-                    .child(spacer())
-                    .child(head_actions(form, actions, 8.0)),
+                    .gap_x(px(10.0))
+                    .gap_y(px(6.0))
+                    .children(meta)
+                    .when(!actions.is_empty(), |row| {
+                        row.child(spacer()).child(head_actions(form, actions, 8.0))
+                    }),
             )
+            .child(view().mt(px(6.0)).child(title))
             .when_some(note, |head, note| {
                 head.child(view().mt(px(4.0)).child(quiet(form, note, 12.0)))
             })
@@ -222,10 +235,10 @@ pub fn qhead(
 /// neighbours. Pass panes ([`pane`], [`body`], [`context`], [`bar_pane`]): columns do not
 /// scroll themselves. Desktop: fixed columns keep their points, `Fill` takes the rest, a 1 pt
 /// rule on the left of every column after the first. Phone: the panes stacked in order with a
-/// rule between (phone screens usually push the detail instead). Terminal: fixed columns get a
-/// Cell for every 12 points, joined `│` lines between them; on a grid narrower than
-/// `term::wide()` only the column at index `keep` shows, across the whole width.
-pub fn columns(app: AppState, cols: Vec<(Width, AnyElement)>, keep: usize) -> AnyElement {
+/// rule between (phone screens usually push the detail instead). Terminal: see
+/// [`terminal_columns`]; `main` is the page's main column there, the one the columns before it
+/// (lists) lead to and the columns after it (side context) stand beside.
+pub fn columns(app: AppState, cols: Vec<(Width, AnyElement)>, main: usize) -> AnyElement {
     match app.form {
         Form::Desktop => view()
             .flex_1()
@@ -255,44 +268,98 @@ pub fn columns(app: AppState, cols: Vec<(Width, AnyElement)>, keep: usize) -> An
                     .into_element()
             }))
             .into_element(),
-        Form::Terminal => {
-            let mut parts = Vec::new();
-            for (at, (width, col)) in cols.into_iter().enumerate() {
-                let kept = at == keep;
-                if at > 0 {
-                    parts.push(
-                        view()
-                            .flex_row()
-                            .self_stretch()
-                            .style_when(move || !term::wide(), |s| s.hidden())
-                            .child(term::vrule())
-                            .into_element(),
-                    );
-                }
-                let cell = view().flex_col().min_w(px(0.0)).min_h(px(0.0));
-                let cell = match width {
-                    Width::Fill => cell.flex_1(),
-                    Width::Fixed(points) => cell
-                        .w(term::cells((points / POINTS_PER_COLUMN_CELL).round()))
-                        .flex_shrink_0()
-                        // Alone on a narrow grid, the kept column takes the whole width.
-                        .style_when(move || kept && !term::wide(), |s| s.flex_1()),
-                };
+        Form::Terminal => terminal_columns(app, cols, main),
+    }
+}
+
+/// Terminal columns. Side by side while the page holds every fixed column with the detail keeping
+/// its least width (`term::beside`): fixed columns get a Cell for every 12 points, a lone list
+/// growing with a wide page (`term::list_columns`), joined `│` lines between. Short of that they
+/// stack rather than leave the list out: the columns before `main` above it, a joined `─` line
+/// between, a list taking two parts of the height and `main` three; the columns after `main`
+/// step out until the page has room for them again.
+fn terminal_columns(app: AppState, cols: Vec<(Width, AnyElement)>, main: usize) -> AnyElement {
+    let fixed_count = cols
+        .iter()
+        .filter(|(width, _)| matches!(width, Width::Fixed(_)))
+        .count();
+    let fixed: f32 = cols
+        .iter()
+        .map(|(width, _)| match width {
+            Width::Fixed(points) => fixed_cells(*points),
+            Width::Fill => 0.0,
+        })
+        .sum();
+    // `term::beside` counts the one line beside a list; any further line is the columns' too.
+    let lines = cols.len().saturating_sub(2) as f32;
+    let stacked = move || !term::beside(app, fixed + lines);
+    let mut parts = Vec::with_capacity(cols.len() * 3);
+    for (at, (width, col)) in cols.into_iter().enumerate() {
+        let side = at > main;
+        if at > 0 {
+            parts.push(
+                view()
+                    .flex_row()
+                    .self_stretch()
+                    .style_when(stacked, |s| s.hidden())
+                    .child(term::vrule())
+                    .into_element(),
+            );
+            if !side {
                 parts.push(
-                    cell.style_when(move || !kept && !term::wide(), |s| s.hidden())
-                        .child(col)
+                    view()
+                        .flex_shrink_0()
+                        .style_when(move || !stacked(), |s| s.hidden())
+                        .child(term::hrule())
                         .into_element(),
                 );
             }
-            view()
-                .flex_1()
-                .flex_row()
-                .min_w(px(0.0))
-                .min_h(px(0.0))
-                .children(parts)
-                .into_element()
         }
+        let cell = view().flex_col().min_w(px(0.0)).min_h(px(0.0));
+        let cell = match width {
+            Width::Fill => cell.flex_1(),
+            Width::Fixed(points) => {
+                let natural = fixed_cells(points);
+                // Only a list alone beside its detail grows: next to another fixed column its
+                // growth would come out of the detail's least width.
+                let grows = at < main && fixed_count == 1;
+                cell.w(move || {
+                    term::cells(if grows {
+                        term::list_columns(app, natural)
+                    } else {
+                        natural
+                    })
+                })
+                .flex_shrink_0()
+            }
+        };
+        let cell = if side {
+            cell.style_when(stacked, |s| s.hidden())
+        } else {
+            let share = if at < main {
+                STACKED_LIST_SHARE
+            } else {
+                STACKED_MAIN_SHARE
+            };
+            cell.style_when(stacked, move |s| {
+                s.flex_1().flex_grow(share).w(relative(1.0))
+            })
+        };
+        parts.push(cell.child(col).into_element());
     }
+    view()
+        .flex_1()
+        .flex_row()
+        .style_when(stacked, |s| s.flex_col())
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .children(parts)
+        .into_element()
+}
+
+/// A fixed column's width in Cells: one for every [`POINTS_PER_COLUMN_CELL`] desktop points.
+fn fixed_cells(points: f32) -> f32 {
+    (points / POINTS_PER_COLUMN_CELL).round()
 }
 
 /// A scrolling pane with no padding of its own, for lists whose rows carry their paddings
@@ -374,7 +441,8 @@ pub fn bar_pane(app: AppState, test_id: &str, content: AnyElement, bar: AnyEleme
 /// The decision bar (`.decide`, `.pdecide`): the actions in a row and, on desktop and in a
 /// terminal, an attribution at the trailing edge. Desktop: padding 12 24, 10 pt apart, a rule
 /// above, the attribution right-aligned in 11.5 pt quiet text at most 430 pt wide. Phone: the
-/// actions only (pass them `wide`), padding 10 14 12; the shell adds the home indicator's inset.
+/// actions only (pass them `wide`), padding 10 14 12; on a short window (held sideways) 48 pt
+/// tall, giving the rows the rest; the shell adds the home indicator's inset.
 /// Terminal: a joined rule, then one row of actions two Cells apart, never cut; the attribution
 /// under them, a Cell in, clipped to two rows on a wide grid and one on a narrow one.
 /// test_id "decide-bar", role toolbar.
@@ -414,6 +482,9 @@ pub fn bar(app: AppState, actions: Vec<AnyElement>, attribution: Option<AnyEleme
             .px(px(14.0))
             .pt(px(10.0))
             .pb(px(12.0))
+            .style_when(page_phone::short_window, |s| {
+                s.pt(px(SHORT_BAR_PAD)).pb(px(SHORT_BAR_PAD))
+            })
             .bg(color(Token::Bg))
             .border_t(px(1.0))
             .border_color(color(Token::Rule))

@@ -291,6 +291,7 @@ fn zero_usage(scale: usize) -> Vec<corral_core::UsageEntry> {
     (0..scale)
         .map(|i| corral_core::UsageEntry {
             connection: None,
+            profile: None,
             billing: None,
             at: Some(fixture::now()),
             latency_ms: Some(1),

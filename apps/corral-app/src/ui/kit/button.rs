@@ -1,6 +1,7 @@
 //! Buttons, the segmented control and the in-page tab strip, in the look of each form.
 //!
-//! Desktop follows `.btn` (30 pt high, 12.5 pt semibold, 6 pt corners), the phone `.pbtn`
+//! Desktop follows `.btn` (30 pt high, 44 pt on a touch tablet, 12.5 pt semibold, 6 pt corners),
+//! the phone `.pbtn`
 //! (at least 44 pt high, 15 pt bold, 10 pt corners). A terminal draws a control as its label row
 //! and bands and bolds the focused or pressed one itself, so there a button is its label on a
 //! band of the app's (bold for primary), with no ring or fill of the app's for its states.
@@ -16,6 +17,7 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::state::AppState;
+use crate::ui::atoms::control_height;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::term::{cells, key_cap};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
@@ -148,8 +150,8 @@ pub fn button_with(
     let target = match form {
         Form::Terminal => target.px(look.pad).h(px(16.0)),
         Form::Desktop => target
-            .h(px(30.0))
-            .when(bare, |b| b.w(px(30.0)))
+            .h(px(control_height(30.0)))
+            .when(bare, |b| b.w(px(control_height(30.0))))
             .when(!bare, |b| b.px(look.pad))
             .rounded(px(6.0))
             .hover(look.hover)

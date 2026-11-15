@@ -211,18 +211,12 @@ pub const fn choice_label(choice: PromptChoice) -> &'static str {
     }
 }
 
-/// A served timestamp as the local clock, with the date when it is not today. Text that is not
-/// a timestamp is shown as served.
-pub fn clock(at: &str, today: &str) -> String {
-    let Ok(stamp) = at.parse::<jiff::Timestamp>() else {
-        return at.to_owned();
-    };
-    let local = stamp.to_zoned(jiff::tz::TimeZone::system());
-    let time = format!("{:02}:{:02}", local.hour(), local.minute());
-    if local.date().to_string() == today {
-        time
-    } else {
-        format!("{} {} {time}", local.strftime("%b"), local.day())
+/// A served timestamp on this device's clock, with the date when it is not today, as every
+/// live surface writes it (`work::when`). Text that is not a timestamp is shown as served.
+pub fn clock(at: &str, feed: &Feed) -> String {
+    match crate::model::work::when(at, feed) {
+        shown if shown.is_empty() => at.to_owned(),
+        shown => shown,
     }
 }
 
@@ -235,19 +229,25 @@ pub fn wait_label(wait: &WaitReason) -> String {
 }
 
 /// A wait reason's full explanation, with when it may lift.
-pub fn wait_explanation(wait: &WaitReason, today: &str) -> String {
+pub fn wait_explanation(wait: &WaitReason, feed: &Feed) -> String {
     match &wait.retry_at {
-        Some(at) => format!("{} Retrying at {}.", wait.text, clock(at, today)),
+        Some(at) => format!("{} Retrying at {}.", wait.text, clock(at, feed)),
         None => wait.text.clone(),
     }
 }
 
-/// Dollars with the basis when not provider-reported.
+/// Dollars with the basis when not provider-reported, or "cost unknown".
 pub fn cost(usd: Option<f64>, basis: Option<CostBasis>) -> String {
-    match (usd, basis) {
-        (None, _) => "cost unknown".into(),
-        (Some(usd), Some(CostBasis::Reported) | None) => format!("${usd:.2}"),
-        (Some(usd), Some(_)) => format!("${usd:.2} (estimated)"),
+    usd.map_or_else(|| "cost unknown".into(), |usd| amount(usd, basis))
+}
+
+/// A known amount in dollars, saying how much of it is estimated rather than reported.
+pub fn amount(usd: f64, basis: Option<CostBasis>) -> String {
+    match basis {
+        Some(CostBasis::Reported) | None => format!("${usd:.2}"),
+        Some(CostBasis::Estimated) => format!("${usd:.2} (estimated)"),
+        Some(CostBasis::Mixed) => format!("${usd:.2} (partly estimated)"),
+        Some(CostBasis::Other) => format!("${usd:.2} (basis unknown)"),
     }
 }
 
@@ -663,7 +663,7 @@ pub fn live_filed(feed: &Feed, scope: &str) -> Vec<FiledLine> {
                     action: Action::OpenLive(Live::Task(Id::from(task.as_str()))),
                     id: task,
                     title,
-                    at: clock(&at, &feed.date),
+                    at: clock(&at, feed),
                     source: source.clone(),
                 },
             )
@@ -680,7 +680,11 @@ pub fn live_thread_header(state: &State, feed: &Feed, scope: &str) -> ThreadHead
     let quick_session = quick.then(|| quick_id(feed)).flatten();
     let id = quick_session.as_deref().unwrap_or(scope);
     let current = profile(state, feed, scope);
-    let mut profile_value = vec![span(current.unwrap_or_else(|| "unknown".into()))];
+    // A profile name is an identifier, shown whole or cut, never broken mid-word.
+    let mut profile_value = vec![match current {
+        Some(profile) => span(profile).mono(),
+        None => span("unknown"),
+    }];
     if pickable(feed, scope) && !models(feed).is_empty() {
         profile_value.push(span(" · switch in the composer").dim());
     }
@@ -704,9 +708,10 @@ pub fn live_thread_header(state: &State, feed: &Feed, scope: &str) -> ThreadHead
         },
         Fact {
             label: "Cost",
-            value: vec![span(cost(
-                row.and_then(|row| row.cost_usd),
-                row.and_then(|row| row.cost_basis),
+            // The label already says cost; the value is the amount or that it is unknown.
+            value: vec![span(row.and_then(|row| row.cost_usd).map_or_else(
+                || "unknown".into(),
+                |usd| amount(usd, row.and_then(|row| row.cost_basis)),
             ))],
         },
     ];
@@ -763,7 +768,7 @@ fn latest(feed: &Feed, scope: &str) -> (Option<(String, String)>, Option<String>
         .iter()
         .rev()
         .find(|entry| matches!(entry.kind, EntryKind::Message | EntryKind::PmMessage))
-        .and_then(|entry| Some((clock(&entry.at, &feed.date), entry.text.clone()?)));
+        .and_then(|entry| Some((clock(&entry.at, feed), entry.text.clone()?)));
     let answer = entries
         .iter()
         .rev()

@@ -271,6 +271,16 @@ struct Line {
     message: Option<Message>,
     /// A compaction or branch summary's own request usage, recorded on its entry.
     usage: Option<WireUsage>,
+    details: Option<serde_json::Value>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SummaryUsage {
+    summary_profile: Option<String>,
+    summary_model: Option<String>,
+    summary_provider: Option<String>,
+    summary_binding: Option<corral_core::connection::ConnectionBinding>,
 }
 
 #[derive(Deserialize)]
@@ -438,7 +448,7 @@ fn read_session_with_turns(
                 }
                 continue;
             }
-            // Summarization requests run on the session's current model (T-564).
+            // Legacy summaries inherit the current model; quick summaries carry exact request metadata.
             "compaction" | "branch_summary" => {}
             "message" => {}
             _ => continue,
@@ -473,6 +483,24 @@ fn read_session_with_turns(
             ),
             _ => None,
         };
+        let summary = entry
+            .details
+            .filter(|details| {
+                matches!(entry.kind.as_str(), "compaction" | "branch_summary")
+                    && details.get("summaryModel").is_some()
+            })
+            .map(serde_json::from_value::<SummaryUsage>)
+            .transpose()
+            .context("decoding quick summary usage metadata")?
+            .unwrap_or_default();
+        let has_summary_route = summary.summary_provider.is_some();
+        let message_model = message_model.or(summary.summary_model);
+        let message_provider = message_provider.or(summary.summary_provider);
+        let binding = if has_summary_route {
+            summary.summary_binding.as_ref()
+        } else {
+            binding
+        };
         let connection = binding.map(|b| b.connection).or_else(|| {
             match message_provider.as_deref().or(provider.as_deref()) {
                 Some("openai-codex") => {
@@ -485,6 +513,7 @@ fn read_session_with_turns(
             }
         });
         let evidence = UsageEntry {
+            profile: summary.summary_profile,
             connection,
             billing: connection.map(|c| c.billing()),
             at,

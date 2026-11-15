@@ -86,6 +86,13 @@ pub(super) fn compute(store: &Store, head: &TaskHead) -> Result<Computed> {
                 text: clip(&text, 60),
                 since: since.map(|at| at.to_string()),
             },
+            age_since: Some(
+                match (head.status, run) {
+                    (Status::Running, Some(run)) => run.started,
+                    _ => head.updated,
+                }
+                .to_string(),
+            ),
             held_reason,
             questions: questions.iter().filter(|q| q.pending).count() as u64,
             attention,

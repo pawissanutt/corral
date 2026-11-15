@@ -7,13 +7,17 @@
 //! (the alternate answer, the follow-up): typing changes only the decide bar, so the fields
 //! keep their focus and the bands around them are not made again.
 
+mod attention;
 mod decide;
 mod evidence;
+mod feed;
 mod graph;
 mod list;
 mod options;
 mod sheet;
+mod situation;
 mod thread;
+mod verbs;
 
 use nsh_core::prelude::*;
 
@@ -36,6 +40,8 @@ const LIST_NARROW: f32 = 280.0;
 /// 340 pt context column, before they switch to their narrow layouts.
 const SHEET_MIN: f32 = 560.0;
 const SIDE: f32 = 340.0;
+/// Points per terminal Cell for the fixed widths above, as `kit::page::columns` counts them.
+const POINTS_PER_CELL: f32 = 12.0;
 
 /// Which question a handover shows: a served focus page's key, or None for the fixture and
 /// for the inline handover of the selected row.
@@ -45,7 +51,8 @@ type Key = Option<Id>;
 /// handover with its decide bar pinned for a question); in a window narrower than both need,
 /// a 280 pt list beside the handover in its narrow layout. Phone: the large title over the
 /// needs-you cards and the changes feed, scrolling itself. Terminal: the list and the pane side
-/// by side on a wide grid, stacked on a narrow one with the pane taking two thirds.
+/// by side while the page leaves the pane its room (`term::beside`), else stacked with the pane
+/// taking two thirds.
 pub fn screen(app: AppState) -> AnyElement {
     list::load_changes(app);
     match app.form {
@@ -78,8 +85,9 @@ pub fn live_question_phone(app: AppState, key: Id) -> PhonePage {
 /// The focused question. Desktop: the page head (back, pager, keys, Ask about this, Next), S A R
 /// in the centre with the decide bar pinned under them, B Thread History in the 340 pt context
 /// column; in a window too narrow for both, the context bands under S A R in one scroll.
-/// Terminal: the same head; on a wide grid the context column beside the bands, on a narrow one
-/// under them in the same scroll. A served question loads first, and says so when it cannot.
+/// Terminal: the same head; the context column beside the bands while the page leaves the
+/// centre its least width (`term::beside`), else under them in the same scroll. A served
+/// question loads first, and says so when it cannot.
 fn focus_page(app: AppState, key: Key) -> AnyElement {
     sheet::load(app, key.clone());
     let head_key = key.clone();
@@ -91,10 +99,10 @@ fn focus_page(app: AppState, key: Key) -> AnyElement {
                 .min_h(px(0.0))
                 .min_w(px(0.0))
                 .child(dynamic(move || {
-                    let wide = term::wide();
+                    let beside = term::beside(app, cells_of(SIDE));
                     let key = key.clone();
                     Some(untracked(move || {
-                        if wide {
+                        if beside {
                             focus_columns(app, key)
                         } else {
                             sheet::focus_main(app, key, true, true)
@@ -126,7 +134,8 @@ fn focus_page(app: AppState, key: Key) -> AnyElement {
 }
 
 /// The question pushed on the phone: S R A B Thread History under the pager and head, the decide
-/// bar in place of the tab bar, the Ask-about icon in the header, the thread as a sheet.
+/// bar in place of the tab bar, the Ask-about icon in the header (held sideways, the pager and
+/// Next beside it), the thread as a sheet.
 fn phone_page(app: AppState, key: Key) -> PhonePage {
     sheet::load(app, key.clone());
     let title = untracked(|| {
@@ -141,7 +150,7 @@ fn phone_page(app: AppState, key: Key) -> PhonePage {
         body: sheet::gate(app, key.clone(), move |app| {
             sheet::phone_body(app, body_key.clone())
         }),
-        trailing: Some(sheet::ask_icon(app, key.clone())),
+        trailing: Some(sheet::phone_trailing(app, key.clone())),
         bar: Some(PhoneBar::always(decide::decide(app, key, false))),
         ask: false,
         scroll: true,
@@ -166,18 +175,66 @@ fn terminal_preview(app: AppState) -> AnyElement {
     list::preview(app, true)
 }
 
+/// S A R beside the context column. Terminal: the column takes its natural Cells, growing with
+/// a wide page (`term::list_columns`), a joined line before it.
 fn focus_columns(app: AppState, key: Key) -> AnyElement {
+    let main = sheet::focus_main(app, key.clone(), false, app.form == Form::Terminal);
+    if app.form == Form::Terminal {
+        return terminal_row(
+            app,
+            Pane::Fill(main),
+            Pane::Fixed(cells_of(SIDE), sheet::side(app, key)),
+        );
+    }
     columns(
         app,
         vec![
-            (
-                Width::Fill,
-                sheet::focus_main(app, key.clone(), false, app.form == Form::Terminal),
-            ),
+            (Width::Fill, main),
             (Width::Fixed(SIDE), sheet::side(app, key)),
         ],
         0,
     )
+}
+
+/// A fixed width in points as terminal Cells.
+fn cells_of(points: f32) -> f32 {
+    (points / POINTS_PER_CELL).round()
+}
+
+/// One side of a terminal row: the filling pane, or a pane of its natural Cells.
+enum Pane {
+    Fill(AnyElement),
+    Fixed(f32, AnyElement),
+}
+
+/// Two terminal panes side by side, a joined `│` line between them. The fixed one keeps the
+/// proportional width `term::list_columns` gives its natural Cells as the page resizes.
+fn terminal_row(app: AppState, first: Pane, second: Pane) -> AnyElement {
+    let cell = |pane: Pane| match pane {
+        Pane::Fill(pane) => view()
+            .flex_1()
+            .flex_col()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
+            .child(pane)
+            .into_element(),
+        Pane::Fixed(natural, pane) => view()
+            .flex_col()
+            .flex_shrink_0()
+            .min_h(px(0.0))
+            .w(move || term::cells(term::list_columns(app, natural)))
+            .child(pane)
+            .into_element(),
+    };
+    view()
+        .flex_1()
+        .flex_row()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .child(cell(first))
+        .child(view().flex_row().self_stretch().child(term::vrule()))
+        .child(cell(second))
+        .into_element()
 }
 
 /// A screen laid out by the width it is given: `build(app, narrow)`, narrow below `min` points,
@@ -212,9 +269,10 @@ fn by_width_with(
         .into_element()
 }
 
-/// Two panes of a terminal screen: side by side (the first 400 pt wide) on a wide grid; on a
-/// narrow one stacked, a joined line between them, the second taking two thirds of the height
-/// so the handover keeps its rows.
+/// Two panes of a terminal screen: side by side while the page leaves the second its least
+/// width beside the first's natural 400 pt (`term::beside`), the first growing with a wide page;
+/// otherwise stacked, a joined line between them, the second taking two thirds of the height so
+/// the handover keeps its rows. The list is never left out.
 fn terminal_panes(
     app: AppState,
     first: fn(AppState) -> AnyElement,
@@ -225,13 +283,13 @@ fn terminal_panes(
         .min_h(px(0.0))
         .min_w(px(0.0))
         .child(dynamic(move || {
-            let wide = term::wide();
+            let beside = term::beside(app, cells_of(LIST));
             Some(untracked(move || {
-                if wide {
-                    return columns(
+                if beside {
+                    return terminal_row(
                         app,
-                        vec![(Width::Fixed(LIST), first(app)), (Width::Fill, second(app))],
-                        1,
+                        Pane::Fixed(cells_of(LIST), first(app)),
+                        Pane::Fill(second(app)),
                     );
                 }
                 let part = |pane: AnyElement, share: f32| {
@@ -437,6 +495,17 @@ fn rich_at(app: AppState, content: &Rich, size: f32, ink: AdaptiveColor) -> Text
                 .cursor_pointer()
                 .role(AccessibilityRole::Link)
                 .on_press(move || app.open_live(record.clone()));
+        }
+        // An inline record link ("plan T-874") is a line tall; on the phone its press reaches
+        // the 44 pt target above and below.
+        if app.form == Form::Phone && (run.link.is_some() || run.live.is_some()) {
+            let slop = px(((44.0 - size * 1.5) / 2.0).max(0.0));
+            piece = piece.hit_slop(EdgeInsets {
+                top: slop,
+                right: px(0.0),
+                bottom: slop,
+                left: px(0.0),
+            });
         }
         piece
     }))

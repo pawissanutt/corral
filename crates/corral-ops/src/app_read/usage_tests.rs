@@ -195,3 +195,25 @@ fn quota_rows_use_canonical_exhaustion_resets_without_inventing_allowances() -> 
     assert_eq!(unknown.quotas[0].headroom, None);
     Ok(())
 }
+
+#[test]
+fn summary_cost_is_grouped_under_its_profile_instead_of_the_session_profile() -> Result<()> {
+    let now = Timestamp::now();
+    let mut summary = entry(now, ConnectionId::OpenaiSubscription, 0.01);
+    summary.profile = Some("cheap-summary".into());
+    let mut facts = Aggregate::new(10);
+    add_usage(
+        &mut facts,
+        Usage::from_entries(vec![summary]),
+        Some("conversation-profile".into()),
+        now - jiff::SignedDuration::from_hours(1),
+        now,
+    );
+    assert_eq!(facts.groups.len(), 1);
+    let summary = facts
+        .groups
+        .get(&("openai-subscription".into(), Some("cheap-summary".into())))
+        .unwrap();
+    assert_eq!(summary.values().next().unwrap().cost(), Some(0.01));
+    Ok(())
+}

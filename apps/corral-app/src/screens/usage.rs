@@ -11,6 +11,7 @@ mod chart;
 mod costs;
 mod profiles;
 mod providers;
+mod quotas;
 mod sessions;
 mod shown;
 
@@ -21,7 +22,7 @@ use crate::model::text::span;
 use crate::model::usage::{PROFILE_TITLE, Page, Period, SESSION_TITLE, SUBTITLE, TITLE};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
-use crate::ui::kit::button::seg;
+use crate::ui::kit::button::{ButtonKind, button, seg};
 use crate::ui::kit::notice::{error, notice};
 use crate::ui::kit::page::{body, head, pane, section};
 use crate::ui::kit::text::{h3, plain};
@@ -29,6 +30,10 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 use shown::{Shown, Status};
+
+/// The held-ink words that qualify a figure (partial coverage, a retained copy); Timeline says
+/// its coverage the same way.
+pub(crate) use costs::qualifier;
 
 /// Below this content width the cost column moves under the table (the mockup's 380 pt column
 /// beside a table that needs about 720).
@@ -42,7 +47,7 @@ const COLUMN: f32 = 8.0;
 /// below the page head; the phone returns its scrolling body (the shell draws the pushed
 /// header with "Usage" and the back to More). test ids: "page-title" (desktop and terminal
 /// head), "usage" (the scroll), "seg-period-<n>", "usage-<provider id>", "usage-profiles",
-/// "usage-sessions", "usage-costs".
+/// "usage-sessions", "usage-costs", "usage-quotas-<provider id>", "btn-retry-usage".
 pub fn screen(app: AppState) -> AnyElement {
     if untracked(|| app.daemon()) {
         shown::keep_loaded(app);
@@ -67,8 +72,10 @@ fn period_seg(app: AppState) -> AnyElement {
     )
 }
 
-/// The page's loading, stale or failed state, above its content; nothing when current.
-fn status(app: AppState, status: &Status) -> Option<AnyElement> {
+/// Above the content: the rows' loading or stale state, then corrald's read failure said once
+/// (the model folds the rows' and the series' causes into one notice) with its Retry; nothing
+/// when current.
+fn status(app: AppState, current: &Shown) -> Vec<AnyElement> {
     let pad = |element: AnyElement| match app.form {
         Form::Terminal => element,
         Form::Desktop | Form::Phone => view()
@@ -77,7 +84,7 @@ fn status(app: AppState, status: &Status) -> Option<AnyElement> {
             .child(element)
             .into_element(),
     };
-    match status {
+    let state = match current.status {
         Status::Ready => None,
         Status::Loading => Some(pad(notice(
             app,
@@ -93,12 +100,20 @@ fn status(app: AppState, status: &Status) -> Option<AnyElement> {
             )],
             None,
         ))),
-        Status::Failed(message) => Some(error(
-            app,
-            &vec![span("Usage unavailable: ").bold(), span(message.clone())],
-            None,
-        )),
-    }
+    };
+    state
+        .into_iter()
+        .chain(current.page.notices.iter().map(|line| {
+            let retry = button(
+                app,
+                "Retry",
+                ButtonKind::Ghost,
+                "btn-retry-usage",
+                move || shown::retry(app),
+            );
+            error(app, &vec![span(line.as_str())], Some(retry))
+        }))
+        .collect()
 }
 
 /// The page body, built again when the shown page changes.
@@ -132,10 +147,10 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
                 .providers
                 .iter()
                 .enumerate()
-                .map(|(at, item)| providers::desktop_cell(item, at == 0))
+                .map(|(at, item)| providers::desktop_cell(app, item, at == 0))
                 .collect::<Vec<_>>();
             view()
-                .children(status(app, &shown.status))
+                .children(status(app, shown))
                 .children(page.providers_empty.map(|line| {
                     view()
                         .px(px(18.0))
@@ -238,10 +253,10 @@ fn phone(app: AppState, data: Memo<Shown>) -> AnyElement {
             let blocks = page
                 .providers
                 .iter()
-                .map(providers::phone_block)
+                .map(|item| providers::phone_block(app, item))
                 .collect::<Vec<_>>();
             view()
-                .children(status(app, &shown.status))
+                .children(status(app, shown))
                 .children(page.providers_empty.map(|line| {
                     view()
                         .px(px(18.0))
@@ -318,10 +333,10 @@ fn terminal_content(app: AppState, shown: &Shown, room: usize) -> AnyElement {
     let lines = page
         .providers
         .iter()
-        .map(|item| providers::terminal_line(item, room))
+        .map(|item| providers::terminal_line(app, item, room))
         .collect::<Vec<_>>();
     view()
-        .children(status(app, &shown.status))
+        .children(status(app, shown))
         .child(term::blank())
         .children(page.providers_empty.map(|line| quiet_line(app, line)))
         .children(lines)

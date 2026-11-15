@@ -112,6 +112,7 @@ import { TurnFacts, turnWaits } from "./turn-facts.ts";
 import { holdContextOnly } from "./lifecycle.ts";
 import { RemotePrompts } from "./remote-prompts.ts";
 import { HostContinuation } from "./continuation.ts";
+import { createSummaryRequest, summarizeQuick, type SummaryOptions, type SummaryRequest } from "./summary.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -127,6 +128,8 @@ export interface HostSessionOptions {
   /** The Bedrock binding and its credential resolver; required for an AWS-profile provider. */
   readonly aws?: AwsRoute;
   readonly effort?: string;
+  readonly quickSummary?: boolean;
+  readonly summary?: SummaryOptions;
   readonly promptFile?: string;
   readonly memoryFile?: string;
   readonly todo?: boolean;
@@ -361,6 +364,7 @@ export class HostSession {
   private attached: "interactive" | "headless" | undefined;
   private guidance: Guidance = { skillPaths: [], promptPaths: [], contextFiles: [] };
   private readonly settings: ReturnType<typeof restrictedSettings> & ReturnType<typeof compactionSettings>;
+  private summaryRequest: SummaryRequest | undefined;
   private readonly controls: HostControls;
   private readonly hooks: Hooks | undefined;
   private additionalLsp: LspToolkit | undefined;
@@ -1067,6 +1071,7 @@ export class HostSession {
       }
     }
     host.auxiliaryModels = models;
+    host.summaryRequest = await createSummaryRequest(options, host.budget);
     host.buildProviders = subscriptions.providers;
     if (!apiBinding && options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
       const providers = subscriptions.providers.filter((id) => id === "openai-codex" || id === "anthropic");
@@ -1150,6 +1155,21 @@ export class HostSession {
     this.dialogPi = pi;
     this.paidContinuation.extend(pi, this.roleContext);
     registerCacheStats(pi);
+    if (this.options.quickSummary) pi.on("session_before_compact", async event => {
+      try {
+        const model = this.session.model;
+        if (!model) throw new Error("model_unavailable: quick summary has no session model");
+        const request = this.summaryRequest ?? { model, effort: this.session.thinkingLevel,
+          binding: this.provider === model.provider ? this.options.binding : undefined,
+          stream: ((model, context, options) => this.session.modelRuntime.streamSimple(model, context, options as never)) as StreamFunction };
+        return { compaction: await summarizeQuick(this.options.sdk, event.preparation, request,
+          event.signal, this.sessionId(), event.customInstructions) };
+      } catch (error) {
+        // Pi swallows thrown extension errors and would otherwise summarize with its default model.
+        this.options.events.emit("quick_summary_failed", { reason: error instanceof Error ? error.message : String(error) });
+        return { cancel: true };
+      }
+    });
     pi.on("model_select", event => {
       this.modelChanged(`${event.model.provider}/${event.model.id}`,
         this.session.thinkingLevel, event.source !== "restore");

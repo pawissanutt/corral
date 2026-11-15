@@ -26,7 +26,7 @@ pub(super) fn app_key(key: &str) -> bool {
         parts.as_slice(),
         [
             "assistant",
-            "agent" | "max_live" | "scratch_max" | "scratch_idle_days"
+            "agent" | "summary_profile" | "max_live" | "scratch_max" | "scratch_idle_days"
         ] | ["defaults", "profile"]
             | ["pm", "agent"]
             | ["profiles", _, "model" | "effort"]
@@ -94,7 +94,11 @@ impl Verb for ConfigCommand {
                     }
                     let legacy_review = whole_review && doc.get("review.autopilot")?.is_some();
                     if whole_capacity { doc.unset(&key)?; }
-                    doc.set_str(&key, &value)?;
+                    if parts.as_slice() == ["assistant", "summary_profile"] && value.is_empty() {
+                        doc.unset(&key)?;
+                    } else {
+                        doc.set_str(&key, &value)?;
+                    }
                     if legacy_review || whole_review && doc.get("review.autopilot")?.is_some() {
                         bail!("review.autopilot is legacy evidence, not an independent control; use corral mode");
                     }

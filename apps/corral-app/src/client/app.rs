@@ -3,9 +3,13 @@ mod cache;
 mod cancellation;
 mod commands;
 mod details;
+mod devices;
 mod events;
+mod local;
 mod rows;
+mod scopes;
 mod session_items;
+mod terminal;
 mod uploads;
 use super::{
     core::{Event, topic_key},
@@ -15,7 +19,9 @@ use super::{
 use crate::model::{Id, daemon::*, devices::Registry};
 use corral_protocol::attachment::*;
 use corral_protocol::device::{
-    DEVICE_PAGE, DEVICE_PAGE_LIMIT_MAX, DeviceInfo, DevicePage, DevicePageQuery,
+    DEVICE_AUTHORITY_PREVIEW, DEVICE_PAGE, DEVICE_PAGE_LIMIT_MAX, DEVICE_REVOKE, DeviceInfo,
+    DevicePage, DevicePageQuery, PUSH_STATUS, PUSH_SUBSCRIBE, PUSH_UNSUBSCRIBE, PUSH_V1,
+    SESSION_AUTHORITY_CHANGED,
 };
 use corral_protocol::{
     self as wire,
@@ -47,6 +53,8 @@ pub(super) const CAPS: &[&str] = &[
     ACT_V1,
     ASSISTANT_ATTACH_V1,
     SESSION_V1,
+    corral_protocol::detail::STREAM_TERMINAL_V1,
+    PUSH_V1,
 ];
 
 pub(super) fn handles(event: &Event) -> bool {
@@ -58,9 +66,12 @@ pub(super) fn handles(event: &Event) -> bool {
             | Event::Reset { .. }
             | Event::TopicError { .. }
             | Event::Live { .. }
-    ) || matches!(event, Event::Reply { method, .. } if matches!(*method,
+    ) || matches!(event, Event::Notice { method, .. } if method == SESSION_AUTHORITY_CHANGED)
+        || matches!(event, Event::Reply { method, .. } if matches!(*method,
             APP_SESSION | ACT_PREVIEW | ACT_SUBMIT | ACT_RESULT | DETAIL_GET | CHANGES_PAGE |
-            SEEN_ADVANCE | DEVICE_SET_AUTHORITY | ASSISTANT_SEND | ASSISTANT_WARM |
+            SEEN_ADVANCE | DEVICE_SET_AUTHORITY | DEVICE_AUTHORITY_PREVIEW | DEVICE_REVOKE |
+            wire::device::PAIR_BEGIN | wire::device::PAIR_STATUS | wire::device::PAIR_CONFIRM | wire::device::PAIR_CANCEL |
+            PUSH_STATUS | PUSH_SUBSCRIBE | PUSH_UNSUBSCRIBE | ASSISTANT_SEND | ASSISTANT_WARM |
             ASSISTANT_STOP | ASSISTANT_SESSION | PROMPT_ANSWER | PROMPT_PREVIEW | DEVICE_PAGE |
             ASSISTANT_CANCEL | ATTACHMENT_BEGIN | ATTACHMENT_PUT | ATTACHMENT_DISCARD))
 }
@@ -71,6 +82,8 @@ pub(super) struct AppState {
     outbox: Option<Outbox>,
     scopes: BTreeSet<String>,
     session_scopes: BTreeMap<String, usize>,
+    terminal_scopes: BTreeMap<String, usize>,
+    offline: super::offline::Cache,
     retained: cache::RetainedCache,
     detail_inflight: BTreeMap<String, String>,
     detail_pages: BTreeMap<String, Vec<DetailReply>>,
@@ -92,6 +105,8 @@ impl AppState {
             scopes: BTreeSet::from([QUICK_THREAD.into()]),
             session_scopes: BTreeMap::new(),
             retained: cache::RetainedCache::default(),
+            terminal_scopes: BTreeMap::new(),
+            offline: super::offline::Cache::default(),
             detail_inflight: BTreeMap::new(),
             detail_pages: BTreeMap::new(),
             detail_bytes: BTreeMap::new(),
@@ -137,16 +152,25 @@ impl AppState {
             vec![open(Topic::Board, None), open(Topic::Health, None)]
         }
     }
-    fn session(
+    async fn session(
         &mut self,
         feed: Signal<Feed>,
         session: AppSession,
     ) -> Result<Vec<Outgoing>, String> {
+        if self
+            .namespace
+            .as_ref()
+            .is_some_and(|namespace| namespace.1 != session.device.id)
+        {
+            feed.update(|feed| feed.authority_revision = 0);
+        }
         let store = feed.with_untracked(|feed| feed.store.clone().unwrap_or_default());
         let namespace = (store, session.device.id.clone());
         let same_namespace = self.namespace.as_ref() == Some(&namespace);
         let refresh_only = self.ready && same_namespace;
         if !same_namespace && self.namespace.is_some() {
+            self.session_scopes.clear();
+            self.terminal_scopes.clear();
             self.scopes = BTreeSet::from([QUICK_THREAD.into()]);
             self.uploads.clear();
             self.item_fetches.clear();
@@ -154,6 +178,7 @@ impl AppState {
             self.cancel_inflight.clear();
             feed.update(|feed| {
                 feed.board = Board::default();
+                feed.synced = None;
                 feed.inbox.clear();
                 feed.plans.clear();
                 feed.agents.clear();
@@ -188,10 +213,15 @@ impl AppState {
                 feed.commands.clear();
                 feed.drafts.clear();
             });
-            match Outbox::load(&namespace.0, &namespace.1) {
+            match Outbox::load_async(&namespace.0, &namespace.1).await {
                 Ok(outbox) => self.outbox = Some(outbox),
                 Err(problem) => feed.update(|feed| feed.problem = Some(problem)),
             }
+        }
+        if let Err(problem) = self.offline.authenticated(feed, &session).await {
+            self.ready = false;
+            self.outbox = None;
+            return Err(problem);
         }
         self.ready = true;
         feed.update(|feed| {
@@ -261,66 +291,15 @@ impl AppState {
                 outgoing.push(open(Topic::Session, Some(scope.clone())));
             }
         }
+        if feed.with_untracked(|feed| feed.capable(STREAM_TERMINAL_V1)) {
+            for scope in self.terminal_scopes.keys() {
+                outgoing.push(open(Topic::Terminal, Some(scope.clone())));
+            }
+        }
+        self.project_local(feed);
         outgoing.extend(self.resume_items());
         outgoing.extend(self.poll_changes(feed));
         if let Some(outbox) = &self.outbox {
-            feed.update(|feed| {
-                feed.drafts = outbox
-                    .saved
-                    .drafts
-                    .iter()
-                    .map(|(key, value)| (Id::from(key), value.clone()))
-                    .collect();
-                for (id, command) in &outbox.saved.commands {
-                    let mut state = command_state(
-                        feed,
-                        &command.method,
-                        command.params.clone(),
-                        CommandStatus::Unknown,
-                    );
-                    state.result = command.result.clone();
-                    state.error = command.error.as_ref().map(|(code, message)| ClientError {
-                        code: code.clone(),
-                        message: message.clone(),
-                    });
-                    if let Some(result) = &state.result {
-                        state.status = result_status(result);
-                    } else if let Some(error) = &state.error {
-                        state.status = error_status(error);
-                    }
-                    feed.commands.entry(Id::from(id)).or_insert(state);
-                }
-                for (id, message) in &outbox.saved.messages {
-                    let mut state = command_state(
-                        feed,
-                        ASSISTANT_SEND,
-                        serde_json::to_value(&message.request).unwrap_or(Value::Null),
-                        if message.attempted {
-                            CommandStatus::Unknown
-                        } else {
-                            CommandStatus::Queued
-                        },
-                    );
-                    if let Some((code, explanation)) = &message.error {
-                        state.error = Some(ClientError {
-                            code: code.clone(),
-                            message: explanation.clone(),
-                        });
-                        state.status = if message.refused {
-                            CommandStatus::Refused
-                        } else {
-                            CommandStatus::Unknown
-                        };
-                    }
-                    feed.commands.entry(Id::from(id)).or_insert(state);
-                    if message.cancel {
-                        feed.cancelling.insert(Id::from(id));
-                        if let Some(state) = feed.commands.get_mut(id.as_str()) {
-                            state.status = CommandStatus::Unknown;
-                        }
-                    }
-                }
-            });
             for id in outbox.saved.commands.keys() {
                 if outbox
                     .saved
@@ -339,7 +318,7 @@ impl AppState {
                 .filter_map(outbox::Message::replay_request)
                 .collect();
             for message in messages {
-                outgoing.extend(self.request(feed, message));
+                outgoing.extend(self.request_async(feed, message).await);
             }
         }
         outgoing.extend(self.refresh_details(feed));
@@ -365,42 +344,50 @@ impl AppState {
             }),
         )
     }
-    fn settled(&mut self, feed: Signal<Feed>, id: &str) {
+    async fn settled(&mut self, feed: Signal<Feed>, id: &str) {
         let state = feed.with_untracked(|feed| feed.commands.get(id).cloned());
         if let Some(outbox) = &mut self.outbox {
-            if let Err(problem) = outbox.update(|saved| {
-                if state
-                    .as_ref()
-                    .is_some_and(|state| state.status == CommandStatus::Done)
-                    && !saved.messages.get(id).is_some_and(|message| message.cancel)
-                {
-                    saved.messages.remove(id);
-                } else if let (Some(message), Some(state)) =
-                    (saved.messages.get_mut(id), state.as_ref())
-                {
-                    if !message.cancel
-                        && matches!(
-                            state.status,
-                            CommandStatus::Refused | CommandStatus::Conflict
-                        )
+            if let Err(problem) = outbox
+                .update_async(|saved| {
+                    if state
+                        .as_ref()
+                        .is_some_and(|state| state.status == CommandStatus::Done)
+                        && !saved.messages.get(id).is_some_and(|message| message.cancel)
                     {
-                        message.refused = true;
-                        message.error = state
+                        saved.messages.remove(id);
+                    } else if let (Some(message), Some(state)) =
+                        (saved.messages.get_mut(id), state.as_ref())
+                    {
+                        if !message.cancel
+                            && matches!(
+                                state.status,
+                                CommandStatus::Refused | CommandStatus::Conflict
+                            )
+                        {
+                            message.refused = true;
+                            message.error = state
+                                .error
+                                .as_ref()
+                                .map(|error| (error.code.clone(), error.code.clone()));
+                        }
+                    }
+                    if let (Some(command), Some(state)) =
+                        (saved.commands.get_mut(id), state.as_ref())
+                    {
+                        command.result = state.result.clone().map(|mut result| {
+                            if let Some(error) = &mut result.error {
+                                error.message = error.code.clone();
+                            }
+                            result
+                        });
+                        command.error = state
                             .error
                             .as_ref()
                             .map(|error| (error.code.clone(), error.code.clone()));
                     }
-                }
-                if let (Some(command), Some(state)) = (saved.commands.get_mut(id), state) {
-                    command.result = state.result.map(|mut result| {
-                        if let Some(error) = &mut result.error {
-                            error.message = error.code.clone();
-                        }
-                        result
-                    });
-                    command.error = state.error.map(|error| (error.code.clone(), error.code));
-                }
-            }) {
+                })
+                .await
+            {
                 feed.update(|feed| feed.problem = Some(problem));
             }
         }

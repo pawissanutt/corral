@@ -4,9 +4,12 @@
 //! Screenshot, Link and File controls. Enter sends and Shift+Enter breaks the line; Send hands
 //! the draft, target and attachment refs to the assistant model, which stores the message with
 //! its state at once; the draft and the attachments clear once the device outbox accepted it.
+//! A phone folds all of it into one row and one chip above it (`phone`).
+
+use std::rc::Rc;
 
 use nsh_base::{SheetEvent, sheet, toggle, toggle_group};
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::{Input, color as for_appearance, input};
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
@@ -15,8 +18,8 @@ use crate::model::hue::Hue;
 use crate::model::text::Rich;
 use crate::model::{Form, Overlay};
 use crate::state::AppState;
-use crate::ui::ask::{act, chip_row, drawer, field_row, foot_controls, models, tray};
-use crate::ui::atoms::key_hint;
+use crate::ui::ask::{act, chip_row, drawer, foot_controls, models, tray};
+use crate::ui::atoms::{control_height, key_hint};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::hue_ink;
@@ -26,10 +29,14 @@ use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
 mod draft;
 mod pending;
+mod phone;
 mod send;
 
 use draft::keep_draft;
 use send::send;
+
+/// Runs after a press in the target switch: the phone's chooser opens the model list or closes.
+type AfterTarget = Rc<dyn Fn()>;
 
 /// Where a composer's model list opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +45,7 @@ pub(crate) enum ListAt {
     Above,
     /// A popup below the control row: the hotkey window.
     Below,
-    /// In the flow under the control row: the phone sheet and a phone thread.
+    /// In the flow, in the chooser under the who chip: the phone sheet and a phone thread.
     Inline,
 }
 
@@ -177,62 +184,44 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
     let status = computed(move || built.with(|c| c.status.clone()));
     let next = computed(move || built.with(|c| c.next_message.clone()));
     let terminal = form == Form::Terminal;
+    let to = To {
+        thread,
+        docked,
+        draft,
+    };
+    let status = dynamic(move || {
+        status
+            .get()
+            .map(|line| untracked(|| saved_line(app, &line)))
+    });
+    if form == Form::Phone {
+        return phone::composer(app, built, entry, to, status, next, menu);
+    }
     let shell = view().gap(px(if terminal { 0.0 } else { 8.0 }));
-    let shell = match (form, docked) {
-        (Form::Desktop, _) => shell
+    let shell = if terminal {
+        shell.px(term::cells(1.0))
+    } else {
+        shell
             .px(px(14.0))
             .pt(px(10.0))
             .pb(px(12.0))
             .bg(color(Token::Bg))
             .border_t(px(1.0))
-            .border_color(color(Token::Rule)),
-        (Form::Phone, true) => shell
-            .px(px(14.0))
-            .py(px(8.0))
-            .bg(color(Token::Bg))
-            .border_t(px(1.0))
-            .border_color(color(Token::Rule)),
-        (Form::Phone, false) => shell.px(px(14.0)).pt(px(4.0)).pb(px(14.0)),
-        (Form::Terminal, _) => shell.px(term::cells(1.0)),
+            .border_color(color(Token::Rule))
     };
     shell
         .when(terminal, |s| s.child(term::blank()))
-        .child(dynamic(move || {
-            status
-                .get()
-                .map(|line| untracked(|| saved_line(app, &line)))
-        }))
+        .child(status)
         .child(dynamic(move || {
             next.get().map(|line| untracked(|| saved_line(app, &line)))
         }))
-        .child(controls(app, built, list, row, menu))
-        .when(list == ListAt::Inline, |s| {
-            s.child(models::inline_list(app, menu))
-        })
+        .child(controls(app, built, list, row, menu, docked))
         .child(chip_row(app, built))
         .child(tray(app, built))
         .when(terminal, |s| s.child(term::blank()))
-        .child(entry_field(
-            app,
-            built,
-            entry,
-            To {
-                thread: thread.clone(),
-                docked,
-                draft,
-            },
-        ))
+        .child(entry_field(app, built, entry, to.clone()))
         .when(terminal, |s| s.child(term::blank()))
-        .when(form == Form::Phone, |s| s.child(field_row(app)))
-        .child(foot(
-            app,
-            built,
-            To {
-                thread,
-                docked,
-                draft,
-            },
-        ))
+        .child(foot(app, built, to))
         .when(terminal, |s| s.child(term::blank()))
         .into_element()
 }
@@ -241,7 +230,7 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
 /// sent from this run would reach nothing: `after_answer` waits for the commit after the one that
 /// mounts it, which is also after a closing dialog (the palette running Ask) hands its focus
 /// back, so this focus lands last. The caret goes after any draft the opening brought.
-fn focus_on_open(app: AppState, entry: ElementRef) {
+pub(crate) fn focus_on_open(app: AppState, entry: ElementRef) {
     effect(move || {
         app.ask_focus.with(|_| ());
         after_answer(move || {
@@ -306,13 +295,15 @@ fn saved_line(app: AppState, line: &Rich) -> AnyElement {
 
 /// The control row (`.crow`): the target switch, the model pill or the PM's profile note, and on
 /// desktop the keys, right-aligned, wrapping under the rest when the row is narrow. Absent for a
-/// pane session's composer, which has none of them.
+/// pane session's composer, which has none of them. Ask's own pane in a terminal shows no keys:
+/// the shell's key line names them while its field has the focus.
 fn controls(
     app: AppState,
     built: Memo<Composer>,
     list: ListAt,
     row: ElementRef,
     menu: Memo<Option<ModelList>>,
+    docked: bool,
 ) -> AnyElement {
     let form = app.form;
     let has_targets = computed(move || built.with(|c| !c.targets.is_empty()));
@@ -325,7 +316,8 @@ fn controls(
         })
     });
     let note = computed(move || built.with(|c| c.profile_note.clone()));
-    let keys = computed(move || built.with(|c| c.key_hints));
+    let own_keys = form != Form::Terminal || docked;
+    let keys = computed(move || built.with(|c| c.key_hints.filter(|_| own_keys)));
     // Ask always has its switch, a daemon session its pill, a pane session nothing. A thread
     // page can mount before its row or the configured profiles arrive, so the row follows them
     // instead of being fixed at mount; only what is inside it follows the target.
@@ -341,7 +333,7 @@ fn controls(
                 .gap(px(8.0))
                 .child(when(
                     move || has_targets.get(),
-                    move || untracked(|| target_switch(app, built)),
+                    move || untracked(|| target_switch(app, built, None)),
                 ))
                 .child(dynamic(move || {
                     pill.get().map(|(label, name)| {
@@ -365,8 +357,9 @@ fn controls(
 }
 
 /// Assistant | PM: one toggle pressed at a time, one stop of the keyboard focus with the arrow keys
-/// moving between them; PM carries its state dot and words. Choosing one closes the model list.
-fn target_switch(app: AppState, built: Memo<Composer>) -> AnyElement {
+/// moving between them; PM carries its state dot and words. Choosing one closes the model list,
+/// then runs `after`. A phone's spans the chooser, each half a full touch target.
+fn target_switch(app: AppState, built: Memo<Composer>, after: Option<AfterTarget>) -> AnyElement {
     let form = app.form;
     let options = built.with(|c| c.targets.clone());
     let group = toggle_group().flex_row().items_center();
@@ -376,35 +369,36 @@ fn target_switch(app: AppState, built: Memo<Composer>) -> AnyElement {
         group
             .gap(px(2.0))
             .p(px(2.0))
-            .rounded(px(if form == Form::Phone { 9.0 } else { 7.0 }))
+            .rounded(px(if form == Form::Phone { 12.0 } else { 7.0 }))
             .bg(color(Token::BgSunk))
             .border_1()
             .border_color(color(Token::Rule))
     };
     group
-        .children(
-            options
-                .iter()
-                .enumerate()
-                .map(|(index, option)| target_item(app, built, index, option.target, option.label)),
-        )
+        .children(options.iter().enumerate().map(|(index, option)| {
+            target_item(
+                app,
+                built,
+                (index, option.target, option.label),
+                after.clone(),
+            )
+        }))
         .into_element()
 }
 
 fn target_item(
     app: AppState,
     built: Memo<Composer>,
-    index: usize,
-    target: crate::model::AskTarget,
-    label: &'static str,
+    (index, target, label): (usize, crate::model::AskTarget, &'static str),
+    after: Option<AfterTarget>,
 ) -> AnyElement {
     let form = app.form;
     let on = computed(move || built.with(|c| c.targets.get(index).is_some_and(|t| t.selected)));
     let state =
         computed(move || built.with(|c| c.targets.get(index).and_then(|t| t.state.clone())));
     let (height, size, radius) = match form {
-        Form::Desktop => (24.0, 12.0, 5.0),
-        Form::Phone => (32.0, 14.0, 7.0),
+        Form::Desktop => (control_height(24.0), 12.0, 5.0),
+        Form::Phone => (44.0, 15.0, 10.0),
         Form::Terminal => (16.0, text_size(form), 0.0),
     };
     let words = text(label)
@@ -441,9 +435,13 @@ fn target_item(
             app.assistant.update(|state| {
                 state.close_menu();
             });
+            if let Some(after) = &after {
+                after();
+            }
         })
         .h(px(height))
         .px(px(if form == Form::Phone { 12.0 } else { 10.0 }))
+        .when(form == Form::Phone, |t| t.flex_1())
         .rounded(px(radius))
         .items_center()
         .justify_center()
@@ -466,14 +464,6 @@ fn target_item(
                     }
                 })
                 .focus_visible(|s| s.border_color(color(Token::Focus)))
-        })
-        .when(form == Form::Phone, |t| {
-            t.hit_slop(EdgeInsets {
-                top: px(6.0),
-                right: px(0.0),
-                bottom: px(6.0),
-                left: px(0.0),
-            })
         })
         .child(face)
         .into_element()
@@ -547,7 +537,8 @@ fn key_hints(app: AppState, keys: &'static [KeyHint]) -> AnyElement {
 }
 
 /// The field: multiline, Enter sends, Shift+Enter breaks the line; always ringed in the focus
-/// colour as the mockup draws it, the placeholder naming what it talks to.
+/// colour as the mockup draws it, the placeholder naming what it talks to. A phone's starts one
+/// line high and grows with the draft to five lines, then scrolls.
 fn entry_field(app: AppState, built: Memo<Composer>, entry: ElementRef, to: To) -> AnyElement {
     let form = app.form;
     let placeholder = computed(move || built.with(|c| c.placeholder.clone()));
@@ -569,7 +560,14 @@ fn entry_field(app: AppState, built: Memo<Composer>, entry: ElementRef, to: To) 
         })
         .placeholder(move || placeholder.get())
         .value(move || draft.get())
-        .on_change(move |text: &str| draft.set(text.to_owned()))
+        .on_change(move |text: &str| draft.set(text.to_owned()));
+    field_look(form, field)
+}
+
+/// The composer field's look for the form: its inks, size and focus ring. Shared with the field
+/// Ask keeps while it has no connection.
+pub(crate) fn field_look(form: Form, field: Input) -> AnyElement {
+    let field = field
         .text_color(color(Token::Ink))
         .placeholder_color(move || {
             for_appearance(color(if form == Form::Terminal {
@@ -594,12 +592,13 @@ fn entry_field(app: AppState, built: Memo<Composer>, entry: ElementRef, to: To) 
             .border_color(color(Token::Focus))
             .into_element(),
         Form::Phone => field
-            .h(px(92.0))
+            .min_h(px(phone::TARGET))
+            .max_h(px(phone::FIELD_MAX))
             .px(px(12.0))
-            .py(px(10.0))
+            .py(px(9.0))
             .font_family(FONT_TEXT)
             .text_size(px(16.0))
-            .line_height(px(23.0))
+            .line_height(px(22.0))
             .rounded(px(10.0))
             .bg(color(Token::Surface))
             .border(px(1.5))

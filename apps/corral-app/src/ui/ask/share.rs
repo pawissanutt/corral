@@ -1,7 +1,7 @@
-//! The phone share extension (`.psheet.osshare`, `.asksheet`): another app's page behind, the
-//! system share sheet, then Corral's caption and Send, the item saved on this phone, and the
-//! filed card once the app delivered it. The extension only writes an outbox item; nothing here
-//! sends. Off the phone the same steps show in the form's modal, so the demo closes cleanly.
+//! Fixture-only illustration of a phone share extension (`.psheet.osshare`, `.asksheet`).
+//! It neither registers an OS share target nor receives content from another application.
+//! NSH 0.5.0's packaged hosts expose inbound URLs, not an inbound share payload/extension API.
+//! The preview's caption and queued/filed states are local fixture state, never a real outbox.
 
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;

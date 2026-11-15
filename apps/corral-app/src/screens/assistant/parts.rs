@@ -315,7 +315,8 @@ pub fn test_id(button: &Button) -> String {
         | Action::WithdrawEntry(id)
         | Action::WithdrawPm { id, .. }
         | Action::CancelSend(id)
-        | Action::Answer { key: id, .. } => Some(id.as_str()),
+        | Action::Answer { key: id, .. }
+        | Action::AnswerText { key: id, .. } => Some(id.as_str()),
         _ => None,
     };
     let mut slug = String::with_capacity(button.label.len() + 8);

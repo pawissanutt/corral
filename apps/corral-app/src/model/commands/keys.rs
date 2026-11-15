@@ -9,6 +9,8 @@ use crate::model::{Destination, Live, Page};
 
 const MOVE: &[&str] = &["j", "k", "down", "up"];
 const MOVE_OPEN: &[&str] = &["j", "k", "down", "up", "enter"];
+const LIVE_MOVE_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "."];
+const MENU: &[&str] = &["."];
 /// The fixture's question offers two answers; the arrows stay with the page's scroll.
 const FIXTURE_QUESTION: &[&str] = &["j", "k", "1", "2"];
 const FIXTURE_INBOX: &[&str] = &["j", "k", "down", "up", "enter", "1", "2"];
@@ -33,7 +35,8 @@ pub fn list_keys_live(destination: Destination, top: Option<&Live>) -> &'static 
     match (destination, top) {
         (Destination::Inbox, Some(Live::Question(_))) => LIVE_QUESTION,
         (Destination::Inbox, None) => LIVE_INBOX,
-        (Destination::Now, None | Some(Live::Task(_))) => MOVE_OPEN,
+        (Destination::Now, None | Some(Live::Task(_))) => LIVE_MOVE_OPEN,
+        (Destination::Review, None | Some(Live::Review(_))) => MENU,
         (Destination::Plans, _) => MOVE,
         _ => &[],
     }
@@ -74,9 +77,14 @@ pub fn key_legend_live(
         (_, Some(Live::Session(_))) => vec![("`", "transcript/terminal")],
         (_, Some(Live::Thread(_))) => Vec::new(),
         (Destination::Inbox, _) => vec![("j k", "move"), ("Enter", "open"), ("1-9", "choose")],
-        (Destination::Now, _) => vec![("j k", "move"), ("Enter", "open")],
+        (Destination::Now, _) => vec![
+            ("j k", "move"),
+            ("Enter", "session"),
+            ("]", "next tab"),
+            (".", "actions"),
+        ],
         (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member")],
-        (Destination::Review, _) => vec![("s", "split")],
+        (Destination::Review, _) => vec![("s", "split"), (".", "actions")],
         _ => Vec::new(),
     }
 }

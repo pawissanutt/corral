@@ -1,17 +1,22 @@
-//! Settings › Connection: the five connection states to try (pressing one switches the app's
-//! connection, so the health line and banner follow), what the current one reports, the local
-//! queue while corrald cannot be reached, and which actions queue or refuse then.
+//! Settings › Connection. Without a connection: why, the guide to connecting this form (a native
+//! app's socket and enrolment, a browser's pairing) and the way to the preview. Against corrald:
+//! this device's enrolment and the live connection facts. In the fixture preview: the five
+//! connection states to try (pressing one switches the app's connection, so the health line and
+//! banner follow), what the current one reports, the local queue while corrald cannot be
+//! reached, and which actions queue or refuse then.
 
 use nsh_base::{toggle, toggle_group};
 use nsh_core::prelude::*;
 
 use super::parts::{
-    act, cell, first_heading, frame, model_button, mono_cell, read, ring, test_id, under,
+    act, button_row, cell, first_heading, frame, model_button, mono_cell, read, ring, space,
+    test_id, under,
 };
+use crate::model::settings::connect::{self, Guide};
 use crate::model::settings::{self, ConnectionCard, ConnectionView, LocalQueueRow, QueueRule};
 use crate::model::{DataState, Form, Hue};
 use crate::state::AppState;
-use crate::ui::kit::button::ButtonOptions;
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::{chip, illus};
 use crate::ui::kit::marks::{hue_ink, mark};
 use crate::ui::kit::notice::tone_mark;
@@ -25,14 +30,8 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 /// local queue when there is one, the policy table. Phone: the cards two to a row. Terminal:
 /// one card per row, the pressed one banded by NSH.
 pub fn page(app: AppState) -> AnyElement {
-    if untracked(|| app.data.get() == DataState::Disconnected) && crate::client::pairing_supported()
-    {
-        return frame(
-            app,
-            "Connection",
-            12.0,
-            vec![super::enrolment::pair_browser(app)],
-        );
+    if untracked(|| app.data.get() == DataState::Disconnected) {
+        return disconnected(app);
     }
     if untracked(|| app.daemon()) {
         let details = dynamic(move || {
@@ -71,7 +70,7 @@ pub fn page(app: AppState) -> AnyElement {
     });
     let mut parts = Vec::new();
     if crate::client::pairing_supported() {
-        parts.push(super::enrolment::pair_browser(app));
+        parts.extend(pairing(app));
     }
     parts.extend([
         first_heading(app, v.state_heading, None),
@@ -81,6 +80,85 @@ pub fn page(app: AppState) -> AnyElement {
         rules(app, v.rules),
     ]);
     frame(app, title, 12.0, parts)
+}
+
+/// This form's guide, read live.
+fn guide(app: AppState) -> Memo<Guide> {
+    let terminal = app.form == Form::Terminal;
+    let origin = crate::client::page_origin();
+    computed(move || {
+        app.feed.with(|feed| {
+            if crate::client::pairing_supported() {
+                connect::web_guide(feed, origin.as_deref())
+            } else {
+                connect::native_guide(feed, terminal)
+            }
+        })
+    })
+}
+
+/// A browser's pairing: where it stands (and the code to compare), then the form while a
+/// code may be entered.
+fn pairing(app: AppState) -> Vec<AnyElement> {
+    let shown = guide(app);
+    vec![
+        dynamic(move || {
+            let guide = shown.get();
+            untracked(move || super::guide::status(app, &guide))
+        }),
+        space(app, 12.0),
+        super::enrolment::pair_form(app),
+    ]
+}
+
+/// Connection without a connection: a browser's pairing, or a native app's start; the steps,
+/// commands and diagnostics; forgetting a stored pairing that no longer works; the preview.
+fn disconnected(app: AppState) -> AnyElement {
+    let web = crate::client::pairing_supported();
+    let shown = guide(app);
+    let mut parts = if web {
+        pairing(app)
+    } else {
+        vec![dynamic(move || {
+            let guide = shown.get();
+            untracked(move || super::guide::status(app, &guide))
+        })]
+    };
+    if web && crate::client::configured() {
+        parts.push(super::enrolment::forget(app));
+    }
+    parts.push(dynamic(move || {
+        let guide = shown.get();
+        untracked(move || {
+            view()
+                .min_w(px(0.0))
+                .children(super::guide::body(app, &guide))
+                .into_element()
+        })
+    }));
+    parts.push(h3(app, "Without a connection", None));
+    parts.push(
+        cell(
+            app,
+            connect::data_source(DataState::Disconnected, false).line,
+            Token::Ink3,
+            false,
+        )
+        .into_element(),
+    );
+    parts.push(space(app, 8.0));
+    parts.push(button_row(
+        app,
+        vec![button_with(
+            app,
+            connect::PREVIEW,
+            ButtonKind::Ghost,
+            ButtonOptions::default(),
+            "btn-preview",
+            move || app.set_data(DataState::Fixture),
+        )],
+    ));
+    frame(app, "Connection", 12.0, parts)
 }
 
 /// The state cards as one group of toggles, the pressed one the current connection.

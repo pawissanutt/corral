@@ -6,6 +6,7 @@ use nsh_base::dock::{DockAreaLayout, DockLayout, DockNode, DockRegion};
 use nsh_core::JsonValue;
 use nsh_core::element::from_json;
 use nsh_core::geometry::Axis;
+use nsh_core::prelude::Points;
 use nsh_core::storage::Storage;
 
 use crate::model::work::{Action, CtxTab, LowTab, NowTab, State};
@@ -80,15 +81,16 @@ fn tabs(keys: &[&'static str]) -> DockLayout {
 }
 
 /// The mock's 2x2: the list and Goals over Since and Parked on the left; the inspector over Live
-/// and the plan graph on the right.
-pub(super) fn default_layout() -> DockAreaLayout {
+/// and the plan graph on the right. `list` sizes the left column (a terminal's list width);
+/// `None` lets the two columns share the room.
+pub(super) fn default_layout(list: Option<Points>) -> DockAreaLayout {
     DockAreaLayout::new(
         DockLayout::h_split()
             .child(
                 DockLayout::v_split()
                     .child(tabs(&[WHO, GOALS]), None)
                     .child(tabs(&[SINCE, PARKED]), None),
-                None,
+                list,
             )
             .child(
                 DockLayout::v_split()

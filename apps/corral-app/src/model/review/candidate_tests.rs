@@ -58,6 +58,7 @@ fn show(feed: &mut Feed, at: &CandidateAt) {
             now: "review".into(),
             now_code: "review".into(),
             since: None,
+            age_since: None,
             held_reason: None,
             questions: 0,
             attention: vec![],
@@ -228,4 +229,44 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
             expected_run, base, head, ..
         }) if expected_run == &new.candidate.run && base == &new.candidate.base && head == &new.candidate.head))
     );
+}
+
+#[test]
+fn narrow_review_content_is_unified_and_gate_receipts_are_visible() {
+    let state = State::default();
+    assert_eq!(effective_layout(&state, env(), 1099.0), Layout::Unified);
+    assert_eq!(effective_layout(&state, env(), 1100.0), Layout::Split);
+    let mut feed = Feed::default();
+    let at = candidate("head");
+    show(&mut feed, &at);
+    let cache = feed
+        .details
+        .get_mut(&detail_key(&review_ref(&at.task)))
+        .unwrap();
+    let Some(DetailBody::Review(review)) = cache.merged.as_mut() else {
+        panic!("review fixture")
+    };
+    review.gates.push(corral_protocol::detail::ReviewGate {
+        by: "gate".into(),
+        sha: "old-head".into(),
+        verdict: "fail".into(),
+        at: None,
+        text: None,
+        stale: true,
+    });
+    let selection = Selection {
+        review: Some(at.task),
+        ..Selection::default()
+    };
+    let page = live_page(&state, &feed, &selection, None, env(), 1099.0);
+    let detail = page.detail.unwrap();
+    assert_eq!(detail.verdicts[0].mark, Mark::Stale);
+    assert!(detail.verdicts[0].tag.is_some());
+    assert!(matches!(
+        detail.body,
+        Body::Diff(DiffView {
+            layout: Layout::Unified,
+            ..
+        })
+    ));
 }

@@ -1,27 +1,127 @@
-//! The position-in-plan mini graph (`.minigraph`): the model's cards and edges in its own units,
-//! scaled to the width it is given, as the mockup's SVG at 100 % width.
+//! Background: the asking task's goal and place, with the position-in-plan graph. The fixture
+//! draws its mini graph (`.minigraph`, the model's cards and edges in its own units, scaled to
+//! the width it is given, as the mockup's SVG at 100 % width); a served question draws the plan
+//! with the Plans destination's own graph, the asking task selected.
 
 use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
-use super::{code, words};
-use crate::model::inbox::{MiniEdge, MiniGraph, MiniNode};
-use crate::model::{Form, Hue};
+use super::sheet::Place;
+use super::{code, rich_at, words};
+use crate::model::inbox::{Background, MiniEdge, MiniGraph, MiniNode};
+use crate::model::{Form, Hue, Rich};
+use crate::screens::plans::plan_graph;
 use crate::state::AppState;
 use crate::ui::kit::marks::{hue_fill, hue_ink};
+use crate::ui::kit::notice::loading;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
+/// Background's placeholder bars while task detail loads (`.skel` 90 %, 70 %, 80 % × 60).
+const PLACE_BARS: [(f32, f32); 3] = [(0.9, 10.0), (0.7, 10.0), (0.8, 60.0)];
 /// The edges' stroke in source units (`.minigraph path`: 1.2).
 const STROKE: f32 = 1.2;
 /// Where the caption's box starts above the source's bottom edge (its baseline sits 4 up).
 const CAPTION_RISE: f32 = 15.0;
 
-/// The graph. Desktop and phone: the edges drawn on a canvas in rule-2, the cards over it
-/// (surface on a rule-2 edge; the needs-you card on its hue's fill with a 1.5 edge; the queued
+/// The task's goal and place: goal and plan line beside the mini graph (desktop inline), or the
+/// graph under them; without a graph the words alone. A served plan's graph always takes the
+/// band's width under the words, as a plan needs the room. Loading: placeholder bars with the
+/// lazy-detail note as the region's caption. Absent: what is not recorded.
+pub(super) fn background(app: AppState, part: Background, place: Place) -> AnyElement {
+    let form = app.form;
+    match part {
+        Background::Loading {
+            skeleton_count,
+            note,
+        } => loading(
+            app,
+            note,
+            &PLACE_BARS[..usize::from(skeleton_count).min(PLACE_BARS.len())],
+        ),
+        Background::Absent { note } => words(
+            app,
+            note,
+            if form == Form::Phone { 14.0 } else { 12.5 },
+            Token::Ink3,
+        )
+        .into_element(),
+        Background::Ready {
+            goal,
+            plan_line,
+            graph: mini_graph,
+        } => {
+            let words_part = goal_and_place(app, &goal, plan_line);
+            let Some(mini_graph) = mini_graph else {
+                return words_part.into_element();
+            };
+            if place == Place::Wide && form == Form::Desktop {
+                return view()
+                    .flex_row()
+                    .items_start()
+                    .gap(px(22.0))
+                    .child(view().flex_1().min_w(px(0.0)).child(words_part))
+                    .child(
+                        view()
+                            .w(px(300.0))
+                            .flex_shrink_0()
+                            .child(mini(app, mini_graph)),
+                    )
+                    .into_element();
+            }
+            under(app, words_part, mini(app, mini_graph))
+        }
+        Background::Plan {
+            goal,
+            plan_line,
+            graph,
+            selected,
+        } => {
+            let words_part = goal_and_place(app, &goal, plan_line);
+            let drawn = plan_graph(app, move || (graph.clone(), selected.clone()));
+            under(app, words_part, drawn)
+        }
+    }
+}
+
+/// The goal over the plan line, which reads quiet.
+fn goal_and_place(app: AppState, goal: &Rich, plan_line: Rich) -> View {
+    let form = app.form;
+    let plan_line: Rich = plan_line.into_iter().map(|run| run.dim()).collect();
+    let goal_size = if form == Form::Phone { 14.5 } else { 12.5 };
+    view()
+        .gap(px(8.0))
+        .when(!goal.is_empty(), |v| {
+            v.child(rich_at(app, goal, goal_size, color(Token::Ink2)).max_w(px(620.0)))
+        })
+        .when(!plan_line.is_empty(), |v| {
+            v.child(rich_at(
+                app,
+                &plan_line,
+                if form == Form::Phone { 13.0 } else { 12.0 },
+                color(Token::Ink3),
+            ))
+        })
+}
+
+/// The words, then the graph under them.
+fn under(app: AppState, words_part: View, drawn: AnyElement) -> AnyElement {
+    view()
+        .child(words_part)
+        .child(
+            view()
+                .mt(px(12.0))
+                .when(app.form == Form::Terminal, |v| v.child(term::blank()))
+                .child(drawn),
+        )
+        .into_element()
+}
+
+/// The fixture's graph. Desktop and phone: the edges drawn on a canvas in rule-2, the cards over
+/// it (surface on a rule-2 edge; the needs-you card on its hue's fill with a 1.5 edge; the queued
 /// card's words faint), the caption under them; one image for screen readers, named by the
 /// model's label. Terminal: one line per card (id, then its subtitle) and the caption.
-pub(super) fn mini(app: AppState, graph: MiniGraph) -> AnyElement {
+fn mini(app: AppState, graph: MiniGraph) -> AnyElement {
     if app.form == Form::Terminal {
         return terminal(graph);
     }

@@ -3,6 +3,10 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[path = "device_push.rs"]
+mod push;
+pub use push::*;
+
 pub const DEVICE_V1: &str = "device.v1";
 pub const DEVICE_ENROL: &str = "device.enrol";
 pub const DEVICE_ATTACH: &str = "device.attach";
@@ -35,6 +39,24 @@ pub const CLOSE_SESSION_LIFETIME: &str = "session_lifetime";
 pub const CLOSE_DAEMON_STOPPING: &str = "daemon_stopping";
 pub const CLOSE_PAIRED: &str = "paired";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceReach {
+    Unix,
+    Loopback,
+    Lan,
+    Tailscale,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReachHint {
+    pub reach: DeviceReach,
+    /// WebSocket base URL, without an application path or credentials.
+    pub endpoint: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DevicePlatform {
@@ -54,6 +76,11 @@ pub struct DeviceInfo {
     pub revoked_at: Option<String>,
     #[serde(default)]
     pub authority: Option<crate::app::DeviceAuthority>,
+    /// Coarse RFC3339 time of authenticated activity, not an online indicator.
+    #[serde(default)]
+    pub last_seen: Option<String>,
+    #[serde(default)]
+    pub reach: Option<DeviceReach>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -120,6 +147,8 @@ pub struct PairOffer {
     pub expires_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(default)]
+    pub reach: Vec<ReachHint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -193,41 +222,65 @@ pub struct PairCode {
     pub token: [u8; 32],
     pub port: u16,
     pub pair_id: [u8; 8],
+    pub endpoint: Option<String>,
 }
 
 impl PairCode {
     pub fn encode(&self) -> String {
-        let mut bytes = [0; 74];
-        bytes[..32].copy_from_slice(&self.daemon_public);
-        bytes[32..64].copy_from_slice(&self.token);
-        bytes[64..66].copy_from_slice(&self.port.to_be_bytes());
-        bytes[66..].copy_from_slice(&self.pair_id);
-        format!("corral-pair-1.{}", URL_SAFE_NO_PAD.encode(bytes))
+        let mut bytes = Vec::with_capacity(74 + self.endpoint.as_ref().map_or(0, String::len));
+        bytes.extend_from_slice(&self.daemon_public);
+        bytes.extend_from_slice(&self.token);
+        bytes.extend_from_slice(&self.port.to_be_bytes());
+        bytes.extend_from_slice(&self.pair_id);
+        let version = if let Some(endpoint) = &self.endpoint {
+            bytes.extend_from_slice(endpoint.as_bytes());
+            2
+        } else {
+            1
+        };
+        format!("corral-pair-{version}.{}", URL_SAFE_NO_PAD.encode(bytes))
     }
 
     pub fn decode(text: &str) -> Result<Self, String> {
-        let encoded = text
-            .trim()
-            .strip_prefix("corral-pair-1.")
-            .ok_or("not a Corral pairing code")?;
-        let mut bytes = [0; 74];
-        let count = URL_SAFE_NO_PAD
-            .decode_slice(encoded, &mut bytes)
-            .map_err(|_| "the pairing code is damaged")?;
-        if count != bytes.len() {
+        let text = text.trim();
+        let (encoded, remote) = if let Some(encoded) = text.strip_prefix("corral-pair-1.") {
+            (encoded, false)
+        } else if let Some(encoded) = text.strip_prefix("corral-pair-2.") {
+            (encoded, true)
+        } else {
+            return Err("not a Corral pairing code".into());
+        };
+        if encoded.len() > 784 {
             return Err("the pairing code is damaged".into());
         }
+        let bytes = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| "the pairing code is damaged")?;
+        if (!remote && bytes.len() != 74) || (remote && !(75..=586).contains(&bytes.len())) {
+            return Err("the pairing code is damaged".into());
+        }
+        let endpoint = if remote {
+            let endpoint =
+                std::str::from_utf8(&bytes[74..]).map_err(|_| "the pairing endpoint is damaged")?;
+            if !valid_endpoint(endpoint) {
+                return Err("the pairing endpoint is invalid".into());
+            }
+            Some(endpoint.to_owned())
+        } else {
+            None
+        };
         let mut daemon_public = [0; 32];
         let mut token = [0; 32];
         let mut pair_id = [0; 8];
         daemon_public.copy_from_slice(&bytes[..32]);
         token.copy_from_slice(&bytes[32..64]);
-        pair_id.copy_from_slice(&bytes[66..]);
+        pair_id.copy_from_slice(&bytes[66..74]);
         Ok(Self {
             daemon_public,
             token,
             port: u16::from_be_bytes([bytes[64], bytes[65]]),
             pair_id,
+            endpoint,
         })
     }
 
@@ -240,6 +293,55 @@ impl PairCode {
         }
         text
     }
+}
+
+/// A secure browser endpoint, or a local-development WebSocket. Paths are fixed by
+/// the protocol so a scanned offer cannot smuggle credentials, queries or redirects.
+pub fn valid_endpoint(endpoint: &str) -> bool {
+    let (authority, secure) = if let Some(authority) = endpoint.strip_prefix("wss://") {
+        (authority, true)
+    } else if let Some(authority) = endpoint.strip_prefix("ws://") {
+        (authority, false)
+    } else {
+        return false;
+    };
+    if endpoint.len() > 512
+        || authority.is_empty()
+        || authority
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "/?#@\\%".contains(c))
+    {
+        return false;
+    }
+    let (host, port) = if authority.starts_with('[') {
+        let Some(end) = authority.find(']') else {
+            return false;
+        };
+        if authority[1..end].parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        (&authority[..=end], &authority[end + 1..])
+    } else {
+        let end = authority.find(':').unwrap_or(authority.len());
+        let host = &authority[..end];
+        if host.is_empty()
+            || !host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))
+        {
+            return false;
+        }
+        (host, &authority[end..])
+    };
+    if !port.is_empty()
+        && port
+            .strip_prefix(':')
+            .and_then(|p| p.parse::<u16>().ok())
+            .is_none_or(|p| p == 0)
+    {
+        return false;
+    }
+    secure || matches!(host, "127.0.0.1" | "localhost" | "[::1]")
 }
 
 pub fn sas(handshake_hash: &[u8]) -> String {
@@ -260,7 +362,13 @@ mod tests {
             token: [29; 32],
             port: 7841,
             pair_id: [0xab; 8],
+            endpoint: None,
         };
+        let mut remote = code.clone();
+        remote.endpoint = Some("wss://workstation.tailnet.ts.net".into());
+        assert_eq!(PairCode::decode(&remote.encode()).unwrap(), remote);
+        remote.endpoint = Some("ws://192.168.1.2:7841".into());
+        assert!(PairCode::decode(&remote.encode()).is_err());
         let text = code.encode();
         assert_eq!(PairCode::decode(&format!(" {text}\n")).unwrap(), code);
         assert_eq!(code.pair_id_hex(), "abababababababab");

@@ -19,13 +19,17 @@ mod list;
 
 use std::collections::BTreeMap;
 
+use corral_protocol::detail::DetailRef;
 use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
 use crate::model::act;
-use crate::model::daemon::Link;
+use crate::model::daemon::{Feed, Link, Task};
 use crate::model::review::{self, Action, Body, ButtonStyle, DetailView, Layout, PageView, Tab};
-use crate::model::{Form, Hue, Id, Rich};
+use crate::model::work::{self, Record};
+use crate::model::{Form, Hue, Id, Rich, Selection};
+use crate::screens::now::parts::{keep_loaded, wanted};
+use crate::screens::now::verb_buttons;
 use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
@@ -167,36 +171,113 @@ fn act(cx: &Ctx, action: Action) -> impl Fn() + 'static {
 /// Keeps the served candidate current: its details are fetched when it is first shown, and
 /// revalidated when its board row changes, the link comes back, or a command sent from here
 /// settles. Every fetch carries the cached etag, so an unchanged detail costs one small reply.
+/// While shown, the candidate's task detail (whose owner revision its commands are bound to)
+/// stays loaded, and both details stay pinned in the client's cache.
 fn keep_current(cx: &Ctx) {
     let Source::Live(focus) = cx.source.clone() else {
         return;
     };
     let app = cx.app;
-    let key = computed(move || {
-        let selection = app.selection();
-        app.feed.with(|feed| {
-            let task = match &focus {
-                Some(id) => feed.board.task(id),
-                None => review::selected(&selection, feed),
-            }?;
-            let settled = app.review.with(|state| {
-                state
-                    .sent
-                    .iter()
-                    .filter(|sent| {
-                        act::status(feed, &sent.key).is_some_and(|status| status.settled())
-                    })
-                    .count()
-            });
-            Some((task.id.clone(), task.rev, feed.link == Link::Up, settled))
+    let key = {
+        let focus = focus.clone();
+        computed(move || {
+            let selection = app.selection();
+            app.feed.with(|feed| {
+                let task = shown_task(feed, &selection, focus.as_ref())?;
+                let settled = app.review.with(|state| {
+                    state
+                        .sent
+                        .iter()
+                        .filter(|sent| {
+                            act::status(feed, &sent.key).is_some_and(|status| status.settled())
+                        })
+                        .count()
+                });
+                Some((task.id.clone(), task.rev, feed.link == Link::Up, settled))
+            })
         })
-    });
+    };
     let refresh = act(cx, Action::Refresh);
     effect(move || {
         if key.get().is_some_and(|(_, _, up, _)| up) {
             untracked(&refresh);
         }
     });
+    let task = computed(move || {
+        let selection = app.selection();
+        app.feed.with(|feed| {
+            shown_task(feed, &selection, focus.as_ref()).and_then(|task| wanted(feed, task))
+        })
+    });
+    keep_loaded(app, task);
+    pin_review(
+        app,
+        computed(move || task.with(|task| task.as_ref().map(|(id, ..)| id.clone()))),
+    );
+}
+
+/// The served candidate this page shows: the one it was pushed for, or the selected one.
+fn shown_task<'a>(feed: &'a Feed, selection: &Selection, focus: Option<&Id>) -> Option<&'a Task> {
+    match focus {
+        Some(id) => feed.board.task(id),
+        None => review::selected(selection, feed),
+    }
+}
+
+/// Pins the shown candidate's review detail in the client's cache, letting go when another is
+/// shown or the page goes.
+fn pin_review(app: AppState, shown: Memo<Option<Id>>) {
+    let pinned = stored(None::<Id>);
+    let target = |task: &Id| DetailRef::Review {
+        task: task.to_string(),
+    };
+    effect(move || {
+        let now = shown.get();
+        if pinned.with(|pinned| *pinned == now) {
+            return;
+        }
+        let was = pinned.replace(now.clone());
+        untracked(|| {
+            if let Some(gone) = was {
+                app.watch_detail(target(&gone), false);
+            }
+            if let Some(new) = &now {
+                app.watch_detail(target(new), true);
+            }
+        });
+    });
+    // The owner may already be letting go of its values when this runs.
+    cleanup(move || {
+        if let Some(gone) = pinned.try_with(Option::take).flatten() {
+            app.watch_detail(target(&gone), false);
+        }
+    });
+}
+
+/// The shown candidate's verbs (a candidate-bound verdict among them) under its verdicts, from
+/// the model's table; the fixture replay has none.
+fn verb_row(cx: &Ctx) -> AnyElement {
+    let Source::Live(focus) = cx.source.clone() else {
+        return view().into_element();
+    };
+    let app = cx.app;
+    let verbs = computed(move || {
+        let selection = app.selection();
+        app.feed.with(|feed| {
+            shown_task(feed, &selection, focus.as_ref())
+                .map(|task| work::record_verbs(feed, &Record::Review(task.id.clone())))
+                .unwrap_or_default()
+        })
+    });
+    dynamic(move || {
+        let row = verb_buttons(app, verbs.get())?;
+        let place = match app.form {
+            Form::Desktop => view().px(px(24.0)).pt(px(4.0)).pb(px(12.0)),
+            Form::Phone => view().px(px(16.0)).pb(px(12.0)),
+            Form::Terminal => view().px(term::cells(1.0)),
+        };
+        Some(place.child(row).into_element())
+    })
 }
 
 /// Desktop and terminal: the candidate list beside the detail, which carries the decide bar.
@@ -303,7 +384,8 @@ fn detail(cx: Ctx, width: Signal<Option<f32>>) -> AnyElement {
             .children(detail.notice.as_ref().map(|line| notice_row(&cx, line)))
             .children(phone_actions)
             .child(verdicts(app, &detail))
-            .child(tab_row(&cx))
+            .child(verb_row(&cx))
+            .child(tab_row(&cx, width))
             .child(evidence_area(&cx, width))
             .into_element()
     })
@@ -317,7 +399,7 @@ const TABS_BESIDE_SWITCH: f32 = 560.0;
 /// under the tabs runs across the whole detail, as the body's top rule does in the mockup. A
 /// desktop detail narrower than `TABS_BESIDE_SWITCH` puts the switch on its own row under the
 /// tabs, at the trailing edge, so neither covers the other.
-fn tab_row(cx: &Ctx) -> AnyElement {
+fn tab_row(cx: &Ctx, width: Signal<Option<f32>>) -> AnyElement {
     let app = cx.app;
     let rule = || {
         view()
@@ -350,7 +432,7 @@ fn tab_row(cx: &Ctx) -> AnyElement {
                                     .justify_end()
                                     .px(px(24.0))
                                     .pt(px(8.0))
-                                    .child(layout_switch(&cx)),
+                                    .child(layout_switch(&cx, width)),
                             )
                             .into_element()
                     } else {
@@ -360,7 +442,7 @@ fn tab_row(cx: &Ctx) -> AnyElement {
                                 .items_center()
                                 .pl(px(10.0))
                                 .pr(px(24.0))
-                                .child(layout_switch(&cx)),
+                                .child(layout_switch(&cx, width)),
                         )
                         .into_element()
                     }
@@ -407,24 +489,41 @@ fn evidence_tabs(cx: &Ctx) -> AnyElement {
     }
 }
 
-/// The desktop's Side by side | Unified switch; the model offers it only with the Diff tab.
-fn layout_switch(cx: &Ctx) -> AnyElement {
+/// The desktop's Side by side | Unified switch, with the model's choices, offered with the Diff
+/// tab only where the detail is wide enough for side by side (the model's rule): narrower, the
+/// diff is unified and a switch whose other choice could not show would mislead.
+fn layout_switch(cx: &Ctx, width: Signal<Option<f32>>) -> AnyElement {
     let app = cx.app;
-    let shown = {
+    let options = {
         let cx = cx.clone();
         computed(move || {
+            let fits = width.get().is_some_and(|width| {
+                let env = app.env();
+                app.review.with(|state| {
+                    let mut split = state.clone();
+                    split.layout = Layout::Split;
+                    review::effective_layout(&split, env, width) == Layout::Split
+                })
+            });
+            if !fits {
+                return Vec::new();
+            }
             page_view(&cx, ANY_WIDTH)
                 .detail
-                .is_some_and(|detail| !detail.layouts.is_empty())
+                .map(|detail| {
+                    detail
+                        .layouts
+                        .iter()
+                        .map(|choice| (Some(choice.layout), choice.label))
+                        .collect::<Vec<(Option<Layout>, &'static str)>>()
+                })
+                .unwrap_or_default()
         })
     };
     let cx = cx.clone();
     dynamic(move || {
-        shown.get().then(|| {
-            let options: Vec<(Option<Layout>, &'static str)> = vec![
-                (Some(Layout::Split), "Side by side"),
-                (Some(Layout::Unified), "Unified"),
-            ];
+        let options = options.get();
+        (!options.is_empty()).then(|| {
             let cx = cx.clone();
             seg(
                 app,

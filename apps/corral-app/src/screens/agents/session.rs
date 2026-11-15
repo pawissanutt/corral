@@ -3,9 +3,10 @@
 //! terminal (`.termbar`, `.bigterm`); on the phone the segmented switch (`.pseg`) and the bar
 //! over the view, the docked reply or the terminal's keys. A session without a terminal (a
 //! daemon-hosted assistant has no pane) shows no switch and no terminal. A daemon session's
-//! terminal is its pane's screen, kept current, with the reply under it (docked on the phone)
-//! so the owner answers without leaving it; an assistant's reply is the shared composer on its
-//! thread (`reply::region`).
+//! terminal is its pane's bounded scrollback and screen, streamed while it shows and scrolling
+//! inside its surface, with the reply under it (docked on the phone) so the owner answers
+//! without leaving it; an assistant's reply is the shared composer on its thread
+//! (`reply::region`).
 
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
@@ -15,7 +16,7 @@ use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::text::span;
 use crate::model::{Form, Id};
-use crate::screens::{PhoneBar, PhonePage};
+use crate::screens::{PhoneBar, PhonePage, assistant};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with, seg};
@@ -140,12 +141,38 @@ fn draft_for(app: AppState, session: Memo<Session>, id: Option<Id>) -> Signal<St
     draft
 }
 
+/// While a daemon session's terminal shows, holds corrald's stream of its pane open: each
+/// replacement screen arrives on its own, so nothing here reads the capture on a clock. It is
+/// released when the view switches back to the transcript, the session loses its pane, or the
+/// page closes.
+fn stream_screen(app: AppState, session: Memo<Session>, id: Id) {
+    let shown =
+        computed(move || session.with(|s| s.view == View::Terminal && s.terminal.is_some()));
+    let open = stored(false);
+    let pane = id.to_string();
+    effect(move || {
+        let now = shown.get();
+        if open.replace(now) != now {
+            untracked(|| app.terminal(pane.clone(), now));
+        }
+    });
+    // The owner may already be letting go of its values when this runs.
+    cleanup(move || {
+        if open.try_with(std::mem::take).unwrap_or(false) {
+            app.terminal(id.to_string(), false);
+        }
+    });
+}
+
 /// Desktop and terminal: the head, the action bar, then any notice about the session, then the
-/// open view. The terminal is built once while it shows and follows its parts, so a screen read
-/// every second neither moves the owner's scroll nor takes the reply field's focus; the
+/// open view. The terminal is built once while it shows and follows its parts, so a screen
+/// arriving neither moves the owner's scroll nor takes the reply field's focus; the
 /// transcript, the reply and the run each follow their own part of the session.
 pub fn page(app: AppState, session: Memo<Session>, id: Option<Id>) -> AnyElement {
     let daemon = id.is_some();
+    if let Some(id) = id.clone() {
+        stream_screen(app, session, id);
+    }
     let draft = draft_for(app, session, id);
     controls::bind_escape(app, session);
     // The head follows the open session and whether it has a terminal, not its view: the
@@ -371,21 +398,37 @@ fn transcript_view(
 }
 
 /// The run (`.side-col`): its facts (the task, its rail, agent, runtime, machine, start, usage),
-/// then its steps or stages, those still to come quiet.
+/// then its steps or stages, those still to come quiet. A terminal's run column is under 30
+/// Cells, too narrow for a label column beside a value: there each label stands over its value,
+/// and an id leading a value (task, profile, runtime, machine) stays one line cut to fit.
 fn run_details(app: AppState, details: &Run) -> AnyElement {
     let form = app.form;
     let value_size = if form == Form::Phone { 14.0 } else { 12.5 };
-    let facts = details
-        .facts
-        .iter()
-        .map(|fact| {
-            let value = match &fact.value {
-                FactValue::Text(words) => line(app, words, value_size, Token::Ink),
-                FactValue::Rail(stages) => rail(app, *stages),
-            };
-            (fact.label.to_owned(), value)
-        })
-        .collect::<Vec<_>>();
+    let value = |fact_value: &FactValue| match fact_value {
+        FactValue::Text(words) if form == Form::Terminal => assistant::identified(app, words),
+        FactValue::Text(words) => line(app, words, value_size, Token::Ink),
+        FactValue::Rail(stages) => rail(app, *stages),
+    };
+    let facts = if form == Form::Terminal {
+        view()
+            .children(
+                details
+                    .facts
+                    .iter()
+                    .map(|fact| assistant::stacked(app, fact.label, value(&fact.value)))
+                    .collect::<Vec<_>>(),
+            )
+            .into_element()
+    } else {
+        kv(
+            app,
+            details
+                .facts
+                .iter()
+                .map(|fact| (fact.label.to_owned(), value(&fact.value)))
+                .collect(),
+        )
+    };
     let items = details
         .steps
         .iter()
@@ -410,7 +453,7 @@ fn run_details(app: AppState, details: &Run) -> AnyElement {
     let has_steps = !items.is_empty();
     view()
         .child(h3(app, details.title, None))
-        .child(kv(app, facts))
+        .child(facts)
         .when(has_steps, |run| {
             run.when(form == Form::Terminal, |run| run.child(term::blank()))
                 .child(h3(app, details.steps_title, None))
@@ -665,6 +708,9 @@ fn phone_terminal(app: AppState, session: Memo<Session>) -> AnyElement {
 /// the terminal can keep to its newest rows.
 pub fn phone(app: AppState, session: Memo<Session>, id: Option<Id>) -> PhonePage {
     let daemon = id.is_some();
+    if let Some(id) = id.clone() {
+        stream_screen(app, session, id);
+    }
     let draft = draft_for(app, session, id);
     let (title, toggle) =
         untracked(move || session.with(|s| (s.phone_title.clone(), s.toggle.clone())));

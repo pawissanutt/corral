@@ -19,6 +19,8 @@ pub enum Authority {
     Act,
     /// Talk to the assistant.
     Assistant,
+    /// Change daemon administration and automation settings.
+    Admin,
 }
 
 impl Authority {
@@ -27,6 +29,9 @@ impl Authority {
         match self {
             Authority::Reply => "Refused: this device may not answer or reply. Nothing was sent.",
             Authority::Act => "Refused: this device may not run owner commands. Nothing was sent.",
+            Authority::Admin => {
+                "Refused: this device may not administer corrald. Nothing was sent."
+            }
             Authority::Assistant => {
                 "Refused: this device may not message the assistant. Nothing was sent."
             }
@@ -89,6 +94,7 @@ impl Act {
     pub fn authority(&self) -> Authority {
         match self.command.app_class() {
             ActClass::Reply => Authority::Reply,
+            ActClass::Admin => Authority::Admin,
             _ => Authority::Act,
         }
     }
@@ -244,6 +250,11 @@ pub enum Confirmable {
         answer: corral_protocol::assistant::PromptAnswer,
         title: String,
     },
+    DeviceAuthority {
+        key: Id,
+        title: String,
+        change: corral_protocol::app::DeviceSetAuthority,
+    },
 }
 
 impl Confirmable {
@@ -251,13 +262,14 @@ impl Confirmable {
         match self {
             Confirmable::Act(act) => act.key.clone(),
             Confirmable::Prompt { answer, .. } => Id::from(&answer.cmd_id),
+            Confirmable::DeviceAuthority { key, .. } => key.clone(),
         }
     }
 
     pub fn title(&self) -> &str {
         match self {
             Confirmable::Act(act) => &act.title,
-            Confirmable::Prompt { title, .. } => title,
+            Confirmable::Prompt { title, .. } | Confirmable::DeviceAuthority { title, .. } => title,
         }
     }
 }

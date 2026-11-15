@@ -14,6 +14,7 @@ mod layout;
 mod list;
 pub(crate) mod parts;
 mod phone;
+mod verbs;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -33,6 +34,8 @@ use crate::ui::term;
 use crate::ui::tokens::{Token, color, row_height, text_size};
 
 pub use phone::{live_task_phone, task_phone};
+pub use verbs::verb_composer;
+pub(crate) use verbs::{verb_buttons, verb_menu, with_menu};
 
 use parts::{act, dim_when, keep_loaded, selected_task, stale};
 
@@ -135,13 +138,27 @@ fn title(app: AppState, titles: &Titles, key: &str) -> impl Fn() -> SharedString
     }
 }
 
+/// The list's natural width in a terminal, in Cells: its marks, id, title, rail and now-phrase.
+const LIST_COLUMNS: f32 = 44.0;
+
+/// The width of the list's column in a terminal (tracked): its natural width, growing with a
+/// wide grid while the inspector keeps its room; `None` elsewhere, where the panes share the room.
+fn list_width(app: AppState) -> Option<Points> {
+    (app.form == Form::Terminal).then(|| term::cells(term::list_columns(app, LIST_COLUMNS)))
+}
+
+/// The default dock for this form, its list column sized for the grid as it stands now.
+fn default_layout(app: AppState) -> DockAreaLayout {
+    layout::default_layout(untracked(|| list_width(app)))
+}
+
 /// The dock workspace. Wide enough (measured, not guessed): a DockArea, 2x2, tab groups
 /// "Who acts next" + "Goals"; "Story" + "Evidence" + "Session"; "Since your last visit" +
 /// "Parked"; "Live" + "Plan graph". The layout is stored under "corral.now.layout" once changes
 /// settle, restored on start, and reset to the default when `app.now_reset` changes. Too small
 /// for 2x2 (terminal grids, narrow windows): the list and the inspector as two panes.
 fn workspace(app: AppState) -> AnyElement {
-    let layout = signal(layout::stored_layout().unwrap_or_else(layout::default_layout));
+    let layout = signal(layout::stored_layout().unwrap_or_else(|| default_layout(app)));
     // Plain Rust rather than a signal: the cleanup below must still read it while the page goes.
     let unsaved: Rc<RefCell<Option<DockAreaLayout>>> = Rc::default();
     let pending = stored(None::<Spawned<()>>);
@@ -165,7 +182,7 @@ fn workspace(app: AppState) -> AnyElement {
                 if let Some(task) = pending.replace(None) {
                     task.cancel();
                 }
-                layout.set(layout::default_layout());
+                layout.set(default_layout(app));
                 follow_model(app, layout);
             }
         });
@@ -348,10 +365,19 @@ fn panes(app: AppState, axis: Axis, titles: &Titles) -> AnyElement {
             move |tab| act(app, work::Action::NowTab(tab)),
             "seg-inspector",
         ));
+    // A terminal's list beside the inspector takes its natural width, growing with a wide grid
+    // (the inspector keeps its room); stacked, or on desktop, the two panes share the room.
+    let sized = terminal && side_by_side;
     let make_pane = |bar: AnyElement, key: &'static str, first: bool| {
-        view()
-            .flex_1()
-            .flex_col()
+        let pane = if first && sized {
+            view()
+                .flex_grow(0.0)
+                .flex_shrink(1.0)
+                .w(move || list_width(app).unwrap_or(px(0.0)))
+        } else {
+            view().flex_1()
+        };
+        pane.flex_col()
             .min_w(px(0.0))
             .min_h(px(0.0))
             .when(!terminal && first && side_by_side, |pane| pane.border_r_1())

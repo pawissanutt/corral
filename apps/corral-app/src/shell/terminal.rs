@@ -12,13 +12,15 @@ use crate::{
         DataState, Destination, Live, Overlay, Page, SettingsSection, Workspace,
         assistant::COMPOSER_KEYS,
         commands::{destination_key, key_legend, key_legend_live},
-        nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, THIS_DEVICE},
+        nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, SIDEBAR_LABEL, THIS_DEVICE},
     },
     screens,
-    shell::{banner, confirmation, section_short, toast},
+    shell::{confirmation, section_short, toast},
     state::AppState,
     ui::{
-        ask, atoms, composer, palette,
+        ask, atoms, composer,
+        kit::notice,
+        palette,
         term::{self, cells},
         tokens::{Token, color},
     },
@@ -26,6 +28,8 @@ use crate::{
 
 /// The palette's key as the terminal spells a control chord.
 const PALETTE_CHORD: &str = "^K";
+/// The sidebar's toggle (`mod+b`) as the terminal spells it.
+const SIDEBAR_CHORD: &str = "^B";
 
 /// The terminal shell for `Form::Terminal`.
 pub fn shell(app: AppState) -> AnyElement {
@@ -41,18 +45,22 @@ pub fn shell(app: AppState) -> AnyElement {
         .flex_col()
         .child(term::top_bar(app))
         .child(
+            // The page comes first in the tree, the sidebar laid out to its left: the terminal's
+            // keys with nothing focused (Page Down, the arrows, Tab) start at the first scroll or
+            // control in the tree. Were that the sidebar's, the focus would land unseen on its
+            // selected row, banded already, and Space or Enter there would leave the page.
             view()
                 .flex_1()
                 .min_h(px(0.0))
-                .flex_row()
+                .flex_row_reverse()
+                .child(content(app, focus))
                 .child(dynamic(move || {
                     if collapsed.get() {
                         untracked(|| rail(app, destination))
                     } else {
                         untracked(|| sidebar(app, destination, workspace))
                     }
-                }))
-                .child(content(app, focus)),
+                })),
         )
         .child(toast(app))
         .child(key_line(app, typing))
@@ -104,7 +112,7 @@ fn content(app: AppState, focus: Focus) -> AnyElement {
             .flex_col()
             .min_w(px(0.0))
             .min_h(px(0.0))
-            .child(banner(app))
+            .child(notice::connection(app))
             .child(
                 view()
                     .element_ref(&focus.row)
@@ -129,7 +137,8 @@ fn content(app: AppState, focus: Focus) -> AnyElement {
                     .child(composer::ask_surface(app)),
             )
             .child(palette::palette(app))
-            .child(confirmation(app)),
+            .child(confirmation(app))
+            .child(screens::now::verb_composer(app)),
     )
     .flex_1()
     .into_element()
@@ -421,33 +430,46 @@ fn keep(destination: Destination) -> u8 {
 }
 
 /// The key line's groups in order, a line between each two: the keys in focus, the
-/// destinations, then Ask and Go to.
+/// destinations, then Ask and Go to, with the sidebar's toggle after them while there is room.
 struct Line {
     own: Vec<Entry>,
     destinations: Vec<Entry>,
     actions: Vec<Entry>,
+    sidebar: Option<Entry>,
 }
 
-/// One way of fitting the key line: names from `keep` on, the destinations or not.
+/// The group the sidebar's toggle ends: Ask and Go to's.
+const ACTIONS_GROUP: usize = 2;
+
+/// One way of fitting the key line: names from `keep` on, the destinations or not, the
+/// sidebar's toggle or not.
 #[derive(Debug, Clone, Copy)]
 struct Fit {
     keep: u8,
     destinations: bool,
+    sidebar: bool,
 }
 
-/// Every fit, longest first. Each destination's name gives way, the least used first; then the
-/// destinations go whole (the sidebar, folded or not, lists their keys); then Go to's and Ask's
-/// names; last the names of the keys in focus. A cap never gives way to a name.
+/// Every fit, longest first. The sidebar's toggle goes first, whole: the sidebar it opens or
+/// folds is in sight anyway. Then each destination's name gives way, the least used
+/// first; then the destinations go whole (the sidebar, folded or not, lists their keys); then Go
+/// to's and Ask's names; last the names of the keys in focus. A cap never gives way to a name.
 fn fits() -> impl Iterator<Item = Fit> {
-    (0..=KEEP_GO_TO)
-        .map(|keep| Fit {
-            keep,
-            destinations: true,
-        })
-        .chain((KEEP_GO_TO..=KEEP_PAGE + 1).map(|keep| Fit {
-            keep,
-            destinations: false,
-        }))
+    std::iter::once(Fit {
+        keep: 0,
+        destinations: true,
+        sidebar: true,
+    })
+    .chain((0..=KEEP_GO_TO).map(|keep| Fit {
+        keep,
+        destinations: true,
+        sidebar: false,
+    }))
+    .chain((KEEP_GO_TO..=KEEP_PAGE + 1).map(|keep| Fit {
+        keep,
+        destinations: false,
+        sidebar: false,
+    }))
 }
 
 /// The key line for what is in view. While Ask's field has the keys, letters typed go into it:
@@ -471,6 +493,7 @@ fn line(
                 .collect(),
             destinations: Vec::new(),
             actions: vec![go_to],
+            sidebar: None,
         };
     }
     let legend = match (served, data) {
@@ -488,6 +511,7 @@ fn line(
             .map(|item| Entry::new(item.key(), item.label(), keep(item)))
             .collect(),
         actions: vec![Entry::new(ASK_KEY, ASK_LABEL, KEEP_ASK), go_to],
+        sidebar: Some(Entry::new(SIDEBAR_CHORD, SIDEBAR_LABEL, 0)),
     }
 }
 
@@ -499,10 +523,12 @@ impl Line {
         } else {
             &[]
         };
+        let sidebar = self.sidebar.as_ref().filter(|_| fit.sidebar);
         [self.own.as_slice(), destinations, self.actions.as_slice()]
             .into_iter()
             .enumerate()
             .flat_map(|(group, entries)| entries.iter().map(move |entry| (group, entry)))
+            .chain(sidebar.map(|entry| (ACTIONS_GROUP, entry)))
     }
 
     /// The Cells the first `count` entries take with `fit`: the line's margins, a Cell between
@@ -534,6 +560,7 @@ impl Line {
         let bare = Fit {
             keep: KEEP_PAGE + 1,
             destinations: false,
+            sidebar: false,
         };
         let count = (0..self.entries(bare).count())
             .rev()

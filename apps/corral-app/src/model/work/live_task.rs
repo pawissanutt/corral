@@ -15,7 +15,7 @@ use crate::model::{Live, Selection};
 
 use super::{
     Button, ButtonKind, Dependency, EMPTY_BOARD, GroupKey, Inspector, NO_BOARD, NowTab, Press,
-    Progress, Stage, State, Tail, TailLine, TaskVerb, ago, daemon_selection, group_key, stamp,
+    Progress, Record, Stage, State, Tail, TailLine, ago, daemon_selection, group_key, stamp,
     task_question, task_session, when,
 };
 
@@ -177,7 +177,7 @@ pub fn daemon_inspector(state: &State, feed: &Feed, selected: &Selection, form: 
             Link::Connecting | Link::Up => Inspector::Loading,
         };
     }
-    let Some(task) = daemon_selection(state, selected, &feed.board, form) else {
+    let Some(task) = daemon_selection(state, selected, feed, form) else {
         return Inspector::Quiet(EMPTY_BOARD);
     };
     task_inspector(state, feed, task, state.now_tab, form)
@@ -326,45 +326,28 @@ fn sent_line(state: &State, feed: &Feed, task: &str) -> Option<SentLine> {
     })
 }
 
-/// The commands the task's state allows: release a hold, hold a queued task, retry a failed
-/// run. Each needs the loaded owner revision and a live link, and none is offered while the
-/// task's previous command has no known result.
+/// Shared table controls, including the same disabled reasons shown in row menus.
 fn verbs(
     state: &State,
     feed: &Feed,
     task: &daemon::Task,
-    detail: Option<&TaskDetail>,
+    _detail: Option<&TaskDetail>,
 ) -> Vec<Button> {
-    let Some(detail) = detail else {
-        return Vec::new();
-    };
-    let mut verbs = Vec::new();
-    if detail.hold.is_some() {
-        verbs.push(TaskVerb::Release);
-    } else if detail.park.is_none() && group_key(task.group) == GroupKey::Queued {
-        verbs.push(TaskVerb::Hold);
-    }
-    if task.rail[0].mark == Mark::Fail && detail.hold.is_none() {
-        verbs.push(TaskVerb::Retry {
-            run: detail.run.as_ref().map(|run| run.id.clone()),
-        });
-    }
     let waiting = state
         .sent_for(&task.id)
         .and_then(|sent| act::status(feed, &sent.key))
         .is_some_and(|status| status.uncertain());
-    verbs
+    super::record_verbs(feed, &Record::Task(task.id.clone()))
         .into_iter()
         .map(|verb| {
-            Button::new(
-                verb.title(&task.id),
-                Press::Run {
-                    task: task.id.clone(),
-                    verb,
-                },
-                ButtonKind::Ghost,
-            )
-            .enabled(feed.link == Link::Up && !waiting)
+            let mut button = Button::new(verb.label, verb.press, ButtonKind::Ghost)
+                .enabled(verb.enabled && !waiting);
+            button.reason = if waiting {
+                Some("Check the previous command's result before acting again.".into())
+            } else {
+                verb.reason
+            };
+            button
         })
         .collect()
 }
@@ -415,8 +398,12 @@ pub fn task_buttons(feed: &Feed, task: &daemon::Task, phone: bool) -> Vec<Button
 /// Build the selected daemon task's story.
 pub fn live_story(state: &State, feed: &Feed, task: &daemon::Task, form: Form) -> LiveStory {
     let detail = loaded_task(feed, &task.id);
-    let key = group_key(task.group);
-    let standing = super::standing(task, detail);
+    let key = super::served::task_group(feed, task);
+    let mut standing = super::standing(task, detail);
+    if key != group_key(task.group) {
+        standing.who = super::group_label(key);
+        standing.hue = key.hue();
+    }
     let mut facts: Vec<(&'static str, Fact)> = Vec::new();
 
     let mut doing = vec![span(standing.now.clone())];

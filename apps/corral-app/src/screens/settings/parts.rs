@@ -318,3 +318,42 @@ pub fn first_heading(app: AppState, label: &'static str, note: Option<&'static s
         .child(h3(app, label, note.map(str::to_owned)))
         .into_element()
 }
+
+/// One record of a phone list: what leads its first line, what sits at that line's trailing
+/// edge, and the lines under it.
+pub struct Record {
+    pub lead: AnyElement,
+    pub end: Option<AnyElement>,
+    pub under: Vec<AnyElement>,
+}
+
+/// Records stacked for a narrow phone, where a table's three or four columns would break names
+/// and model ids mid-token: each record's lead and trailing control on one line, its details
+/// under it at full width, records parted by a hairline.
+pub fn records(records: Vec<Record>) -> AnyElement {
+    view()
+        .min_w(px(0.0))
+        .children(records.into_iter().enumerate().map(|(at, record)| {
+            view()
+                .min_w(px(0.0))
+                .py(px(10.0))
+                .gap(px(4.0))
+                .when(at > 0, |row| {
+                    row.border_t_1().border_t_color(color(Token::Rule))
+                })
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(8.0))
+                        .min_w(px(0.0))
+                        .child(view().flex_1().min_w(px(0.0)).child(record.lead))
+                        .children(record.end.map(|end| {
+                            view().flex_row().flex_shrink_0().child(end).into_element()
+                        })),
+                )
+                .children(record.under)
+                .into_element()
+        }))
+        .into_element()
+}

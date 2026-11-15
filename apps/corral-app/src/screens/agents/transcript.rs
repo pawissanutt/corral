@@ -26,7 +26,7 @@ use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::chip::illus;
 use crate::ui::kit::marks::{dot, hue_fill, hue_ink};
-use crate::ui::kit::notice::{empty, error, notice, skeleton};
+use crate::ui::kit::notice::{empty, error, loading, notice};
 use crate::ui::kit::text::{dim, plain, rich};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
@@ -100,18 +100,19 @@ fn pager(
     ))
 }
 
-/// What stands in for the messages while there are none to show: the skeleton, the failure or
-/// the empty state.
+/// What stands in for the messages while there are none to show: the loading state (announced
+/// and captioned once the wait is noticeable), the failure or the empty state.
 fn fill(app: AppState, fill: &Fill) -> Option<AnyElement> {
     match fill {
         Fill::Ready => None,
-        Fill::Loading => Some(
+        Fill::Loading(caption) => Some(
             view()
                 .when(app.form != Form::Terminal, |pad| {
                     pad.px(px(24.0)).py(px(12.0))
                 })
-                .child(skeleton(
+                .child(loading(
                     app,
+                    *caption,
                     &[(0.5, 10.0), (0.8, 10.0), (0.65, 10.0), (0.3, 10.0)],
                 ))
                 .into_element(),

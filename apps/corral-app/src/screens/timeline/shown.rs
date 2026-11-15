@@ -1,6 +1,7 @@
 //! What the Timeline shows, read tracked: the fixture preview's illustrative day, or the
-//! daemon's recorded Timeline and Burnup details in the viewer's time zone. Also keeps those
-//! details requested while the page is open and revalidates them when the board moves.
+//! daemon's recorded Timeline and Burnup details in the viewer's time zone (the one the driver
+//! put on the feed). Also keeps those details requested while the page is open and revalidates
+//! them when the board moves; the burn-up is the scope the owner picked.
 
 use corral_protocol::detail::DetailBody;
 use jiff::tz::TimeZone;
@@ -8,6 +9,7 @@ use nsh_core::prelude::*;
 
 use crate::model::daemon::{DetailCache, Feed};
 use crate::model::timeline::{self, BurnupSeries, Gap, Plot};
+use crate::model::usage::completeness_label;
 use crate::state::AppState;
 
 /// Where a recorded detail stands.
@@ -32,12 +34,22 @@ pub struct Shown {
     pub gaps_note: &'static str,
     pub burnup: Option<BurnupSeries>,
     pub burnup_status: Status,
+    /// How complete corrald's count of the burn-up is, said even when it found no change to plot.
+    pub burnup_coverage: Option<String>,
 }
 
 impl Shown {
     /// A complete answer with no lanes at all.
     pub fn lanes_empty(&self) -> bool {
         self.plot.as_ref().is_some_and(|plot| plot.lanes.is_empty())
+    }
+
+    /// The burn-up failed for the same cause as the spans, which the page already says once.
+    pub fn burnup_failed_alike(&self) -> bool {
+        matches!(
+            (&self.status, &self.burnup_status),
+            (Status::Failed(spans), Status::Failed(burnup)) if spans == burnup
+        )
     }
 }
 
@@ -59,6 +71,12 @@ fn minute(feed: &Feed) -> u64 {
     feed.now / 60 * 60
 }
 
+/// The viewer's zone as the driver reported it; UTC, said as such by the zone-named ticks, when
+/// the platform could not tell.
+fn zone(feed: &Feed) -> TimeZone {
+    feed.time_zone.clone().unwrap_or(TimeZone::UTC)
+}
+
 /// Tracked: the page's content now.
 pub fn shown(app: AppState) -> Shown {
     let state = app.timeline.get();
@@ -72,34 +90,41 @@ pub fn shown(app: AppState) -> Shown {
             gaps_note: timeline::GAPS_DISCLOSURE,
             burnup: Some(timeline::fixture_burnup()),
             burnup_status: Status::Ready,
+            burnup_coverage: None,
         };
     }
-    let tz = TimeZone::system();
     app.feed.with(|feed| {
         let now = minute(feed);
-        let window = timeline::window(state.range, now, &tz);
+        let window = timeline::window(state.range, now, &zone(feed));
         let (plot, status, gaps) = match &window {
             Some(window) => {
                 let cache = feed.detail(&timeline::request(&state, window));
                 let plot = cache
                     .and_then(DetailCache::body)
                     .and_then(|body| match body {
-                        DetailBody::Timeline(page) => Some(timeline::live_plot(page, window, &tz)),
+                        DetailBody::Timeline(page) => Some(timeline::live_plot(page, window, feed)),
                         _ => None,
                     });
                 let gaps = plot
                     .as_ref()
-                    .map(|plot| timeline::live_gaps(plot, window, &tz))
+                    .map(|plot| timeline::live_gaps(plot, window, feed))
                     .unwrap_or_default();
                 (plot, state_of(cache), gaps)
             }
             None => (None, Status::Loading, Vec::new()),
         };
-        let burnup_cache = feed.detail(&timeline::burnup_request());
+        let burnup_cache = feed.detail(&timeline::burnup_request(&state));
+        let burnup_coverage =
+            burnup_cache
+                .and_then(DetailCache::body)
+                .and_then(|body| match body {
+                    DetailBody::Burnup(burnup) => completeness_label(&burnup.completeness),
+                    _ => None,
+                });
         let burnup = burnup_cache
             .and_then(DetailCache::body)
             .and_then(|body| match body {
-                DetailBody::Burnup(burnup) => timeline::burnup_series(burnup, now, &tz),
+                DetailBody::Burnup(burnup) => timeline::burnup_series(burnup, now, feed),
                 _ => None,
             });
         Shown {
@@ -113,6 +138,7 @@ pub fn shown(app: AppState) -> Shown {
             gaps_note: timeline::LIVE_GAPS_NOTE,
             burnup,
             burnup_status: state_of(burnup_cache),
+            burnup_coverage,
         }
     })
 }
@@ -129,19 +155,19 @@ fn board_mark(feed: &Feed) -> u64 {
 }
 
 /// Keeps the Timeline and Burnup details requested while the page is open: requested when the
-/// range, grouping or day changes, revalidated (with their etags) when the board moves.
+/// range, grouping, burn-up scope or day changes, revalidated (with their etags) when the board
+/// moves.
 pub fn keep_loaded(app: AppState) {
     let wanted = computed(move || {
         if !app.daemon() {
             return None;
         }
         let state = app.timeline.get();
-        let tz = TimeZone::system();
         app.feed.with(|feed| {
-            let window = timeline::window(state.range, minute(feed), &tz)?;
+            let window = timeline::window(state.range, minute(feed), &zone(feed))?;
             Some((
                 timeline::request(&state, &window),
-                timeline::burnup_request(),
+                timeline::burnup_request(&state),
                 board_mark(feed),
             ))
         })

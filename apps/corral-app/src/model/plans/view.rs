@@ -173,6 +173,8 @@ pub struct PipelineStage {
 /// A detail header, resolved for the current idiom.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
+    /// Canonical served plan or tracker id for record actions; absent in fixture preview.
+    pub plan: Option<Id>,
     /// Status chips, in source order.
     pub chips: Vec<Chip>,
     /// Id and optional revision.
@@ -345,6 +347,14 @@ pub struct ExecutingView {
     /// Desktop/terminal inspector; absent on phone, where members push task pages.
     pub story: Option<Story>,
 }
+/// Planning and review before an owner acceptance request exists.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanningView {
+    pub header: Header,
+    pub heading: String,
+    pub body: String,
+    pub pipeline: Vec<PipelineStage>,
+}
 
 /// An approved plan: its identity, and the state of publication under it.
 #[derive(Debug, Clone, PartialEq)]
@@ -492,6 +502,8 @@ pub struct ScaleView {
 pub enum Detail {
     /// Revision review and decision bar.
     Awaiting(AwaitingView),
+    /// Drafting, independent review or a planning failure, never an owner decide bar.
+    Planning(PlanningView),
     /// Published tracker and member story.
     Executing(ExecutingView),
     /// Approved, but not yet published.
@@ -513,10 +525,6 @@ pub enum Detail {
 pub struct PhonePage {
     /// Plan review, tracker id or S-900.
     pub title: String,
-    /// Parent list label.
-    pub back_label: &'static str,
-    /// Back navigation action.
-    pub back: crate::model::effect::Effect,
     /// Navigation-bar Ask action, only for executing trackers.
     pub right: Option<Button>,
     /// Accessibility label for the navigation-bar action.

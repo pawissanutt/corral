@@ -4,7 +4,9 @@
 use nsh_core::prelude::*;
 
 use crate::model::review::{self, CandidateGroup, CandidateRow};
-use crate::model::{Form, flat};
+use crate::model::work::Record;
+use crate::model::{Form, Id, flat};
+use crate::screens::now::with_menu;
 use crate::state::AppState;
 use crate::ui::kit::marks::dot;
 use crate::ui::kit::notice::empty;
@@ -122,7 +124,7 @@ fn candidate_row(cx: &Ctx, row: &CandidateRow) -> AnyElement {
         })
         .test_id(&format!("task-{}", row.task))
         .on_press(move || press());
-    match app.form {
+    let shown = match app.form {
         Form::Terminal => base
             .items_start()
             .child(
@@ -207,5 +209,12 @@ fn candidate_row(cx: &Ctx, row: &CandidateRow) -> AnyElement {
                     ),
             )
             .into_element(),
+    };
+    // A served candidate's row carries its commands: its context menu on desktop and terminal,
+    // the action sheet a held finger opens on the phone.
+    if cx.live() {
+        with_menu(app, Record::Review(Id::new(&row.task)), shown)
+    } else {
+        shown
     }
 }

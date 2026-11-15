@@ -1,6 +1,10 @@
 //! Browser-owned Noise sessions and shared app data; only the paired marker uses NSH Storage.
+mod identity;
 mod keystore;
+mod lifecycle;
 mod noise;
+pub(crate) mod push;
+mod push_runtime;
 mod socket;
 
 use super::{
@@ -49,10 +53,12 @@ thread_local! { static SENDER: RefCell<Option<UnboundedSender<Input>>> = const {
 
 pub(super) fn send(request: ClientRequest) -> bool {
     SENDER.with(|sender| {
-        sender
-            .borrow()
-            .as_ref()
-            .is_some_and(|sender| sender.unbounded_send(Input::Request(request)).is_ok())
+        sender.borrow().as_ref().is_some_and(|sender| {
+            if matches!(&request, ClientRequest::BrowserPush { enabled: true, .. }) {
+                push::begin_permission();
+            }
+            sender.unbounded_send(Input::Request(request)).is_ok()
+        })
     })
 }
 
@@ -87,25 +93,11 @@ pub(super) fn start(feed: Signal<Feed>) {
             generation: 0,
             failures: 0,
             retry_at: None,
+            forgetting: identity::ForgetState::default(),
+            push_intent: None,
         };
         driver.tick_clock();
-        if super::configured() && !feed.with_untracked(Feed::browser_pairing_pending) {
-            match keystore::load().await {
-                Ok(Some(credential)) => {
-                    driver.credential = Some(credential);
-                    driver.connect_session();
-                }
-                Ok(None) => {
-                    Storage::remove_item(PAIRED_KEY);
-                    feed.update(|feed| {
-                        feed.device = DeviceLink::Failed(
-                            "This browser has no stored pairing; pair it again.".into(),
-                        )
-                    });
-                }
-                Err(problem) => feed.update(|feed| feed.device = DeviceLink::Failed(problem)),
-            }
-        }
+        driver.restore().await;
         while let Some(input) =
             std::future::poll_fn(|cx| Pin::new(&mut receiver).poll_next(cx)).await
         {
@@ -177,6 +169,8 @@ struct Driver {
     generation: u64,
     failures: usize,
     retry_at: Option<u64>,
+    forgetting: identity::ForgetState,
+    push_intent: Option<push_runtime::Intent>,
 }
 enum Action {
     Keep,
@@ -207,6 +201,7 @@ impl Driver {
                     seconds,
                     format!("{:02}:{:02}", local.hour(), local.minute()),
                 );
+                feed.time_zone = Some(local.time_zone().clone());
                 feed.date = local.date().to_string();
             });
         }
@@ -214,16 +209,17 @@ impl Driver {
 
     fn open(
         &mut self,
-        port: u16,
+        endpoint: &str,
         path: &str,
         role: Role,
         handshake: HandshakeState,
     ) -> Result<(), String> {
         self.connection = None;
+        self.push_intent = None;
         self.retry_at = None;
         self.generation = self.generation.wrapping_add(1);
         let generation = self.generation;
-        let socket = Socket::open(port, path, generation, self.sender.clone())?;
+        let socket = Socket::open(endpoint, path, generation, self.sender.clone())?;
         let now = self.now();
         self.connection = Some(Connection {
             socket,
@@ -243,18 +239,23 @@ impl Driver {
     }
 
     fn connect_session(&mut self) {
+        if self.forgetting.pending() {
+            return;
+        }
         let result = (|| {
             let credential = self
                 .credential
                 .as_ref()
                 .ok_or("This browser is not paired")?;
-            let port = credential.port;
+            let endpoint = credential
+                .endpoint
+                .clone()
+                .unwrap_or_else(|| format!("ws://127.0.0.1:{}", credential.port));
             let private = key(&credential.private)?;
             let daemon = key(&credential.daemon)?;
             let handshake = noise::initiator_session(&private, &daemon)?;
-            self.feed
-                .update(|feed| feed.connecting(format!("ws://127.0.0.1:{port}")));
-            self.open(port, SESSION_PATH, Role::Session, handshake)
+            self.feed.update(|feed| feed.connecting(endpoint.clone()));
+            self.open(&endpoint, SESSION_PATH, Role::Session, handshake)
         })();
         if let Err(problem) = result {
             self.lost(problem);
@@ -267,11 +268,17 @@ impl Driver {
         self.feed.update(|feed| feed.link_lost(problem));
         let delay = super::requests::reconnect_delay_ms(self.failures);
         self.failures = self.failures.saturating_add(1);
-        self.retry_at = self.credential.as_ref().map(|_| self.now() + delay);
+        self.push_intent = None;
+        self.retry_at = self
+            .credential
+            .as_ref()
+            .filter(|_| !self.forgetting.pending())
+            .map(|_| self.now() + delay);
     }
 
     fn failed(&mut self, pair: bool, failure: Failure) {
         self.connection = None;
+        self.push_intent = None;
         self.retry_at = None;
         match failure {
             Failure::Retry(problem) if !pair => self.lost(problem),
@@ -291,35 +298,22 @@ impl Driver {
 
     async fn handle(&mut self, input: Input) {
         match input {
-            Input::Request(ClientRequest::Forget) => {
-                self.connection = None;
-                self.retry_at = None;
-                self.credential = None;
-                self.app.disconnected(self.feed);
-                self.app = AppState::new();
-                let blocked = self.feed.with_untracked(|feed| match feed.browser_pairing {
-                    BrowserPairing::Blocked(line) => Some(line),
-                    _ => None,
-                });
-                let cleared = keystore::clear().await;
-                Storage::remove_item(PAIRED_KEY);
-                self.feed.update(|feed| {
-                    *feed = Feed::default();
-                    if let Some(line) = blocked {
-                        feed.browser_pairing = BrowserPairing::Blocked(line);
-                    } else if let Err(problem) = cleared {
-                        feed.browser_pairing = BrowserPairing::Failed(problem);
-                    }
-                });
-                self.tick_clock();
-            }
+            Input::Request(ClientRequest::Forget) => self.forget().await,
             Input::Request(ClientRequest::Pair { code, name }) => {
                 if self.feed.with_untracked(|feed| {
                     matches!(feed.browser_pairing, BrowserPairing::Blocked(_))
                 }) {
                     return;
                 }
+                if self.forgetting.pending() {
+                    self.forget_failed(
+                        "Forgetting this browser is incomplete; retry Forget before pairing."
+                            .into(),
+                    );
+                    return;
+                }
                 self.connection = None;
+                self.push_intent = None;
                 self.retry_at = None;
                 self.app.disconnected(self.feed);
                 self.feed
@@ -341,9 +335,13 @@ impl Driver {
                         private: hex(&private),
                         daemon: hex(&code.daemon_public),
                         port: code.port,
+                        endpoint: code.endpoint.clone(),
                     };
                     self.open(
-                        code.port,
+                        &code
+                            .endpoint
+                            .clone()
+                            .unwrap_or_else(|| format!("ws://127.0.0.1:{}", code.port)),
                         &format!("{PAIR_PATH_PREFIX}{}", code.pair_id_hex()),
                         Role::Pair {
                             credential,
@@ -356,8 +354,18 @@ impl Driver {
                     self.failed(true, Failure::Fatal(problem));
                 }
             }
+            Input::Request(ClientRequest::BrowserPush {
+                request_id,
+                enabled,
+                kinds,
+            }) => {
+                self.change_push(request_id, enabled, kinds).await;
+            }
+            Input::Request(ClientRequest::PushStatus { request_id }) => {
+                self.push_status(request_id);
+            }
             Input::Request(request) => {
-                let outgoing = self.app.request(self.feed, request);
+                let outgoing = self.app.request_async(self.feed, request).await;
                 if outgoing.is_empty() {
                     return;
                 }
@@ -365,7 +373,7 @@ impl Driver {
                     return;
                 };
                 match conn.flush_app(outgoing, self.now()) {
-                    Ok(()) => match self.process_events(&mut conn, self.now()) {
+                    Ok(()) => match self.process_events(&mut conn, self.now()).await {
                         Ok(Action::Keep) => self.connection = Some(conn),
                         Ok(Action::Stop) => {}
                         Ok(Action::Paired(_)) => self.failed(
@@ -381,6 +389,7 @@ impl Driver {
             }
             Input::Tick => {
                 self.tick_clock();
+                self.app.refresh_local(self.feed).await;
                 let now = self.now();
                 if self.retry_at.is_some_and(|deadline| now >= deadline) {
                     self.connect_session();
@@ -413,8 +422,15 @@ impl Driver {
                     }
                     _ => Ok(()),
                 };
+                let result = result.and_then(|()| {
+                    if !pair && matches!(conn.stage, Stage::Transport) {
+                        conn.flush_app(self.app.pair_poll(self.feed), now)
+                    } else {
+                        Ok(())
+                    }
+                });
                 match result {
-                    Ok(()) => match self.process_events(&mut conn, now) {
+                    Ok(()) => match self.process_events(&mut conn, now).await {
                         Ok(Action::Keep) => self.connection = Some(conn),
                         Ok(Action::Stop) => {}
                         Ok(Action::Paired(_)) => self.failed(
@@ -455,12 +471,7 @@ impl Driver {
                     ) {
                         BrowserSessionClose::Revoked => {
                             self.retry_at = None;
-                            if let Some(credential) = &self.credential {
-                                self.feed.update(|feed| {
-                                    feed.revoked(credential.device.clone());
-                                    feed.link_lost("This browser was revoked.".into());
-                                });
-                            }
+                            self.revoke_local().await;
                         }
                         BrowserSessionClose::Failed(line) => {
                             self.failed(false, Failure::Fatal(line.into()));
@@ -506,31 +517,32 @@ impl Driver {
                 }
                 conn.socket.received();
                 let pair = matches!(conn.role, Role::Pair { .. });
-                match self.message(&mut conn, bytes) {
+                match self.message(&mut conn, bytes).await {
                     Ok(Action::Keep) => self.connection = Some(conn),
                     Ok(Action::Stop) => {}
                     Ok(Action::Paired(credential)) => {
                         drop(conn);
                         match keystore::save(&credential).await {
-                            Ok(()) => match Storage::set_item(PAIRED_KEY, "1") {
-                                Ok(()) => {
-                                    self.feed.update(|feed| {
-                                        feed.pairing_code = None;
-                                        feed.browser_pairing = BrowserPairing::Paired {
-                                            device: credential.device.clone(),
-                                        }
-                                    });
-                                    self.credential = Some(credential);
-                                    self.failures = 0;
-                                    self.connect_session();
+                            Ok(()) => {
+                                // This marker is only a hint; the credential transaction is authoritative.
+                                let _ = Storage::set_item(PAIRED_KEY, "1");
+                                self.feed.update(|feed| {
+                                    feed.pairing_code = None;
+                                    feed.browser_pairing = BrowserPairing::Paired {
+                                        device: credential.device.clone(),
+                                    }
+                                });
+                                self.credential = Some(credential);
+                                self.failures = 0;
+                                let device = self
+                                    .credential
+                                    .as_ref()
+                                    .map(|credential| credential.device.clone());
+                                match self.app.boot(self.feed, device.as_deref()).await {
+                                    Ok(()) => self.connect_session(),
+                                    Err(problem) => self.failed(false, Failure::Fatal(problem)),
                                 }
-                                Err(problem) => self.failed(
-                                    true,
-                                    Failure::Fatal(format!(
-                                        "Cannot remember this browser pairing: {problem}"
-                                    )),
-                                ),
-                            },
+                            }
                             Err(problem) => self.failed(true, Failure::Fatal(problem)),
                         }
                     }
@@ -540,7 +552,7 @@ impl Driver {
         }
     }
 
-    fn message(&mut self, conn: &mut Connection, bytes: Vec<u8>) -> Result<Action, Failure> {
+    async fn message(&mut self, conn: &mut Connection, bytes: Vec<u8>) -> Result<Action, Failure> {
         let now = self.now();
         conn.received = now;
         if matches!(conn.stage, Stage::Handshake) {
@@ -634,16 +646,19 @@ impl Driver {
                 )?,
             }
         }
-        self.process_events(conn, now)
+        self.process_events(conn, now).await
     }
 
-    fn process_events(&mut self, conn: &mut Connection, now: u64) -> Result<Action, Failure> {
+    async fn process_events(&mut self, conn: &mut Connection, now: u64) -> Result<Action, Failure> {
         while let Some(event) = conn.core.next_event() {
+            if self.push_event(conn, &event, now).await? {
+                continue;
+            }
             if matches!(conn.role, Role::Session) && app::handles(&event) {
                 if matches!(&event, Event::Board { .. }) {
                     self.failures = 0;
                 }
-                let outgoing = self.app.event(self.feed, event)?;
+                let outgoing = self.app.event_async(self.feed, event).await?;
                 conn.flush_app(outgoing, now)?;
                 continue;
             }
@@ -689,14 +704,7 @@ impl Driver {
                 Event::Notice { method, params }
                     if method == wire::BYE && params["reason"] == CLOSE_REVOKED =>
                 {
-                    if let Some(credential) = &self.credential {
-                        self.feed.update(|feed| {
-                            feed.revoked(credential.device.clone());
-                            feed.link_lost("This browser was revoked.".into());
-                        });
-                    }
-                    self.retry_at = None;
-                    self.app.disconnected(self.feed);
+                    self.revoke_local().await;
                     return Ok(Action::Stop);
                 }
                 Event::Closed(problem) => return Err(Failure::Retry(problem)),

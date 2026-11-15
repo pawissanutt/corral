@@ -409,7 +409,7 @@ pub(super) fn diff(
     DiffView {
         layout,
         notice: (env.form == Form::Phone)
-            .then_some("Unified on phones; side by side needs ≥ 900 pt."),
+            .then_some("Unified on phones; side by side needs ≥ 1100 pt of content."),
         files,
         empty: review
             .files

@@ -10,7 +10,11 @@ pub(super) struct WebCredential {
     pub(super) private: String,
     pub(super) daemon: String,
     pub(super) port: u16,
+    #[serde(default)]
+    pub(super) endpoint: Option<String>,
 }
+
+pub(super) type Stored = super::identity::Stored<WebCredential>;
 
 #[wasm_bindgen(inline_js = r#"
 function storageError(action, error) {
@@ -71,7 +75,10 @@ export async function corral_credential_load() {
     let stored;
     try {
         database = await openCredentials();
-        stored = await credentialTransaction(database, "readonly", store => store.get("device"));
+        const records = await credentialTransaction(database, "readonly", store => store.getAll());
+        // Never decrypt or resume an identity after an acknowledged forget intent.
+        if (records.some(record => record.forget === true)) return false;
+        stored = records[0];
     } catch (error) {
         throw storageError("Could not load this browser's pairing; allow site storage and reload Corral", error);
     } finally {
@@ -100,11 +107,54 @@ export async function corral_credential_save(bytes) {
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
         database = await openCredentials();
-        await credentialTransaction(database, "readwrite", store => store.put({ key, iv, data }, "device"));
+        // Serialize the tombstone check and credential write so another tab cannot
+        // resurrect an identity while Forget is removing its local namespaces.
+        await new Promise((resolve, reject) => {
+            const transaction = database.transaction("credentials", "readwrite");
+            let forgetting = false;
+            transaction.oncomplete = () => resolve();
+            transaction.onabort = () => reject(forgetting
+                ? new Error("Forgetting this browser is incomplete; retry Forget before pairing.")
+                : transaction.error || new Error("The pairing storage transaction was aborted."));
+            const store = transaction.objectStore("credentials");
+            const request = store.get("forget");
+            request.onsuccess = () => {
+                if (request.result !== undefined) {
+                    forgetting = true;
+                    transaction.abort();
+                } else {
+                    store.put({ key, iv, data }, "device");
+                }
+            };
+        });
     } catch (error) {
         throw storageError("Could not save this browser's pairing; allow persistent site storage and try pairing again", error);
     } finally {
         plaintext.fill(0);
+        if (database) database.close();
+    }
+}
+
+export async function corral_credential_begin_forget() {
+    let database;
+    try {
+        database = await openCredentials();
+        await credentialTransaction(database, "readwrite", store => store.put({ forget: true }, "forget"));
+    } catch (error) {
+        throw storageError("Could not record forgetting this browser; allow site storage and retry Forget", error);
+    } finally {
+        if (database) database.close();
+    }
+}
+
+export async function corral_credential_finish_forget() {
+    let database;
+    try {
+        database = await openCredentials();
+        await credentialTransaction(database, "readwrite", store => store.delete("forget"));
+    } catch (error) {
+        throw storageError("Could not finish forgetting this browser; retry Forget", error);
+    } finally {
         if (database) database.close();
     }
 }
@@ -124,31 +174,57 @@ export async function corral_credential_clear() {
 extern "C" {
     fn corral_credential_load() -> js_sys::Promise;
     fn corral_credential_save(bytes: &[u8]) -> js_sys::Promise;
+    fn corral_credential_begin_forget() -> js_sys::Promise;
+    fn corral_credential_finish_forget() -> js_sys::Promise;
     fn corral_credential_clear() -> js_sys::Promise;
 }
 
-pub(super) async fn load() -> Result<Option<WebCredential>, String> {
+pub(super) async fn load() -> Result<Stored, String> {
     let value = JsFuture::from(corral_credential_load())
         .await
         .map_err(storage_error)?;
     if value.is_null() {
-        return Ok(None);
+        return Ok(Stored::Missing);
+    }
+    if value.as_bool() == Some(false) {
+        return Ok(Stored::ForgetPending);
     }
     let bytes = value
         .dyn_into::<js_sys::Uint8Array>()
         .map_err(|_| invalid_credential())?;
     let credential: WebCredential =
         serde_json::from_slice(&bytes.to_vec()).map_err(|_| invalid_credential())?;
-    if credential.v != 1 || !valid_key(&credential.private) || !valid_key(&credential.daemon) {
+    if credential.v != 1
+        || !valid_key(&credential.private)
+        || !valid_key(&credential.daemon)
+        || credential
+            .endpoint
+            .as_deref()
+            .is_some_and(|endpoint| !corral_protocol::device::valid_endpoint(endpoint))
+    {
         return Err(invalid_credential());
     }
-    Ok(Some(credential))
+    Ok(Stored::Credential(credential))
 }
 
 pub(super) async fn save(credential: &WebCredential) -> Result<(), String> {
     let bytes = serde_json::to_vec(credential)
         .map_err(|error| format!("Could not encode this browser's pairing: {error}"))?;
     JsFuture::from(corral_credential_save(&bytes))
+        .await
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+pub(super) async fn begin_forget() -> Result<(), String> {
+    JsFuture::from(corral_credential_begin_forget())
+        .await
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+pub(super) async fn finish_forget() -> Result<(), String> {
+    JsFuture::from(corral_credential_finish_forget())
         .await
         .map_err(storage_error)?;
     Ok(())

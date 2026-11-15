@@ -99,6 +99,7 @@ pub(super) fn approved(
     };
     ApprovedView {
         header: Some(Header {
+            plan: Some(id.clone()),
             chips,
             id: detail
                 .revision

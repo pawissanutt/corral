@@ -67,12 +67,13 @@ pub(super) fn provide_styles(app: AppState) {
 }
 
 /// Whether the transcript is too narrow for a table's grid: the phone, or a terminal whose
-/// transcript column is under the terminal UI's 50 Cells (tracked: follows the size).
+/// page (after the sidebar and a docked Ask) is under the terminal UI's 50 Cells (tracked:
+/// follows the size).
 fn narrow(app: AppState) -> bool {
     match app.form {
         Form::Phone => true,
         Form::Desktop => false,
-        Form::Terminal => (term::columns() as f32 - term::sidebar_columns(app)) < TABLE_CELLS,
+        Form::Terminal => term::page_columns(app) < TABLE_CELLS,
     }
 }
 

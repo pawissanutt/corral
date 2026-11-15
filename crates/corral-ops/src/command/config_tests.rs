@@ -182,3 +182,86 @@ fn profile_actions_preserve_stale_edits_and_new_task_references() {
             .contains_key("app-clone")
     );
 }
+
+#[test]
+fn settings_can_select_and_clear_summary_profile_without_removing_a_referenced_profile() {
+    use crate::agent::app_runtime::AuthenticatedDevice;
+    let root = tempfile::tempdir().unwrap();
+    let store = corral_core::Store::init(root.path()).unwrap();
+    let invoker = Invoker::authenticated_device(
+        Caller {
+            principal: Principal::Device {
+                id: "native-admin".into(),
+            },
+            client: ClientKind::App,
+            actor: Some(ActorName::Owner),
+            via: Via::App,
+            assistant: None,
+            planning_safe: false,
+            cwd: None,
+            env: CallerEnv::default(),
+        },
+        AuthenticatedDevice {
+            id: "native-admin".into(),
+            name: "native".into(),
+            assistant: true,
+            assistant_act: false,
+            reply: true,
+            act: true,
+        },
+        true,
+    )
+    .unwrap();
+    let hash = || {
+        config_hash(
+            &store
+                .config_layers()
+                .unwrap()
+                .doc(ConfigLayer::Workspace)
+                .unwrap(),
+        )
+    };
+    let set = |value: &str| {
+        execute_in(
+            crate::Ctx::from_store(store.clone()),
+            &invoker,
+            Command::Config(ConfigCommand::Set {
+                key: "assistant.summary_profile".into(),
+                value: value.into(),
+                expected_hash: hash(),
+            }),
+        )
+    };
+    assert_eq!(set("omp").state, CmdState::Done);
+    let ctx = crate::Ctx::from_store(store.clone());
+    assert_eq!(
+        crate::app_read::settings_rows(&ctx).unwrap()[0]
+            .summary_profile
+            .as_deref(),
+        Some("omp")
+    );
+    let layers = store.config_layers().unwrap();
+    let config = layers.config().unwrap();
+    let profile = super::super::profile_choices(&store, &layers, &config)
+        .unwrap()
+        .into_iter()
+        .find(|profile| profile.name == "omp")
+        .unwrap();
+    assert!(
+        profile
+            .references
+            .contains(&"assistant.summary_profile".to_owned())
+    );
+    assert!(profile.remove_refusal.is_some());
+    assert_eq!(set("").state, CmdState::Done);
+    assert_eq!(
+        store
+            .config_layers()
+            .unwrap()
+            .config()
+            .unwrap()
+            .assistant
+            .summary_profile,
+        None
+    );
+}

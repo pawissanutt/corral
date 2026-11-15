@@ -21,6 +21,7 @@ pub enum Topic {
     Settings,
     Thread,
     Session,
+    Terminal,
     #[serde(other)]
     Other,
 }
@@ -96,6 +97,16 @@ pub enum SubDelta {
         cursor: BoardCursor,
         more: bool,
         gap: Option<SessionLiveGap>,
+    },
+    Terminal {
+        scope: String,
+        epoch: u64,
+        /// Complete bounded replacement window; absent on an unavailable pane.
+        snapshot: Option<crate::detail::TerminalSnapshot>,
+        cursor: BoardCursor,
+        more: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     #[serde(other)]
     Other,

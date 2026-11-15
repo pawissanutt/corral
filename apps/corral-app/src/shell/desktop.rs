@@ -1,7 +1,8 @@
 //! The desktop and web shell: a top bar across the window, the sidebar of destinations
 //! (folding to a rail of icons by choice or on a narrow window), and the content container that
 //! holds the connection banner and the current page, with the Ask drawer, the palette, the
-//! confirmation and the toast over it.
+//! confirmation and the toast over it. On a touch tablet every shell control reaches the touch
+//! target ([`control_height`]).
 
 use nsh_core::AccessibilityCurrent;
 use nsh_core::element::StyleRefinement;
@@ -12,14 +13,16 @@ use crate::model::nav::{
 };
 use crate::model::{Destination, SettingsSection, Workspace};
 use crate::screens;
-use crate::shell::{banner, confirmation, section_short, sidebar_collapsed, stale, toast};
+use crate::shell::{confirmation, section_short, sidebar_collapsed, stale, toast};
 use crate::state::AppState;
 use crate::ui::ask;
 use crate::ui::atoms::{
-    HealthLayout, count, destination_spoken, health_line, key_hint, nav_row, nav_row_icon,
+    HealthLayout, control_height, count, destination_spoken, health_line, key_hint, nav_row,
+    nav_row_icon,
 };
 use crate::ui::composer::ask_surface;
 use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::notice;
 use crate::ui::palette::palette;
 use crate::ui::tokens::{FONT_MONO, Token, color, row_height, text_size};
 
@@ -78,7 +81,7 @@ pub fn shell(app: AppState) -> AnyElement {
 
 fn top_bar(app: AppState, workspace: Memo<Option<Workspace>>, collapsed: Memo<bool>) -> AnyElement {
     view()
-        .h(px(TOP_BAR_HEIGHT))
+        .h(px(control_height(TOP_BAR_HEIGHT)))
         .flex_shrink_0()
         .flex_row()
         .items_center()
@@ -176,7 +179,7 @@ fn sidebar(
 fn sidebar_toggle(app: AppState, collapsed: Memo<bool>) -> AnyElement {
     let ink = color(Token::ShellInk);
     view()
-        .size(px(28.0))
+        .size(px(control_height(28.0)))
         .flex_shrink_0()
         .items_center()
         .justify_center()
@@ -341,7 +344,7 @@ fn rail_sections(app: AppState) -> AnyElement {
                 selected,
                 move || app.go_settings(section),
             )
-            .h(px(row_height(app.form)))
+            .h(px(control_height(row_height(app.form))))
             .child(
                 text(section_short(section))
                     .text_size(px(text_size(app.form) - 2.5))
@@ -378,8 +381,8 @@ fn rail_button(
     let selected = computed(selected);
     view()
         .relative()
-        .w(px(RAIL_BUTTON))
-        .h(px(row_height(app.form) + 8.0))
+        .w(px(control_height(RAIL_BUTTON)))
+        .h(px(control_height(row_height(app.form) + 8.0)))
         .flex_shrink_0()
         .items_center()
         .justify_center()
@@ -466,7 +469,7 @@ fn project(app: AppState, ws: Workspace) -> AnyElement {
 fn ask_button(app: AppState) -> AnyElement {
     let ink = color(Token::ShellInk);
     view()
-        .h(px(row_height(app.form) + 4.0))
+        .h(px(control_height(row_height(app.form) + 4.0)))
         .flex_shrink_0()
         .flex_row()
         .items_center()
@@ -503,7 +506,7 @@ fn palette_opener(app: AppState) -> AnyElement {
     let ink = color(Token::ShellInk);
     let quiet = color(Token::ShellInk2);
     view()
-        .h(px(row_height(app.form)))
+        .h(px(control_height(row_height(app.form))))
         .flex_shrink_0()
         .flex_row()
         .items_center()
@@ -626,7 +629,7 @@ fn content(app: AppState) -> AnyElement {
         .min_h(px(0.0))
         .overflow_hidden()
         .bg(color(Token::Bg))
-        .child(banner(app))
+        .child(notice::connection(app))
         .child(
             view()
                 .role(AccessibilityRole::Region)
@@ -640,6 +643,7 @@ fn content(app: AppState) -> AnyElement {
         .child(ask_surface(app))
         .child(palette(app))
         .child(confirmation(app))
+        .child(crate::screens::now::verb_composer(app))
         .child(toast(app))
         .into_element()
 }

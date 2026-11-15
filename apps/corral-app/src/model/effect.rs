@@ -187,6 +187,10 @@ pub enum Effect {
     },
     /// Run a typed canonical command (preview and fresh confirmation when it is Confirm-class).
     Act(Act),
+    /// Open the selected record's canonical action menu from a scoped list shortcut.
+    VerbMenu(crate::model::work::Record),
+    /// Enrol, pair, revoke or edit device authority through the shared client.
+    Device(crate::model::devices::DeviceOp),
     /// Ask corrald for the result of the command with this id, without resubmitting it.
     Recover(Id),
     /// Fetch, revalidate or page a detail.

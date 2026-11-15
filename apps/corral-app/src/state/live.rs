@@ -2,19 +2,16 @@
 //! with fresh confirmation, detail requests and assistant calls. Every call goes through the
 //! shared client; nothing runs locally and nothing falls back to fixture data.
 
-use std::time::Duration;
-
-use corral_protocol::app::{ActPreviewRequest, ActSubmit, ConfirmProof, PREVIEW_TTL_SECS};
-use corral_protocol::assistant::{AssistantSend, ContextRef, PromptPreview};
-use corral_protocol::cmd::mode::ModeCommand;
-use corral_protocol::cmd::{CmdResultQuery, Command};
+use corral_protocol::app::{ActSubmit, ConfirmProof, PREVIEW_TTL_SECS};
+use corral_protocol::assistant::{AssistantSend, ContextRef};
+use corral_protocol::cmd::CmdResultQuery;
 use corral_protocol::detail::{DetailGet, DetailRef};
 
 use nsh_core::prelude::*;
 
 use super::AppState;
 use crate::client::requests;
-use crate::model::act::{self, Confirmable, Confirmation, PreviewState};
+use crate::model::act::{self, Confirmable, PreviewState};
 use crate::model::daemon::{DetailCache, Feed, Operation};
 use crate::model::health::{self, Availability};
 use crate::model::{
@@ -129,12 +126,15 @@ impl AppState {
             .with(|feed| health::device_name(feed).map(str::to_owned))
     }
 
-    /// Tracked: `via=app:<device>` as corrald attributes this device's actions.
+    /// Tracked human attribution for an action receipt, without exposing raw device IDs.
     pub fn via(&self) -> String {
-        match self.device_name() {
-            Some(name) => format!("via=app:{name}"),
-            None => "via=app".into(),
-        }
+        self.feed.with(|feed| {
+            let device = feed
+                .session
+                .as_ref()
+                .map(|session| session.device.id.as_str());
+            crate::model::inbox::provenance(feed, "owner", device, "app")
+        })
     }
 
     /// Tracked: today's local date, `YYYY-MM-DD`.
@@ -227,10 +227,12 @@ impl AppState {
                 PreviewState::Failed(why) => ActStatus::Refused(why),
             }));
         }
-        self.feed.with(|feed| act::status(feed, key)).or_else(|| {
-            self.watching
-                .with(|watching| watching.contains_key(key))
-                .then_some(ActStatus::Pending)
+        self.device_status(key).or_else(|| {
+            self.feed.with(|feed| act::status(feed, key)).or_else(|| {
+                self.watching
+                    .with(|watching| watching.contains_key(key))
+                    .then_some(ActStatus::Pending)
+            })
         })
     }
 
@@ -280,6 +282,16 @@ impl AppState {
         _ = requests::send(requests::ClientRequest::DetailWatch { target, open });
     }
 
+    /// Requests a detail page without discarding its cursor or conditional etag.
+    pub fn detail(&self, get: DetailGet) {
+        self.run(vec![Effect::Detail(get)]);
+    }
+
+    /// Acquires or releases the raw terminal subscription for a mounted session view.
+    pub fn terminal(&self, session: String, open: bool) {
+        _ = requests::terminal(session, open);
+    }
+
     /// Tracked read of a detail's cache.
     pub fn with_detail<R>(
         &self,
@@ -312,7 +324,9 @@ impl AppState {
                 target,
             } => self.ask_about(context, text, target),
             Effect::Act(act) => self.dispatch(act),
+            Effect::VerbMenu(record) => self.work.update(|state| state.menu = Some(record)),
             Effect::Recover(key) => self.recover(&key),
+            Effect::Device(op) => self.device(op),
             Effect::Detail(get) => {
                 let loading = get.page.is_none()
                     && self.feed.with_untracked(|feed| {
@@ -327,6 +341,9 @@ impl AppState {
             }
             Effect::Watch { session, on } => {
                 _ = requests::watch(session.to_string(), on);
+            }
+            Effect::RetryTopic(topic) => {
+                _ = requests::send(requests::ClientRequest::RetryTopic(topic));
             }
             Effect::Changes(query) => _ = requests::changes_page(query),
             Effect::Seen(seen) => _ = requests::seen_advance(seen),
@@ -409,170 +426,8 @@ impl AppState {
         }
     }
 
-    /// Confirms the live command on screen with corrald's fresh preview proof.
-    pub(super) fn confirm_live(&self) {
-        let Some(confirmation) = self.confirmation.get_untracked() else {
-            return;
-        };
-        let state = self.feed.with_untracked(|feed| confirmation.state(feed));
-        let PreviewState::Ready(preview) = state else {
-            // Nothing to prove yet, or corrald refused: the sheet already says which.
-            return;
-        };
-        self.confirmation.set(None);
-        let key = confirmation.subject.key();
-        self.watching.update(|watching| {
-            if let Some(entry) = watching.get_mut(&key) {
-                entry.1 = Watch::Confirmed;
-            }
-        });
-        let token = preview.operation_token.clone();
-        let proof = ConfirmProof {
-            preview_id: preview.preview_id,
-            digest: preview.digest,
-        };
-        match confirmation.subject {
-            Confirmable::Act(mut act) => {
-                // An autopilot grant confirms corrald's own operation preview: its token, never
-                // one this app makes up.
-                if let Command::Mode(ModeCommand::Autopilot { confirm, .. }) = &mut act.command {
-                    let Some(token) = token else {
-                        self.watching
-                            .update(|watching| _ = watching.remove(&act.key));
-                        self.toast(format!(
-                            "{} · Refused: corrald returned no automation preview",
-                            act.title
-                        ));
-                        return;
-                    };
-                    *confirm = token;
-                }
-                submit(&act, Some(proof));
-            }
-            Confirmable::Prompt { mut answer, .. } => {
-                answer.confirm = Some(proof);
-                requests::prompt_answer(answer);
-            }
-        }
-    }
-
-    /// Cancels the live confirmation; nothing was sent.
-    pub(super) fn cancel_live(&self) {
-        if let Some(confirmation) = self.confirmation.get_untracked() {
-            self.confirmation.set(None);
-            let key = confirmation.subject.key();
-            self.watching.update(|watching| _ = watching.remove(&key));
-            self.toast(format!(
-                "{} · cancelled, nothing was sent",
-                confirmation.subject.title()
-            ));
-        }
-    }
-
-    /// Keeps corrald's preview with the open sheet once it arrives, so the client's bounded
-    /// operation table dropping the reply cannot turn a ready sheet back into a wait.
-    pub(super) fn latch_previews(self) {
-        effect(move || {
-            let stops = self
-                .assistant
-                .with(|state| state.live.stop_ops.keys().cloned().collect::<Vec<_>>());
-            for key in stops {
-                let operation = self
-                    .feed
-                    .with(|feed| feed.operations.get(&key).filter(|op| !op.loading).cloned());
-                if let Some(operation) = operation {
-                    untracked(|| {
-                        self.act(self.assistant, |state, _| {
-                            state.settle_stop(&key, &operation)
-                        })
-                    });
-                }
-            }
-        });
-        effect(move || {
-            let Some(pending) = self.confirmation.get().filter(|c| c.ready.is_none()) else {
-                return;
-            };
-            let PreviewState::Ready(ready) =
-                self.feed.with(|feed| act::preview(feed, &pending.preview))
-            else {
-                return;
-            };
-            untracked(|| {
-                self.confirmation.update(|current| {
-                    if let Some(current) = current
-                        .as_mut()
-                        .filter(|current| current.preview == pending.preview)
-                    {
-                        current.ready = Some(ready);
-                    }
-                });
-            });
-        });
-    }
-
-    /// Toasts each watched command's outcome once it settles or becomes unknown, and sends a
-    /// command corrald refused for lack of a confirmation through one, once, under the same
-    /// identity. A command whose sheet is open is not settled.
-    pub(super) fn watch_receipts(self) {
-        effect(move || {
-            let watched = self.watching.get();
-            // Tracked: a sheet closing lets a waiting re-confirmation open.
-            let pending = self.confirmation.with(Option::is_some);
-            if watched.is_empty() {
-                return;
-            }
-            let mut done = Vec::new();
-            let mut reconfirm = None;
-            self.feed.with(|feed| {
-                for (key, (subject, stage)) in &watched {
-                    match stage {
-                        Watch::Confirming => continue,
-                        Watch::Sent if act::needs_confirmation(feed, key) => {
-                            reconfirm.get_or_insert_with(|| subject.clone());
-                            continue;
-                        }
-                        Watch::Sent | Watch::Confirmed => {}
-                    }
-                    match act::status(feed, key) {
-                        Some(status) if status.settled() || status == ActStatus::Unknown => {
-                            done.push((key.clone(), subject.title().to_owned(), status));
-                        }
-                        _ => {}
-                    }
-                }
-            });
-            let again = reconfirm.filter(|_| !pending);
-            if done.is_empty() && again.is_none() {
-                return;
-            }
-            untracked(move || {
-                let via = self.via();
-                self.watching.update(|watching| {
-                    for (key, _, _) in &done {
-                        watching.remove(key);
-                    }
-                    if let Some(entry) = again.as_ref().and_then(|s| watching.get_mut(&s.key())) {
-                        entry.1 = Watch::Confirming;
-                    }
-                });
-                if let Some((_, title, status)) = done.last() {
-                    self.toast(format!("{title} · {} · {via}", status.line()));
-                }
-                if let Some(subject) = again {
-                    // Deferred so the preview request leaves after this reaction settles, and
-                    // owned by the root: this reaction re-runs on the stage change above, and
-                    // its cleanup would cancel a timer it owned.
-                    self.root.run(move || {
-                        let _ = set_timeout(Duration::ZERO, move || self.preview(subject));
-                    });
-                }
-            });
-        });
-    }
-
     /// The refusal a command meets on this device now, if any.
-    fn refusal(&self, authority: Authority, needs_link: bool) -> Option<&'static str> {
+    pub(super) fn refusal(&self, authority: Authority, needs_link: bool) -> Option<&'static str> {
         self.feed.with_untracked(|feed| {
             if needs_link && !feed.ready() {
                 Some(NO_LINK)
@@ -624,38 +479,19 @@ impl AppState {
         match subject {
             subject if confirm => self.preview(subject),
             Confirmable::Prompt { answer, .. } => _ = requests::prompt_answer(answer),
-            Confirmable::Act(_) => {}
+            Confirmable::Act(_) | Confirmable::DeviceAuthority { .. } => {}
         }
-    }
-
-    /// Asks corrald for the exact preview and shows the confirmation sheet while it arrives.
-    fn preview(&self, subject: Confirmable) {
-        let correlation = match &subject {
-            Confirmable::Act(act) => requests::act_preview(ActPreviewRequest {
-                command: act.command.clone(),
-                expect: act.expect.clone(),
-            }),
-            Confirmable::Prompt { answer, .. } => requests::prompt_preview(PromptPreview {
-                key: answer.key.clone(),
-                rev: answer.rev,
-                choice: answer.choice,
-            }),
-        };
-        self.confirmation.set(Some(Confirmation {
-            subject,
-            preview: Id::from(correlation),
-            ready: None,
-        }));
     }
 }
 
-fn granted(feed: &Feed, authority: Authority) -> bool {
+pub(super) fn granted(feed: &Feed, authority: Authority) -> bool {
     feed.session.as_ref().is_some_and(|session| {
         let granted = &session.authority;
         match authority {
             Authority::Reply => granted.reply,
             Authority::Act => granted.act,
             Authority::Assistant => granted.assistant,
+            Authority::Admin => granted.admin,
         }
     })
 }
@@ -665,7 +501,7 @@ fn etag(cache: &DetailCache) -> Option<String> {
 }
 
 /// Submits under the command's own identity, issued now and expiring with the preview window.
-fn submit(act: &Act, confirm: Option<ConfirmProof>) {
+pub(super) fn submit(act: &Act, confirm: Option<ConfirmProof>) {
     let now = jiff::Timestamp::now();
     let expires = now
         .checked_add(jiff::SignedDuration::from_secs(PREVIEW_TTL_SECS as i64))

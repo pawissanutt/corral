@@ -18,13 +18,17 @@ use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::chip::{chip, illus};
 use crate::ui::kit::marks::{hue_ink, mark};
-use crate::ui::kit::notice::skeleton;
+use crate::ui::kit::notice::loading;
 use crate::ui::kit::table::{kv, steps};
 use crate::ui::kit::text::{dim, h3, mono, plain, rich, rich_small};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::context::tail;
 use super::parts::{model_button, press, press_id, pressable, quiet};
+use super::verbs::reasons;
+
+/// The phone's least touch target: a dependency id or the plan link is pressed as a button is.
+const TARGET: f32 = 44.0;
 
 /// The panel key of the inspector that follows the model's selected tab (the two-pane fallback).
 pub(super) const FOLLOW: &str = "inspector";
@@ -66,7 +70,11 @@ fn padded(app: AppState, child: AnyElement) -> AnyElement {
 /// too in the Daemon state.
 pub(super) fn content(app: AppState, inspector: &Inspector) -> AnyElement {
     let body = match inspector {
-        Inspector::Loading => skeleton(app, &[(0.3, 10.0), (0.6, 18.0), (1.0, 60.0)]),
+        Inspector::Loading => loading(
+            app,
+            work::INSPECTOR_LOADING,
+            &[(0.3, 10.0), (0.6, 18.0), (1.0, 60.0)],
+        ),
         Inspector::Quiet(words) => return quiet(app, *words),
         Inspector::LiveStory(story) => live_story(app, story),
         Inspector::LiveEvidence(evidence) => live_evidence(app, evidence),
@@ -138,7 +146,8 @@ pub(super) fn story(app: AppState, story: &Story) -> AnyElement {
         &story.facts
     };
     if !goal.is_empty() {
-        out.push(paragraph(app, rich_small(app, goal)));
+        let note = story.machine_note.filter(|_| !story.facts.is_empty());
+        out.push(paragraph(app, with_note(app, rich_small(app, goal), note)));
     }
     if let Some(stages) = &story.stages {
         out.push(stepper(app, stages));
@@ -170,19 +179,50 @@ pub(super) fn story(app: AppState, story: &Story) -> AnyElement {
     view().children(out).into_element()
 }
 
-/// The model's action row under a story: each button by what it does.
+/// The model's action row under a story: each button by what it does, then why each command
+/// that cannot run now cannot.
 fn actions(app: AppState, buttons: &[work::Button]) -> AnyElement {
+    view()
+        .pt(px(if app.form == Form::Terminal {
+            0.0
+        } else {
+            16.0
+        }))
+        .child(
+            view().flex_row().flex_wrap().gap(px(8.0)).children(
+                buttons
+                    .iter()
+                    .map(|button| pressable(app, button, false))
+                    .collect::<Vec<_>>(),
+            ),
+        )
+        .children(reasons(app, buttons))
+        .into_element()
+}
+
+/// `paragraph`, then the model's illustrative note after a separator, italic and quiet, so it
+/// never reads as part of the recorded facts.
+fn with_note(app: AppState, paragraph: AnyElement, note: Option<&'static str>) -> AnyElement {
+    let Some(note) = note else {
+        return paragraph;
+    };
+    let words = text(format!("· {note}"))
+        .italic()
+        .number_of_lines(1u32)
+        .flex_shrink_0()
+        .text_color(color(Token::Ink3));
+    let words = if app.form == Form::Terminal {
+        words
+    } else {
+        words.font_family(FONT_TEXT).text_size(px(12.0))
+    };
     view()
         .flex_row()
         .flex_wrap()
-        .gap(px(8.0))
-        .pt(px(16.0))
-        .children(
-            buttons
-                .iter()
-                .map(|button| pressable(app, button, false))
-                .collect::<Vec<_>>(),
-        )
+        .items_baseline()
+        .gap_x(px(if app.form == Form::Terminal { 8.0 } else { 6.0 }))
+        .child(paragraph)
+        .child(words)
         .into_element()
 }
 
@@ -376,6 +416,9 @@ fn head(
             words.font_family(FONT_TEXT).text_size(px(12.0))
         };
         view()
+            .when(form == Form::Phone, |link| {
+                link.justify_center().min_h(px(TARGET))
+            })
             .cursor_pointer()
             .role(AccessibilityRole::Link)
             .label(label)
@@ -389,7 +432,13 @@ fn head(
         .items_center()
         .flex_wrap()
         .gap(px(8.0))
-        .child(mono(app, id).text_color(color(Token::Ink3)))
+        // Ids are one token: cut at the edge, never broken across lines (TT-19).
+        .child(
+            mono(app, id)
+                .number_of_lines(1u32)
+                .truncate()
+                .text_color(color(Token::Ink3)),
+        )
         .children(who.map(|(who, hue)| chip(app, who, hue)))
         .children(plan)
         .children(changed.map(|changed| chip(app, changed, Hue::Neutral)))
@@ -546,12 +595,19 @@ fn ids(app: AppState, dependencies: &[Dependency]) -> AnyElement {
                         .flex_row()
                         .items_center()
                         .gap(px(4.0))
+                        .when(app.form == Form::Phone, |link| {
+                            link.justify_center().min_w(px(TARGET)).min_h(px(TARGET))
+                        })
                         .cursor_pointer()
                         .role(AccessibilityRole::Link)
                         .label(format!("{} {}", dependency.id, dependency.mark.label()))
                         .test_id(&format!("btn-dep-{}", dependency.id))
                         .on_press(move || press(app, action.clone()))
-                        .child(mono(app, dependency.id.clone()))
+                        .child(
+                            mono(app, dependency.id.clone())
+                                .number_of_lines(1u32)
+                                .truncate(),
+                        )
                         .when(dependency.show_mark, |link| {
                             link.child(mark(app, dependency.mark, Hue::Neutral))
                         })

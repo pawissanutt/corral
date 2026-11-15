@@ -7,8 +7,8 @@ use std::rc::Rc;
 use nsh_core::prelude::*;
 
 use crate::model::assistant::{
-    Action, Button, LABELS, LivePrompt, Prompt, PromptCard, PromptPane, ThreadHeader, ThreadRef,
-    live_prompt_pane, live_thread_header, prompt_pane, thread_header,
+    Action, Button, Fact, LABELS, LivePrompt, Prompt, PromptCard, PromptPane, QUICK, ThreadHeader,
+    ThreadRef, live_prompt_pane, live_thread_header, prompt_pane, quick_id, thread_header,
 };
 use crate::model::{Destination, Form, Id};
 use crate::screens::{PhoneBar, PhonePage};
@@ -25,7 +25,7 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::parts::{act, model_button, note_size, ring, spacer, words};
-use super::{cards, open_scope, transcript, watch_ops};
+use super::{cards, open_scope, session_verbs, side_facts, transcript, watch_ops};
 
 /// The facts column beside the transcript (`grid-template-columns: minmax(0,1fr) 300px`).
 const FACTS_WIDTH: f32 = 300.0;
@@ -252,7 +252,8 @@ fn end_modal(app: AppState, session: &str) -> Modal {
 }
 
 /// The session's facts (`Session`: id, state, where, profile, cost and what is known besides),
-/// how long its host runs, and the Ideas filed from this thread.
+/// how long its host runs, the served session's canonical actions, and the Ideas filed from
+/// this thread.
 fn facts(app: AppState, source: &ThreadRef) -> Vec<AnyElement> {
     let Some(header) = header(app, source) else {
         return Vec::new();
@@ -262,12 +263,7 @@ fn facts(app: AppState, source: &ThreadRef) -> Vec<AnyElement> {
         h3(app, LABELS.session, None),
         view()
             .gap(px(if form == Form::Terminal { 0.0 } else { 5.0 }))
-            .children(
-                header
-                    .facts
-                    .iter()
-                    .map(|fact| label_value(app, fact.label, rich_small(app, &fact.value))),
-            )
+            .children(header.facts.iter().map(|fact| fact_row(app, fact)))
             .into_element(),
     ];
     let note = words(app, header.lifetime_note, note_size(form), Token::Ink3);
@@ -276,6 +272,21 @@ fn facts(app: AppState, source: &ThreadRef) -> Vec<AnyElement> {
     } else {
         view().mt(px(8.0)).child(note).into_element()
     });
+    if let ThreadRef::Live(scope) = source {
+        // The quick thread's actions are its current generation's.
+        let session = if scope.as_str() == QUICK {
+            app.feed.with(quick_id)
+        } else {
+            Some(scope.to_string())
+        };
+        if let Some(session) = session {
+            if form == Form::Terminal {
+                out.push(term::blank());
+            }
+            out.push(h3(app, LABELS.session_actions, None));
+            out.push(session_verbs(app, Id::from(session.as_str())));
+        }
+    }
     if !header.filed.is_empty() {
         if form == Form::Terminal {
             out.push(term::blank());
@@ -294,6 +305,15 @@ fn facts(app: AppState, source: &ThreadRef) -> Vec<AnyElement> {
         );
     }
     out
+}
+
+/// One session fact: desktop and phone the label column beside the value; a terminal the label
+/// over the value, its id cut to one line (`side_facts`).
+fn fact_row(app: AppState, fact: &Fact) -> AnyElement {
+    if app.form == Form::Terminal {
+        return side_facts::stacked(app, fact.label, side_facts::identified(app, &fact.value));
+    }
+    label_value(app, fact.label, rich_small(app, &fact.value))
 }
 
 /// A filed row of the facts column (`.irow`): the mono id and the title cut to fit.

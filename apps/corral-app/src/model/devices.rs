@@ -1,6 +1,11 @@
-//! Device enrolment and browser pairing state, with wording shared by every app form.
+//! Device enrolment and browser pairing state, the device operations Settings asks the app to
+//! run, with wording shared by every app form.
 
-use crate::model::daemon::Feed;
+use corral_protocol::app::DeviceSetAuthority;
+use corral_protocol::device::PushKind;
+
+use crate::model::Id;
+use crate::model::daemon::{Feed, Link};
 
 pub const ENROL_FIRST: &str = "Enrol this device in Settings › Connection to load the board.";
 pub const REVOKED: &str = "This device was revoked. Enrol it again in Settings › Connection.";
@@ -58,6 +63,46 @@ impl DeviceLink {
     }
 }
 
+/// A device operation a Settings reducer asks the app to run (`Effect::Device`). The app gates
+/// each on the link and this device's authority and says why it refused; Revoke and
+/// SetAuthority report their outcome under `key` (`AppState::act_status`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceOp {
+    Enrol {
+        name: String,
+    },
+    /// Forget this browser's pairing; the app returns to the disconnected Connection page.
+    Forget,
+    Pair {
+        code: String,
+        name: String,
+    },
+    PairBegin,
+    PairConfirm {
+        pair_id: String,
+    },
+    PairCancel {
+        pair_id: String,
+    },
+    /// Already confirmed by the owner on this device.
+    Revoke {
+        key: Id,
+        device: String,
+    },
+    /// Already reviewed on this device; granting admin also goes through corrald's preview and
+    /// this device's proof.
+    SetAuthority {
+        key: Id,
+        title: String,
+        change: DeviceSetAuthority,
+    },
+    /// Turn this browser's Web Push on for `kinds`, or change the kinds while it is on.
+    PushSubscribe {
+        kinds: Vec<PushKind>,
+    },
+    PushUnsubscribe,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceRow {
     pub id: String,
@@ -69,6 +114,10 @@ pub struct DeviceRow {
     pub enrolled: String,
     /// Calendar date, YYYY-MM-DD, when revoked.
     pub revoked: Option<String>,
+    /// RFC 3339 time of its last authenticated activity, coarse; not an online indicator.
+    pub last_seen: Option<String>,
+    /// How it last reached corrald, in owner words ("LAN", "loopback").
+    pub reach: Option<String>,
 }
 
 /// Whether `Feed::devices` is corrald's current registry. Rows retained from an earlier session or
@@ -94,6 +143,8 @@ pub enum Pairing {
         url: Option<String>,
         /// Unix seconds.
         expires_at: u64,
+        /// Where the new device can reach corrald: (reach label, endpoint).
+        reach: Vec<(String, String)>,
     },
     Claimed {
         pair_id: String,
@@ -144,6 +195,10 @@ pub enum ThisDevice {
         default_name: String,
     },
     Busy,
+    /// corrald cannot be reached, so whether this device is enrolled is not known yet.
+    Unreachable {
+        line: String,
+    },
     Enrolled {
         line: String,
     },
@@ -160,6 +215,16 @@ pub enum ThisDevice {
 
 pub fn this_device(feed: &Feed, web: bool) -> ThisDevice {
     match &feed.device {
+        DeviceLink::Unknown | DeviceLink::Busy if feed.link == Link::Down => {
+            ThisDevice::Unreachable {
+                line: match &feed.problem {
+                    Some(problem) => format!(
+                        "corrald can't be reached ({problem}), so this device's enrolment isn't known yet. It shows once corrald answers."
+                    ),
+                    None => "corrald can't be reached, so this device's enrolment isn't known yet. It shows once corrald answers.".into(),
+                },
+            }
+        }
         DeviceLink::Unknown | DeviceLink::Busy => ThisDevice::Busy,
         DeviceLink::Unenrolled => ThisDevice::Enrol {
             line: "This device is not enrolled. Enrolling records it as a device of this workspace, which you can revoke later.",
@@ -180,25 +245,35 @@ pub fn this_device(feed: &Feed, web: bool) -> ThisDevice {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PairBrowser {
-    Form { line: &'static str },
+    /// The pairing form; `prefilled` when a pairing link filled in the code.
+    Form {
+        prefilled: bool,
+    },
     Connecting,
-    Claimed { line: String },
-    Paired { line: String },
-    Failed { line: String },
-    Blocked { line: &'static str },
+    Claimed {
+        sas: String,
+    },
+    Paired {
+        line: String,
+    },
+    Failed {
+        line: String,
+    },
+    Blocked {
+        line: &'static str,
+    },
 }
 
 pub fn pair_browser(feed: &Feed) -> PairBrowser {
     match &feed.browser_pairing {
         BrowserPairing::Idle => PairBrowser::Form {
-            line: "Pair this browser: run `corral device pair` in a terminal, or use Settings › Devices in the desktop or terminal app, then paste the code here.",
+            prefilled: feed
+                .pairing_code
+                .as_deref()
+                .is_some_and(|code| !code.trim().is_empty()),
         },
         BrowserPairing::Connecting => PairBrowser::Connecting,
-        BrowserPairing::Claimed { sas } => PairBrowser::Claimed {
-            line: format!(
-                "Compare this code with the one on your trusted device: {sas}. Waiting for confirmation…"
-            ),
-        },
+        BrowserPairing::Claimed { sas } => PairBrowser::Claimed { sas: sas.clone() },
         BrowserPairing::Paired { device } => PairBrowser::Paired {
             line: format!("Paired as {device}."),
         },
@@ -214,7 +289,11 @@ pub enum PairingPanel {
         pair_id: String,
         code: String,
         url: Option<String>,
+        /// The pairing link as a QR Code, for a phone's camera.
+        qr: Option<crate::model::settings::qr::Qr>,
         line: String,
+        /// Where the new device can reach corrald, one line each.
+        reach: Vec<String>,
     },
     Claimed {
         pair_id: String,
@@ -230,31 +309,41 @@ pub struct LiveDevices {
     pub rows: Vec<DeviceRow>,
     pub panel: PairingPanel,
     pub can_pair: bool,
-    pub notice: Option<&'static str>,
+    /// Why this device cannot start a pairing now, when it cannot.
+    pub pair_note: Option<&'static str>,
 }
 
-pub fn live_devices(feed: &Feed, web: bool) -> LiveDevices {
+/// Settings › Devices on any platform: a browser with admin authority pairs and manages devices
+/// exactly as a native app does.
+pub fn live_devices(feed: &Feed) -> LiveDevices {
     let panel = match &feed.pairing {
-        _ if web => PairingPanel::Idle,
         Pairing::Idle => PairingPanel::Idle,
         Pairing::Offered {
             pair_id,
             code,
             url,
             expires_at,
+            reach,
         } => PairingPanel::Offered {
             pair_id: pair_id.clone(),
             code: code.clone(),
             url: url.clone(),
+            qr: url
+                .as_deref()
+                .and_then(crate::model::settings::qr::Qr::encode),
             line: format!(
-                "{} Expires in {} s.",
+                "{} The code expires in {} s; the new device then shows a six-digit code to compare.",
                 if url.is_some() {
-                    "Open this link in the browser to prefill Settings › Connection."
+                    "Scan this with the new device's camera, or open the link in its browser; it opens Settings › Connection with the code filled in."
                 } else {
-                    "Paste this code in the browser's Settings › Connection."
+                    "Paste this code into Settings › Connection on the new device."
                 },
                 expires_at.saturating_sub(feed.now)
             ),
+            reach: reach
+                .iter()
+                .map(|(label, endpoint)| format!("{label} · {endpoint}"))
+                .collect(),
         },
         Pairing::Claimed {
             pair_id,
@@ -265,20 +354,30 @@ pub fn live_devices(feed: &Feed, web: bool) -> LiveDevices {
         } => PairingPanel::Claimed {
             pair_id: pair_id.clone(),
             line: format!(
-                "{name} ({app_version}) wants to pair. The browser shows {sas}. Confirm only if the codes match."
+                "{name} ({app_version}) wants to pair and shows {sas}. Confirm only if the codes match."
             ),
         },
         Pairing::Ended { line } => PairingPanel::Ended { line: line.clone() },
     };
+    let admin = feed
+        .session
+        .as_ref()
+        .is_some_and(|session| session.authority.admin);
+    let idle = matches!(feed.pairing, Pairing::Idle | Pairing::Ended { .. });
+    let pair_note = if feed.link != Link::Up {
+        Some("Pairing needs a live connection to corrald.")
+    } else if !matches!(feed.device, DeviceLink::Enrolled { .. }) {
+        Some("Enrol or pair this device first; only a known device can pair others.")
+    } else if !admin {
+        Some("Only an administrator device can pair new devices; this one is not an administrator.")
+    } else {
+        None
+    };
     LiveDevices {
         rows: feed.devices.clone(),
         panel,
-        can_pair: !web
-            && matches!(feed.device, DeviceLink::Enrolled { .. })
-            && matches!(feed.pairing, Pairing::Idle | Pairing::Ended { .. }),
-        notice: web.then_some(
-            "Pair a new browser from the desktop or terminal app, or with `corral device` in a terminal."
-        ),
+        can_pair: pair_note.is_none() && idle,
+        pair_note,
     }
 }
 

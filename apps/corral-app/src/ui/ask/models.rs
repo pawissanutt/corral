@@ -1,6 +1,8 @@
 //! The model pill and the model list it opens (`.pick`, `.modelmenu`): a popup above the
 //! composer's control row in the drawer and under a thread, below it in the hotkey window, inline
-//! under the row in the phone sheet.
+//! in the phone composer's chooser.
+
+use std::rc::Rc;
 
 use nsh_core::prelude::*;
 
@@ -10,6 +12,7 @@ use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::state::AppState;
 use crate::ui::ask::act;
+use crate::ui::atoms::control_height;
 use crate::ui::composer::ListAt;
 use crate::ui::kit::chip::illus;
 use crate::ui::kit::marks::mark;
@@ -19,7 +22,10 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 /// The list's widest extent (`width: min(440px, 100%)`) on desktop.
 const POPUP_WIDTH: f32 = 440.0;
 /// The disclosure triangle after the profile name: drawn chrome, not wording.
-const DISCLOSURE: &str = " ▾";
+pub(crate) const DISCLOSURE: &str = " ▾";
+
+/// Runs after a profile is picked from the inline list: the phone's chooser closes with it.
+pub(crate) type Picked = Rc<dyn Fn()>;
 
 /// The pill naming the model of the next message, `label` its accessible name. Pressing it opens
 /// or closes the list; while `at` is a popup the open list hangs from `row` (the control row the
@@ -78,15 +84,15 @@ pub(crate) fn pill(
             .bg(color(Token::Surface))
             .child(words),
         Form::Desktop | Form::Phone => {
-            let phone = form == Form::Phone;
-            let (height, size, pad) = if phone {
-                (32.0, 14.0, 12.0)
+            // A phone's is a full touch target, as tall as its buttons.
+            let (height, size, pad, radius) = if form == Form::Phone {
+                (44.0, 15.0, 14.0, 10.0)
             } else {
-                (26.0, 12.0, 10.0)
+                (control_height(26.0), 12.0, 10.0, 6.0)
             };
             face.h(px(height))
                 .px(px(pad))
-                .rounded(px(6.0))
+                .rounded(px(radius))
                 .border_1()
                 .border_color(color(Token::Rule2))
                 .bg(move || {
@@ -101,15 +107,6 @@ pub(crate) fn pill(
                     s.outline(px(2.0))
                         .outline_color(color(Token::Focus))
                         .outline_offset(px(2.0))
-                })
-                // 32 pt high, reaching the 44 pt target above and below.
-                .when(phone, |v| {
-                    v.hit_slop(EdgeInsets {
-                        top: px(6.0),
-                        right: px(0.0),
-                        bottom: px(6.0),
-                        left: px(0.0),
-                    })
                 })
                 .child(words.font_family(FONT_TEXT).text_size(px(size)))
         }
@@ -134,7 +131,7 @@ pub(crate) fn pill(
                 })
                 .child(dynamic(move || {
                     menu.get()
-                        .map(|list| untracked(|| model_list(app, &list, false, inside)))
+                        .map(|list| untracked(|| model_list(app, &list, None, inside)))
                 }))
         })),
     };
@@ -146,13 +143,19 @@ pub(crate) fn pill(
         .into_element()
 }
 
-/// The open list inline under the control row (the phone sheet's), nothing while it is closed.
-pub(crate) fn inline_list(app: AppState, menu: Memo<Option<ModelList>>) -> AnyElement {
-    // Only the phone sheet shows the list inline, where touch leaves no keyboard focus to return.
+/// The open list inline in the phone composer's chooser, nothing while it is closed; `picked`
+/// runs after a profile is chosen.
+pub(crate) fn inline_list(
+    app: AppState,
+    menu: Memo<Option<ModelList>>,
+    picked: Picked,
+) -> AnyElement {
+    // Only the phone shows the list inline, where touch leaves no keyboard focus to return.
     let inside = signal(false);
     dynamic(move || {
+        let picked = picked.clone();
         menu.get()
-            .map(|list| untracked(|| model_list(app, &list, true, inside)))
+            .map(|list| untracked(|| model_list(app, &list, Some(picked), inside)))
     })
 }
 
@@ -160,8 +163,14 @@ pub(crate) fn inline_list(app: AppState, menu: Memo<Option<ModelList>>) -> AnyEl
 /// is configured and, in the fixture preview, the illustrative tag. A listbox; each profile an
 /// option with its selected state, `model-<n>`. Opening it puts the keyboard focus on the
 /// current profile; Up and Down move between profiles, Enter and Space pick the focused one.
-/// `inside` follows whether an option has the focus.
-fn model_list(app: AppState, list: &ModelList, inline: bool, inside: Signal<bool>) -> AnyElement {
+/// `inside` follows whether an option has the focus. `inline` is the phone's in-flow list and
+/// what runs after a pick there; a popup has none.
+fn model_list(
+    app: AppState,
+    list: &ModelList,
+    inline: Option<Picked>,
+    inside: Signal<bool>,
+) -> AnyElement {
     let form = app.form;
     let options: Vec<ElementRef> = list.options.iter().map(|_| element_ref()).collect();
     let at = signal(
@@ -201,7 +210,9 @@ fn model_list(app: AppState, list: &ModelList, inline: bool, inside: Signal<bool
         .iter()
         .zip(options)
         .enumerate()
-        .map(|(index, (option, handle))| row(app, index, option, inline, handle, at, inside));
+        .map(|(index, (option, handle))| {
+            row(app, index, option, inline.clone(), handle, at, inside)
+        });
     let foot = view()
         .flex_row()
         .flex_wrap()
@@ -234,7 +245,7 @@ fn model_list(app: AppState, list: &ModelList, inline: bool, inside: Signal<bool
         .rounded(px(10.0))
         .border_1()
         .border_color(color(Token::Rule2));
-    if inline {
+    if inline.is_some() {
         shell.bg(color(Token::Surface2)).child(foot).into_element()
     } else {
         shell
@@ -249,18 +260,20 @@ fn model_list(app: AppState, list: &ModelList, inline: bool, inside: Signal<bool
 }
 
 /// One profile: the check on the current one, its name over the model and effort, its note at the
-/// trailing edge. Picking it closes the list and applies the profile to the next message. It
-/// tells `at` and `inside` when the keyboard focus reaches or leaves it.
+/// trailing edge. Picking it closes the list, applies the profile to the next message and runs
+/// the inline list's `picked`. It tells `at` and `inside` when the keyboard focus reaches or
+/// leaves it.
 fn row(
     app: AppState,
     index: usize,
     option: &ModelOption,
-    inline: bool,
+    picked: Option<Picked>,
     handle: ElementRef,
     at: Signal<usize>,
     inside: Signal<bool>,
 ) -> AnyElement {
     let form = app.form;
+    let inline = picked.is_some();
     let action = option.action.clone();
     let check = if option.selected {
         mark(app, Mark::Done, Hue::Ok)
@@ -276,7 +289,12 @@ fn row(
             selected: option.selected,
             ..AccessibilityState::default()
         })
-        .on_press(move || act(app, action.clone()))
+        .on_press(move || {
+            act(app, action.clone());
+            if let Some(picked) = &picked {
+                picked();
+            }
+        })
         .on_focus(move || {
             at.set(index);
             inside.set(true);

@@ -1,14 +1,15 @@
 //! Settings sections of a daemon session that read the canonical settings snapshot or say what
-//! this platform cannot do: Machines, Notifications and General; and the parts every live
-//! section shares (the snapshot's loading/stale/failed state, the admin refusal, a facts table
-//! and a command's truthful status line).
+//! this device can do: Machines and Notifications; and the parts every live section shares
+//! (the snapshot's loading/stale/unreachable/failed state, the admin refusal, a facts table and
+//! a command's truthful status line).
 
 use corral_protocol::rows::SettingsSnapshot;
 use nsh_core::prelude::*;
 
-use super::parts::{cell, frame, mono_cell, space};
+use super::parts::{button_row, cell, frame, mono_cell, space};
 use crate::model::daemon::Feed;
 use crate::model::settings::live::{self, Fact, Standing};
+use crate::model::settings::push;
 use crate::model::text::span;
 use crate::model::{ActStatus, Form, Hue, Id};
 use crate::state::AppState;
@@ -53,6 +54,16 @@ fn standing(app: AppState, standing: &Standing) -> Option<AnyElement> {
             )],
             None,
         )),
+        Standing::Unreachable(problem) => {
+            let mut line = vec![span(
+                "corrald can't be reached, so settings show once it is.",
+            )];
+            if let Some(problem) = problem {
+                line.push(span(" "));
+                line.push(span(problem.clone()).mono());
+            }
+            Some(notice(app, Hue::Held, &line, None))
+        }
         Standing::Failed(message) => Some(error(
             app,
             &vec![span("Settings unavailable: ").bold(), span(message.clone())],
@@ -85,11 +96,10 @@ fn source(feed: &Feed) -> Source {
     }
 }
 
-/// A section drawn from the settings snapshot, again whenever it or this device's authority
+/// The parts drawn from the settings snapshot, again whenever it or this device's authority
 /// changes: the standing notice, then `build`'s parts (absent while there is no snapshot).
-pub fn snapshot_section(
+pub fn snapshot_parts(
     app: AppState,
-    title: &'static str,
     build: impl Fn(AppState, &SettingsSnapshot, &Source) -> Vec<AnyElement> + 'static,
 ) -> AnyElement {
     let shown = computed(move || app.feed.with(source));
@@ -103,10 +113,19 @@ pub fn snapshot_section(
                 }
                 parts.extend(build(app, settings, &source));
             }
-            frame(app, title, 12.0, parts)
+            view().min_w(px(0.0)).children(parts).into_element()
         })
     })
     .into_element()
+}
+
+/// A section drawn from the settings snapshot (see [`snapshot_parts`]) in its frame.
+pub fn snapshot_section(
+    app: AppState,
+    title: &'static str,
+    build: impl Fn(AppState, &SettingsSnapshot, &Source) -> Vec<AnyElement> + 'static,
+) -> AnyElement {
+    frame(app, title, 12.0, vec![snapshot_parts(app, build)])
 }
 
 /// The admin refusal in the quiet notice, when this device may not change these settings.
@@ -182,7 +201,7 @@ pub fn in_flight(app: AppState, slot: &str) -> bool {
 }
 
 /// Machines: this daemon host as the one machine, with what corrald reports of its runtimes and
-/// agents, and why there is nothing to add.
+/// agents (counted as the Agents wall counts them), and why there is nothing to add.
 pub fn machines(app: AppState) -> AnyElement {
     let row = computed(move || app.feed.with(live::machine));
     dynamic(move || {
@@ -225,64 +244,97 @@ pub fn machines(app: AppState) -> AnyElement {
     .into_element()
 }
 
-/// Notifications: the kinds the app would deliver, each marked not delivered, and why; there
-/// is no switch because nothing would be switched.
+/// Notifications: where this browser's Web Push stands, the switch that turns it on or off,
+/// a switch per kind while it is on, and what corrald reports of the last send. A device that
+/// cannot receive push says why and offers nothing to switch.
 pub fn notifications(app: AppState) -> AnyElement {
-    let rows = crate::model::settings::NOTIFICATIONS
+    let web = crate::client::pairing_supported();
+    let supported = crate::client::push_supported();
+    let shown = computed(move || app.feed.with(|feed| push::view(feed, supported, web)));
+    let body = dynamic(move || {
+        let v = shown.get();
+        untracked(move || {
+            let mut parts = vec![notice(app, v.hue, &vec![span(v.line.clone())], None)];
+            if let Some((label, op)) = v.action.clone() {
+                parts.push(space(app, 10.0));
+                parts.push(button_row(
+                    app,
+                    vec![button_with(
+                        app,
+                        label,
+                        ButtonKind::Primary,
+                        ButtonOptions::default(),
+                        "btn-push",
+                        move || {
+                            let op = op.clone();
+                            app.act(app.settings, move |state, _| state.device(op));
+                        },
+                    )],
+                ));
+            }
+            parts.push(space(app, 12.0));
+            parts.push(kinds(app, &v.kinds));
+            if !v.facts.is_empty() {
+                parts.push(space(app, 12.0));
+                parts.push(facts(app, v.facts.clone()));
+            }
+            view().min_w(px(0.0)).children(parts).into_element()
+        })
+    });
+    frame(app, "Notifications", 12.0, vec![body])
+}
+
+/// One row per kind: what it covers, and its on/off switch (a chip that reads "off" while push
+/// is off for this device, never "not…" cut short).
+fn kinds(app: AppState, rows: &[push::KindRow]) -> AnyElement {
+    let rows = rows
         .iter()
-        .map(|kind| {
+        .map(|row| {
+            let kind = row.kind;
+            let (label, hue) = if row.on {
+                ("on", Hue::Ok)
+            } else {
+                ("off", Hue::Neutral)
+            };
+            let face = chip(app, label, hue);
+            let end = if row.enabled {
+                button_with(
+                    app,
+                    if row.on { "Turn off" } else { "Turn on" },
+                    ButtonKind::Quiet,
+                    ButtonOptions::default(),
+                    format!("btn-push-{}", push::slug(&kind)),
+                    move || {
+                        app.reduce(app.settings, move |state, feed, _, _| match &feed.push {
+                            Some(status) => state.device(push::flip(status, &kind)),
+                            None => Vec::new(),
+                        });
+                    },
+                )
+            } else {
+                view().into_element()
+            };
             vec![
                 view()
                     .flex_1()
                     .min_w(px(0.0))
-                    .child(cell(app, kind.label, Token::Ink, true))
-                    .child(cell(app, kind.detail, Token::Ink3, false))
+                    .child(cell(app, push::label(&kind), Token::Ink, true))
+                    .child(cell(app, push::detail(&kind), Token::Ink3, false))
                     .into_element(),
                 view()
-                    .flex_1()
                     .flex_row()
+                    .items_center()
                     .justify_end()
-                    .child(chip(app, "not delivered", Hue::Neutral))
+                    .gap(px(8.0))
+                    .child(face)
+                    .child(end)
                     .into_element(),
             ]
         })
         .collect();
-    frame(
-        app,
-        "Notifications",
-        12.0,
-        vec![
-            notice(
-                app,
-                Hue::Neutral,
-                &vec![span(live::NOTIFICATIONS_NOTE)],
-                None,
-            ),
-            space(app, 12.0),
-            qtable(app, &[Width::Fill, Width::Fixed(110.0)], rows),
-        ],
-    )
-}
-
-/// General: the workspace, store, host, listener and configuration identity corrald reports.
-pub fn general(app: AppState) -> AnyElement {
-    snapshot_section(app, "General", move |app, settings, _| {
-        let rows = app
-            .feed
-            .with_untracked(|feed| live::general_facts(feed, settings));
-        vec![
-            facts(app, rows),
-            space(app, 10.0),
-            cell(
-                app,
-                format!(
-                    "Owner-only settings change only from a trusted device with admin authority; changes made here are recorded with {}.",
-                    app.via()
-                ),
-                Token::Ink3,
-                false,
-            )
-            .into_element(),
-        ]
-    })
+    let end = match app.form {
+        Form::Desktop => 170.0,
+        Form::Phone | Form::Terminal => 150.0,
+    };
+    qtable(app, &[Width::Fill, Width::Fixed(end)], rows)
 }

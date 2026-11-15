@@ -77,6 +77,9 @@ pub struct LiveState {
     pub ends: BTreeMap<String, Ending>,
     /// Commands sent from thread cards, by subject (`file:<entry>`, `discard:<task>`, …).
     pub acts: BTreeMap<String, Id>,
+    /// The words last sent as a question's free-text answer, by question key: its field shows
+    /// them again if corrald refuses that answer, so nothing typed is lost.
+    pub answer_words: BTreeMap<String, String>,
     /// The filed Idea whose title is being edited.
     pub editing: Option<String>,
     /// The filed Idea whose merge destination is being typed.
@@ -463,6 +466,7 @@ impl State {
                     .about(Live::Question(Id::from(key)))
                 })
             }
+            Action::AnswerText { key, rev, text } => self.answer_text(key, rev, text, feed),
             Action::EditIdea(Some(task)) => {
                 self.live.merging = None;
                 self.live.editing = Some(task.clone());
@@ -732,7 +736,12 @@ impl State {
 
     /// Sends a card command once: a settled failure may be retried under a new identity, an
     /// uncertain one is only recovered, an in-flight or done one is left alone.
-    fn once(&mut self, remembered: String, feed: &Feed, make: impl FnOnce() -> Act) -> Vec<Effect> {
+    pub(super) fn once(
+        &mut self,
+        remembered: String,
+        feed: &Feed,
+        make: impl FnOnce() -> Act,
+    ) -> Vec<Effect> {
         if let Some(effects) = self.held(&remembered, feed) {
             return effects;
         }

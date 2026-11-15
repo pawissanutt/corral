@@ -4,7 +4,7 @@
 use crate::model::board::{Change, ChangeKind, LAST_VISIT, Mark, changes as board_changes};
 use crate::model::effect::{Conn, Env};
 use crate::model::hue::Hue;
-use crate::model::nav::{Destination, Form, PhoneTab};
+use crate::model::nav::{Destination, Form};
 use crate::model::text::{Rich, span};
 
 use super::{
@@ -339,10 +339,6 @@ pub fn feed_filters(state: &State, form: Form) -> Vec<FeedFilter> {
 pub struct Changes {
     /// Page title.
     pub title: &'static str,
-    /// Phone navigation back label, absent on desktop/terminal.
-    pub back_label: Option<&'static str>,
-    /// Pop the phone page, absent on desktop/terminal.
-    pub back: Option<Action>,
     /// Desktop subtitle explaining the per-device cursor, absent on phone.
     pub subtitle: Option<String>,
     /// The filter controls.
@@ -365,14 +361,8 @@ pub struct Changes {
     pub status: Status,
 }
 
-/// Build Changes as entered from the phone More tab, or the desktop destination.
-/// Use [`changes_for_tab`] when the phone back label depends on a different current tab.
+/// Build Changes; the shell owns the phone stack's back label.
 pub fn changes(state: &State, env: Env) -> Changes {
-    changes_for_tab(state, env, PhoneTab::More)
-}
-
-/// Build Changes with the phone shell's current tab supplied for the back label.
-pub fn changes_for_tab(state: &State, env: Env, tab: PhoneTab) -> Changes {
     let phone = env.form == Form::Phone;
     let history = if phone {
         Vec::new()
@@ -404,8 +394,6 @@ pub fn changes_for_tab(state: &State, env: Env, tab: PhoneTab) -> Changes {
     };
     Changes {
         title: "Changes",
-        back_label: phone.then_some(if tab == PhoneTab::More { "More" } else { "Back" }),
-        back: phone.then_some(Action::Back),
         subtitle: (!phone).then(|| "since this device's last visit 18:40 · 12 events · seen-cursor is per device: your phone read these at 21:30, the ▲ marks here stay".to_owned()),
         filters: feed_filters(state, env.form),
         recent: since_rows(state.filter, state),

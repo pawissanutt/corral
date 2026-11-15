@@ -9,8 +9,9 @@ use super::live::{open_question, rail};
 use super::story::{field, ids};
 use super::{Action, Button, ButtonKind, LiveAction, Story, StoryStage};
 use crate::model::board::{Mark, STAGES, money};
-use crate::model::daemon::{Feed, Group};
+use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
+use crate::model::inbox::owner_moves;
 use crate::model::text::span;
 use crate::model::{Id, Live};
 
@@ -36,7 +37,7 @@ pub(super) fn story(
     let id = Id::from(&member.id);
     let task = feed.board.task(&member.id);
     let question = open_question(feed, &member.id);
-    let you = question.is_some() || task.is_some_and(|task| task.group == Group::NeedsYou);
+    let you = owner_moves(feed).any(|row| row.task.as_deref() == Some(member.id.as_str()));
     let marks = rail(member);
     let agent = task.and_then(|task| task.agent.as_ref());
     let context = match agent {
@@ -173,6 +174,7 @@ pub(super) fn story(
         plan: Some(format!("· plan {plan}")),
         changed: None,
         context,
+        context_note: None,
         stages,
         progress: None,
         progress_count: None,

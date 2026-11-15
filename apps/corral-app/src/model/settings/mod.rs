@@ -1,15 +1,21 @@
 //! Settings: the fixture preview's illustrative sections, pairing walkthrough and actions, and
 //! the daemon session's live sections (`live`), configured profiles (`profiles`), owner edits
-//! (`edits`) and autopilot grant (`autopilot`), with renderer-ready views.
+//! (`edits`), device authority (`authority`), Web Push (`push`), the pairing QR (`qr`) and
+//! autopilot grant (`autopilot`); what the app offers without a connection and this device's
+//! own preferences (`connect`); with renderer-ready views.
 
+pub mod authority;
 pub mod autopilot;
+pub mod connect;
 mod data;
 mod edits;
 pub mod live;
 mod pairing;
 pub mod profiles;
+pub mod push;
+pub mod qr;
 
-pub use edits::{ADD_PROFILE, Edits, Pending, remove_slot};
+pub use edits::{ADD_PROFILE, Edits, Pending, SUMMARY, device_slot, remove_slot};
 pub use live::daemon_connection_details;
 pub use pairing::*;
 
@@ -579,10 +585,7 @@ pub fn phone_root(_state: &State, env: Env) -> RootView {
             SettingsSection::Autopilot,
             "owner only · needs live connection",
         ),
-        (
-            SettingsSection::General,
-            "owner only · needs live connection",
-        ),
+        (SettingsSection::General, "theme and data on this device"),
     ]
     .into_iter()
     .map(|(section, subtitle)| RootRow {

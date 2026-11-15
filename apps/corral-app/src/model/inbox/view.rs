@@ -25,7 +25,10 @@ pub enum Handover {
     /// The question's detail is here (always, for the fixture).
     Ready,
     /// The question's detail is on its way.
-    Loading,
+    Loading {
+        /// The status the placeholder announces.
+        caption: &'static str,
+    },
     /// The detail did not load and nothing earlier is cached.
     Failed(Notice),
     /// corrald no longer serves this question, or nothing is selected.

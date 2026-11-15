@@ -61,7 +61,7 @@ impl AppState {
         for domain in [inbox::KEYS, work::KEYS, plans::KEYS, review::KEYS] {
             keys.extend(domain.iter().copied());
         }
-        for key in keys {
+        for &key in &keys {
             on_key_with(stroke(key), typing, move |_| self.press_key(key));
         }
         // Bound again whenever the focus or the page changes what the list keys reach; each run
@@ -69,7 +69,10 @@ impl AppState {
         let list = computed(move || self.list_keys_now());
         effect(move || {
             for &key in list.get() {
-                on_key_with(stroke(key), typing, move |_| self.press_key(key));
+                // Destination/list collisions share one router, never two active bindings.
+                if !keys.contains(key) {
+                    on_key_with(stroke(key), typing, move |_| self.press_key(key));
+                }
             }
         });
         on_key_with("mod+k", anywhere, move |_| {
@@ -121,6 +124,7 @@ impl AppState {
             || self.confirm.with(Option::is_some)
             || self.confirmation.with(Option::is_some)
             || self.nav.with(|nav| nav.newest().is_some())
+            || self.work.with(|state| state.menu.is_some())
         {
             return &[];
         }
@@ -138,6 +142,7 @@ impl AppState {
         if self.confirm.get_untracked().is_some()
             || self.confirmation.with_untracked(Option::is_some)
             || self.nav.with_untracked(|nav| nav.newest().is_some())
+            || self.work.with_untracked(|state| state.menu.is_some())
         {
             return;
         }
@@ -156,17 +161,25 @@ impl AppState {
             }
             _ => {}
         }
+        // In Now/Review, '.' belongs to the focused list's selected-row menu. Otherwise it
+        // remains the global Changes shortcut; an empty list still consumes its own key.
+        let scoped_menu = key == "." && untracked(|| self.list_keys_now().contains(&"."));
         // Without a connection no destination is served, so only destination keys answer.
-        let effects = match self.data.get_untracked() {
-            DataState::Daemon => self.key_live(key),
-            DataState::Fixture => self.key_fixture(key),
-            DataState::Disconnected => None,
+        let effects = if key == "." && !scoped_menu {
+            None
+        } else {
+            match self.data.get_untracked() {
+                DataState::Daemon => self.key_live(key),
+                DataState::Fixture => self.key_fixture(key),
+                DataState::Disconnected => None,
+            }
         };
         if let Some(effects) = effects {
             self.run(effects);
-        } else if let Some(destination) = Destination::ALL
-            .into_iter()
-            .find(|destination| commands::destination_key(*destination) == Some(key))
+        } else if !scoped_menu
+            && let Some(destination) = Destination::ALL
+                .into_iter()
+                .find(|destination| commands::destination_key(*destination) == Some(key))
         {
             self.go(destination);
         }

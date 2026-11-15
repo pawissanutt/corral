@@ -2,9 +2,14 @@
 //! preview projects the mockup's illustrative providers (`data`); a daemon session projects
 //! corral's recorded usage rows, series and session costs (`live`). Usage is visibility only.
 
+mod completeness;
+mod daily;
 mod data;
 mod live;
+mod quota;
+mod totals;
 
+pub use completeness::completeness_label;
 pub use live::{Inputs, page as live_page, series_request};
 
 use crate::model::Effect;
@@ -226,6 +231,8 @@ pub struct ProviderView {
     pub window: String,
     /// The big figure: window use, or the period's cost when no quota is known.
     pub big: String,
+    /// Qualification displayed with the figure, never clipped into the figure column.
+    pub big_note: Option<String>,
     /// The quiet word after the big figure.
     pub big_label: &'static str,
     /// Fraction of the window used, when known.
@@ -243,7 +250,44 @@ pub struct ProviderView {
     /// Said in the chart's place when there is nothing to chart.
     pub chart_missing: Option<&'static str>,
     pub profiles: Vec<PhoneProfile>,
+    pub quotas: Vec<QuotaView>,
 }
+/// One provider quota observation; unavailable facts are explicitly unknown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaView {
+    pub profile: String,
+    pub source: String,
+    pub scope: String,
+    pub window: String,
+    pub used: String,
+    pub limit: String,
+    pub headroom: String,
+    pub resets_at: String,
+    pub observed_at: String,
+    pub exhausted: String,
+    pub completeness: Option<String>,
+}
+
+pub const QUOTA_TITLE: &str = "Quota";
+pub const UNKNOWN: &str = "unknown";
+
+impl QuotaView {
+    pub fn facts(&self) -> [(&'static str, &str); 10] {
+        [
+            ("Profile", &self.profile),
+            ("Source", &self.source),
+            ("Scope", &self.scope),
+            ("Window", &self.window),
+            ("Used", &self.used),
+            ("Limit", &self.limit),
+            ("Headroom", &self.headroom),
+            ("Resets", &self.resets_at),
+            ("Observed", &self.observed_at),
+            ("Exhausted", &self.exhausted),
+        ]
+    }
+}
+
 /// A profile line inside a phone provider block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhoneProfile {
@@ -262,6 +306,7 @@ pub struct ProfileRow {
     /// Meter level follows provider use, not profile use.
     pub level: Level,
     pub today: String,
+    pub today_note: Option<String>,
     /// Provider headroom on the first row only.
     pub headroom: String,
 }
@@ -271,6 +316,7 @@ pub struct CostBar {
     pub day: String,
     pub values: [u32; 3],
     pub total_label: String,
+    pub total_note: Option<String>,
 }
 /// The cost-per-day section.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,6 +326,8 @@ pub struct Costs {
     pub bars: Vec<CostBar>,
     /// Said in place of the bars when there are none.
     pub empty: Option<String>,
+    /// Coverage or retained-series status; independent of whether bars exist.
+    pub note: Option<String>,
 }
 /// One session's recorded tokens and cost.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,6 +352,8 @@ pub struct Page {
     pub sessions_note: Option<String>,
     pub disclaimer: &'static str,
     pub phone_disclaimer: &'static str,
+    /// Deduplicated live read errors; render once above the content.
+    pub notices: Vec<String>,
 }
 
 /// Profile table column labels in the preview.
@@ -333,6 +383,7 @@ pub fn fixture_page() -> Page {
                 label: p.label.to_owned(),
                 window: p.window.to_owned(),
                 big: format!("{}%", percent(p.used)),
+                big_note: None,
                 big_label: USED_LABEL,
                 used: Some(p.used),
                 headroom: format!("{}% headroom", percent(1.0 - p.used)),
@@ -371,6 +422,7 @@ pub fn fixture_page() -> Page {
                         ),
                     })
                     .collect(),
+                quotas: Vec::new(),
             }
         })
         .collect();
@@ -387,6 +439,7 @@ pub fn fixture_page() -> Page {
                     share_percent: Some(percent(profile.used)),
                     level: level(p.used),
                     today: fixture_money(profile.today),
+                    today_note: None,
                     headroom: if i == 0 {
                         format!("{}%", percent(1.0 - p.used))
                     } else {
@@ -409,13 +462,16 @@ pub fn fixture_page() -> Page {
                     day: day.to_owned(),
                     values,
                     total_label: format!("${}", values.iter().sum::<u32>()),
+                    total_note: None,
                 })
                 .collect(),
             empty: None,
+            note: None,
         },
         sessions: None,
         sessions_note: None,
         disclaimer: DESKTOP_DISCLAIMER,
+        notices: Vec::new(),
         phone_disclaimer: PHONE_DISCLAIMER,
     }
 }

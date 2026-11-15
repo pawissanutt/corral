@@ -13,6 +13,9 @@ pub struct BoardRow {
     /// Run, gate, review, land, in that order.
     pub rail: [RailStep; 4],
     pub now: BoardNow,
+    /// CLI card age: current run start while Running, otherwise last task update.
+    #[serde(default)]
+    pub age_since: Option<String>,
     /// Recorded hold reason, or the CLI's canonical owner-dispatch-hold cause.
     pub held_reason: Option<String>,
     pub questions: u64,

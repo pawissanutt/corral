@@ -1,7 +1,14 @@
-//! Bounded transcript pages and read-only terminal captures.
+//! Bounded transcript pages and terminal stream replacement windows.
 use super::question::{QuestionAnswer, QuestionOption};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// Acknowledged, scoped terminal windows over `sub.open` / `sub.delta`.
+pub const STREAM_TERMINAL_V1: &str = "stream.terminal.v1";
+pub const TERMINAL_ROWS_MAX: usize = 200;
+pub const TERMINAL_POLL_MS: u64 = 1_000;
+/// Serialized lines and styled rows together; leaves room for the CONTROL envelope.
+pub const TERMINAL_ARRAYS_MAX: usize = 52 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionPage {
@@ -153,7 +160,8 @@ pub struct SessionItemPage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalSnapshot {
-    /// At most 200 captured lines, not a writable or live terminal.
+    /// Latest bounded scrollback plus screen, in display order. Stream pages replace this
+    /// window, never append repeated screen rows. Recorded gates remain non-live captures.
     pub lines: Vec<String>,
     pub captured_at: String,
     pub live: bool,

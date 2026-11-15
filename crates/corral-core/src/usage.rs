@@ -35,6 +35,9 @@ pub enum CostBasis {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UsageEntry {
+    /// Exact configured profile for auxiliary requests; absent on legacy/session evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// Billing route evidence, independent of model-family identity and API-equivalent prices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection: Option<crate::connection::ConnectionId>,

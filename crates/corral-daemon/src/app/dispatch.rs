@@ -46,6 +46,9 @@ pub(crate) fn is_method(method: &str) -> bool {
             | assistant::PROMPT_ANSWER
             | device::DEVICE_LIST
             | device::DEVICE_PAGE
+            | device::PUSH_STATUS
+            | device::PUSH_SUBSCRIBE
+            | device::PUSH_UNSUBSCRIBE
     )
 }
 
@@ -58,12 +61,14 @@ pub(crate) fn capability(shared: &Shared, cap: &str) -> bool {
         | app::PLANS_V1
         | app::AGENTS_V1
         | app::SESSION_V1
+        | wire::detail::STREAM_TERMINAL_V1
         | app::FILINGS_V1
         | app::REVIEW_V1
         | app::TIMELINE_V1
         | app::USAGE_V1
         | app::SETTINGS_V1
         | app::ACT_V1 => true,
+        device::PUSH_V1 => true,
         app::ASSISTANT_V1 | attachment::ASSISTANT_ATTACH_V1 => crate::assistant::available(shared),
         _ => false,
     }
@@ -82,6 +87,7 @@ pub(crate) fn allowed_topic(topic: wire::subscription::Topic) -> bool {
             | Topic::Usage
             | Topic::Settings
             | Topic::Thread
+            | Topic::Terminal
             | Topic::Session
     )
 }
@@ -92,7 +98,7 @@ pub(crate) fn serve(
     id: Value,
     method: &str,
     params: Value,
-    device_id: Option<&str>,
+    session: Option<&crate::devices::SessionGuard>,
 ) -> Result<()> {
     // Keep the complete response envelope bounded even for hostile JSON-RPC ids.
     if serde_json::to_vec(&id)?.len() > 256 {
@@ -102,8 +108,20 @@ pub(crate) fn serve(
             (rpc::ErrorCode::InvalidParams, "invalid_rpc_id".into()),
         );
     }
-    match dispatch(shared, method, params, device_id) {
-        Ok(result) => reply(conn, id, result),
+    match dispatch(
+        shared,
+        method,
+        params,
+        session.map(|session| session.device.as_str()),
+    ) {
+        Ok(mut result) => {
+            if method == app::APP_SESSION
+                && let Some(session) = session
+            {
+                result["device"]["reach"] = serde_json::to_value(session.reach())?;
+            }
+            reply(conn, id, result)
+        }
         Err(problem) => error(conn, id, problem),
     }
 }
@@ -133,6 +151,23 @@ fn dispatch(
                 seen: devices.seen(id).map_err(|problem| problem.wire())?,
                 server_time: corral_core::clock::now().to_string(),
             })
+        }
+        device::PUSH_STATUS => {
+            let _: app::AppSessionRequest = decode(params)?;
+            value(devices.push_status(id).map_err(|problem| problem.wire())?)
+        }
+        device::PUSH_SUBSCRIBE => value(
+            devices
+                .push_subscribe(id, decode(params)?)
+                .map_err(|problem| problem.wire())?,
+        ),
+        device::PUSH_UNSUBSCRIBE => {
+            let _: app::AppSessionRequest = decode(params)?;
+            value(
+                devices
+                    .push_unsubscribe(id)
+                    .map_err(|problem| problem.wire())?,
+            )
         }
         app::ACT_PREVIEW => value(crate::commands::app::preview(shared, id, decode(params)?)?),
         app::ACT_SUBMIT => value(crate::commands::app::submit(shared, id, decode(params)?)?),

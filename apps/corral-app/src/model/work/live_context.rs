@@ -143,7 +143,7 @@ pub fn daemon_live(state: &State, feed: &Feed, selected: &Selection, form: Form)
             tiles_note: None,
         };
     }
-    let task = daemon_selection(state, selected, &feed.board, form);
+    let task = daemon_selection(state, selected, feed, form);
     let tail = task.and_then(|task| task_tail(feed, task));
     let selected_note = match (task, &tail) {
         (None, _) => Some(Notice::Quiet(super::EMPTY_BOARD)),
@@ -226,7 +226,7 @@ pub fn daemon_plan(state: &State, feed: &Feed, selected: &Selection, form: Form)
     if let Some(notice) = board_notice(feed) {
         return quiet(notice);
     }
-    match daemon_selection(state, selected, &feed.board, form) {
+    match daemon_selection(state, selected, feed, form) {
         Some(task) => task_plan_context(feed, task),
         None => quiet(Notice::Quiet(super::EMPTY_BOARD)),
     }

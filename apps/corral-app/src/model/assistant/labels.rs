@@ -5,6 +5,8 @@
 pub struct Labels {
     /// Session fact-list heading.
     pub session: &'static str,
+    /// Heading over the session's canonical record verbs (Revoke permissions).
+    pub session_actions: &'static str,
     /// Quick-thread-only filed section heading.
     pub filed_from_thread: &'static str,
     /// Supporting-record heading.
@@ -34,6 +36,7 @@ pub struct Labels {
 /// Verbatim captions shared across desktop, phone and terminal renderers.
 pub const LABELS: Labels = Labels {
     session: "Session",
+    session_actions: "Session actions",
     filed_from_thread: "Filed from this thread",
     rests_on: "Rests on",
     cites: "cites",

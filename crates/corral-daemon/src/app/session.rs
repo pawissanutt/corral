@@ -238,7 +238,7 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
                 id,
                 &request.method,
                 params,
-                session.as_ref().map(|session| session.device.as_str()),
+                session.as_ref(),
             )?;
             continue;
         }

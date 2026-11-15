@@ -41,6 +41,8 @@ fn feed(keys: ControlState) -> Feed {
             enrolled_at: "2026-11-15T10:00:00Z".into(),
             revoked_at: None,
             authority: None,
+            last_seen: None,
+            reach: None,
         },
         authority: DeviceAuthority {
             reply: true,

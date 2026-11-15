@@ -14,7 +14,7 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with, seg};
 use crate::ui::kit::chip::{chip, illus};
 use crate::ui::kit::marks::{dot, hue_ink};
-use crate::ui::kit::notice::{empty, error, notice, skeleton};
+use crate::ui::kit::notice::{empty, error, loading, notice};
 use crate::ui::kit::page::{body, group_head, head, pane, search};
 use crate::ui::kit::rows::list_row;
 use crate::ui::kit::text::dim;
@@ -92,17 +92,22 @@ fn note(app: AppState, note: &Note) -> AnyElement {
     }
 }
 
-/// What stands in for the agents while there are none to show: the skeleton while the first
-/// rows load, the failure, or the empty state.
+/// What stands in for the agents while there are none to show: the loading state (announced
+/// and captioned once the wait is noticeable) while the first rows load, the failure, or the
+/// empty state.
 fn fill(app: AppState, fill: &Fill) -> Option<AnyElement> {
     match fill {
         Fill::Ready => None,
-        Fill::Loading => Some(
+        Fill::Loading(caption) => Some(
             view()
                 .when(app.form != Form::Terminal, |pad| {
                     pad.px(px(18.0)).py(px(8.0))
                 })
-                .child(skeleton(app, &[(0.4, 10.0), (0.7, 10.0), (0.55, 10.0)]))
+                .child(loading(
+                    app,
+                    *caption,
+                    &[(0.4, 10.0), (0.7, 10.0), (0.55, 10.0)],
+                ))
                 .into_element(),
         ),
         Fill::Failed(words) => Some(error(app, &vec![span(words.clone())], None)),

@@ -204,6 +204,7 @@ impl AppState {
 
     fn session_pinned(&self, session: &str, feed: &Feed) -> bool {
         self.scope_pinned(session, feed)
+            || self.terminal_scopes.contains_key(session)
             || self
                 .retained
                 .pins

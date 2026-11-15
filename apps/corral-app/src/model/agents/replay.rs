@@ -414,7 +414,7 @@ pub(super) fn transcript(
             Some(why) if !loading => Fill::Failed(format!(
                 "The transcript could not be loaded: {why}. It loads again when the session changes or corrald reconnects."
             )),
-            _ => Fill::Loading,
+            _ => Fill::Loading("Loading the transcript…"),
         },
     };
     let stale_note = body.and(cache).and_then(|cache| {

@@ -439,7 +439,6 @@ pub fn session(state: &State, _env: Env) -> Session {
         switch_key: "`",
         switch_hint: "switch",
         phone_title: format!("{id} session"),
-        back_label: "Back",
         desktop_back_label: "Agents",
         back: Action::Back,
         view: state.view,
@@ -515,18 +514,19 @@ pub fn session(state: &State, _env: Env) -> Session {
                 },
                 RunFact {
                     label: "Agent",
-                    value: FactValue::Text(vec![span(task.agent.unwrap_or("pi-sol xhigh"))]),
+                    value: FactValue::Text(vec![span(task.agent.unwrap_or("pi-sol xhigh")).mono()]),
                 },
                 RunFact {
                     label: "Runtime",
                     value: FactValue::Text(vec![
-                        span("herdr-core · "),
+                        span("herdr-core").mono(),
+                        span(" · "),
                         span(task.pane.unwrap_or("—")).mono(),
                     ]),
                 },
                 RunFact {
                     label: "Machine",
-                    value: FactValue::Text(vec![span("workstation")]),
+                    value: FactValue::Text(vec![span("workstation").mono()]),
                 },
                 RunFact {
                     label: "Started",

@@ -102,6 +102,16 @@ fn reject(status: StatusCode) -> ErrorResponse {
     response
 }
 
+fn origin_allowed(headers: &tungstenite::http::HeaderMap, origins: &[String]) -> bool {
+    let mut values = headers.get_all("Origin").iter();
+    let allowed = values.next().is_some_and(|value| {
+        origins
+            .iter()
+            .any(|origin| value.as_bytes() == origin.as_bytes())
+    });
+    allowed && values.next().is_none()
+}
+
 pub(super) fn upgrade(stream: TcpStream, origins: &[String]) -> Result<(WebSocket<Bounded>, Mode)> {
     stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
     stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
@@ -118,13 +128,7 @@ pub(super) fn upgrade(stream: TcpStream, origins: &[String]) -> Result<(WebSocke
         reason = "tungstenite fixes the callback's error type to an HTTP response"
     )]
     let callback = |request: &Request, response: Response| {
-        let mut values = request.headers().get_all("Origin").iter();
-        let allowed = values.next().is_some_and(|value| {
-            origins
-                .iter()
-                .any(|origin| value.as_bytes() == origin.as_bytes())
-        });
-        if !allowed || values.next().is_some() {
+        if !origin_allowed(request.headers(), origins) {
             return Err(reject(StatusCode::FORBIDDEN));
         }
         // Comparing the complete path-and-query also refuses query suffixes.
@@ -187,6 +191,7 @@ pub(super) fn handshake(
     devices: &Arc<Devices>,
 ) -> Result<Established> {
     let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
+    let reach = crate::devices::reach::classify(ws.get_ref().stream.local_addr()?.ip());
     ws.get_mut().budget(HANDSHAKE_TIMEOUT, HANDSHAKE_TIMEOUT);
     let mut reason = device::CLOSE_HANDSHAKE_FAILED;
     let mut burn = PairBurn {
@@ -237,7 +242,7 @@ pub(super) fn handshake(
         let session = match &mode {
             Mode::Session => Some(
                 devices
-                    .attach_key(&public)
+                    .attach_key(&public, reach)
                     .map_err(|error| {
                         reason = device::CLOSE_DEVICE_UNKNOWN;
                         anyhow!(error.wire().1)
@@ -393,5 +398,30 @@ pub(super) fn peer_gone(error: &anyhow::Error) -> bool {
                 | io::ErrorKind::NotConnected
         ),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_origins_need_one_exact_allowlisted_header_before_upgrade() {
+        let origins = vec!["https://workstation.tailnet.ts.net".to_owned()];
+        let mut headers = tungstenite::http::HeaderMap::new();
+        assert!(!origin_allowed(&headers, &origins));
+        for origin in [
+            "null",
+            "http://workstation.tailnet.ts.net",
+            "https://evil.example",
+            "https://workstation.tailnet.ts.net.evil",
+        ] {
+            headers.insert("Origin", origin.parse().unwrap());
+            assert!(!origin_allowed(&headers, &origins));
+        }
+        headers.insert("Origin", origins[0].parse().unwrap());
+        assert!(origin_allowed(&headers, &origins));
+        headers.append("Origin", origins[0].parse().unwrap());
+        assert!(!origin_allowed(&headers, &origins));
     }
 }
