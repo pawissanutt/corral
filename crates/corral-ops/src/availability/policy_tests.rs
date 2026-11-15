@@ -1,11 +1,11 @@
-//! Pure quota evidence keeps unclassified roles on the same native admission contract.
+//! Pure quota evidence admits only eligible native turn classes and rejects stale quota.
 use super::super::{continuation_tests::ROLES, policy};
 use super::*;
 use corral_core::availability::FailureCategory;
 use corral_core::connection::ConnectionId;
 use serde_json::json;
 #[test]
-fn quota_evidence_accepts_unclassified_roles_without_reusing_stale_quota() {
+fn quota_evidence_requires_eligible_classes_without_reusing_stale_quota() {
     let now = corral_core::clock::now();
     let binding = ConnectionBinding::new(
         ConnectionId::OpenaiSubscription,
@@ -31,13 +31,30 @@ fn quota_evidence_accepts_unclassified_roles_without_reusing_stale_quota() {
     .unwrap();
     for role in ROLES {
         state.binding.role = role;
-        assert_eq!(
-            policy::quota_evidence(&state, None).is_some(),
-            !matches!(role, AgentRole::Worker | AgentRole::Reviewer),
-            "{role:?}"
-        );
+        for class in [
+            None,
+            Some(TurnClass::ProviderFailed),
+            Some(TurnClass::Cancelled),
+            Some(TurnClass::BudgetExhausted),
+            Some(TurnClass::Completed),
+            Some(TurnClass::OwnerEngaged),
+            Some(TurnClass::AwaitingAnswer),
+            Some(TurnClass::WaitingExternal),
+            Some(TurnClass::NoReport),
+            Some(TurnClass::NoVerdict),
+        ] {
+            state.turns[0].class = class;
+            let eligible = class == Some(TurnClass::ProviderFailed)
+                || (class.is_none() && !matches!(role, AgentRole::Worker | AgentRole::Reviewer));
+            assert_eq!(
+                policy::quota_evidence(&state, None).is_some(),
+                eligible,
+                "{role:?} {class:?}"
+            );
+        }
     }
     state.binding.role = AgentRole::Assistant;
+    state.turns[0].class = None;
     let mut latest = state.turns[0].clone();
     latest.seq = 2;
     latest.provider_failure.as_mut().unwrap().category = FailureCategory::Transient;

@@ -58,8 +58,7 @@ fn assert_paused(fx: &ts::Fx, intent: &continuation::ContinuationIntent) {
     );
 }
 
-#[test]
-fn planner_failed_first_bind_keeps_paused_intent_instead_of_closing_it() {
+fn unbound_planner() -> (ts::Fx, String, continuation::ContinuationIntent) {
     let (fx, id, _, source) = fixture();
     let task = fx.ctx.store.get(&id).unwrap();
     let successor = ContainerRef::Planner {
@@ -105,6 +104,12 @@ fn planner_failed_first_bind_keeps_paused_intent_instead_of_closing_it() {
         "w1:p1",
         "unbound",
     );
+    (fx, id, intent)
+}
+
+#[test]
+fn planner_failed_first_bind_keeps_paused_intent_instead_of_closing_it() {
+    let (fx, id, intent) = unbound_planner();
     let current = fx.ctx.store.get(&id).unwrap();
     for _ in 0..2 {
         assert!(
@@ -121,6 +126,74 @@ fn planner_failed_first_bind_keeps_paused_intent_instead_of_closing_it() {
     let saved = fx.ctx.store.get(&id).unwrap();
     assert_eq!(saved.status, Status::NeedsMe);
     assert_eq!(saved.plan_runs[1].state, PlanRunState::Planning);
+}
+
+#[test]
+fn paused_planner_failed_start_completes_task_hold_once() {
+    let (fx, id, intent) = unbound_planner();
+    let successor = &intent.successor.container;
+    continuation::pause(
+        &fx.ctx,
+        successor,
+        continuation::PauseReason::SuccessorAmbiguous,
+        "interrupted before task hold",
+    )
+    .unwrap();
+    assert_paused(&fx, &intent);
+    assert_eq!(fx.ctx.store.head(&id).unwrap().status, Status::Running);
+    let before = fx.ctx.store.tasks_stamp().unwrap();
+
+    assert!(continuation::failed_start(&fx.ctx, successor, 1).unwrap());
+    let held = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(held.status, Status::NeedsMe);
+    assert_eq!(held.plan_runs[1].state, PlanRunState::Planning);
+    let after = fx.ctx.store.tasks_stamp().unwrap();
+    assert_ne!(after, before);
+
+    assert!(continuation::failed_start(&fx.ctx, successor, 1).unwrap());
+    assert_eq!(fx.ctx.store.tasks_stamp().unwrap(), after);
+}
+
+#[test]
+fn paused_planner_retry_admission_completes_task_hold_once() {
+    for source_retry in [false, true] {
+        let (fx, id, intent) = unbound_planner();
+        continuation::pause(
+            &fx.ctx,
+            &intent.successor.container,
+            continuation::PauseReason::SuccessorAmbiguous,
+            "interrupted before task hold",
+        )
+        .unwrap();
+        let mut expected = fx.ctx.store.get(&id).unwrap();
+        assert_eq!(expected.status, Status::Running);
+        let before = fx.ctx.store.tasks_stamp().unwrap();
+        let recover = || {
+            if source_retry {
+                crate::plan_dispatch::continuation::already_prepared(
+                    &fx.ctx,
+                    &intent.source.container,
+                )
+            } else {
+                crate::plan_dispatch::continuation::resume_allowed(
+                    &fx.ctx,
+                    &intent.successor.container,
+                    true,
+                )
+                .map(|allowed| !allowed)
+            }
+        };
+        assert!(recover().unwrap());
+        let held = fx.ctx.store.get(&id).unwrap();
+        expected.status = Status::NeedsMe;
+        expected.updated = held.updated;
+        expected.status_since = Some(held.updated);
+        assert_eq!(held, expected);
+        let after = fx.ctx.store.tasks_stamp().unwrap();
+        assert_ne!(after, before);
+        assert!(recover().unwrap());
+        assert_eq!(fx.ctx.store.tasks_stamp().unwrap(), after);
+    }
 }
 
 #[test]

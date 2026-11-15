@@ -292,6 +292,38 @@ fn worker_paid_replacement_links_one_successor_pauses_stale_checkpoint_and_repla
         Some(continuation::PauseReason::SuccessorAmbiguous)
     );
     assert_eq!(task_bytes(&unbound.fx, &unbound.task), before);
+    // A later retry must finish the task hold even though no successor was allocated.
+    let mut expected = unbound.fx.ctx.store.get(&unbound.task).unwrap();
+    let before = unbound.fx.ctx.store.tasks_stamp().unwrap();
+    let error = transfer(&unbound).unwrap_err();
+    assert!(format!("{error:#}").contains("SuccessorAmbiguous"));
+    let held = unbound.fx.ctx.store.get(&unbound.task).unwrap();
+    expected.status = Status::NeedsMe;
+    expected.updated = held.updated;
+    expected.status_since = Some(held.updated);
+    assert_eq!(held, expected);
+    let after = unbound.fx.ctx.store.tasks_stamp().unwrap();
+    assert_ne!(after, before);
+    let error = transfer(&unbound).unwrap_err();
+    assert!(format!("{error:#}").contains("SuccessorAmbiguous"));
+    assert_eq!(unbound.fx.ctx.store.tasks_stamp().unwrap(), after);
+    // A stale retry must not transfer its hold to an unrelated replacement run.
+    unbound
+        .fx
+        .ctx
+        .store
+        .update(&unbound.task, |task| {
+            task.runs[0].outcome = Some(RunOutcome::Superseded);
+            task.runs.push(run("R3", "p3"));
+            task.status = Status::Running;
+            Ok(())
+        })
+        .unwrap();
+    let before = task_bytes(&unbound.fx, &unbound.task);
+    let version = unbound.fx.ctx.store.tasks_stamp().unwrap();
+    assert!(continuation::failed_start(&unbound.fx.ctx, &intent.successor.container, 1).unwrap());
+    assert_eq!(task_bytes(&unbound.fx, &unbound.task), before);
+    assert_eq!(unbound.fx.ctx.store.tasks_stamp().unwrap(), version);
 
     for change_spec in [false, true] {
         let stale = worker();

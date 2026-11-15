@@ -325,11 +325,37 @@ fn paid_reviewer_fresh_attempt_preserves_only_notes_and_closes_on_verdict() {
 }
 
 #[test]
+fn paid_reviewer_retry_admission_finishes_paused_hold_once() {
+    let review = review();
+    let intent = review.prepare().unwrap();
+    review.fresh_child(&intent, false);
+    assert!(launch_failed(&review.fx.ctx, &review.id).unwrap());
+    let mut expected = review.fx.ctx.store.get(&review.id).unwrap();
+    assert_ne!(expected.status, corral_core::Status::NeedsMe);
+    let before = review.fx.ctx.store.tasks_stamp().unwrap();
+    let retry = || {
+        let error = crate::reviewer::review_run_automatic(&review.fx.ctx, &review.id, Some("pi"))
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("SuccessorAmbiguous"));
+    };
+    retry();
+    let held = review.fx.ctx.store.get(&review.id).unwrap();
+    expected.status = corral_core::Status::NeedsMe;
+    expected.updated = held.updated;
+    expected.status_since = Some(held.updated);
+    assert_eq!(held, expected);
+    let after = review.fx.ctx.store.tasks_stamp().unwrap();
+    assert_ne!(after, before);
+    retry();
+    assert_eq!(review.fx.ctx.store.tasks_stamp().unwrap(), after);
+}
+
+#[test]
 fn paid_reviewer_lost_ack_and_entering_verdict_never_create_a_competing_child() {
     // Preparation can commit before the accounting child or its native state exists.
     let unbound = review();
     let intent = unbound.prepare().unwrap();
-    let before = ts::task_bytes(&unbound.fx, &unbound.id);
+    let mut expected = unbound.fx.ctx.store.get(&unbound.id).unwrap();
     assert!(
         agent::container_state(
             &unbound.fx.ctx.store.get(&unbound.id).unwrap(),
@@ -345,7 +371,16 @@ fn paid_reviewer_lost_ack_and_entering_verdict_never_create_a_competing_child() 
         .unwrap();
     assert_eq!(paused.phase, IntentPhase::Paused);
     assert_eq!(paused.pause, Some(PauseReason::SuccessorAmbiguous));
-    assert_eq!(ts::task_bytes(&unbound.fx, &unbound.id), before);
+    let held = unbound.fx.ctx.store.get(&unbound.id).unwrap();
+    expected.status = corral_core::Status::NeedsMe;
+    expected.updated = held.updated;
+    expected.status_since = Some(held.updated);
+    assert_eq!(held, expected);
+    let after = unbound.fx.ctx.store.tasks_stamp().unwrap();
+    let error = crate::reviewer::review_run_automatic(&unbound.fx.ctx, &unbound.id, Some("pi"))
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("SuccessorAmbiguous"));
+    assert_eq!(unbound.fx.ctx.store.tasks_stamp().unwrap(), after);
     assert_eq!(
         unbound.fx.ctx.store.get(&unbound.id).unwrap().runs[0]
             .review_runs

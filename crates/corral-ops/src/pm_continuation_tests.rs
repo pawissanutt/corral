@@ -13,6 +13,10 @@ fn advance_current(ctx: &Ctx, now: Timestamp) -> Result<bool> {
 }
 
 fn fixture() -> (Fx, ts::Host, HostProc, ConnectionBinding) {
+    fixture_with_end(false)
+}
+
+fn fixture_with_end(cancelled: bool) -> (Fx, ts::Host, HostProc, ConnectionBinding) {
     let mut fx = crate::agent::hooks::pm::tests::fixture();
     let candidate = |id, connection, cost| {
         json!({
@@ -110,7 +114,10 @@ fn fixture() -> (Fx, ts::Host, HostProc, ConnectionBinding) {
             2,
             json!({"kind":"provider_error","turn":1,"class":failure.class(),"failure":failure}),
         ),
-        (3, json!({"kind":"turn_ended","turn":1})),
+        (
+            3,
+            json!({"kind":"turn_ended","turn":1,"cancelled":cancelled}),
+        ),
     ] {
         let request = crate::agent::event_request_id(1, seq);
         ts::committed(
@@ -312,6 +319,30 @@ fn pm_continuation_rechecks_sticky_quota_before_attaching_a_paid_root() {
     assert!(!advance_current(&fx.ctx, fx.ctx.store.now()).unwrap());
     assert!(fx.calls("pane run").is_empty());
     assert!(!host.reaped());
+}
+
+#[test]
+fn pm_continuation_cancelled_quota_turn_drops_sticky_signal_without_spending() {
+    let (fx, _bound, mut host, _) = fixture_with_end(true);
+    let before = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+    assert_eq!(
+        before.state.turns[0].class,
+        Some(corral_core::agent::TurnClass::Cancelled)
+    );
+    assert!(before.state.turns[0].provider_failure.is_some());
+    assert!(before.state.paid_episode.is_none());
+    assert!(SIGNAL.load(&fx.ctx.store, "latest").unwrap().unwrap().quota);
+
+    assert!(!advance_current(&fx.ctx, fx.ctx.store.now()).unwrap());
+    assert_eq!(pm_state::load(&fx.ctx.store).unwrap(), Some(before));
+    assert!(!SIGNAL.load(&fx.ctx.store, "latest").unwrap().unwrap().quota);
+    assert!(fx.events("continuation_paused").is_empty());
+    assert!(fx.calls("pane run").is_empty());
+    assert!(!host.reaped());
+
+    // A consumed signal must not acquire recovery on subsequent idle passes.
+    let _policy = fx.ctx.store.try_lock("pm-policy").unwrap().unwrap();
+    assert!(!advance_current(&fx.ctx, fx.ctx.store.now()).unwrap());
 }
 
 #[test]

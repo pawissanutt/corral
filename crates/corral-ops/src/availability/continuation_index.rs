@@ -151,8 +151,12 @@ pub(super) fn validate(store: &Store, intent: &ContinuationIntent) -> Result<()>
         );
         Ok(())
     };
-    present(&SOURCES, &container_key(&intent.source.container)?)?;
-    present(&CONTAINERS, &container_key(&intent.successor.container)?)?;
+    let source_key = container_key(&intent.source.container)?;
+    present(&SOURCES, &source_key)?;
+    present(&CONTAINERS, &source_key)?;
+    if intent.source.container != intent.successor.container {
+        present(&CONTAINERS, &container_key(&intent.successor.container)?)?;
+    }
     if let Some(task) = intent.subject.task.as_deref() {
         present(&TASKS, &task_key(task, intent.role)?)?;
     }
