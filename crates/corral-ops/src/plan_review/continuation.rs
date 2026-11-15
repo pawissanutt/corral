@@ -18,20 +18,34 @@ pub(crate) fn advance(
     plan: &PlanRecord,
     review: &PlanReview,
     evidence: &policy::QuotaEvidence,
-    now: Timestamp,
+    _now: Timestamp,
 ) -> Result<Vec<Change>> {
     let source = ContainerRef::PlanReviewer {
         task: task.id.clone(),
         plan: plan.id.clone(),
         review: review.id.clone(),
     };
+    let Some(input) = crate::plan_dispatch::continuation::claim_input(ctx, &source)? else {
+        return Ok(Vec::new());
+    };
+    if let Some(run) = &plan.run
+        && !crate::session_control::automation_may_start(
+            ctx,
+            &corral_core::inbox::Recipient::PlanRun {
+                task: task.id.clone(),
+                plan_run: run.clone(),
+            },
+        )?
+    {
+        return Ok(Vec::new());
+    }
     if already_prepared(ctx, &source)? {
         return Ok(Vec::new());
     }
     paused(
         ctx,
         &source,
-        advance_inner(ctx, task, plan, review, evidence, now, &source),
+        advance_inner(ctx, task, plan, review, evidence, &source, &input),
     )
 }
 
@@ -41,8 +55,8 @@ fn advance_inner(
     plan: &PlanRecord,
     review: &PlanReview,
     evidence: &policy::QuotaEvidence,
-    _now: Timestamp,
     source: &ContainerRef,
+    input: &corral_core::store::StoreLock,
 ) -> Result<Vec<Change>> {
     crate::agent::ops::planning::reconcile(ctx, &task.id)?;
     let current = ctx.store.get(&task.id)?;
@@ -168,12 +182,13 @@ fn advance_inner(
         Ok(())
     })?;
     let _action = corral_core::work::action(&current.id, OperatingActionKind::PlanReview);
-    super::review_with_origin(
+    super::launch::review_claimed(
         ctx,
         &current.id,
         None,
         crate::operating::Origin::Automatic,
         None,
+        Some(input),
     )
     .context("SuccessorAmbiguous")?;
     Ok(vec![Change {

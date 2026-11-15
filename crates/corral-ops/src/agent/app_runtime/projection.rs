@@ -90,6 +90,7 @@ fn state(session: &AssistantSession, head: Option<&Thread>) -> AssistantState {
         Some("working") => AssistantState::Working,
         Some("ready") => AssistantState::Ready,
         Some("waiting") => AssistantState::Waiting,
+        Some("paused") => AssistantState::Paused,
         Some("failed") => AssistantState::Failed,
         Some("stopping" | "takeover") => AssistantState::Stopping,
         _ => AssistantState::Cold,

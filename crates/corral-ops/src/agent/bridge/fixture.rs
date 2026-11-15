@@ -467,17 +467,65 @@ pub(crate) fn quiet(frame: &Value) -> Value {
     match frame["command"].as_str() {
         Some("get_state") => json!({"ok": true, "result": {
             "generation": generation, "session": {"bound_id": SESSION}, "herdr": {"blocked_on": []}}}),
-        Some("events_since") => {
+        Some("events_since" | "live_since") => {
             let after = frame["args"]["seq"].clone();
             json!({"ok": true, "result": {"generation": generation, "events": [],
                 "last": after, "next": after, "more": false}})
         }
         Some("hello") => json!({"ok": true, "result": {
-            "protocol": 1, "generation": generation, "bound": true, "session_id": SESSION}}),
+            "protocol": 1, "generation": generation, "bound": true, "session_id": SESSION,
+            "commands": ["hello", "get_state", "submit_input", "events_since", "live_since"]}}),
         Some("submit_input") => json!({"ok": true, "result": {
             "request_id": frame["id"], "idempotency_key": frame["args"]["idempotency_key"],
             "disposition": "started", "turn": 1, "replayed": false}}),
         _ => json!({"ok": false, "error": {"code": "unknown_command", "reason": "fixture"}}),
+    }
+}
+
+/// Script live events in sequence order, paging by cursor; other commands use the quiet host.
+pub(crate) fn live_script(
+    mut events: Vec<Value>,
+) -> impl Fn(&Value) -> Value + Send + Sync + 'static {
+    events.sort_by_key(|event| event["seq"].as_u64().unwrap());
+    move |frame| {
+        if frame["command"] != "live_since" {
+            return quiet(frame);
+        }
+        let after = frame["args"]["seq"].as_u64().unwrap();
+        let generation = frame["generation"].clone();
+        let last = events
+            .last()
+            .map_or(0, |event| event["seq"].as_u64().unwrap());
+        let mut page = Vec::new();
+        let mut bytes = 0;
+        for event in events
+            .iter()
+            .filter(|event| event["seq"].as_u64().unwrap() > after)
+        {
+            let mut event = event.clone();
+            event["generation"] = generation.clone();
+            let size = event.to_string().len() + 1;
+            assert!(size <= 32 * 1024, "fixture live event exceeds page limit");
+            if bytes + size > 32 * 1024 {
+                break;
+            }
+            bytes += size;
+            page.push(event);
+        }
+        let next = page
+            .last()
+            .map_or(after, |event| event["seq"].as_u64().unwrap());
+        let mut result = json!({"generation": generation, "events": page,
+            "last": last, "next": next, "more": next < last});
+        if let Some(oldest) = events.first().and_then(|event| event["seq"].as_u64())
+            && after.saturating_add(1) < oldest
+        {
+            result["gap"] = json!({
+                "after": after, "resumed": oldest, "missing": oldest - after - 1,
+                "reconcile": true,
+            });
+        }
+        json!({"ok": true, "result": result})
     }
 }
 

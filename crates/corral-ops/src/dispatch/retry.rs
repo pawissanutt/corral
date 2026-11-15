@@ -34,7 +34,10 @@ fn worktree_head(worktree: &std::path::Path) -> Option<String> {
 /// rounds can select `escalate_to`. A switch uses the target defaults instead of the old model/effort.
 /// The owner redirecting the task resets the autopilot's rounds, but not profile failure history.
 pub fn retry(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<DispatchOutcome> {
-    retry_with(ctx, id, choice, None, false, None, None, |t| t.rounds = 0)?.full(ctx)
+    retry_with(ctx, id, choice, None, false, None, None, None, |t| {
+        t.rounds = 0
+    })?
+    .full(ctx)
 }
 
 /// Guard a retry against an obsolete worker/run identity.
@@ -44,7 +47,7 @@ pub fn retry_run(
     run: &str,
     choice: &ProfileChoice,
 ) -> Result<DispatchOutcome> {
-    retry_with(ctx, id, choice, Some(run), false, None, None, |t| {
+    retry_with(ctx, id, choice, Some(run), false, None, None, None, |t| {
         t.rounds = 0
     })?
     .full(ctx)
@@ -66,6 +69,7 @@ pub fn request_changes_escalated(ctx: &Ctx, id: &str, text: &str) -> Result<Disp
         &ProfileChoice::default(),
         None,
         true,
+        None,
         None,
         None,
         |t| {
@@ -112,12 +116,22 @@ pub(crate) fn auto_retry(
     } else {
         ProfileChoice::default()
     };
-    retry_with(ctx, id, &choice, None, false, Some(expected), None, |t| {
-        t.rounds = round;
-        if let Some(run) = t.current_run_mut() {
-            run.autopilot = Some(state);
-        }
-    })
+    retry_with(
+        ctx,
+        id,
+        &choice,
+        None,
+        false,
+        Some(expected),
+        None,
+        None,
+        |t| {
+            t.rounds = round;
+            if let Some(run) = t.current_run_mut() {
+                run.autopilot = Some(state);
+            }
+        },
+    )
 }
 
 // Only a recognizable pre-exec Pi refusal with no bound host and an unchanged tree can
@@ -165,15 +179,73 @@ pub(super) fn retry_with(
     forced: bool,
     expected: Option<&RepairKey>,
     availability: Option<RetryPlan>,
+    session_input: Option<&corral_core::store::StoreLock>,
     mark: impl FnOnce(&mut TaskHeadMut),
 ) -> Result<DispatchOutcome<Box<TaskHead>>> {
     let automatic = expected.is_some() || availability.is_some();
     let id = corral_core::Store::normalize_id(id)?;
+    let source =
+        if automatic {
+            ctx.store.head(&id)?.current_run.as_ref().map(|run| {
+                corral_core::inbox::Recipient::Run {
+                    task: id.clone(),
+                    run: run.id.clone(),
+                }
+            })
+        } else {
+            None
+        };
+    let source_inbox = source
+        .as_ref()
+        .map(|recipient| corral_core::inbox::Inbox::new(&ctx.store, recipient.clone()))
+        .transpose()?;
+    let _session_input = if let Some(inbox) = &source_inbox {
+        if let Some(claim) = session_input {
+            let path = ctx
+                .store
+                .dir()
+                .join("lock")
+                .join(format!("deliver-{}.lock", inbox.key()));
+            anyhow::ensure!(
+                claim.exclusively_protects(&path),
+                "worker continuation requires its source input claim"
+            );
+            None
+        } else {
+            Some(
+                ctx.store
+                    .try_lock(&format!("deliver-{}", inbox.key()))?
+                    .ok_or_else(|| {
+                        crate::operating::AuthorizationRefused(
+                            "Held: worker session input busy".into(),
+                        )
+                    })?,
+            )
+        }
+    } else {
+        None
+    };
+    if let Some(recipient) = &source
+        && !crate::session_control::automation_may_start(ctx, recipient)?
+    {
+        return Err(crate::operating::AuthorizationRefused(
+            "Held: worker session paused or stopped".into(),
+        )
+        .into());
+    }
     let owner = ctx
         .store
         .try_lock(&format!("launch-{id}"))?
         .context("dispatch is already in progress for this task")?;
     let head = ctx.store.head(&id)?;
+    if let Some(corral_core::inbox::Recipient::Run { run, .. }) = &source {
+        anyhow::ensure!(
+            head.current_run
+                .as_ref()
+                .is_some_and(|current| current.id == *run),
+            "worker continuation source changed"
+        );
+    }
     corral_core::Park::require_unparked_ref(&head)?;
     // The retry choice and checks read head fields and the current run's scalars only.
     let task = head.shell_task()?;
@@ -201,6 +273,12 @@ pub(super) fn retry_with(
         .current_run()
         .cloned()
         .ok_or_else(|| anyhow!("{} has no run to retry", task.id))?;
+    if automatic && prev.outcome == Some(RunOutcome::Stopped) {
+        return Err(crate::operating::AuthorizationRefused(
+            "Held: session stopped by owner".into(),
+        )
+        .into());
+    }
     if let Some(expected) = expected_run
         && expected != prev.id
     {
@@ -229,7 +307,11 @@ pub(super) fn retry_with(
     if paid_route {
         paid::require_checkpoint(ctx, &head, &prev, true)?;
     }
-    let reachable = match &prev.herdr {
+    let reachable = match prev
+        .herdr
+        .as_ref()
+        .filter(|_| prev.outcome != Some(RunOutcome::Stopped))
+    {
         Some(h) => ctx.herdr.pane_get(&h.pane_id)?.is_some(),
         None => false,
     };
@@ -258,7 +340,8 @@ pub(super) fn retry_with(
         let base = corral_git::rev_sha(&prev.worktree, &prev.base)?;
         crate::plan_recovery::retry::require_source(&prev, &base)?;
     }
-    let can_checkpoint = reachable && prev.worktree.is_dir();
+    let can_checkpoint =
+        reachable && prev.worktree.is_dir() && prev.outcome != Some(RunOutcome::Stopped);
     let refused_before_start =
         launch_refused_before_start(&head, head.current_run.as_deref().context("missing_run")?)?;
     // An availability handoff never depends on the old pane: a missing source tree or
@@ -386,8 +469,10 @@ pub(super) fn retry_with(
 
 fn supersede(t: &mut TaskHeadMut, plan: &RetryPlan) {
     if let Some(run) = t.current_run_mut() {
-        run.outcome = Some(RunOutcome::Superseded);
-        run.ended = Some(corral_core::clock::now());
+        if run.outcome != Some(RunOutcome::Stopped) {
+            run.outcome = Some(RunOutcome::Superseded);
+            run.ended = Some(corral_core::clock::now());
+        }
         run.retry = Some(plan.clone());
         if run
             .autopilot

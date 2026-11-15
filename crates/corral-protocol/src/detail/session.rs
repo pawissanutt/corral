@@ -1,6 +1,5 @@
 //! Bounded transcript pages and read-only terminal captures.
 use super::question::{QuestionAnswer, QuestionOption};
-use crate::assistant::ToolLine;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +21,12 @@ pub struct SessionMessage {
     pub author: String,
     pub at: Option<String>,
     pub items: Vec<SessionItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -30,9 +35,6 @@ pub enum SessionItem {
     Text {
         text: String,
     },
-    Tool {
-        tool: ToolLine,
-    },
     QuestionCard {
         key: String,
         rev: u32,
@@ -40,8 +42,113 @@ pub enum SessionItem {
         options: Vec<QuestionOption>,
         answer: Option<QuestionAnswer>,
     },
+    Thinking {
+        text: String,
+    },
+    ToolCall {
+        call_id: String,
+        name: String,
+        /// Pretty JSON, not a flattened argument description.
+        arguments: String,
+        summary: String,
+        state: SessionToolState,
+        paired: bool,
+        /// Original call metadata, including argument validation errors and namespaces.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        /// Complete structured result, including images and presenter-specific details.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        elapsed_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diff: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+    },
+    BashExecution {
+        command: String,
+        output: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i64>,
+        cancelled: bool,
+        truncated: bool,
+        exclude_from_context: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        full_output_path: Option<String>,
+    },
+    Image {
+        media_type: String,
+        size: u64,
+        encoding: String,
+        data: String,
+    },
+    Compaction {
+        summary: String,
+        tokens_before: u64,
+    },
+    BranchSummary {
+        summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_id: Option<String>,
+    },
+    ModelChange {
+        provider: String,
+        model: String,
+    },
+    ThinkingLevelChange {
+        level: String,
+    },
+    Label {
+        target_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+    Aborted {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        facts: Option<String>,
+    },
+    ProviderError {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        facts: Option<String>,
+    },
+    /// All persisted fields read by an extension presenter, without reducing them to prose.
+    Card {
+        title: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<String>,
+    },
+    /// Immediately follows the preview it replaces. Fetch and concatenate JSON fragments.
+    Continuation {
+        token: String,
+        bytes: u64,
+    },
     #[serde(other)]
     Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionToolState {
+    Running,
+    Done,
+    Failed,
+    NotRun,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionItemPage {
+    /// A UTF-8 fragment of the complete serialized SessionItem.
+    pub json: String,
+    pub offset: u64,
+    pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

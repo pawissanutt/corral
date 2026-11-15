@@ -75,32 +75,87 @@ pub(crate) fn cancel_task(ctx: &Ctx, id: &str, reason: &str) -> Result<()> {
     ctx.store.update_head(id, |task| {
         task.review_reservation = None;
         task.review_wait = None;
-        let Some(current) = task.current_run_mut().filter(|r| r.id == run.id) else {
-            return Ok(());
-        };
-        if review.is_some() && current.review.as_ref() == review {
-            let mut record = current.review.take();
-            if let Some(review) = record.as_mut() {
-                review.cancelled = true;
-            }
-            if let Some(child) = current.current_child.as_deref_mut() {
-                child.review = record;
-                child.outcome = Some(RunOutcome::Cancelled);
-                child.ended = Some(ctx.store.now());
-                child.usage_pending = true;
-                child.pending_reply = None;
-            }
-            ctx.store.log_event(
-                Some(id),
-                "review_cancelled",
-                json!({"run": run.id, "result":"cancelled", "reason": reason}),
-            )?;
-        }
         Ok(())
     })?;
     if let Some(child) = run.current_child.as_deref().filter(|_| review.is_some()) {
+        cancel_reviewer(ctx, id, &run.id, &child.id, reason)?;
+    }
+    if review.is_some() && run.current_child.is_none() {
+        ctx.store.update_head(id, |task| {
+            if let Some(current) = task
+                .current_run_mut()
+                .filter(|current| current.id == run.id)
+            {
+                current.review = None;
+            }
+            Ok(())
+        })?;
+    }
+    if let Some(child) = run.current_child.as_deref().filter(|_| review.is_some()) {
         crate::cleanup_worktree::reap_review(ctx, id, &run.id, &child.id)?;
     }
+    Ok(())
+}
+
+/// Record-only half of review cancellation. Terminate stops the native host first
+/// and closes its exact pane afterwards, without cancelling its parent or siblings.
+pub(crate) fn cancel_reviewer(
+    ctx: &Ctx,
+    id: &str,
+    run: &str,
+    child: &str,
+    reason: &str,
+) -> Result<()> {
+    ctx.store.update_head(id, |task| {
+        let current = task
+            .current_run_mut()
+            .filter(|current| current.id == run)
+            .ok_or_else(|| anyhow::anyhow!("review parent changed"))?;
+        let latest = current
+            .current_child
+            .as_deref()
+            .is_some_and(|current| current.id == child);
+        if latest {
+            if current
+                .current_child
+                .as_deref()
+                .is_some_and(|child| child.ended.is_some())
+            {
+                return Ok(());
+            }
+            let mut record = current.review.take();
+            if let Some(review) = record.as_mut() {
+                review.cancelled = true;
+                review.verdict = None;
+            }
+            if let Some(cancelled) = current.current_child.as_deref_mut() {
+                cancelled.review = record;
+                cancelled.outcome = Some(RunOutcome::Cancelled);
+                cancelled.ended = Some(ctx.store.now());
+                cancelled.usage_pending = true;
+                cancelled.pending_reply = None;
+            }
+            task.review_reservation = None;
+            task.review_wait = None;
+        } else {
+            task.edit_review_child(run, child, |cancelled| {
+                if let Some(review) = cancelled.review.as_mut() {
+                    review.cancelled = true;
+                    review.verdict = None;
+                }
+                cancelled.outcome = Some(RunOutcome::Cancelled);
+                cancelled.ended.get_or_insert(ctx.store.now());
+                cancelled.usage_pending = true;
+                cancelled.pending_reply = None;
+                Ok(())
+            })?;
+        }
+        ctx.store.log_event(
+            Some(id),
+            "review_cancelled",
+            json!({"run":run,"review":child,"result":"cancelled","reason":reason}),
+        )
+    })?;
     Ok(())
 }
 
@@ -118,16 +173,7 @@ fn cancel_plan_reviews(ctx: &Ctx, id: &str, reason: &str) -> Result<()> {
         {
             ctx.herdr.pane_close(&herdr.pane_id)?;
         }
-        ctx.store.update_head(id, |task| {
-            task.edit_plan_review(&plan, &review.id, |current| {
-                if current.verdict.is_none() && !current.cancelled {
-                    current.cancelled = true;
-                    current.pending_reply = None;
-                    ctx.store.log_event(Some(id), "review_cancelled", json!({"target":"plan", "plan":plan,"attempt":review.id,"result":"cancelled","reason":reason}))?;
-                }
-                Ok(())
-            })
-        })?;
+        crate::plan_review::cancel_attempt(ctx, id, &plan, &review.id, reason)?;
     }
     if let Some(attempt) = head.last_aggregate_attempt.as_deref()
         && let Some(review) = attempt.current_review.as_ref().filter(|r| r.pending())

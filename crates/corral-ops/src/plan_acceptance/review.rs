@@ -12,6 +12,7 @@ use serde_json::json;
 
 use super::{capture, current, current_head, evidence_failures, fresh_candidate, gate};
 use crate::Ctx;
+use crate::delivery::paused::{PmReviewTarget, queue_review};
 use crate::review_contracts::Selected;
 use crate::scratch_reclaim::Attempt;
 use crate::verification::digest;
@@ -391,9 +392,9 @@ fn current_review<'a>(
         .with_context(|| format!("aggregate review {review} was replaced"))
 }
 
-/// Launch the policy-selected reviewer on the current attempt and its evidence. The pending
-/// record is published before launch; an earlier pending review is superseded and its
-/// callback refused from then on.
+/// Request the policy-selected review on the current attempt and its evidence. A fenced
+/// shared PM receives a queued request and leaves the review pending without a pane.
+/// An earlier pending review is superseded and its callback refused from then on.
 ///
 /// # Errors
 /// Refuses when no reviewer is configured, the gate is running, evidence is invalid or the
@@ -519,19 +520,20 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
             close(ctx, id, stored);
         }
     }
-    let herdr = launched?;
-    ctx.store.log_event(
-        Some(id),
-        "aggregate_review_started",
-        json!({"attempt": chosen.id, "review": review.id, "reviewer": name, "pane": herdr.pane_id}),
-    )?;
+    if let Some(herdr) = launched? {
+        ctx.store.log_event(
+            Some(id),
+            "aggregate_review_started",
+            json!({"attempt": chosen.id, "review": review.id, "reviewer": name, "pane": herdr.pane_id}),
+        )?;
+    }
     ctx.store
         .head(id)?
         .aggregate_review(&chosen.id, &review.id)?
         .context("aggregate review disappeared")
 }
 
-/// Attach the pane before sending: a synchronous reviewer can call back immediately.
+/// Attach a real pane before sending; a fenced shared PM keeps its review pending.
 fn launch(
     ctx: &Ctx,
     id: &str,
@@ -540,13 +542,31 @@ fn launch(
     resolved: &ResolvedProfile,
     prompt_file: &Path,
     cwd: &Path,
-) -> Result<HerdrRef> {
-    let tracker_title = title;
+) -> Result<Option<HerdrRef>> {
+    let attempt = review.identity.attempt.clone();
+    let message = (review.reviewer == PM).then(|| {
+        format!(
+            "Review aggregate attempt {attempt} of {} ({}): read the review prompt at {} and follow it. \
+             Do not edit files; finish with its exact plan aggregate-verdict command, including --review {}.",
+            id,
+            title,
+            prompt_file.display(),
+            review.id
+        )
+    });
     let title = format!("{id} aggregate review");
-    let herdr = if review.reviewer == PM {
-        let pane_id = match crate::pm::live_pm_pane(ctx)? {
-            Some(pane) => pane,
-            None => crate::pm::open_pm(ctx)?,
+    let herdr = if let Some(message) = &message {
+        let Some(pane_id) = crate::pm::open_pm_automated(ctx)? else {
+            queue_review(
+                ctx,
+                message,
+                PmReviewTarget::Aggregate {
+                    task: id.to_owned(),
+                    attempt: attempt.clone(),
+                    review: review.id.clone(),
+                },
+            )?;
+            return Ok(None);
         };
         let info = ctx
             .herdr
@@ -565,7 +585,6 @@ fn launch(
             socket: Some(ctx.herdr.socket_path()?),
         }
     };
-    let attempt = review.identity.attempt.clone();
     ctx.store.update_head(id, |task| {
         crate::hold::require_clear(&ctx.store, &*task)?;
         let stored = current_review(task, &attempt, &review.id)?;
@@ -577,24 +596,27 @@ fn launch(
         stored.herdr = Some(herdr.clone());
         Ok(())
     })?;
-    if review.reviewer == PM {
-        let message = format!(
-            "Review aggregate attempt {attempt} of {} ({}): read the review prompt at {} and follow it. \
-             Do not edit files; finish with its exact plan aggregate-verdict command, including --review {}.",
-            id,
-            tracker_title,
-            prompt_file.display(),
-            review.id
-        );
-        let delivery = ctx.herdr.agent_prompt(&herdr.pane_id, &message)?;
-        if !delivery.submitted {
-            bail!(
-                "PM aggregate review prompt was not submitted: {}",
-                delivery
-                    .error
-                    .as_deref()
-                    .unwrap_or("submission was not confirmed")
-            );
+    if let Some(message) = &message {
+        if let Some(delivery) = crate::delivery::paused::prompt_pm(ctx, &herdr.pane_id, message)? {
+            if !delivery.submitted {
+                bail!(
+                    "PM aggregate review prompt was not submitted: {}",
+                    delivery
+                        .error
+                        .as_deref()
+                        .unwrap_or("submission was not confirmed")
+                );
+            }
+        } else {
+            queue_review(
+                ctx,
+                message,
+                PmReviewTarget::Aggregate {
+                    task: id.to_owned(),
+                    attempt: attempt.clone(),
+                    review: review.id.clone(),
+                },
+            )?;
         }
     } else {
         ctx.herdr.pane_report_metadata(
@@ -620,7 +642,7 @@ fn launch(
         let command = crate::launch_exit::arm(ctx, &command, &receipt)?;
         ctx.herdr.pane_run(&herdr.pane_id, &command)?;
     }
-    Ok(herdr)
+    Ok(Some(herdr))
 }
 
 /// Abandon the pending aggregate review whose reviewer returned to its shell (or whose PM is

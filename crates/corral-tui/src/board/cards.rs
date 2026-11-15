@@ -381,6 +381,10 @@ fn meta_lines(
             let question = decision.map(|d| d.request.question.clone());
             let question = question
                 .or_else(|| autopilot::escalation(t))
+                .or_else(|| {
+                    run.filter(|r| r.outcome == Some(corral_core::RunOutcome::Stopped))
+                        .map(|_| "stopped by owner".to_string())
+                })
                 .unwrap_or_else(|| {
                     run.and_then(|r| r.blocked_excerpt.as_deref())
                         .and_then(|e| e.lines().map(str::trim).rfind(|l| !l.is_empty()))

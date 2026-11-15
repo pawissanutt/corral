@@ -16,6 +16,8 @@ pub(crate) struct RecoveryLaunch<'a> {
     pub profile: Option<&'a ResolvedProfile>,
     /// Applied only when the frozen rotation decision approves a fresh conversation.
     pub fresh_profile: Option<&'a ResolvedProfile>,
+    /// An automated caller retains its input claim through settlement and submission.
+    pub input: Option<&'a StoreLock>,
     pub adopted: bool,
     pub continue_session: bool,
     /// A rotation attempt (fence reason `rotate`): called once the predecessor is stopped,
@@ -32,6 +34,7 @@ impl<'a> RecoveryLaunch<'a> {
             pane: Some(pane),
             profile: Some(profile),
             fresh_profile: None,
+            input: None,
             adopted: true,
             continue_session,
             rotate: None,
@@ -80,9 +83,10 @@ impl std::fmt::Display for PmRecoveryInProgress {
 
 impl std::error::Error for PmRecoveryInProgress {}
 
-/// All PM launch/recovery entries use this order: pm-recovery, pm-policy, then dispatch
-/// or generation delivery locks. The first two claims never wait for another operation.
-/// Read state again only after both claims, so a snapshot grants no replacement authority.
+/// PM launch/recovery takes pm-recovery, then pm-policy, then dispatch or delivery locks.
+/// Automated callers first try deliver-pm and reuse that claim throughout recovery.
+/// The recovery/policy claims never wait. Read state again only after both claims,
+/// so a snapshot grants no replacement authority.
 pub(crate) struct PmRecoveryLease {
     _policy: StoreLock,
     _recovery: StoreLock,

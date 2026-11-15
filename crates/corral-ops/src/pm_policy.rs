@@ -121,6 +121,7 @@ pub(crate) fn instructions(policy: &PolicySnapshot) -> Result<String> {
 #[serde(rename_all = "snake_case")]
 enum Disposition {
     Confirmed,
+    Deferred,
     NotSubmitted,
     Submitting,
     Uncertain,
@@ -226,7 +227,7 @@ pub(crate) fn deliver(ctx: &Ctx, pane: &str, policy: &PolicySnapshot) -> Result<
                 return Ok(());
             }
             Disposition::Confirmed if record.fingerprint == key => return Ok(()),
-            Disposition::Confirmed => {}
+            Disposition::Confirmed | Disposition::Deferred => {}
         }
     }
     crate::pm::save_prompt(ctx, policy)?;
@@ -237,6 +238,19 @@ pub(crate) fn deliver(ctx: &Ctx, pane: &str, policy: &PolicySnapshot) -> Result<
         delivery: None,
         error: None,
     };
+    // Some callers already hold dispatch: never wait for delivery -> dispatch in reverse.
+    let inbox = corral_core::inbox::Inbox::new(&ctx.store, corral_core::inbox::Recipient::Pm)?;
+    let delivery = ctx.store.try_lock(&format!("deliver-{}", inbox.key()))?;
+    if delivery.is_none()
+        || crate::session_control::automated_input_must_wait(
+            ctx,
+            &corral_core::inbox::Recipient::Pm,
+        )?
+    {
+        record.disposition = Disposition::Deferred;
+        records.panes.insert(pane.into(), record);
+        return save(ctx, &records);
+    }
     records.panes.insert(pane.into(), record.clone());
     save(ctx, &records)?;
     let text = instructions(policy)?;

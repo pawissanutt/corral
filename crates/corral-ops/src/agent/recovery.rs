@@ -115,14 +115,32 @@ use labels::health;
 
 #[path = "recovery_quiesce.rs"]
 mod quiesce;
-pub(crate) use quiesce::stop_for_handoff;
+pub(crate) use quiesce::{stop_container, stop_for_handoff};
 
 /// Cancels a turn of a live host. It never fences: the run, its questions and its receipts stay
 /// live, and an in-flight call keeps its own truthful receipt.
 pub fn cancel(ctx: &Ctx, args: &CancelArgs) -> Result<()> {
     let container = resolve(ctx, &args.target)?;
-    let (state, _) = open(ctx, &container)?;
+    let detail = cancel_container(ctx, &container, None, args.turn)?;
+    println!("{}", serde_json::to_string(&detail)?);
+    Ok(())
+}
+
+/// Shared stdout-free cancellation for daemon-routed owner session controls.
+pub(crate) fn cancel_container(
+    ctx: &Ctx,
+    container: &ContainerRef,
+    generation: Option<u32>,
+    turn: Option<u64>,
+) -> Result<Value> {
+    let (state, _) = open(ctx, container)?;
     let n = state.binding.generation;
+    ensure!(
+        generation.is_none_or(|expected| expected == n),
+        "conflict: session {} is generation {n}, not {:?}",
+        container.key(),
+        generation
+    );
     ensure!(
         state.binding.health == HostHealth::Healthy,
         "host_{}: generation {n} of {} cannot take a cancel; `corral agent resume` starts the \
@@ -130,20 +148,19 @@ pub fn cancel(ctx: &Ctx, args: &CancelArgs) -> Result<()> {
         health(state.binding.health),
         container.key()
     );
-    let reply = BridgeClient::connect(&ctx.store, &recipient(&container), n)?.cancel(args.turn)?;
+    let reply = BridgeClient::connect(&ctx.store, &recipient(container), n)?.cancel(turn)?;
     // The host names the turn it cancelled. A turn not recorded yet classifies `cancelled` from
     // its own `turn_ended` report, whenever that commits.
     if reply["cancelled"] == true
         && let Some(seq) = reply["turn"].as_u64()
     {
-        cancels::confirm(ctx, &container, n, seq)?;
+        cancels::confirm(ctx, container, n, seq)?;
     }
     let detail = json!({
         "container": container.key(), "generation": n, "turn": reply["turn"],
         "cancelled": reply["cancelled"], "reason": reply["reason"],
     });
-    println!("{}", serde_json::to_string(&detail)?);
-    Ok(())
+    Ok(detail)
 }
 
 pub fn resume(ctx: &Ctx, args: &ResumeArgs) -> Result<()> {
@@ -336,7 +353,13 @@ pub(crate) fn recover_with(
         crate::pm::continuation::regenerate(ctx, &state)?;
     }
     let interrupted = classify_lost(ctx, container, n, &plan)?;
-    let unconfirmed = settle_unconfirmed(ctx, container, n, &state)?;
+    let unconfirmed = settle_unconfirmed(
+        ctx,
+        container,
+        n,
+        &state,
+        launch.as_ref().and_then(|launch| launch.input),
+    )?;
     if let Some(restore) = restore.as_mut() {
         restore()?;
     }

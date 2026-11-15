@@ -189,6 +189,13 @@ pub fn answer_group(
         }
     }
     let applied = applied.context("the group answer produced no change")?;
+    drop(_inbox_lock);
+    if !pm
+        && !applied.replayed
+        && let Some(recipient) = super::super::recipient(&container)
+    {
+        crate::session_control::pause::lift_recipient_owner(ctx, &recipient)?;
+    }
     for outcome in &applied.outcomes {
         super::super::events::reconcile_question(&ctx.store, &outcome.key)?;
         crate::agent::herdr_status::push_after_transition(ctx, &container, &outcome.key);

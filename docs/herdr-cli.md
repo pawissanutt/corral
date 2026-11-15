@@ -190,6 +190,14 @@ Arguments:
 Use esc as the canonical Escape key name; escape is also accepted.
 ```
 
+Corral's admin `session keys` control exposes only a bounded named-key subset:
+`enter`, `esc` (`escape` alias), `tab`, `backspace`, `up`, `down`, `left`, `right`,
+`pageup`, `pagedown`, `home`, `end`, `insert`, `delete`, `space`, `f1`–`f12`, and
+`ctrl+a`–`ctrl+z`. Its `ctrl-a`–`ctrl-z` aliases are translated to herdr's `ctrl+` spelling;
+`page-up`/`page-down` aliases become `pageup`/`pagedown`. Literal strings use `--text`
+instead, after the keys and without Enter; submit with a following command. Corral refuses
+whitespace-only `--text` with `invalid_params:`: use named `space`, `tab`, `enter` keys.
+
 ## herdr pane close
 
 ```

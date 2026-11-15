@@ -22,6 +22,9 @@ pub(crate) fn reconcile(
     let Some(run) = task.plan_runs.last().filter(|r| r.holds_slot()) else {
         return Ok(());
     };
+    if !session_controls_allow(ctx, task)? {
+        return Ok(());
+    }
     if run.agent_host.as_ref().is_some_and(|host| {
         matches!(
             host.binding.health,
@@ -277,6 +280,9 @@ fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
     // The decision reads head fields, the last plan with its current review and the last
     // planner run, which the head's shell holds.
     let task = &head.shell_task()?;
+    if !session_controls_allow(ctx, task)? {
+        return Ok(());
+    }
     let config = crate::plan::config(ctx)?;
     // Prepared actions retain their exact round and owner/automatic provenance. A
     // failed authorization is not a planner exit, nor a reason to claim a round.
@@ -417,6 +423,40 @@ fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
         )?,
     }
     Ok(())
+}
+
+/// Session fences defer scheduling and loss escalation; they are independent of
+/// the paid-continuation intent's failure/financial pause.
+fn session_controls_allow(ctx: &Ctx, task: &Task) -> Result<bool> {
+    use corral_core::inbox::Recipient;
+    if let Some(run) = task.plan_runs.last()
+        && !crate::session_control::automation_may_start(
+            ctx,
+            &Recipient::PlanRun {
+                task: task.id.clone(),
+                plan_run: run.id.clone(),
+            },
+        )?
+    {
+        return Ok(false);
+    }
+    if let Some(plan) = task.plans.last()
+        && let Some(review) = plan.reviews.last()
+    {
+        let recipient = if review.reviewer == "pm" {
+            Recipient::Pm
+        } else {
+            Recipient::PlanReview {
+                task: task.id.clone(),
+                plan: plan.id.clone(),
+                review: review.id.clone(),
+            }
+        };
+        if !crate::session_control::automation_may_start(ctx, &recipient)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// The plan state a decision was taken on is still current: the last plan with its current

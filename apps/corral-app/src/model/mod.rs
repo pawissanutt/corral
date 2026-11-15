@@ -34,6 +34,8 @@ pub mod nav;
 pub mod plans;
 /// Independent review and candidate evidence.
 pub mod review;
+/// A watched session's open turn and continued transcript items.
+pub mod session_feed;
 /// Device, connection and app settings.
 pub mod settings;
 /// Styled model text.

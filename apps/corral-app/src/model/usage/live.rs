@@ -566,6 +566,9 @@ mod tests {
             cost_basis: cost_usd.map(|_| CostBasis::Reported),
             tokens,
             rev: 1,
+            generation: None,
+            turn: None,
+            controls: Default::default(),
         }
     }
 

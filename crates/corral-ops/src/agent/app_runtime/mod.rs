@@ -1,6 +1,9 @@
 //! Canonical daemon-hosted Ask services. The daemon supplies an authenticated device, owns
 //! the supervisor loop and transport journal, and never accepts authority from request JSON.
 //! Sends are durable before provider preflight; a disconnected client cannot discard a turn.
+//! Pause fences queued assistant delivery without stopping the host. A fresh owner assistant
+//! message lifts it atomically with its durable append; explicit owner question answers also
+//! resume the thread. PM sends and warm do not.
 use crate::Ctx;
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::assistant::threads::{ContextRef, Message};
@@ -18,6 +21,7 @@ pub use actions::{ensure_filing_log, file_as_idea, withdraw};
 pub use input::FreshConfirmation;
 pub use projection::{filings, live, sessions, thread};
 pub(crate) use projection::{row_with_usage, sessions_with_usage};
+pub(crate) use runtime::control;
 pub use runtime::{Runtime, RuntimeUpdate, pump, shutdown, start, stop};
 
 pub fn resolve_scope(ctx: &Ctx, scope: &str) -> Result<Option<String>> {
@@ -136,6 +140,8 @@ pub fn send(ctx: &Ctx, device: &AuthenticatedDevice, request: &AssistantSend) ->
     );
     let (attachments, uploads) = attachments::references(&request.attachments)?;
     let head = ctx.store.app_thread(&request.thread)?;
+    let _control = runtime::control(ctx, &head.session)?;
+    let head = ctx.store.app_thread_head(&head.session)?;
     let digest = super::payload_sha256(&serde_json::to_value(request)?);
     let (message, replayed) = ctx.store.append_app_message(
         Message {
@@ -195,7 +201,10 @@ pub fn send(ctx: &Ctx, device: &AuthenticatedDevice, request: &AssistantSend) ->
             }
             Ok(())
         })?;
-        if !matches!(head.state.as_str(), "working" | "starting" | "ready") {
+        if !matches!(
+            ctx.store.app_thread_head(&head.session)?.state.as_str(),
+            "working" | "starting" | "ready"
+        ) {
             ctx.store
                 .set_app_thread_state(&head.session, "cold", None)?;
         }
@@ -203,6 +212,14 @@ pub fn send(ctx: &Ctx, device: &AuthenticatedDevice, request: &AssistantSend) ->
         // PM input is inbox evidence, never an assistant-citable owner instruction.
         ctx.store
             .set_app_thread_state(&head.session, "pm_wait", None)?;
+    }
+    if target == "assistant" {
+        crate::availability::continuation::activate_ready(
+            ctx,
+            &corral_core::agent::ContainerRef::Assistant {
+                session: head.session.clone(),
+            },
+        )?;
     }
     // A crash between append and journal is recovered by the supervisor from saved provenance.
     if target == "pm" {
@@ -222,7 +239,45 @@ pub fn warm(ctx: &Ctx, device: &AuthenticatedDevice, scope: &str) -> Result<()> 
     let ctx = &attributed;
     ensure!(device.assistant, "authority_assistant");
     let head = ctx.store.app_thread(scope)?;
+    let _control = runtime::control(ctx, &head.session)?;
+    if !crate::session_control::automation_may_start(
+        ctx,
+        &corral_core::inbox::Recipient::Assistant {
+            session: head.session.clone(),
+        },
+    )? {
+        return Ok(());
+    }
     ctx.store.set_app_thread_state(&head.session, "cold", None)
+}
+
+/// The caller has established owner input; host-authenticated answers must not call this.
+pub(crate) fn lift_pause_for_owner_input(ctx: &Ctx, session: &str) -> Result<bool> {
+    if ctx.store.app_thread_scope(session)?.is_none() {
+        return Ok(false);
+    }
+    let _control = runtime::control(ctx, session)?;
+    if ctx.store.app_thread_head(session)?.state != "paused" {
+        return Ok(false);
+    }
+    ensure!(
+        ctx.store.get_assistant(session)?.ended.is_none(),
+        "assistant_ended"
+    );
+    let container = ctx.store.get_assistant_container(session)?;
+    let state = if super::pi::host_alive(&container.state)? {
+        "ready"
+    } else {
+        "cold"
+    };
+    ctx.store.set_app_thread_state(session, state, None)?;
+    crate::availability::continuation::activate_ready(
+        ctx,
+        &corral_core::agent::ContainerRef::Assistant {
+            session: session.into(),
+        },
+    )?;
+    Ok(true)
 }
 
 /// Restart discovery is independent of app subscriptions. Failed setup waits for an explicit
@@ -242,7 +297,7 @@ pub fn pending_scopes(ctx: &Ctx) -> Result<Vec<String>> {
             .pending_app_messages(&session.id)?
             .iter()
             .any(|m| m.target == "assistant");
-        if !matches!(head.state.as_str(), "failed" | "ended")
+        if !matches!(head.state.as_str(), "failed" | "ended" | "paused")
             && (matches!(head.state.as_str(), "cold" | "takeover") || assistant_pending)
         {
             scopes.push(session.id);
@@ -285,6 +340,7 @@ pub fn session(
             session.id
         }
         AssistantSessionOp::End { session } => {
+            let _control = runtime::control(ctx, session)?;
             super::ops::assistant::end(ctx, session)?;
             if ctx.store.app_thread_head(session).is_ok() {
                 ctx.store.set_app_thread_state(session, "ended", None)?;
@@ -292,6 +348,7 @@ pub fn session(
             session.clone()
         }
         AssistantSessionOp::TakeOver { session } => {
+            let _control = runtime::control(ctx, session)?;
             let container = ctx.store.get_assistant_container(session)?;
             let stopping = super::pi::host_alive(&container.state)?;
             if stopping {
@@ -304,11 +361,20 @@ pub fn session(
                 bridge.shutdown()?;
             }
             ctx.store.app_thread(session)?;
-            ctx.store.set_app_thread_state(
+            ctx.store.set_app_thread_state_unless(
                 session,
                 if stopping { "takeover" } else { "cold" },
                 None,
+                &["paused", "ended"],
             )?;
+            session.clone()
+        }
+        AssistantSessionOp::Pause { session } => {
+            runtime::pause(ctx, session)?;
+            session.clone()
+        }
+        AssistantSessionOp::Resume { session } => {
+            runtime::resume(ctx, session)?;
             session.clone()
         }
         AssistantSessionOp::SetProfile { thread, profile } => {
@@ -321,6 +387,8 @@ pub fn session(
                 None,
             )?;
             let head = ctx.store.app_thread(thread)?;
+            let _control = runtime::control(ctx, &head.session)?;
+            let head = ctx.store.app_thread_head(&head.session)?;
             ensure!(
                 head.pending.is_empty() && !matches!(head.state.as_str(), "working" | "starting"),
                 "assistant_busy"
@@ -337,8 +405,12 @@ pub fn session(
                 super::bridge::BridgeClient::connect_dir(&dir, container.state.binding.generation)?
                     .shutdown()?;
             }
-            ctx.store
-                .set_app_thread_state(&head.session, "cold", None)?;
+            ctx.store.set_app_thread_state_unless(
+                &head.session,
+                "cold",
+                None,
+                &["paused", "ended"],
+            )?;
             head.session
         }
         _ => bail!("unsupported assistant session operation"),

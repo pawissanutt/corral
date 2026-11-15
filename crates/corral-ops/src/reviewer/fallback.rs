@@ -14,6 +14,69 @@ use corral_core::TaskRef as _;
 
 #[path = "fallback_paid.rs"]
 pub(super) mod fallback_paid;
+pub(super) fn claim_input(
+    ctx: &Ctx,
+    id: &str,
+    origin: crate::operating::Origin,
+) -> Result<Option<corral_core::store::StoreLock>> {
+    if origin == crate::operating::Origin::Owner {
+        return Ok(None);
+    }
+    let head = ctx.store.head(id)?;
+    let run = head.current_run_head()?.context("review parent missing")?;
+    let container = run.current_child.as_deref().map_or_else(
+        || corral_core::agent::ContainerRef::Worker {
+            task: id.into(),
+            run: run.id.clone(),
+        },
+        |child| fallback_paid::container(id, &run.id, &child.id),
+    );
+    let intent = crate::availability::continuation::latest_for(&ctx.store, &container)?;
+    let source = intent
+        .as_ref()
+        .filter(|intent| {
+            intent.phase == crate::availability::continuation::IntentPhase::Prepared
+                && intent.successor.container == container
+        })
+        .map_or(&container, |intent| &intent.source.container);
+    let recipient =
+        crate::questions::recipient(source).context("review input recipient missing")?;
+    let input = ctx
+        .store
+        .try_lock(&format!("deliver-{}", recipient.key()?))?
+        .ok_or_else(|| {
+            crate::operating::AuthorizationRefused("Held: review session input is busy".into())
+        })?;
+    if run.outcome == Some(RunOutcome::Stopped)
+        || run
+            .current_child
+            .as_deref()
+            .is_some_and(|child| child.outcome == Some(RunOutcome::Stopped))
+        || !crate::session_control::automation_may_start(ctx, &recipient)?
+        || (source != &container
+            && !crate::session_control::automation_may_start(
+                ctx,
+                &crate::questions::recipient(&container)
+                    .context("review input recipient missing")?,
+            )?)
+        || (run.current_child.is_some()
+            && !crate::session_control::automation_may_start(
+                ctx,
+                &corral_core::inbox::Recipient::Run {
+                    task: id.into(),
+                    run: run.id.clone(),
+                },
+            )?)
+    {
+        return Err(crate::operating::AuthorizationRefused(
+            "Held: review source session is paused or stopped".into(),
+        )
+        .into());
+    }
+    Ok(Some(input))
+}
+
+#[cfg(test)]
 pub(crate) fn continue_review(
     ctx: &Ctx,
     task: &Task,
@@ -22,6 +85,48 @@ pub(crate) fn continue_review(
     reason: &str,
     now: Timestamp,
 ) -> Result<Vec<Change>> {
+    let recipient = corral_core::inbox::Recipient::ReviewRun {
+        task: task.id.clone(),
+        run: run.id.clone(),
+        review: child.id.clone(),
+    };
+    let Some(input) = ctx
+        .store
+        .try_lock(&format!("deliver-{}", recipient.key()?))?
+    else {
+        return Ok(Vec::new());
+    };
+    continue_review_claimed(ctx, task, run, child, reason, now, &input)
+}
+
+pub(crate) fn continue_review_claimed(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    child: &Run,
+    reason: &str,
+    now: Timestamp,
+    input: &corral_core::store::StoreLock,
+) -> Result<Vec<Change>> {
+    if run.outcome == Some(RunOutcome::Stopped) || child.outcome == Some(RunOutcome::Stopped) {
+        return Ok(Vec::new());
+    }
+    let recipient = corral_core::inbox::Recipient::ReviewRun {
+        task: task.id.clone(),
+        run: run.id.clone(),
+        review: child.id.clone(),
+    };
+    if !crate::session_control::automation_may_start(ctx, &recipient)?
+        || !crate::session_control::automation_may_start(
+            ctx,
+            &corral_core::inbox::Recipient::Run {
+                task: task.id.clone(),
+                run: run.id.clone(),
+            },
+        )?
+    {
+        return Ok(Vec::new());
+    }
     if fallback_paid::reconcile(ctx, &task.id, &run.id, &child.id)?.is_some() {
         return Ok(Vec::new());
     }
@@ -31,9 +136,19 @@ pub(crate) fn continue_review(
         let launched = {
             let _action =
                 corral_core::work::action(&task.id, corral_core::OperatingActionKind::Review);
-            super::review_run_automatic(ctx, &task.id, Some(&child.agent))
+            super::launch::review_run_claimed(
+                ctx,
+                &task.id,
+                Some(&child.agent),
+                crate::operating::Origin::Automatic,
+                None,
+                Some(input),
+            )
         };
         if let Err(error) = launched {
+            if crate::operating::refused(&error) {
+                return Ok(Vec::new());
+            }
             fallback_paid::failed(ctx, &task.id, &run.id, &child.id, &error)?;
             crate::provider_stall::block_continuation(
                 ctx,
@@ -70,7 +185,14 @@ pub(crate) fn continue_review(
     // The interrupted attempt's reviewer profile, its purpose and instructions, continue.
     let launched = {
         let _action = corral_core::work::action(&task.id, corral_core::OperatingActionKind::Review);
-        super::review_run_automatic(ctx, &task.id, Some(&child.agent))
+        super::launch::review_run_claimed(
+            ctx,
+            &task.id,
+            Some(&child.agent),
+            crate::operating::Origin::Automatic,
+            None,
+            Some(input),
+        )
     };
     match launched {
         Ok(record) => {
@@ -83,6 +205,9 @@ pub(crate) fn continue_review(
             Ok(Vec::new())
         }
         Err(error) => {
+            if crate::operating::refused(&error) {
+                return Ok(Vec::new());
+            }
             let note = format!("{reason}; fallback review blocked: {error:#}");
             crate::provider_stall::block_continuation(
                 ctx,

@@ -1,4 +1,4 @@
-//! Device registry authority is server-owned; web devices can never acquire admin.
+//! Device registry authority is server-owned and editable per device.
 //! Records in `devices` retain authority and a monotonic per-device seen cursor.
 //! Callers pass only transport-authenticated ids; queued actions reload these facts.
 use std::collections::BTreeMap;
@@ -44,20 +44,13 @@ struct DeviceRecord {
 
 impl DeviceRecord {
     fn authority(&self) -> DeviceAuthority {
-        let mut authority = self.authority.clone().unwrap_or_else(|| {
-            let native = self.platform == DevicePlatform::Native;
-            DeviceAuthority {
-                reply: true,
-                act: true,
-                assistant: true,
-                assistant_act: native,
-                admin: native,
-            }
-        });
-        if self.platform != DevicePlatform::Native {
-            authority.admin = false;
-        }
-        authority
+        self.authority.clone().unwrap_or(DeviceAuthority {
+            reply: true,
+            act: true,
+            assistant: true,
+            assistant_act: true,
+            admin: true,
+        })
     }
 
     fn info(self, id: String) -> DeviceInfo {
@@ -220,8 +213,8 @@ impl Devices {
                 reply: true,
                 act: true,
                 assistant: true,
-                assistant_act: public.is_none(),
-                admin: public.is_none(),
+                assistant_act: true,
+                admin: true,
             }),
             seen: SeenCursor::default(),
         };
@@ -381,7 +374,7 @@ impl Devices {
         Ok(record.seen)
     }
 
-    /// Only a live native administrator may edit authority; web admin is ungrantable.
+    /// Only an active administrator may edit device authority.
     pub(crate) fn set_authority(
         &self,
         admin: &str,
@@ -393,13 +386,10 @@ impl Devices {
             .try_lock("devices")?
             .ok_or(DeviceError::Conflict("device_registry_busy"))?;
         let caller = self.active(&store, admin)?;
-        if caller.platform != DevicePlatform::Native || !caller.authority().admin {
+        if !caller.authority().admin {
             return Err(DeviceError::Refused("admin_only"));
         }
         let mut record = self.active(&store, &request.device)?;
-        if record.platform != DevicePlatform::Native && request.authority.admin {
-            return Err(DeviceError::Refused("admin_only"));
-        }
         store.set_attribution(Actor::Owner, &format!("app:{admin}"))?;
         record.authority = Some(request.authority);
         store.records_transaction(|| {
@@ -566,8 +556,8 @@ pub(crate) fn serve_unix(
                 .attached
                 .as_ref()
                 .ok_or(DeviceError::Refused("admin_only"))?;
-            let (info, authority) = devices.authenticated(&device.device)?;
-            if info.platform != DevicePlatform::Native || !authority.admin {
+            let (_, authority) = devices.authenticated(&device.device)?;
+            if !authority.admin {
                 return Err(DeviceError::Refused("admin_only"));
             }
         }

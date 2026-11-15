@@ -78,6 +78,7 @@ fn chip(status: AgentStatus) -> (&'static str, Hue) {
         AgentStatus::Reviewing => ("reviewing", Hue::Corral),
         AgentStatus::Idle => ("idle", Hue::Neutral),
         AgentStatus::Waiting => ("waiting", Hue::Neutral),
+        AgentStatus::Paused => ("paused", Hue::Held),
         AgentStatus::Ended => ("ended", Hue::Neutral),
         AgentStatus::Unavailable => ("unavailable", Hue::Held),
         AgentStatus::Other => ("unknown", Hue::Neutral),

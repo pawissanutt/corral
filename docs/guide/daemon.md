@@ -92,9 +92,8 @@ Keep that state directory to preserve browser pins across daemon restarts.
 
 Enrolled WebSocket sessions negotiate typed app subscriptions, detail pages, assistant
 chat and permitted actions. Device authority, canonical revisions and confirmations
-are checked on the daemon. Generic CLI commands, opaque CLI reads, nudges, shutdown
-and trusted-side device administration remain refused on this carrier. Existing
-CLI executable/build checks are unchanged.
+are checked on the daemon. Newly enrolled native devices and paired browsers have all authority flags, including `admin` and `assistant_act`, editable per device. Generic CLI commands, opaque CLI reads, nudges and shutdown
+remain refused on this carrier. Existing CLI executable/build checks are unchanged.
 
 Typed app topics publish coherent Store snapshots even if another writer commits
 while they are read; the next refresh catches up. Lease and command-journal

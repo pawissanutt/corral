@@ -110,6 +110,26 @@ impl AppState {
                 }
                 Topic::Thread
             }
+            SubDelta::Session {
+                scope,
+                generation,
+                events,
+                gap,
+                ..
+            } => {
+                if !self.session_scopes.contains_key(&scope) {
+                    return Ok(vec![]);
+                }
+                scope_key = Some(scope.clone());
+                feed.update(|feed| {
+                    feed.live.entry(Id::from(&scope)).or_default().apply_page(
+                        generation,
+                        events,
+                        gap.is_some(),
+                    );
+                });
+                Topic::Session
+            }
             _ => return Ok(vec![]),
         };
         feed.update(|feed| {

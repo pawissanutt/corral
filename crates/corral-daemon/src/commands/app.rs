@@ -166,6 +166,20 @@ fn operation_preview(
     service: &Service,
     command: &mut Command,
 ) -> AppResult<(Option<String>, Vec<String>)> {
+    if let Command::Session(corral_protocol::cmd::session::SessionCommand::Stop {
+        id,
+        generation,
+        ..
+    }) = command
+    {
+        let ctx = Ctx::from_store(lock(&service.journal).clone());
+        let (resolved_generation, mut effects) =
+            corral_ops::session_control::stop_preview(&ctx, id, *generation)
+                .map_err(|problem| error(ErrorCode::Conflict, format!("{problem:#}")))?;
+        *generation = resolved_generation;
+        effects.insert(0, "Durably record the owner's stop before stopping any host or pane; retain the transcript".into());
+        return Ok((None, effects));
+    }
     let Command::Mode(mode @ corral_protocol::cmd::mode::ModeCommand::Autopilot { .. }) = command
     else {
         return Ok((None, vec![format!("Execute {} as owner", command.name())]));
@@ -457,7 +471,7 @@ pub(super) fn execution_invoker(
     let (info, authority) =
         authenticate(shared, id).map_err(|(_, message)| anyhow::anyhow!("{message}"))?;
     policy(&authority, command).map_err(|(_, message)| anyhow::anyhow!("{message}"))?;
-    let admin = info.platform == corral_protocol::device::DevicePlatform::Native && authority.admin;
+    let admin = authority.admin;
     let device = AuthenticatedDevice {
         id: id.clone(),
         name: info.name,
@@ -634,8 +648,7 @@ pub(super) fn accept_prompt(
         if !matches!(request.choice, PromptChoice::Deny | PromptChoice::Decline) {
             anyhow::ensure!(authority.act, "authority_act");
         }
-        let admin =
-            info.platform == corral_protocol::device::DevicePlatform::Native && authority.admin;
+        let admin = authority.admin;
         let device = AuthenticatedDevice {
             id: device.into(),
             name: info.name,

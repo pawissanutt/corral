@@ -171,9 +171,13 @@ pub(super) fn answer(
             "only the owner answers a host-authored owner ask",
         ));
     }
-    mutate(ctx, key, revision, |q| {
+    let applied = mutate(ctx, key, revision, |q| {
         answer_record(ctx, q, revision, &input)
-    })
+    })?;
+    if let Some(recipient) = super::recipient(&container(key)?) {
+        crate::session_control::pause::lift_recipient_owner(ctx, &recipient)?;
+    }
+    Ok(applied)
 }
 
 pub(super) fn followup(ctx: &Ctx, key: &str, revision: u32, text: &str) -> Result<Applied> {

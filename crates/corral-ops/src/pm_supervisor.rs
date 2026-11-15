@@ -334,6 +334,7 @@ pub fn supervise(ctx: &Ctx) -> Result<()> {
         if !heartbeat.owned {
             return Ok(());
         }
+        crate::session_control::stop::recover_pm(ctx)?;
         watchdog(ctx, &mut heartbeat, now.as_second())?;
         if heartbeat.locks.values().any(|lock| lock.reported) {
             heartbeat.status = "lock_held".into();
@@ -398,10 +399,24 @@ fn watchdog(ctx: &Ctx, heartbeat: &mut Heartbeat, now: i64) -> Result<()> {
 }
 
 fn supervise_pm(ctx: &Ctx, heartbeat: &mut Heartbeat, now: i64) -> Result<bool> {
+    // Share the session input claim through continuation/replacement, not only
+    // through the decision. Contention never spends a restart or paid episode.
+    let Some(_input) = ctx.store.try_lock("deliver-pm")? else {
+        return Ok(false);
+    };
+    if !crate::session_control::automation_may_start(ctx, &Recipient::Pm)? {
+        heartbeat.status = if crate::session_control::stop::pm_stopped(ctx)? {
+            "owner_stopped"
+        } else {
+            "session_paused"
+        }
+        .into();
+        return Ok(false);
+    }
     let Some(mut pm) = pm_state::load_current(&ctx.store)? else {
         return Ok(false);
     };
-    if crate::pm::continuation::advance(ctx, &pm, ctx.store.now())? {
+    if crate::pm::continuation::advance_held(ctx, &pm, ctx.store.now(), &_input)? {
         pm = pm_state::load_current(&ctx.store)?.context("PM disappeared after continuation")?;
     }
     let generation = pm.state.binding.generation;
@@ -465,7 +480,7 @@ fn supervise_pm(ctx: &Ctx, heartbeat: &mut Heartbeat, now: i64) -> Result<bool> 
             // Persist before the potentially slow effect, including an interrupted attempt.
             heartbeat.at = Timestamp::now();
             HEARTBEAT.save(&ctx.store, "heartbeat", heartbeat)?;
-            match crate::pm::relaunch(ctx, reason, replace) {
+            match crate::pm::relaunch_held(ctx, reason, replace, &_input) {
                 Ok(_) => {
                     heartbeat.last_error = None;
                     // Launch acceptance is not recovery; keep the attempt until hello + observation.

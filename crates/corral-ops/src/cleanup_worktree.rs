@@ -377,6 +377,42 @@ fn owned<T: TaskRef + ?Sized>(
         .is_ok_and(|saved| saved.len() == 64 && saved == marker))
 }
 
+/// Terminate preserves the worktree but may not leave a verified owned resident
+/// running in it. Unknown/protected residents are reported, never guessed-owned.
+pub(crate) fn stop_retained_run(
+    ctx: &Ctx,
+    id: &str,
+    run: &str,
+    terminate_owned: bool,
+) -> Result<()> {
+    let task = ctx.store.head(id)?;
+    let run = task.run_head(run)?.context("stopped run disappeared")?;
+    let mut remaining = scratch_residents(&run.worktree, Callers::Occupy)?;
+    if terminate_owned {
+        let protected = protected_pids()?;
+        for process in &remaining {
+            if !protected.contains(&process.pid) && owned(ctx, &task, &run, process)? {
+                SystemProcesses
+                    .terminate(process)
+                    .with_context(|| format!("stopping retained run process {}", process.pid))?;
+            }
+        }
+        remaining = scratch_residents(&run.worktree, Callers::Occupy)?;
+    }
+    if !remaining.is_empty() {
+        bail!(
+            "still_alive: worktree {}: {}",
+            run.worktree.display(),
+            remaining
+                .iter()
+                .map(|process| format!("pid {} ({:?})", process.pid, process.argv))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(())
+}
+
 #[cfg(not(target_os = "linux"))]
 fn residents(path: &Path) -> Result<Vec<StuckProcess>> {
     crate::native_process::residents(path)

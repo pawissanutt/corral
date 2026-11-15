@@ -191,7 +191,7 @@ impl Core {
                 close
                     .scope
                     .as_deref()
-                    .filter(|_| close.topic == Topic::Thread),
+                    .filter(|_| matches!(close.topic, Topic::Thread | Topic::Session)),
             );
             self.clear_topic_errors(&key);
             if let Some((id, _)) = self.deferred_opens.remove(&key) {
@@ -207,7 +207,7 @@ impl Core {
                 open.topic,
                 open.scope
                     .as_deref()
-                    .filter(|_| open.topic == Topic::Thread),
+                    .filter(|_| matches!(open.topic, Topic::Thread | Topic::Session)),
             );
             if !reset_reopen {
                 self.clear_topic_errors(&key);
@@ -433,7 +433,7 @@ impl Core {
         if self.pending.values().any(|pending| {
             pending.closing.is_some()
                 && pending.params.get("topic") == notification.params.get("topic")
-                && (topic != Topic::Thread
+                && (!matches!(topic, Topic::Thread | Topic::Session)
                     || pending.params["scope"].as_str() == notification.params["scope"].as_str())
         }) {
             // The producer may have sent this page before receiving our close.
@@ -596,6 +596,27 @@ impl Core {
         }
         batch.epoch = Some(epoch);
         batch.bytes = batch.bytes.saturating_add(page_bytes);
+        if topic == Topic::Session {
+            if scope.is_none() {
+                return Err("session delta has no scope".into());
+            }
+            let cursor = serde_json::from_value(value["cursor"].clone()).map_err(decode)?;
+            let replacement = batch.replacement;
+            batch.replacement = false;
+            batch.bytes = 0;
+            let delta = serde_json::from_value(value).map_err(decode)?;
+            self.events.push_back(Event::Rows { delta, replacement });
+            return self.request(
+                wire::SUB_ACK,
+                serde_json::to_value(SubAck {
+                    topic,
+                    cursor,
+                    scope,
+                })
+                .map_err(decode)?,
+                now_ms,
+            );
+        }
         if let Some(rows) = value["rows"].as_array_mut() {
             for row in std::mem::take(rows) {
                 let id = row["id"].as_str().ok_or("topic row has no id")?.to_owned();

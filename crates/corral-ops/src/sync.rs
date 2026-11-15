@@ -264,6 +264,9 @@ fn sync_scoped(
         let search_stamp = crate::content_refresh::task_stamp(ctx)?;
         for head in scope.heads(open_heads(ctx)?) {
             gated_task(ctx, pass.gate(), StepId::Obligations, &head, || {
+                if crate::session_control::stop::recover_owned_task(ctx, &head)? {
+                    return Ok(None);
+                }
                 crate::obligations_sync::reconcile_head(ctx, &ctx.store.head(&head.id)?, now, None)
             })?;
         }
@@ -457,6 +460,23 @@ fn reconcile(
     let Some(run) = task.current_run().filter(|r| r.outcome.is_none()) else {
         return Ok(None);
     };
+    if run
+        .agent_host
+        .as_ref()
+        .is_some_and(|host| host.paid_episode.is_some())
+        && crate::availability::continuation::latest_for(
+            &ctx.store,
+            &corral_core::agent::ContainerRef::Worker {
+                task: task.id.clone(),
+                run: run.id.clone(),
+            },
+        )?
+        .is_some_and(|intent| {
+            intent.phase == crate::availability::continuation::IntentPhase::Paused
+        })
+    {
+        return Ok(None);
+    }
     // The shell run carries no obligations: their current state is the run's facts.
     let Some(facts) = head.current_run.as_ref().map(|r| &r.facts) else {
         return Ok(None);
@@ -611,6 +631,9 @@ fn reconcile(
                 _ => (task.status, ""),
             }
         };
+    let Some(_resume_input) = crate::delivery::paused::restore_worker(ctx, task, run, to)? else {
+        return Ok(None);
+    };
     // A conversation reopened for changes can answer with its old "complete" state and idle,
     // whether or not an earlier sync happened to sample it working; once startup is over, that
     // idle turn is a report gap at the first idle sync, not after `idle_after_secs`.
@@ -697,6 +720,9 @@ fn reconcile(
     // for a CLI writer (`corral done`, move, retry, ...). Apply only if the task is still in the state
     // we reconciled: same status, same run, run still open. Otherwise skip; the next tick re-reads.
     let written = ctx.store.try_update_head(&task.id, |t| {
+        if crate::session_control::stop::task_stop_pending(ctx, &task.id)? {
+            return Ok(false);
+        }
         if !crate::session_scope::owns_head(ctx, t.head())? {
             return Ok(false);
         }

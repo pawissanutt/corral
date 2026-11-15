@@ -13,6 +13,50 @@ use crate::delivery::owner;
 
 /// The caller holds the task's delivery lock.
 pub(super) fn reply(ctx: &Ctx, task: &Task, recipient: &Recipient, text: &str) -> Result<Task> {
+    reply_with_policy(ctx, task, recipient, text, None)?;
+    ctx.store.get(&task.id)
+}
+
+/// Session chat takes the same admission lock and enters the ordinary owner-reply path.
+pub(crate) fn session_reply(
+    ctx: &Ctx,
+    recipient: &Recipient,
+    text: &str,
+    policy: &str,
+) -> Result<(Message, bool)> {
+    let id = recipient.task().context("worker reply has no task")?;
+    let _delivery = ctx
+        .store
+        .try_lock(&format!("delivery-{id}"))?
+        .context("another reply is being delivered; try again")?;
+    let task = ctx.store.get(id).context("reading session reply task")?;
+    ensure!(
+        owner::live_run(&task).as_ref() == Some(recipient),
+        "ended: worker session is no longer the task's live inbox run"
+    );
+    reply_with_policy(ctx, &task, recipient, text, Some(policy))
+}
+
+fn reply_with_policy(
+    ctx: &Ctx,
+    task: &Task,
+    recipient: &Recipient,
+    text: &str,
+    policy: Option<&str>,
+) -> Result<(Message, bool)> {
+    let native = match recipient {
+        Recipient::Run { .. } => task
+            .current_run()
+            .is_some_and(crate::agent::hooks::run_is_corral_pi),
+        Recipient::PlanRun { .. } => task
+            .plan_runs
+            .last()
+            .is_some_and(|run| run.agent_host.is_some() || corral_core::is_corral_pi(&run.harness)),
+        _ => false,
+    };
+    if native || policy.is_some() {
+        crate::session_control::send::validate_text(ctx, recipient, text)?;
+    }
     let (run, decision) = match recipient {
         Recipient::Run { run, .. } => (
             run.clone(),
@@ -23,6 +67,15 @@ pub(super) fn reply(ctx: &Ctx, task: &Task, recipient: &Recipient, text: &str) -
         Recipient::PlanRun { plan_run, .. } => (plan_run.clone(), None),
         _ => bail!("inbox replies address a coding or planning run"),
     };
+    let inbox = Inbox::new(&ctx.store, recipient.clone())?;
+    let session_delivery = inbox.delivery_lock().context("locking owner reply input")?;
+    let paused = crate::session_control::pause::recipient_paused(ctx, recipient)?;
+    if policy.is_some() {
+        crate::session_control::pause::lift_recipient_owner(ctx, recipient)?;
+    } else {
+        crate::delivery::paused::lift_owner(ctx, recipient)?;
+    }
+    let lifted = paused && !crate::session_control::pause::recipient_paused(ctx, recipient)?;
     let binding = |question_request| MessageBinding {
         run: Some(run.clone()),
         decision: decision.clone(),
@@ -30,7 +83,7 @@ pub(super) fn reply(ctx: &Ctx, task: &Task, recipient: &Recipient, text: &str) -
         question_request,
     };
     // An unsettled native answer keeps the one-reply guard even after its question settled.
-    if let Some(pending) = pending_question(ctx, recipient)? {
+    if !native && let Some(pending) = pending_question(ctx, recipient)? {
         ensure!(
             owner::text(&pending) == text,
             "{}: the reply {} to a native question is pending; resend it with `corral reply {} --resend` or settle it with `corral inbox mark` before sending another",
@@ -38,39 +91,47 @@ pub(super) fn reply(ctx: &Ctx, task: &Task, recipient: &Recipient, text: &str) -
             pending.id,
             task.id
         );
-        return answer(ctx, task, recipient, &pending, true);
+        drop(session_delivery);
+        answer(ctx, task, recipient, &pending, true)?;
+        return Ok((pending, lifted));
     }
-    if let Some(request) = crate::question_reply::route(ctx, task)? {
+    if !native && let Some(request) = crate::question_reply::route(ctx, task)? {
         ctx.store.log_event(
             Some(&task.id),
             "reply_pending",
             json!({"run": run, "text": text}),
         )?;
-        let message = owner::post(
+        let message = owner::post_with_policy(
             ctx,
             recipient,
             "owner_reply",
             text,
             binding(Some(request)),
+            policy,
             |current, _| set_pending(current, recipient, text),
         )?;
-        return answer(ctx, task, recipient, &message, false);
+        drop(session_delivery);
+        answer(ctx, task, recipient, &message, false)?;
+        return Ok((message, lifted));
     }
-    let message = owner::post(
+    let message = owner::post_with_policy(
         ctx,
         recipient,
         "owner_reply",
         text,
         binding(None),
+        policy,
         |current, _| set_pending(current, recipient, text),
     )?;
+    drop(session_delivery);
     let status = owner::kick(ctx, recipient);
     log(ctx, task, recipient, &message, "inbox", status.err(), 0)?;
-    ctx.store.get(&task.id)
+    Ok((message, lifted))
 }
 
 /// `comment --send`: an owner note informs; it is not a reply awaiting an answer.
 pub(crate) fn note(ctx: &Ctx, task: &Task, recipient: &Recipient, text: &str) -> Result<Task> {
+    crate::delivery::paused::lift_owner(ctx, recipient)?;
     let run = match recipient {
         Recipient::Run { run, .. } => Some(run.clone()),
         _ => None,
@@ -93,8 +154,10 @@ pub(crate) fn note(ctx: &Ctx, task: &Task, recipient: &Recipient, text: &str) ->
 
 /// `--resend` never re-posts text: it retries the native answer or runs a delivery pass.
 pub(super) fn resend(ctx: &Ctx, task: &Task, recipient: &Recipient) -> Result<Task> {
+    crate::delivery::paused::lift_owner(ctx, recipient)?;
     if let Some(pending) = pending_question(ctx, recipient)? {
-        return answer(ctx, task, recipient, &pending, true);
+        answer(ctx, task, recipient, &pending, true)?;
+        return ctx.store.get(&task.id);
     }
     let inbox = Inbox::new(&ctx.store, recipient.clone())?;
     let mut waiting = false;
@@ -158,7 +221,12 @@ fn answer(
     recipient: &Recipient,
     message: &Message,
     resend: bool,
-) -> Result<Task> {
+) -> Result<()> {
+    let inbox = Inbox::new(&ctx.store, recipient.clone())?;
+    let _session_delivery = inbox.delivery_lock()?;
+    if crate::session_control::automated_input_must_wait(ctx, recipient)? {
+        return Ok(());
+    }
     let text = owner::text(message);
     let request = message
         .binding
@@ -175,6 +243,7 @@ fn answer(
             message: &message.id,
         },
     )?;
+    drop(_session_delivery);
     if delivery.submitted {
         let inbox = Inbox::new(&ctx.store, recipient.clone())?;
         inbox.record_receipt(
@@ -210,7 +279,7 @@ fn answer(
             task.id
         );
     }
-    ctx.store.get(&task.id)
+    Ok(())
 }
 
 fn log(

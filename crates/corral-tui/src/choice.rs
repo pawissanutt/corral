@@ -42,6 +42,8 @@ pub(crate) fn outcome_label(
         Some(corral_core::RunOutcome::Discarded) => ("discarded", theme::RED),
         Some(corral_core::RunOutcome::Interrupted) => ("interrupted", theme::DIM),
         Some(corral_core::RunOutcome::Failed) => ("failed", theme::RED),
+        // The owner's own stop is neither a failure nor a verdict; the task waits in Needs me.
+        Some(corral_core::RunOutcome::Stopped) => ("stopped by owner", theme::YELLOW),
         Some(corral_core::RunOutcome::Cancelled) => ("cancelled", theme::YELLOW),
         None => ("in progress", theme::BLUE),
     }

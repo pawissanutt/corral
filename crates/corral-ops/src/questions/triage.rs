@@ -628,6 +628,12 @@ pub fn answer(
         corral_core::clock::now(),
         |ctx, task, current, now| plan_answer(ctx, task, current, &input, pm, by, now),
     )?;
+    if matches!(actor, Actor::Owner)
+        && matches!(applied, Some(Applied::Fresh { .. }))
+        && let Some(recipient) = super::recipient(&QuestionKey::parse(key)?.container)
+    {
+        crate::session_control::pause::lift_recipient_owner(ctx, &recipient)?;
+    }
     applied.context("the answer produced no change")
 }
 

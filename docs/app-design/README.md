@@ -9,6 +9,7 @@ Imported from `/home/pawis/corral-app-design/` into branch `app-daemon-integrati
 ## Contents and authority
 
 - [REQUIREMENTS.md](REQUIREMENTS.md): owner-answered product decisions and requirements. Preserve the one-chat model, assistant sessions in Agents, no idle stop, per-device authority, and full device parity as the target.
+- [SESSION-CONTROL.md](SESSION-CONTROL.md): owner decisions of 2026-11-15 for controlling agent sessions from the app (chat, Cancel, Pause, Terminate, PM launch, browser authority). Written in this repository, not imported; it overrides the architecture's session proposals.
 - [ARCHITECTURE.md](ARCHITECTURE.md): proposed target architecture, historical source citations, and dated implementation notes. Section 11 records later deviations; section 14 defines delivery phases. Proposed types and paths are not proof they exist.
 - [PRODUCT.md](PRODUCT.md): inferred product context for the original static mockup, not an additional owner interview or override of the requirements.
 - [mockup/DESIGN.md](mockup/DESIGN.md) and [mockup/index.html](mockup/index.html): visual/interaction reference and its runnable static implementation. The mockup's illustrative data and simulated actions are not daemon capabilities. Open `mockup/index.html` locally; its scripts, styles and fonts are included.

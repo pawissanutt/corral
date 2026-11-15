@@ -64,7 +64,10 @@ impl TaskHead {
                     run.is_some_and(|run| cowork.has_worker(&run.id, run.herdr.is_some()))
                 }) && self.status.holds_slot()
                     && run.is_none_or(|r| {
-                        r.outcome != Some(crate::RunOutcome::Failed) && !r.releases_slot(&self.id)
+                        !matches!(
+                            r.outcome,
+                            Some(crate::RunOutcome::Failed | crate::RunOutcome::Stopped)
+                        ) && !r.releases_slot(&self.id)
                     })
                     && !(run.is_none_or(|r| r.outcome.is_some())
                         && self.last_plan.as_deref().is_some_and(|p| {

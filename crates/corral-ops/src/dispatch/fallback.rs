@@ -7,10 +7,11 @@ use crate::Ctx;
 /// A linked continuation on the next approved candidate of the same profile, selected by the
 /// availability episode. The old worker is quiescent; its last compatible checkpoint is the
 /// handoff because the failed model cannot write a new one. Never a difficulty switch.
-pub(crate) fn availability_retry(
+pub(crate) fn availability_retry_claimed(
     ctx: &Ctx,
     id: &str,
     run: &str,
+    session_input: &corral_core::store::StoreLock,
 ) -> Result<DispatchOutcome<Box<TaskHead>>> {
     let _action = corral_core::work::action(id, corral_core::OperatingActionKind::Dispatch);
     let task = ctx.store.head(id)?;
@@ -42,6 +43,7 @@ pub(crate) fn availability_retry(
         false,
         None,
         Some(plan),
+        Some(session_input),
         |_| {},
     )
 }

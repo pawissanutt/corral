@@ -56,6 +56,30 @@ fn head_slot_parking_tracks_keyed_wait_changes_and_self_waits() {
     task.runs = vec![run()];
     store.fixture_put_task(&task).unwrap();
     same(&store, &task.id, true);
+    for outcome in [
+        corral_core::RunOutcome::Failed,
+        corral_core::RunOutcome::Stopped,
+    ] {
+        store
+            .update_head(&task.id, |head| {
+                head.status = Status::NeedsMe;
+                head.current_run_mut().unwrap().outcome = Some(outcome);
+                Ok(())
+            })
+            .unwrap();
+        same(&store, &task.id, false);
+        assert_eq!(
+            store.get(&task.id).unwrap().current_run().unwrap().outcome,
+            Some(outcome)
+        );
+    }
+    store
+        .update_head(&task.id, |head| {
+            head.status = Status::Running;
+            head.current_run_mut().unwrap().outcome = None;
+            Ok(())
+        })
+        .unwrap();
     store
         .update_head(&task.id, |head| {
             head.push_wait("R100", wait("dep", "T-999"))

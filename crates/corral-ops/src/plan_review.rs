@@ -111,6 +111,28 @@ pub(crate) fn review_recovery(
     )
 }
 
+/// Record-only half shared by hold cancellation and owner Terminate.
+pub(crate) fn cancel_attempt(
+    ctx: &Ctx,
+    id: &str,
+    plan: &str,
+    review: &str,
+    reason: &str,
+) -> Result<()> {
+    ctx.store.update_head(id, |task| {
+        task.edit_plan_review(plan, review, |current| {
+            if current.verdict.is_none() && !current.cancelled {
+                current.cancelled = true;
+                current.pending_reply = None;
+                ctx.store.log_event(Some(id), "review_cancelled",
+                    json!({"target":"plan","plan":plan,"attempt":review,"result":"cancelled","reason":reason}))?;
+            }
+            Ok(())
+        })
+    })?;
+    Ok(())
+}
+
 pub(crate) fn review_forced(
     ctx: &Ctx,
     id: &str,
@@ -132,6 +154,25 @@ pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
         return Ok(false);
     };
     preparation.check(task.plans.last().context("prepared plan disappeared")?)?;
+    let container = corral_core::agent::ContainerRef::PlanReviewer {
+        task: task.id.clone(),
+        plan: preparation.plan.clone(),
+        review: preparation.review.id.clone(),
+    };
+    let Some(input) = crate::plan_dispatch::continuation::claim_input(ctx, &container)? else {
+        return Ok(true);
+    };
+    if let Some(run) = task.plans.last().and_then(|plan| plan.run.as_ref())
+        && !crate::session_control::automation_may_start(
+            ctx,
+            &corral_core::inbox::Recipient::PlanRun {
+                task: task.id.clone(),
+                plan_run: run.clone(),
+            },
+        )?
+    {
+        return Ok(true);
+    }
     let paid = crate::availability::policy::profile_configured(
         &ctx.store.config,
         &preparation.review.reviewer,
@@ -154,7 +195,14 @@ pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
         return Ok(true);
     }
     if crate::operating::is_automatic(&preparation.authorization) {
-        review_auto(ctx, &task.id)?;
+        launch::review_claimed(
+            ctx,
+            &task.id,
+            None,
+            crate::operating::Origin::Automatic,
+            None,
+            Some(&input),
+        )?;
     }
     Ok(true)
 }

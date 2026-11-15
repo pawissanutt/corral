@@ -39,6 +39,8 @@ export interface BridgeServerOptions {
   readonly uid: number;
   readonly peer: PeerLookup;
   readonly events: EventLog;
+  /** Separate ephemeral chat ring; absent on callers that do not produce live events. */
+  readonly liveEvents?: EventLog;
   readonly handlers: BridgeHandlers;
   readonly submissionsMax?: number;
   readonly inputReplyMs?: number;
@@ -184,6 +186,11 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
         return { request_id: frame.id, ...(await options.handlers.cancel(parseTurn(frame.args))) };
       case "events_since":
         return { ...options.events.since(parseSeq(frame.args), EVENT_PAGE_BYTES) };
+      case "live_since": {
+        const seq = parseSeq(frame.args);
+        if (!options.liveEvents) throw new BridgeRefusal("capability_unavailable", "live events are unavailable");
+        return { ...options.liveEvents.since(seq, EVENT_PAGE_BYTES) };
+      }
       case "shutdown":
         setImmediate(() => options.handlers.shutdown());
         return { shutting_down: true };

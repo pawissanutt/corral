@@ -251,6 +251,15 @@ impl Herdr {
         Ok(self.send_text_with_wait(pane_id, text, submit, &mut wait))
     }
 
+    /// Sends named keys as argv, without invoking a shell or adding an implicit Enter.
+    pub fn pane_send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<()> {
+        anyhow::ensure!(!keys.is_empty(), "pane send-keys requires at least one key");
+        let mut args = Vec::with_capacity(3 + keys.len());
+        args.extend_from_slice(&["pane", "send-keys", pane_id]);
+        args.extend_from_slice(keys);
+        self.call(&args).map(|_| ())
+    }
+
     /// Last `lines` lines of output (source recent-unwrapped), as plain text.
     pub fn pane_read(&self, pane_id: &str, lines: usize) -> Result<String> {
         let n = lines.to_string();

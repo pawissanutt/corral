@@ -1,7 +1,7 @@
-//! Enrolled workspace devices, trusted-device browser pairing, and per-device authority. A
-//! trusted desktop or terminal session with admin authority may revoke a device or let what is
-//! typed on it instruct assistants, each after a fresh confirmation here; corrald answers with
-//! the device's new authority, which the list then shows.
+//! Enrolled workspace devices, trusted-device browser pairing, and per-device authority. Any
+//! session with admin authority, on any platform, may revoke a device, let what is typed on it
+//! instruct assistants, or make it an administrator, each after a fresh confirmation here;
+//! corrald answers with the device's new authority, which the list then shows.
 
 use corral_protocol::app::DeviceSetAuthority;
 use nsh_core::prelude::*;
@@ -11,7 +11,7 @@ use crate::client::requests::{ClientRequest, device_set_authority, send};
 use crate::model::Form;
 use crate::model::devices::{self, DeviceLink, DeviceRow, PairingPanel};
 use crate::model::settings::Pending;
-use crate::model::settings::live::{may_instruct, with_instructing};
+use crate::model::settings::live::{administrator, may_instruct, with_admin, with_instructing};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
@@ -22,7 +22,7 @@ use crate::ui::tokens::Token;
 
 /// What the device list needs besides the feed's devices.
 struct Context {
-    /// This session may change devices: a trusted native session with admin authority.
+    /// This session has admin authority, whatever platform it runs on.
     admin: bool,
     /// This device's id, which is never offered its own changes.
     this: Option<String>,
@@ -31,7 +31,7 @@ struct Context {
     changes: Vec<(String, String, Token)>,
 }
 
-fn context(app: AppState, web: bool) -> Context {
+fn context(app: AppState) -> Context {
     let (confirming, operations) = app.settings.with(|state| {
         (
             state.edits.confirming.clone(),
@@ -39,11 +39,10 @@ fn context(app: AppState, web: bool) -> Context {
         )
     });
     app.feed.with(|feed| Context {
-        admin: !web
-            && feed
-                .session
-                .as_ref()
-                .is_some_and(|session| session.authority.admin),
+        admin: feed
+            .session
+            .as_ref()
+            .is_some_and(|session| session.authority.admin),
         this: match &feed.device {
             DeviceLink::Enrolled { id, .. } => Some(id.clone()),
             _ => None,
@@ -68,7 +67,7 @@ pub fn page(app: AppState) -> AnyElement {
     dynamic(move || {
         let web = crate::client::pairing_supported();
         let v = app.feed.with(|feed| devices::live_devices(feed, web));
-        let cx = context(app, web);
+        let cx = context(app);
         untracked(move || {
             let mut parts = Vec::new();
             if let Some(notice) = v.notice {
@@ -191,6 +190,15 @@ fn confirmation(app: AppState, pending: &Pending, devices: &[DeviceRow]) -> AnyE
                             authority,
                         })
                     }),
+                Pending::Admin { on, .. } => device
+                    .as_ref()
+                    .and_then(|row| with_admin(row, *on).map(|authority| (row, authority)))
+                    .map(|(row, authority)| {
+                        device_set_authority(DeviceSetAuthority {
+                            device: row.id.clone(),
+                            authority,
+                        })
+                    }),
             };
             app.act(app.settings, move |state, _| {
                 state.device_sent(operation.clone())
@@ -220,52 +228,64 @@ fn status(device: &DeviceRow) -> String {
         .map_or_else(|| "active".into(), |date| format!("revoked {date}"))
 }
 
-/// Revoke and the instructing switch, for an admin session on another active device.
+/// A device row's button that asks to confirm `pending`.
+fn change_button(
+    app: AppState,
+    pending: Pending,
+    kind: ButtonKind,
+    options: ButtonOptions,
+    id: String,
+) -> AnyElement {
+    button_with(app, pending.toggle_label(), kind, options, id, move || {
+        let pending = pending.clone();
+        app.act(app.settings, move |state, _| {
+            state.confirm_device(pending.clone())
+        });
+    })
+}
+
+/// Revoke and the authority switches, for an admin session on another active device.
 fn controls(app: AppState, device: &DeviceRow, cx: &Context) -> AnyElement {
     if !cx.admin || device.revoked.is_some() || cx.this.as_deref() == Some(device.id.as_str()) {
         return view().into_element();
     }
     let mut buttons = Vec::new();
     if let Some(authority) = &device.authority {
-        let on = !authority.assistant_act;
-        let pending = Pending::Instruct {
-            device: device.id.clone(),
-            name: device.name.clone(),
-            on,
-        };
-        buttons.push(button_with(
+        buttons.push(change_button(
             app,
-            if on { "Turn on" } else { "Turn off" },
+            Pending::Instruct {
+                device: device.id.clone(),
+                name: device.name.clone(),
+                on: !authority.assistant_act,
+            },
             ButtonKind::Quiet,
             ButtonOptions::default(),
             format!("btn-instruct-device-{}", device.id),
-            move || {
-                let pending = pending.clone();
-                app.act(app.settings, move |state, _| {
-                    state.confirm_device(pending.clone())
-                });
+        ));
+        buttons.push(change_button(
+            app,
+            Pending::Admin {
+                device: device.id.clone(),
+                name: device.name.clone(),
+                on: !authority.admin,
             },
+            ButtonKind::Quiet,
+            ButtonOptions::default(),
+            format!("btn-admin-device-{}", device.id),
         ));
     }
-    let pending = Pending::Revoke {
-        device: device.id.clone(),
-        name: device.name.clone(),
-    };
-    buttons.push(button_with(
+    buttons.push(change_button(
         app,
-        "Revoke",
+        Pending::Revoke {
+            device: device.id.clone(),
+            name: device.name.clone(),
+        },
         ButtonKind::Ghost,
         ButtonOptions {
             danger: true,
             ..Default::default()
         },
         format!("btn-revoke-device-{}", device.id),
-        move || {
-            let pending = pending.clone();
-            app.act(app.settings, move |state, _| {
-                state.confirm_device(pending.clone())
-            });
-        },
     ));
     button_row(app, buttons)
 }
@@ -285,6 +305,15 @@ fn instructing(app: AppState, device: &DeviceRow, cx: &Context) -> AnyElement {
         .into_element()
 }
 
+/// Whether the device is an administrator, as the row's chip.
+fn administrator_chip(app: AppState, device: &DeviceRow) -> AnyElement {
+    let (words, hue) = administrator(device.authority.as_ref());
+    view()
+        .flex_row()
+        .child(chip(app, words, hue))
+        .into_element()
+}
+
 fn rows(app: AppState, devices: &[DeviceRow], cx: &Context) -> AnyElement {
     if matches!(app.form, Form::Phone | Form::Terminal) {
         return view()
@@ -301,11 +330,12 @@ fn rows(app: AppState, devices: &[DeviceRow], cx: &Context) -> AnyElement {
                             .child(cell(
                                 app,
                                 format!(
-                                    "{} · enrolled {} · {} · may instruct: {}",
+                                    "{} · enrolled {} · {} · may instruct: {} · administrator: {}",
                                     device.platform,
                                     device.enrolled,
                                     status(device),
-                                    may_instruct(device.authority.as_ref()).0
+                                    may_instruct(device.authority.as_ref()).0,
+                                    administrator(device.authority.as_ref()).0
                                 ),
                                 Token::Ink3,
                                 false,
@@ -323,10 +353,18 @@ fn rows(app: AppState, devices: &[DeviceRow], cx: &Context) -> AnyElement {
             .into_element();
     }
     let mut rows = vec![
-        ["Name", "Platform", "Enrolled", "Status", "May instruct", ""]
-            .into_iter()
-            .map(|label| cell(app, label, Token::Ink3, true).into_element())
-            .collect(),
+        [
+            "Name",
+            "Platform",
+            "Enrolled",
+            "Status",
+            "May instruct",
+            "Administrator",
+            "",
+        ]
+        .into_iter()
+        .map(|label| cell(app, label, Token::Ink3, true).into_element())
+        .collect(),
     ];
     rows.extend(devices.iter().map(|device| {
         vec![
@@ -335,6 +373,7 @@ fn rows(app: AppState, devices: &[DeviceRow], cx: &Context) -> AnyElement {
             mono_cell(app, device.enrolled.clone(), Token::Ink3).into_element(),
             cell(app, status(device), Token::Ink3, false).into_element(),
             instructing(app, device, cx),
+            administrator_chip(app, device),
             controls(app, device, cx),
         ]
     }));
@@ -346,7 +385,8 @@ fn rows(app: AppState, devices: &[DeviceRow], cx: &Context) -> AnyElement {
             Width::Fixed(100.0),
             Width::Fixed(110.0),
             Width::Fixed(150.0),
-            Width::Fixed(180.0),
+            Width::Fixed(110.0),
+            Width::Fixed(240.0),
         ],
         rows,
     )

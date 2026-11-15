@@ -277,7 +277,7 @@ pub fn live_devices(feed: &Feed, web: bool) -> LiveDevices {
             && matches!(feed.device, DeviceLink::Enrolled { .. })
             && matches!(feed.pairing, Pairing::Idle | Pairing::Ended { .. }),
         notice: web.then_some(
-            "Manage devices from the desktop or terminal app, or with `corral device` in a terminal."
+            "Pair a new browser from the desktop or terminal app, or with `corral device` in a terminal."
         ),
     }
 }

@@ -106,6 +106,14 @@ pub enum AssistantSessionOp {
     TakeOver {
         session: String,
     },
+    /// Fence the session: its host stays up and queued messages wait. An owner message or
+    /// `resume` lifts it.
+    Pause {
+        session: String,
+    },
+    Resume {
+        session: String,
+    },
     SetProfile {
         thread: String,
         profile: String,

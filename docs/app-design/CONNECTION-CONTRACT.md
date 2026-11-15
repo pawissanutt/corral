@@ -50,7 +50,7 @@ Authorization comes from a server-owned connection context, not `Caller`, `Clien
 2. The app route establishes its device principal from enrolment/session authentication. It derives `actor = owner`, device-bound `via` and event provenance on the server. Browser requests cannot impersonate the PM, an assistant, a different device or a local CLI client.
 3. Both routes call the existing typed command executor with the same preconditions and authority resolver. App admission rejects unsupported verbs before scheduling them. Do not forward browser-provided `HOME`, `PATH`, cwd, Herdr socket, executable or file paths as host authority.
 4. App admission uses an explicit allowlist and the canonical services, preconditions and confirmation rules. It does not grant arbitrary host administration, shell or file access.
-5. Per-device assistant instruction capability and direct question-answer permission are distinct. Native enrolled devices have Admin; newly paired browsers have `reply`, `act` and `assistant`, but not `admin` or `assistant_act`. Confirm-class actions use a fresh device-bound preview and confirmation.
+5. Per-device assistant instruction capability and direct question-answer permission are distinct. Newly enrolled native devices and paired browsers have all authority flags, including `admin` and `assistant_act`, editable per device. Confirm-class actions use a fresh device-bound preview and confirmation.
 
 Keep `cmd_id`, expiry, digest checking, reserved/settled state and `cmd.result` recovery. After a possibly accepted submit, never resubmit with a new id or execute locally. A disconnected app has no local-store fallback. Report an unknown result distinctly from a definite refusal.
 

@@ -14,6 +14,13 @@ impl Pilot<'_> {
         packet: Option<&str>,
     ) -> Result<Step> {
         let _action = corral_core::work::action(self.id(), OperatingActionKind::Repair);
+        let recipient = corral_core::inbox::Recipient::Run {
+            task: self.id().into(),
+            run: self.run.id.clone(),
+        };
+        if !crate::session_control::automation_may_start(self.ctx, &recipient)? {
+            return Ok(Step::Wait);
+        }
         key.check(&self.ctx.store.head(self.id())?)?;
         // The integration packet describes Git facts, not a coding-cycle issue. Preserve
         // its existing dedupe identity when an unchanged candidate is submitted again.

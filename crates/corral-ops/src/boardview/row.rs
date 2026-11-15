@@ -125,10 +125,19 @@ fn now(store: &Store, head: &TaskHead, owner_since: Option<jiff::Timestamp>) -> 
         ));
     }
     if owner_since.is_some() || head.status == Status::NeedsMe {
+        let stopped = head.status == Status::NeedsMe
+            && head
+                .current_run
+                .as_deref()
+                .is_some_and(|run| run.outcome == Some(RunOutcome::Stopped));
         return Ok((
             BoardGroup::NeedsYou,
             "needs_you",
-            "needs you".into(),
+            if stopped {
+                "needs you · stopped by owner".into()
+            } else {
+                "needs you".into()
+            },
             owner_since.or(since),
         ));
     }

@@ -50,6 +50,9 @@ fn checked<T>(
     result: Result<T>,
 ) -> Result<T> {
     result.or_else(|error| {
+        if error.is::<crate::operating::AuthorizationRefused>() {
+            return Err(error);
+        }
         continuation::pause(ctx, source, reason, "worker continuation refused")
             .context("pausing refused worker continuation")?;
         Err(error)
@@ -73,6 +76,18 @@ fn recover_existing(ctx: &Ctx, source: &ContainerRef) -> Result<bool> {
 
 pub(super) fn require_checkpoint(ctx: &Ctx, head: &TaskHead, prev: &Run, paid: bool) -> Result<()> {
     if paid {
+        if !crate::session_control::automation_may_start(
+            ctx,
+            &corral_core::inbox::Recipient::Run {
+                task: head.id.clone(),
+                run: prev.id.clone(),
+            },
+        )? {
+            return Err(crate::operating::AuthorizationRefused(
+                "Held: worker session paused or stopped".into(),
+            )
+            .into());
+        }
         ensure!(
             !recover_existing(ctx, &container(head, prev))?,
             "SuccessorAmbiguous: worker already has a successor intent"
@@ -113,6 +128,18 @@ pub(super) fn transfer(
     decision: &RouteDecision,
 ) -> Result<Option<ContinuationIntent>> {
     let source = container(head, prev);
+    if !crate::session_control::automation_may_start(
+        ctx,
+        &corral_core::inbox::Recipient::Run {
+            task: head.id.clone(),
+            run: prev.id.clone(),
+        },
+    )? {
+        return Err(crate::operating::AuthorizationRefused(
+            "Held: worker session paused or stopped".into(),
+        )
+        .into());
+    }
     ensure!(
         !recover_existing(ctx, &source)?,
         "SuccessorAmbiguous: worker already has a successor intent"
@@ -353,6 +380,7 @@ pub(super) fn launched(
     let result = finish(ctx, intent, result)?;
     if let Some(intent) = intent
         && matches!(result, DispatchOutcome::Queued { .. })
+        && continuation::automation_may_start(ctx, &intent.successor.container)?
     {
         continuation::pause(
             ctx,

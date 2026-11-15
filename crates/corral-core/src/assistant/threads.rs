@@ -227,6 +227,10 @@ impl Store {
             .context("thread sequence exhausted")?;
         head.rev += 1;
         head.pending.push(message.seq);
+        if message.target == "assistant" && head.state == "paused" {
+            head.state = "cold".into();
+            head.failure = None;
+        }
         let _attachments = if uploads.is_empty() {
             None
         } else {
@@ -366,12 +370,26 @@ impl Store {
         state: &str,
         failure: Option<String>,
     ) -> Result<()> {
+        self.set_app_thread_state_unless(session, state, failure, &[])
+    }
+
+    /// Preserve a concurrent control state while publishing a runtime observation.
+    pub fn set_app_thread_state_unless(
+        &self,
+        session: &str,
+        state: &str,
+        failure: Option<String>,
+        preserved: &[&str],
+    ) -> Result<()> {
         ensure!(
             failure.as_ref().is_none_or(|s| s.len() <= 2048),
             "failure exceeds bound"
         );
         let _lock = self.lock("app-threads")?;
         let mut head = self.app_thread_head(session)?;
+        if preserved.contains(&head.state.as_str()) {
+            return Ok(());
+        }
         head.state = state.into();
         head.failure = failure;
         head.rev += 1;

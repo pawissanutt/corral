@@ -26,6 +26,7 @@ pub mod queue;
 pub mod repair;
 pub mod review;
 pub mod run;
+pub mod session;
 pub mod setup;
 pub mod task;
 
@@ -56,6 +57,7 @@ pub enum Command {
     Queue(queue::QueueCommand),
     Repair(repair::RepairCommand),
     Run(run::RunCommand),
+    Session(session::SessionCommand),
     Setup(setup::SetupCommand),
     Task(task::TaskCommand),
     /// A family this build does not know; its `args`, if any, are skipped. A plain
@@ -88,6 +90,7 @@ impl Command {
             Self::Queue(command) => ("queue", command.verb()),
             Self::Repair(command) => ("repair", command.verb()),
             Self::Run(command) => ("run", command.verb()),
+            Self::Session(command) => ("session", command.verb()),
             Self::Setup(command) => ("setup", command.verb()),
             Self::Task(command) => ("task", command.verb()),
             Self::Other => return "other".into(),
@@ -118,6 +121,7 @@ impl Command {
             Self::Queue(command) => command.verb() != "other",
             Self::Repair(command) => command.verb() != "other",
             Self::Run(command) => command.verb() != "other",
+            Self::Session(command) => command.verb() != "other",
             Self::Setup(command) => command.verb() != "other",
             Self::Task(command) => command.verb() != "other",
             Self::Other => false,
@@ -135,7 +139,7 @@ impl Command {
             message::MessageCommand as Message, mode::ModeCommand as Mode,
             plan::PlanCommand as Plan, pm::PmCommand as Pm, question::QuestionCommand as Question,
             queue::QueueCommand as Queue, review::ReviewCommand as Review,
-            task::TaskCommand as Task,
+            session::SessionCommand as Session, task::TaskCommand as Task,
         };
         match self {
             Self::Question(
@@ -166,6 +170,14 @@ impl Command {
                 Annotation::Open { .. } | Annotation::Resolve { .. } | Annotation::Reopen { .. },
             )
             | Self::Pm(Pm::InboxPost { .. } | Pm::InboxWithdraw { .. })
+            | Self::Session(
+                Session::Cancel { .. }
+                | Session::Pause { .. }
+                | Session::Resume { .. }
+                | Session::Relaunch { .. }
+                | Session::PmOpen { .. }
+                | Session::Send { .. },
+            )
             | Self::Message(Message::FileAsIdea { .. } | Message::Withdraw { .. }) => ActClass::Act,
             Self::Task(
                 Task::Retry { .. }
@@ -183,10 +195,12 @@ impl Command {
                 | Review::Verdict { .. }
                 | Review::Discard { .. },
             )
+            | Self::Session(Session::Stop { .. })
             | Self::Assistant(Assistant::PermissionsRevoke { .. }) => ActClass::Confirm,
             Self::Config(
                 Config::Set { .. } | Config::ProfileAdd { .. } | Config::ProfileRemove { .. },
             )
+            | Self::Session(Session::Keys { .. })
             | Self::Mode(
                 Mode::Assist {}
                 | Mode::Pause {}

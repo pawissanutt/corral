@@ -191,6 +191,16 @@ pub enum Effect {
     Recover(Id),
     /// Fetch, revalidate or page a detail.
     Detail(DetailGet),
+    /// Resolve the complete recorded item behind a transcript preview.
+    SessionItem {
+        session: Id,
+        token: String,
+    },
+    /// Acquire or release one watcher of a session's live overlay.
+    Watch {
+        session: Id,
+        on: bool,
+    },
     Changes(ChangesQuery),
     Seen(SeenAdvance),
     /// Send a message in the one chat, with the attachment refs it carries.

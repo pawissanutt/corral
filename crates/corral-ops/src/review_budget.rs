@@ -13,7 +13,7 @@ use corral_core::{TaskMut as _, TaskRef as _};
 
 pub(crate) use corral_core::ReviewWork as Kind;
 mod cancel;
-pub(crate) use cancel::cancel_task;
+pub(crate) use cancel::{cancel_reviewer, cancel_task};
 
 /// Serialize auxiliary gate/review launch publication with hold cancellation.
 pub(crate) fn hold_guard(ctx: &Ctx, id: &str) -> Result<corral_core::StoreLock> {
@@ -686,6 +686,15 @@ pub(crate) fn reconcile(
                 let Some((pane, started)) = record else {
                     continue;
                 };
+                if kind == Kind::Reviewer
+                    && pane.is_none()
+                    && run
+                        .review
+                        .as_ref()
+                        .is_some_and(|review| review.reviewer == "pm")
+                {
+                    continue;
+                }
                 let exited = kind == Kind::Reviewer
                     && run.current_child.as_deref().is_some_and(|child| {
                         let attempt = format!("{}-{}", run.id, child.id);

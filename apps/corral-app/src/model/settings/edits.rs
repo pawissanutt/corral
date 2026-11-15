@@ -27,12 +27,19 @@ pub enum Pending {
         name: String,
         on: bool,
     },
+    Admin {
+        device: String,
+        name: String,
+        on: bool,
+    },
 }
 
 impl Pending {
     pub fn device(&self) -> &str {
         match self {
-            Pending::Revoke { device, .. } | Pending::Instruct { device, .. } => device,
+            Pending::Revoke { device, .. }
+            | Pending::Instruct { device, .. }
+            | Pending::Admin { device, .. } => device,
         }
     }
 
@@ -50,6 +57,14 @@ impl Pending {
             } => format!(
                 "Stop what you type on {name} from instructing assistants? It can still ask and file."
             ),
+            Pending::Admin { name, on: true, .. } => format!(
+                "Make {name} an administrator? It will be able to change other devices' authority, including making more administrators, and to revoke devices."
+            ),
+            Pending::Admin {
+                name, on: false, ..
+            } => format!(
+                "Remove {name}'s administrator authority? It can no longer change or revoke devices."
+            ),
         }
     }
 
@@ -58,6 +73,20 @@ impl Pending {
             Pending::Revoke { .. } => "Revoke",
             Pending::Instruct { on: true, .. } => "Turn on",
             Pending::Instruct { on: false, .. } => "Turn off",
+            Pending::Admin { on: true, .. } => "Make administrator",
+            Pending::Admin { on: false, .. } => "Remove administrator",
+        }
+    }
+
+    /// The device row's button that asks for this change; the two switches name what they
+    /// switch so they are told apart when a row shows both.
+    pub fn toggle_label(&self) -> &'static str {
+        match self {
+            Pending::Revoke { .. } => "Revoke",
+            Pending::Instruct { on: true, .. } => "Allow instructing",
+            Pending::Instruct { on: false, .. } => "Stop instructing",
+            Pending::Admin { on: true, .. } => "Make admin",
+            Pending::Admin { on: false, .. } => "Remove admin",
         }
     }
 }

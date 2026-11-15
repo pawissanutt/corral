@@ -76,7 +76,7 @@ pub(super) fn deliver(
         );
     }
     let target = state.notices[i].target.clone();
-    let Some(_delivery_lock) = ctx.store.try_lock(&format!("delivery-{}", target.task))? else {
+    let Some(delivery_lock) = ctx.store.try_lock(&format!("delivery-{}", target.task))? else {
         return record(
             ctx,
             receipt,
@@ -94,6 +94,33 @@ pub(super) fn deliver(
             i,
             DeliveryState::Cancelled,
             "run finished or identity changed",
+        );
+    }
+    let recipient = corral_core::inbox::Recipient::Run {
+        task: target.task.clone(),
+        run: target.run.clone(),
+    };
+    let inbox = corral_core::inbox::Inbox::new(&ctx.store, recipient.clone())?;
+    // A reply may already own the recipient lock while waiting for the pane claim.
+    // Never wait for that lock while holding the legacy delivery claim.
+    let Some(session_delivery) = ctx.store.try_lock(&format!("deliver-{}", inbox.key()))? else {
+        return record(
+            ctx,
+            receipt,
+            state,
+            i,
+            DeliveryState::Deferred,
+            "another delivery holds the session",
+        );
+    };
+    if crate::session_control::automated_input_must_wait(ctx, &recipient)? {
+        return record(
+            ctx,
+            receipt,
+            state,
+            i,
+            DeliveryState::Deferred,
+            "session paused",
         );
     }
     if state.notices[i].artifact.is_none() {
@@ -305,6 +332,10 @@ pub(super) fn deliver(
         }
         Ok(())
     })?;
+    // These claims fence direct pane input only. The inbox owns its own delivery
+    // claim, so release both before enqueue can synchronously kick that recipient.
+    drop(session_delivery);
+    drop(delivery_lock);
     if structured {
         enqueue(ctx, receipt, state, i)?;
     }

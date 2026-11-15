@@ -7,8 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use corral_protocol::cmd::{Command, task::TaskCommand};
-use corral_protocol::detail::{DetailBody, DetailGet, DetailRef};
+use corral_protocol::detail::{DetailGet, DetailRef};
 
 use crate::model::board::{Mark, Rail};
 use crate::model::daemon;
@@ -16,18 +15,31 @@ use crate::model::effect::{Effect, Env, Page};
 use crate::model::hue::Hue;
 use crate::model::nav::{Destination, Form};
 use crate::model::text::{Rich, span};
-use crate::model::{Act, ActStatus, Id, Live, Selection, act};
+use crate::model::{ActStatus, Id, Live, Selection, act};
 
+mod controls;
 mod data;
 mod fixture;
+mod items;
+mod keys;
 mod live;
+mod live_reply;
 mod live_session;
+mod replay;
+mod replay_marks;
+#[cfg(test)]
+mod replay_tests;
+mod replay_tool;
 pub mod screen;
 
+pub use controls::{Ask, Bar, Control, ControlKind, Launch, Weight, op_status};
 pub use data::AGENTS;
 pub use fixture::{session, wall};
+pub use items::{Card, Divider, Footer, Marker, More, Picture, Prose, Section, Thinking};
+pub use keys::{KeyBar, KeyButton, KeyPress, Keys, Settled};
 pub use live::wall as live_wall;
-pub use live_session::session as live_session;
+pub use live_session::{chat_scope, op_key, session as live_session};
+pub use replay::fetches;
 
 /// The agent's current activity, used for the wall chip and phone dot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +51,8 @@ pub enum AgentStatus {
     Reviewing,
     Idle,
     Waiting,
+    /// Fenced by the owner: alive, taking no automated input until resumed.
+    Paused,
     Ended,
     Unavailable,
     /// A state this build does not know.
@@ -56,6 +70,7 @@ impl AgentStatus {
             Self::Reviewing => ("reviewing", Hue::Worker),
             Self::Idle => ("idle", Hue::Neutral),
             Self::Waiting => ("waiting", Hue::Held),
+            Self::Paused => ("paused", Hue::Held),
             Self::Ended => ("ended", Hue::Neutral),
             Self::Unavailable => ("unavailable", Hue::Fail),
             Self::Unknown => ("unknown", Hue::Neutral),
@@ -133,7 +148,8 @@ pub struct State {
     /// knowing the source, and each source has its own first view.
     pub live_view: View,
     pub mode: Mode,
-    /// Expanded tool calls of daemon transcripts, by `Tool::key`.
+    /// Transcript rows the owner opened, by stable item key (a tool's call id). A thinking
+    /// block shows by default, so its key here folds it instead.
     pub expanded: BTreeSet<String>,
     /// The latest reply command per daemon session, kept to show its outcome; one key per
     /// intended reply, never replaced after an uncertain result.
@@ -141,6 +157,17 @@ pub struct State {
     /// Sessions whose transcript shows an earlier page rather than the latest messages. Such a
     /// page is not replaced by the latest until the owner asks for it.
     pub earlier: BTreeSet<Id>,
+    /// The latest control command per daemon session, kept to show its outcome.
+    pub sent: BTreeMap<Id, controls::Sent>,
+    /// The control whose confirmation this device asks for itself (an assistant's Take over or
+    /// Terminate), with its session.
+    pub asking: Option<(Id, ControlKind)>,
+    /// The latest Launch PM command from the wall.
+    pub launch: Option<Id>,
+    /// Fixture sessions paused in the preview; nothing is sent.
+    pub paused: BTreeSet<&'static str>,
+    /// Each daemon session's gathered keys and latest keys command.
+    pub keys: BTreeMap<Id, keys::Latest>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -152,6 +179,11 @@ impl Default for State {
             expanded: BTreeSet::new(),
             replies: BTreeMap::new(),
             earlier: BTreeSet::new(),
+            sent: BTreeMap::new(),
+            asking: None,
+            launch: None,
+            paused: BTreeSet::new(),
+            keys: BTreeMap::new(),
         }
     }
 }
@@ -177,7 +209,7 @@ impl State {
             }
             Action::Question => vec![Effect::Open(Page::Question)],
             Action::Tool => vec![Effect::Toast("Tool call expanded".into())],
-            Action::Send(_) => {
+            Action::Send(_) | Action::Steer(_) => {
                 let id = fixture::effective_id(self.session);
                 let text = if env.form == Form::Phone {
                     "Sent · via=app:pawis-iphone".to_string()
@@ -185,6 +217,12 @@ impl State {
                     format!("Sent to {id} via corral send · actor=owner via=app:pawis-desktop")
                 };
                 vec![Effect::Toast(text)]
+            }
+            Action::Key(key) => keys::fixture(key),
+            Action::Control(kind) => self.fixture_control(kind),
+            Action::ConfirmControl | Action::DismissControl => {
+                self.asking = None;
+                vec![]
             }
             other => self.shared(other),
         }
@@ -197,18 +235,32 @@ impl State {
         action: Action,
         feed: &daemon::Feed,
         selection: &Selection,
-        _env: Env,
+        env: Env,
     ) -> Vec<Effect> {
         match action {
             Action::OpenSession(id) => vec![Effect::OpenLive(Live::Session(id))],
             Action::OpenQuestion(key) => vec![Effect::OpenLive(Live::Question(key))],
             Action::OpenThread(id) => vec![Effect::OpenLive(Live::Thread(id))],
-            Action::Expand(key) => {
-                if !self.expanded.remove(&key) {
+            Action::Expand { key, fetch } => {
+                let opening = !self.expanded.remove(&key);
+                if opening {
                     self.expanded.insert(key);
                 }
-                vec![]
+                match fetch {
+                    Some((session, token)) if opening && wanted(feed, &token) => {
+                        vec![Effect::SessionItem { session, token }]
+                    }
+                    _ => vec![],
+                }
             }
+            Action::Fetch { session, token } => {
+                if wanted(feed, &token) {
+                    vec![Effect::SessionItem { session, token }]
+                } else {
+                    vec![]
+                }
+            }
+            Action::Watch { session, on } => vec![Effect::Watch { session, on }],
             Action::Older(id) => match older(feed, &id) {
                 Some(effect) => {
                     self.earlier.insert(id);
@@ -228,20 +280,31 @@ impl State {
                 if let DetailRef::Session { id } = &target {
                     self.earlier.remove(id.as_str());
                 }
-                vec![Effect::Detail(DetailGet {
-                    etag: feed
-                        .detail(&target)
-                        .and_then(|cache| cache.pages.first())
-                        .map(|page| page.etag.clone()),
-                    target,
-                    page: None,
-                })]
+                vec![reread(feed, target)]
             }
             Action::Recover(key) => vec![Effect::Recover(key)],
             Action::Send(text) => match selection.session.clone() {
-                Some(session) => self.reply(session, text, feed),
+                Some(session) => self.reply(session, text, live_reply::Policy::FollowUp, feed),
                 None => vec![],
             },
+            Action::Steer(text) => match selection.session.clone() {
+                Some(session) => self.reply(session, text, live_reply::Policy::Steer, feed),
+                None => vec![],
+            },
+            Action::Keys(press) => match selection.session.clone() {
+                Some(session) => self.press_keys(session, press, feed, env),
+                None => vec![],
+            },
+            Action::Control(kind) => match selection.session.clone() {
+                Some(session) => self.press(session, kind, feed),
+                None => vec![],
+            },
+            Action::ConfirmControl => self.confirm_control(feed),
+            Action::DismissControl => {
+                self.asking = None;
+                vec![]
+            }
+            Action::LaunchPm => self.launch_pm(feed),
             Action::SetView(view) => {
                 self.live_view = view;
                 vec![]
@@ -275,39 +338,6 @@ impl State {
             _ => vec![],
         }
     }
-
-    /// Sends the typed words to the session's task as owner input (`task.reply`). Only a page the
-    /// daemon marked replyable, with a task to reply to, accepts it; a reply being prepared or in
-    /// flight blocks another.
-    fn reply(&mut self, session: Id, text: String, feed: &daemon::Feed) -> Vec<Effect> {
-        let text = text.trim();
-        if text.is_empty() || reply_busy(self, &session, feed) {
-            return vec![];
-        }
-        let target = DetailRef::Session {
-            id: session.to_string(),
-        };
-        let Some(task) = feed
-            .detail(&target)
-            .and_then(daemon::DetailCache::body)
-            .and_then(|body| match body {
-                DetailBody::Session(page) if page.replyable => page.task.clone(),
-                _ => None,
-            })
-        else {
-            return vec![];
-        };
-        let act = Act::new(
-            format!("Reply to {task}"),
-            Command::Task(TaskCommand::Reply {
-                id: task.clone(),
-                text: text.to_owned(),
-            }),
-        )
-        .about(Live::Session(session.clone()));
-        self.replies.insert(session, act.key.clone());
-        vec![Effect::Act(act)]
-    }
 }
 
 fn flip(view: View) -> View {
@@ -315,6 +345,14 @@ fn flip(view: View) -> View {
         View::Transcript => View::Terminal,
         View::Terminal => View::Transcript,
     }
+}
+
+/// Whether a continuation should be fetched: it was never asked for, or its last read failed.
+/// A fetch in flight or done is not asked for again.
+fn wanted(feed: &daemon::Feed, token: &str) -> bool {
+    feed.items
+        .get(token)
+        .is_none_or(|fetch| matches!(fetch, crate::model::session_feed::ItemFetch::Failed(_)))
 }
 
 /// True while the session's latest reply is being prepared, queued or in flight; its key must
@@ -355,6 +393,18 @@ fn older(feed: &daemon::Feed, session: &Id) -> Option<Effect> {
     }))
 }
 
+/// Revalidate a session page or terminal capture with the etag of the page shown.
+fn reread(feed: &daemon::Feed, target: DetailRef) -> Effect {
+    Effect::Detail(DetailGet {
+        etag: feed
+            .detail(&target)
+            .and_then(|cache| cache.pages.first())
+            .map(|page| page.etag.clone()),
+        target,
+        page: None,
+    })
+}
+
 /// Actions attached to tiles, controls, tool calls and the reply box. The first group belongs to
 /// the fixture preview; the second carries daemon ids.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -371,21 +421,47 @@ pub enum Action {
     ToggleView,
     /// Fixture: a tool call row.
     Tool,
-    /// Send the reply field's words.
+    /// Send the reply field's words; a working session takes them after its current turn.
     Send(String),
+    /// Send the reply field's words to a working session now, interrupting what it does.
+    Steer(String),
+    /// Press a control of the open session's action bar.
+    Control(ControlKind),
+    /// Gather keys for, or send them to, the open session's pane.
+    Keys(KeyPress),
+    /// Confirm the confirmation this device asked for itself.
+    ConfirmControl,
+    /// Close that confirmation; nothing is sent.
+    DismissControl,
+    /// Launch the PM from the wall.
+    LaunchPm,
     OpenSession(Id),
     OpenQuestion(Id),
     /// The assistant thread a pane-less assistant session is answered in.
     OpenThread(Id),
-    /// Expand or fold a daemon tool call's output.
-    Expand(String),
+    /// Open or fold a transcript row by its stable key. Opening a row whose complete content
+    /// is not here yet also fetches it, by the session and continuation token.
+    Expand {
+        key: String,
+        fetch: Option<(Id, String)>,
+    },
+    /// Fetch the complete item behind a transcript preview (again, after a failure).
+    Fetch {
+        session: Id,
+        token: String,
+    },
+    /// Acquire or release one watcher of a session's live turn, while its page is open.
+    Watch {
+        session: Id,
+        on: bool,
+    },
     /// Show the page of messages before the shown ones.
     Older(Id),
     /// Return to the latest messages.
     Newer(Id),
     /// Revalidate a session page or terminal capture.
     Refresh(DetailRef),
-    /// Ask the daemon for the outcome of an uncertain reply, under the same key.
+    /// Ask the daemon for the outcome of an uncertain reply or control, under the same key.
     Recover(Id),
 }
 
@@ -494,25 +570,47 @@ pub struct Wall {
     pub footer: Note,
     pub mode: Mode,
     pub mode_labels: [&'static str; 2],
+    /// Launch PM, while no PM is live.
+    pub launch: Option<Launch>,
 }
 
-/// A tool call row. Daemon output shows when the row is expanded.
+/// A tool call row: the state mark, the tool, what it acted on and how it ended, in one quiet
+/// line; opening it shows the arguments, the output, a diff or written content and the
+/// complete recorded call and result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tool {
-    pub kind: String,
-    pub argument: String,
-    pub result: String,
     pub mark: Mark,
-    pub output: Vec<Line>,
-    /// Whether pressing the row shows or hides output; spoken with the row.
-    pub expanded: Option<bool>,
-    pub action: Action,
+    pub name: String,
+    pub summary: String,
+    /// `0.4s`, `exit 0`, `failed`, `running`, `not run`.
+    pub outcome: String,
+    /// Drawn in the failure colour while folded too.
+    pub failed: bool,
+    /// Muted at the trailing edge: `you`, or which half of the call is not on this page.
+    pub note: Option<String>,
+    /// Rows under the folded line: a failure's last output lines, a running call's tail.
+    pub tail: Vec<Line>,
+    /// What the folded row hides, in words the outcome does not already say (`41 lines`).
+    pub hidden: Option<String>,
+    pub open: bool,
+    /// The opened row's blocks.
+    pub body: Vec<Section>,
+    pub more: More,
+    /// Opens or folds the row; absent when there is nothing more to show.
+    pub action: Option<Action>,
 }
-/// A paragraph, tool call or inline handover within a transcript message.
+/// One item of a transcript message, in recorded order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageItem {
+    /// Styled words the fixture preview writes directly.
     Paragraph(Rich),
+    Prose(Prose),
+    Thinking(Thinking),
     Tool(Tool),
+    Picture(Picture),
+    Divider(Divider),
+    Marker(Marker),
+    Card(Card),
     Question(QuestionCard),
 }
 /// Inline owner-only handover.
@@ -535,9 +633,13 @@ pub struct Message {
     pub author: String,
     pub detail: String,
     pub items: Vec<MessageItem>,
+    /// An assistant message's model, unusual stop and usage.
+    pub footer: Option<Footer>,
+    /// The live turn's message, still being written: drawn with the streaming mark.
+    pub live: bool,
 }
-/// Session transcript: one bounded page of messages, the controls to page through it, and its
-/// source's state.
+/// Session transcript: one bounded page of messages, the controls to page through it, its
+/// source's state, then the open turn as the host streams it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transcript {
     pub messages: Vec<Message>,
@@ -550,6 +652,10 @@ pub struct Transcript {
     pub fill: Fill,
     pub stale: Option<String>,
     pub disclaimer: Option<Note>,
+    /// The live turn after the recorded messages, until the recorded transcript holds it.
+    pub live: Vec<Message>,
+    /// Quiet rows after the live turn: owner input the host holds, how the turn ended.
+    pub after: Vec<MessageItem>,
 }
 
 /// Whether the reply box takes words, and what it says when it does not.
@@ -571,6 +677,9 @@ pub struct Reply {
     pub placeholder: String,
     pub accessibility_label: &'static str,
     pub button: &'static str,
+    /// The second send, offered while the session works: its words interrupt the turn
+    /// (`Action::Steer`) instead of waiting for it.
+    pub steer: Option<&'static str>,
     pub hint: Rich,
     pub question_hint: String,
     pub mode: ReplyMode,
@@ -618,8 +727,10 @@ pub struct Terminal {
     pub styled: Vec<screen::Row>,
     /// What the empty surface says instead of lines (no capture yet, none recorded).
     pub empty: Option<String>,
-    /// Fixture: the phone's terminal keys. Daemon captures take no keys.
+    /// Fixture: the phone's terminal keys, which send nothing.
     pub phone_keys: Vec<&'static str>,
+    /// The keys bar under a daemon pane's screen, or why it has none worth saying.
+    pub keys: Option<Keys>,
     /// Revalidate the capture.
     pub refresh: Option<Action>,
 }
@@ -642,9 +753,14 @@ pub struct Session {
     pub toggle: Action,
     /// Why the page shows what it does: the session left the wall, or its source is stale.
     pub notice: Option<(Hue, String)>,
+    /// The session's state and the controls corrald offers for it.
+    pub controls: Bar,
     pub transcript: Transcript,
     pub terminal: Option<Terminal>,
     pub reply: Reply,
+    /// The assistant thread scope the page chats in, through the shared composer, instead of
+    /// the reply box.
+    pub chat: Option<Id>,
     pub run_details: Run,
 }
 

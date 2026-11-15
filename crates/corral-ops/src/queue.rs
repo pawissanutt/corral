@@ -405,9 +405,10 @@ pub(crate) fn resolve_plan<T: corral_core::TaskRef + ?Sized>(
         return Ok(plan);
     }
     let previous_run = task.current_run_head()?;
-    let previous = previous_run
-        .as_ref()
-        .filter(|r| r.outcome == Some(RunOutcome::Superseded));
+    let previous = previous_run.as_ref().filter(|r| {
+        r.outcome == Some(RunOutcome::Superseded)
+            || (r.outcome == Some(RunOutcome::Stopped) && r.retry.is_some())
+    });
     let retry = previous.and_then(|r| r.retry.as_ref());
     let choice = ProfileChoice {
         profile: opts

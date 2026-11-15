@@ -15,6 +15,7 @@ pub const INBOX_V1: &str = "inbox.v1";
 pub const CHANGES_V1: &str = "changes.v1";
 pub const PLANS_V1: &str = "plans.v1";
 pub const AGENTS_V1: &str = "agents.v1";
+pub const SESSION_V1: &str = "session.v1";
 pub const REVIEW_V1: &str = "review.v1";
 pub const TIMELINE_V1: &str = "timeline.v1";
 pub const USAGE_V1: &str = "usage.v1";

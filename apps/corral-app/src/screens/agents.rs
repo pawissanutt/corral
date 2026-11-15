@@ -4,7 +4,10 @@
 //! press to the model's reducer.
 
 mod console;
+mod controls;
 mod grid;
+mod keys;
+mod reply;
 mod session;
 mod transcript;
 mod wall;
@@ -15,7 +18,7 @@ use nsh_core::prelude::*;
 use crate::model::Id;
 use crate::model::agents::{self, Action, View};
 use crate::model::daemon::Link;
-use crate::screens::PhonePage;
+use crate::screens::{PhonePage, assistant};
 use crate::state::AppState;
 
 /// The Agents page. Desktop: the page head with the Wall | List switch, the machine line, the
@@ -48,6 +51,8 @@ pub fn live_session(app: AppState, id: Id) -> AnyElement {
         move || daemon_session(app, &id)
     });
     follow(app, id.clone());
+    transcript::watch(app, id.clone());
+    chat(app, id.clone());
     session::page(app, view, Some(id))
 }
 
@@ -58,7 +63,29 @@ pub fn live_session_phone(app: AppState, id: Id) -> PhonePage {
         move || daemon_session(app, &id)
     });
     follow(app, id.clone());
+    transcript::watch(app, id.clone());
+    chat(app, id.clone());
     session::phone(app, view, Some(id))
+}
+
+/// While an assistant's session page is open, subscribes the thread its composer chats in (the
+/// reference-counted thread scope; released when the page closes or the scope changes) and
+/// settles the composer's session operations, as the thread page does.
+fn chat(app: AppState, id: Id) {
+    assistant::watch_ops(app);
+    let scope = computed(move || {
+        app.feed.with(|feed| {
+            feed.agents
+                .get(id.as_str())
+                .filter(|row| row.role == "assistant")
+                .map(|row| agents::chat_scope(feed, row))
+        })
+    });
+    effect(move || {
+        if let Some(scope) = scope.get() {
+            untracked(|| assistant::open_scope(app, scope, false));
+        }
+    });
 }
 
 /// Runs one of the model's actions through the app state, which applies its effects: the
@@ -91,13 +118,18 @@ fn fixture_session(app: AppState) -> agents::Session {
     app.agents.with(|state| agents::session(state, env))
 }
 
-/// A daemon session as the model builds it now (tracked).
+/// A daemon session as the model builds it now (tracked), with the reply to its latest
+/// `assistant.session` control operation.
 fn daemon_session(app: AppState, id: &Id) -> agents::Session {
     let env = app.env();
     let via = app.via();
+    let op = app
+        .agents
+        .with(|state| agents::op_key(state, id))
+        .and_then(|key| app.with_operation(&key, |op| op.map(agents::op_status)));
     app.feed.with(|feed| {
         app.agents
-            .with(|state| agents::live_session(state, id, feed, env, &via))
+            .with(|state| agents::live_session(state, id, feed, env, &via, op.as_ref()))
     })
 }
 

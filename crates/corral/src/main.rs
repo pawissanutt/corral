@@ -48,6 +48,7 @@ mod report_cmd;
 mod run_cmd;
 mod search_cmd;
 mod selection_cmd;
+mod session_cmd;
 mod setup_cmd;
 mod skill;
 mod sprint_cmd;
@@ -90,6 +91,8 @@ pub struct Cli {
 pub enum Cmd {
     /// Inspect and manage durable assistant sessions (no coding slot)
     Assistant(assistant_cmd::AssistantArgs),
+    /// Control task and PM sessions
+    Session(session_cmd::SessionArgs),
     /// Select Assist or explicitly confirm scoped Autopilot for this workspace
     Mode(mode_cmd::ModeArgs),
     /// Inspect and durably manage agent inbox messages without delivering them

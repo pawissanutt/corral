@@ -33,6 +33,7 @@ fn usage_events(store: &Store, task: &str) -> Result<Vec<Event>> {
             "approved",
             "changes_requested",
             "discarded",
+            "session_stopped",
         ],
     )
 }
@@ -109,7 +110,13 @@ pub fn refresh_active_usage(store: &Store) {
     }
 }
 
-const VERDICT_KINDS: [&str; 4] = ["verdict", "approved", "changes_requested", "discarded"];
+const VERDICT_KINDS: [&str; 5] = [
+    "verdict",
+    "approved",
+    "changes_requested",
+    "discarded",
+    "session_stopped",
+];
 
 /// `refresh_runs`' algorithm on the current run alone, reading that run's own records and its
 /// own events; the write is guarded by the whole assembled run, as the full form was.
@@ -214,7 +221,10 @@ fn first_verdict_from(
         };
         after = last.seq;
         watch.after = Some(after);
-        for event in page.iter().filter(|event| event.ts >= from) {
+        for event in page.iter().filter(|event| {
+            event.ts >= from
+                && (event.kind != "session_stopped" || event.detail["role"] == "worker")
+        }) {
             watch.first = Some(watch.first.map_or(event.ts, |first| first.min(event.ts)));
         }
     }
@@ -246,9 +256,14 @@ fn refresh_runs(
                         event.task.as_deref() == Some(id)
                             && event.detail["run"].as_str() == Some(run.id.as_str())
                             && event.ts >= review.started
+                            && (event.kind != "session_stopped" || event.detail["role"] == "worker")
                             && matches!(
                                 event.kind.as_str(),
-                                "verdict" | "approved" | "changes_requested" | "discarded"
+                                "verdict"
+                                    | "approved"
+                                    | "changes_requested"
+                                    | "discarded"
+                                    | "session_stopped"
                             )
                     })
                     .map(|event| event.ts)
@@ -289,6 +304,7 @@ fn backfill_reviews(run: &mut Run, store: &Store, task_id: &str, events: &[Event
     for event in events.iter().filter(|event| {
         event.task.as_deref() == Some(task_id)
             && event.detail["run"].as_str() == Some(run.id.as_str())
+            && (event.kind != "session_stopped" || event.detail["role"] == "worker")
     }) {
         match event.kind.as_str() {
             "review_started" => {
@@ -338,7 +354,7 @@ fn backfill_reviews(run: &mut Run, store: &Store, task_id: &str, events: &[Event
                 review.autopilot = None;
                 reviews.push(review);
             }
-            "verdict" | "approved" | "changes_requested" | "discarded" => {
+            "verdict" | "approved" | "changes_requested" | "discarded" | "session_stopped" => {
                 if let Some(review) = reviews.last_mut()
                     && review.ended.is_none()
                 {

@@ -129,6 +129,23 @@ pub fn with_instructing(device: &DeviceRow, on: bool) -> Option<DeviceAuthority>
     Some(authority)
 }
 
+/// Whether a device is an administrator, which lets it change other devices' authority.
+pub fn administrator(authority: Option<&DeviceAuthority>) -> (&'static str, Hue) {
+    match authority {
+        None => ("unknown", Hue::Neutral),
+        Some(a) if a.admin => ("yes", Hue::Ok),
+        Some(_) => ("no", Hue::Neutral),
+    }
+}
+
+/// The authority a device would have with administrator turned on or off; None while its
+/// current authority is unknown, since the rest of it must be sent back unchanged.
+pub fn with_admin(device: &DeviceRow, on: bool) -> Option<DeviceAuthority> {
+    let mut authority = device.authority.clone()?;
+    authority.admin = on;
+    Some(authority)
+}
+
 /// One row of a facts table.
 pub type Fact = (&'static str, String);
 
@@ -437,5 +454,25 @@ mod tests {
             ..device
         };
         assert!(with_instructing(&unknown, true).is_none());
+    }
+
+    #[test]
+    fn admin_toggle_keeps_every_other_flag() {
+        let device = DeviceRow {
+            id: "d1".into(),
+            name: "browser".into(),
+            authority: Some(DeviceAuthority {
+                reply: true,
+                act: false,
+                assistant: true,
+                assistant_act: true,
+                admin: false,
+            }),
+            platform: "web",
+            enrolled: "2026-11-14".into(),
+            revoked: None,
+        };
+        let on = with_admin(&device, true).unwrap();
+        assert!(on.admin && on.reply && !on.act && on.assistant && on.assistant_act);
     }
 }

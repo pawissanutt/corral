@@ -11,6 +11,15 @@ use crate::Ctx;
 mod tests;
 
 pub(crate) fn cancel(ctx: &Ctx, id: &str, reason: &str) -> Result<bool> {
+    cancel_attempt(ctx, id, reason, false)
+}
+
+/// Terminate closes its pane after settlement and must not schedule a replacement.
+pub(crate) fn cancel_without_pane(ctx: &Ctx, id: &str, reason: &str) -> Result<bool> {
+    cancel_attempt(ctx, id, reason, true)
+}
+
+fn cancel_attempt(ctx: &Ctx, id: &str, reason: &str, owner_stop: bool) -> Result<bool> {
     let task = ctx.store.head(id)?;
     let Some(run) = task.current_run.as_deref() else {
         return Ok(false);
@@ -23,7 +32,8 @@ pub(crate) fn cancel(ctx: &Ctx, id: &str, reason: &str) -> Result<bool> {
         return Ok(false);
     };
     // Never close the worker even for a malformed legacy record.
-    if let Some(pane) = gate.pane.as_deref()
+    if !owner_stop
+        && let Some(pane) = gate.pane.as_deref()
         && run.herdr.as_ref().is_none_or(|h| h.pane_id != pane)
         && ctx.herdr.pane_get(pane)?.is_some()
     {
@@ -48,7 +58,11 @@ pub(crate) fn cancel(ctx: &Ctx, id: &str, reason: &str) -> Result<bool> {
         crate::gate_triage::observe(&ctx.store, id, gate)?;
         if let Some(staged) = &staged { staged.stage(&ctx.store, (GateResult::Cancelled, None))?; }
         ctx.store.log_event(Some(id), "gate_cancelled", json!({"run":run.id,"attempt":gate.identity.as_ref().map(|i| &i.attempt),"result":"cancelled","reason":reason}))?;
-        crate::agent::gate_queue::requeue_cancelled(ctx, task)?;
+        if owner_stop {
+            task.review_wait = None;
+        } else {
+            crate::agent::gate_queue::requeue_cancelled(ctx, task)?;
+        }
         Ok(true)
     })?;
     Ok(updated.is_some())

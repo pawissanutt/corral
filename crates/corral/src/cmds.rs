@@ -353,6 +353,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
     let inv = crate::invocation::Invocation::new(&entry, &root);
     match cmd {
         Cmd::Mode(args) => crate::mode_cmd::run(&inv, args),
+        Cmd::Session(args) => crate::session_cmd::run(&inv, args),
         Cmd::Inbox(args) => crate::inbox_cmd::run(&inv, args),
         Cmd::Attention(args) => crate::attention_cmd::run(&inv, args),
         Cmd::Agent(args) => crate::agent_cmd::run(&start_dir(&root)?, args, &entry),

@@ -247,7 +247,7 @@ pub(super) fn conditions_with_runs(
                 ));
             }
             if task.status == Status::NeedsMe {
-                super::stopping::launch_refusal(
+                super::stopping::worker_stop(
                     task,
                     phases.run.as_ref(),
                     now,
@@ -255,13 +255,21 @@ pub(super) fn conditions_with_runs(
                 );
                 escalation(task, phases.run.as_ref(), now, &mut assessment.conditions);
                 if assessment.conditions.is_empty() {
+                    let stopped = phases
+                        .run
+                        .as_ref()
+                        .is_some_and(|run| run.outcome == Some(RunOutcome::Stopped));
                     let mut condition = keyed_status(
                         task,
                         now,
                         "needs_me_other",
                         WaitClass::OwnerDecision,
-                        "Task needs an owner decision without a more specific recorded condition"
-                            .into(),
+                        if stopped {
+                            "Run stopped by owner; the worktree and branch are kept"
+                        } else {
+                            "Task needs an owner decision without a more specific recorded condition"
+                        }
+                        .into(),
                     );
                     condition
                         .resume
@@ -419,6 +427,7 @@ pub(super) fn escalation(
     out: &mut Vec<Condition>,
 ) {
     let Some(stage) = run
+        .filter(|run| run.outcome != Some(RunOutcome::Stopped))
         .and_then(|run| run.autopilot.as_ref())
         .filter(|stage| stage.stage == AutoStage::Escalated)
     else {

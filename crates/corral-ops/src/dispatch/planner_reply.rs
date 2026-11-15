@@ -50,6 +50,11 @@ pub(super) fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     if let Some(recipient) = crate::delivery::owner::live_planner(&task) {
         return super::inbox_reply::reply(ctx, &task, &recipient, text);
     }
+    let recipient = corral_core::inbox::Recipient::PlanRun {
+        task: task.id.clone(),
+        plan_run: run.id.clone(),
+    };
+    crate::delivery::paused::lift_owner(ctx, &recipient)?;
     ctx.store.dispatch_update(id, |store, current| {
         crate::queue::check_snapshot(ctx, store, &task, current)?;
         ensure!(
@@ -68,6 +73,11 @@ pub(super) fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         run.pending_reply = Some(text.to_string());
         Ok(())
     })?;
+    let inbox = corral_core::inbox::Inbox::new(&ctx.store, recipient.clone())?;
+    let _session_delivery = inbox.delivery_lock()?;
+    if crate::session_control::automated_input_must_wait(ctx, &recipient)? {
+        return ctx.store.get(id);
+    }
     let delivery = crate::question_reply::deliver(
         ctx,
         &task,

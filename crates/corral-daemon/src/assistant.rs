@@ -232,6 +232,11 @@ fn failure(problem: anyhow::Error) -> Failure {
         | "attachment_expired"
         | "attachment_unknown"
         | "attachments_unsupported_target"
+        | "assistant_ended"
+        | "assistant_failed"
+        | "already_paused"
+        | "not_paused"
+        | "not_daemon_hosted"
         | "cancelled" => ErrorCode::Refused,
         "confirm_required" => ErrorCode::ConfirmRequired,
         "invalid_params" | "invalid_scope" => ErrorCode::InvalidParams,

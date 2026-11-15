@@ -120,6 +120,158 @@ impl ReviewLaunch<'_> {
         self.pending.prepared_gate.is_some() || self.pending.prepared_review.is_some()
     }
 
+    /// A queued request is durable input, not a submitted host launch or a pane attachment.
+    pub(crate) fn defer_pm(&mut self, message: &str) -> Result<()> {
+        ensure!(
+            self.pending.kind == Kind::Reviewer && self.pending.pane.is_none(),
+            "only an unattached PM review can be deferred"
+        );
+        self.pending.close_pane = false;
+        super::save(self.ctx, &self.pending)?;
+        crate::delivery::paused::queue_review(
+            self.ctx,
+            message,
+            crate::delivery::paused::PmReviewTarget::Worker {
+                task: self.pending.task.clone(),
+                run: self.pending.run.clone(),
+                review: self
+                    .pending
+                    .review_run
+                    .clone()
+                    .context("deferred PM review child missing")?,
+            },
+        )
+    }
+
+    fn resume_pm(
+        &mut self,
+        task: &corral_core::TaskHead,
+        run: &corral_core::RunHead,
+    ) -> Result<()> {
+        let ctx = self.ctx;
+        let child = run
+            .current_child
+            .as_deref()
+            .context("prepared PM reviewer child missing")?;
+        let message = child
+            .pending_reply
+            .as_deref()
+            .context("prepared PM request missing")?;
+        let Some(pane) = crate::pm::open_pm_automated(ctx)? else {
+            let review_run = &child.id;
+            self.pending.pane = None;
+            ctx.store.update_head(&task.id, |task| {
+                let parent = task
+                    .current_run_mut()
+                    .filter(|parent| parent.id == run.id)
+                    .context("prepared parent disappeared")?;
+                let review = parent.review.as_mut().context("prepared review missing")?;
+                review.pane = None;
+                let review = review.clone();
+                let child = parent
+                    .current_child
+                    .as_deref_mut()
+                    .filter(|current| current.id == child.id)
+                    .context("prepared child changed")?;
+                child.herdr = None;
+                child.review = Some(review);
+                ctx.store.log_event(
+                    Some(&task.id),
+                    "review_prompt_delivery",
+                    json!({"run": run.id, "review_run": review_run,
+                        "pane": null, "queued": true, "recovered": true}),
+                )
+            })?;
+            self.defer_pm(message)?;
+            return Ok(());
+        };
+        let info = ctx
+            .herdr
+            .pane_get(&pane)?
+            .context("prepared PM pane disappeared")?;
+        let herdr = corral_core::HerdrRef {
+            workspace_id: info.workspace_id,
+            pane_id: pane.clone(),
+            socket: Some(ctx.herdr.socket_path()?),
+        };
+        self.attach(&pane, false)?;
+        ctx.store.update_head(&task.id, |task| {
+            let parent = task
+                .current_run_mut()
+                .filter(|parent| parent.id == run.id)
+                .context("prepared parent disappeared")?;
+            let review = parent.review.as_mut().context("prepared review missing")?;
+            review.pane = Some(pane.clone());
+            let review = review.clone();
+            let child = parent
+                .current_child
+                .as_deref_mut()
+                .filter(|current| current.id == child.id)
+                .context("prepared child changed")?;
+            child.herdr = Some(herdr.clone());
+            child.review = Some(review);
+            Ok(())
+        })?;
+        let delivery = self.submit_head(
+            |store, current| {
+                ensure!(
+                    current.id == task.id && current.status == corral_core::Status::Review,
+                    "prepared PM review task changed"
+                );
+                let parent = current
+                    .current_run_head()?
+                    .filter(|parent| parent.id == run.id)
+                    .context("prepared PM parent changed")?;
+                ensure!(
+                    parent
+                        .current_child
+                        .as_deref()
+                        .and_then(|child| child.pending_reply.as_deref())
+                        == Some(message),
+                    "prepared PM request changed"
+                );
+                crate::reviewer::current_assessment_ref(ctx, store, &*current, &run.id)
+            },
+            || {
+                let delivery = crate::delivery::paused::prompt_pm(ctx, &pane, message)?;
+                if let Some(delivery) = &delivery {
+                    ensure!(delivery.submitted, "prepared PM delivery is unconfirmed");
+                }
+                Ok(delivery)
+            },
+        )?;
+        if delivery.is_none() {
+            crate::delivery::paused::queue_review(
+                ctx,
+                message,
+                crate::delivery::paused::PmReviewTarget::Worker {
+                    task: task.id.clone(),
+                    run: run.id.clone(),
+                    review: child.id.clone(),
+                },
+            )?;
+        }
+        ctx.store.update_head(&task.id, |task| {
+            task.restart_current_child(corral_core::clock::now())?;
+            let child = task
+                .current_run_mut()
+                .context("parent missing")?
+                .current_child
+                .as_deref_mut()
+                .context("child missing")?;
+            if delivery.is_some() {
+                child.pending_reply = None;
+            }
+            ctx.store.log_event(
+                Some(&task.id),
+                "review_started",
+                json!({"run": run.id, "authorization": self.pending.authorization,
+                    "recovered": true, "pane": pane}),
+            )
+        })?;
+        Ok(())
+    }
+
     pub(crate) fn resume(&mut self) -> Result<()> {
         let ctx = self.ctx;
         let authorization = self
@@ -132,6 +284,14 @@ impl ReviewLaunch<'_> {
             .current_run_head()?
             .context("prepared run missing")?
             .into_owned();
+        if self.pending.kind == Kind::Reviewer
+            && run
+                .review
+                .as_ref()
+                .is_some_and(|review| review.reviewer == "pm")
+        {
+            return self.resume_pm(&task, run);
+        }
         let pane = match &self.pending.pane {
             Some(pane) => pane.clone(),
             None => {
@@ -213,12 +373,7 @@ impl ReviewLaunch<'_> {
             &format!("{} prepared {:?}", task.id, self.pending.kind),
             &[("task", &task.id), ("run", &run.id)],
         )?;
-        let pm = !self.pending.close_pane;
         let reviewer = self.pending.kind == Kind::Reviewer;
-        let message = run
-            .current_child
-            .as_deref()
-            .and_then(|child| child.pending_reply.clone());
         let mut started =
             json!({"run": run.id, "authorization": authorization, "recovered":true, "pane":pane});
         let gate = match (self.pending.kind, self.pending.prepared_gate.as_ref()) {
@@ -302,18 +457,7 @@ impl ReviewLaunch<'_> {
                 }
                 Ok(())
             },
-            || {
-                if pm {
-                    let delivery = ctx.herdr.agent_prompt(
-                        &pane,
-                        message.as_deref().context("prepared PM request missing")?,
-                    )?;
-                    ensure!(delivery.submitted, "prepared PM delivery is unconfirmed");
-                    Ok(())
-                } else {
-                    ctx.herdr.pane_run(&pane, &command)
-                }
-            },
+            || ctx.herdr.pane_run(&pane, &command),
         )?;
         if let Some((_, identity, _, _)) = &gate {
             return crate::gate::evidence::record_launched(

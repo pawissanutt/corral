@@ -323,6 +323,12 @@ impl AppState {
                     requests::detail(get);
                 }
             }
+            Effect::SessionItem { session, token } => {
+                _ = requests::session_item(session.to_string(), token);
+            }
+            Effect::Watch { session, on } => {
+                _ = requests::watch(session.to_string(), on);
+            }
             Effect::Changes(query) => _ = requests::changes_page(query),
             Effect::Seen(seen) => _ = requests::seen_advance(seen),
             Effect::Send(message) => _ = self.send_message(message),

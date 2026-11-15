@@ -20,7 +20,7 @@ use corral_core::TaskMut as _;
 
 mod cancel;
 mod collect;
-pub(crate) use cancel::{cancel, stop_descendants};
+pub(crate) use cancel::{cancel, cancel_without_pane, stop_descendants};
 pub(crate) mod evidence;
 mod stale;
 

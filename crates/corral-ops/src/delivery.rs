@@ -21,6 +21,8 @@ pub mod effects;
 #[cfg(all(test, unix))]
 mod omo_fixture;
 pub(crate) mod owner;
+pub(crate) mod paused;
+mod pm_reviews;
 mod refused;
 #[cfg(test)]
 mod tests;
@@ -109,6 +111,15 @@ pub enum DeliveryStatus {
     Sent { envelope: u64 },
 }
 
+/// An unknown metadata value is an ordinary legacy message, never a delivery blocker.
+pub(crate) fn explicit_busy_policy(message: &corral_core::inbox::Message) -> Option<&'static str> {
+    match message.subject.as_ref()?.get("busy_policy")?.as_str()? {
+        "steer" => Some("steer"),
+        "follow_up" => Some("follow_up"),
+        _ => None,
+    }
+}
+
 /// No fallback is considered after publication; the saved adapter and binding are immutable.
 pub fn deliver(
     ctx: &Ctx,
@@ -130,6 +141,10 @@ pub fn deliver_at(
     let inbox = Inbox::new(&ctx.store, recipient.clone())?;
     let _deliver = inbox.delivery_lock()?;
     let mut open = observe_pass(ctx, &inbox, adapter, fallback, now)?;
+    // Observe late receipts, but leave unpublished messages and retry attempts untouched.
+    if crate::session_control::automated_input_must_wait(ctx, recipient)? {
+        return Ok(DeliveryStatus::Deferred);
+    }
     let replacement = inbox
         .state_head()?
         .replacement_envelope
@@ -268,11 +283,16 @@ pub fn deliver_at(
     let mut envelope = match open {
         Some(envelope) => envelope,
         None => {
-            let Some(envelope) = inbox.publish(
+            let Some(envelope) = inbox.publish_with_mode(
                 &binding,
                 selected.harness(),
                 caps.max_payload,
                 inbox.flush_requested(),
+                |message| {
+                    (selected.harness() == crate::agent::delivery::ADAPTER)
+                        .then(|| explicit_busy_policy(message))
+                        .flatten()
+                },
             )?
             else {
                 return Ok(DeliveryStatus::Idle);
@@ -283,8 +303,17 @@ pub fn deliver_at(
     };
     // Verify bytes before journaling the external side effect. Adapters read this same file.
     inbox.payload(&envelope)?;
+    let review_inputs = if *recipient == Recipient::Pm {
+        let Some(inputs) = pm_reviews::bind(ctx, &inbox, &envelope)? else {
+            return Ok(DeliveryStatus::Deferred);
+        };
+        inputs
+    } else {
+        Vec::new()
+    };
     inbox.begin_attempt(&mut envelope, now)?;
     let outcome = selected.send(ctx, &binding, &envelope);
+    drop(review_inputs);
     inbox.finish_attempt(&mut envelope, outcome.clone())?;
     match outcome {
         SendOutcome::Admitted { detail } => admitted(&inbox, &envelope, detail, now)?,

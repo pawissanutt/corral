@@ -300,6 +300,9 @@ pub fn record(store: &Store, container: &ContainerRef, probe: &Probe) -> Result<
         (Some(id), _) => store
             .try_update_head(id, |task| match probe {
                 Probe::Lost { generation, .. } => {
+                    if crate::session_control::stop::task_stop_pending_in(store, id)? {
+                        return Ok(false);
+                    }
                     let Some(host) = task.agent_head(container)? else {
                         return Ok(false);
                     };
@@ -343,6 +346,11 @@ pub fn record(store: &Store, container: &ContainerRef, probe: &Probe) -> Result<
         })?,
         (None, _) => store.records_transaction(|| {
             pm_state::update_selected(store, &pm_state::Selection::current(), |pm| {
+                if matches!(probe, Probe::Lost { .. })
+                    && crate::session_control::stop::pm_stopped_in(store)?
+                {
+                    return Ok((false, false));
+                }
                 let changed = pm.as_mut().is_some_and(|pm| apply(&mut pm.state, probe));
                 if changed {
                     log_lost()?;

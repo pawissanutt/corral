@@ -7,7 +7,7 @@ This app lives in the corral repository as `apps/corral-app/`. It is its own Car
 The app has three data states (`DataState`):
 
 - **Fixture**: explicitly selected mockup preview. Content comes from fixtures in `src/model/`; actions change local state only.
-- **Daemon**: an enrolled native Unix session (`CORRAL_SOCKET`, peer-UID trust and a private `0600` device-id file), or a paired browser session over an explicitly enabled loopback WebSocket with pinned Noise IK. Typed reads and permitted actions cover the current destinations; capabilities, authority, stale data and missing facts remain visible. Native devices have Admin authority; newly paired browsers have `reply`, `act` and `assistant`, not `admin` or `assistant_act`.
+- **Daemon**: an enrolled native Unix session (`CORRAL_SOCKET`, peer-UID trust and a private `0600` device-id file), or a paired browser session over an explicitly enabled loopback WebSocket with pinned Noise IK. Typed reads and permitted actions cover the current destinations; capabilities, authority, stale data and missing facts remain visible. Newly enrolled native devices and paired browsers have all authority flags, including `admin` and `assistant_act`, editable per device.
 - **Disconnected**: no daemon connection. Normal startup must not substitute fixture facts. Unpaired browsers open Settings › Connection.
 
 The web build pairs using a trusted-side offer and matching-code confirmation. Its encrypted credential and non-extractable wrapping key live in IndexedDB; only `corral.paired` is in NSH Storage. Revocation closes sessions and stops automatic reconnect. Forget returns to disconnected Connection. No browser shell executor is enabled.
@@ -19,6 +19,7 @@ Ask is one composer for assistant and PM messages; the daemon hosts the assistan
 - `src/lib.rs`: root `App`.
 - `src/model/`: pure Rust, with no `nsh_*` imports or I/O; holds data, wording, state, reducers and view builders for every form.
 - `src/model/daemon.rs`: owned daemon feed and its pure updates, including typed domain data and command states.
+- `src/model/session_feed.rs`: a watched session's open turn and continued transcript items, with their pure updates; `src/model/agents/` holds the session action bar (`controls.rs`), the chat input (`live_reply.rs`), the keys bar under a foreign harness's pane (`keys.rs`) and the transcript replay (`replay*.rs`, `items.rs`).
 - `src/client/`: shared frame/session core, native Unix adapter and device-id persistence, browser WebSocket/Noise adapter and encrypted IndexedDB credentials, wire-to-model mapping, and root-owned tasks feeding `AppState::feed`.
 - `src/model/hue.rs`, `text.rs`, `effect.rs`: semantic colours, rich text, environment and reducer effects.
 - `src/model/nav.rs`, `health.rs`, `fixture.rs`, `commands.rs`: navigation, health and fixture snapshots, and palette commands.

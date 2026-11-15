@@ -98,10 +98,10 @@ pub(crate) fn install_skill_in(
 /// The previous run and its autopilot record when the autopilot requested changes and the run was then
 /// superseded (its agent pane was gone): the next run continues that change request.
 pub(super) fn carried_changes(task: &Task) -> Option<(Run, AutopilotState)> {
-    let prev = task
-        .runs
-        .last()
-        .filter(|r| r.outcome == Some(RunOutcome::Superseded))?;
+    let prev = task.runs.last().filter(|r| {
+        r.outcome == Some(RunOutcome::Superseded)
+            || (r.outcome == Some(RunOutcome::Stopped) && r.retry.is_some())
+    })?;
     let state = prev
         .autopilot
         .clone()

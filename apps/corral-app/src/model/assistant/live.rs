@@ -316,6 +316,7 @@ fn served_chip(feed: &Feed, scope: &str) -> Chip {
         AssistantState::Working => ("working", Hue::Corral),
         AssistantState::Waiting => ("waiting for assistant", Hue::Held),
         AssistantState::Stopping => ("stopping", Hue::Neutral),
+        AssistantState::Paused => ("paused", Hue::Held),
         AssistantState::Ended => ("ended", Hue::Neutral),
         AssistantState::Failed => ("host failed", Hue::Fail),
         AssistantState::Other => ("unknown", Hue::Neutral),
@@ -501,6 +502,12 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
             Some(row) if row.state == AssistantState::Starting => Some(vec![
                 span("starting").hue(Hue::Corral),
                 span(" The host is starting; your message is stored meanwhile."),
+            ]),
+            Some(row) if row.state == AssistantState::Paused => Some(vec![
+                span("paused").hue(Hue::Held),
+                span(
+                    " Automated input waits until you resume. Sending your message resumes the session.",
+                ),
             ]),
             _ => None,
         }

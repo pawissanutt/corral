@@ -156,7 +156,7 @@ impl Store {
             f.lock()
                 .with_context(|| format!("locking {}", path.display()))?;
         }
-        let guard = StoreLock::new(f);
+        let guard = StoreLock::for_path(f, path, false);
         if self.submission_barrier.is_some() {
             self.submission_barrier(&format!("lock:{name}"));
         }
@@ -190,7 +190,7 @@ impl Store {
         };
         crate::timing::record_lock_try(result.is_err());
         match result {
-            Ok(()) => Ok(Some(StoreLock::new(f))),
+            Ok(()) => Ok(Some(StoreLock::for_path(f, path, shared))),
             Err(fs::TryLockError::WouldBlock) => Ok(None),
             Err(fs::TryLockError::Error(e)) => {
                 Err(e).with_context(|| format!("locking {}", path.display()))
@@ -490,7 +490,7 @@ impl Store {
             .with_context(|| format!("opening {}", lock.display()))?;
         file.lock()
             .with_context(|| format!("locking {}", lock.display()))?;
-        Ok(StoreLock::new(file))
+        Ok(StoreLock::for_path(file, lock, false))
     }
 
     /// All tasks (including done/dropped), sorted by numeric id.

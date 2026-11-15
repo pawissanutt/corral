@@ -269,6 +269,7 @@ fn closure_predicate_covers_every_worker_and_review_child_path() {
         RunOutcome::Discarded,
         RunOutcome::Superseded,
         RunOutcome::Abandoned,
+        RunOutcome::Stopped,
     ] {
         let mut ended = task(Status::NeedsMe);
         ended.runs[0].outcome = Some(outcome);

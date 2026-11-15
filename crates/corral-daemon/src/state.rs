@@ -34,6 +34,9 @@ pub(crate) struct Shared {
     /// Pane-less hosts outlive every individual app connection.
     #[cfg(unix)]
     pub assistant: Mutex<Option<std::sync::Arc<crate::assistant::Service>>>,
+    /// A single live-ring reader per watched session, independent of app row reads.
+    #[cfg(unix)]
+    pub session_live: Mutex<Option<std::sync::Arc<crate::topics::SessionLiveService>>>,
 }
 
 pub(crate) struct State {
@@ -88,6 +91,8 @@ impl Shared {
             views: Mutex::new(None),
             #[cfg(unix)]
             assistant: Mutex::new(None),
+            #[cfg(unix)]
+            session_live: Mutex::new(None),
             state: Mutex::new(State {
                 stop: false,
                 closed: false,

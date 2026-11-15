@@ -1,5 +1,5 @@
 //! Owner-facing task context. Run prose is activity, never verification evidence.
-use corral_core::{GateResult, Status, Task};
+use corral_core::{GateResult, RunOutcome, Status, Task};
 use corral_ops::Ctx;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -178,6 +178,10 @@ impl DetailView {
                 .join("\n")
         } else if task.awaiting_owner() {
             "Review the result and evidence [r].".into()
+        } else if task.status == Status::NeedsMe
+            && run.is_some_and(|r| r.outcome == Some(RunOutcome::Stopped))
+        {
+            "Stopped by owner. The worktree and branch are kept; retry or discard the task.".into()
         } else if task.status == Status::NeedsMe {
             run.and_then(|r| r.blocked_excerpt.clone())
                 .unwrap_or_else(|| "Open the agent [a] to inspect the blocker.".into())

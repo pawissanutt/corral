@@ -22,6 +22,7 @@ fn subscription_resume(
     id: &str,
     pane: &str,
     container: &AssistantContainer,
+    input: &ops::InputClaim,
 ) -> Result<Prepared> {
     let mut overrides = crate::agent::hooks::pm::Overrides::default();
     if let Some(binding) = container
@@ -33,7 +34,7 @@ fn subscription_resume(
         overrides.provider = Some(binding.connection.provider().into());
         overrides.effort = binding.effort.clone();
     }
-    ops::resume(ctx, id, pane, &overrides).map(|(_, prepared)| prepared)
+    ops::resume_admitted(ctx, id, pane, &overrides, input).map(|(_, prepared)| prepared)
 }
 
 fn gate(ctx: &Ctx, id: &str, container: &AssistantContainer) -> Result<()> {
@@ -109,7 +110,16 @@ fn reason(error: &anyhow::Error, default: PauseReason) -> PauseReason {
 
 /// Exit 78 requests a switch; only canonical quota evidence can authorize its preparation.
 /// Refusals retain the subscription conversation and leave every authority journal unchanged.
-pub(crate) fn resume(ctx: &Ctx, id: &str, pane: &str, generation: u32) -> Result<Prepared> {
+pub(crate) fn resume(ctx: &Ctx, id: &str, pane: &str, generation: u32) -> Result<Option<Prepared>> {
+    let Some(input) = ops::claim_input(ctx, id)? else {
+        return Ok(None);
+    };
+    if !crate::session_control::automation_may_start(
+        ctx,
+        &corral_core::inbox::Recipient::Assistant { session: id.into() },
+    )? {
+        return Ok(None);
+    }
     let _lease = ctx.store.assistant_scratch_lease(id)?;
     let container = ctx.store.get_assistant_container(id)?;
     ensure!(
@@ -119,11 +129,11 @@ pub(crate) fn resume(ctx: &Ctx, id: &str, pane: &str, generation: u32) -> Result
         "assistant_changed: stopped generation is no longer current"
     );
     if policy::quota_evidence(&container.state, None).is_none() {
-        return subscription_resume(ctx, id, pane, &container);
+        return subscription_resume(ctx, id, pane, &container, &input).map(Some);
     }
     let prepared = transfer(ctx, id, pane, &container);
     match prepared {
-        Ok(prepared) => Ok(prepared),
+        Ok(prepared) => Ok(Some(prepared)),
         Err(error) => {
             let source = reference(id);
             let successor_prepared = generation
@@ -142,12 +152,12 @@ pub(crate) fn resume(ctx: &Ctx, id: &str, pane: &str, generation: u32) -> Result
             if successor_prepared {
                 return Err(error);
             }
-            let prepared = subscription_resume(ctx, id, pane, &container)?;
+            let prepared = subscription_resume(ctx, id, pane, &container, &input)?;
             ops::write_switch_notice(
                 &prepared,
                 "corral: paid continuation paused; continuing this assistant on its subscription connection.",
             )?;
-            Ok(prepared)
+            Ok(Some(prepared))
         }
     }
 }
@@ -224,6 +234,15 @@ pub(crate) fn recover(
     pane: &str,
     container: &AssistantContainer,
 ) -> Result<Option<Prepared>> {
+    // This predicate is outside financial recovery's error handler: a session fence
+    // must leave the existing intent and paid pause reason unchanged.
+    ensure!(
+        crate::session_control::automation_may_start(
+            ctx,
+            &corral_core::inbox::Recipient::Assistant { session: id.into() },
+        )?,
+        "assistant_input_deferred"
+    );
     let Some(binding) = container
         .state
         .current_generation()
@@ -297,6 +316,15 @@ pub(crate) fn recover(
 
 /// A host exit before healthy hello revokes its prepared launch, regardless of exit code.
 pub(crate) fn failed_start(ctx: &Ctx, id: &str, generation: u32) -> Result<()> {
+    let Some(_input) = ops::claim_input(ctx, id)? else {
+        return Ok(());
+    };
+    if !crate::session_control::automation_may_start(
+        ctx,
+        &corral_core::inbox::Recipient::Assistant { session: id.into() },
+    )? {
+        return Ok(());
+    }
     let source = reference(id);
     if shared::intent_for(&ctx.store, &source, generation)?
         .is_some_and(|i| i.phase == IntentPhase::Prepared)

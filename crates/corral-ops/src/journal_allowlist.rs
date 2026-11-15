@@ -104,7 +104,7 @@ pub const JOURNAL_ALLOWLIST: &[(&str, &str, &str, &str, &str)] = &[
     ),
     (
         "plan_review/launch.rs",
-        "review_with_origin",
+        "review_claimed",
         "plan_review_delivery",
         "submit_head",
         "agent_prompt inside the PM plan review send callback",
@@ -146,9 +146,9 @@ pub const JOURNAL_ALLOWLIST: &[(&str, &str, &str, &str, &str)] = &[
     ),
     (
         "reviewer/fallback.rs",
-        "continue_review",
+        "continue_review_claimed",
         "availability_switched",
-        "review_run_automatic",
+        "review_run_claimed",
         "pane_run or agent_prompt launching the replacement reviewer",
     ),
     (

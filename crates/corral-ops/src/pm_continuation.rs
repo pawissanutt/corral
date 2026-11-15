@@ -6,7 +6,7 @@ use corral_core::availability::AvailabilityClass;
 use corral_core::connection::BillingMode;
 use corral_core::paid_episode::PaidBinding;
 use corral_core::records::RecordArea;
-use corral_core::{ProfileRole, ResolvedProfile};
+use corral_core::{ProfileRole, ResolvedProfile, StoreLock};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +15,7 @@ use crate::agent::recovery::{PmRecoveryInProgress, PmRecoveryLease};
 use crate::availability::{checkpoint, continuation, policy};
 use continuation::{ContextSource, IntentPhase, PauseReason, SubjectRevision, Transfer};
 
-const PAUSED: RecordArea<u32> = RecordArea::new("pm-continuation-pauses");
+const CONTINUATION_PAUSED: RecordArea<u32> = RecordArea::new("pm-continuation-pauses");
 const SIGNAL: RecordArea<QuotaSignal> = RecordArea::new("pm-continuation-signals");
 
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
@@ -95,14 +95,33 @@ fn clear_signal(ctx: &Ctx, generation: u32) -> Result<()> {
     Ok(())
 }
 
-fn pause(ctx: &Ctx, generation: u32, reason: PauseReason) -> Result<()> {
+fn pause_continuation(ctx: &Ctx, generation: u32, reason: PauseReason) -> Result<()> {
     continuation::pause(ctx, &ContainerRef::Pm, reason, "PM continuation refused")?;
-    PAUSED.save(&ctx.store, "generation", &generation)?;
+    CONTINUATION_PAUSED.save(&ctx.store, "generation", &generation)?;
     clear_signal(ctx, generation)
 }
 
-/// Busy recovery is owned by the winner; the supervisor must not open a second PM.
+/// Test entry without the supervisor's already-held input claim.
+#[cfg(test)]
 pub(crate) fn advance(ctx: &Ctx, current: &AgentPm, now: Timestamp) -> Result<bool> {
+    let Some(input) = ctx.store.try_lock("deliver-pm")? else {
+        return Ok(false);
+    };
+    advance_held(ctx, current, now, &input)
+}
+
+/// Session admission precedes financial signals/pauses and every replacement effect.
+/// The supervisor retains this claim through recovery settlement and launch bookkeeping;
+/// neither stage may reacquire it.
+pub(crate) fn advance_held(
+    ctx: &Ctx,
+    current: &AgentPm,
+    now: Timestamp,
+    input: &StoreLock,
+) -> Result<bool> {
+    if !crate::session_control::automation_may_start(ctx, &corral_core::inbox::Recipient::Pm)? {
+        return Ok(false);
+    }
     let config = &ctx.store.config;
     if !policy::profile_configured(config, &config.pm.agent, AgentRole::Pm)
         && !has_paid_state(&current.state)
@@ -141,7 +160,7 @@ pub(crate) fn advance(ctx: &Ctx, current: &AgentPm, now: Timestamp) -> Result<bo
         clear_signal(ctx, signal.generation)?;
         return Ok(false);
     }
-    if PAUSED.load(&ctx.store, "generation")? == Some(n) {
+    if CONTINUATION_PAUSED.load(&ctx.store, "generation")? == Some(n) {
         clear_signal(ctx, n)?;
         return Ok(false);
     }
@@ -176,7 +195,7 @@ pub(crate) fn advance(ctx: &Ctx, current: &AgentPm, now: Timestamp) -> Result<bo
         clear_signal(ctx, n)?;
         return Ok(false);
     }
-    let refuse = |reason| pause(ctx, n, reason).map(|()| false);
+    let refuse = |reason| pause_continuation(ctx, n, reason).map(|()| false);
     let Some(source) = pm
         .state
         .current_generation()
@@ -212,20 +231,23 @@ pub(crate) fn advance(ctx: &Ctx, current: &AgentPm, now: Timestamp) -> Result<bo
         return refuse(PauseReason::UnsupportedHost);
     }
     let decide = || frozen(ctx, &pm, &profile, &target, &evidence.summary);
-    match super::successor(
+    match super::successor_with(
         ctx,
         &pm,
         "subscription_quota",
         true,
         Some(&decide),
         Some(&target.resolved),
+        Some(input),
     ) {
         Ok(_) => {
             clear_signal(ctx, n)?;
             Ok(true)
         }
         Err(error) => {
-            pause(ctx, n, PauseReason::SuccessorAmbiguous)?;
+            if !crate::operating::refused(&error) {
+                pause_continuation(ctx, n, PauseReason::SuccessorAmbiguous)?;
+            }
             Err(error.context("launching PM continuation"))
         }
     }
@@ -241,7 +263,7 @@ fn frozen(
 ) -> Result<bool> {
     let n = previous.state.binding.generation;
     let refuse = |reason| -> Result<bool> {
-        pause(ctx, n, reason)?;
+        pause_continuation(ctx, n, reason)?;
         Ok(false)
     };
     if !crate::pm_rotation::survey(ctx, n, false)?.0.is_empty() {
@@ -307,7 +329,7 @@ fn frozen(
     {
         return refuse(PauseReason::PolicyNotApproved);
     }
-    if continuation::prepare(
+    if let Err(error) = continuation::prepare(
         ctx,
         Transfer {
             source: ContainerRef::Pm,
@@ -319,9 +341,10 @@ fn frozen(
             subject: subject(),
             reason: reason.into(),
         },
-    )
-    .is_err()
-    {
+    ) {
+        if crate::operating::refused(&error) {
+            return Err(error);
+        }
         return refuse(PauseReason::SuccessorAmbiguous);
     }
     Ok(true)
@@ -363,6 +386,9 @@ pub(crate) fn regenerate(ctx: &Ctx, state: &AgentRunState) -> Result<()> {
         return Ok(());
     }
     if let Err(error) = continuation::regenerate(ctx, &ContainerRef::Pm) {
+        if crate::operating::refused(&error) {
+            return Err(error);
+        }
         continuation::pause(
             ctx,
             &ContainerRef::Pm,
@@ -394,7 +420,7 @@ pub(crate) fn require_recoverable(ctx: &Ctx, state: &AgentRunState) -> Result<()
                 IntentPhase::Prepared | IntentPhase::Paused | IntentPhase::Closed
             )
         {
-            pause(ctx, n, PauseReason::SuccessorAmbiguous)?;
+            pause_continuation(ctx, n, PauseReason::SuccessorAmbiguous)?;
             anyhow::bail!("PM continuation successor never bound; owner intervention required");
         }
     }

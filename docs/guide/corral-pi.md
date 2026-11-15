@@ -1530,7 +1530,7 @@ subscription and guarded-stream restrictions survive model refresh.
 corral talks to a live host over its generation's Unix socket. Any corral process can connect
 through `ctl.cap`, which it must send with every request; the host also refuses a peer running
 as another user. The commands are `hello`, `get_state`, `submit_input`, `cancel`,
-`events_since`, `shutdown`, `questions`, `queue_state` and `queue_withdraw`. Input is answered truthfully: `started` (with the turn it
+`events_since`, `live_since`, `shutdown`, `questions`, `queue_state` and `queue_withdraw`. Input is answered truthfully: `started` (with the turn it
 started), `queued` (busy, delivered as a steer or follow-up), `handled` (a command that needs
 no model run) or `rejected` (for example, busy input whose policy is `prompt`). When Pi has not
 answered within 30 seconds, the reply is `pending`: the input stays admitted, its outcome follows
@@ -1548,6 +1548,66 @@ Each host event carries the generation and a monotonic sequence. `events_since` 
 one frame of events; continue from its `next` cursor while `more` is true. A reader whose cursor
 fell behind the host's buffer gets an explicit gap, which corral records as an
 `agent_events_gap` event, a requirement to reconcile from its own records.
+
+#### Live chat events
+
+Every host (interactive, headless or daemon-owned, for every role) advertises `"live_since"`
+in `hello.commands`. `live_since {seq}` takes a non-negative safe integer cursor, with the
+same peer-UID, generation and `ctl_cap` checks as `events_since`. Its result is
+`{generation, events, last, next, more, gap?}`. Start at `seq:0`, then continue from `next`,
+including while `more:true`. `gap`, when present, is
+`{after, resumed, missing, reconcile:true}`: events after the requested cursor were lost
+and replay from the canonical Pi session is required. Hosts without a live producer refuse
+with `capability_unavailable`; older hosts do not advertise the command.
+
+Live events have their own 512-event `EventLog` ring and monotonic sequence per generation.
+The cursor is independent of `events_since` and `hello.last_seq`; never share them. Live
+traffic cannot evict or renumber lifecycle, input, queue or `owner_*` events. Pages fit one
+64 KiB bridge frame; individual events retain the 8 KiB bound and the existing
+`{omitted:"event_too_large", bytes}` fallback for an oversized event. These ephemeral events
+do not change the Pi session file, `owner_delta`, model/tool execution or cancellation.
+
+Each live event includes `{seq, generation, at, kind}` (`at` is an ISO timestamp), plus:
+
+| `kind` | Payload | Upstream source |
+|---|---|---|
+| `live_turn` | `{turn, state:"started"}` | `agent_start`, after the host increments its turn |
+| `live_turn` | `{turn, state:"ended", aborted, error?}` | `agent_settled`; `error` is the latest assistant `message_end` failure |
+| `live_text` | `{turn, message, offset, text}` | `message_update.assistantMessageEvent` with `type:"text_delta"` |
+| `live_thinking` | `{turn, message, offset, text}` | `message_update.assistantMessageEvent` with `type:"thinking_delta"` |
+| `live_tool` | `{turn, call, tool, state:"started", args?, args_truncated?}` | `tool_execution_start` |
+| `live_tool` | `{turn, call, tool, state:"updated", partial?}` | `tool_execution_update` |
+| `live_tool` | `{turn, call, tool, state:"ended", failed, elapsed_ms?}` | `tool_execution_end`, deferred until the following `turn_end` persistence barrier |
+| `live_queue` | `{steer, follow_up}` | `queue_update` array lengths |
+
+`turn` is the host sequence exposed by `get_state.turn.current`, not Pi's inner `turn_start`
+sequence. `message` is a one-based assistant-message ordinal within that host turn, advanced
+by assistant `message_start`. Text and thinking each have an independent zero-based UTF-8
+byte `offset`, reset per message; content blocks of the same kind concatenate within that
+message. Chunks are at most 1,024 UTF-8 bytes (below the 4 KiB ceiling), cut only on character
+boundaries; JSON escaping still fits the event bound. Ended-turn `error` is at most 512 UTF-8
+bytes and resets when the next assistant message starts.
+
+For a persisted session, receiving `live_tool` with `state:"ended"`, a higher assistant
+`message` ordinal, or `live_turn` with `state:"ended"` guarantees that the corresponding
+tool-result entry (the parent result for a nested call), preceding assistant message, or
+final turn entries, respectively, have already been synchronously written to the session
+JSONL and are immediately readable; this is file visibility, not an fsync crash-durability
+guarantee.
+
+Tool completions wait for Pi's awaited `turn_end` barrier, not a timer; started/updated tool
+events and text/thinking deltas retain their streaming timing. A message-append failure
+that prevents that barrier also prevents a misleading ended-turn event at settlement.
+
+`call` is the upstream `toolCallId`, `tool` is `toolName`, `failed` is `isError`, and
+`elapsed_ms`, when supplied, is upstream `durationMs`. Started-tool `args` is JSON text,
+limited to a 1,024-byte UTF-8 prefix. A cut prefix is not necessarily valid JSON and carries
+`args_truncated:true`; an unserializable argument value omits `args` and also sets that flag.
+Updated-tool `partial`, when the partial result has a content array, is the last at most
+1,024 UTF-8 bytes of its concatenated text blocks, not a delta; images and structured details
+are not included. A partial result without a content array omits `partial`. Queue counts are
+emitted on each upstream queue update. Emission is synchronous in-memory ring appends only:
+there is no reader-dependent model behavior, awaiting or I/O.
 
 ### Identified input queues
 

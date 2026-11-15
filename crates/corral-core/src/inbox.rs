@@ -269,6 +269,9 @@ pub struct Message {
     pub author: String,
     pub created: Timestamp,
     pub binding: MessageBinding,
+    /// Structured caller metadata; corral-pi session chat merges `busy_policy`
+    /// (`steer` or `follow_up`) here. Missing/unknown policy retains legacy batching.
+    /// Other subject keys (question, key, item, project, causes) keep their meanings.
     pub subject: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes: Option<String>,

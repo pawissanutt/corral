@@ -1,30 +1,25 @@
 //! One agent session from corrald: its row on the wall, its bounded transcript page, its pane's
-//! screen (read live where corrald serves it, else a recorded capture such as a gate's log), and
-//! replies through `task.reply`. A session without a pane (a daemon-hosted assistant) has no
-//! terminal; none is drawn for it.
+//! screen (read live where corrald serves it, else a recorded capture such as a gate's log), its
+//! action bar (`controls`) and its reply box (`live_reply`) or, for an assistant, the thread its
+//! composer chats in. A session without a pane (a daemon-hosted assistant) has no terminal; none
+//! is drawn for it.
 
-use corral_protocol::assistant::ToolLine;
-use corral_protocol::detail::{
-    DetailBody, DetailRef, SessionItem, SessionMessage, SessionPage, TerminalSnapshot,
-};
+use corral_protocol::detail::{DetailBody, DetailRef, SessionItem, SessionPage, TerminalSnapshot};
 use corral_protocol::rows::AgentRow;
 
-use crate::model::board::{Mark, STAGES};
+use crate::model::board::STAGES;
 use crate::model::daemon::{self, DetailCache, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::text::{Rich, span};
-use crate::model::{ActStatus, Id, act};
+use crate::model::{ActStatus, Id};
 
 use super::live::{clock, role_label, shown_id, stale, unix, usage};
+use super::replay::transcript;
 use super::{
-    Action, FactValue, Feed, Fill, Line, LineClass, Message, MessageItem, QuestionCard, Reply,
-    ReplyMode, Run, RunFact, Session, State, Terminal, Tool, Transcript, View, line, reply_busy,
-    screen, tail_line,
+    Action, FactValue, Feed, Keys, LineClass, Run, RunFact, Session, State, Terminal, View,
+    controls, keys, line, live_reply, screen, tail_line,
 };
-
-/// Output lines an expanded tool call shows; the rest are counted, not drawn.
-const TOOL_LINES: usize = 200;
 
 /// Seconds within which a screen read counts as "just now": it is read about once a second.
 const JUST_NOW: u64 = 5;
@@ -37,7 +32,7 @@ pub(super) fn older_token(cache: &DetailCache) -> Option<String> {
     }
 }
 
-fn page(cache: Option<&DetailCache>) -> Option<&SessionPage> {
+pub(super) fn page(cache: Option<&DetailCache>) -> Option<&SessionPage> {
     match cache?.body()? {
         DetailBody::Session(page) => Some(page),
         _ => None,
@@ -52,225 +47,11 @@ fn snapshot(cache: Option<&DetailCache>) -> Option<&TerminalSnapshot> {
 }
 
 /// What failed, from the cache's error.
-fn failure(cache: Option<&DetailCache>) -> Option<String> {
+pub(super) fn failure(cache: Option<&DetailCache>) -> Option<String> {
     cache?
         .error
         .as_ref()
         .map(|error| format!("{} ({})", error.message, error.code))
-}
-
-/// The avatar letter and hue of a transcript author.
-fn avatar(author: &str) -> (&'static str, Hue) {
-    let who = author.to_ascii_lowercase();
-    if who.starts_with("corral") || who == "system" {
-        ("C", Hue::Corral)
-    } else if who.starts_with("owner") || who == "you" {
-        ("Y", Hue::You)
-    } else if who == "pm" || who.starts_with("pm ") {
-        ("P", Hue::Corral)
-    } else if who.starts_with("assistant") {
-        ("A", Hue::Worker)
-    } else if who.starts_with("gate") {
-        ("G", Hue::Corral)
-    } else if who.starts_with("reviewer") {
-        ("R", Hue::Worker)
-    } else {
-        ("W", Hue::Worker)
-    }
-}
-
-/// A finished, failed or still-running tool call; its output shows only when expanded.
-fn tool(tool: &ToolLine, key: String, state: &State) -> Tool {
-    let (result, mark) = match (tool.failed, &tool.output) {
-        (Some(true), _) => ("failed".to_owned(), Mark::Fail),
-        (None, None) => ("running".to_owned(), Mark::Active),
-        _ => (
-            match tool.elapsed_ms {
-                Some(ms) => format!("ok {:.1}s", ms as f64 / 1000.0),
-                None => "ok".to_owned(),
-            },
-            Mark::Done,
-        ),
-    };
-    let open = state.expanded.contains(&key);
-    let output = match (&tool.output, open) {
-        (Some(text), true) => {
-            let lines: Vec<&str> = text.lines().collect();
-            let cut = lines.len().saturating_sub(TOOL_LINES);
-            let mut shown: Vec<Line> = Vec::with_capacity(lines.len() - cut + 1);
-            if cut > 0 {
-                shown.push(line(&format!("… {cut} earlier lines"), LineClass::Dim));
-            }
-            shown.extend(lines[cut..].iter().map(|text| tail_line(text)));
-            shown
-        }
-        _ => Vec::new(),
-    };
-    Tool {
-        kind: tool.tool.clone(),
-        argument: tool.input.lines().next().unwrap_or_default().to_owned(),
-        result,
-        mark,
-        output,
-        expanded: tool.output.as_ref().map(|_| open),
-        action: Action::Expand(key),
-    }
-}
-
-/// The inline handover for a question the agent asked, open or settled.
-fn question(
-    key: &str,
-    text: &str,
-    options: &[corral_protocol::detail::QuestionOption],
-    answer: Option<&corral_protocol::detail::QuestionAnswer>,
-    feed: &daemon::Feed,
-) -> QuestionCard {
-    let recommended = options
-        .iter()
-        .position(|option| option.recommended)
-        .map(|at| format!(" · recommends {}", at + 1))
-        .unwrap_or_default();
-    let count = match options.len() {
-        0 => "free answer".to_owned(),
-        1 => "1 option".to_owned(),
-        n => format!("{n} options"),
-    };
-    match answer {
-        None => QuestionCard {
-            label: format!("{key} · waiting on you"),
-            question: text.to_owned(),
-            button: "Open handover · decide",
-            hint: format!("{count}{recommended}"),
-            open: true,
-            action: Action::OpenQuestion(Id::from(key)),
-        },
-        Some(answer) => QuestionCard {
-            label: format!("{key} · answered by {}", answer.by),
-            question: text.to_owned(),
-            button: "Open handover",
-            hint: [
-                clock(Some(answer.at.as_str()), feed),
-                Some(answer.option.clone().unwrap_or_else(|| answer.text.clone())),
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(" · "),
-            open: false,
-            action: Action::OpenQuestion(Id::from(key)),
-        },
-    }
-}
-
-fn message(message: &SessionMessage, state: &State, feed: &daemon::Feed) -> Message {
-    let (letter, hue) = avatar(&message.author);
-    let author = if letter == "Y" {
-        "you".to_owned()
-    } else {
-        message.author.clone()
-    };
-    let at = clock(message.at.as_deref(), feed);
-    let mut head: Rich = vec![span(author.clone()).bold()];
-    if let Some(at) = &at {
-        head.push(span(format!(" · {at}")).dim());
-    }
-    let stamp = message.at.clone().unwrap_or_default();
-    let mut items = Vec::new();
-    for (n, item) in message.items.iter().enumerate() {
-        match item {
-            SessionItem::Text { text } => items.extend(
-                text.split("\n\n")
-                    .map(str::trim)
-                    .filter(|part| !part.is_empty())
-                    .map(|part| MessageItem::Paragraph(vec![span(part)])),
-            ),
-            SessionItem::Tool { tool: call } => items.push(MessageItem::Tool(tool(
-                call,
-                format!("{stamp}|{}|{n}", message.author),
-                state,
-            ))),
-            SessionItem::QuestionCard {
-                key,
-                text,
-                options,
-                answer,
-                ..
-            } => items.push(MessageItem::Question(question(
-                key,
-                text,
-                options,
-                answer.as_ref(),
-                feed,
-            ))),
-            SessionItem::Other => items.push(MessageItem::Paragraph(vec![
-                span("An item this version of the app cannot show.").dim(),
-            ])),
-        }
-    }
-    Message {
-        avatar: letter,
-        hue,
-        head,
-        author,
-        detail: at.unwrap_or_default(),
-        items,
-    }
-}
-
-fn transcript(
-    id: &Id,
-    state: &State,
-    cache: Option<&DetailCache>,
-    feed: &daemon::Feed,
-) -> Transcript {
-    let body = page(cache);
-    let loading = cache.is_none_or(|cache| cache.loading);
-    let earlier = state.earlier.contains(id.as_str());
-    let fill = match body {
-        Some(page) if page.messages.is_empty() => Fill::Empty {
-            heading: "No transcript yet",
-            paragraph: "corrald has recorded no messages for this session.".into(),
-        },
-        Some(_) => Fill::Ready,
-        None => match failure(cache) {
-            Some(why) if !loading => Fill::Failed(format!(
-                "The transcript could not be loaded: {why}. It loads again when the session changes or corrald reconnects."
-            )),
-            _ => Fill::Loading,
-        },
-    };
-    let stale_note = body.and(cache).and_then(|cache| {
-        if let Some(why) = failure(Some(cache)) {
-            Some(format!(
-                "Showing the last transcript received; refreshing failed: {why}."
-            ))
-        } else {
-            (cache.stale && !cache.loading).then(|| {
-                format!(
-                    "Showing the transcript as of {}; corrald is not answering.",
-                    feed.synced.as_deref().unwrap_or("the last update")
-                )
-            })
-        }
-    });
-    Transcript {
-        messages: body
-            .map(|page| {
-                page.messages
-                    .iter()
-                    .map(|m| message(m, state, feed))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        older: cache
-            .and_then(older_token)
-            .map(|_| Action::Older(id.clone())),
-        newer: earlier.then(|| Action::Newer(id.clone())),
-        paging: body.is_some() && loading,
-        fill,
-        stale: stale_note,
-        disclaimer: None,
-    }
 }
 
 /// When the shown screen was last confirmed: the latest reply's time, which a not-modified
@@ -303,12 +84,14 @@ fn reason(message: &str) -> &str {
 }
 
 /// The session pane's screen: read live where corrald serves it, or a recorded capture (a
-/// gate's log). Neither takes keys. Live rows stay as read; only a current read is `Live`.
+/// gate's log). Live rows stay as read; only a current read is `Live`. Keys go to the pane only
+/// through `keys`, the bar under it, while corrald offers them.
 fn terminal(
     row: &AgentRow,
     pane: &str,
     cache: Option<&DetailCache>,
     feed: &daemon::Feed,
+    keys: Option<Keys>,
 ) -> Terminal {
     let capture = snapshot(cache);
     let loading = cache.is_none_or(|cache| cache.loading);
@@ -377,7 +160,12 @@ fn terminal(
             row.runtime.as_deref().unwrap_or("runtime unknown")
         ),
         status,
-        input: "keys are not sent".into(),
+        input: if matches!(keys, Some(Keys::Open(_))) {
+            "keys go to the pane from the bar below"
+        } else {
+            "keys are not sent"
+        }
+        .into(),
         lines: capture
             .map(|capture| {
                 if capture.live {
@@ -399,93 +187,8 @@ fn terminal(
             .unwrap_or_default(),
         empty,
         phone_keys: Vec::new(),
+        keys,
         refresh: Some(Action::Refresh(DetailRef::Terminal { id: row.id.clone() })),
-    }
-}
-
-/// The reply box: open for a replyable session with a task, otherwise closed with the reason
-/// and, for an assistant, the thread it answers in.
-#[allow(clippy::too_many_arguments)]
-fn reply(
-    id: &Id,
-    role: &str,
-    shown: &str,
-    body: Option<&SessionPage>,
-    open_question: bool,
-    state: &State,
-    feed: &daemon::Feed,
-    via: &str,
-) -> Reply {
-    let task = body.and_then(|page| page.task.clone());
-    let mode = match body {
-        None => ReplyMode::Closed {
-            reason: "Replies open once the transcript has loaded.".into(),
-            action: None,
-        },
-        Some(page) if page.replyable && task.is_some() => {
-            if reply_busy(state, id, feed) {
-                ReplyMode::Busy
-            } else {
-                ReplyMode::Open
-            }
-        }
-        Some(page) if role == "assistant" => ReplyMode::Closed {
-            reason: page
-                .reply_refusal
-                .clone()
-                .unwrap_or_else(|| "This assistant answers in its thread.".into()),
-            action: Some(("Open thread", Action::OpenThread(id.clone()))),
-        },
-        Some(page) => ReplyMode::Closed {
-            reason: page.reply_refusal.clone().unwrap_or_else(|| match role {
-                "reviewer" | "plan_reviewer" => {
-                    "A reviewer takes no replies; replies go to the task's worker.".into()
-                }
-                _ => "corrald does not take replies for this session now.".into(),
-            }),
-            action: None,
-        },
-    };
-    let key = state.replies.get(id.as_str());
-    let outcome = key.and_then(|key| act::status(feed, key));
-    let status = outcome.as_ref().map(|status| match status {
-        ActStatus::Done => (
-            Hue::Ok,
-            format!("Delivered to {}", task.as_deref().unwrap_or(shown)),
-        ),
-        ActStatus::Failed(_) | ActStatus::Refused(_) | ActStatus::Conflict(_) => {
-            (Hue::Fail, status.line())
-        }
-        ActStatus::Unknown => (
-            Hue::Held,
-            "Delivery unknown · it may have arrived; check before sending again".into(),
-        ),
-        ActStatus::Abandoned => (Hue::Held, status.line()),
-        _ => (Hue::Neutral, status.line()),
-    });
-    Reply {
-        placeholder: format!("Message {} {shown}…", role_label(role)),
-        accessibility_label: "Reply to agent",
-        button: "Send",
-        hint: vec![
-            span("Arrives in "),
-            span(task.clone().unwrap_or_else(|| shown.to_owned())).mono(),
-            span(" as owner input · "),
-            span(via.to_owned()).mono(),
-        ],
-        question_hint: if open_question {
-            "Answering the open question happens on its handover sheet".into()
-        } else {
-            String::new()
-        },
-        mode,
-        status,
-        recover: matches!(outcome, Some(ActStatus::Unknown))
-            .then(|| key.map(|key| Action::Recover(key.clone())))
-            .flatten(),
-        delivered: matches!(outcome, Some(ActStatus::Done))
-            .then(|| key.map(ToString::to_string))
-            .flatten(),
     }
 }
 
@@ -496,9 +199,40 @@ fn fact(label: &'static str, value: Rich) -> RunFact {
     }
 }
 
+/// The thread scope an assistant row chats in: the quick thread's, or its own `A-n`.
+pub fn chat_scope(feed: &daemon::Feed, row: &AgentRow) -> Id {
+    let quick = feed
+        .assistants
+        .get(row.id.as_str())
+        .is_some_and(|assistant| assistant.kind == corral_protocol::rows::AssistantKind::Quick);
+    if quick {
+        Id::from(crate::model::assistant::QUICK)
+    } else {
+        Id::from(row.id.as_str())
+    }
+}
+
+/// The key of the session's latest `assistant.session` control operation, whose reply the
+/// screen reads for [`session`]'s `op`.
+pub fn op_key(state: &State, id: &Id) -> Option<Id> {
+    state
+        .sent
+        .get(id.as_str())
+        .filter(|sent| sent.channel == controls::Channel::Op)
+        .map(|sent| sent.key.clone())
+}
+
 /// Build the session page for a daemon session id. `via` is this device's authenticated
-/// attribution, as replies carry it.
-pub fn session(state: &State, id: &Id, feed: &daemon::Feed, _env: Env, via: &str) -> Session {
+/// attribution, as replies carry it; `op` is the status of the session's latest
+/// `assistant.session` control operation ([`op_key`]).
+pub fn session(
+    state: &State,
+    id: &Id,
+    feed: &daemon::Feed,
+    env: Env,
+    via: &str,
+    op: Option<&ActStatus>,
+) -> Session {
     let row = feed.agents.get(id.as_str());
     let session_cache = feed.detail(&DetailRef::Session { id: id.to_string() });
     let body = page(session_cache);
@@ -528,6 +262,7 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, _env: Env, via: &str
             pane,
             feed.detail(&DetailRef::Terminal { id: id.to_string() }),
             feed,
+            keys::keys(state, id, row, feed, env),
         )
     });
     let profile = row.and_then(|row| row.profile.clone());
@@ -657,9 +392,13 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, _env: Env, via: &str
         ],
         toggle: Action::ToggleView,
         notice,
+        controls: controls::live_bar(state, id, row, feed, env, op),
         transcript: transcript(id, state, session_cache, feed),
         terminal,
-        reply: reply(id, &role, &shown, body, open_question, state, feed, via),
+        reply: live_reply::reply(id, row, &role, &shown, open_question, state, feed, env, via),
+        chat: row
+            .filter(|row| row.role == "assistant" && row.controls.send.available)
+            .map(|row| chat_scope(feed, row)),
         run_details: Run {
             title: "Run",
             facts,
@@ -710,6 +449,9 @@ mod tests {
                 cost_basis: None,
                 tokens: None,
                 rev: 1,
+                generation: None,
+                turn: None,
+                controls: Default::default(),
             },
         );
         let target = DetailRef::Terminal { id: id.into() };
@@ -735,6 +477,7 @@ mod tests {
             &feed,
             daemon_env(&feed, Form::Desktop),
             "app:test",
+            None,
         );
         let terminal = page.terminal.expect("a session with a pane has a terminal");
         let shown: Vec<String> = terminal

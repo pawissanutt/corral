@@ -13,6 +13,7 @@ use crate::{Ctx, DispatchOpts, DispatchOutcome, prompt};
 
 mod claim;
 pub(crate) mod continuation;
+pub(crate) use continuation::dispatch;
 #[cfg(test)]
 mod snapshot_tests;
 
@@ -57,11 +58,13 @@ pub(crate) fn replacement_allowed<T: corral_core::TaskRef + ?Sized>(
     crate::assistant::workflow::handoff::admission::explicit(store, task, OperatingActionKind::Plan)
 }
 
-pub(crate) fn dispatch(
+/// Paid continuation already holds its source input claim through preparation and dispatch.
+fn dispatch_claimed(
     ctx: &Ctx,
     head: &TaskHead,
     opts: &DispatchOpts,
     admission: &Admission,
+    _input: Option<&corral_core::store::StoreLock>,
 ) -> Result<DispatchOutcome<Box<TaskHead>>> {
     corral_core::Park::require_unparked_ref(head)?;
     crate::tracker::check_action(head, "dispatch tracker to the plan pipeline")?;
@@ -601,6 +604,10 @@ pub(crate) fn revise(
     origin: crate::operating::Origin,
 ) -> Result<bool> {
     let owner = origin == crate::operating::Origin::Owner;
+    let _input = continuation::claim_planner(ctx, head, owner)?;
+    if !owner && _input.is_none() {
+        return Ok(false);
+    }
     let _action = (!owner).then(|| corral_core::work::action(&head.id, OperatingActionKind::Plan));
     crate::tracker::check_action(head, "revise tracker in the plan pipeline")?;
     let task = &head.shell_task()?;
@@ -756,6 +763,10 @@ pub(crate) fn resume_prepared(ctx: &Ctx, head: &TaskHead) -> Result<bool> {
     }
     let Some(claim) = claim::load(task)? else {
         return Ok(false);
+    };
+    // A saved owner authorization is not fresh owner input: automatic recovery waits too.
+    let Some(_input) = continuation::claim_planner(ctx, head, false)? else {
+        return Ok(true);
     };
     if !continuation::resume_planner(ctx, head)? {
         return Ok(true);

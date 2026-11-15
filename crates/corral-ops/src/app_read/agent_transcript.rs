@@ -1,40 +1,133 @@
 //! Bounded readback of trusted, stored session references. Request IDs never become paths.
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::LazyLock;
 
-use anyhow::{Context, Result, bail, ensure};
-use corral_protocol::assistant::ToolLine;
+use anyhow::{Context, Result, ensure};
 use corral_protocol::detail::session::{SessionItem, SessionMessage, TerminalSnapshot};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
-use super::short;
+use super::{replay, short};
 use crate::Ctx;
 
 const WINDOW: u64 = 128 * 1024;
 const MESSAGES: usize = 32;
-const TEXT_BYTES: usize = 32 * 1024;
 const ARCHIVE_BYTES: u64 = 8 * 1024 * 1024;
 /// Lines a wall tile shows for what a session did last.
 const TAIL_LINES: usize = 4;
 const TAIL_BYTES: usize = 160;
 const LOG_TAIL_WINDOW: u64 = 4 * 1024;
-
-pub(super) fn cursor(page: Option<&str>, kind: &str) -> Result<Option<u64>> {
-    page.map(|page| {
-        let (prefix, offset) = page
-            .split_once(':')
-            .context("invalid session page cursor")?;
-        ensure!(
-            prefix == kind && offset.len() <= 20,
-            "invalid session page cursor"
-        );
-        offset.parse().context("invalid session page position")
-    })
-    .transpose()
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) enum Source {
+    Transcript { start: u64, end: u64, index: usize },
+    Thread { before: Option<u64>, index: usize },
+}
+impl Source {
+    pub(super) fn index(&self, index: usize) -> Self {
+        match self {
+            Self::Transcript { start, end, .. } => Self::Transcript {
+                start: *start,
+                end: *end,
+                index,
+            },
+            Self::Thread { before, .. } => Self::Thread {
+                before: *before,
+                index,
+            },
+        }
+    }
+    pub(super) fn item(&self) -> usize {
+        match self {
+            Self::Transcript { index, .. } | Self::Thread { index, .. } => *index,
+        }
+    }
 }
 
-fn open(path: &Path) -> Result<File> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct Token {
+    pub source: Source,
+    pub pair: Option<Source>,
+    pub offset: usize,
+    pub digest: String,
+}
+
+fn secret() -> Result<&'static [u8; 32]> {
+    static SECRET: LazyLock<std::result::Result<[u8; 32], String>> = LazyLock::new(|| {
+        let mut bytes = [0; 32];
+        getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
+        Ok(bytes)
+    });
+    SECRET
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("creating transcript token key: {error}"))
+}
+pub(super) fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        result.push(DIGITS[(byte >> 4) as usize] as char);
+        result.push(DIGITS[(byte & 15) as usize] as char);
+    }
+    result
+}
+fn unhex(text: &str) -> Result<Vec<u8>> {
+    ensure!(text.len().is_multiple_of(2), "invalid replay token");
+    text.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let digit = |byte: u8| (byte as char).to_digit(16).context("invalid replay token");
+            Ok((digit(pair[0])? * 16 + digit(pair[1])?) as u8)
+        })
+        .collect()
+}
+fn signature(id: &str, payload: &[u8]) -> Result<String> {
+    // HMAC-SHA256: the session id is authenticated, not trusted token metadata.
+    let mut inner = [0x36; 64];
+    let mut outer = [0x5c; 64];
+    for (index, byte) in secret()?.iter().enumerate() {
+        inner[index] ^= byte;
+        outer[index] ^= byte;
+    }
+    let mut hash = Sha256::new();
+    hash.update(inner);
+    hash.update((id.len() as u64).to_be_bytes());
+    hash.update(id.as_bytes());
+    hash.update(payload);
+    let mut final_hash = Sha256::new();
+    final_hash.update(outer);
+    final_hash.update(hash.finalize());
+    Ok(hex(&final_hash.finalize()))
+}
+pub(super) fn encode(id: &str, token: &Token) -> Result<String> {
+    let bytes = serde_json::to_vec(token).context("encoding replay item token")?;
+    Ok(format!("{}.{}", hex(&bytes), signature(id, &bytes)?))
+}
+pub(super) fn decode(id: &str, text: &str) -> Result<Token> {
+    ensure!(text.len() <= 2048, "invalid replay token");
+    let (payload, mac) = text.split_once('.').context("invalid replay token")?;
+    let bytes = unhex(payload)?;
+    let expected = signature(id, &bytes)?;
+    ensure!(
+        mac.len() == expected.len()
+            && mac
+                .bytes()
+                .zip(expected.bytes())
+                .fold(0, |diff, (a, b)| diff | (a ^ b))
+                == 0,
+        "invalid replay token"
+    );
+    serde_json::from_slice(&bytes).context("invalid replay token payload")
+}
+pub(super) fn digest(item: &SessionItem) -> Result<String> {
+    Ok(hex(&Sha256::digest(
+        serde_json::to_vec(item).context("encoding replay item")?,
+    )))
+}
+
+pub(super) fn open(path: &Path) -> Result<File> {
     let meta = std::fs::symlink_metadata(path).context("reading recorded output metadata")?;
     ensure!(meta.is_file(), "recorded output is not a regular file");
     #[cfg(unix)]
@@ -69,191 +162,213 @@ fn open(path: &Path) -> Result<File> {
     Ok(file)
 }
 
-/// Reads backwards by bytes, never rescanning the complete transcript or allocating its history.
-/// Incomplete JSONL writes remain invisible until their newline is durable.
+/// Finds one record boundary using fixed windows, including when a single JSONL record is huge.
+fn boundary(file: &mut File, mut end: u64) -> Result<u64> {
+    let mut bytes = [0; WINDOW as usize];
+    while end > 0 {
+        let start = end.saturating_sub(WINDOW);
+        let count = (end - start) as usize;
+        file.seek(SeekFrom::Start(start))
+            .context("seeking transcript boundary")?;
+        file.read_exact(&mut bytes[..count])
+            .context("reading transcript boundary")?;
+        if let Some(index) = bytes[..count].iter().rposition(|byte| *byte == b'\n') {
+            return Ok(start + index as u64 + 1);
+        }
+        end = start;
+    }
+    Ok(0)
+}
+
+/// Deserialize only the selected record, through a bounded-buffer reader, never a whole-file read.
+pub(super) fn record(path: &Path, start: u64, end: u64) -> Result<Value> {
+    let mut file = open(path)?;
+    let len = file.metadata().context("reading transcript size")?.len();
+    ensure!(start < end && end <= len, "transcript item is stale");
+    if start > 0 {
+        file.seek(SeekFrom::Start(start - 1))
+            .context("seeking transcript record start")?;
+        let mut byte = [0];
+        file.read_exact(&mut byte)
+            .context("reading transcript record start")?;
+        ensure!(byte[0] == b'\n', "invalid transcript record boundary");
+    }
+    file.seek(SeekFrom::Start(end - 1))
+        .context("seeking transcript record end")?;
+    let mut byte = [0];
+    file.read_exact(&mut byte)
+        .context("reading transcript record end")?;
+    ensure!(byte[0] == b'\n', "transcript record is incomplete");
+    file.seek(SeekFrom::Start(start))
+        .context("seeking transcript record")?;
+    serde_json::from_reader(BufReader::new(file.take(end - start)))
+        .context("decoding recorded transcript entry")
+}
+
+/// The skip counts items already returned from the end of a multi-page record.
+pub(super) fn position(page: Option<&str>) -> Result<(Option<u64>, usize, String)> {
+    let Some(page) = page else {
+        return Ok((None, 0, "*".into()));
+    };
+    let mut parts = page.split(':');
+    ensure!(
+        parts.next() == Some("transcript"),
+        "invalid transcript cursor"
+    );
+    let end = parts
+        .next()
+        .context("missing transcript position")?
+        .parse()
+        .context("invalid transcript position")?;
+    let skip = parts
+        .next()
+        .unwrap_or("0")
+        .parse()
+        .context("invalid transcript item position")?;
+    let branch = parts.next().unwrap_or("*");
+    ensure!(
+        matches!(branch, "*" | "-")
+            || (branch.len() == 32 && branch.bytes().all(|byte| byte.is_ascii_hexdigit())),
+        "invalid transcript branch cursor"
+    );
+    ensure!(parts.next().is_none(), "invalid transcript cursor");
+    Ok((Some(end), skip, branch.into()))
+}
+
+/// Older pages preserve every block, including blocks of a record larger than a reply.
 pub(super) fn messages(
     path: &Path,
+    id: &str,
     page: Option<&str>,
+) -> Result<(Vec<SessionMessage>, Option<String>)> {
+    messages_with_words(path, id, page, true, replay::PAGE_BYTES)
+}
+
+pub(super) fn messages_with_words(
+    path: &Path,
+    id: &str,
+    page: Option<&str>,
+    words: bool,
+    budget: usize,
 ) -> Result<(Vec<SessionMessage>, Option<String>)> {
     let mut file = open(path)?;
     let len = file.metadata().context("reading transcript size")?.len();
-    let end = cursor(page, "transcript")?.unwrap_or(len);
-    ensure!(end <= len, "transcript cursor is stale");
-    let start = end.saturating_sub(WINDOW);
-    file.seek(SeekFrom::Start(start))
-        .context("seeking recorded transcript page")?;
-    let mut bytes = Vec::new();
-    file.take(end - start)
-        .read_to_end(&mut bytes)
-        .context("reading recorded transcript page")?;
-    let first = if start == 0 {
-        0
-    } else {
-        bytes
-            .iter()
-            .position(|b| *b == b'\n')
-            .map(|n| n + 1)
-            .unwrap_or(bytes.len())
-    };
-    let mut offsets = Vec::new();
-    let mut position = first;
-    for line in bytes[first..].split_inclusive(|b| *b == b'\n') {
-        if line.ends_with(b"\n") {
-            offsets.push((position, line));
-        }
-        position += line.len();
-    }
-    let mut messages = Vec::new();
+    let (requested, mut skip, mut branch) = position(page)?;
+    ensure!(
+        requested.is_none_or(|end| end <= len),
+        "transcript cursor is stale"
+    );
+    let mut end = boundary(&mut file, requested.unwrap_or(len))?;
+    let mut selected = Vec::new();
     let mut size = 0;
-    let mut older = start + first as u64;
-    for (offset, line) in offsets.into_iter().rev() {
-        let value: Value =
-            serde_json::from_slice(line).context("decoding recorded transcript entry")?;
-        if let Some(message) = message(&value) {
-            let cost = crate::app_read::paging::json_len(&message)?;
-            if !messages.is_empty() && (messages.len() >= MESSAGES || size + cost > TEXT_BYTES) {
-                // Cursor includes the unconsumed record on the next page.
-                older = start + offset as u64 + line.len() as u64;
+    let mut older = None;
+    for _ in 0..MESSAGES {
+        if end == 0 || branch == "-" {
+            break;
+        }
+        let start = boundary(&mut file, end - 1)?;
+        let value = record(path, start, end)?;
+        let key = |id: &str| hex(&Sha256::digest(id.as_bytes())[..16]);
+        let entry = value.get("id").and_then(Value::as_str);
+        if branch != "*" && entry.is_none_or(|id| key(id) != branch) {
+            end = start;
+            older = (end > 0).then(|| format!("transcript:{end}:0:{branch}"));
+            continue;
+        }
+        let parent = if entry.is_some() && value.get("parentId").is_some() {
+            if branch == "*" {
+                branch = entry.map(key).unwrap_or_else(|| "*".into());
+            }
+            value
+                .get("parentId")
+                .and_then(Value::as_str)
+                .map(key)
+                .unwrap_or_else(|| "-".into())
+        } else {
+            branch.clone()
+        };
+        if let Some(mut message) = replay::message(&value) {
+            let source = replay::Source::Transcript {
+                start,
+                end,
+                index: 0,
+            };
+            let all = std::mem::take(&mut message.items);
+            ensure!(skip <= all.len(), "transcript item cursor is stale");
+            replay::header(&mut message);
+            let mut cost = crate::app_read::paging::json_len(&message)?;
+            let mut items = Vec::new();
+            let count = all.len();
+            let mut consumed = skip;
+            for (index, value) in all.into_iter().enumerate().rev().skip(skip) {
+                if !words
+                    && matches!(&value, corral_protocol::detail::SessionItem::Text { .. })
+                    && matches!(message.author.as_str(), "user" | "assistant")
+                {
+                    consumed += 1;
+                    continue;
+                }
+                let item = replay::Item {
+                    value,
+                    source: source.index(index),
+                    pair: None,
+                    hidden: false,
+                };
+                let item_cost = if matches!(
+                    &item.value,
+                    corral_protocol::detail::SessionItem::ToolCall { .. }
+                ) {
+                    // Pairing may add a result after selection; reserve its largest preview and token.
+                    4096
+                } else {
+                    crate::app_read::paging::json_len(&replay::bounded(
+                        id,
+                        replay::Item {
+                            value: item.value.clone(),
+                            source: item.source.clone(),
+                            pair: None,
+                            hidden: false,
+                        },
+                    )?)?
+                };
+                if size + cost + item_cost > budget && (!selected.is_empty() || !items.is_empty()) {
+                    older = Some(format!("transcript:{end}:{consumed}:{branch}"));
+                    break;
+                }
+                cost += item_cost;
+                consumed += 1;
+                items.push(item);
+            }
+            items.reverse();
+            if !items.is_empty() {
+                size += cost;
+                selected.push((message, items));
+            }
+            if consumed < count {
                 break;
             }
-            size += cost;
+        }
+        branch = parent;
+        end = start;
+        skip = 0;
+        older = (end > 0 && branch != "-").then(|| format!("transcript:{end}:0:{branch}"));
+    }
+    selected.reverse();
+    replay::pair(&mut selected);
+    let mut messages = Vec::new();
+    for (mut message, items) in selected {
+        for item in items {
+            message.items.extend(replay::bounded(id, item)?);
+        }
+        if !message.items.is_empty() {
             messages.push(message);
         }
-        older = start + offset as u64;
     }
-    messages.reverse();
-    // A single record larger than the read window is unavailable, not silently replaced.
-    if first == bytes.len() && !bytes.is_empty() && start > 0 {
-        bail!("transcript_record_too_large: recorded entry exceeds bounded page window");
-    }
-    Ok((messages, (older > 0).then(|| format!("transcript:{older}"))))
-}
-
-fn excerpt(value: &str, maximum: usize) -> String {
-    if value.len() <= maximum {
-        return value.to_owned();
-    }
-    format!("{}… [excerpt]", short(value, maximum.saturating_sub(14)))
-}
-
-fn scalar(value: &Value, max: usize) -> String {
-    match value.as_str() {
-        Some(text) => excerpt(text, max),
-        None => excerpt(&value.to_string(), max),
-    }
-}
-
-fn message(value: &Value) -> Option<SessionMessage> {
-    let body = value.get("message").unwrap_or(value);
-    let role = body.get("role").and_then(Value::as_str).or_else(|| {
-        match value.get("type").and_then(Value::as_str) {
-            Some("user") => Some("user"),
-            Some("assistant") => Some("assistant"),
-            _ => None,
-        }
-    })?;
-    let at = value
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .or_else(|| body.get("timestamp").and_then(Value::as_str))
-        .map(|at| short(at, 80));
-    let mut items = Vec::new();
-    // Leave room for worst-case six-byte JSON escapes and tool metadata.
-    let mut remaining = 4 * 1024;
-    if let Some(text) = body.get("content").and_then(Value::as_str) {
-        items.push(SessionItem::Text {
-            text: excerpt(text, remaining),
-        });
-    } else if let Some(blocks) = body.get("content").and_then(Value::as_array) {
-        for block in blocks.iter().take(16) {
-            if remaining == 0 {
-                break;
-            }
-            let kind = block.get("type").and_then(Value::as_str).unwrap_or("");
-            let item = match kind {
-                "text" | "input_text" | "output_text" => {
-                    let text = excerpt(
-                        block.get("text").and_then(Value::as_str).unwrap_or(""),
-                        remaining.min(8192),
-                    );
-                    remaining = remaining.saturating_sub(text.len());
-                    SessionItem::Text { text }
-                }
-                "toolCall" | "tool_use" => {
-                    let input = scalar(
-                        block
-                            .get("arguments")
-                            .or_else(|| block.get("input"))
-                            .unwrap_or(&Value::Null),
-                        remaining.min(4096),
-                    );
-                    remaining = remaining.saturating_sub(input.len());
-                    SessionItem::Tool {
-                        tool: ToolLine {
-                            tool: short(
-                                block.get("name").and_then(Value::as_str).unwrap_or(""),
-                                80,
-                            ),
-                            input,
-                            output: None,
-                            elapsed_ms: None,
-                            failed: None,
-                        },
-                    }
-                }
-                "tool_result" => {
-                    let output = scalar(
-                        block.get("content").unwrap_or(&Value::Null),
-                        remaining.min(8192),
-                    );
-                    remaining = remaining.saturating_sub(output.len());
-                    SessionItem::Tool {
-                        tool: ToolLine {
-                            // A tool-use ID is not its name; missing recorded names stay empty.
-                            tool: block
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .map(|name| short(name, 80))
-                                .unwrap_or_default(),
-                            input: String::new(),
-                            output: Some(output),
-                            elapsed_ms: None,
-                            failed: block.get("is_error").and_then(Value::as_bool),
-                        },
-                    }
-                }
-                _ => continue,
-            };
-            items.push(item);
-        }
-    }
-    if role == "toolResult" && !items.is_empty() {
-        let output = items
-            .into_iter()
-            .filter_map(|item| match item {
-                SessionItem::Text { text } => Some(text),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        items = vec![SessionItem::Tool {
-            tool: ToolLine {
-                tool: short(
-                    body.get("toolName").and_then(Value::as_str).unwrap_or(""),
-                    80,
-                ),
-                input: String::new(),
-                output: Some(output),
-                elapsed_ms: None,
-                failed: body.get("isError").and_then(Value::as_bool),
-            },
-        }];
-    }
-    (!items.is_empty()).then(|| SessionMessage {
-        author: short(role, 80),
-        at,
-        items,
-    })
+    ensure!(
+        crate::app_read::paging::json_len(&messages)? <= budget + 4096,
+        "transcript preview exceeds page budget"
+    );
+    Ok((messages, older))
 }
 
 /// The complete lines in the last `window` bytes of a recorded file.
@@ -514,6 +629,7 @@ pub(super) fn gate_snapshot(ctx: &Ctx, task: &str, run: &str) -> Result<Terminal
 #[cfg(test)]
 mod tests {
     use super::*;
+    use corral_protocol::detail::SessionItem;
 
     #[test]
     fn transcript_continuation_keeps_unconsumed_records() -> Result<()> {
@@ -527,9 +643,9 @@ mod tests {
             text.push('\n');
         }
         std::fs::write(&path, text)?;
-        let (latest, next) = messages(&path, None)?;
+        let (latest, next) = messages(&path, "session", None)?;
         assert_eq!(latest.len(), 32);
-        let (older, end) = messages(&path, next.as_deref())?;
+        let (older, end) = messages(&path, "session", next.as_deref())?;
         assert_eq!(older.len(), 8);
         assert!(end.is_none());
         let found: Vec<_> = older
@@ -559,15 +675,8 @@ mod tests {
         std::fs::write(&target, b"private host contents")?;
         let link = directory.path().join("session.jsonl");
         std::os::unix::fs::symlink(target, &link)?;
-        assert!(messages(&link, None).is_err());
+        assert!(messages(&link, "session", None).is_err());
         Ok(())
-    }
-
-    #[test]
-    fn bounded_text_marks_the_actual_excerpt() {
-        let text = excerpt(&"é".repeat(100), 32);
-        assert!(text.ends_with("[excerpt]"));
-        assert!(text.len() <= 32);
     }
 
     #[test]

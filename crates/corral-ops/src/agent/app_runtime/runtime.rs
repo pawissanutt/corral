@@ -32,10 +32,97 @@ pub struct RuntimeUpdate {
     pub exited: bool,
 }
 
+// Pause and submission share a lease: a submitted message keeps its real outcome, while a
+// pause that wins the lease prevents even the delivery claim from being published.
+pub(crate) fn control(ctx: &Ctx, session: &str) -> Result<std::fs::File> {
+    corral_core::assistant::validate_id(session)?;
+    let dir = ctx.store.dir().join("lock");
+    std::fs::create_dir_all(&dir).context("creating assistant control lock directory")?;
+    let path = dir.join(format!("assistant-control-{session}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    file.lock()
+        .with_context(|| format!("locking {}", path.display()))?;
+    Ok(file)
+}
+
+pub(super) fn pause(ctx: &Ctx, session: &str) -> Result<()> {
+    let inbox = corral_core::inbox::Inbox::new(
+        &ctx.store,
+        corral_core::inbox::Recipient::Assistant {
+            session: session.into(),
+        },
+    )?;
+    let _delivery = inbox
+        .delivery_lock()
+        .context("locking assistant inbox for pause")?;
+    let _control = control(ctx, session)?;
+    let head = ctx.store.app_thread(session)?;
+    ensure!(
+        ctx.store.get_assistant(session)?.ended.is_none() && head.state != "ended",
+        "assistant_ended"
+    );
+    ensure!(head.state != "failed", "assistant_failed");
+    ensure!(head.state != "paused", "already_paused");
+    let container = ctx.store.get_assistant_container(session)?;
+    let generation = container.state.binding.generation;
+    ensure!(
+        container
+            .state
+            .generation(generation)
+            .is_some_and(|g| g.daemon_hosted),
+        "not_daemon_hosted"
+    );
+    if super::super::pi::host_alive(&container.state)? {
+        let dir = launch::assistant_runtime_dir(&ctx.store, session).join(format!("g{generation}"));
+        let mut client = BridgeClient::connect_dir(&dir, generation)?;
+        let state = client.get_state()?;
+        if state["turn"]["open"] == true {
+            let turn = state["turn"]["current"]
+                .as_u64()
+                .context("host state has no current turn")?;
+            // Idle/turn-not-current replies mean the observed turn already settled.
+            client.cancel(Some(turn))?;
+        }
+    }
+    ctx.store.set_app_thread_state(session, "paused", None)
+}
+
+pub(super) fn resume(ctx: &Ctx, session: &str) -> Result<()> {
+    let _control = control(ctx, session)?;
+    let head = ctx.store.app_thread(session)?;
+    ensure!(
+        ctx.store.get_assistant(session)?.ended.is_none() && head.state != "ended",
+        "assistant_ended"
+    );
+    ensure!(head.state == "paused", "not_paused");
+    let container = ctx.store.get_assistant_container(session)?;
+    let state = if super::super::pi::host_alive(&container.state)? {
+        "ready"
+    } else {
+        "cold"
+    };
+    ctx.store.set_app_thread_state(session, state, None)?;
+    crate::availability::continuation::activate_ready(
+        ctx,
+        &corral_core::agent::ContainerRef::Assistant {
+            session: session.into(),
+        },
+    )
+}
+
 fn unavailable(ctx: &Ctx, session: &str, reason: &str) -> Result<()> {
     let reason = excerpt(reason, 2048);
+    let paused = ctx.store.app_thread_head(session)?.state == "paused";
     for message in ctx.store.pending_app_messages(session)? {
         if message.target != "assistant" {
+            continue;
+        }
+        if paused && !matches!(message.state.as_str(), "working" | "delivered") {
             continue;
         }
         ctx.store.update_app_message(&message.id, |m| {
@@ -53,11 +140,22 @@ fn unavailable(ctx: &Ctx, session: &str, reason: &str) -> Result<()> {
         })?;
     }
     ctx.store
-        .set_app_thread_state(session, "failed", Some(reason))
+        .set_app_thread_state_unless(session, "failed", Some(reason), &["paused", "ended"])
 }
 
 pub fn start(ctx: &Ctx, scope: &str) -> Result<Runtime> {
     let head = ctx.store.app_thread(scope)?;
+    let _input = super::super::ops::assistant::claim_input(ctx, &head.session)?
+        .context("assistant_input_busy: start is deferred")?;
+    ensure!(
+        crate::session_control::automation_may_start(
+            ctx,
+            &corral_core::inbox::Recipient::Assistant {
+                session: head.session.clone()
+            },
+        )?,
+        "assistant_input_deferred: start is deferred"
+    );
     let result = start_inner(ctx, &head.session);
     if let Err(error) = &result {
         let busy_claim = error
@@ -94,7 +192,8 @@ fn start_inner(ctx: &Ctx, session: &str) -> Result<Runtime> {
             "assistant_in_pane: use explicit take-over before daemon launch"
         );
         let claim = super::super::ops::assistant::claim(&ctx.store, session)?;
-        ctx.store.set_app_thread_state(session, "ready", None)?;
+        ctx.store
+            .set_app_thread_state_unless(session, "ready", None, &["paused", "ended"])?;
         return Ok(Runtime {
             session: session.into(),
             generation: current,
@@ -121,7 +220,8 @@ fn start_inner(ctx: &Ctx, session: &str) -> Result<Runtime> {
     let (prepared, claim) = launch::daemon::resume_claimed(ctx, session, &Overrides::default())?;
     let host = launch::daemon::spawn(&prepared)?;
     let generation = host.generation;
-    ctx.store.set_app_thread_state(session, "starting", None)?;
+    ctx.store
+        .set_app_thread_state_unless(session, "starting", None, &["paused", "ended"])?;
     Ok(Runtime {
         session: session.into(),
         generation,
@@ -157,8 +257,12 @@ fn connect(ctx: &Ctx, runtime: &mut Runtime) -> Result<bool> {
                 return Ok(false);
             }
             runtime.bridge = Some(client);
-            ctx.store
-                .set_app_thread_state(&runtime.session, "ready", None)?;
+            ctx.store.set_app_thread_state_unless(
+                &runtime.session,
+                "ready",
+                None,
+                &["paused", "ended"],
+            )?;
             Ok(true)
         }
         Err(error) if runtime.started.elapsed() < Duration::from_secs(30) => {
@@ -221,6 +325,14 @@ fn bound_json_text(text: &mut String, budget: usize) {
 }
 
 fn deliver(ctx: &Ctx, runtime: &mut Runtime) -> Result<bool> {
+    if !crate::session_control::automation_may_start(
+        ctx,
+        &corral_core::inbox::Recipient::Assistant {
+            session: runtime.session.clone(),
+        },
+    )? {
+        return Ok(false);
+    }
     let Some(client) = runtime.bridge.as_mut() else {
         return Ok(false);
     };
@@ -356,8 +468,12 @@ fn deliver(ctx: &Ctx, runtime: &mut Runtime) -> Result<bool> {
         m.state = "working".into();
         Ok(())
     })?;
-    ctx.store
-        .set_app_thread_state(&runtime.session, "working", None)?;
+    ctx.store.set_app_thread_state_unless(
+        &runtime.session,
+        "working",
+        None,
+        &["paused", "ended"],
+    )?;
     Ok(true)
 }
 
@@ -425,8 +541,12 @@ fn event(
                 Ok(())
             })?;
             runtime.active = None;
-            ctx.store
-                .set_app_thread_state(&runtime.session, "ready", None)?;
+            ctx.store.set_app_thread_state_unless(
+                &runtime.session,
+                "ready",
+                None,
+                &["paused", "ended"],
+            )?;
             update.live.push(LiveText {
                 entry: format!("{id}/answer/0"),
                 turn,
@@ -443,6 +563,17 @@ fn event(
 
 /// One bounded bridge event page and at most one new turn. Never waits for model completion.
 pub fn pump(ctx: &Ctx, runtime: &mut Runtime) -> Result<RuntimeUpdate> {
+    // Try delivery before control, matching Pause without blocking the supervisor scan.
+    let inbox = corral_core::inbox::Inbox::new(
+        &ctx.store,
+        corral_core::inbox::Recipient::Assistant {
+            session: runtime.session.clone(),
+        },
+    )?;
+    let Some(_delivery) = ctx.store.try_lock(&format!("deliver-{}", inbox.key()))? else {
+        return Ok(RuntimeUpdate::default());
+    };
+    let _control = control(ctx, &runtime.session)?;
     let mut update = RuntimeUpdate::default();
     if runtime.exited {
         update.exited = true;
@@ -514,6 +645,7 @@ pub fn stop(ctx: &Ctx, device: &AuthenticatedDevice, scope: &str, turn: u64) -> 
     super::input::recheck_authority(&ctx.store, &device.id, false)?;
     ensure!(device.assistant, "authority_assistant");
     let head = ctx.store.app_thread(scope)?;
+    let _control = control(ctx, &head.session)?;
     let container = ctx.store.get_assistant_container(&head.session)?;
     let generation = container.state.binding.generation;
     ensure!(
@@ -530,9 +662,10 @@ pub fn stop(ctx: &Ctx, device: &AuthenticatedDevice, scope: &str, turn: u64) -> 
 }
 
 pub fn shutdown(ctx: &Ctx, runtime: &mut Runtime) -> Result<()> {
+    let _control = control(ctx, &runtime.session)?;
     if let Some(client) = &mut runtime.bridge {
         client.shutdown()?;
     }
     ctx.store
-        .set_app_thread_state(&runtime.session, "stopping", None)
+        .set_app_thread_state_unless(&runtime.session, "stopping", None, &["paused", "ended"])
 }

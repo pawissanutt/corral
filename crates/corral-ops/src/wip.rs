@@ -56,7 +56,10 @@ pub(crate) fn reason(store: &Store, task: &Task) -> Result<Option<String>> {
     if limit == 0
         || !matches!(task.status, Status::Ready | Status::Backlog | Status::Idea)
         || task.current_run().is_some_and(|run| {
-            run.outcome == Some(corral_core::RunOutcome::Superseded) && run.retry.is_some()
+            matches!(
+                run.outcome,
+                Some(corral_core::RunOutcome::Superseded | corral_core::RunOutcome::Stopped)
+            ) && run.retry.is_some()
         })
     {
         return Ok(None);
@@ -71,7 +74,13 @@ pub(crate) fn reason(store: &Store, task: &Task) -> Result<Option<String>> {
                 && h.current_run.as_ref().is_some_and(|run| {
                     h.launch.as_ref().is_some_and(|l| l.reserved)
                         || (h.status == Status::Ready
-                            && run.outcome == Some(corral_core::RunOutcome::Superseded)
+                            && matches!(
+                                run.outcome,
+                                Some(
+                                    corral_core::RunOutcome::Superseded
+                                        | corral_core::RunOutcome::Stopped
+                                )
+                            )
                             && run.retry.is_some())
                 })
         })
@@ -98,6 +107,16 @@ mod tests {
             Status::Dropped,
         ] {
             assert!(!in_flight(status, true));
+        }
+        for outcome in [
+            corral_core::RunOutcome::Failed,
+            corral_core::RunOutcome::Stopped,
+        ] {
+            assert!(coding_active(
+                Status::NeedsMe,
+                Some(("2026-01-01T00:00:00Z".parse().unwrap(), Some(outcome))),
+                None,
+            ));
         }
         let dir = tempfile::tempdir().unwrap();
         let store = Store::init(dir.path()).unwrap();

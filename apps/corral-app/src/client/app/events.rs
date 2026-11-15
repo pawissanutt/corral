@@ -35,7 +35,9 @@ impl AppState {
                     });
                     state.stale = true;
                     state.loading = false;
-                    if let Some(scope) = scope {
+                    if topic == Topic::Thread
+                        && let Some(scope) = scope
+                    {
                         let thread = feed.threads.entry(scope.into()).or_default();
                         thread.stale = true;
                         thread.loading = false;
@@ -66,10 +68,16 @@ impl AppState {
                         }
                     }
                     if let Some(scope) = scope {
-                        let thread = feed.threads.entry(scope.into()).or_default();
-                        thread.stale = true;
-                        thread.loading = true;
-                        thread.live = None;
+                        if topic == Topic::Session {
+                            if self.session_scopes.contains_key(&scope) {
+                                feed.live.entry(scope.into()).or_default().reset();
+                            }
+                        } else if topic == Topic::Thread {
+                            let thread = feed.threads.entry(scope.into()).or_default();
+                            thread.stale = true;
+                            thread.loading = true;
+                            thread.live = None;
+                        }
                     }
                 });
                 Ok(vec![])

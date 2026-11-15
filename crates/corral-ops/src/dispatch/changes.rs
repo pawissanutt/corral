@@ -91,7 +91,38 @@ fn send_changes(
         .store
         .try_lock(&format!("delivery-{id}"))?
         .context("another reply is being delivered; try again")?;
-    let head = ctx.store.head(&id)?;
+    let mut head = ctx.store.head(&id)?;
+    let recipient = head
+        .current_run
+        .as_ref()
+        .map(|run| corral_core::inbox::Recipient::Run {
+            task: head.id.clone(),
+            run: run.id.clone(),
+        });
+    if by == "owner"
+        && let Some(recipient) = &recipient
+    {
+        let paused = crate::session_control::pause::recipient_paused(ctx, recipient)?;
+        crate::delivery::paused::lift_owner(ctx, recipient)?;
+        if paused {
+            head = ctx.store.head(&id)?;
+        }
+    }
+    let session_inbox = recipient
+        .as_ref()
+        .map(|recipient| corral_core::inbox::Inbox::new(&ctx.store, recipient.clone()))
+        .transpose()?;
+    let session_delivery = session_inbox
+        .as_ref()
+        .map(corral_core::inbox::Inbox::delivery_lock)
+        .transpose()?;
+    if let Some(recipient) = &recipient
+        && crate::session_control::automated_input_must_wait(ctx, recipient)?
+    {
+        return Err(
+            crate::operating::AuthorizationRefused("Held: session input fenced".into()).into(),
+        );
+    }
     // The checks read head fields and the current run's scalars and current review child.
     let task = head.shell_task()?;
     if let Some(expected) = expected {
@@ -329,6 +360,7 @@ fn send_changes(
         if let Some(run) = task.current_run.as_deref() {
             crate::role_session::log(ctx, &task.id, &run.id)?;
         }
+        drop(session_delivery);
         let status = crate::delivery::owner::kick(ctx, recipient);
         let observed = crate::delivery::owner::is_observed(ctx, recipient, message.seq)?;
         ctx.store.log_event(

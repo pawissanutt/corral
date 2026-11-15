@@ -23,6 +23,14 @@ An entry admits at most one model delivery. Same-entry/same-payload retries retu
 
 The aggregate answer ceiling is 256 KiB. Exceeding it emits a truthful error and aborts that exact turn, rather than leaving a provider running after the daemon stops accepting text. Bridge ring gaps retain the existing explicit reconciliation contract.
 
+All hosts, including this daemon-owned attachment, also advertise `live_since` in
+`hello.commands`. `live_since {seq}` reads a separate bounded chat ring with the same
+`{generation,events,last,next,more,gap?}` pagination and authentication as `events_since`.
+Its cursor is independent of `events_since` and `hello.last_seq`. It projects upstream
+turn boundaries, assistant text/thinking, tool activity and queue counts without changing
+the `owner_*` stream above. Exact payloads and bounds are documented in
+[`corral-pi.md`](../../../../../docs/guide/corral-pi.md#live-chat-events).
+
 ## Owner attachments
 
 An optional `attachments` array contains at most four metadata records. Each has a distinct `id` (`a1`–`a4`), `kind` (`image`, `file`, or `link`), and a `name` of at most 160 UTF-8 bytes without controls. Unknown metadata keys are refused; there are no host-path fields or inline bytes.
