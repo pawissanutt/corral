@@ -426,3 +426,86 @@ fn attribution_routes_without_rewriting_receipts_and_requires_fresh_candidate_su
         assert_eq!(state.failures[0].gate.result, GateResult::Fail);
     }
 }
+
+#[test]
+fn t956_quick_pass_cannot_close_full_failure_or_spend_repair_verification_credit() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::init(root.path()).unwrap();
+    let failed = gate("fail", "candidate-A", "full-A");
+    observe(&store, "T-001", &failed).unwrap();
+    admit(&store, "T-001", Some(&failed), "candidate-B", "quick-B").unwrap();
+    let mut quick = gate("pass", "candidate-B", "quick-B");
+    quick.identity.as_mut().unwrap().gate_tier = Some(Box::new(corral_core::GateTierBinding {
+        tier: "quick".into(),
+        selection_sha256: "quick-selection".into(),
+        source: "fixture".into(),
+    }));
+    let mut state = status(&Ctx::from_store(store.clone()), "T-001").unwrap();
+    state.failures[0].diagnoses.push(GateDiagnosis {
+        attempt: "full-A".into(),
+        class: FailureClass::Candidate,
+        explanation: "Owner-confirmed repair B fixes the retained full A defect".into(),
+        evidence: vec!["retained-proof".into()],
+        baseline: None,
+        retry: false,
+    });
+    store.save_record(AREA, "T-001", &state).unwrap();
+    let state = observe(&store, "T-001", &quick).unwrap();
+    assert!(
+        state.failures[0].resolved_by.is_none(),
+        "a reduced-tier PASS cannot resolve a full failure"
+    );
+    require_pass(&store, "T-001", Some(&quick)).unwrap();
+    assert!(!check_retry(&store, "T-001", Some(&quick), "candidate-B", Some("full-B")).unwrap());
+    admit(&store, "T-001", Some(&quick), "candidate-B", "full-B").unwrap();
+    let full = gate("pass", "candidate-B", "full-B");
+    require_pass(&store, "T-001", Some(&full)).unwrap();
+    let state = observe(&store, "T-001", &full).unwrap();
+    assert_eq!(state.failures[0].gate, failed);
+    assert_eq!(state.failures[0].resolved_by.as_ref(), Some(&full));
+    assert_eq!(state.diagnostic_attempt.as_deref(), Some("quick-B"));
+    assert_eq!(state.diagnostic_history, ["quick-B"]);
+}
+
+#[test]
+fn failure_resolution_preserves_exact_reduced_coverage_and_full_dominance() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::init(root.path()).unwrap();
+    let mut failed = gate("fail", "candidate-A", "quick-A");
+    let binding = corral_core::GateTierBinding {
+        tier: "quick".into(),
+        selection_sha256: "selection-A".into(),
+        source: "fixture".into(),
+    };
+    failed.identity.as_mut().unwrap().gate_tier = Some(Box::new(binding.clone()));
+    observe(&store, "T-001", &failed).unwrap();
+    let mut state = status(&Ctx::from_store(store.clone()), "T-001").unwrap();
+    state.failures[0].diagnoses.push(GateDiagnosis {
+        attempt: "quick-A".into(),
+        class: FailureClass::Candidate,
+        explanation: "Repair B fixes the retained quick failure".into(),
+        evidence: vec!["retained-proof".into()],
+        baseline: None,
+        retry: false,
+    });
+    for (coverage, accepted) in [
+        (None, true),
+        (Some(binding.clone()), true),
+        (
+            Some(corral_core::GateTierBinding {
+                selection_sha256: "different-selection".into(),
+                ..binding.clone()
+            }),
+            false,
+        ),
+    ] {
+        store.save_record(AREA, "T-001", &state).unwrap();
+        let mut passing = gate("pass", "candidate-B", "verified-B");
+        passing.identity.as_mut().unwrap().gate_tier = coverage.map(Box::new);
+        // Attribution permits review progress; only sufficient coverage closes the episode.
+        require_pass(&store, "T-001", Some(&passing)).unwrap();
+        let observed = observe(&store, "T-001", &passing).unwrap();
+        assert_eq!(observed.failures[0].resolved_by.is_some(), accepted);
+        assert_eq!(observed.failures[0].gate, failed);
+    }
+}

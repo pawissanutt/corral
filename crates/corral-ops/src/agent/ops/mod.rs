@@ -7,6 +7,7 @@ pub(crate) mod assistant_workflow;
 mod auxiliary;
 mod budget;
 mod event;
+pub(crate) mod gate_triage;
 mod hello;
 pub(crate) mod jobs;
 mod lookup;

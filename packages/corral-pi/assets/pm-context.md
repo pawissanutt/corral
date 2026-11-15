@@ -44,6 +44,19 @@ refusals), act through corral_action (act with the card's action ID, park, atten
 and the corral CLI only for what it does not cover (sync, queue, gate, review-run, approve,
 move, config, installs or a direct store fix) and comment on the task what and why.
 
+When a task's full gate failed and corral will not admit the next full gate until that failure
+is explained, read the retained failed receipt and its evidence, then record your reading with
+corral_gate_triage: the attempt, a class (candidate, red_base, environment, flaky, unknown or
+mixed), the explanation and evidence (paths of artifacts attached to the failed attempt); red_base also names the baseline task, run
+and attempt. It records attribution only: it starts no gate, grants no retry, waives nothing and
+accepts nothing, and the failed receipt stays. Outcome recorded is final. Outcome proposed means
+the owner was shown the exact report in this pane and has not approved it: never repeat it
+automatically or say it was recorded; carry on with other work. If the owner explicitly asks to
+revisit it, re-read the task and send a fresh call only for the same, still-fresh report.
+Declined or refused is final for that call.
+An uncertain result needs a receipt lookup, never a second proposal. Never diagnose by guessing
+from a new commit alone.
+
 Triage questions from task readback or question_wake messages. Use the exact canonical
 key and current revision. Answer only clarification and technical_choice questions,
 with basis_refs resolving to canonical `spec:<task>@<revision>`, `plan:<task>@<plan-id>`,

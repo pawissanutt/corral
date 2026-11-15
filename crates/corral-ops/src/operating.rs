@@ -123,6 +123,55 @@ pub(crate) fn require_diagnosis<T: TaskRef + ?Sized>(
     require_recovery(store, task)
 }
 
+/// Attribution-only admission: a missing grant is the sole reason to ask for bounded
+/// confirmation. All live stops and ownership/recovery fences remain hard refusals.
+pub(crate) fn attribution_scope<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<bool> {
+    store.check_runtime()?;
+    crate::hold::require_clear(store, task)?;
+    corral_core::Park::require_unparked_ref(task)?;
+    ensure!(!*task.dispatch_hold(), "task dispatch hold");
+    let config = store.config_layers()?.config()?;
+    ensure!(
+        !config.automation.paused && !config.dispatch.paused,
+        "diagnosis is paused by the current automation/dispatch policy"
+    );
+    config.validate_review()?;
+    ensure!(
+        config.review.autopilot != Some(false),
+        "review automation is explicitly disabled"
+    );
+    ensure!(
+        !config.automation.scope.exclusions.contains(task.id()),
+        "task is explicitly excluded from the operating scope"
+    );
+    if let Some(run) = task.current_run_head()? {
+        ensure!(
+            task.open_obligations(&run.id)?.pending_decision().is_none(),
+            "unresolved owner decision"
+        );
+    }
+    transfer::require(store, task, OperatingActionKind::Repair, true)?;
+    cowork::validate(task, OperatingActionKind::Repair)?;
+    require_recovery(store, task)?;
+    if transfer::explicit(store, task, OperatingActionKind::Repair)?
+        || cowork::diagnosis(store, task)?
+    {
+        return Ok(true);
+    }
+    let effective = store.effective_operating_policy()?;
+    let allowed = effective.allows_diagnosis(task.id());
+    // A currently delegated member refused for a task/plan/policy condition is not a
+    // missing-scope request. Keep its actual refusal instead of converting it to consent.
+    if !allowed
+        && effective.mode == corral_core::OperatingMode::Autopilot
+        && config.automation.authority.dispatch
+        && effective.tasks.contains_key(task.id())
+    {
+        require_grant_for(store, task, GrantOperation::Diagnosis)?;
+    }
+    Ok(allowed)
+}
+
 fn require_recovery<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<()> {
     if let Some(run) = task.current_run_head()? {
         let stuck_unresolved = run.stuck.as_ref().is_some_and(|stuck| {

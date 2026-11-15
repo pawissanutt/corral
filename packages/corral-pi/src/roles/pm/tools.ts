@@ -7,6 +7,7 @@ import type { CorralOp, CorralToolSpec } from "../types.ts";
 import { pmResultSchema } from "./results.ts";
 import { notesTool } from "./notes.ts";
 import { actionTool } from "./actions.ts";
+import { gateTriageTool } from "../common/gate-triage.ts";
 
 function tool(
   name: string, op: CorralOp, description: string, properties: TProperties,
@@ -47,6 +48,7 @@ export const pmTools: readonly CorralToolSpec[] = [
   receiptLookupTool(true),
   notesTool,
   actionTool,
+  gateTriageTool,
   tool("brief", "read_brief", "Read the approved projects' PM brief without running sync.", {}),
   tool("next", "read_next", "Read the approved projects' next actions without executing them or running sync.", {}),
   tool("show", "read_show", "Read one task's canonical sections. content_json is a JSON text chunk; "

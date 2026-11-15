@@ -33,7 +33,7 @@ export type CorralOp =
   | "job" | "job_monitor"
   | "plan_write" | "plan_submit" | "plan_verdict" | "owner_action" | "write_permission"
   | "assistant_plan" | "assistant_plan_review" | "assistant_handoff" | "notes" | "pm_action"
-  | "pm_shadow" | "owner_ask" | "owner_prompt" | "idea_file";
+  | "pm_shadow" | "owner_ask" | "owner_prompt" | "idea_file" | "gate_triage";
 
 export const CORRAL_OPS: readonly CorralOp[] = [
   "hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint",
@@ -43,7 +43,7 @@ export const CORRAL_OPS: readonly CorralOp[] = [
   "todo", "job", "job_monitor", "memory_list", "memory_read", "memory_put", "memory_remove",
   "plan_write", "plan_submit", "plan_verdict", "owner_action", "write_permission",
   "assistant_plan", "assistant_plan_review", "assistant_handoff", "notes", "pm_action",
-  "pm_shadow", "owner_ask", "owner_prompt", "idea_file",
+  "pm_shadow", "owner_ask", "owner_prompt", "idea_file", "gate_triage",
 ];
 
 /** The launcher-bound identity; never chosen by the model. */

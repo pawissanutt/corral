@@ -6,6 +6,7 @@ import { memoryTools } from "../common/memory.ts";
 import { closeSync, openSync, readSync } from "node:fs";
 import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import { receiptLookupTool } from "../common/tools.ts";
+import { gateTriageTool } from "../common/gate-triage.ts";
 import { requestContract, sessionTodoTool } from "../common/todo.ts";
 import { askUserContract } from "../common/ask-user.ts";
 import { calibrationReader } from "../common/family.ts";
@@ -18,14 +19,14 @@ import { ideaFileTool } from "./idea-file.ts";
 export const CONTRACT_ASSET = "assets/assistant-contract.md";
 export const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "grep", "find", "ls", "bash"];
 const LOOKUP = receiptLookupTool();
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission", "idea_file", ...memoryTools.map((tool) => tool.op)];
+const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission", "idea_file", "gate_triage", ...memoryTools.map((tool) => tool.op)];
 
 export function assistantRole(root: string): RoleModule {
   return {
     role: "assistant",
     upstreamTools: UPSTREAM,
     corralOps: OPS,
-    tools: (context) => [LOOKUP, ownerActionTool, ...memoryTools,
+    tools: (context) => [LOOKUP, ownerActionTool, gateTriageTool, ...memoryTools,
       ...(context.todo === true ? [sessionTodoTool] : []), ...(context.daemonHosted ? [ideaFileTool] : [])],
     contract: (context) => {
       const contract = `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n`

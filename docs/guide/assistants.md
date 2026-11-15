@@ -871,11 +871,31 @@ Only an author's candidate submission closes an issued repair cycle. Repeating a
 after a no-op submission consumes a new bounded cycle; changing driver/run alone does not.
 
 **Gate diagnosis (board and co-work).** Unknown, mixed and suspected-flaky failures block
-without a code-repair charge. Read `corral repair triage-status T-042`, attach the diagnostic
-evidence, then record a JSON `GateDiagnosis` with `corral repair triage T-042 --file diagnosis.json`.
-The current assistant driver can use owner-action kind `gate_triage` with target `T-042`
-and `args: ["--file", "diagnosis.json"]`, citing the original verification/shipping instruction;
-this kind cannot pass `--owner` or renew investigation allowance. It names `attempt`, `class` (`candidate`, `red_base`, `environment`, `unknown`, `mixed`, `flaky`),
+without a code-repair charge. Read `corral repair triage-status T-042` and attach the
+diagnostic evidence. In corral-pi, PMs and assistants use `corral_gate_triage` with
+`task: "T-042"` and an inline `diagnosis`. The tool records attribution without
+advancing task status or scheduling a gate. Existing diagnosis authority needs no
+new confirmation; otherwise the host presents the exact proposal for an owner
+decision in the current pane. No owner-terminal command or broader automation
+grant is needed for that record.
+
+The proposal binds the report and retained failure to the current task, run,
+candidate and policy. An owner answer is host-only, not a model-supplied approval.
+A changed candidate, policy, hold or session invalidates the pending authority.
+Decline, cancellation and replay do not authorize a launch or replenish diagnostic
+allowance. If delivery is uncertain, inspect the receipt instead of submitting
+another proposal or repeating the owner question.
+
+The typed tool does not request diagnostic retries. A repaired candidate still
+needs the normal full landing gate and independent review: a quick PASS alone
+cannot close a full-gate failure. Recording attribution does not grant execution
+or acceptance authority; continue through the separately authorized executors.
+
+The CLI remains `corral repair triage T-042 --file diagnosis.json`. The current
+assistant driver can also use owner-action kind `gate_triage` with target `T-042`
+and `args: ["--file", "diagnosis.json"]`, citing the original verification/shipping
+instruction; this kind cannot pass `--owner` or renew investigation allowance.
+The CLI JSON names `attempt`, `class` (`candidate`, `red_base`, `environment`, `unknown`, `mixed`, `flaky`),
 `explanation`, attached artifact paths in `evidence`, and optional `retry: true`. Red-base reports
 also name `baseline: {task, run, attempt}`: the service checks a separate clean baseline gate's
 exact base, environment and all failed-command output signatures. Partial matches cannot
@@ -883,9 +903,10 @@ excuse candidate-specific failures. Known launcher/environment diagnosis must ci
 it is routing metadata, never PASS. A single diagnostic retry is admitted durably; a new driver,
 run or candidate cannot reset it or erase an unexplained red. A diagnostic green does not clear
 unknown/mixed/flaky attribution. Revising a recorded diagnosis requires an explicit owner
-investigation (`--owner`), not an automatic retry loop or coding allowance renewal. A new,
-evidence-backed owner investigation can request one further diagnostic attempt; replaying the
-identical report cannot renew it, and all prior launches/observations remain recorded. Proven base or
+confirmation in the pane or an owner-terminal investigation (`--owner`), not an automatic retry
+loop or coding allowance renewal. Only the CLI owner investigation can request one further
+diagnostic attempt; replaying the identical report cannot renew it, and all prior launches and
+observations remain recorded. Proven base or
 environment failures spend no coding round, and landing still needs a fresh successful candidate
 gate plus the normal independent review. Clean integration refresh spends no coding round;
 actual conflicts still use the bounded repair path.

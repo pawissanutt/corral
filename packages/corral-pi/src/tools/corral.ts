@@ -60,6 +60,15 @@ export function toolRequestId(sessionId: string, toolCallId: string): string {
   return `rq-${digest.slice(0, 32)}`;
 }
 
+/**
+ * The host-only decision on one gate-triage proposal: one fixed request per generation and stored
+ * proposal (the original propose request ID), so a resend replays and a different answer
+ * conflicts. The model's tool calls never produce it.
+ */
+export function triageDecisionRequestId(sessionId: string, generation: number, proposal: string): string {
+  return toolRequestId(sessionId, `gate-triage-decision:${generation}:${proposal}`);
+}
+
 export function eventRequestId(generation: number, seq: number): string {
   return `ev-${generation}-${seq}`;
 }

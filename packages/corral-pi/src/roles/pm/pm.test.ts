@@ -27,6 +27,12 @@ const cases = [
   { name: "receipt_lookup", op: "receipt_lookup", payload: { request_id: `rq-${"a".repeat(32)}`, task: "T-007" } },
   { name: "notes", op: "notes", payload: { op: "list" } },
   { name: "action", op: "pm_action", payload: { action: "act", id: "a".repeat(64) } },
+  { name: "gate_triage", op: "gate_triage", payload: {
+    task: "T-007", diagnosis: { attempt: "G2", class: "candidate", explanation: "The retained failure names the changed parser.",
+      evidence: [".evidence/G2/failure.log"] },
+  }, wire: { action: "propose", task: "T-007", diagnosis: {
+    attempt: "G2", class: "candidate", explanation: "The retained failure names the changed parser.",
+    evidence: [".evidence/G2/failure.log"] } } },
   { name: "brief", op: "read_brief", payload: {} },
   { name: "next", op: "read_next", payload: {} },
   { name: "show", op: "read_show", payload: { task: "T-007" } },
@@ -55,6 +61,8 @@ const cases = [
     project: "demo", title: "Follow-up", body: "Investigate the adapter.", status: "backlog",
   } },
 ] as const;
+/** The payload one case's tool call puts on the wire. */
+const sent = (item: (typeof cases)[number]): unknown => "wire" in item ? item.wire : item.payload;
 const memoryOps = ["memory_list", "memory_read", "memory_put", "memory_remove"];
 const names = [...cases.map(({ name }) => `corral_${name}`), ...memoryOps.map((op) => `corral_${op}`)];
 const originalFetch = globalThis.fetch;
@@ -224,15 +232,16 @@ test("the PM exposes only its scoped operations and requires the installed conte
   }
 });
 
-for (const { name, payload } of cases) test(`the ${name} schema and payload preserve the Rust wire contract`, () => {
+for (const item of cases) test(`the ${item.name} schema and payload preserve the Rust wire contract`, () => {
   // Given a Rust-compatible payload, when it crosses the model-tool boundary:
+  const { name, payload } = item;
   const tool = spec(name);
   // Then valid input survives and undeclared identity or owner authority is refused.
   expect(Check(tool.parameters, payload)).toBeTrue();
-  expect(tool.payload(payload)).toEqual(payload);
+  expect(tool.payload(payload)).toEqual(sent(item));
   expect(Check(tool.parameters, { ...payload, owner: true })).toBeFalse();
   expect(Check(tool.parameters, { ...payload, generation: 99 })).toBeFalse();
-  expect(tool.payload({ ...payload, owner: true, generation: 99 })).toEqual(payload);
+  expect(tool.payload({ ...payload, owner: true, generation: 99 })).toEqual(sent(item));
 });
 
 test("policy wake keeps the native ceiling while independent coordination crosses the host wire", async () => {
@@ -284,6 +293,11 @@ const invalidCases: readonly (readonly [string, Record<string, unknown>])[] = [
   ["inbox_resolve", { id: "PMI-1", action: "claim" }],
   ["inbox_resolve", { id: "PMI-1", expected_revision: 0, action: "approve" }],
   ["inbox_resolve", { id: "PMI-1", expected_revision: 1, action: "resolve", outcome: "landed" }],
+  // The model can only propose: no decision, approval, retry or authority field exists.
+  ["gate_triage", { action: "decide", proposal: "rq-x", digest: "d", approved: true }],
+  ["gate_triage", { task: "T-007", diagnosis: { attempt: "G2", class: "candidate", explanation: "e", evidence: [], retry: true } }],
+  ["gate_triage", { task: "T-007", diagnosis: { attempt: "G2", class: "candidate", explanation: "e", evidence: [] }, approved: true }],
+  ["gate_triage", { task: "T-007", diagnosis: { attempt: "G2", class: "retry", explanation: "e", evidence: [] } }],
 ];
 for (const [index, [name, payload]] of invalidCases.entries()) test(`the ${name} schema refuses invalid case ${index}`, () => {
   // Given malformed input, when checking the schema, then it cannot reach the client.
@@ -338,7 +352,7 @@ for (const stage of ["startup", "reload", "refused replacement"]) test(
     const calls = corral.calls().slice(before).map(({ envelope }) => envelope).filter(({ op }) => op !== "event");
     const byOp = (a: { readonly op: string }, b: { readonly op: string }) => a.op.localeCompare(b.op);
     expect(calls.map(({ op, payload }) => ({ op, payload })).sort(byOp))
-      .toEqual(cases.map(({ op, payload }) => ({ op, payload })).sort(byOp));
+      .toEqual(cases.map((item) => ({ op: item.op, payload: sent(item) })).sort(byOp));
     const modelCalls = host.session.messages.flatMap((message) =>
       message.role === "assistant" ? message.content.filter((part) => part.type === "toolCall") : []);
     for (const call of calls) {

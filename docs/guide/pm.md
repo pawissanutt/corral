@@ -68,6 +68,33 @@ decisions that are truly theirs (undecided scope or priority, paid spend, creden
 privacy, destructive actions on unfinished work). Handoffs and board reads never confer
 fresh owner authority.
 
+### Recording a gate diagnosis without a terminal handoff
+
+Use `corral_gate_triage` to submit an evidence-backed attribution of a retained
+failed gate. Its `diagnosis` names the failed `attempt`, `class`, `explanation`
+and attached artifact paths in `evidence`; `red_base` also requires a verified
+baseline receipt. This is distinct from the bounded coding-repair diagnosis pass.
+
+The tool records the diagnosis directly when current delegated authority permits
+it. Otherwise it saves an exact proposal and the host asks the owner in the same
+pane. The host, not the PM model, records the answer. Approval applies only to
+that report and candidate state; it does not add the task to the automation grant.
+No UI or cancellation leaves a pending proposal, never implied consent. A
+replayed or uncertain request must not prompt the owner again automatically.
+
+Attribution is record-only: it preserves task status, pipeline stage, failed
+receipts, diagnostic attempts and coding allowances. It neither runs a gate nor
+waives review or acceptance. After a genuine candidate repair is attributed,
+ordinary authorized validation can proceed without treating the required full
+gate as another unexplained retry. A quick PASS does not resolve a full-gate
+failure. Unknown or suspected-flaky history remains unresolved; changing a commit
+alone is never an explanation.
+
+After cancellation or "Decide later", an explicit owner request to revisit the
+diagnosis may create a fresh proposal after re-reading the task. It does not
+reuse the earlier proposal as authority. An uncertain submitted decision must
+first be resolved through its receipt, not replaced with another proposal.
+
 ## Running corral with a cheap PM
 
 Use Claude Sonnet as the comparison baseline, then measure cheaper candidates
