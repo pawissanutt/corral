@@ -154,24 +154,37 @@ fn save(store: &Store, intent: &ContinuationIntent) -> Result<()> {
         intent,
     )
 }
-fn approved(store: &Store, episode: &PaidEpisode) -> Result<()> {
+fn approved(store: &Store, episode: &PaidEpisode, source: &ConnectionBinding) -> Result<()> {
     let config = store.config_layers()?.config()?;
     ensure!(
-        episode.approval.policy_digest == config.profile_setup_revision()?
-            && config
-                .profiles
-                .values()
-                .filter_map(|p| p.metadata.as_ref())
-                .filter_map(|m| m.fallback.as_ref())
-                .any(|p| p.automatic
-                    && p.paid_roles.contains(&episode.root.role)
-                    && p.approval == episode.approval.approval
-                    && p.spending.as_ref().is_some_and(|s| s.currency == "USD"
-                        && s.maximum_micros.checked_mul(1000)
-                            == Some(episode.approval.allowance_nanos))),
+        episode.approval.policy_digest == config.profile_setup_revision()?,
         "PolicyNotApproved"
     );
-    Ok(())
+    let mut refusal = None;
+    for (profile, configured) in &config.profiles {
+        let Some(policy) = configured
+            .metadata
+            .as_ref()
+            .and_then(|m| m.fallback.as_ref())
+        else {
+            continue;
+        };
+        if !policy.automatic
+            || !policy.paid_roles.contains(&episode.root.role)
+            || policy.approval != episode.approval.approval
+            || !policy.spending.as_ref().is_some_and(|s| {
+                s.currency == "USD"
+                    && s.maximum_micros.checked_mul(1000) == Some(episode.approval.allowance_nanos)
+            })
+        {
+            continue;
+        }
+        match super::policy::source_position(&config, profile, source) {
+            Ok(_) => return Ok(()),
+            Err(error) => refusal = Some(error),
+        }
+    }
+    Err(refusal.unwrap_or_else(|| anyhow::anyhow!("PolicyNotApproved")))
 }
 fn subject_current(
     store: &Store,
@@ -331,7 +344,7 @@ pub(crate) fn prepare(ctx: &Ctx, mut transfer: Transfer) -> Result<ContinuationI
         };
         let source_link = state.paid_episode.clone().context("PolicyNotApproved")?;
         let mut episode = ctx.store.paid_episode(&source_link.episode)?;
-        approved(&ctx.store, &episode)?;
+        approved(&ctx.store, &episode, &source.binding)?;
         ensure!(!state.binding.closing, "TerminalResult");
         subject_current(&ctx.store, &source.container, &transfer.subject)?;
         checkpoint::quiescent(state, source.generation).map_err(|r| anyhow::anyhow!("{r:?}"))?;
@@ -478,7 +491,7 @@ pub(crate) fn require_launch(
         "paid_admission_required"
     );
     let episode = store.paid_episode(&intent.link.episode)?;
-    approved(store, &episode)?;
+    approved(store, &episode, &intent.source.binding)?;
     ensure!(
         episode.epoch == intent.link.epoch
             && matches!(&episode.phase,
@@ -499,18 +512,18 @@ pub(crate) fn require_preflight(
     }
     for row in store.record_rows(corral_core::paid_episode::AREA)? {
         let episode = store.paid_episode(&row.key)?;
+        let route = match &episode.phase {
+            PaidPhase::Active { owner } => &owner.binding,
+            PaidPhase::Prepared { successor, .. } => &successor.binding,
+            PaidPhase::Closed => continue,
+        };
         if episode.root.role != role
-            || approved(store, &episode).is_err()
+            || approved(store, &episode, route).is_err()
             || !episode.approval.candidates.contains(binding)
         {
             continue;
         }
-        let route = match &episode.phase {
-            PaidPhase::Active { owner } => Some(&owner.binding),
-            PaidPhase::Prepared { successor, .. } => Some(&successor.binding),
-            PaidPhase::Closed => None,
-        };
-        if route.is_some_and(|b| b == binding || !b.connection.api_key() && episode.switches == 0) {
+        if route == binding || !route.connection.api_key() && episode.switches == 0 {
             return Ok(());
         }
     }
@@ -531,7 +544,7 @@ pub(crate) fn notice(
         return Ok(None);
     }
     let episode = store.paid_episode(&intent.link.episode)?;
-    approved(store, &episode)?;
+    approved(store, &episode, &intent.source.binding)?;
     ensure!(
         episode.epoch == intent.link.epoch
             && matches!(&episode.phase,
@@ -566,7 +579,7 @@ pub(crate) fn activate(ctx: &Ctx, container: &ContainerRef, generation: u32) -> 
         IntentPhase::Prepared => {}
         IntentPhase::Active => {
             let episode = ctx.store.paid_episode(&intent.link.episode)?;
-            approved(&ctx.store, &episode)?;
+            approved(&ctx.store, &episode, &intent.source.binding)?;
             episode.owner(&intent.link, &intent.successor)?;
             return Ok(false);
         }
@@ -576,7 +589,7 @@ pub(crate) fn activate(ctx: &Ctx, container: &ContainerRef, generation: u32) -> 
         let mut intent =
             intent_for(&ctx.store, container, generation)?.context("SuccessorAmbiguous")?;
         let mut episode = ctx.store.paid_episode(&intent.link.episode)?;
-        approved(&ctx.store, &episode)?;
+        approved(&ctx.store, &episode, &intent.source.binding)?;
         if intent.phase == IntentPhase::Active {
             episode.owner(&intent.link, &intent.successor)?;
             return Ok(false);
@@ -616,18 +629,38 @@ pub(crate) fn close_in(
     state: &mut AgentRunState,
     _why: &str,
 ) -> Result<bool> {
-    if let Some(mut intent) = intent_for(store, container, state.binding.generation)?
-        && intent.phase == IntentPhase::Prepared
+    let pending_phase = |intent: &ContinuationIntent| {
+        matches!(intent.phase, IntentPhase::Prepared | IntentPhase::Paused)
+    };
+    let mut pending = intent_for(store, container, state.binding.generation)?.filter(pending_phase);
+    if pending.is_none()
+        && matches!(container, ContainerRef::Pm | ContainerRef::Assistant { .. })
+        && let Some(next) = state.binding.generation.checked_add(1)
+        && state.generation(next).is_none()
     {
+        pending = intent_for(store, container, next)?.filter(|intent| {
+            pending_phase(intent)
+                && intent.source.container == *container
+                && intent.source.generation == state.binding.generation
+                && intent.successor.container == *container
+        });
+    }
+    if let Some(mut intent) = pending {
         let episode = store.paid_episode(&intent.link.episode)?;
+        // Pausing an already Active owner closes its episode. Preserve the existing
+        // no-op closure behavior for that case; only pending transfers need revocation.
+        if intent.phase == IntentPhase::Paused && matches!(episode.phase, PaidPhase::Closed) {
+            return Ok(false);
+        }
         ensure!(
             episode.epoch == intent.link.epoch
                 && matches!(&episode.phase,
             PaidPhase::Prepared { successor, .. } if successor == &intent.successor),
             "SuccessorAmbiguous"
         );
-        // Core cannot close a Prepared episode. Revoke the only activation authority and
-        // fence the native host, CASing the unchanged financial row in this same commit.
+        // Core cannot close a Prepared episode. The Closed intent is also a durable
+        // fence for a not-yet-opened successor number: require_launch refuses it without
+        // fabricating a generation row. CAS the unchanged financial row with this revocation.
         state.binding.health = HostHealth::Fenced;
         state
             .generation_mut(state.binding.generation)
@@ -749,7 +782,7 @@ pub(crate) fn prepared_candidate(
             continue;
         }
         let episode = store.paid_episode(&intent.link.episode)?;
-        approved(store, &episode)?;
+        approved(store, &episode, &intent.source.binding)?;
         ensure!(
             episode.epoch == intent.link.epoch
                 && matches!(&episode.phase,

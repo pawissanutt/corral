@@ -21,7 +21,7 @@ const ROLES: [AgentRole; 6] = [
     AgentRole::Assistant,
 ];
 
-fn configure(
+pub(super) fn configure(
     fx: &mut Fx,
     paid_roles: BTreeSet<AgentRole>,
 ) -> (ConnectionBinding, ConnectionBinding) {
@@ -268,12 +268,22 @@ fn bind_successor(p: &Prepared) -> Host {
     host
 }
 fn paid_hello(p: &Prepared, host: &Host) -> CallResponse {
-    let payload = json!({"binding_digest":p.api.digest,
+    hello_binding(&p.fx, host, &p.api)
+}
+
+pub(super) fn hello_binding(fx: &Fx, host: &Host, binding: &ConnectionBinding) -> CallResponse {
+    let payload = json!({"binding_digest":binding.digest,
         "ctl_cap_sha256":corral_core::agent::paths::sha256_hex(host.ctl_cap.as_bytes()),
         "session_file":host.sessions.join("session.jsonl"), "pid":4242, "start_time":"123456", "pane":host.pane});
     send(
-        &p.fx,
-        &envelope(host, "hello", "ev-1-0", payload, true),
+        fx,
+        &envelope(
+            host,
+            "hello",
+            &crate::agent::event_request_id(host.identity.generation, 0),
+            payload,
+            true,
+        ),
         "hello",
     )
 }
