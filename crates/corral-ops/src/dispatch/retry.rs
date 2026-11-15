@@ -11,6 +11,12 @@ use crate::Ctx;
 use crate::cleanup::{Cleanup, cleanup_head};
 use crate::integration::RepairKey;
 
+#[path = "retry_paid.rs"]
+mod paid;
+#[cfg(test)]
+#[path = "retry_paid_tests.rs"]
+mod paid_tests;
+
 #[cfg(test)]
 #[path = "retry_tests.rs"]
 mod tests;
@@ -219,6 +225,10 @@ pub(super) fn retry_with(
     )?;
     crate::routing::validate_model(ctx, &decision)?;
     crate::agent::hooks::preflight::route(ctx, corral_core::agent::AgentRole::Worker, &decision)?;
+    let paid_route = availability.is_some() && paid::is_api(ctx, &decision);
+    if paid_route {
+        paid::require_checkpoint(ctx, &head, &prev, true)?;
+    }
     let reachable = match &prev.herdr {
         Some(h) => ctx.herdr.pane_get(&h.pane_id)?.is_some(),
         None => false,
@@ -254,12 +264,9 @@ pub(super) fn retry_with(
     // An availability handoff never depends on the old pane: a missing source tree or
     // checkpoint is not permission to replay work whose outcome is unknown.
     if availability.is_some() {
-        anyhow::ensure!(
-            prev.worktree.is_dir(),
-            "no trustworthy handoff: source worktree {} is missing",
-            prev.worktree.display()
-        );
-        crate::resume::require_checkpoint_head(&head, &prev.id)?;
+        if !paid_route {
+            paid::require_checkpoint(ctx, &head, &prev, false)?;
+        }
     } else if can_checkpoint && !refused_before_start {
         if automatic {
             crate::resume::require_checkpoint_head(&head, &prev.id)?;
@@ -270,8 +277,17 @@ pub(super) fn retry_with(
             crate::resume::retry_checkpoint(ctx, &full, current)?;
         }
     }
+    let transfer = if paid_route {
+        Some(
+            paid::transfer(ctx, &head, &prev, &decision)?
+                .context("no current worker to transfer")?,
+        )
+    } else {
+        paid::close(ctx, &head, &prev)?;
+        None
+    };
     // Back to Ready so the retried task can be dispatched and does not count against its own slot.
-    let (task, ()) = ctx.store.dispatch_update_head(&task.id, |store, t| {
+    let superseded = ctx.store.dispatch_update_head(&task.id, |store, t| {
         corral_core::Park::require_unparked_ref(&*t)?;
         if let Some(expected) = expected {
             expected.check(&t.shell_task()?)?;
@@ -281,6 +297,11 @@ pub(super) fn retry_with(
             .current_run
             .as_ref()
             .is_none_or(|r| r.id != prev.id)
+            || (transfer.is_some()
+                && t.head()
+                    .current_run
+                    .as_ref()
+                    .is_some_and(|r| r.outcome.is_some()))
             || !matches!(t.status, Status::Review | Status::NeedsMe | Status::Running)
         {
             bail!(
@@ -309,46 +330,7 @@ pub(super) fn retry_with(
         if let Some(key) = expected {
             crate::repair_cycle::issue(store, &*t, key, t.rounds)?;
         }
-        if let Some(run) = t.current_run_mut() {
-            run.outcome = Some(RunOutcome::Superseded);
-            run.ended = Some(corral_core::clock::now());
-            run.retry = Some(plan.clone());
-            if run
-                .autopilot
-                .as_ref()
-                .is_none_or(|a| a.stage != AutoStage::Changes)
-            {
-                let reason = run
-                    .review
-                    .as_ref()
-                    .filter(|r| r.verdict == Some(corral_core::Verdict::Changes))
-                    .and_then(|r| r.notes.clone())
-                    .or_else(|| {
-                        run.gate
-                            .as_ref()
-                            .filter(|g| {
-                                matches!(
-                                    g.result,
-                                    corral_core::GateResult::Fail | corral_core::GateResult::Stale
-                                )
-                            })
-                            .map(|g| {
-                                format!(
-                                    "Gate failed: {}",
-                                    g.failed_cmd.as_deref().unwrap_or("unknown command")
-                                )
-                            })
-                    });
-                if reason.is_some() {
-                    run.autopilot = Some(AutopilotState {
-                        stage: AutoStage::Changes,
-                        reason,
-                        sha: worktree_head(&run.worktree),
-                        at: corral_core::clock::now(),
-                    });
-                }
-            }
-        }
+        supersede(t, &plan);
         t.status = Status::Ready;
         t.queued = true;
         ctx.store.log_event(
@@ -359,9 +341,14 @@ pub(super) fn retry_with(
         )?;
         t.dispatch_plan = None;
         Ok(())
-    })?;
+    });
+    let (task, ()) = paid::finish(ctx, transfer.as_ref(), superseded)?;
     cleanup_head(ctx, &task, Cleanup::Round);
-    crate::sandbox_cleanup::retire_superseded(ctx, &task.id, &prev.id)?;
+    paid::finish(
+        ctx,
+        transfer.as_ref(),
+        crate::sandbox_cleanup::retire_superseded(ctx, &task.id, &prev.id),
+    )?;
     let opts = DispatchOpts {
         plan: false,
         profile: Some(plan.profile),
@@ -373,22 +360,69 @@ pub(super) fn retry_with(
         force_resources: false,
     };
     drop(owner);
-    if automatic {
-        let inputs = if availability.is_some() {
-            json!({"source": "availability", "reason": "approved availability fallback"})
+    paid::launched(
+        ctx,
+        transfer.as_ref(),
+        if automatic {
+            let inputs = if availability.is_some() {
+                json!({"source": "availability", "reason": "approved availability fallback"})
+            } else {
+                json!({"source": "repair", "reason": "bounded automatic retry"})
+            };
+            dispatch_with(
+                ctx,
+                &task.id,
+                &opts,
+                Admission::Automatic {
+                    inputs,
+                    at: corral_core::clock::now(),
+                },
+            )
         } else {
-            json!({"source": "repair", "reason": "bounded automatic retry"})
-        };
-        dispatch_with(
-            ctx,
-            &task.id,
-            &opts,
-            Admission::Automatic {
-                inputs,
-                at: corral_core::clock::now(),
-            },
-        )
-    } else {
-        dispatch_with(ctx, &task.id, &opts, Admission::Manual)
+            dispatch_with(ctx, &task.id, &opts, Admission::Manual)
+        },
+    )
+}
+
+fn supersede(t: &mut TaskHeadMut, plan: &RetryPlan) {
+    if let Some(run) = t.current_run_mut() {
+        run.outcome = Some(RunOutcome::Superseded);
+        run.ended = Some(corral_core::clock::now());
+        run.retry = Some(plan.clone());
+        if run
+            .autopilot
+            .as_ref()
+            .is_none_or(|a| a.stage != AutoStage::Changes)
+        {
+            let reason = run
+                .review
+                .as_ref()
+                .filter(|r| r.verdict == Some(corral_core::Verdict::Changes))
+                .and_then(|r| r.notes.clone())
+                .or_else(|| {
+                    run.gate
+                        .as_ref()
+                        .filter(|g| {
+                            matches!(
+                                g.result,
+                                corral_core::GateResult::Fail | corral_core::GateResult::Stale
+                            )
+                        })
+                        .map(|g| {
+                            format!(
+                                "Gate failed: {}",
+                                g.failed_cmd.as_deref().unwrap_or("unknown command")
+                            )
+                        })
+                });
+            if reason.is_some() {
+                run.autopilot = Some(AutopilotState {
+                    stage: AutoStage::Changes,
+                    reason,
+                    sha: worktree_head(&run.worktree),
+                    at: corral_core::clock::now(),
+                });
+            }
+        }
     }
 }
