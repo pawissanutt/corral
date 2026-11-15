@@ -14,7 +14,6 @@ use serde_json::json;
 
 use crate::artifacts::add_artifact;
 use crate::gate::{gate_paths, open_run_pane};
-use crate::pm::{live_pm_pane, open_pm};
 use crate::prompt::{corral_bin, fill, render_template};
 use crate::review::current_run;
 use crate::{Ctx, verification};
@@ -30,7 +29,9 @@ pub(crate) use watchdog::reconcile_review_sampled_at;
 pub(crate) use watchdog::{Observation, commit_observation};
 mod callback;
 mod fallback;
+#[cfg(test)]
 pub(crate) use fallback::continue_review;
+pub(crate) use fallback::continue_review_claimed;
 mod history;
 mod instruction_guard;
 mod stronger;

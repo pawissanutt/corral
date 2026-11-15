@@ -17,9 +17,12 @@ use corral_protocol::{
     subscription::{LiveText, SubAck, SubOpen, SubReset, Topic},
 };
 
+pub(crate) mod session;
+
 #[derive(Default)]
 pub(super) struct AppTopics {
     subscribers: BTreeMap<Key, Subscriber>,
+    sessions: session::SessionTopics,
 }
 
 struct Subscriber {
@@ -61,9 +64,19 @@ struct Transfer {
 
 impl AppTopics {
     pub fn open(&mut self, shared: &Shared, open: SubOpen) -> Result<()> {
+        if open.topic == Topic::Session {
+            ensure!(
+                self.sessions.contains(open.scope.as_deref())
+                    || self.subscribers.len() + self.sessions.len()
+                        < session::SESSION_SUBSCRIPTIONS,
+                "too many topic subscriptions"
+            );
+            return self.sessions.open(shared, open);
+        }
         let key = Key::new(open.topic, open.scope)?;
         ensure!(
-            self.subscribers.contains_key(&key) || self.subscribers.len() < 32,
+            self.subscribers.contains_key(&key)
+                || self.subscribers.len() + self.sessions.len() < session::SESSION_SUBSCRIPTIONS,
             "too many topic subscriptions"
         );
         // Drop the replaced watch first; counters count subscriptions, never open calls.
@@ -93,12 +106,19 @@ impl AppTopics {
     }
 
     pub fn close(&mut self, topic: Topic, scope: Option<String>) {
+        if topic == Topic::Session {
+            self.sessions.close(scope);
+            return;
+        }
         if let Ok(key) = Key::new(topic, scope) {
             self.subscribers.remove(&key);
         }
     }
 
     pub fn ack(&mut self, ack: SubAck) -> Result<()> {
+        if ack.topic == Topic::Session {
+            return self.sessions.ack(ack);
+        }
         let key = Key::new(ack.topic, ack.scope)?;
         let sub = self
             .subscribers
@@ -116,6 +136,7 @@ impl AppTopics {
     }
 
     pub fn flush(&mut self, shared: &Shared, conn: &mut dyn crate::conn::Conn) -> Result<()> {
+        self.sessions.flush(shared, conn)?;
         let mut closed = Vec::new();
         for (key, subscriber) in &mut self.subscribers {
             match subscriber.next(shared) {

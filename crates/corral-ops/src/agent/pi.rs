@@ -299,7 +299,12 @@ pub(crate) fn supervise_with(
         }
         match status.code() {
             Some(CONTINUE_ASSISTANT_EXIT) => {
-                prepared = crate::assistant::continuation::resume(ctx, &id, pane, generation)?;
+                let Some(next) =
+                    crate::assistant::continuation::resume(ctx, &id, pane, generation)?
+                else {
+                    return Ok(());
+                };
+                prepared = next;
             }
             Some(RELINK_ASSISTANT_EXIT) => {
                 anyhow::ensure!(

@@ -61,7 +61,9 @@ pub(crate) fn retire_superseded(ctx: &Ctx, task: &str, run: &str) -> Result<()> 
         .run_head(run)?
         .context("sandbox retirement run missing")?;
     ensure!(
-        intent.outcome == Some(RunOutcome::Superseded) && intent.ended.is_some(),
+        (intent.outcome == Some(RunOutcome::Superseded)
+            || (intent.outcome == Some(RunOutcome::Stopped) && intent.retry.is_some()))
+            && intent.ended.is_some(),
         "sandbox retirement requires durable supersession intent"
     );
     if let Err(error) = reap(ctx, task, run) {

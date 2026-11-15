@@ -301,6 +301,10 @@ pub struct Feed {
     pub threads: BTreeMap<Id, ThreadSnapshot>,
     pub topics: BTreeMap<String, TopicState>,
     pub details: BTreeMap<String, DetailCache>,
+    /// Transcript item continuations, by continuation token.
+    pub items: BTreeMap<String, crate::model::session_feed::ItemFetch>,
+    /// The open turn of each watched session, by session id.
+    pub live: BTreeMap<Id, crate::model::session_feed::LiveSession>,
     pub commands: BTreeMap<Id, CommandState>,
     pub operations: BTreeMap<Id, Operation>,
     /// Upload metadata only; file bytes never enter the model or persistent storage.
@@ -343,6 +347,15 @@ impl Feed {
         self.details.get(&detail_key(target))
     }
 
+    pub fn settle_session(&mut self, target: &DetailRef, reread: Option<u64>) {
+        if let DetailRef::Session { id } = target
+            && let Some(reread) = reread
+            && let Some(live) = self.live.get_mut(id.as_str())
+        {
+            live.settle(reread);
+        }
+    }
+
     pub fn mark_stale(&mut self) {
         self.session = None;
         self.registry = crate::model::devices::Registry::Unknown;
@@ -357,6 +370,9 @@ impl Feed {
         for thread in self.threads.values_mut() {
             thread.stale = true;
             thread.loading = false;
+        }
+        for session in self.live.values_mut() {
+            session.reset();
         }
         for command in self.commands.values_mut() {
             if matches!(

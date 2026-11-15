@@ -648,7 +648,8 @@ fn prepare_prompt(ctx: &Ctx, task: &TaskHead) -> Result<()> {
         ));
     }
     if let Some(previous) = source.as_ref()
-        && previous.outcome == Some(RunOutcome::Superseded)
+        && (previous.outcome == Some(RunOutcome::Superseded)
+            || (previous.outcome == Some(RunOutcome::Stopped) && previous.retry.is_some()))
     {
         if let Some(state) = &run.autopilot
             && let Some(request) = &state.reason

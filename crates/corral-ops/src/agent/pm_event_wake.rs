@@ -56,11 +56,25 @@ pub(crate) fn checkpoint(ctx: &Ctx) -> Result<()> {
     )
 }
 
+/// Establish the first-binding baseline before a PM pause can defer its first event pass.
+/// Existing cursors and frozen batches must survive every subsequent pause unchanged.
+pub(crate) fn ensure_checkpoint(ctx: &Ctx) -> Result<()> {
+    ctx.store.records_transaction(|| {
+        if STATE.load(&ctx.store, "state")?.is_none() {
+            checkpoint(ctx)?;
+        }
+        Ok(())
+    })
+}
+
 /// Publication never depends on health; only a healthy bound PM may receive native input.
 pub(crate) fn push(ctx: &Ctx, pm: AgentPm) -> Result<()> {
+    if crate::session_control::automated_input_must_wait(ctx, &Recipient::Pm)? {
+        return Ok(());
+    }
     let Some(mut state) = STATE.load(&ctx.store, "state")? else {
         // First binding starts at EOF, not at sequence zero.
-        return checkpoint(ctx);
+        return ensure_checkpoint(ctx);
     };
     let healthy = super::pm_wake::healthy(&pm);
     let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;

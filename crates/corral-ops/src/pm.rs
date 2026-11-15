@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use corral_core::records::RecordArea;
-use corral_core::{Config, ProfileChoice, ResolvedProfile};
+use corral_core::{Config, ProfileChoice, ResolvedProfile, StoreLock};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -83,7 +83,7 @@ pub fn open_setup_pm(ctx: &Ctx, connection: &SetupConnection) -> Result<String> 
     let resolved = setup_connection(&config, connection)?;
     let current = ctx.store.profile_setup()?;
     crate::setup_begin(&ctx.store, current.revision)?;
-    open_pm_with(ctx, Some((connection, resolved)))
+    open_pm_with(ctx, Some((connection, resolved)), true, None)
 }
 
 /// Ensures the workspace PM pane exists and focuses it; returns its pane id.
@@ -96,20 +96,52 @@ pub fn open_setup_pm(ctx: &Ctx, connection: &SetupConnection) -> Result<String> 
 ///   (render the agent template with {prompt_file}=prompts/pm.md, {name}="corral PM", {task}="PM",
 ///   {worktree}=root), report metadata title "corral PM", save the PM record, focus it.
 pub fn open_pm(ctx: &Ctx) -> Result<String> {
-    open_pm_with(ctx, None)
+    open_pm_with(ctx, None, true, None)
+}
+
+/// Daemon-routed launch/reuse must never move the owner's terminal focus.
+pub(crate) fn open_pm_unfocused(ctx: &Ctx) -> Result<String> {
+    open_pm_with(ctx, None, false, None)
+}
+
+/// Automated requests never resurrect a paused or owner-stopped PM. The final
+/// launch bookkeeping uses this same claim rather than reacquiring deliver-pm.
+pub(crate) fn open_pm_automated(ctx: &Ctx) -> Result<Option<String>> {
+    let Some(input) = ctx
+        .store
+        .try_lock("deliver-pm")
+        .context("claiming automated PM startup")?
+    else {
+        return Ok(None);
+    };
+    if !crate::session_control::automation_may_start(ctx, &corral_core::inbox::Recipient::Pm)? {
+        return Ok(None);
+    }
+    open_pm_with(ctx, None, false, Some(&input)).map(Some)
 }
 
 fn open_pm_with(
     ctx: &Ctx,
     bootstrap: Option<(&SetupConnection, ResolvedProfile)>,
+    focus: bool,
+    input: Option<&StoreLock>,
 ) -> Result<String> {
     // Validate a corral-pi PM before any policy delivery, workspace or pane.
     crate::agent::hooks::pm::preflight(ctx, bootstrap.as_ref().map(|(_, r)| r))?;
+    if input.is_none() {
+        crate::session_control::stop::recover_pm(ctx)?;
+        crate::session_control::pause::lift_owner(ctx, "pm")?;
+    }
     let recovery = crate::agent::recovery::PmRecoveryLease::acquire(ctx)?;
+    if input.is_none() {
+        crate::session_control::stop::clear_pm_owner_stop(ctx)?;
+    }
     if recovery.pending(ctx)
         && let Some(pm) = &recovery.current
     {
-        ctx.herdr.pane_focus(&pm.pane)?;
+        if focus {
+            ctx.herdr.pane_focus(&pm.pane)?;
+        }
         return Ok(pm.pane.clone());
     }
     let _board = ctx
@@ -120,7 +152,9 @@ fn open_pm_with(
     if let Some(pane) = live_pm_pane(ctx)? {
         crate::pm_policy::deliver(ctx, &pane, &policy)?;
         drop(_board);
-        ctx.herdr.pane_focus(&pane)?;
+        if focus {
+            ctx.herdr.pane_focus(&pane)?;
+        }
         return Ok(pane);
     }
     let prompt_file = save_prompt(ctx, &policy)?;
@@ -191,8 +225,11 @@ fn open_pm_with(
         connection.clone(),
         &resolved,
         &command,
+        input,
     )?;
-    ctx.herdr.pane_focus(&created.pane_id)?;
+    if focus {
+        ctx.herdr.pane_focus(&created.pane_id)?;
+    }
     ctx.store.log_event(
         None,
         "pm_opened",
@@ -202,10 +239,38 @@ fn open_pm_with(
 }
 
 /// Recover the recorded corral-pi PM without taking focus or starting a new conversation.
+#[cfg(test)]
 pub(crate) fn relaunch(ctx: &Ctx, reason: &str, replace: bool) -> Result<String> {
+    relaunch_with(ctx, reason, replace, false, None)
+}
+
+pub(crate) fn relaunch_held(
+    ctx: &Ctx,
+    reason: &str,
+    replace: bool,
+    input: &StoreLock,
+) -> Result<String> {
+    ensure!(
+        crate::session_control::automation_may_start(ctx, &corral_core::inbox::Recipient::Pm)?,
+        "session_fenced: automated PM relaunch is deferred"
+    );
+    relaunch_with(ctx, reason, replace, false, Some(input))
+}
+
+fn relaunch_with(
+    ctx: &Ctx,
+    reason: &str,
+    replace: bool,
+    owner: bool,
+    input: Option<&StoreLock>,
+) -> Result<String> {
     use crate::agent::recovery::PmRecoveryLease;
 
     let recovery = PmRecoveryLease::acquire(ctx)?;
+    if owner {
+        crate::session_control::pause::lift_owner(ctx, "pm")?;
+        crate::session_control::stop::clear_pm_owner_stop(ctx)?;
+    }
     let pm = recovery
         .current
         .as_ref()
@@ -214,7 +279,7 @@ pub(crate) fn relaunch(ctx: &Ctx, reason: &str, replace: bool) -> Result<String>
     if recovery.keep_current(ctx, replace)? {
         return Ok(pm.pane.clone());
     }
-    Ok(successor(ctx, pm, reason, replace, None, None)?.0)
+    Ok(successor_with(ctx, pm, reason, replace, None, None, input)?.0)
 }
 
 /// Fence, drain and reconcile `pm`, then launch its next generation in a corral-owned pane
@@ -228,6 +293,18 @@ pub(crate) fn successor(
     replace: bool,
     rotate: Option<&dyn Fn() -> Result<bool>>,
     fresh_profile: Option<&ResolvedProfile>,
+) -> Result<(String, serde_json::Value)> {
+    successor_with(ctx, pm, reason, replace, rotate, fresh_profile, None)
+}
+
+fn successor_with(
+    ctx: &Ctx,
+    pm: &corral_core::agent::AgentPm,
+    reason: &str,
+    replace: bool,
+    rotate: Option<&dyn Fn() -> Result<bool>>,
+    fresh_profile: Option<&ResolvedProfile>,
+    input: Option<&StoreLock>,
 ) -> Result<(String, serde_json::Value)> {
     use crate::agent::recovery::{RecoveryLaunch, recover_with};
     use corral_core::agent::ContainerRef;
@@ -257,6 +334,7 @@ pub(crate) fn successor(
             pane: Some(&pane),
             profile: Some(&resolved),
             fresh_profile,
+            input,
             adopted: false,
             continue_session: true,
             rotate,
@@ -268,7 +346,7 @@ pub(crate) fn successor(
     } else {
         &resolved
     };
-    launch_pm(ctx, &pane, None, launched, &prepared.command())?;
+    launch_pm(ctx, &pane, None, launched, &prepared.command(), input)?;
     let mut detail = json!({
         "pane": pane, "reason": reason, "replaced": outcome["replaced"],
         "previous_pane": previous_pane,
@@ -286,7 +364,8 @@ pub(crate) fn successor(
 
 /// CLI access to the same recovery entry point used by the supervisor.
 pub fn relaunch_pm(ctx: &Ctx, reason: &str, replace: bool) -> Result<String> {
-    relaunch(ctx, reason, replace)
+    crate::session_control::stop::recover_pm(ctx)?;
+    relaunch_with(ctx, reason, replace, true, None)
 }
 
 /// Commit policy startup and launch into a corral-owned pane; focus remains the caller's choice.
@@ -296,6 +375,7 @@ fn launch_pm(
     connection: Option<SetupConnection>,
     resolved: &ResolvedProfile,
     command: &str,
+    input: Option<&StoreLock>,
 ) -> Result<()> {
     let _board = ctx
         .store
@@ -320,8 +400,11 @@ fn launch_pm(
     crate::pm_policy::confirm_startup(ctx, pane)?;
     // Release the board boundary before metadata, focus and event accounting.
     drop(_board);
-    corral_core::inbox::Inbox::new(&ctx.store, corral_core::inbox::Recipient::Pm)?
-        .record_pm_launch()?;
+    let inbox = corral_core::inbox::Inbox::new(&ctx.store, corral_core::inbox::Recipient::Pm)?;
+    match input {
+        Some(input) => inbox.record_pm_launch_held(input)?,
+        None => inbox.record_pm_launch()?,
+    }
     ctx.herdr.pane_report_metadata(pane, "corral PM", &[])?;
     Ok(())
 }
@@ -344,6 +427,9 @@ fn pm_receipt(ctx: &Ctx, pane: &str) -> Result<std::path::PathBuf> {
 /// The owner's pane adopted by `corral pi` is the PM's only while its host is verifiably alive,
 /// and is never closed; any other PM pane is live until its agent returns to the shell.
 fn live(ctx: &Ctx, pane: &str) -> Result<bool> {
+    if crate::session_control::stop::pm_stopped(ctx)? {
+        return Ok(false);
+    }
     match crate::agent::pi::adopted_alive(ctx, pane)? {
         Some(alive) => Ok(alive),
         None => Ok(!exited(ctx, pane)?),
@@ -360,7 +446,10 @@ pub(crate) fn adopt_pm<T>(
     resolved: &ResolvedProfile,
     start: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
+    crate::session_control::stop::recover_pm(ctx)?;
     let recovery = crate::agent::recovery::PmRecoveryLease::acquire(ctx)?;
+    crate::session_control::pause::lift_owner(ctx, "pm")?;
+    crate::session_control::stop::clear_pm_owner_stop(ctx)?;
     let board = || -> Result<_> {
         ctx.store
             .try_lock("dispatch")?

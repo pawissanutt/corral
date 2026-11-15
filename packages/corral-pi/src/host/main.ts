@@ -160,6 +160,7 @@ export async function runHost(config: HostConfig, overrides: {
     uid: process.getuid?.() ?? -1,
     peer: await loadPeerLookup(),
     events,
+    liveEvents: session.liveEvents.events,
     handlers: {
       hello: () => ({
         protocol: 1, generation: config.identity.generation, role: config.identity.role,

@@ -83,6 +83,19 @@ pub(crate) fn post(
     binding: MessageBinding,
     admit: impl FnOnce(&mut Task, &Message) -> Result<()>,
 ) -> Result<Message> {
+    post_with_policy(ctx, recipient, kind, body, binding, None, admit)
+}
+
+/// Session chat uses the same publisher and owner effects, with a durable mode override.
+pub(crate) fn post_with_policy(
+    ctx: &Ctx,
+    recipient: &Recipient,
+    kind: &str,
+    body: &str,
+    binding: MessageBinding,
+    policy: Option<&str>,
+    admit: impl FnOnce(&mut Task, &Message) -> Result<()>,
+) -> Result<Message> {
     Inbox::new(&ctx.store, recipient.clone())?.post_with(
         Post {
             kind,
@@ -90,8 +103,12 @@ pub(crate) fn post(
             author: OWNER,
             body,
             binding,
-            subject: None,
-            max_payload: MAX_PAYLOAD,
+            subject: policy.map(|policy| json!({"busy_policy": policy})),
+            max_payload: if policy.is_some() {
+                crate::agent::delivery::INPUT_MAX_BYTES
+            } else {
+                MAX_PAYLOAD
+            },
         },
         admit,
     )
@@ -112,6 +129,15 @@ pub(crate) fn kick(ctx: &Ctx, recipient: &Recipient) -> Result<DeliveryStatus, S
 
 /// The registered native adapter, without reclassifying existing legacy runs.
 fn native_adapter(ctx: &Ctx, recipient: &Recipient) -> Option<Box<dyn DeliveryAdapter>> {
+    if matches!(recipient, Recipient::Pm) {
+        return corral_core::agent::pm_state::load_current(&ctx.store)
+            .ok()
+            .flatten()
+            .map(|pm| Box::new(crate::agent::pm_wake::ScopedPm(pm)) as Box<dyn DeliveryAdapter>);
+    }
+    if matches!(recipient, Recipient::Assistant { .. }) {
+        return Some(crate::agent::hooks::delivery::adapter());
+    }
     // The recipient's projection is read by key, never by hydrating task history.
     let task = ctx.store.head(recipient.task()?).ok()?;
     if let Recipient::PlanRun { plan_run, .. } = recipient

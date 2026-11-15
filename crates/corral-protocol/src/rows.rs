@@ -113,6 +113,43 @@ pub struct AgentRow {
     pub cost_basis: Option<CostBasis>,
     pub tokens: Option<u64>,
     pub rev: u64,
+    /// The host generation the controls were computed for; a control command echoes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u32>,
+    /// The open turn, when the host reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<u64>,
+    /// What the owner may do to this session now. The client never infers these.
+    #[serde(default)]
+    pub controls: SessionControls,
+}
+
+/// One control of a session: offered, or refused with a machine code such as `host_lost`,
+/// `no_bridge`, `ended`, `not_owned`, `adopted_pane`, `not_paused`, `no_turn`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ControlState {
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+}
+
+/// Per-session controls, computed by the daemon. A default value offers nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionControls {
+    /// Owner words into the session's chat.
+    pub send: ControlState,
+    /// Cancel the current turn.
+    pub cancel: ControlState,
+    pub pause: ControlState,
+    pub resume: ControlState,
+    /// Terminate: stop the host and end the session.
+    pub stop: ControlState,
+    /// Start the next generation of a lost host (for the PM row: open the PM).
+    pub relaunch: ControlState,
+    /// Keys typed into the session's pane.
+    pub keys: ControlState,
+    /// Move a pane-hosted assistant into the daemon.
+    pub take_over: ControlState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -125,6 +162,8 @@ pub enum AgentStatus {
     Reviewing,
     Idle,
     Waiting,
+    /// Fenced by the owner: alive, taking no automated input until resumed.
+    Paused,
     Ended,
     Unavailable,
     #[serde(other)]
@@ -166,6 +205,8 @@ pub enum AssistantState {
     Working,
     Waiting,
     Stopping,
+    /// Fenced by the owner: alive, queued messages wait until resumed.
+    Paused,
     Ended,
     Failed,
     #[serde(other)]

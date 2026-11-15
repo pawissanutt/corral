@@ -147,6 +147,8 @@ mod plan_recovery;
 mod routing;
 mod scratch_reclaim;
 mod search;
+pub mod session_control;
+pub mod session_live;
 mod session_scope;
 mod settling;
 mod setup;

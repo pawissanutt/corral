@@ -507,13 +507,29 @@ fn enter(fx: &Fx, id: &str, entry: Entry, key: &crate::integration::RepairKey) -
                 .unwrap()
                 .to_owned()
         }),
-        Entry::Handoff => crate::dispatch::availability_retry(&fx.ctx, id, "R1").map(|outcome| {
-            format!("{outcome:?}")
-                .split_whitespace()
-                .next()
-                .unwrap()
-                .to_owned()
-        }),
+        Entry::Handoff => (|| {
+            let inbox = corral_core::inbox::Inbox::new(
+                &fx.ctx.store,
+                corral_core::inbox::Recipient::Run {
+                    task: id.to_owned(),
+                    run: "R1".into(),
+                },
+            )?;
+            let session_input = fx
+                .ctx
+                .store
+                .try_lock(&format!("deliver-{}", inbox.key()))?
+                .ok_or_else(|| anyhow::anyhow!("handoff session input is busy"))?;
+            crate::dispatch::availability_retry_claimed(&fx.ctx, id, "R1", &session_input).map(
+                |outcome| {
+                    format!("{outcome:?}")
+                        .split_whitespace()
+                        .next()
+                        .unwrap()
+                        .to_owned()
+                },
+            )
+        })(),
         Entry::Approve => crate::done(&fx.ctx, id, "finished the change")
             .map(|task| task.status.label().to_owned()),
     };

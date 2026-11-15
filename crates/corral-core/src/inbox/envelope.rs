@@ -142,6 +142,19 @@ impl Inbox<'_> {
         max_payload: usize,
         flush: bool,
     ) -> Result<Option<Envelope>> {
+        self.publish_with_mode(binding, adapter, max_payload, flush, |_| None)
+    }
+
+    /// Explicit per-message modes split only the leading contiguous batch. With no
+    /// override, retain the legacy owner-wins batching and frozen mode exactly.
+    pub fn publish_with_mode(
+        &self,
+        binding: &SessionBinding,
+        adapter: &str,
+        max_payload: usize,
+        flush: bool,
+        explicit_mode: impl Fn(&Message) -> Option<&'static str>,
+    ) -> Result<Option<Envelope>> {
         let _lock = self.lock()?;
         let state = self.state_head()?;
         ensure!(
@@ -165,6 +178,17 @@ impl Inbox<'_> {
         if unread.is_empty() {
             return Ok(None);
         }
+        let partition = unread
+            .iter()
+            .any(|message| explicit_mode(message).is_some());
+        let effective_mode = |message: &Message| {
+            explicit_mode(message).unwrap_or(if message.owner_kind() {
+                "steer"
+            } else {
+                "follow_up"
+            })
+        };
+        let mode = partition.then(|| effective_mode(&unread[0]));
         let number = state.next_envelope;
         // Escape member-looking lines in stored bodies, including messages posted by older
         // versions. The framing marker lets consumers reject ambiguous legacy payloads.
@@ -175,6 +199,9 @@ impl Inbox<'_> {
         let mut members = Vec::new();
         let mut owner = false;
         for message in unread {
+            if mode.is_some_and(|mode| effective_mode(&message) != mode) {
+                break;
+            }
             let body = message.body.replace("\n\n[corral ", "\n\n\\[corral ");
             if payload.len() + 2 + body.len() > max_payload.min(MAX_PAYLOAD) {
                 ensure!(
@@ -197,7 +224,9 @@ impl Inbox<'_> {
             members,
             binding: binding.clone(),
             adapter: adapter.into(),
-            mode: if owner { "steer" } else { "follow_up" }.into(),
+            mode: mode
+                .unwrap_or(if owner { "steer" } else { "follow_up" })
+                .into(),
             payload_sha256: hash(&payload),
             payload_path,
             idempotency_key: format!("{}@env{number}", self.key()),

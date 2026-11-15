@@ -12,6 +12,7 @@ Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
   assistant               Inspect and manage durable assistant sessions (no coding slot)
+  session                 Control task and PM sessions
   mode                    Select Assist or explicitly confirm scoped Autopilot for this workspace
   inbox                   Inspect and durably manage agent inbox messages without delivering them
   attention               Inspect current task conditions and progress without changing state
@@ -83,6 +84,7 @@ Commands:
   jump                    Focus the task's herdr pane
   sync                    Reconcile tasks once; use `corral daemon run` for the always-on loop
   daemon                  Manage the workspace's always-on sync daemon
+  device                  Pair, list and revoke app devices (needs a running daemon)
   autopilot               Compatibility alias: shared status, workspace pause, or guidance for scoped activation
   hook                    herdr plugin event hook: nudge the daemon or sync once, always exit 0
   bind-session            Bind legacy pane ownership using verified launch or plugin-registration evidence
@@ -673,6 +675,163 @@ Options:
   -h, --help         Print help
 ```
 
+## `corral session`
+
+```text
+Control task and PM sessions
+
+Usage: corral session [OPTIONS] <COMMAND>
+
+Commands:
+  cancel    Cancel the current turn without ending the session
+  pause     Pause automated input while keeping the host alive
+  resume    Resume automated input
+  stop      Stop the host and end the session
+  relaunch  Start the next generation of a session
+  pm-open   Open the PM when none is live
+  send      Send owner words, lifting any pause
+  keys      Send keys and optional text to a foreign-harness pane
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral session cancel`
+
+```text
+Cancel the current turn without ending the session
+
+Usage: corral session cancel [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --generation <GENERATION>
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --turn <TURN>
+      --json
+  -h, --help                     Print help
+```
+
+### `corral session pause`
+
+```text
+Pause automated input while keeping the host alive
+
+Usage: corral session pause [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --generation <GENERATION>
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help                     Print help
+```
+
+### `corral session resume`
+
+```text
+Resume automated input
+
+Usage: corral session resume [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral session stop`
+
+```text
+Stop the host and end the session
+
+Usage: corral session stop [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --generation <GENERATION>
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help                     Print help
+```
+
+### `corral session relaunch`
+
+```text
+Start the next generation of a session
+
+Usage: corral session relaunch [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --replace
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help         Print help
+```
+
+### `corral session pm-open`
+
+```text
+Open the PM when none is live
+
+Usage: corral session pm-open [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral session send`
+
+```text
+Send owner words, lifting any pause
+
+Usage: corral session send [OPTIONS] <ID> <TEXT>
+
+Arguments:
+  <ID>
+  <TEXT>
+
+Options:
+      --policy <POLICY>  [default: follow-up] [possible values: steer, follow-up]
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help             Print help
+```
+
+### `corral session keys`
+
+```text
+Send keys and optional text to a foreign-harness pane
+
+Usage: corral session keys [OPTIONS] <ID> [KEYS]...
+
+Arguments:
+  <ID>
+  [KEYS]...
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --text <TEXT>
+      --json
+  -h, --help         Print help
+```
+
 ## `corral mode`
 
 ```text
@@ -1112,7 +1271,7 @@ Run one corral-pi host request: a JSON envelope on stdin, one JSON receipt on st
 Usage: corral agent call [OPTIONS] --op <OP>
 
 Options:
-      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, notes, pm_action, pm_shadow, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_content, read_lessons, read_annotations, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict, owner_action, write_permission, assistant_plan, assistant_plan_review, assistant_handoff, memory_list, memory_read, memory_put, memory_remove]
+      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, notes, pm_action, pm_shadow, checkpoint, evidence, artifact, gate, gate_triage, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_content, read_lessons, read_annotations, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict, owner_action, owner_ask, owner_prompt, idea_file, write_permission, assistant_plan, assistant_plan_review, assistant_handoff, memory_list, memory_read, memory_put, memory_remove]
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -1973,22 +2132,63 @@ Usage: corral recover [OPTIONS] <ID>
 Arguments:
   <ID>
 
+
 Options:
-      --action <ACTION>          Exact proposed operation; without --apply this only previews [possible values: use-reviewer, accept-plan, accept-code, reconcile-external, force-admission]
-      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --stage <STAGE>            One named launch stage (use-reviewer or force-admission only) [possible values: dispatch, plan-dispatch, gate, code-review, plan-review]
-      --plan <PLAN>              Refuse unless this is still the current plan revision
-      --run <RUN>                Refuse unless this is still the current code run
-      --reviewer <REVIEWER>      One-attempt reviewer; prefer ordinary route --set-reviewer when sufficient
-      --merge <MERGE>            Code acceptance strategy (accept-code requires an explicit choice) [possible values: keep, rebase, ff]
-      --waive <EXCEPTIONS>       Name every exact overridden/waived check; repeatable, no wildcard
-      --notes-file <NOTES_FILE>  Plan acceptance resolutions; binds the actual file bytes into the preview
-      --external-file <EXTERNAL_FILE>  ExternalDelivery JSON: full commit/tree and exact gate/review/landing artifact paths + hashes
-      --history                  Read durable operations, not preview proposals
-      --apply <APPLY>            Exact current preview digest; not permission and never a yes/force flag
-      --reason <REASON>          Nonblank owner-written reason; application still requires local terminal confirmation
+      --action <ACTION>
+          Exact proposed operation; without --apply this only previews
+
+          Possible values:
+          - use-reviewer
+          - accept-plan
+          - accept-code
+          - reconcile-external: Reconcile work already delivered externally; never merge the native candidate
+          - force-admission
+
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+
+      --stage <STAGE>
+          One named launch stage (use-reviewer or force-admission only)
+
+          [possible values: dispatch, plan-dispatch, gate, code-review, plan-review]
+
+      --plan <PLAN>
+          Refuse unless this is still the current plan revision
+
+      --run <RUN>
+          Refuse unless this is still the current code run
+
+      --reviewer <REVIEWER>
+          One-attempt reviewer; prefer ordinary route --set-reviewer when sufficient
+
+      --merge <MERGE>
+          Code acceptance strategy (accept-code requires an explicit choice)
+
+          [possible values: keep, rebase, ff]
+
+      --waive <EXCEPTIONS>
+          Name every exact overridden/waived check; repeatable, no wildcard
+
+      --notes-file <NOTES_FILE>
+          Plan acceptance resolutions; binds the actual file bytes into the preview
+
+      --external-file <EXTERNAL_FILE>
+          ExternalDelivery JSON: full commit/tree and exact gate/review/landing artifact paths + hashes
+
+      --history
+          Read durable operations, not preview proposals
+
+      --apply <APPLY>
+          Exact current preview digest; not permission and never a yes/force flag
+
+      --reason <REASON>
+          Nonblank owner-written reason; application still requires local terminal confirmation
+
       --json
-  -h, --help                     Print help
+
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ## `corral digest`
@@ -4372,6 +4572,64 @@ Options:
       --print        Print the service definition without writing it
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --force        Replace a different existing service definition
+  -h, --help         Print help
+```
+
+## `corral device`
+
+```text
+Pair, list and revoke app devices (needs a running daemon)
+
+Usage: corral device [OPTIONS] <COMMAND>
+
+Commands:
+  pair    Offer a short-lived browser pairing link or code and confirm its matching code
+  list    List enrolled and revoked app devices
+  revoke  Revoke a device and close its active sessions
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral device pair`
+
+```text
+Offer a short-lived browser pairing link or code and confirm its matching code
+
+Usage: corral device pair [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral device list`
+
+```text
+List enrolled and revoked app devices
+
+Usage: corral device list [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral device revoke`
+
+```text
+Revoke a device and close its active sessions
+
+Usage: corral device revoke [OPTIONS] <DEVICE>
+
+Arguments:
+  <DEVICE>
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
 

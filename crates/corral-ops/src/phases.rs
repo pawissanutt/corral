@@ -518,6 +518,13 @@ impl Builder {
             "autopilot" => self.autopilot(at, run, detail["to"].as_str().unwrap_or("")),
             "landing_stale" => self.decided(at, run),
             "approved" => self.approved(event, run),
+            "session_stopped" if detail["role"] == "worker" => {
+                let state = self
+                    .runs
+                    .entry(run.to_owned())
+                    .or_insert_with(RunState::new);
+                interrupt(&mut self.spans, run, state, Some(at), "stopped");
+            }
             "discarded" | "superseded" => {
                 let state = self
                     .runs

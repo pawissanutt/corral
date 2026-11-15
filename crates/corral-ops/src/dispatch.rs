@@ -461,6 +461,11 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         .context("task has no live run")?
         .id
         .clone();
+    let recipient = corral_core::inbox::Recipient::Run {
+        task: task.id.clone(),
+        run: run_id.clone(),
+    };
+    crate::delivery::paused::lift_owner(ctx, &recipient)?;
     let resending = task
         .current_run()
         .is_some_and(|r| r.pending_reply.as_deref() == Some(text));
@@ -496,6 +501,11 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         }
         Ok(())
     })?;
+    let inbox = corral_core::inbox::Inbox::new(&ctx.store, recipient.clone())?;
+    let _session_delivery = inbox.delivery_lock()?;
+    if crate::session_control::automated_input_must_wait(ctx, &recipient)? {
+        return Ok(task);
+    }
     if task.current_run().is_some_and(|r| r.stuck.is_some()) {
         return Ok(task);
     }
@@ -605,12 +615,12 @@ pub fn resend_reply(ctx: &Ctx, id: &str) -> Result<Task> {
 }
 
 pub(crate) use changes::auto_request_changes;
-pub(crate) use fallback::availability_retry;
+pub(crate) use fallback::availability_retry_claimed;
 mod fallback;
 pub use changes::request_changes;
 mod changes;
 mod inbox_reply;
-pub(crate) use inbox_reply::note as inbox_note;
+pub(crate) use inbox_reply::{note as inbox_note, session_reply as inbox_session_reply};
 
 mod retry;
 pub(crate) use retry::auto_retry;

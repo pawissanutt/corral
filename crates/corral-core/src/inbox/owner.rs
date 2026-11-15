@@ -134,15 +134,32 @@ impl Inbox<'_> {
 
     /// Phase 1 launches are always legacy; preserve any historical inbox records.
     pub fn record_pm_launch(&self) -> Result<()> {
+        let deliver = self.delivery_lock()?;
+        self.record_pm_launch_held(&deliver)
+    }
+
+    /// Startup order: nonblocking deliver-pm -> recovery/policy leases -> dispatch ->
+    /// record writes. Drop dispatch before this helper; never reacquire deliver-pm or
+    /// inbox-pm here (a posting/readiness holder may itself be waiting for dispatch).
+    pub fn record_pm_launch_held(&self, deliver: &StoreLock) -> Result<()> {
         ensure!(
             self.recipient == Recipient::Pm,
             "PM launch state requires PM recipient"
         );
-        let _deliver = self.delivery_lock()?;
-        let _inbox = self.lock()?;
-        let mut pm = self.pm_state()?;
-        pm.delivery = DeliveryMode::Legacy;
-        self.save_standalone_record("pm-inbox", "current", &pm)
+        let path = self
+            .store
+            .dir()
+            .join("lock")
+            .join(format!("deliver-{}.lock", self.key()));
+        ensure!(
+            deliver.exclusively_protects(&path),
+            "PM launch requires this inbox's exclusive delivery guard"
+        );
+        self.store.records_transaction(|| {
+            let mut pm = self.pm_state()?;
+            pm.delivery = DeliveryMode::Legacy;
+            self.save_standalone_record("pm-inbox", "current", &pm)
+        })
     }
     pub fn keys(store: &Store) -> Result<Vec<String>> {
         let mut keys = Vec::new();

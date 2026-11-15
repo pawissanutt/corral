@@ -515,6 +515,19 @@ fn deliver(ctx: &Ctx, row: &ScratchRow, state: &State, warning: OwedWarning) -> 
     let Some(pane) = state.pane.as_deref() else {
         return Ok(());
     };
+    let pm_delivery = if crate::pm::live_pm_pane(ctx)?.as_deref() == Some(pane) {
+        Some(crate::delivery::paused::lock_pm(ctx)?)
+    } else {
+        None
+    };
+    if pm_delivery.is_some()
+        && crate::session_control::automated_input_must_wait(
+            ctx,
+            &corral_core::inbox::Recipient::Pm,
+        )?
+    {
+        return Ok(());
+    }
     let submitting = OwedWarning {
         stage: Stage::Submitting,
         message: warning.message,

@@ -4,10 +4,18 @@ use anyhow::{Context, Result, bail};
 use corral_core::TaskRef as _;
 use corral_core::{
     Config, GateRecord, GateResult, ProfileChoice, ProfileSwitch, RetryPlan, ReviewRecord,
-    RouteSource, Task, TaskHead, Verdict,
+    RouteSource, RunOutcome, Task, TaskHead, Verdict,
 };
 
-fn failed(gate: Option<&GateRecord>, review: Option<&ReviewRecord>, failures: u32) -> u32 {
+fn failed(
+    outcome: Option<RunOutcome>,
+    gate: Option<&GateRecord>,
+    review: Option<&ReviewRecord>,
+    failures: u32,
+) -> u32 {
+    if outcome == Some(RunOutcome::Stopped) {
+        return 0;
+    }
     let failed = gate.is_some_and(|g| matches!(g.result, GateResult::Fail | GateResult::Stale))
         || review.is_some_and(|r| r.verdict == Some(Verdict::Changes));
     failures.max(u32::from(failed))
@@ -20,6 +28,7 @@ fn failures_head(head: &TaskHead) -> Result<u32> {
         return Ok(0);
     };
     let mut count = failed(
+        current.outcome,
         current.gate.as_ref(),
         current.review.as_ref(),
         current.failures,
@@ -29,7 +38,12 @@ fn failures_head(head: &TaskHead) -> Result<u32> {
         .run_head_back(back)?
         .filter(|run| run.agent == current.agent)
     {
-        count = count.saturating_add(failed(run.gate.as_ref(), run.review.as_ref(), run.failures));
+        count = count.saturating_add(failed(
+            run.outcome,
+            run.gate.as_ref(),
+            run.review.as_ref(),
+            run.failures,
+        ));
         back += 1;
     }
     Ok(count)
@@ -52,7 +66,9 @@ fn escalation_with(
 ) -> Result<Option<ProfileSwitch>> {
     let run = task.current_run().context("task has no run to escalate")?;
     if !forced
-        && (task.profile.is_some() || run.route.as_ref().is_some_and(|source| source.is_manual()))
+        && (run.outcome == Some(RunOutcome::Stopped)
+            || task.profile.is_some()
+            || run.route.as_ref().is_some_and(|source| source.is_manual()))
     {
         return Ok(None);
     }

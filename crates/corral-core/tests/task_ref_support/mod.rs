@@ -162,7 +162,8 @@ pub fn random_task(store: &Store, rng: &mut Rng) -> Task {
                 corral_core::RunOutcome::Done,
                 corral_core::RunOutcome::Superseded,
                 corral_core::RunOutcome::Discarded,
-            ][rng.below(3)],
+                corral_core::RunOutcome::Stopped,
+            ][rng.below(4)],
         );
     }
     if rng.below(2) == 0 {

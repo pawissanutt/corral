@@ -11,7 +11,7 @@ use crate::model::{Form, Id};
 use crate::screens::assistant;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::kit::button::seg;
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with, seg};
 use crate::ui::kit::chip::{chip, illus};
 use crate::ui::kit::marks::{dot, hue_ink};
 use crate::ui::kit::notice::{empty, error, notice, skeleton};
@@ -125,16 +125,67 @@ fn stale(app: AppState, wall: &Wall) -> Option<AnyElement> {
     })
 }
 
+/// Launch PM while no PM is live: why, the button and, once pressed, the launch's outcome in its
+/// tone, with "Check result" when it is unknown.
+fn launch(app: AppState, wall: &Wall) -> Option<AnyElement> {
+    let launch = wall.launch.as_ref()?;
+    let action = launch.action.clone();
+    let press = button_with(
+        app,
+        launch.label,
+        ButtonKind::Primary,
+        ButtonOptions {
+            disabled: !launch.enabled,
+            ..ButtonOptions::default()
+        },
+        "btn-launch-pm",
+        move || run(app, action.clone()),
+    );
+    let recover = launch.recover.clone().map(|action| {
+        button(
+            app,
+            "Check result",
+            ButtonKind::Quiet,
+            "btn-recover-launch",
+            move || run(app, action.clone()),
+        )
+    });
+    let mut words = vec![span(launch.words.clone())];
+    if let Some((hue, status)) = &launch.status {
+        words.push(span(format!(" {status}.")).hue(*hue));
+    }
+    let actions = view()
+        .flex_row()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(8.0))
+        .children(recover)
+        .child(press)
+        .into_element();
+    let notice = notice(app, Hue::Held, &words, Some(actions));
+    Some(if app.form == Form::Terminal {
+        notice
+    } else {
+        view()
+            .px(px(if app.form == Form::Phone { 16.0 } else { 18.0 }))
+            .pt(px(12.0))
+            .child(notice)
+            .into_element()
+    })
+}
+
 /// What scrolls under the head: the blocks and the agents in the mockup's order.
 fn content(app: AppState, wall: &Wall) -> AnyElement {
     let first = untracked(move || assistant::agents_head(app));
     let last = untracked(move || assistant::agents_tail(app));
     let stale = stale(app, wall);
+    let launch = launch(app, wall);
     let fill = fill(app, &wall.fill);
     match app.form {
         Form::Desktop => view()
             .child(machine_line(app, wall))
             .children(stale)
+            .children(launch)
             .child(match wall.mode {
                 Mode::Wall => grid(app, first, &wall.tiles),
                 Mode::List => view()
@@ -157,6 +208,7 @@ fn content(app: AppState, wall: &Wall) -> AnyElement {
         Form::Phone => view()
             .child(first)
             .children(stale)
+            .children(launch)
             .child(group_head(
                 app,
                 wall.machine.clone(),
@@ -196,6 +248,7 @@ fn content(app: AppState, wall: &Wall) -> AnyElement {
             )
             .child(term::blank())
             .children(stale)
+            .children(launch)
             .child(first)
             .child(term::hrule())
             .children(fill)

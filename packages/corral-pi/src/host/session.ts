@@ -29,6 +29,7 @@ import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capab
 import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
 import type { AuthContext } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
+import { LiveEvents } from "./live-events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
 import { closeResidentSession, residentLifecycle } from "../claude/resident.ts";
 import type { QuestionUpdate, SubmitInput, SubmitResult } from "../bridge/protocol.ts";
@@ -317,6 +318,7 @@ export class HostSession {
   runtime!: AgentSessionRuntime;
   /** Interactive host API only; deliberately absent from extension/model registries. */
   readonly queue: HostQueue;
+  readonly liveEvents: LiveEvents;
   readonly panels: NativePanels | undefined;
   private readonly unsubscribePanels: (() => void) | undefined;
   private terminalInput: InputObservation | undefined;
@@ -403,6 +405,7 @@ export class HostSession {
   readonly provider: ProviderId;
 
   private constructor(private readonly options: HostSessionOptions) {
+    this.liveEvents = new LiveEvents(options.identity.generation);
     this.provider = options.provider ?? "openai-codex";
     this.paidContinuation = new HostContinuation({
       identity: options.identity, binding: () => options.binding, manager: options.sessionManager, events: options.events,
@@ -1565,6 +1568,7 @@ export class HostSession {
             ...(provider === "amazon-bedrock" || provider === "llama.cpp" ? {} : { failure }) });
         }
       }
+      this.liveEvents.observe(event, this.turn);
     });
     this.options.events.emit("session_bound", { session_id: session.sessionId });
   }

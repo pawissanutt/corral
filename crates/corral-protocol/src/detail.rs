@@ -47,6 +47,10 @@ pub enum DetailRef {
     Session {
         id: String,
     },
+    SessionItem {
+        id: String,
+        token: String,
+    },
     Terminal {
         id: String,
     },
@@ -105,6 +109,7 @@ pub enum DetailBody {
     Review(ReviewDetail),
     ReviewFile(PatchPage),
     Session(SessionPage),
+    SessionItem(SessionItemPage),
     Terminal(TerminalSnapshot),
     Timeline(TimelinePage),
     Burnup(Burnup),

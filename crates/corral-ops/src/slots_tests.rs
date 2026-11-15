@@ -172,21 +172,21 @@ fn historical_gate_does_not_share_current_worker_slot() {
 }
 
 #[test]
-fn failed_worker_cannot_share_gate_slot() {
-    // Given a Running task whose failed run no longer holds a worker slot.
+fn ended_worker_cannot_share_gate_slot() {
     let (fx, ids) = full_workers(2);
-    let mut task = fx.ctx.store.get(&ids[0]).unwrap();
-    let run = task.current_run_mut().unwrap();
-    run.outcome = Some(RunOutcome::Failed);
-    run.gate = Some(gate());
-
-    // When slot usage is computed.
-    let usage = SlotUsage::from_tasks(&[task], &fx.ctx.store.config.limits);
-
-    // Then the gate still consumes its independent slot.
-    assert_eq!(usage.tasks, 0);
-    assert_eq!(usage.gates, 1);
-    assert_eq!(usage.total(), 1);
+    for outcome in [RunOutcome::Failed, RunOutcome::Stopped] {
+        for status in [Status::Running, Status::NeedsMe] {
+            let mut task = fx.ctx.store.get(&ids[0]).unwrap();
+            task.status = status;
+            let run = task.current_run_mut().unwrap();
+            run.outcome = Some(outcome);
+            run.gate = Some(gate());
+            let usage = SlotUsage::from_tasks(&[task], &fx.ctx.store.config.limits);
+            assert_eq!(usage.tasks, 0);
+            assert_eq!(usage.gates, 1);
+            assert_eq!(usage.total(), 1);
+        }
+    }
 }
 
 #[test]

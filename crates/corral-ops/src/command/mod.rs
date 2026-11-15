@@ -23,6 +23,7 @@ mod queue;
 mod repair;
 mod review;
 mod run;
+mod session;
 mod setup;
 mod target;
 mod task;
@@ -143,6 +144,7 @@ macro_rules! by_family {
             Command::Repair($family) => $body,
             Command::Review($family) => $body,
             Command::Run($family) => $body,
+            Command::Session($family) => $body,
             Command::Setup($family) => $body,
             Command::Task($family) => $body,
             Command::Other => $other,

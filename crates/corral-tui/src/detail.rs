@@ -366,9 +366,18 @@ impl DetailView {
                     .task
                     .current_run()
                     .and_then(|r| r.blocked_excerpt.clone());
+                let stopped = self.task.status == Status::NeedsMe
+                    && self
+                        .task
+                        .current_run()
+                        .is_some_and(|r| r.outcome == Some(corral_core::RunOutcome::Stopped));
                 if let (Status::NeedsMe, Some(x)) = (self.task.status, excerpt) {
                     let mut out = vec![Line::from(Span::styled(
-                        "blocked excerpt (pane not live):",
+                        if stopped {
+                            "stopped by owner · last output:"
+                        } else {
+                            "blocked excerpt (pane not live):"
+                        },
                         theme::dim(),
                     ))];
                     out.extend(
@@ -379,6 +388,9 @@ impl DetailView {
                     return out;
                 }
                 let mut msg = "No live run.".to_string();
+                if stopped {
+                    msg = "No live run. Stopped by owner.".into();
+                }
                 if self.task.status == Status::Review {
                     msg.push_str(" Last run finished; see Review.");
                 }

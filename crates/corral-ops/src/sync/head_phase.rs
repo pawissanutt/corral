@@ -1,6 +1,6 @@
 //! Rows 21-23 of a sync pass: each open head's obligations, each owned open head's
 //! reconciliation with its panes, then native heads that still owe work.
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::Result;
 use corral_core::{Board, TaskHead};
@@ -26,6 +26,7 @@ pub(super) fn reconcile_heads(
         .iter()
         .filter(|head| scope.includes(head.project.as_deref()))
         .collect();
+    let mut stopped = BTreeSet::new();
     // Each task's head is read afresh: gate collection above may have just recorded a result.
     for &head in &in_scope {
         changes.extend(gated_task(
@@ -33,7 +34,15 @@ pub(super) fn reconcile_heads(
             pass.gate(),
             StepId::Obligations,
             head,
-            || crate::obligations_sync::reconcile_one(ctx, &head.id, now, Some(panes)),
+            || {
+                if crate::session_scope::owns_head(ctx, head)?
+                    && crate::session_control::stop::recover_task(ctx, &head.id)?
+                {
+                    stopped.insert(head.id.clone());
+                    return Ok(None);
+                }
+                crate::obligations_sync::reconcile_one(ctx, &head.id, now, Some(panes))
+            },
         )?);
     }
     let mut native: BTreeMap<_, _> = ctx
@@ -49,6 +58,10 @@ pub(super) fn reconcile_heads(
         .collect();
     if decided.is_empty() || decided.values().any(|run| *run) {
         for head in scope.heads(open_heads(ctx)?) {
+            if stopped.contains(&head.id) {
+                native.remove(&head.id);
+                continue;
+            }
             let run = match decided.get(&head.id) {
                 Some(run) => *run,
                 None => pass.gate().task(StepId::HeadLoop, &head),
@@ -65,9 +78,15 @@ pub(super) fn reconcile_heads(
     }
     // Indexed owed work survives terminal status and retired planning/review containers.
     for (_, head) in native {
-        if scope.includes(head.project.as_deref()) && crate::session_scope::owns_head(ctx, &head)? {
+        if !stopped.contains(&head.id)
+            && scope.includes(head.project.as_deref())
+            && crate::session_scope::owns_head(ctx, &head)?
+        {
             gated_task(ctx, pass.gate(), StepId::NativeLeftover, &head, || {
-                crate::agent::hooks::sync::task_id(ctx, &head.id, now).map(drop)
+                if !crate::session_control::stop::recover_task(ctx, &head.id)? {
+                    crate::agent::hooks::sync::task_id(ctx, &head.id, now)?;
+                }
+                Ok(())
             })?;
         }
     }
@@ -85,6 +104,10 @@ fn head_steps(
 ) -> Result<Vec<Change>> {
     let now = pass.now;
     let mut changes = Vec::new();
+    if crate::session_control::stop::recover_task(ctx, &head.id)? {
+        native.remove(&head.id);
+        return Ok(changes);
+    }
     crate::plan_pilot::reconcile(ctx, &head.to_shell_task()?, snapshot, now)?;
     let reconciled = ctx.store.head(&head.id)?;
     if reconciled.status != head.status {

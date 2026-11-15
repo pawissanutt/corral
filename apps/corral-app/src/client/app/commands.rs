@@ -121,6 +121,61 @@ impl AppState {
                 request_id,
                 request,
             } => self.detail_request(feed, request_id, request),
+            ClientRequest::SessionItem { session, token } => {
+                self.session_item(feed, session, token)
+            }
+            ClientRequest::Watch { session, on } => {
+                let transition = if on {
+                    let count = self.session_scopes.entry(session.clone()).or_default();
+                    *count = count.saturating_add(1);
+                    *count == 1
+                } else if let Some(count) = self.session_scopes.get_mut(&session) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        self.session_scopes.remove(&session);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if !transition {
+                    return vec![];
+                }
+                if !on {
+                    feed.update(|feed| {
+                        feed.live.remove(session.as_str());
+                        feed.topics
+                            .remove(&topic_key(Topic::Session, Some(&session)));
+                    });
+                }
+                if !self.ready || !feed.with_untracked(|feed| feed.capable(SESSION_V1)) {
+                    return vec![];
+                }
+                if on {
+                    feed.update(|feed| {
+                        feed.topics.insert(
+                            topic_key(Topic::Session, Some(&session)),
+                            TopicState {
+                                loading: true,
+                                stale: true,
+                                error: None,
+                            },
+                        );
+                    });
+                    vec![open(Topic::Session, Some(session))]
+                } else {
+                    vec![out(
+                        wire::SUB_CLOSE,
+                        value(SubClose {
+                            topic: Topic::Session,
+                            scope: Some(session),
+                        }),
+                        None,
+                    )]
+                }
+            }
             ClientRequest::ActPreview {
                 request_id,
                 request,

@@ -45,10 +45,10 @@ pub(crate) fn require_source(run: &Run, base: &str) -> Result<()> {
 /// Freeze the exact source in the same transaction that reserves the new run. Target
 /// movement refuses explicitly rather than making a compatible checkpoint lie about HEAD.
 pub(crate) fn source(task: &Task, run: &Run) -> Result<Option<RetrySource>> {
-    let Some(previous) = task
-        .current_run()
-        .filter(|r| r.outcome == Some(RunOutcome::Superseded))
-    else {
+    let Some(previous) = task.current_run().filter(|r| {
+        r.outcome == Some(RunOutcome::Superseded)
+            || (r.outcome == Some(RunOutcome::Stopped) && r.retry.is_some())
+    }) else {
         return Ok(None);
     };
     let target = previous.plan_target.as_ref();
@@ -86,7 +86,9 @@ pub(crate) fn start_head(store: &Store, task: &TaskHead, run: &RunHead) -> Resul
                     .is_none_or(|cowork| cowork.assistant_driver().is_some()))
                 || !task
                     .previous_run_head()?
-                    .is_some_and(|previous| previous.outcome == Some(RunOutcome::Superseded)
+                    .is_some_and(|previous| (previous.outcome == Some(RunOutcome::Superseded)
+                        || (previous.outcome == Some(RunOutcome::Stopped)
+                            && previous.retry.is_some()))
                         && (previous.plan_target.is_some()
                             || task
                                 .cowork_run()

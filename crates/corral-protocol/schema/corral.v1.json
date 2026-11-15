@@ -132,6 +132,36 @@
       },
       "AgentRow": {
         "properties": {
+          "controls": {
+            "$ref": "#/components/schemas/SessionControls",
+            "default": {
+              "cancel": {
+                "available": false
+              },
+              "keys": {
+                "available": false
+              },
+              "pause": {
+                "available": false
+              },
+              "relaunch": {
+                "available": false
+              },
+              "resume": {
+                "available": false
+              },
+              "send": {
+                "available": false
+              },
+              "stop": {
+                "available": false
+              },
+              "take_over": {
+                "available": false
+              }
+            },
+            "description": "What the owner may do to this session now. The client never infers these."
+          },
           "cost_basis": {
             "anyOf": [
               {
@@ -146,6 +176,15 @@
             "format": "double",
             "type": [
               "number",
+              "null"
+            ]
+          },
+          "generation": {
+            "description": "The host generation the controls were computed for; a control command echoes it.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -224,6 +263,15 @@
               "integer",
               "null"
             ]
+          },
+          "turn": {
+            "description": "The open turn, when the host reports one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -238,19 +286,28 @@
         "type": "object"
       },
       "AgentStatus": {
-        "enum": [
-          "live",
-          "working",
-          "asking",
-          "gating",
-          "reviewing",
-          "idle",
-          "waiting",
-          "ended",
-          "unavailable",
-          "other"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "live",
+              "working",
+              "asking",
+              "gating",
+              "reviewing",
+              "idle",
+              "waiting",
+              "ended",
+              "unavailable",
+              "other"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "paused",
+            "description": "Fenced by the owner: alive, taking no automated input until resumed.",
+            "type": "string"
+          }
+        ]
       },
       "AnnotationCommand": {
         "oneOf": [
@@ -872,6 +929,39 @@
             "type": "object"
           },
           {
+            "description": "Fence the session: its host stays up and queued messages wait. An owner message or\n`resume` lifts it.",
+            "properties": {
+              "op": {
+                "const": "pause",
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "session"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "resume",
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "session"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "op": {
                 "const": "set_profile",
@@ -906,18 +996,27 @@
         ]
       },
       "AssistantState": {
-        "enum": [
-          "cold",
-          "starting",
-          "ready",
-          "working",
-          "waiting",
-          "stopping",
-          "ended",
-          "failed",
-          "other"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "cold",
+              "starting",
+              "ready",
+              "working",
+              "waiting",
+              "stopping",
+              "ended",
+              "failed",
+              "other"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "paused",
+            "description": "Fenced by the owner: alive, queued messages wait until resumed.",
+            "type": "string"
+          }
+        ]
       },
       "AssistantStop": {
         "properties": {
@@ -2163,6 +2262,22 @@
           {
             "properties": {
               "args": {
+                "$ref": "#/components/schemas/SessionCommand"
+              },
+              "family": {
+                "const": "session",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
                 "$ref": "#/components/schemas/SetupCommand"
               },
               "family": {
@@ -2342,6 +2457,24 @@
         ],
         "type": "object"
       },
+      "ControlState": {
+        "description": "One control of a session: offered, or refused with a machine code such as `host_lost`,\n`no_bridge`, `ended`, `not_owned`, `adopted_pane`, `not_paused`, `no_turn`.",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "refusal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "type": "object"
+      },
       "CostBasis": {
         "enum": [
           "reported",
@@ -2486,6 +2619,22 @@
               },
               "kind": {
                 "const": "session",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionItemPage"
+              },
+              "kind": {
+                "const": "session_item",
                 "type": "string"
               }
             },
@@ -2728,6 +2877,26 @@
             "required": [
               "kind",
               "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_item",
+                "type": "string"
+              },
+              "token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "token"
             ],
             "type": "object"
           },
@@ -8062,6 +8231,293 @@
           }
         ]
       },
+      "SessionCommand": {
+        "oneOf": [
+          {
+            "description": "Cancel a turn of a live host, as Esc does in its terminal. The session stays live.",
+            "properties": {
+              "generation": {
+                "description": "Refuse with `conflict` unless this is still the host's generation.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "turn": {
+                "description": "Turn sequence to cancel (default: the current turn).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "cancel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Cancel the current turn and fence the session against automated input until `resume`.",
+            "properties": {
+              "generation": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "pause",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Lift a pause; input queued meanwhile is delivered in order.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "resume",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Stop the host and end the session. A task keeps its worktree and waits in Needs me.",
+            "properties": {
+              "generation": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "stop",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Fence a lost host and start the next generation of the same session.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "replace": {
+                "description": "Replace a host that is still alive after verifying its identity.",
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "relaunch",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "replace",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Open the PM when none is live.",
+            "properties": {
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "pm-open",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Owner words typed into the session. Lifts a pause.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "policy": {
+                "description": "`steer` or `follow-up`: what a busy host does with the words.",
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "send",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "text",
+              "policy",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Keys, then optional text, typed into the session's pane. Only for a session with a pane\nand no host bridge.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "keys": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "keys",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "keys",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SessionControls": {
+        "description": "Per-session controls, computed by the daemon. A default value offers nothing.",
+        "properties": {
+          "cancel": {
+            "$ref": "#/components/schemas/ControlState",
+            "description": "Cancel the current turn."
+          },
+          "keys": {
+            "$ref": "#/components/schemas/ControlState",
+            "description": "Keys typed into the session's pane."
+          },
+          "pause": {
+            "$ref": "#/components/schemas/ControlState"
+          },
+          "relaunch": {
+            "$ref": "#/components/schemas/ControlState",
+            "description": "Start the next generation of a lost host (for the PM row: open the PM)."
+          },
+          "resume": {
+            "$ref": "#/components/schemas/ControlState"
+          },
+          "send": {
+            "$ref": "#/components/schemas/ControlState",
+            "description": "Owner words into the session's chat."
+          },
+          "stop": {
+            "$ref": "#/components/schemas/ControlState",
+            "description": "Terminate: stop the host and end the session."
+          },
+          "take_over": {
+            "$ref": "#/components/schemas/ControlState",
+            "description": "Move a pane-hosted assistant into the daemon."
+          }
+        },
+        "required": [
+          "send",
+          "cancel",
+          "pause",
+          "resume",
+          "stop",
+          "relaunch",
+          "keys",
+          "take_over"
+        ],
+        "type": "object"
+      },
       "SessionItem": {
         "oneOf": [
           {
@@ -8077,22 +8533,6 @@
             "required": [
               "kind",
               "text"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "const": "tool",
-                "type": "string"
-              },
-              "tool": {
-                "$ref": "#/components/schemas/ToolLine"
-              }
-            },
-            "required": [
-              "kind",
-              "tool"
             ],
             "type": "object"
           },
@@ -8142,6 +8582,370 @@
           {
             "properties": {
               "kind": {
+                "const": "thinking",
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "arguments": {
+                "description": "Pretty JSON, not a flattened argument description.",
+                "type": "string"
+              },
+              "call": {
+                "description": "Original call metadata, including argument validation errors and namespaces.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "call_id": {
+                "type": "string"
+              },
+              "content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "diff": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "elapsed_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "tool_call",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "output": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "paired": {
+                "type": "boolean"
+              },
+              "result": {
+                "description": "Complete structured result, including images and presenter-specific details.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "state": {
+                "$ref": "#/components/schemas/SessionToolState"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "call_id",
+              "name",
+              "arguments",
+              "summary",
+              "state",
+              "paired"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "cancelled": {
+                "type": "boolean"
+              },
+              "command": {
+                "type": "string"
+              },
+              "exclude_from_context": {
+                "type": "boolean"
+              },
+              "exit_code": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "full_output_path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "bash_execution",
+                "type": "string"
+              },
+              "output": {
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "command",
+              "output",
+              "cancelled",
+              "truncated",
+              "exclude_from_context"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "data": {
+                "type": "string"
+              },
+              "encoding": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "image",
+                "type": "string"
+              },
+              "media_type": {
+                "type": "string"
+              },
+              "size": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "media_type",
+              "size",
+              "encoding",
+              "data"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "compaction",
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "tokens_before": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "summary",
+              "tokens_before"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "from_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "branch_summary",
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "summary"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "model_change",
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "provider",
+              "model"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "thinking_level_change",
+                "type": "string"
+              },
+              "level": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "level"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "label",
+                "type": "string"
+              },
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "target_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "target_id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "facts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "aborted",
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "facts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "provider_error",
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "All persisted fields read by an extension presenter, without reducing them to prose.",
+            "properties": {
+              "data": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "card",
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Immediately follows the preview it replaces. Fetch and concatenate JSON fragments.",
+            "properties": {
+              "bytes": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "continuation",
+                "type": "string"
+              },
+              "token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "token",
+              "bytes"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
                 "const": "other",
                 "type": "string"
               }
@@ -8152,6 +8956,368 @@
             "type": "object"
           }
         ]
+      },
+      "SessionItemPage": {
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "json": {
+            "description": "A UTF-8 fragment of the complete serialized SessionItem.",
+            "type": "string"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "json",
+          "offset",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "SessionLiveEvent": {
+        "description": "Text/thinking offsets are UTF-8 bytes, independent per (generation, turn, message,\nkind). Applying chunks at their offsets, rather than appending, is idempotent.",
+        "oneOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "state": {
+                    "const": "started",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "aborted": {
+                    "type": "boolean"
+                  },
+                  "error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "state": {
+                    "const": "ended",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "aborted"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "state": {
+                    "const": "other",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              }
+            ],
+            "properties": {
+              "kind": {
+                "const": "live_turn",
+                "type": "string"
+              },
+              "turn": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "turn"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "live_text",
+                "type": "string"
+              },
+              "message": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "offset": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              },
+              "turn": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "turn",
+              "message",
+              "offset",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "live_thinking",
+                "type": "string"
+              },
+              "message": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "offset": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              },
+              "turn": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "turn",
+              "message",
+              "offset",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "args": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "args_truncated": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "state": {
+                    "const": "started",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "partial": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "state": {
+                    "const": "updated",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "elapsed_ms": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "failed": {
+                    "type": "boolean"
+                  },
+                  "state": {
+                    "const": "ended",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "failed"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "state": {
+                    "const": "other",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              }
+            ],
+            "properties": {
+              "call": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "live_tool",
+                "type": "string"
+              },
+              "tool": {
+                "type": "string"
+              },
+              "turn": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "turn",
+              "call",
+              "tool"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "follow_up": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "live_queue",
+                "type": "string"
+              },
+              "steer": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "steer",
+              "follow_up"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "generation": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "generation",
+          "at"
+        ],
+        "type": "object"
+      },
+      "SessionLiveGap": {
+        "description": "Drop the live overlay and reconcile from `detail.get { session }`. A zero\n`missing` still signals discontinuity (generation change or unavailable host).",
+        "properties": {
+          "after": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "missing": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reconcile": {
+            "type": "boolean"
+          },
+          "resumed": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "after",
+          "resumed",
+          "missing",
+          "reconcile"
+        ],
+        "type": "object"
       },
       "SessionMessage": {
         "properties": {
@@ -8169,7 +9335,20 @@
               "$ref": "#/components/schemas/SessionItem"
             },
             "type": "array"
-          }
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stop_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "usage": true
         },
         "required": [
           "author",
@@ -8232,6 +9411,15 @@
           "replyable"
         ],
         "type": "object"
+      },
+      "SessionToolState": {
+        "enum": [
+          "running",
+          "done",
+          "failed",
+          "not_run"
+        ],
+        "type": "string"
       },
       "SettingsSnapshot": {
         "properties": {
@@ -8920,6 +10108,61 @@
               "epoch",
               "rows",
               "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "events": {
+                "items": {
+                  "$ref": "#/components/schemas/SessionLiveEvent"
+                },
+                "type": "array"
+              },
+              "gap": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SessionLiveGap"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "generation": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "scope": {
+                "type": "string"
+              },
+              "topic": {
+                "const": "session",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "scope",
+              "epoch",
+              "events",
               "cursor",
               "more"
             ],
@@ -10145,6 +11388,7 @@
           "usage",
           "settings",
           "thread",
+          "session",
           "other"
         ],
         "type": "string"
@@ -10955,7 +12199,8 @@
             6,
             7,
             8,
-            9
+            9,
+            10
           ]
         },
         {
@@ -10986,8 +12231,48 @@
             6,
             7,
             8,
-            9
+            9,
+            10
           ]
+        },
+        {
+          "name": "events",
+          "required": false,
+          "schema": {
+            "items": {
+              "$ref": "#/components/schemas/SessionLiveEvent"
+            },
+            "type": "array"
+          },
+          "x-required-in": [
+            10
+          ]
+        },
+        {
+          "name": "gap",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionLiveGap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        {
+          "name": "generation",
+          "required": false,
+          "schema": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
         },
         {
           "name": "left",
@@ -11039,7 +12324,8 @@
             6,
             7,
             8,
-            9
+            9,
+            10
           ]
         },
         {
@@ -11136,7 +12422,8 @@
             "type": "string"
           },
           "x-required-in": [
-            9
+            9,
+            10
           ]
         },
         {
@@ -11195,6 +12482,10 @@
               },
               {
                 "const": "thread",
+                "type": "string"
+              },
+              {
+                "const": "session",
                 "type": "string"
               },
               {
@@ -12064,7 +13355,7 @@
             "$ref": "#/components/schemas/TimelineBy"
           },
           "x-required-in": [
-            8
+            9
           ]
         },
         {
@@ -12074,7 +13365,7 @@
             "type": "string"
           },
           "x-required-in": [
-            12
+            13
           ]
         },
         {
@@ -12085,7 +13376,7 @@
           },
           "x-required-in": [
             3,
-            8
+            9
           ]
         },
         {
@@ -12100,7 +13391,8 @@
             3,
             6,
             7,
-            12
+            8,
+            13
           ]
         },
         {
@@ -12111,7 +13403,7 @@
           },
           "x-required-in": [
             0,
-            11
+            12
           ]
         },
         {
@@ -12145,6 +13437,10 @@
               },
               {
                 "const": "session",
+                "type": "string"
+              },
+              {
+                "const": "session_item",
                 "type": "string"
               },
               {
@@ -12199,7 +13495,7 @@
             "type": "string"
           },
           "x-required-in": [
-            10
+            11
           ]
         },
         {
@@ -12209,7 +13505,7 @@
             "type": "string"
           },
           "x-required-in": [
-            9
+            10
           ]
         },
         {
@@ -12221,7 +13517,7 @@
           "x-required-in": [
             4,
             5,
-            11
+            12
           ]
         },
         {
@@ -12232,7 +13528,17 @@
           },
           "x-required-in": [
             3,
-            8
+            9
+          ]
+        },
+        {
+          "name": "token",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            7
           ]
         }
       ],
@@ -12888,6 +14194,14 @@
                 "type": "string"
               },
               {
+                "const": "pause",
+                "type": "string"
+              },
+              {
+                "const": "resume",
+                "type": "string"
+              },
+              {
                 "const": "set_profile",
                 "type": "string"
               },
@@ -12915,7 +14229,7 @@
             ]
           },
           "x-required-in": [
-            3
+            5
           ]
         },
         {
@@ -12926,7 +14240,9 @@
           },
           "x-required-in": [
             1,
-            2
+            2,
+            3,
+            4
           ]
         },
         {
@@ -12946,7 +14262,7 @@
             "type": "string"
           },
           "x-required-in": [
-            3
+            5
           ]
         }
       ],

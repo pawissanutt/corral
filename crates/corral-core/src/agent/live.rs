@@ -302,8 +302,8 @@ pub fn container_pane<'a>(task: &'a Task, container: &ContainerRef) -> Option<&'
     }
 }
 
-/// A worker run ends only by discard, retry, drop or landing; done in Review, a refused
-/// operation, a cancelled turn and host loss leave it open.
+/// A worker run ends by owner stop, discard, retry, drop or landing; done in Review,
+/// a refused operation, a cancelled turn and host loss leave it open.
 fn worker_closed(task: &Task, run: &str) -> bool {
     let Some(named) = task.runs.iter().find(|r| r.id == run) else {
         return true;
@@ -312,7 +312,12 @@ fn worker_closed(task: &Task, run: &str) -> bool {
         || task.status == Status::Dropped
         || matches!(
             named.outcome,
-            Some(RunOutcome::Discarded | RunOutcome::Superseded | RunOutcome::Abandoned)
+            Some(
+                RunOutcome::Discarded
+                    | RunOutcome::Superseded
+                    | RunOutcome::Abandoned
+                    | RunOutcome::Stopped
+            )
         )
         || (named.outcome == Some(RunOutcome::Done) && task.status == Status::Done)
 }
@@ -634,7 +639,12 @@ pub fn check_live_ref<T: crate::TaskRef + ?Sized>(
     if status == Status::Dropped
         || matches!(
             parent.outcome,
-            Some(RunOutcome::Discarded | RunOutcome::Superseded | RunOutcome::Abandoned)
+            Some(
+                RunOutcome::Discarded
+                    | RunOutcome::Superseded
+                    | RunOutcome::Abandoned
+                    | RunOutcome::Stopped
+            )
         )
         || (parent.outcome == Some(RunOutcome::Done) && status == Status::Done)
     {

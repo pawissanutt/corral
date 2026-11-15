@@ -221,14 +221,26 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
 // not turn a successful bind into a retryable hello or expose a raw provider error.
 fn activate_bound(ctx: &Ctx, container: &ContainerRef, generation: u32) {
     use crate::availability::continuation::{self, PauseReason};
-    if continuation::activate(ctx, container, generation).is_err()
-        && continuation::pause(
-            ctx,
-            container,
-            PauseReason::SuccessorAmbiguous,
-            "activation failed",
+    let Err(error) = continuation::activate(ctx, container, generation) else {
+        return;
+    };
+    // A session fence may win the activation transaction after the successful hello.
+    // Its Prepared intent is retried by owner Resume/input, not financially paused.
+    if crate::operating::refused(&error)
+        || matches!(
+            continuation::automation_may_start(ctx, container),
+            Ok(false)
         )
-        .is_err()
+    {
+        return;
+    }
+    if continuation::pause(
+        ctx,
+        container,
+        PauseReason::SuccessorAmbiguous,
+        "activation failed",
+    )
+    .is_err()
     {
         crate::messages::report(
             container.task(),

@@ -1,5 +1,8 @@
 //! Per-connection cursors and one in-flight marker; no per-client row queue.
 mod app;
+pub(crate) use app::session::{
+    Service as SessionLiveService, join as join_session_live, start as start_session_live,
+};
 use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result, bail, ensure};

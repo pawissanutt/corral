@@ -4,6 +4,7 @@ mod commands;
 mod details;
 mod events;
 mod rows;
+mod session_items;
 mod uploads;
 use super::{
     core::{Event, topic_key},
@@ -26,7 +27,7 @@ use corral_protocol::{
 use nsh_core::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub(super) type Outgoing = (&'static str, Value, Option<String>);
 pub(super) const CAPS: &[&str] = &[
@@ -44,6 +45,7 @@ pub(super) const CAPS: &[&str] = &[
     FILINGS_V1,
     ACT_V1,
     ASSISTANT_ATTACH_V1,
+    SESSION_V1,
 ];
 
 pub(super) fn handles(event: &Event) -> bool {
@@ -67,9 +69,13 @@ pub(super) struct AppState {
     namespace: Option<(String, String)>,
     outbox: Option<Outbox>,
     scopes: BTreeSet<String>,
+    session_scopes: BTreeMap<String, usize>,
     detail_inflight: BTreeMap<String, String>,
     detail_pages: BTreeMap<String, Vec<DetailReply>>,
     detail_bytes: BTreeMap<String, usize>,
+    detail_reread: BTreeMap<String, u64>,
+    item_fetches: BTreeMap<String, session_items::ItemAssembly>,
+    item_ready: VecDeque<String>,
     changes_inflight: bool,
     changes_cursor: Option<u64>,
     device_walk: Option<(String, Vec<DeviceInfo>)>,
@@ -83,9 +89,13 @@ impl AppState {
             namespace: None,
             outbox: None,
             scopes: BTreeSet::from([QUICK_THREAD.into()]),
+            session_scopes: BTreeMap::new(),
             detail_inflight: BTreeMap::new(),
             detail_pages: BTreeMap::new(),
             detail_bytes: BTreeMap::new(),
+            detail_reread: BTreeMap::new(),
+            item_fetches: BTreeMap::new(),
+            item_ready: VecDeque::new(),
             changes_inflight: false,
             changes_cursor: None,
             device_walk: None,
@@ -110,6 +120,7 @@ impl AppState {
         self.detail_inflight.clear();
         self.detail_pages.clear();
         self.detail_bytes.clear();
+        self.detail_reread.clear();
         self.cancel_inflight.clear();
         for upload in self.uploads.values_mut() {
             upload.disconnected();
@@ -136,6 +147,8 @@ impl AppState {
         if !same_namespace && self.namespace.is_some() {
             self.scopes = BTreeSet::from([QUICK_THREAD.into()]);
             self.uploads.clear();
+            self.item_fetches.clear();
+            self.item_ready.clear();
             self.cancel_inflight.clear();
             feed.update(|feed| {
                 feed.board = Board::default();
@@ -147,6 +160,8 @@ impl AppState {
                 feed.settings.clear();
                 feed.threads.clear();
                 feed.details.clear();
+                feed.items.clear();
+                feed.live.clear();
                 // A registry listed after this connection's welcome already belongs to the new
                 // namespace; anything older does not.
                 if feed.registry != Registry::Current {
@@ -228,6 +243,22 @@ impl AppState {
                 outgoing.push(open(Topic::Thread, Some(scope.clone())));
             }
         }
+        if feed.with_untracked(|feed| feed.capable(SESSION_V1)) {
+            for scope in self.session_scopes.keys() {
+                feed.update(|feed| {
+                    feed.topics.insert(
+                        topic_key(Topic::Session, Some(scope)),
+                        TopicState {
+                            loading: true,
+                            stale: true,
+                            error: None,
+                        },
+                    );
+                });
+                outgoing.push(open(Topic::Session, Some(scope.clone())));
+            }
+        }
+        outgoing.extend(self.resume_items());
         outgoing.extend(self.poll_changes(feed));
         if let Some(outbox) = &self.outbox {
             feed.update(|feed| {

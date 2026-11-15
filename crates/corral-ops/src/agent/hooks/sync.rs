@@ -506,13 +506,58 @@ pub(crate) fn attention_ref<T: TaskRef + ?Sized>(task: &T) -> Result<Option<Stri
 /// Returns a task this module held in Needs me to Running once its cause is gone: resume bound
 /// another generation, or a later turn followed the failed authentication.
 pub fn settle_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
+    let head = ctx.store.head(task_id)?;
+    let Some(run) = head
+        .current_run
+        .as_ref()
+        .filter(|run| head.status == Status::NeedsMe && run.outcome.is_none())
+    else {
+        return Ok(false);
+    };
+    let recipient = Recipient::Run {
+        task: head.id.clone(),
+        run: run.id.clone(),
+    };
+    let inbox = corral_core::inbox::Inbox::new(&ctx.store, recipient.clone())?;
+    let Some(_input) = ctx.store.try_lock(&format!("deliver-{}", inbox.key()))? else {
+        return Ok(false);
+    };
+    if !crate::session_control::automation_may_start(ctx, &recipient)? {
+        return Ok(false);
+    }
+    if run
+        .agent_host
+        .as_ref()
+        .is_some_and(|host| host.paid_episode.is_some())
+        && crate::availability::continuation::latest_for(
+            &ctx.store,
+            &ContainerRef::Worker {
+                task: head.id.clone(),
+                run: run.id.clone(),
+            },
+        )?
+        .is_some_and(|intent| {
+            intent.phase == crate::availability::continuation::IntentPhase::Paused
+        })
+    {
+        return Ok(false);
+    }
     let settled = ctx.store.try_update_head(task_id, |task| {
+        if crate::session_control::stop::task_stop_pending(ctx, task_id)? {
+            return Ok(false);
+        }
         if task.status != Status::NeedsMe || attention_ref(task)?.is_some() {
             return Ok(false);
         }
-        let Some(run) = task.current_run_mut() else {
+        let Some(run) = task
+            .current_run_mut()
+            .filter(|current| current.id == run.id)
+        else {
             return Ok(false);
         };
+        if run.outcome == Some(corral_core::RunOutcome::Stopped) {
+            return Ok(false);
+        }
         let held = run.blocked_excerpt.as_deref().is_some_and(|e| {
             // Older binaries persisted these excerpts as machine-readable holds.
             [

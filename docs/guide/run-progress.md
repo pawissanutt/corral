@@ -36,6 +36,29 @@ Progress and checkpoints never stand for acceptance, task or Plan. A tracker
 Plan has no runs; its aggregate attempts carry their own candidate identity (see
 [Plan aggregate acceptance](acceptance.md#plan-aggregate-acceptance)).
 
+## Task states and run outcomes
+
+A task's state and its latest run's outcome answer different questions. **Running**
+means execution is active, **Needs me** (`needs_me`, also shown as Blocked) means
+the task needs intervention, **Review** means submitted work awaits checks/review
+and acceptance, and **Done** means it landed. Backlog, Ready and Idea have not
+started their next execution; Dropped is discarded work.
+
+Run outcomes are `done` (submitted, not necessarily landed), `failed` (an agent
+exited before reporting), `superseded` (replaced by retry), `abandoned` (an inactive
+held/dequeued run), `discarded` (explicit disposal), `cancelled` (an intentionally
+cancelled gate/review child), `interrupted` (reviewer provider failure), and
+`stopped` (the owner terminated the worker). An open run has no outcome.
+
+Terminate is not Cancel or Pause: it ends the session and leaves the task in
+**Needs me** without a dispatch slot. Its worktree, branch and transcript stay.
+A stopped run is not a failure, does not trigger provider escalation or automatic
+retry, and still counts as unfinished work. Choose `corral retry T-058` to start
+a replacement explicitly, or `corral discard T-058` to discard it separately.
+Retry preserves the stopped outcome on the source run and records its replacement
+provenance; it does not need a checkpoint from the terminated host. Plan retries
+still require a clean, retained source checkout as described below.
+
 ## Progress payload
 
 For a first progress write, use `expected_revision: 0`. Replace the example's

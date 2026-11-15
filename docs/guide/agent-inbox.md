@@ -63,10 +63,26 @@ typing into the pane. It binds the container's current generation: its Pi sessio
 its current generation is bound, healthy and answers `hello`. A message that was never sent
 to a lost host stays pending and goes to the next generation.
 
-Delivery is one bridge `submit_input` with origin `corral-inbox`: owner messages steer,
-others follow up. The idempotency key is the envelope key with `@env` written as `:env`,
-because the bridge accepts `[A-Za-z0-9._:-]` only. Envelopes hold at most 8 KiB, the bridge's
-input limit.
+Delivery is one bridge `submit_input` with origin `corral-inbox`: existing owner messages
+steer and other messages follow up. `session send --policy follow-up` explicitly queues
+behind the current turn; `--policy steer` interrupts it. That override is immutable message
+subject metadata (`busy_policy: follow_up|steer`); unknown values retain the default.
+Policy-aware publication takes only the leading contiguous batch with the same mode,
+never pulling a later steer ahead of an earlier follow-up. The mode is frozen in the envelope
+and survives pause, retries and daemon restarts. Existing publishers without an explicit
+override keep their original owner-wins batching.
+
+Worker session chat enters the same owner-reply admission, pending-reply view, reply event
+and receipt-driven effects as `corral reply`. Planner, reviewer, plan-reviewer and PM
+chat posts owner-attributed `owner_reply` messages to that container's delivery inbox (not
+the PM triage inbox). Owner input lifts the addressed pause under the recipient delivery lock,
+before publication becomes deliverable; delivery failures leave the message pending.
+
+The idempotency key is the existing recipient journal's envelope key with `@env` written as
+`:env`, because the bridge accepts `[A-Za-z0-9._:-]` only. Envelopes hold at most
+`INPUT_MAX_BYTES` (8 KiB), the bridge's input limit. Session sends and native owner task replies
+must fit that same limit, including reserved inbox framing, before their pause is lifted or
+sequence reserved. No owner message is split or pasted into a bridged host's pane.
 
 | Host reply | Outcome |
 |---|---|

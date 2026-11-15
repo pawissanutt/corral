@@ -113,6 +113,16 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
                 ScratchCmd::Gc { .. } | ScratchCmd::Finish { .. } => Refused,
             },
         },
+        Cmd::Session(args) => match &args.cmd {
+            crate::session_cmd::SessionCmd::Cancel { .. }
+            | crate::session_cmd::SessionCmd::Pause { .. }
+            | crate::session_cmd::SessionCmd::Resume { .. }
+            | crate::session_cmd::SessionCmd::Stop { .. }
+            | crate::session_cmd::SessionCmd::Relaunch { .. }
+            | crate::session_cmd::SessionCmd::PmOpen { .. }
+            | crate::session_cmd::SessionCmd::Send { .. }
+            | crate::session_cmd::SessionCmd::Keys { .. } => Refused,
+        },
         Cmd::Mode(args) => match &args.cmd {
             ModeCmd::Status { .. } => Read,
             ModeCmd::Assist

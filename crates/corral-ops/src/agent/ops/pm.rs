@@ -447,6 +447,10 @@ fn reply(ctx: &Ctx, origin: &RequestOrigin, p: &Text) -> Result<CallResponse> {
             .context("reply receipt has no sequence")?;
         let message = inbox.message(seq)?;
         if let Some(request) = &message.binding.question_request {
+            let _session_delivery = inbox.delivery_lock()?;
+            if crate::session_control::automated_input_must_wait(ctx, &recipient)? {
+                return Ok(answer(sent));
+            }
             let current = ctx.store.get(&task.id)?;
             let delivery = crate::question_reply::answer(
                 ctx,
@@ -476,6 +480,12 @@ fn reply(ctx: &Ctx, origin: &RequestOrigin, p: &Text) -> Result<CallResponse> {
         }
         Ok(answer(sent))
     } else {
+        let recipient = corral_core::inbox::Recipient::Run {
+            task: task.id.clone(),
+            run: run_id.clone(),
+        };
+        let inbox = Inbox::new(&ctx.store, recipient.clone())?;
+        let _session_delivery = inbox.delivery_lock()?;
         two_phase(ctx, origin, "legacy_reply", &task.id, || {
             let mut result = None;
             // This operation's own target transaction serializes the last scope/fence check
@@ -493,7 +503,9 @@ fn reply(ctx: &Ctx, origin: &RequestOrigin, p: &Text) -> Result<CallResponse> {
                     "a prior reply requires owner recovery"
                 );
                 run.pending_reply = Some(p.text.clone());
-                if run.stuck.is_some() {
+                if run.stuck.is_some()
+                    || crate::session_control::automated_input_must_wait(ctx, &recipient)?
+                {
                     result = Some(json!({"outcome":"queued","task":task.id}));
                     return Ok(());
                 }

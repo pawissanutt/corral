@@ -17,6 +17,27 @@ use crate::agent::hooks::pm::Overrides;
 use crate::agent::launch::{self, CTL_CAP_FILE, HostSpec, Prepared, SOCKET_FILE};
 use crate::agent::pi::{host_alive, refuse};
 
+/// Recipient input precedes assistant control; nested preparation reuses this claim.
+pub(crate) struct InputClaim {
+    _delivery: corral_core::StoreLock,
+    _control: std::fs::File,
+}
+
+pub(crate) fn claim_input(ctx: &Ctx, id: &str) -> Result<Option<InputClaim>> {
+    let inbox = corral_core::inbox::Inbox::new(
+        &ctx.store,
+        corral_core::inbox::Recipient::Assistant { session: id.into() },
+    )?;
+    let Some(delivery) = ctx.store.try_lock(&format!("deliver-{}", inbox.key()))? else {
+        return Ok(None);
+    };
+    let control = crate::agent::app_runtime::control(ctx, id)?;
+    Ok(Some(InputClaim {
+        _delivery: delivery,
+        _control: control,
+    }))
+}
+
 /// An open session whose current generation has a verifiably running host, and its pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveAssistant {
@@ -349,13 +370,40 @@ pub(crate) fn open_observed(
 /// current generation and opens the next one here on the same Pi session file.
 pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<(u32, Prepared)> {
     corral_core::assistant::validate_id(id).map_err(|e| refuse("usage_error", format!("{e:#}")))?;
-    let _lease = ctx.store.assistant_scratch_lease(id)?;
     if !ctx.store.assistant_exists(id)? {
         return Err(refuse(
             "assistant_unknown",
             format!("no assistant session {id}"),
         ));
     }
+    let claim = claim_input(ctx, id)?.context("assistant_input_busy: input is deferred")?;
+    if !crate::session_control::automation_may_start(
+        ctx,
+        &corral_core::inbox::Recipient::Assistant { session: id.into() },
+    )? {
+        if let Some(ended) = ctx.store.get_assistant(id)?.ended {
+            return Err(refuse(
+                "assistant_ended",
+                format!("{id} ended at {ended}; `corral pi --assistant` opens a new assistant"),
+            ));
+        }
+        return Err(refuse(
+            "assistant_input_deferred",
+            "resume the session before restarting it",
+        ));
+    }
+    resume_admitted(ctx, id, pane, overrides, &claim)
+}
+
+/// The caller keeps recipient delivery and assistant control claimed through preparation.
+pub(crate) fn resume_admitted(
+    ctx: &Ctx,
+    id: &str,
+    pane: &str,
+    overrides: &Overrides,
+    _input: &InputClaim,
+) -> Result<(u32, Prepared)> {
+    let _lease = ctx.store.assistant_scratch_lease(id)?;
     let session = ctx.store.get_assistant(id)?;
     if let Some(ended) = session.ended {
         return Err(refuse(

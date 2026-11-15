@@ -1,5 +1,6 @@
 //! Recovery's one notice to the next generation and the unconfirmed envelope it reports.
 use anyhow::{Context, Result};
+use corral_core::StoreLock;
 use corral_core::agent::{self, AgentRunState, ContainerRef};
 use corral_core::inbox::{Inbox, Message, Post, Urgency};
 use serde_json::{Value, json};
@@ -16,13 +17,20 @@ pub(super) fn settle_unconfirmed(
     container: &ContainerRef,
     n: u32,
     state: &AgentRunState,
+    input: Option<&StoreLock>,
 ) -> Result<Vec<Unconfirmed>> {
     let Some(bound) = state.generation(n).and_then(|g| g.bound.as_ref()) else {
         return Ok(Vec::new());
     };
     let to = recipient(container);
     let endpoint = generation_dir(&ctx.store, &to, n)?.join(SOCKET_FILE);
-    notice::settle_unconfirmed(ctx, &to, &endpoint, &bound.session_file)
+    match input {
+        Some(input) => {
+            let inbox = Inbox::new(&ctx.store, to)?;
+            notice::settle_unconfirmed_held(&inbox, &endpoint, &bound.session_file, input)
+        }
+        None => notice::settle_unconfirmed(ctx, &to, &endpoint, &bound.session_file),
+    }
 }
 
 pub(super) fn unconfirmed_json(unconfirmed: &[Unconfirmed]) -> Value {

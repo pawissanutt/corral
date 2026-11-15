@@ -59,7 +59,12 @@ pub fn container_closure_ref<T: TaskRef + ?Sized>(
             };
             if matches!(
                 parent.outcome,
-                Some(RunOutcome::Discarded | RunOutcome::Superseded | RunOutcome::Abandoned)
+                Some(
+                    RunOutcome::Discarded
+                        | RunOutcome::Superseded
+                        | RunOutcome::Abandoned
+                        | RunOutcome::Stopped
+                )
             ) || (parent.outcome == Some(RunOutcome::Done) && *task.status() == Status::Done)
             {
                 return closed(ClosureReason::RunEnded);

@@ -91,9 +91,8 @@ capabilities and device authority; missing facts, provider failures and unsuppor
 are shown as such. Quotas without a source are unknown, not invented headroom. Raw terminal
 access is not supplied for daemon-hosted assistants.
 
-Native enrolled devices have Admin authority. A newly paired browser has `reply`, `act` and
-`assistant` authority, but not `admin` or `assistant_act`; trusted-side administration
-controls device authority. Commands use canonical revisions and device-bound confirmations
+Newly enrolled native devices and paired browsers have all authority flags, including `admin`
+and `assistant_act`, editable per device. Commands use canonical revisions and device-bound confirmations
 where required. They do not run locally when disconnected.
 
 On link loss, last known data is marked stale and subscriptions reconnect. Drafts and the
@@ -121,6 +120,26 @@ Agents › Filed from chat reads a server-wide filing registry, including ended 
 without opening their histories. Newest, Newer and Older page through at most 50 summaries
 at a time. The count is corrald's total, not the device's loaded thread count. This history
 remains available without a configured assistant runtime.
+
+An agent session page carries the controls corrald reports for that session: Cancel, Pause
+or Resume, Relaunch (Launch PM for an ended PM), Take over for a pane-hosted assistant, and
+Terminate, which asks for confirmation first (with corrald's exact effects for task and PM
+sessions). A control corrald does not offer is never pressable; one it refused for a reason
+stays visible, dimmed, with the
+reason. Words typed on the page go to the session as `session send`, after its current turn,
+or interrupting it with Steer while it works; an assistant's page chats in its own thread
+with the shared composer. The Agents wall offers Launch PM while no PM is live.
+
+An agent session's transcript replays the recorded session as the corral-pi terminal shows
+it, for every role: words as rendered Markdown, thinking (folding to one row), tool rows that
+open into their arguments, output, diff or written content and recorded call and result, the
+owner's `!` commands, images, compaction and branch dividers, model, effort, bookmark, stop
+and error rows, run marks, host notices, presenter cards and each assistant turn's model,
+stop and usage. A recorded item larger than its preview shows the preview until its
+complete content arrives: words are fetched as soon as they are shown, everything else when
+its row is opened. While the page is open it watches the session's live turn, drawing the
+streamed words and running tools after the recorded messages until the transcript holds them,
+and it keeps to the newest rows unless the owner scrolled up.
 
 The first daemon start builds the derived filing index from canonical filing records;
 an initialization failure stops startup with an error. Tasks, conversations and billing
@@ -173,7 +192,7 @@ Run one cargo or NSH build at a time on this shared host.
 
 ## Keys
 
-Destination keys are `i` Inbox, `n` Now, `.` Changes, `p` Plans, `a` Agents, `r` Review, `t` Timeline, `u` Usage and `,` Settings. `/` opens Ask, `Ctrl K` opens the palette and `Esc` closes the newest overlay.
+Destination keys are `i` Inbox, `n` Now, `.` Changes, `p` Plans, `a` Agents, `r` Review, `t` Timeline, `u` Usage and `,` Settings. `/` opens Ask, `Ctrl K` opens the palette and `Esc` closes the newest overlay; in the terminal, on a session page whose Cancel is offered and with nothing open over it, `Esc` cancels the session's turn instead.
 
 ## Structure
 

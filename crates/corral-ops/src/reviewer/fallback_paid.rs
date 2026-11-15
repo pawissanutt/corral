@@ -121,6 +121,19 @@ pub(in crate::reviewer) fn prepare(
     review_id: &str,
     resolved: &ResolvedProfile,
 ) -> Result<ContinuationIntent> {
+    if let Some(previous) = previous_child {
+        let recipient = corral_core::inbox::Recipient::ReviewRun {
+            task: task.id.clone(),
+            run: run.id.clone(),
+            review: previous.id.clone(),
+        };
+        if !crate::session_control::automation_may_start(ctx, &recipient)? {
+            return Err(crate::operating::AuthorizationRefused(
+                "Held: review source session is paused or stopped".into(),
+            )
+            .into());
+        }
+    }
     let result = prepare_inner(ctx, task, run, previous_child, review_id, resolved);
     if let Err(error) = &result
         && let Some(previous) = previous_child
@@ -235,6 +248,7 @@ fn interrupt(ctx: &Ctx, task: &Task, parent: &Run, child: &Run) -> Result<()> {
         ensure!(task.current_run_head()?.is_some_and(|r| r.id == parent.id), "review parent changed");
         task.edit_review_child_head(&parent.id, &child.id, |old| {
             ensure!(old.review.as_ref().is_some_and(|r| r.verdict.is_none()), "TerminalResult");
+            ensure!(matches!(old.outcome, None | Some(RunOutcome::Interrupted)), "TerminalResult");
             old.outcome = Some(RunOutcome::Interrupted);
             Ok(())
         })?;
@@ -250,6 +264,9 @@ pub(in crate::reviewer) fn failed(
     child: &str,
     error: &anyhow::Error,
 ) -> Result<()> {
+    if crate::operating::refused(error) {
+        return Ok(());
+    }
     let source = container(task, run, child);
     if continuation::from_source(&ctx.store, &source)?
         .is_some_and(|i| i.phase == IntentPhase::Paused)
@@ -307,6 +324,13 @@ pub(in crate::reviewer) fn resume_allowed(ctx: &Ctx, task: &str) -> Result<bool>
     let Some(intent) = continuation::task_intent(&ctx.store, task, AgentRole::Reviewer)? else {
         return Ok(true);
     };
+    let source = crate::questions::recipient(&intent.source.container)
+        .context("review source recipient missing")?;
+    if intent.phase == IntentPhase::Prepared
+        && !crate::session_control::automation_may_start(ctx, &source)?
+    {
+        return Ok(false);
+    }
     Ok(!continuation::failed_start(
         ctx,
         &intent.successor.container,

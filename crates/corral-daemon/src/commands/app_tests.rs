@@ -211,7 +211,7 @@ fn app_tombstones_retain_recovery_seven_days_and_never_announce_data() {
 }
 
 #[test]
-fn legacy_web_device_cannot_become_an_administrator() {
+fn web_authority_defaults_and_explicit_restrictions_are_preserved() {
     let fixture = Fixture::new();
     let (shared, _, native) = setup(&fixture);
     let mut web = fixture
@@ -229,21 +229,21 @@ fn legacy_web_device_cannot_become_an_administrator() {
         .unwrap();
     let devices = shared.devices().unwrap();
     let (info, mut authority) = devices.authenticated("dev-web").unwrap();
-    assert!(!authority.admin);
-    assert!(!authority.assistant_act);
+    assert!(authority.admin);
+    assert!(authority.assistant_act);
     assert_eq!(info.authority, Some(authority.clone()));
-    authority.admin = true;
-    assert!(
-        devices
-            .set_authority(
-                &native,
-                DeviceSetAuthority {
-                    device: "dev-web".into(),
-                    authority: authority.clone(),
-                }
-            )
-            .is_err()
-    );
+    authority.admin = false;
+    authority.assistant_act = false;
+    devices
+        .set_authority(
+            &native,
+            DeviceSetAuthority {
+                device: "dev-web".into(),
+                authority: authority.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(devices.authenticated("dev-web").unwrap().1, authority);
     assert!(
         devices
             .set_authority(

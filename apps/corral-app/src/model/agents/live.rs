@@ -29,6 +29,7 @@ pub(super) fn status(status: rows::AgentStatus) -> AgentStatus {
         rows::AgentStatus::Reviewing => AgentStatus::Reviewing,
         rows::AgentStatus::Idle => AgentStatus::Idle,
         rows::AgentStatus::Waiting => AgentStatus::Waiting,
+        rows::AgentStatus::Paused => AgentStatus::Paused,
         rows::AgentStatus::Ended => AgentStatus::Ended,
         rows::AgentStatus::Unavailable => AgentStatus::Unavailable,
         rows::AgentStatus::Other => AgentStatus::Unknown,
@@ -176,7 +177,11 @@ fn tile(row: &AgentRow, feed: &daemon::Feed, stale: bool) -> Tile {
         label: shown_id(row),
         role: role_label(&row.role),
         title: row.title.clone(),
-        doing: row.now.clone(),
+        doing: if row.now.is_empty() && state == AgentStatus::Paused {
+            "paused by you · automated input waits".into()
+        } else {
+            row.now.clone()
+        },
         profile: row
             .profile
             .clone()
@@ -223,7 +228,7 @@ fn runtimes(rows: &[&AgentRow]) -> String {
 }
 
 /// Build the wall and phone rows from the daemon's agent rows.
-pub fn wall(state: &State, feed: &daemon::Feed, _env: Env) -> Wall {
+pub fn wall(state: &State, feed: &daemon::Feed, env: Env) -> Wall {
     let rows = shown(feed);
     let stale = stale(feed, "agents");
     let topic = feed.topics.get("agents");
@@ -289,6 +294,7 @@ pub fn wall(state: &State, feed: &daemon::Feed, _env: Env) -> Wall {
         ),
         mode: state.mode,
         mode_labels: ["Wall", "List"],
+        launch: super::controls::launch(state, feed, env),
     }
 }
 

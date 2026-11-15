@@ -51,6 +51,7 @@ pub(crate) fn capability(shared: &Shared, cap: &str) -> bool {
         | app::CHANGES_V1
         | app::PLANS_V1
         | app::AGENTS_V1
+        | app::SESSION_V1
         | app::FILINGS_V1
         | app::REVIEW_V1
         | app::TIMELINE_V1
@@ -75,6 +76,7 @@ pub(crate) fn allowed_topic(topic: wire::subscription::Topic) -> bool {
             | Topic::Usage
             | Topic::Settings
             | Topic::Thread
+            | Topic::Session
     )
 }
 
@@ -85,7 +87,6 @@ pub(crate) fn serve(
     method: &str,
     params: Value,
     device_id: Option<&str>,
-    native: bool,
 ) -> Result<()> {
     // Keep the complete response envelope bounded even for hostile JSON-RPC ids.
     if serde_json::to_vec(&id)?.len() > 256 {
@@ -95,7 +96,7 @@ pub(crate) fn serve(
             (rpc::ErrorCode::InvalidParams, "invalid_rpc_id".into()),
         );
     }
-    match dispatch(shared, method, params, device_id, native) {
+    match dispatch(shared, method, params, device_id) {
         Ok(result) => reply(conn, id, result),
         Err(problem) => error(conn, id, problem),
     }
@@ -106,7 +107,6 @@ fn dispatch(
     method: &str,
     params: Value,
     id: Option<&str>,
-    native: bool,
 ) -> Result<Value, Failure> {
     let id = id.ok_or((
         rpc::ErrorCode::Unauthenticated,
@@ -162,9 +162,6 @@ fn dispatch(
             )
         }
         app::DEVICE_SET_AUTHORITY => {
-            if !native {
-                return Err((rpc::ErrorCode::Refused, "admin_only".into()));
-            }
             let result = devices
                 .set_authority(id, decode(params)?)
                 .map_err(|problem| problem.wire())?;

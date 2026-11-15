@@ -11,8 +11,8 @@ use crate::model::text::span;
 
 use super::{
     AGENTS, Action, AgentStatus, FactValue, Feed, Fill, Line, LineClass, Message, MessageItem,
-    Note, QuestionCard, Reply, ReplyMode, Run, RunFact, Session, State, Terminal, Tile, Tool,
-    Transcript, View, Wall, line, screen, tail_line,
+    More, Note, QuestionCard, Reply, ReplyMode, Run, RunFact, Section, Session, State, Terminal,
+    Tile, Tool, Transcript, View, Wall, line, screen, tail_line,
 };
 
 /// The session a fixture id stands for: the PM tile opens T-868's session in the mockup.
@@ -74,6 +74,7 @@ pub fn wall(state: &State, _env: Env) -> Wall {
         ),
         mode: state.mode,
         mode_labels: ["Wall", "List"],
+        launch: None,
     }
 }
 
@@ -81,18 +82,27 @@ fn paragraph(text: &str) -> MessageItem {
     MessageItem::Paragraph(vec![span(text)])
 }
 fn tool(kind: &str, argument: &str, result: &str, output: &[&str]) -> MessageItem {
+    let failed = result == "fail";
     MessageItem::Tool(Tool {
-        kind: kind.into(),
-        argument: argument.into(),
-        result: if result == "fail" { "failed" } else { result }.into(),
-        mark: if result == "fail" {
-            Mark::Fail
+        mark: if failed { Mark::Fail } else { Mark::Done },
+        name: kind.into(),
+        summary: argument.into(),
+        outcome: if failed { "failed" } else { result }.into(),
+        failed,
+        note: None,
+        tail: Vec::new(),
+        hidden: None,
+        open: !output.is_empty(),
+        body: if output.is_empty() {
+            Vec::new()
         } else {
-            Mark::Done
+            vec![Section::Text {
+                label: "output".into(),
+                text: output.join("\n"),
+            }]
         },
-        output: output.iter().map(|s| tail_line(s)).collect(),
-        expanded: None,
-        action: Action::Tool,
+        more: More::Whole,
+        action: Some(Action::Tool),
     })
 }
 fn message(avatar: &'static str, author: &str, detail: &str, items: Vec<MessageItem>) -> Message {
@@ -117,6 +127,8 @@ fn message(avatar: &'static str, author: &str, detail: &str, items: Vec<MessageI
         author: author.into(),
         detail: detail.into(),
         items,
+        footer: None,
+        live: false,
     }
 }
 fn transcript(id: &'static str) -> Transcript {
@@ -128,6 +140,8 @@ fn transcript(id: &'static str) -> Transcript {
         fill: Fill::Ready,
         stale: None,
         disclaimer: Some(Note::Illustrative(disclaimer)),
+        live: Vec::new(),
+        after: Vec::new(),
     };
     if id != "T-868" {
         let a = AGENTS
@@ -436,6 +450,7 @@ pub fn session(state: &State, _env: Env) -> Session {
         ],
         toggle: Action::ToggleView,
         notice: None,
+        controls: super::controls::fixture_bar(state, id),
         transcript: transcript(id),
         terminal: Some(Terminal {
             feed,
@@ -449,7 +464,7 @@ pub fn session(state: &State, _env: Env) -> Session {
             input: if feed == Feed::Snapshot {
                 "read-only snapshot"
             } else {
-                "keys go to the agent's pane as owner input · actor=owner"
+                "preview keys · nothing is sent to a pane"
             }
             .into(),
             lines: match &pane_rows {
@@ -467,12 +482,14 @@ pub fn session(state: &State, _env: Env) -> Session {
             styled: pane_rows.as_deref().map(screen::rows).unwrap_or_default(),
             empty: None,
             phone_keys: vec!["Esc", "Tab", "Ctrl", "↑", "↓", "⏎"],
+            keys: None,
             refresh: None,
         }),
         reply: Reply {
             placeholder: format!("Message worker {id}…"),
             accessibility_label: "Reply to agent",
             button: "Send",
+            steer: Some("Steer"),
             hint: vec![
                 span("Sends with "),
                 span(format!("corral send {id}")).mono(),
@@ -484,6 +501,7 @@ pub fn session(state: &State, _env: Env) -> Session {
             recover: None,
             delivered: None,
         },
+        chat: None,
         run_details: Run {
             title: "Run",
             facts: vec![

@@ -10,7 +10,7 @@ use serde_json::json;
 fn worker_and_reviewer_closure_match_cold_facades_without_history_reads() {
     for reviewer in [false, true] {
         for native in [false, true] {
-            for case in 0..14 {
+            for case in 0..15 {
                 let mut measured = Vec::new();
                 for scale in [1, 10] {
                     let (_dir, store) = store_support::store();
@@ -97,6 +97,11 @@ fn worker_and_reviewer_closure_match_cold_facades_without_history_reads() {
                         }
                         13 => {
                             id = "T-999".into();
+                            expected = Some(ClosureReason::RunEnded);
+                        }
+                        14 => {
+                            parent.outcome = Some(RunOutcome::Stopped);
+                            task.status = Status::NeedsMe;
                             expected = Some(ClosureReason::RunEnded);
                         }
                         _ => unreachable!(),

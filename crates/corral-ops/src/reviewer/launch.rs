@@ -5,6 +5,8 @@
 use super::*;
 use corral_core::{RunHead, TaskHead, TaskHeadMut};
 
+mod session;
+
 /// The current run of any task form, as its projection.
 fn current_run_head<T: corral_core::TaskRef + ?Sized>(task: &T) -> Result<RunHead> {
     Ok(task
@@ -204,12 +206,7 @@ fn prompt_pm<T: TaskRef + ?Sized>(
     review_id: &str,
     prompt_file: &Path,
     launch: &mut crate::review_budget::ReviewLaunch<'_>,
-) -> Result<String> {
-    let pane = match live_pm_pane(ctx)? {
-        Some(p) => p,
-        None => open_pm(ctx)?,
-    };
-    attach_pane(ctx, task, run, &pane, false, launch)?;
+) -> Result<Option<String>> {
     let corral = corral_bin()?.display().to_string();
     let notes = prompt_file.with_file_name(NOTES);
     let prepared = ctx.store.head(task.id())?;
@@ -231,10 +228,8 @@ fn prompt_pm<T: TaskRef + ?Sized>(
         attempt,
         notes.display()
     );
-    let info = ctx
-        .herdr
-        .pane_get(&pane)?
-        .context("PM pane disappeared before review")?;
+    let pane = crate::pm::open_pm_automated(ctx)?;
+    let herdr = session::pm_reference(ctx, task, run, pane.as_deref(), launch)?;
     // Save the exact request before contacting the composer, including on transport errors.
     ctx.store.update_head(task.id(), |t| {
         let snapshot = review_parent_head(t, &run.id)?
@@ -243,47 +238,73 @@ fn prompt_pm<T: TaskRef + ?Sized>(
             .filter(|r| r.id == review_id)
             .context("review changed before prompting PM")?;
         snapshot.pending_reply = Some(message.clone());
-        snapshot.herdr = Some(HerdrRef {
-            workspace_id: info.workspace_id.clone(),
-            pane_id: pane.clone(),
-            socket: Some(ctx.herdr.socket_path()?),
-        });
-        Ok(())
-    })?;
-    let delivery = submission::submit(ctx, task, run, launch, Some(&message), || {
-        ctx.herdr.agent_prompt(&pane, &message)
-    })
-    .with_context(|| format!("PM review prompt retained for {}", task.id()))?;
-    ctx.store.log_event(
-        Some(task.id()),
-        "review_prompt_delivery",
-        json!({
-            "run": run.id, "review_run": review_id, "pane": pane,
-            "via": delivery.via, "submitted": delivery.submitted,
-            "attempts": delivery.attempts, "error": delivery.error,
-        }),
-    )?;
-    if !delivery.submitted {
-        bail!(
-            "PM review prompt was not submitted; retained for review-run {}: {}",
-            task.id(),
-            delivery
-                .error
-                .as_deref()
-                .unwrap_or("submission was not confirmed")
-        );
-    }
-    ctx.store.update_head(task.id(), |t| {
-        if let Some(snapshot) = review_parent_head(t, &run.id)?
-            .current_child
-            .as_deref_mut()
-            .filter(|r| r.id == review_id)
-        {
-            snapshot.pending_reply = None;
+        snapshot.herdr = herdr.clone();
+        if pane.is_none() {
+            ctx.store.log_event(
+                Some(task.id()),
+                "review_prompt_delivery",
+                json!({"run": run.id, "review_run": review_id, "pane": null, "queued": true}),
+            )?;
         }
         Ok(())
     })?;
-    Ok(pane)
+    let Some(pane) = pane else {
+        launch.defer_pm(&message)?;
+        return Ok(None);
+    };
+    let delivery = submission::submit(ctx, task, run, launch, Some(&message), || {
+        crate::delivery::paused::prompt_pm(ctx, &pane, &message)
+    })
+    .with_context(|| format!("PM review prompt retained for {}", task.id()))?;
+    if let Some(delivery) = &delivery {
+        ctx.store.log_event(
+            Some(task.id()),
+            "review_prompt_delivery",
+            json!({
+                "run": run.id, "review_run": review_id, "pane": pane,
+                "via": delivery.via, "submitted": delivery.submitted,
+                "attempts": delivery.attempts, "error": delivery.error,
+            }),
+        )?;
+        if !delivery.submitted {
+            bail!(
+                "PM review prompt was not submitted; retained for review-run {}: {}",
+                task.id(),
+                delivery
+                    .error
+                    .as_deref()
+                    .unwrap_or("submission was not confirmed")
+            );
+        }
+    } else {
+        crate::delivery::paused::queue_review(
+            ctx,
+            &message,
+            crate::delivery::paused::PmReviewTarget::Worker {
+                task: task.id().clone(),
+                run: run.id.clone(),
+                review: review_id.to_owned(),
+            },
+        )?;
+        ctx.store.log_event(
+            Some(task.id()),
+            "review_prompt_delivery",
+            json!({"run": run.id, "review_run": review_id, "pane": pane, "queued": true}),
+        )?;
+    }
+    if delivery.is_some() {
+        ctx.store.update_head(task.id(), |t| {
+            if let Some(snapshot) = review_parent_head(t, &run.id)?
+                .current_child
+                .as_deref_mut()
+                .filter(|r| r.id == review_id)
+            {
+                snapshot.pending_reply = None;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(Some(pane))
 }
 
 fn check_linked_paid_launch(
@@ -320,21 +341,20 @@ pub(super) fn review_run_origin(
     origin: crate::operating::Origin,
     recovery: Option<&corral_core::RecoveryRecord>,
 ) -> Result<ReviewRecord> {
-    let mut pending_paid = false;
-    let mut cleanup_paid = false;
-    let result = review_run_inner(
-        ctx,
-        id,
-        reviewer,
-        origin,
-        recovery,
-        &mut pending_paid,
-        &mut cleanup_paid,
-    );
-    if result.is_err() && cleanup_paid {
-        super::fallback::fallback_paid::launch_failed(ctx, id)?;
-    }
-    result
+    let input = super::fallback::claim_input(ctx, id, origin)?;
+    review_run_claimed(ctx, id, reviewer, origin, recovery, input.as_ref())
+}
+
+/// The continuation executor already owns the exact source recipient's input claim.
+pub(in crate::reviewer) fn review_run_claimed(
+    ctx: &Ctx,
+    id: &str,
+    reviewer: Option<&str>,
+    origin: crate::operating::Origin,
+    recovery: Option<&corral_core::RecoveryRecord>,
+    _input: Option<&corral_core::store::StoreLock>,
+) -> Result<ReviewRecord> {
+    session::run_claimed(ctx, id, reviewer, origin, recovery)
 }
 
 fn review_run_inner(
@@ -726,7 +746,7 @@ fn review_run_inner(
     }
     let launched = match &reviewer {
         Reviewer::Profile(_) | Reviewer::CrossVendor | Reviewer::Auto => {
-            launch_profile(ctx, &task, &run, &resolved, &prompt_file, &mut launch)
+            launch_profile(ctx, &task, &run, &resolved, &prompt_file, &mut launch).map(Some)
         }
         Reviewer::Pm => prompt_pm(ctx, &task, &run, &review_id, &prompt_file, &mut launch),
         Reviewer::None => bail!("no reviewer configured"),
@@ -743,11 +763,13 @@ fn review_run_inner(
         // Never overwrite an immediate verdict, or a replacement review's record.
         if r.current_child.as_deref().is_some_and(|s| s.id == review_id) {
             match &launched {
-                Ok(pane) => {
+                Ok(Some(pane)) => {
                     if let Some(record) = &mut r.review {
                         record.pane = Some(pane.clone());
                     }
                 }
+                // Inbox delivery may already have bound the deferred request to a real pane.
+                Ok(None) => {}
                 Err(_) => {
                     history::finish_review_head(r, corral_core::clock::now());
                     if r.review.as_ref().is_some_and(|r| r.verdict.is_none()) {
@@ -756,7 +778,7 @@ fn review_run_inner(
                 }
             }
         }
-        if let Ok(pane) = &launched {
+        if let Ok(Some(pane)) = &launched {
             crate::role_session::publish_reviewer(ctx, t, &run.id)?;
             ctx.store.log_event(
                 Some(&task.id),

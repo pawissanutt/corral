@@ -13,7 +13,7 @@ pub(super) fn finish_review(ctx: &Ctx, parent: &mut Run, ended: Timestamp) {
             }
             snapshot.review = Some(record);
         }
-        if snapshot.ended.is_none() {
+        if snapshot.ended.is_none() && snapshot.outcome != Some(RunOutcome::Stopped) {
             snapshot.ended = Some(ended);
             crate::usage::collect(snapshot, &ctx.store);
         }
@@ -31,7 +31,7 @@ pub(super) fn finish_review_head(parent: &mut corral_core::RunHead, ended: Times
             }
             snapshot.review = Some(record);
         }
-        if snapshot.ended.is_none() {
+        if snapshot.ended.is_none() && snapshot.outcome != Some(RunOutcome::Stopped) {
             snapshot.ended = Some(ended);
             snapshot.usage_pending = true;
         }
@@ -46,7 +46,9 @@ pub(crate) fn supersede_review(ctx: &Ctx, parent: &mut Run, ended: Timestamp) {
     finish_review(ctx, parent, ended);
     parent.review = None;
     if let Some(child) = parent.review_runs.last_mut() {
-        child.outcome = Some(RunOutcome::Superseded);
+        if child.outcome != Some(RunOutcome::Stopped) {
+            child.outcome = Some(RunOutcome::Superseded);
+        }
         child.pending_reply = None;
     }
     parent.idle_since = None;
@@ -74,11 +76,13 @@ pub(crate) fn supersede_review_head(
             }
             snapshot.review = Some(record);
         }
-        if snapshot.ended.is_none() {
+        if snapshot.ended.is_none() && snapshot.outcome != Some(RunOutcome::Stopped) {
             snapshot.ended = Some(ended);
             snapshot.usage_pending = true;
         }
-        snapshot.outcome = Some(RunOutcome::Superseded);
+        if snapshot.outcome != Some(RunOutcome::Stopped) {
+            snapshot.outcome = Some(RunOutcome::Superseded);
+        }
         snapshot.pending_reply = None;
     }
     parent.idle_since = None;

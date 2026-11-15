@@ -172,6 +172,27 @@ pub(crate) fn reconcile_review_sampled_at(
     let Some(review) = run.review.as_ref().filter(|r| r.verdict.is_none()) else {
         return Ok(None);
     };
+    let recipient = if review.reviewer == "pm" {
+        Some(corral_core::inbox::Recipient::Pm)
+    } else {
+        run.review_runs
+            .last()
+            .map(|child| corral_core::inbox::Recipient::ReviewRun {
+                task: id.into(),
+                run: run.id.clone(),
+                review: child.id.clone(),
+            })
+    };
+    if let Some(recipient) = recipient
+        && !crate::session_control::automation_may_start(ctx, &recipient)?
+    {
+        return Ok(None);
+    }
+    // A deferred shared-PM request has not selected a pane yet. Its inbox delivery
+    // binds the real PM before submission; absence here is not process loss.
+    if review.reviewer == "pm" && review.pane.is_none() {
+        return Ok(None);
+    }
     let timeout = ctx.store.config.sync.review_idle_after_secs;
     let window = SignedDuration::from_secs(i64::try_from(timeout).unwrap_or(i64::MAX));
     let activity_window = SignedDuration::from_secs(

@@ -48,6 +48,7 @@ impl DetailView {
                 Some(RunOutcome::Discarded) => ("discarded", RED),
                 Some(RunOutcome::Interrupted) => ("interrupted", YELLOW),
                 Some(RunOutcome::Failed) => ("failed", RED),
+                Some(RunOutcome::Stopped) => ("stopped", YELLOW),
                 None if t.status == Status::NeedsMe => ("blocked", YELLOW),
                 Some(RunOutcome::Cancelled) => ("cancelled", YELLOW),
                 None => ("running", BLUE),

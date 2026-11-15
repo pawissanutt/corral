@@ -489,6 +489,15 @@ pub(crate) fn retry_checkpoint(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> 
             current.pending_reply = Some(request.clone());
             Ok(())
         })?;
+        let recipient = corral_core::inbox::Recipient::Run {
+            task: task.id.clone(),
+            run: run.id.clone(),
+        };
+        let inbox = corral_core::inbox::Inbox::new(&ctx.store, recipient.clone())?;
+        let _session_delivery = inbox.delivery_lock()?;
+        if crate::session_control::automated_input_must_wait(ctx, &recipient)? {
+            return Err(error.context("checkpoint request queued while session paused"));
+        }
         let delivery = ctx.herdr.agent_prompt(pane, &request)?;
         if !delivery.submitted {
             ctx.store.log_event(

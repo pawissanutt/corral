@@ -19,7 +19,7 @@ pub fn require_automation_owner(store: &Store, invoker: &Invoker) -> Result<()> 
     if invoker.is_app() {
         ensure!(
             invoker.device_admin()?,
-            "admin_only: trusted native administrator required"
+            "admin_only: administrator required"
         );
         return Ok(());
     }

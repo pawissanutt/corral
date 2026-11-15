@@ -196,6 +196,7 @@ fn run_loop(
             .context("building chat filing log")?;
         views::start(&ctx, &shared)?;
         assistant::start(&ctx, &shared)?;
+        topics::start_session_live(&ctx, &shared)?;
         server::start(listener, Arc::clone(&shared), ctx.store.dir())?;
         app::start(&ctx, &shared);
         let transitions = Arc::new(Mutex::new(health::Transitions::new()));
@@ -490,6 +491,8 @@ impl Drop for Cleanup {
         self.shared.close();
         #[cfg(unix)]
         assistant::join(&self.shared);
+        #[cfg(unix)]
+        topics::join_session_live(&self.shared);
         if let Some(projector) = self.projector.take()
             && projector.join().is_err()
         {

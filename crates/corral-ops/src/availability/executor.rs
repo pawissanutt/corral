@@ -21,7 +21,9 @@ struct Subject<'a> {
 }
 
 fn continuation(task: &Task) -> Option<Subject<'_>> {
-    let run = task.current_run()?;
+    let run = task
+        .current_run()
+        .filter(|run| run.outcome != Some(RunOutcome::Stopped))?;
     if task.status == Status::Review {
         let review = run
             .review
@@ -91,6 +93,28 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         let Some(subject) = continuation(&task) else {
             continue;
         };
+        let recipient = if subject.review {
+            let parent = task
+                .current_run()
+                .ok_or_else(|| anyhow::anyhow!("review parent disappeared"))?;
+            corral_core::inbox::Recipient::ReviewRun {
+                task: task.id.clone(),
+                run: parent.id.clone(),
+                review: subject.run.id.clone(),
+            }
+        } else {
+            corral_core::inbox::Recipient::Run {
+                task: task.id.clone(),
+                run: subject.run.id.clone(),
+            }
+        };
+        let inbox = corral_core::inbox::Inbox::new(&ctx.store, recipient.clone())?;
+        let Some(session_input) = ctx.store.try_lock(&format!("deliver-{}", inbox.key()))? else {
+            continue;
+        };
+        if !crate::session_control::automation_may_start(ctx, &recipient)? {
+            continue;
+        }
         let Some(reason) = selected(ctx, &task.id, subject.run, &subject.episode)? else {
             continue;
         };
@@ -113,9 +137,17 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             continue;
         };
         changes.extend(if subject.review {
-            crate::reviewer::continue_review(ctx, &task, run, subject.run, &reason, now)?
+            crate::reviewer::continue_review_claimed(
+                ctx,
+                &task,
+                run,
+                subject.run,
+                &reason,
+                now,
+                &session_input,
+            )?
         } else {
-            continue_agent(ctx, &task, run, &reason)?
+            continue_agent(ctx, &task, run, &reason, &session_input)?
                 .into_iter()
                 .collect()
         });
@@ -164,17 +196,29 @@ fn quiescent(
         && crate::provider_stall::still_stalled(ctx, &crate::provider_stall::agent_key(task, run))
 }
 
-fn continue_agent(ctx: &Ctx, task: &Task, run: &Run, reason: &str) -> Result<Option<Change>> {
+fn continue_agent(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    reason: &str,
+    session_input: &corral_core::store::StoreLock,
+) -> Result<Option<Change>> {
     let blocked = match crate::operating::require(&ctx.store, task, OperatingActionKind::Dispatch) {
         Err(error) => Some(format!(
             "the approved fallback is ready, but automatic dispatch is not authorized ({error:#}); \
              `corral retry {}` continues with it",
             task.id
         )),
-        Ok(()) => match crate::dispatch::availability_retry(ctx, &task.id, &run.id) {
-            Ok(_) => None,
-            Err(error) => Some(format!("fallback continuation blocked: {error:#}")),
-        },
+        Ok(()) => {
+            match crate::dispatch::availability_retry_claimed(ctx, &task.id, &run.id, session_input)
+            {
+                Ok(_) => None,
+                Err(error) if error.is::<crate::operating::AuthorizationRefused>() => {
+                    return Ok(None);
+                }
+                Err(error) => Some(format!("fallback continuation blocked: {error:#}")),
+            }
+        }
     };
     let current = ctx.store.head(&task.id)?.to_shell_task()?;
     let Some(blocked) = blocked else {

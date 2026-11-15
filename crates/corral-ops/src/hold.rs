@@ -56,6 +56,43 @@ pub fn hold(ctx: &Ctx, id: &str, reason: Option<&str>) -> Result<()> {
     cancel_held(ctx, &SyncScope::All)
 }
 
+/// A session pause owns only the hold it inserted. Persist its fence in the same
+/// task transaction, so a crash cannot leave an untracked pause-owned hold.
+pub(crate) fn pause_session(
+    ctx: &Ctx,
+    id: &str,
+    record: impl FnOnce(Option<&TaskHold>) -> Result<()>,
+) -> Result<()> {
+    ctx.store.update_head(id, |task| {
+        ensure!(
+            !matches!(task.status, Status::Done | Status::Dropped),
+            "{} is terminal",
+            task.id
+        );
+        let placed = if task.hold.is_none() {
+            let hold = TaskHold {
+                reason: "session paused".into(),
+                at: ctx.store.now(),
+                resume: task.review_wait,
+                focus: None,
+            };
+            task.hold = Some(hold.clone());
+            task.review_wait = None;
+            ctx.store
+                .log_event(Some(&task.id), "held", json!({"hold": hold}))?;
+            Some(hold)
+        } else {
+            None
+        };
+        record(placed.as_ref())
+    })?;
+    cancel_held(ctx, &SyncScope::All)
+}
+
+pub(crate) fn release_session(ctx: &Ctx, id: &str, expected: &TaskHold) -> Result<()> {
+    release_matching(ctx, id, None, Some(expected))
+}
+
 fn set(ctx: &Ctx, id: &str, reason: &str, focus: Option<&str>) -> Result<()> {
     ctx.store.update_head(id, |task| {
         ensure!(
@@ -107,11 +144,21 @@ pub fn release(ctx: &Ctx, id: &str) -> Result<()> {
 }
 
 fn release_from(ctx: &Ctx, id: &str, focus: Option<&str>) -> Result<()> {
+    release_matching(ctx, id, focus, None)
+}
+
+fn release_matching(
+    ctx: &Ctx,
+    id: &str,
+    focus: Option<&str>,
+    expected: Option<&TaskHold>,
+) -> Result<()> {
     ctx.store.update_head(id, |task| {
         if task
             .hold
             .as_ref()
             .is_none_or(|h| focus.is_some() && h.focus.as_deref() != focus)
+            || expected.is_some_and(|expected| task.hold.as_ref() != Some(expected))
         {
             return Ok(());
         }
@@ -142,6 +189,14 @@ fn release_from(ctx: &Ctx, id: &str, focus: Option<&str>) -> Result<()> {
             || crate::plan_acceptance::checkpoint::cancelled(&ctx.store, &task.id)?
         {
             task.review_wait = Some(corral_core::ReviewWork::Gate);
+        }
+        if task
+            .head()
+            .current_run
+            .as_ref()
+            .is_some_and(|run| run.outcome == Some(corral_core::RunOutcome::Stopped))
+        {
+            task.review_wait = None;
         }
         ctx.store
             .log_event(Some(&task.id), "released", json!({"hold": hold}))?;
@@ -245,6 +300,9 @@ fn cancel_held(ctx: &Ctx, scope: &SyncScope) -> Result<()> {
         ctx.store
             .heads(&corral_core::backend::HeadQuery::Open { project: None })?,
     ) {
+        if crate::session_control::stop::task_stop_pending(ctx, &task.id)? {
+            continue;
+        }
         if task.hold.is_some() {
             crate::review_budget::cancel_task(ctx, &task.id, "held")?;
         }
@@ -260,6 +318,13 @@ pub(crate) fn resume_gates(ctx: &Ctx) -> Result<()> {
         .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?;
     for task in tasks {
+        if task
+            .current_run
+            .as_ref()
+            .is_some_and(|run| run.outcome == Some(corral_core::RunOutcome::Stopped))
+        {
+            continue;
+        }
         if task.hold.is_none()
             && task.review_wait == Some(corral_core::ReviewWork::Gate)
             && crate::plan_acceptance::checkpoint::cancelled(&ctx.store, &task.id)?

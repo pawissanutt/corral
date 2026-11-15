@@ -23,7 +23,9 @@ pub(crate) use index::{from_source, latest_for, task_intent};
 
 #[path = "continuation_start.rs"]
 mod startup;
-pub(crate) use startup::failed_start;
+pub(crate) use startup::{
+    activate_ready, automation_may_start, failed_start, require_automation_start,
+};
 
 #[path = "continuation_context.rs"]
 mod context_cache;
@@ -312,6 +314,14 @@ fn event(
 
 /// Fence source, advance the financial epoch and insert the sole successor in ONE commit.
 pub(crate) fn prepare(ctx: &Ctx, mut transfer: Transfer) -> Result<ContinuationIntent> {
+    if !startup::session_may_start(ctx, &transfer.source)?
+        || !startup::session_may_start(ctx, &transfer.successor)?
+    {
+        return Err(crate::operating::AuthorizationRefused(
+            "Held: continuation session paused or stopped".into(),
+        )
+        .into());
+    }
     ensure!(
         same_lineage(&transfer.source, &transfer.successor),
         "SuccessorAmbiguous"
@@ -596,6 +606,9 @@ pub(crate) fn activate(ctx: &Ctx, container: &ContainerRef, generation: u32) -> 
     let Some(intent) = intent_for(&ctx.store, container, generation)? else {
         return Ok(false);
     };
+    if intent.phase == IntentPhase::Prepared && !automation_may_start(ctx, container)? {
+        return Ok(false);
+    }
     match intent.phase {
         IntentPhase::Prepared => {}
         IntentPhase::Active => {
@@ -616,6 +629,14 @@ pub(crate) fn activate(ctx: &Ctx, container: &ContainerRef, generation: u32) -> 
             return Ok(false);
         }
         ensure!(intent.phase == IntentPhase::Prepared, "SuccessorAmbiguous");
+        if !startup::session_may_start(ctx, container)?
+            || !startup::session_may_start(ctx, &intent.source.container)?
+        {
+            return Err(crate::operating::AuthorizationRefused(
+                "Held: continuation session paused or stopped".into(),
+            )
+            .into());
+        }
         ensure!(!state.binding.closing, "TerminalResult");
         subject_current(&ctx.store, container, &intent.subject)?;
         context_valid(&ctx.store, &intent)?;

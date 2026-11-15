@@ -27,12 +27,34 @@ pub(super) fn planner_owns_stop(
             })
 }
 
-pub(super) fn launch_refusal(
+pub(super) fn worker_stop(
     task: &TaskHeadFields,
     run: Option<&super::phase_inputs::RunPhase>,
     now: Timestamp,
     conditions: &mut Vec<Condition>,
 ) {
+    if let Some(run) = run.filter(|run| run.outcome == Some(corral_core::RunOutcome::Stopped)) {
+        let mut condition = row(
+            task,
+            now,
+            "session_stopped",
+            WaitClass::OwnerDecision,
+            Responsible::Owner,
+            (Some(run.id.clone()), task.status_since),
+            format!(
+                "Run {} was stopped by the owner; retry or discard the retained work",
+                run.id
+            ),
+        );
+        condition
+            .resume
+            .push(check("owner_disposition", &task.id, None, false));
+        condition.next_action.command = Some(format!("corral retry {}", task.id));
+        condition.next_action.description =
+            "Explicitly retry the stopped task, or discard it separately".into();
+        conditions.push(condition);
+        return;
+    }
     if let Some(run) = run
         && run.outcome == Some(corral_core::RunOutcome::Failed)
         && let Some(reason) = run.blocked_excerpt.as_ref().filter(|text| {
@@ -94,6 +116,14 @@ pub(super) fn project(
     a: &mut Assessment,
 ) {
     if matches!(task.status, Status::Idea | Status::Done | Status::Dropped) {
+        return;
+    }
+    if phases
+        .run
+        .as_ref()
+        .is_some_and(|run| run.outcome == Some(corral_core::RunOutcome::Stopped))
+    {
+        a.progress = None;
         return;
     }
     native_waits(inputs, n, a);

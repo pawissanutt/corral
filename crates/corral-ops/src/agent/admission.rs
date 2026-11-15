@@ -566,6 +566,13 @@ pub(crate) fn open_generation_host(
     connection: Option<&corral_core::connection::ConnectionBinding>,
     fresh_session: bool,
 ) -> Result<GenerationGrant> {
+    let ctx = crate::Ctx::from_store(store.clone());
+    if !crate::availability::continuation::automation_may_start(&ctx, &target.container())? {
+        return Err(crate::operating::AuthorizationRefused(
+            "Held: session controls defer paid host continuation".into(),
+        )
+        .into());
+    }
     ensure!(
         pane.is_some_and(|pane| !pane.is_empty())
             || matches!(target, BindTarget::Assistant { .. }) && pane.is_none(),
@@ -706,6 +713,10 @@ pub(crate) fn open_generation_host(
                 crate::assistant::workflow::handoff::admission::require_host_start(
                     store, task, &container,
                 )?;
+                ensure!(
+                    !crate::session_control::stop::container_stop_pending_in(store, &container)?,
+                    "ended: this container has a pending owner stop"
+                );
                 let project = task
                     .project
                     .clone()

@@ -30,7 +30,7 @@ pub(super) fn admit(invoker: &super::Invoker, command: &Command) -> anyhow::Resu
         ActClass::Admin => {
             anyhow::ensure!(
                 invoker.device_admin()?,
-                "admin_only: trusted native administrator required"
+                "admin_only: administrator required"
             );
         }
         _ => anyhow::bail!("not_app_safe: command is not available to app devices"),

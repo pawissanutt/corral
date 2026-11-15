@@ -19,6 +19,36 @@ pub(crate) enum Cleanup {
     Round,
 }
 
+/// Exact-pane Terminate cleanup: retain task resources and never sweep a sibling.
+/// Unlike best-effort terminal cleanup, failure is returned to the owner.
+pub(crate) fn close_session_pane(ctx: &Ctx, task: Option<&str>, pane: &str) -> Result<()> {
+    if ctx
+        .herdr
+        .pane_get(pane)
+        .context("reading stopped pane")?
+        .is_some()
+    {
+        let exits = crate::cleanup_worktree::pane_exits(ctx, pane);
+        ctx.herdr.pane_close(pane).context("closing stopped pane")?;
+        crate::cleanup_worktree::wait_pane_exits(&exits);
+    }
+    if let Some(id) = task {
+        let rows = ctx.store.head(id)?.ledger_named(pane)?;
+        let keys = rows.iter().map(|row| row.key.clone()).collect::<Vec<_>>();
+        let owed = rows
+            .iter()
+            .filter_map(|row| {
+                row.workspace
+                    .as_ref()
+                    .map(|workspace| (workspace.clone(), row.socket.clone()))
+            })
+            .collect::<Vec<_>>();
+        ctx.store
+            .update_head(id, |head| head.release_panes(&keys, &owed))?;
+    }
+    Ok(())
+}
+
 /// Best-effort cleanup of a head. Terminal tasks release all runs; send-back only releases the
 /// current run's review tools. Panes come from the task's unreleased cleanup-ledger rows (plan
 /// T-253 section 4, "Pane references and cleanup"), never from a walk of its history or its

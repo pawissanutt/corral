@@ -308,7 +308,8 @@ fn paired_browser_reads_board_and_revocation_closes_it() {
     );
     let app_session = browser.call(wire::app::APP_SESSION, json!({}));
     assert_eq!(app_session["result"]["device"]["id"], device.id);
-    assert_eq!(app_session["result"]["authority"]["assistant_act"], false);
+    assert_eq!(app_session["result"]["authority"]["assistant_act"], true);
+    assert_eq!(app_session["result"]["authority"]["admin"], true);
     let issued = jiff::Timestamp::now();
     let command = wire::app::ActSubmit {
         cmd_id: "browser-comment-1".into(),
@@ -348,10 +349,10 @@ fn paired_browser_reads_board_and_revocation_closes_it() {
     let browser_admin = browser.call(
         wire::app::DEVICE_SET_AUTHORITY,
         json!({
-            "device": device.id, "authority": native.authority,
+            "device": native.id, "authority": native.authority,
         }),
     );
-    assert_eq!(browser_admin["error"]["data"]["code"], "admin_only");
+    assert_eq!(browser_admin["result"]["id"], native.id);
     let devices_first = browser.call(DEVICE_PAGE, json!({"after": null, "limit": 1}));
     assert_eq!(
         devices_first["result"]["devices"].as_array().unwrap().len(),

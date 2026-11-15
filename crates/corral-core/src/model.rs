@@ -201,6 +201,8 @@ pub enum RunOutcome {
     Discarded,
     /// A gate/review was intentionally stopped; never a failure or verdict.
     Cancelled,
+    /// The owner terminated the worker; Needs me retains its work without a dispatch slot.
+    Stopped,
     /// A reviewer session stopped on a provider failure that outlasted its retries.
     Interrupted,
     /// The agent returned to its shell before reporting (its launch failed or it exited); the
@@ -925,7 +927,8 @@ impl Task {
                         .is_some_and(|run| cowork.has_worker(&run.id, run.herdr.is_some()))
                 }) && self.status.holds_slot()
                     && self.current_run().is_none_or(|r| {
-                        r.outcome != Some(RunOutcome::Failed) && !r.releases_slot(&self.id)
+                        !matches!(r.outcome, Some(RunOutcome::Failed | RunOutcome::Stopped))
+                            && !r.releases_slot(&self.id)
                     })
                     && !(self.current_run().is_none_or(|r| r.outcome.is_some())
                         && self.plans.last().is_some_and(|p| {

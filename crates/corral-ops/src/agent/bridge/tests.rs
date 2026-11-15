@@ -31,7 +31,7 @@ impl Drop for Host {
 }
 
 /// A scripted host on generation 1's socket: it records each frame and answers `reply(frame)`.
-fn host(cap: Option<&str>, reply: fn(&Value) -> Value) -> Host {
+fn host(cap: Option<&str>, reply: impl Fn(&Value) -> Value + Send + 'static) -> Host {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let recipient = Recipient::Run {
@@ -174,6 +174,141 @@ fn an_event_gap_is_recorded_as_a_reconciliation_requirement() {
     assert_eq!(gap.detail["container"], json!("T-001/R1"));
     assert_eq!(gap.detail["missing"], json!(4));
     assert_eq!(gap.detail["reconcile"], json!(true));
+}
+
+#[test]
+fn a_hosts_live_event_payload_does_not_decode() {
+    use corral_protocol::subscription::{
+        SessionLiveGap, SessionLiveKind as Kind, SessionLiveToolState as Tool,
+        SessionLiveTurnState as Turn,
+    };
+
+    let at = "2026-11-15T00:00:00.000Z";
+    // Raw host payloads, not serialization of the Rust enums under test.
+    let mut events = vec![
+        json!({"kind": "live_turn", "turn": 7, "state": "started"}),
+        json!({"kind": "live_text", "turn": 7, "message": 2, "offset": 3, "text": "hé"}),
+        json!({"kind": "live_thinking", "turn": 7, "message": 2, "offset": 0, "text": "why"}),
+        json!({"kind": "live_tool", "turn": 7, "call": "call-1", "tool": "read",
+            "state": "started", "args": "{\"path\":\"README.md\"}", "args_truncated": true}),
+        json!({"kind": "live_tool", "turn": 7, "call": "call-1", "tool": "read",
+            "state": "updated", "partial": "output tail"}),
+        json!({"kind": "live_tool", "turn": 7, "call": "call-1", "tool": "read",
+            "state": "ended", "failed": true, "elapsed_ms": 12}),
+        json!({"kind": "live_queue", "steer": 2, "follow_up": 3}),
+        json!({"kind": "live_turn", "turn": 7, "state": "ended",
+            "aborted": true, "error": "provider_error"}),
+        json!({"kind": "live_future", "extension": {"value": 1}}),
+    ];
+    for (index, event) in events.iter_mut().enumerate() {
+        event["seq"] = json!(index as u64 + 3);
+        event["generation"] = json!(1);
+        event["at"] = json!(at);
+    }
+    let expected = vec![
+        Kind::LiveTurn {
+            turn: 7,
+            state: Turn::Started,
+        },
+        Kind::LiveText {
+            turn: 7,
+            message: 2,
+            offset: 3,
+            text: "hé".into(),
+        },
+        Kind::LiveThinking {
+            turn: 7,
+            message: 2,
+            offset: 0,
+            text: "why".into(),
+        },
+        Kind::LiveTool {
+            turn: 7,
+            call: "call-1".into(),
+            tool: "read".into(),
+            state: Tool::Started {
+                args: Some("{\"path\":\"README.md\"}".into()),
+                args_truncated: Some(true),
+            },
+        },
+        Kind::LiveTool {
+            turn: 7,
+            call: "call-1".into(),
+            tool: "read".into(),
+            state: Tool::Updated {
+                partial: Some("output tail".into()),
+            },
+        },
+        Kind::LiveTool {
+            turn: 7,
+            call: "call-1".into(),
+            tool: "read".into(),
+            state: Tool::Ended {
+                failed: true,
+                elapsed_ms: Some(12),
+            },
+        },
+        Kind::LiveQueue {
+            steer: 2,
+            follow_up: 3,
+        },
+        Kind::LiveTurn {
+            turn: 7,
+            state: Turn::Ended {
+                aborted: true,
+                error: Some("provider_error".into()),
+            },
+        },
+        Kind::Other,
+    ];
+    let host = host(Some(CAP), fixture::live_script(events));
+    let mut client = BridgeClient::connect(&host.store, &host.recipient, 1).unwrap();
+    let page = client.live_since(0).unwrap();
+    assert_eq!(
+        (page.generation, page.last, page.next, page.more),
+        (1, 11, 11, false)
+    );
+    assert_eq!(
+        page.gap,
+        Some(SessionLiveGap {
+            after: 0,
+            resumed: 3,
+            missing: 2,
+            reconcile: true,
+        })
+    );
+    let actual: Vec<_> = page
+        .events
+        .into_iter()
+        .enumerate()
+        .map(|(index, event)| {
+            assert_eq!(
+                (event.seq, event.generation, event.at.as_str()),
+                (index as u64 + 3, 1, at)
+            );
+            event.kind
+        })
+        .collect();
+    assert_eq!(actual, expected);
+    let idle = client.live_since(page.next).unwrap();
+    assert!(idle.events.is_empty());
+    assert!(idle.gap.is_none());
+    assert_eq!(idle.next, 11);
+    let frames: Vec<_> = host.frames.try_iter().collect();
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|frame| frame["command"] == "hello")
+            .count(),
+        1
+    );
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|frame| frame["command"] == "live_since")
+            .count(),
+        2
+    );
 }
 
 #[test]

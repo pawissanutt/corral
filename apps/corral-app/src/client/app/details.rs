@@ -11,6 +11,15 @@ impl AppState {
         id: String,
         request: DetailGet,
     ) -> Vec<Outgoing> {
+        let request = match request {
+            DetailGet {
+                target: DetailRef::SessionItem { id, token },
+                ..
+            } => {
+                return self.session_item(feed, id, token);
+            }
+            request => request,
+        };
         let key = detail_key(&request.target);
         let mut retired = if matches!(&request.target, DetailRef::Filings { .. }) {
             feed.with_untracked(|feed| {
@@ -79,6 +88,15 @@ impl AppState {
         if !accepted || !self.ready {
             return vec![];
         }
+        if let DetailRef::Session { id } = &request.target {
+            if let Some(reread) =
+                feed.with_untracked(|feed| feed.live.get(id.as_str()).map(|live| live.reread))
+            {
+                self.detail_reread.insert(key.clone(), reread);
+            } else {
+                self.detail_reread.remove(&key);
+            }
+        }
         // Only the latest request for a stable selector can publish its pages.
         if let Some(previous) = self.detail_inflight.insert(key.clone(), id.clone()) {
             feed.update(|feed| {
@@ -103,6 +121,9 @@ impl AppState {
         outcome: Result<Value, (corral_protocol::rpc::ErrorCode, String)>,
     ) -> Result<Vec<Outgoing>, String> {
         let request: DetailGet = decode(params)?;
+        if let DetailRef::SessionItem { id, token } = &request.target {
+            return self.session_item_reply(feed, tag, id, token, outcome);
+        }
         let key = detail_key(&request.target);
         let Some(id) = tag else {
             return Err("detail reply has no correlation identity".into());
@@ -142,7 +163,9 @@ impl AppState {
             if !valid {
                 return Err("daemon returned not-modified without a matching cached detail".into());
             }
+            let reread = self.detail_reread.remove(&key);
             feed.update(|feed| {
+                feed.settle_session(&request.target, reread);
                 if let Some(cache) = feed.details.get_mut(&key) {
                     cache.loading = false;
                     cache.stale = false;
@@ -219,7 +242,11 @@ impl AppState {
             }
         };
         self.detail_inflight.remove(&key);
+        let reread = self.detail_reread.remove(&key);
         feed.update(|feed| {
+            if matches!(&merged, Some(DetailBody::Session(_))) {
+                feed.settle_session(&request.target, reread);
+            }
             if let Some(cache) = feed.details.get_mut(&key) {
                 cache.pages = pages;
                 cache.merged = merged;
@@ -244,6 +271,7 @@ impl AppState {
         self.detail_pages.remove(key);
         self.detail_inflight.remove(key);
         self.detail_bytes.remove(key);
+        self.detail_reread.remove(key);
         feed.update(|feed| {
             if let Some(cache) = feed.details.get_mut(key) {
                 cache.loading = false;
@@ -327,8 +355,14 @@ fn merge_pages(pages: &[DetailReply]) -> Result<Option<DetailBody>, String> {
     }
     merged
         .map(|body| {
-            serde_json::from_value(body)
-                .map_err(|error| format!("invalid assembled detail: {error}"))
+            let mut body: DetailBody = serde_json::from_value(body)
+                .map_err(|error| format!("invalid assembled detail: {error}"))?;
+            if let DetailBody::Session(session) = &mut body {
+                session
+                    .messages
+                    .sort_by(|left, right| left.at.cmp(&right.at));
+            }
+            Ok(body)
         })
         .transpose()
 }

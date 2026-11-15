@@ -5,7 +5,7 @@
 //! canonical `id`/`day` parents and replacing fixed task rails. Patch text appends;
 //! artifact base64 chunks decode independently before byte concatenation. A changed
 //! source rejects continuation. Topic owners cache rows by feed head, not loop ticks.
-mod agents;
+pub(crate) mod agents;
 mod artifacts;
 mod attachments;
 mod changes;
@@ -22,7 +22,7 @@ mod usage;
 #[cfg(test)]
 mod tests;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 use corral_protocol::detail::{DetailBody, DetailGet, DetailRef, DetailReply};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -177,6 +177,7 @@ fn read_snapshot(ctx: &Ctx, request: &DetailGet) -> Result<DetailReply> {
         DetailRef::Plan { id } => plans::plan(ctx, id)?,
         DetailRef::Review { task } => review::review(ctx, task)?,
         DetailRef::Session { .. } => unreachable!(),
+        DetailRef::SessionItem { id, token } => agents::session_item(ctx, id, token)?,
         DetailRef::Terminal { id } => agents::terminal(ctx, id)?,
         DetailRef::Timeline { from, to, by } => timeline::timeline(ctx, from, to, *by)?,
         DetailRef::Burnup { scope } => timeline::burnup(ctx, scope)?,
@@ -222,6 +223,14 @@ fn validate(request: &DetailGet) -> Result<()> {
         | DetailRef::Plan { id }
         | DetailRef::Session { id }
         | DetailRef::Terminal { id } => bounded(id, 512)?,
+        DetailRef::SessionItem { id, token } => {
+            bounded(id, 512)?;
+            bounded(token, 2048)?;
+            ensure!(
+                request.page.is_none(),
+                "session item continuations use their own token"
+            );
+        }
         DetailRef::Review { task } => bounded(task, 512)?,
         DetailRef::ReviewFile { task, path } => {
             bounded(task, 512)?;

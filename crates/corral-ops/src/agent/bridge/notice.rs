@@ -14,10 +14,10 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use corral_core::ArtifactKind;
+use anyhow::{Context, Result, ensure};
 use corral_core::agent::ContainerRef;
 use corral_core::inbox::{Inbox, MessageBinding, Receipt, ReceiptLevel, Recipient, TerminalState};
+use corral_core::{ArtifactKind, StoreLock};
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
@@ -70,7 +70,27 @@ pub fn settle_unconfirmed(
     session_file: &Path,
 ) -> Result<Vec<Unconfirmed>> {
     let inbox = Inbox::new(&ctx.store, recipient.clone())?;
-    let _deliver = inbox.delivery_lock()?;
+    let deliver = inbox.delivery_lock()?;
+    settle_unconfirmed_held(&inbox, endpoint, session_file, &deliver)
+}
+
+/// Reuse the session claim held before recovery stopped and fenced its predecessor.
+/// Reacquiring it here deadlocks even when no envelope needs settlement.
+pub(crate) fn settle_unconfirmed_held(
+    inbox: &Inbox<'_>,
+    endpoint: &Path,
+    session_file: &Path,
+    deliver: &StoreLock,
+) -> Result<Vec<Unconfirmed>> {
+    let path = inbox
+        .store
+        .dir()
+        .join("lock")
+        .join(format!("deliver-{}.lock", inbox.key()));
+    ensure!(
+        deliver.exclusively_protects(&path),
+        "recovery settlement requires this inbox's exclusive delivery guard"
+    );
     inbox.recover_publication()?;
     let Some(number) = inbox.state()?.open_envelope else {
         return Ok(Vec::new());

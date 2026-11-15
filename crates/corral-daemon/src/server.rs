@@ -247,6 +247,7 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
                         | Topic::Usage
                         | Topic::Settings
                         | Topic::Thread
+                        | Topic::Session
                 )
             });
             if (session.via == "app" || typed) && session.attached.is_none() {
@@ -455,7 +456,6 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
                         other,
                         params,
                         session.attached.as_ref().map(|guard| guard.device.as_str()),
-                        true,
                     )?;
                     continue;
                 }

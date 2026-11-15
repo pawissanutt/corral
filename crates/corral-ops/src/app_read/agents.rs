@@ -8,7 +8,6 @@ use anyhow::{Context, Result, ensure};
 use corral_core::agent::{AgentGeneration, ContainerRef, HostHealth, pm_state};
 use corral_core::backend::HeadQuery;
 use corral_core::{AgentHostHead, GateResult, RunHead, TaskHead, UsageTotals};
-use corral_protocol::assistant::{EntryCard, EntryKind};
 use corral_protocol::detail::DetailBody;
 use corral_protocol::detail::session::{SessionItem, SessionMessage, SessionPage};
 use corral_protocol::rows::{
@@ -19,6 +18,8 @@ use jiff::Timestamp;
 use super::{revision, short};
 use crate::Ctx;
 
+#[path = "session_replay.rs"]
+mod replay;
 #[path = "agent_transcript.rs"]
 mod transcript;
 
@@ -27,6 +28,7 @@ const RECENT_TERMINAL: u32 = 64;
 
 struct Source {
     row: AgentRow,
+    container: Option<ContainerRef>,
     provider_id: Option<String>,
     transcript: Option<PathBuf>,
     replyable: bool,
@@ -56,6 +58,9 @@ fn blank(id: String, role: &str, title: &str) -> AgentRow {
         cost_basis: None,
         tokens: None,
         rev: 0,
+        generation: None,
+        turn: None,
+        controls: Default::default(),
     }
 }
 
@@ -124,6 +129,7 @@ fn native(
 
 fn source(
     row: AgentRow,
+    container: Option<ContainerRef>,
     generation: Option<AgentGeneration>,
     fallback: Option<PathBuf>,
     replyable: bool,
@@ -131,6 +137,7 @@ fn source(
     let bound = generation.and_then(|generation| generation.bound);
     Source {
         row,
+        container,
         provider_id: bound.as_ref().map(|bound| bound.session_id.clone()),
         transcript: bound.map(|bound| bound.session_file).or(fallback),
         replyable,
@@ -197,6 +204,7 @@ fn run_source(head: &TaskHead, parent: &RunHead, run: &RunHead, reviewer: bool) 
         && (run.herdr.is_some() || run.delivery == corral_core::inbox::DeliveryMode::Inbox);
     let mut selected = source(
         row,
+        Some(container),
         generation,
         run.session.as_ref().and_then(|s| s.transcript.clone()),
         replyable,
@@ -234,6 +242,7 @@ fn task_sources(head: &TaskHead, output: &mut Vec<Source>) -> Result<()> {
             output.push(Source {
                 ended: (row.status == AgentStatus::Ended).then_some(gate.at),
                 row,
+                container: None,
                 provider_id: None,
                 transcript: None,
                 replyable: false,
@@ -274,7 +283,7 @@ fn task_sources(head: &TaskHead, output: &mut Vec<Source>) -> Result<()> {
             && run.ended.is_none()
             && run.pending_reply.is_none()
             && row.pane.is_some();
-        let mut planner = source(row, generation, None, replyable);
+        let mut planner = source(row, Some(container), generation, None, replyable);
         planner.ended = run.ended;
         output.push(planner);
     }
@@ -306,6 +315,7 @@ fn task_sources(head: &TaskHead, output: &mut Vec<Source>) -> Result<()> {
         };
         let mut reviewer = source(
             row,
+            Some(container.clone()),
             native(head, &container, review.agent_host.as_deref())?,
             None,
             false,
@@ -317,9 +327,27 @@ fn task_sources(head: &TaskHead, output: &mut Vec<Source>) -> Result<()> {
 }
 
 fn pm_source(ctx: &Ctx) -> Result<Option<Source>> {
-    let Some(pm) = pm_state::load_current(&ctx.store)? else {
-        return Ok(None);
-    };
+    let pm = pm_state::load_current(&ctx.store)?;
+    let recorded = crate::pm::recorded_pane(ctx)?;
+    if pm.is_none()
+        || recorded.as_ref().is_some_and(|pane| {
+            pm.as_ref()
+                .is_some_and(|pm| pm.pane != *pane && pm.state.binding.health == HostHealth::Fenced)
+        })
+    {
+        let mut row = blank("pm".into(), "pm", "Project manager");
+        row.pane = recorded;
+        row.status = if row.pane.is_some() {
+            AgentStatus::Live
+        } else {
+            AgentStatus::Ended
+        };
+        let ended = row.status == AgentStatus::Ended;
+        let mut source = source(row, Some(ContainerRef::Pm), None, None, false);
+        source.ended = ended.then(|| ctx.store.now());
+        return Ok(Some(source));
+    }
+    let pm = pm.context("PM session disappeared from stored snapshot")?;
     let mut row = blank("pm".into(), "pm", "Project manager");
     row.pane = (!pm.pane.is_empty()).then_some(pm.pane);
     row.now = progress(pm.state.todo.as_ref());
@@ -331,7 +359,13 @@ fn pm_source(ctx: &Ctx) -> Result<Option<Source>> {
         .into_iter()
         .find(|g| g.n == host.binding.generation);
     row.since = generation.as_ref().map(|g| g.created.to_string());
-    Ok(Some(source(row, generation, None, false)))
+    Ok(Some(source(
+        row,
+        Some(ContainerRef::Pm),
+        generation,
+        None,
+        false,
+    )))
 }
 
 /// Sessions that ended before this are off the Agents list (`[ui] agents_ended_window`).
@@ -364,6 +398,7 @@ fn task_heads(ctx: &Ctx, cutoff: Timestamp) -> Result<Vec<TaskHead>> {
 }
 
 fn assistant_source(ctx: &Ctx, assistant: AssistantRow, tokens: Option<u64>) -> Result<Source> {
+    let controls = crate::session_control::controls::for_assistant(&assistant);
     let session = ctx.store.get_assistant(&assistant.id)?;
     let container = ctx.store.get_assistant_container(&assistant.id)?;
     let generation = container
@@ -380,10 +415,14 @@ fn assistant_source(ctx: &Ctx, assistant: AssistantRow, tokens: Option<u64>) -> 
     row.cost_usd = assistant.cost_usd;
     row.cost_basis = assistant.cost_basis;
     row.tokens = tokens;
+    row.generation = Some(container.state.binding.generation).filter(|n| *n != 0);
+    row.turn = assistant.turn;
+    row.controls = controls;
     row.status = match assistant.state {
         AssistantState::Working => AgentStatus::Working,
         AssistantState::Ready => AgentStatus::Live,
         AssistantState::Ended => AgentStatus::Ended,
+        AssistantState::Paused => AgentStatus::Paused,
         AssistantState::Failed => AgentStatus::Unavailable,
         _ => AgentStatus::Waiting,
     };
@@ -394,7 +433,15 @@ fn assistant_source(ctx: &Ctx, assistant: AssistantRow, tokens: Option<u64>) -> 
     if assistant.live_in == AssistantLocation::Daemon {
         row.pane = None;
     }
-    let mut selected = source(row, generation, None, false);
+    let mut selected = source(
+        row,
+        Some(ContainerRef::Assistant {
+            session: session.id.clone(),
+        }),
+        generation,
+        None,
+        false,
+    );
     selected.assistant_socket = container.herdr_socket;
     selected.ended = session.ended;
     Ok(selected)
@@ -432,6 +479,7 @@ pub fn agents_rows(ctx: &Ctx) -> Result<Vec<AgentRow>> {
             source.row.status != AgentStatus::Ended || source.ended.is_some_and(|at| at >= cutoff)
         })
         .map(|mut source| {
+            apply_controls(ctx, &mut source)?;
             // A tail that cannot be read leaves the row without one; its other facts stand.
             source.row.tail = match (&source.transcript, &source.gate) {
                 (Some(path), _) => transcript::tail(path).unwrap_or_default(),
@@ -446,7 +494,7 @@ pub fn agents_rows(ctx: &Ctx) -> Result<Vec<AgentRow>> {
         .collect()
 }
 
-fn resolve(ctx: &Ctx, id: &str) -> Result<Source> {
+fn resolve_source(ctx: &Ctx, id: &str) -> Result<Source> {
     ensure!(
         !id.is_empty() && id.len() <= 512 && !id.chars().any(char::is_control),
         "invalid session id"
@@ -485,63 +533,59 @@ fn resolve(ctx: &Ctx, id: &str) -> Result<Source> {
         .context("session not found")
 }
 
-fn entry_message(entry: corral_protocol::assistant::ThreadEntry) -> SessionMessage {
-    let author = match entry.kind {
-        EntryKind::Message | EntryKind::PmMessage | EntryKind::Idea => "owner",
-        EntryKind::PmReply => "pm",
-        EntryKind::Answer => "assistant",
-        _ => "system",
-    }
-    .into();
-    let mut items = Vec::new();
-    if let Some(text) = entry.text {
-        items.push(SessionItem::Text {
-            text: short(&text, 32 * 1024),
-        });
-    }
-    for mut tool in entry.tools.into_iter().take(16) {
-        tool.input = short(&tool.input, 4096);
-        tool.output = tool.output.map(|text| short(&text, 4096));
-        items.push(SessionItem::Tool { tool });
-    }
-    if let Some(EntryCard::Question {
-        key,
-        rev,
-        options,
-        answer,
-    }) = entry.card
-    {
-        items.push(SessionItem::QuestionCard {
-            key,
-            rev,
-            text: String::new(),
-            options,
-            answer,
-        });
-    }
-    SessionMessage {
-        author,
-        at: Some(entry.at),
-        items,
-    }
+fn resolve(ctx: &Ctx, id: &str) -> Result<Source> {
+    let mut source = resolve_source(ctx, id)?;
+    apply_controls(ctx, &mut source)?;
+    Ok(source)
 }
 
-/// `page` is a domain cursor: `thread:<before>` or `transcript:<byte offset>`. The page's
-/// `older` is the cursor of the window before it, when there is one.
-/// Canonical assistants reply through assistant.send, never task.reply or terminal input.
+/// The control resolver consumes the projection's identity, not another session-id grammar.
+pub(crate) fn control_identity(
+    ctx: &Ctx,
+    id: &str,
+) -> Result<(AgentRow, Option<ContainerRef>, bool)> {
+    let selected = resolve_source(ctx, id)?;
+    Ok((selected.row, selected.container, selected.replyable))
+}
+
+fn apply_controls(ctx: &Ctx, source: &mut Source) -> Result<()> {
+    if source.row.role == "assistant" {
+        return Ok(());
+    }
+    let target = crate::session_control::Target::from_row(
+        ctx,
+        &source.row,
+        source.container.clone(),
+        source.replyable,
+    )?;
+    source.row.generation = target.generation;
+    source.row.turn = target.turn;
+    source.row.controls = crate::session_control::controls::for_target(ctx, &target)?;
+    if !target.ended && crate::session_control::pause::is_paused(ctx, &target.id)? {
+        source.row.status = AgentStatus::Paused;
+    }
+    Ok(())
+}
+
+fn entry_message(entry: corral_protocol::assistant::ThreadEntry) -> SessionMessage {
+    replay::entry_message(entry)
+}
+
+/// Canonical assistant words and Pi replay have independent append-only positions.
 pub(super) fn session(ctx: &Ctx, id: &str, page: Option<&str>) -> Result<SessionPage> {
     let selected = resolve(ctx, id)?;
     let row = selected.row;
     let (messages, older) = if row.role == "assistant" && ctx.store.app_thread_head(&row.id).is_ok()
     {
-        let before = transcript::cursor(page, "thread")?;
-        let (entries, next, _) = crate::agent::app_runtime::thread(ctx, &row.id, before, 1)?;
-        (
-            entries.into_iter().map(entry_message).collect(),
-            next.map(|next| format!("thread:{next}")),
-        )
-    } else if let Some(path) = selected.transcript {
-        transcript::messages(&path, page)?
+        replay::assistant(
+            ctx,
+            &row.id,
+            selected.transcript.as_deref(),
+            page,
+            entry_message,
+        )?
+    } else if let Some(path) = selected.transcript.as_deref() {
+        transcript::messages(path, &row.id, page)?
     } else if let Some((task, run)) = selected.gate {
         let snapshot = transcript::gate_snapshot(ctx, &task, &run)?;
         (
@@ -551,6 +595,9 @@ pub(super) fn session(ctx: &Ctx, id: &str, page: Option<&str>) -> Result<Session
                 items: vec![SessionItem::Text {
                     text: snapshot.lines.join("\n"),
                 }],
+                model: None,
+                stop_reason: None,
+                usage: None,
             }],
             None,
         )
@@ -573,16 +620,52 @@ pub(super) fn session(ctx: &Ctx, id: &str, page: Option<&str>) -> Result<Session
         )
     };
     Ok(SessionPage {
-        id: row.id,
-        role: row.role,
-        task: row.task,
-        run: row.run,
-        machine: row.machine,
+        id: short(&row.id, 512),
+        role: short(&row.role, 80),
+        task: row.task.map(|task| short(&task, 512)),
+        run: row.run.map(|run| short(&run, 512)),
+        machine: row.machine.map(|machine| short(&machine, 512)),
         messages,
         older,
         replyable: selected.replyable,
         reply_refusal: refusal,
     })
+}
+
+pub(super) fn session_item(ctx: &Ctx, id: &str, raw: &str) -> Result<DetailBody> {
+    let token = replay::decode(id, raw)?;
+    let selected = resolve(ctx, id)?;
+    let load = |source: &replay::Source| -> Result<SessionItem> {
+        let message = match source {
+            replay::Source::Transcript { start, end, .. } => {
+                let path = selected
+                    .transcript
+                    .as_deref()
+                    .context("session has no recorded transcript")?;
+                replay::message(&transcript::record(path, *start, *end)?)
+                    .context("transcript entry no longer draws content")?
+            }
+            replay::Source::Thread { before, .. } => {
+                let (entries, _, _) = crate::agent::app_runtime::thread(ctx, id, *before, 1)?;
+                entry_message(
+                    entries
+                        .into_iter()
+                        .next()
+                        .context("thread entry no longer exists")?,
+                )
+            }
+        };
+        message
+            .items
+            .into_iter()
+            .nth(source.item())
+            .context("transcript item no longer exists")
+    };
+    let mut item = load(&token.source)?;
+    if let Some(pair) = &token.pair {
+        replay::merge(&mut item, &load(pair)?);
+    }
+    Ok(DetailBody::SessionItem(replay::fragment(id, token, item)?))
 }
 
 /// Gate captures remain recorded; other terminals require explicit, owning-server reads.

@@ -375,6 +375,29 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
     if !still_current(ctx, target)? {
         return Ok(Drive::Quiet);
     }
+    let recipient = match target.role {
+        Role::Agent => corral_core::inbox::Recipient::Run {
+            task: target.task.into(),
+            run: target.run.id.clone(),
+        },
+        Role::Reviewer => {
+            let task = ctx.store.head(target.task)?;
+            let Some(parent) = task.current_run.as_ref() else {
+                return Ok(Drive::Quiet);
+            };
+            corral_core::inbox::Recipient::ReviewRun {
+                task: target.task.into(),
+                run: parent.id.clone(),
+                review: target.run.id.clone(),
+            }
+        }
+    };
+    let inbox = corral_core::inbox::Inbox::new(&ctx.store, recipient.clone())?;
+    let _session_delivery = inbox.delivery_lock()?;
+    // Do not consume the retry counter or advance escalation while input is fenced.
+    if crate::session_control::automated_input_must_wait(ctx, &recipient)? {
+        return Ok(Drive::Holding);
+    }
     let before = load(ctx, target.key);
     let session = before
         .as_ref()

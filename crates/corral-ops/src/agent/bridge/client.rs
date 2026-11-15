@@ -105,6 +105,18 @@ pub struct EventsPage {
     pub gap: Option<EventGap>,
 }
 
+/// A page of ephemeral live events, with a separate cursor from lifecycle events.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct LivePage {
+    pub generation: u32,
+    pub events: Vec<corral_protocol::subscription::SessionLiveEvent>,
+    pub last: u64,
+    pub next: u64,
+    pub more: bool,
+    #[serde(default)]
+    pub gap: Option<corral_protocol::subscription::SessionLiveGap>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct EventGap {
     pub after: u64,
@@ -118,6 +130,7 @@ pub struct BridgeClient {
     ctl_cap: String,
     generation: u32,
     next: u64,
+    live_supported: Option<bool>,
 }
 
 impl std::fmt::Debug for BridgeClient {
@@ -218,7 +231,20 @@ impl BridgeClient {
             ctl_cap,
             generation,
             next: 0,
+            live_supported: None,
         })
+    }
+
+    /// Bounds subsequent reads and writes to the host.
+    pub fn set_io_timeout(&self, timeout: Duration) -> Result<()> {
+        self.reader
+            .get_ref()
+            .set_read_timeout(Some(timeout))
+            .context("setting the bridge read timeout")?;
+        self.writer
+            .set_write_timeout(Some(timeout))
+            .context("setting the bridge write timeout")?;
+        Ok(())
     }
 
     /// One request and its reply; a host refusal is a `BridgeError` with the host's code.
@@ -267,7 +293,13 @@ impl BridgeClient {
     }
 
     pub fn hello(&mut self) -> Result<Value> {
-        self.request("hello", json!({}))
+        let result = self.request("hello", json!({}))?;
+        self.live_supported = Some(result["commands"].as_array().is_some_and(|commands| {
+            commands
+                .iter()
+                .any(|command| command.as_str() == Some("live_since"))
+        }));
+        Ok(result)
     }
 
     pub fn get_state(&mut self) -> Result<Value> {
@@ -292,6 +324,20 @@ impl BridgeClient {
     pub fn events_since(&mut self, seq: u64) -> Result<EventsPage> {
         let result = self.request("events_since", json!({"seq": seq}))?;
         serde_json::from_value(result).context("reading the events page")
+    }
+
+    pub fn live_since(&mut self, seq: u64) -> Result<LivePage> {
+        if self.live_supported.is_none() {
+            self.hello()?;
+        }
+        if self.live_supported != Some(true) {
+            return Err(refused(
+                "live_unsupported",
+                "the host does not advertise live_since",
+            ));
+        }
+        let result = self.request("live_since", json!({"seq": seq}))?;
+        serde_json::from_value(result).context("reading the live events page")
     }
 
     pub fn shutdown(&mut self) -> Result<Value> {

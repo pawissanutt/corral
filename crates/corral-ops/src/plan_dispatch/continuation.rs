@@ -22,6 +22,96 @@ pub(crate) fn paid_bound(state: &AgentRunState) -> bool {
             .is_some_and(|binding| binding.connection.api_key())
 }
 
+/// A prepared successor still owes admission to its exact predecessor session.
+pub(crate) fn claim_input(
+    ctx: &Ctx,
+    container: &ContainerRef,
+) -> Result<Option<corral_core::store::StoreLock>> {
+    let intent = continuation::latest_for(&ctx.store, container)?;
+    let source = intent
+        .as_ref()
+        .filter(|intent| {
+            intent.phase == IntentPhase::Prepared && intent.successor.container == *container
+        })
+        .map_or(container, |intent| &intent.source.container);
+    let recipient =
+        crate::questions::recipient(source).context("planning input recipient missing")?;
+    let Some(input) = ctx
+        .store
+        .try_lock(&format!("deliver-{}", recipient.key()?))?
+    else {
+        return Ok(None);
+    };
+    if !crate::session_control::automation_may_start(ctx, &recipient)?
+        || (source != container
+            && !crate::session_control::automation_may_start(
+                ctx,
+                &crate::questions::recipient(container)
+                    .context("planning input recipient missing")?,
+            )?)
+    {
+        return Ok(None);
+    }
+    Ok(Some(input))
+}
+
+pub(crate) fn claim_planner(
+    ctx: &Ctx,
+    head: &corral_core::TaskHead,
+    owner_input: bool,
+) -> Result<Option<corral_core::store::StoreLock>> {
+    let source = ContainerRef::Planner {
+        task: head.id.clone(),
+        run: head
+            .last_plan_run_head()?
+            .context("plan run missing")?
+            .id
+            .clone(),
+    };
+    if owner_input {
+        Ok(None)
+    } else {
+        claim_input(ctx, &source)
+    }
+}
+
+pub(crate) fn dispatch(
+    ctx: &Ctx,
+    head: &corral_core::TaskHead,
+    opts: &DispatchOpts,
+    admission: &crate::dispatch::Admission,
+) -> Result<crate::DispatchOutcome<Box<corral_core::TaskHead>>> {
+    let input = if admission.origin(&ctx.store, head)? == crate::operating::Origin::Automatic {
+        let source = head
+            .last_plan_run_head()?
+            .map(|run| ContainerRef::Planner {
+                task: head.id.clone(),
+                run: run.id.clone(),
+            })
+            .or_else(|| {
+                head.current_run.as_deref().map(|run| ContainerRef::Worker {
+                    task: head.id.clone(),
+                    run: run.id.clone(),
+                })
+            });
+        match source {
+            Some(source) => {
+                let Some(input) = claim_input(ctx, &source)? else {
+                    return Ok(crate::DispatchOutcome::Queued {
+                        task: Box::new(head.clone()),
+                        reason: "source session input is busy, paused or stopped".into(),
+                    });
+                };
+                Some(input)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    super::dispatch_claimed(ctx, head, opts, admission, input.as_ref())
+}
+
 /// Only current planning containers already present in the loaded head are candidates.
 /// Healthy hosts with turns cost one latest-turn pointer and one keyed turn read; empty
 /// histories cost nothing. Non-healthy hosts inspect only their pending financial identity.
@@ -143,6 +233,13 @@ pub(crate) fn already_prepared(ctx: &Ctx, source: &ContainerRef) -> Result<bool>
 
 /// Ordinary prepared-launch recovery must not retry a paid successor's first bind.
 pub(crate) fn resume_allowed(ctx: &Ctx, container: &ContainerRef, eligible: bool) -> Result<bool> {
+    let recipient =
+        crate::questions::recipient(container).context("planning input recipient missing")?;
+    if !crate::session_control::automation_may_start(ctx, &recipient)?
+        || !continuation::automation_may_start(ctx, container)?
+    {
+        return Ok(false);
+    }
     if !eligible {
         return Ok(true);
     }
@@ -191,6 +288,9 @@ pub(crate) fn paused(
     match result {
         Ok(changes) => Ok(changes),
         Err(error) => {
+            if crate::operating::refused(&error) {
+                return Ok(Vec::new());
+            }
             let text = format!("{error:#}");
             let reason = [
                 PauseReason::UncertainEffect,
@@ -237,13 +337,16 @@ pub(crate) fn advance(
         task: task.id.clone(),
         run: run.id.clone(),
     };
+    let Some(input) = claim_input(ctx, &source)? else {
+        return Ok(Vec::new());
+    };
     if already_prepared(ctx, &source)? {
         return Ok(Vec::new());
     }
     paused(
         ctx,
         &source,
-        advance_inner(ctx, task, run, evidence, now, &source),
+        advance_inner(ctx, task, run, evidence, now, &source, &input),
     )
 }
 
@@ -254,6 +357,7 @@ fn advance_inner(
     evidence: &policy::QuotaEvidence,
     now: Timestamp,
     source: &ContainerRef,
+    input: &corral_core::store::StoreLock,
 ) -> Result<Vec<Change>> {
     crate::agent::ops::planning::reconcile(ctx, &task.id)?;
     let task = ctx.store.get(&task.id)?;
@@ -342,7 +446,8 @@ fn advance_inner(
         },
     )?;
     let head = ctx.store.head(&task.id)?;
-    super::dispatch(ctx, &head, &opts, &admission).context("SuccessorAmbiguous")?;
+    super::dispatch_claimed(ctx, &head, &opts, &admission, Some(input))
+        .context("SuccessorAmbiguous")?;
     Ok(vec![Change {
         task: task.id,
         from: task.status,

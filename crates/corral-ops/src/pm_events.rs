@@ -19,8 +19,17 @@ pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
     let Some(_lock) = ctx.store.try_lock("pm-events")? else {
         return Ok(());
     };
+    // Retain both native and legacy event cursors while the PM is fenced.
+    if crate::session_control::automated_input_must_wait(ctx, &corral_core::inbox::Recipient::Pm)? {
+        return Ok(());
+    }
     if let Some(pm) = corral_core::agent::pm_state::load_current(&ctx.store)? {
         return crate::agent::pm_event_wake::push(ctx, pm);
+    }
+    let inbox = corral_core::inbox::Inbox::new(&ctx.store, corral_core::inbox::Recipient::Pm)?;
+    let _delivery = inbox.delivery_lock()?;
+    if crate::session_control::automated_input_must_wait(ctx, &corral_core::inbox::Recipient::Pm)? {
+        return Ok(());
     }
     crate::agent::pm_event_wake::checkpoint(ctx)?;
     let pane = if ctx.store.config.pm.push_events && herdr_available {

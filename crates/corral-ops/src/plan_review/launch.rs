@@ -8,6 +8,7 @@ use corral_core::{
 use serde_json::json;
 
 use super::{close_plan_review, next_plan_attempt, prepared};
+use crate::delivery::paused::{PmReviewTarget, queue_review};
 use crate::{Ctx, plan, prompt};
 
 /// The current review of plan `plan`, when `plan` is still the task's last.
@@ -30,17 +31,85 @@ pub(super) fn review_with_origin(
     origin: crate::operating::Origin,
     recovery: Option<&corral_core::RecoveryRecord>,
 ) -> Result<PlanReview> {
+    if origin == crate::operating::Origin::Owner {
+        return review_claimed(ctx, id, reviewer, origin, recovery, None);
+    }
+    let head = ctx.store.head(id)?;
+    let selected = head
+        .last_plan_head()?
+        .context("submit a plan before reviewing it")?;
+    let source = selected
+        .current_review
+        .as_ref()
+        .map(|review| corral_core::agent::ContainerRef::PlanReviewer {
+            task: id.into(),
+            plan: selected.id.clone(),
+            review: review.id.clone(),
+        })
+        .or_else(|| {
+            selected
+                .run
+                .as_ref()
+                .map(|run| corral_core::agent::ContainerRef::Planner {
+                    task: id.into(),
+                    run: run.clone(),
+                })
+        });
+    let input = if origin == crate::operating::Origin::Automatic {
+        match source {
+            Some(source) => Some(
+                crate::plan_dispatch::continuation::claim_input(ctx, &source)?.ok_or_else(
+                    || {
+                        crate::operating::AuthorizationRefused(
+                            "Held: plan-review source session input is busy, paused or stopped"
+                                .into(),
+                        )
+                    },
+                )?,
+            ),
+            None => None,
+        }
+    } else {
+        None
+    };
+    review_claimed(ctx, id, reviewer, origin, recovery, input.as_ref())
+}
+
+/// Continuations and retained starts pass their existing source claim, never reacquire it.
+pub(super) fn review_claimed(
+    ctx: &Ctx,
+    id: &str,
+    reviewer: Option<&str>,
+    origin: crate::operating::Origin,
+    recovery: Option<&corral_core::RecoveryRecord>,
+    _input: Option<&corral_core::store::StoreLock>,
+) -> Result<PlanReview> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     crate::session_scope::check_launch(ctx)?;
     let _budget = crate::review_budget::hold_guard(ctx, id)?;
-    // Unlike implementation reviews, plans have no run-backed launch journal.
-    // Retain the exclusive claim until the real pane reference has been saved.
+    // Pane ownership must remain exclusive until a live reference is saved; deferred
+    // shared-PM requests publish no pane and keep their pending review in the inbox.
     let _ownership = ctx
         .store
         .claim_session_ownership()?
         .context("pane inventory is being reconciled; retry plan review")?;
     crate::session_scope::check_launch(ctx)?;
     let head = ctx.store.head(id)?;
+    if origin == crate::operating::Origin::Automatic
+        && let Some(run) = head.last_plan_head()?.and_then(|plan| plan.run.clone())
+        && !crate::session_control::automation_may_start(
+            ctx,
+            &corral_core::inbox::Recipient::PlanRun {
+                task: id.into(),
+                plan_run: run,
+            },
+        )?
+    {
+        return Err(crate::operating::AuthorizationRefused(
+            "Held: planner source session is paused or stopped".into(),
+        )
+        .into());
+    }
     // The launch reads head fields, the last plan with its current review and the last
     // planning run, which the head's shell holds; counts come from the plan's facts.
     let task = super::source_task(&head)?;
@@ -272,7 +341,7 @@ pub(super) fn review_with_origin(
                 at,
                 herdr: None,
                 pending_reply: Some(format!(
-                    "Review the plan prompt at {}. Follow its exact verdict command.",
+                    "Review the plan prompt at {}. Follow its exact plan verdict command, including --plan and --attempt.",
                     prompt_file.display()
                 )),
                 route: Some(Box::new(route)),
@@ -347,23 +416,24 @@ pub(super) fn review_with_origin(
         crate::recovery::bind_journal(ctx, record, &preparation.authorization)?;
     }
     close_plan_review(ctx, &previous)?;
-    let mut launch = || -> Result<HerdrRef> {
-        let herdr = if let Some(herdr) = preparation.live_pane(ctx)? {
-            herdr
-        } else if shared_pm {
-            let pane_id = match crate::pm::live_pm_pane(ctx)? {
-                Some(pane) => pane,
-                None => crate::pm::open_pm(ctx)?,
-            };
-            let info = ctx
-                .herdr
-                .pane_get(&pane_id)?
-                .context("PM pane disappeared")?;
-            HerdrRef {
-                workspace_id: info.workspace_id,
-                pane_id,
-                socket: Some(ctx.herdr.socket_path()?),
-            }
+    let mut launch = || -> Result<(Option<HerdrRef>, bool)> {
+        // Shared-PM reuse passes the same fence as startup, even for a retained preparation.
+        let herdr = if shared_pm {
+            crate::pm::open_pm_automated(ctx)?
+                .map(|pane_id| -> Result<HerdrRef> {
+                    let info = ctx
+                        .herdr
+                        .pane_get(&pane_id)?
+                        .context("PM pane disappeared")?;
+                    Ok(HerdrRef {
+                        workspace_id: info.workspace_id,
+                        pane_id,
+                        socket: Some(ctx.herdr.socket_path()?),
+                    })
+                })
+                .transpose()?
+        } else if let Some(herdr) = preparation.live_pane(ctx)? {
+            Some(herdr)
         } else {
             let cwd = match task.project.as_deref() {
                 Some(project) => ctx.store.project_path(project)?,
@@ -372,37 +442,40 @@ pub(super) fn review_with_origin(
             let created =
                 ctx.herdr
                     .workspace_create(&cwd, &format!("{} plan review", task.id), false)?;
-            HerdrRef {
+            Some(HerdrRef {
                 workspace_id: created.workspace_id,
                 pane_id: created.pane_id,
                 socket: Some(ctx.herdr.socket_path()?),
-            }
+            })
         };
-        if isolated_pm {
+        if isolated_pm && let Some(herdr) = &herdr {
             ensure!(
                 crate::pm::recorded_pane(ctx)?.as_deref() != Some(herdr.pane_id.as_str()),
                 "c3_pm_context_unowned: dedicated attempt cannot occupy the shared PM pane"
             );
         }
-        preparation.review.herdr = Some(herdr.clone());
+        preparation.review.herdr = herdr.clone();
         preparation.save(ctx, &task.id)?;
         let attach = ctx.store.update_head(&task.id, |t| {
             let r = current_review(t, &plan_id)?
                 .filter(|r| r.id == attempt)
                 .context("plan review replaced before launch")?;
-            r.herdr = Some(herdr.clone());
+            r.herdr = herdr.clone();
             Ok(())
         });
         if let Err(error) = attach {
             // No native identity was bound yet. Retain the scoped PM preparation;
             // its pane reference alone cannot authorize workspace-wide cleanup.
-            if !shared_pm && !isolated_pm {
+            if !shared_pm
+                && !isolated_pm
+                && let Some(herdr) = &herdr
+            {
                 ctx.herdr.workspace_close(&herdr.workspace_id)?;
             }
             return Err(error);
         }
-        if native {
-            preparation.bind_native(ctx, &head, &resolved, &herdr)?;
+        if native && let Some(herdr) = &herdr {
+            preparation.bind_native(ctx, &head, &resolved, herdr)?;
         }
         let pressure = crate::resources::read_admission(ctx)?;
         let prepare = |store: &corral_core::Store, task: &mut corral_core::TaskHeadMut| {
@@ -457,53 +530,80 @@ pub(super) fn review_with_origin(
             );
             Ok(())
         };
-        ctx.herdr.pane_report_metadata(
-            &herdr.pane_id,
-            &format!("{} plan review", task.id),
-            &[
-                ("task", &task.id),
-                ("run", &preparation.authorization.action.run),
-                ("plan", &plan_id),
-                ("attempt", &attempt),
-                ("target", "plan-review"),
-            ],
-        )?;
+        if let Some(herdr) = &herdr {
+            ctx.herdr.pane_report_metadata(
+                &herdr.pane_id,
+                &format!("{} plan review", task.id),
+                &[
+                    ("task", &task.id),
+                    ("run", &preparation.authorization.action.run),
+                    ("plan", &plan_id),
+                    ("attempt", &attempt),
+                    ("target", "plan-review"),
+                ],
+            )?;
+        }
+        let mut queued = false;
         if shared_pm {
-            crate::availability::pm_plan_reviewer(ctx, &config, &task)?;
-            let delivery = crate::operating::submit_head(
-                ctx,
-                &preparation.authorization,
-                prepare,
-                || {
-                    ctx.herdr.agent_prompt(&herdr.pane_id, &format!(
+            if herdr.is_some() {
+                crate::availability::pm_plan_reviewer(ctx, &config, &task)?;
+            }
+            let message = format!(
                 "Review the plan prompt at {}. Follow its exact plan verdict command, including --plan and --attempt.",
                 prompt_file.display()
-                ))
-                },
-            )?;
-            ctx.store.log_event(
-                Some(&task.id),
-                "plan_review_delivery",
-                json!({"target":"plan","plan":plan_id,"attempt":attempt,"via":delivery.via,
-                    "submitted":delivery.submitted,"error":delivery.error}),
-            )?;
-            if !delivery.submitted {
-                bail!("PM plan prompt was not submitted; retained for inspection");
+            );
+            let delivery =
+                crate::operating::submit_head(ctx, &preparation.authorization, prepare, || {
+                    match &herdr {
+                        Some(herdr) => {
+                            crate::delivery::paused::prompt_pm(ctx, &herdr.pane_id, &message)
+                        }
+                        None => Ok(None),
+                    }
+                })?;
+            if let Some(delivery) = delivery {
+                ctx.store.log_event(
+                    Some(&task.id),
+                    "plan_review_delivery",
+                    json!({"target":"plan","plan":plan_id,"attempt":attempt,"via":delivery.via,
+                        "submitted":delivery.submitted,"error":delivery.error}),
+                )?;
+                if !delivery.submitted {
+                    bail!("PM plan prompt was not submitted; retained for inspection");
+                }
+            } else {
+                queue_review(
+                    ctx,
+                    &message,
+                    PmReviewTarget::Plan {
+                        task: task.id.clone(),
+                        plan: plan_id.clone(),
+                        review: attempt.clone(),
+                    },
+                )?;
+                queued = true;
             }
         } else {
+            let herdr = herdr.as_ref().context("dedicated reviewer pane missing")?;
             crate::operating::submit_head(ctx, &preparation.authorization, prepare, || {
                 ctx.herdr.pane_run(&herdr.pane_id, &preparation.command)
             })?;
         }
-        Ok(herdr)
+        Ok((herdr, queued))
     };
     match launch() {
-        Ok(herdr) => {
+        Ok((herdr, queued)) => {
             let saved = ctx.store.update_head(&task.id, |t| {
                 let r = current_review(t, &plan_id)?.filter(|r| r.id == attempt).context("plan review replaced during launch")?;
-                r.pending_reply = None;
-                ctx.store.log_event(Some(&task.id), "plan_review_started",
-                    json!({"target":"plan","plan":plan_id,"attempt":attempt,"reviewer":name,"pane":herdr.pane_id}))?;
+                if queued {
+                    // Keep the durable request pending until inbox delivery binds it.
+                    ctx.store.log_event(Some(&task.id), "plan_review_delivery",
+                        json!({"target":"plan","plan":plan_id,"attempt":attempt,"queued":true}))?;
+                } else if let Some(herdr) = &herdr {
+                    r.pending_reply = None;
+                    ctx.store.log_event(Some(&task.id), "plan_review_started",
+                        json!({"target":"plan","plan":plan_id,"attempt":attempt,"reviewer":name,"pane":herdr.pane_id}))?;
+                }
                 Ok(())
             })?.shell_task()?;
             let p = saved.plans.last().context("plan disappeared")?;

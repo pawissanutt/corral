@@ -43,6 +43,14 @@ pub enum ClientRequest {
         request_id: String,
         request: DetailGet,
     },
+    SessionItem {
+        session: String,
+        token: String,
+    },
+    Watch {
+        session: String,
+        on: bool,
+    },
     ActPreview {
         request_id: String,
         request: ActPreviewRequest,
@@ -201,6 +209,12 @@ pub fn prompt_answer(request: PromptAnswer) -> bool {
 }
 pub fn thread(scope: String, open: bool) -> bool {
     send(ClientRequest::Thread { scope, open })
+}
+pub fn session_item(session: String, token: String) -> bool {
+    send(ClientRequest::SessionItem { session, token })
+}
+pub fn watch(session: String, on: bool) -> bool {
+    send(ClientRequest::Watch { session, on })
 }
 pub fn save_draft(thread: String, text: String) -> bool {
     send(ClientRequest::SaveDraft { thread, text })

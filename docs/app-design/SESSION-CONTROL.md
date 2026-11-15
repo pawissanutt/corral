@@ -1,0 +1,701 @@
+# Session control from the app
+
+Owner decisions of 2026-11-15 for managing agent sessions from the Corral app through the
+daemon. This record governs the session page in Agents, the assistant thread and the
+`session` command family. Where it disagrees with the proposals in
+[ARCHITECTURE.md](ARCHITECTURE.md) (`stream.open`, `session.reply`, `kill`), this record wins.
+
+## Decisions
+
+| # | Decision |
+|---|---|
+| S1 | The interactive surface is a chat over the host bridge, not a byte-stream terminal. herdr 0.9.3 has no attach stream; a streaming terminal waits for a runtime that has one. |
+| S2 | The chat transcript replays the session with the same content the Pi terminal UI shows: nothing the terminal UI draws is dropped or flattened. |
+| S3 | Cancel, Pause and Terminate are three different controls (below). |
+| S4 | Pause keeps the host process alive. |
+| S5 | An owner message typed into a paused session resumes it. Only automated prompts wait. |
+| S6 | Terminate keeps the task's worktree and branch; the task moves to Needs me. Discard stays a separate action. |
+| S7 | Every role is controllable: assistant, worker, reviewer, planner, plan reviewer, gate and PM. The PM can be launched from the app. Assistants come first. |
+| S8 | A foreign harness (no corral-pi bridge) refuses Cancel and Pause with a reason; Terminate closes its pane. |
+| S9 | An app-launched PM runs in a herdr pane (`open_pm`). Every role becomes pane-less later; nothing in this contract may depend on a pane. |
+| S10 | A paired browser has the same authority as a native device, including admin. Authority stays per device and editable, so this can be narrowed later. |
+
+## Controls
+
+| Control | Effect | Host afterwards |
+|---|---|---|
+| Cancel | Cancels the current turn, like Esc in the terminal UI | Alive and idle; any input starts the next turn |
+| Pause | Cancels the current turn and fences the session: no automated input is delivered | Alive and idle until Resume |
+| Resume | Lifts the fence; input queued meanwhile is delivered in order | Working again when input is waiting |
+| Terminate | Stops the host and ends the session | Gone; the transcript stays readable |
+| Relaunch | Fences a lost host and starts the next generation of the same session | Alive |
+| Launch PM | Opens the PM when none is live | Alive |
+
+Pause is a fact of the session, not of the task. Pausing a task session also places a task
+hold with the reason `session paused`, so automation does not start gate or review work
+for it, and Resume releases that hold only when the pause placed it. Reviewers and gates
+are cancelled by a hold already, so they offer Cancel and Terminate, not Pause.
+
+Automated input is everything the owner did not type into this session: inbox deliveries,
+sync nudges, PM event wakes and policy pushes, review change requests, question answers
+relayed by another party. It queues where it queues today and is delivered on Resume.
+
+Task/PM fences are durable `session-pauses` records keyed by `ContainerRef::key()` (`pm`
+for the PM), not by an app row's display id. A pause records the exact task hold it inserted;
+lifting it releases only that unchanged hold, never a pre-existing or replacement hold.
+Pause and delivery serialize on the recipient's delivery lock. A fenced inbox still observes
+late receipts, but creates no new send attempt and leaves queued input intact. Direct
+automated nudges defer without consuming retries; shared-PM review requests enter its inbox.
+PM event cursors/frozen batches and deferred policy snapshots survive pause. The PM's initial
+event checkpoint is established before its first pause, so Resume cannot skip events from
+the paused interval. Explicit owner task replies and owner question answers lift the addressed
+session's fence in the same operation; authenticated host/PM relays do not gain owner authority.
+The PM-to-task relay (`agent/ops/pm.rs`) records its answer before checking delivery; a paused
+target keeps that queued answer and the PM's committed receipt, without lifting the fence.
+Automatic replacement is admission-controlled by `session_control::automation_may_start`.
+The PM supervisor holds the same input lock through its restart decision and effect; a pause
+does not spend its recovery budget. Worker/reviewer availability continuations, review watchdog
+relaunch decisions and fresh autopilot retries use the same predicate. Sync's native lost-host
+handler only reports Needs me; it does not automatically launch a replacement.
+Automated PM opening also passes this admission predicate before creating any pane or host.
+Its lock order is nonblocking `deliver-pm`, nonblocking recovery/policy leases, dispatch,
+then records. Recovery notice settlement and launch bookkeeping validate and reuse the held
+delivery claim; settlement/publication take inbox locks only outside dispatch. Final prompts
+inside a submission only try-claim delivery; busy/fenced prompts queue after dispatch releases.
+Deferred review requests carry exact worker/plan/aggregate identities. A pending review may
+genuinely have no pane; inbox delivery binds the real PM reference before its first send,
+without weakening callback policy checks or treating the absent pane as a lost process.
+
+Owner session Pause and availability's financial continuation pause are independent:
+`session-pauses`/assistant thread `paused` fences input, while a continuation intent's
+`Paused` phase records failed or unsafe paid-start recovery. Neither Resume nor owner
+input clears that financial state, and financial reconciliation never clears an owner fence.
+Paid continuation checks both the recorded source session and the proposed successor;
+a new run/review id or generation cannot escape a source Pause or Terminate. Automated
+continuation does not migrate or discard session pause records: it waits until owner
+Resume/input lifts them. Explicit owner Relaunch releases only its addressed generation's
+session pause before paid-start admission.
+If hello bound a host before session Pause won financial activation, its intent stays
+Prepared. Resume/owner input retries activation of that exact healthy bound generation
+without spending a second start or changing a financial pause.
+
+## Terminate, per role
+
+| Role | Effect |
+|---|---|
+| Assistant | The session ends; its record, thread and transcript stay |
+| Worker | The host stops and its pane closes; the run ends as stopped by the owner; the task waits in Needs me without a dispatch slot; worktree and branch stay |
+| Reviewer | The review child ends cancelled, with no verdict |
+| Gate | The gate ends cancelled, with no result |
+| Planner | The plan run ends as stopped by the owner (`cancelled`, with a retained owner-stop reason); its task waits in Needs me |
+| Plan reviewer | The plan review ends cancelled |
+| PM | The host is asked to exit and is not relaunched until the owner launches it again |
+
+A pane the owner opened (an adopted pane, `docs/session-ownership.md`) is never closed or
+typed into: there Terminate only asks the host to exit. Every control passes the herdr
+session ownership guard before it touches a pane.
+
+Task and PM termination first commits a `session-stops` intent, keyed by task id
+(`pm` for the PM), containing the canonical container key, generation, saved owner
+attribution and completion state. Sync finishes pending intents before diagnosing a
+missing host. Generation fencing precedes bridge shutdown, so an exiting host cannot
+publish new mutations. Terminate waits for verified host exit, drains effect executors
+and reaps verified job groups. Unknown/live executors, unverified groups or remaining
+worktree residents keep the intent pending and return `still_alive`, never success.
+Record settlement precedes exact-pane cleanup; cleanup preserves the worktree and branch.
+The completed intent and its single `session_stopped` event commit together.
+
+Workers serialize their intentional outcome as `stopped`, never `failed`. Planner
+termination uses the existing intentional `cancelled` plan-run state and retains the
+reason `Stopped by owner.`; it is held for the owner, without automatic re-planning.
+A stopped PM retains queued input and event cursors. Its stop marker is distinct from a
+pause: Resume and chat input do not clear it. Only explicit `session relaunch pm`,
+`session pm-open`, `corral pm` or `corral pi --pm` launch paths clear the marker.
+
+
+## What the daemon reports
+
+The app never infers what a session supports. Each session carries, per control, whether
+it is available and otherwise a refusal reason (`host_lost`, `no_bridge`, `ended`,
+`not_owned`, `adopted_pane`, and so on). Commands address the session id, never a pane.
+The terminal snapshot and remote keys are optional capabilities that exist only while the
+session has a pane.
+
+## Authority
+
+| Action | Class |
+|---|---|
+| Chat input, Cancel, Pause, Resume, Relaunch, Launch PM | `act` |
+| Terminate | `act`, with a previewed confirmation |
+| Remote keys into a pane | `admin` |
+
+None of these may queue offline.
+
+## Order of delivery
+
+1. Paired browsers get native authority.
+2. Assistant: the session page is the live chat, with Cancel, Pause, Resume, Terminate,
+   New and Take over.
+3. Transcript replay equivalent to the terminal UI, shared by assistant threads and task
+   sessions.
+4. The `session` command family for every role, PM launch, and per-session capabilities.
+5. Live chat for worker, planner, reviewer and PM sessions.
+6. Remote keys for foreign-harness panes.
+
+Pane-less hosts for every role and a byte-stream terminal are later work.
+
+## Decisions made while building
+
+- **Replay target.** A replay equals what a terminal UI shows after reopening the same
+  session from its file. Rows the host never journals are listed under "Not in a replay".
+- **Tool completion in the live stream.** The host reports a tool as ended only once its
+  result is written to the session file, which upstream guarantees at the end of the model
+  turn. A finished tool therefore reads as running until that turn's tools are all done;
+  its partial output still streams.
+- **Owner input lifts a pause.** `task reply`, `session send`, and an owner's answer to a
+  question the session asked all count, for task sessions and assistants alike.
+- **`session send` size.** The same input limit as `corral reply` (8 KiB including
+  framing); worker sends use the reply path itself.
+- **`session keys`.** Named keys only, from a fixed list; `--text` must contain a
+  non-whitespace character, and whitespace is sent as `space`, `tab` or `enter`. It is an
+  admin-class command, so every command is previewed and confirmed: the app gathers up to
+  32 keys and the text into one sequence and sends it as one confirmed command.
+- **Owner only.** PM, worker, reviewer and assistant callers are refused the `session`
+  family.
+- **A stopped or paused PM is not started by automation.** Shared reviews and recovery
+  prompts that need the PM stay queued until the owner launches or resumes it.
+- **Stored device authority is kept.** A browser paired before S10 keeps the authority it
+  stored; an administrator changes it in Settings › Devices, or the browser pairs again.
+
+## Transcript replay
+
+The replay source is the recorded Pi session, not the pane's current screen. All roles
+use the same reader. A session file is an append-only JSONL tree: replay follows the
+latest complete entry's `parentId` chain, including history before compaction, and
+foreign harness files without that tree metadata retain append order. Partial final
+lines remain invisible. The reference is Pi's reopen path:
+`pi-coding-agent/dist/modes/interactive/interactive-mode.js:3780-3784`
+(`renderInitialMessages` → `getBranch` → `renderTranscriptHistory`), not its
+compacted model context.
+
+### Sources and serialized items
+
+In the table, `pi/` means
+`packages/corral-pi/node_modules/@earendil-works/pi-coding-agent/dist/`, and `corral/`
+means `packages/corral-pi/src/`. These are source citations; the installed Pi distribution
+is the authority inventoried here. Content is retained before visual folding, clipping,
+syntax highlighting or Markdown layout. A renderer may collapse it as Pi does, but
+must offer the complete recorded content through expansion/continuation.
+
+| Terminal element | Session-file source | Serialized `SessionItem` / fields | Drawing authority |
+|---|---|---|---|
+| Owner and assistant Markdown, code fences, tables, skill invocation text | `message.message.content` string or `text` blocks; foreign top-level `type: user/assistant`, `input_text`, `output_text` | `text.text`; no Markdown is flattened | `pi/modes/interactive/interactive-mode.js:3482-3524`, `components/user-message.js:31-42`, `components/assistant-message.js:140-197` |
+| Thinking, including reasoning hidden by the terminal's toggle | Assistant `thinking.thinking` blocks | `thinking.text` | `pi/modes/interactive/components/assistant-message.js:153-195`; `corral/ui/DESIGN.md`, Transcript |
+| Tool row and its expanded arguments/result | Assistant `toolCall` or foreign `tool_use`; later `toolResult` / `tool_result`, matched by `id` ↔ `toolCallId` / `tool_use_id` within the returned page | `tool_call.call_id`, `name`, `arguments` (pretty JSON), `summary` (first command/path/target line), `state`, `paired`, `call` (complete call JSON), `output` (text), `result` (complete result JSON), `elapsed_ms` (`durationMs` when recorded) | `pi/modes/interactive/interactive-mode.js:3588-3643`; `corral/ui/tool-row.ts`, `tool-rendering.ts` |
+| A call without its result, or result without its call | Either half outside the current page / no matching recorded id | `tool_call.paired: false`; a call has `result` absent, a result-only row has empty `arguments`; states are `running`, `done`, `failed`, `not_run` | Same tool lifecycle; no name is invented from a call id |
+| Read, grep, find, ls, highlighted file and listings | Call arguments and result content/details | `tool_call.arguments`, `output`, `result`; original `path`, `file_path`, ranges, counts, truncation notices and images remain available | `corral/ui/tool-lines-files.ts:69-88,170-218` |
+| Edit diff, patch and replacements | `arguments.edits` / `oldText` / `newText`; `result.details.diff` or `.patch` | `tool_call.diff`, `arguments`, `result` | `corral/ui/tool-lines-files.ts:90-141` |
+| Write source/new content | `arguments.content` | `tool_call.content`, `arguments` | `corral/ui/tool-lines-files.ts:143-156` |
+| Bash/managed command and job rows, exit state, output tails, saved output location | Tool arguments/result, `corral_command`, `corral_command_monitor`, `corral_job_control` journals | `tool_call` with complete `result`; supplemental `card.title` equal to the journal's `customType`, `data` equal to its complete pretty-JSON `data` | `corral/ui/tool-lines-jobs.ts`; `host/session.ts` command/monitor restore |
+| Corral operation rows, receipts, refusal reasons, expanded fields, plan progress | Corral tools' arguments and complete result, including receipt envelope and structured `details` | `tool_call.arguments`, `call`, `result`, `output`; `summary` is the recorded call target, not a fabricated receipt verdict | `corral/ui/corral-presenter.ts:444-824,854-902`; `tool-rendering.ts:48-52` |
+| Diagnostics, definition, references, fetch, web read/search, browse/screenshot, ask, explore/oracle, experts, MCP and unknown tools | Their complete call/result | `tool_call`; every presenter-specific field remains inside `call` / `result`, including nested tool records, usage and images | `corral/ui/tool-lines-local.ts`, `tool-rendering.ts:144-169` |
+| Build task, finish and board-plan tool cards | `task`, `build_finish`, `board_plan` call/result | `tool_call.arguments`, `call`, `result` | `corral/ui/tool-rendering.ts:51-52` |
+| Code Mode cell source, child calls/results, error, printed/returned values, detach/settle status and timing | `codemode` arguments and `result.details.cells`; later `corral_code_call` and `corral_code_cell` snapshots | `tool_call.arguments`, `call`, `result`; `card.title: corral_code_call/corral_code_cell`, `data` complete snapshot JSON; child records are not reduced to a single output string | `corral/ui/code-cell.ts:140-179,231-249,383-509`; `host/session.ts` CodeRuntime journal/restore |
+| Owner `!` / `!!` execution | Message role `bashExecution` | `bash_execution.command`, `output`, `exit_code` (absent is unknown, never zero), `cancelled`, `truncated`, `exclude_from_context`, `full_output_path` | `pi/core/messages.d.ts:16-27`; `corral/ui/owner-bash.ts` |
+| Images, including tool result images | `image.data`, `mimeType`; foreign base64 `source.data` / `source.media_type` | `image.media_type`, `size` (decoded byte count), `encoding: base64`, `data`; large images use the same item continuation as text | `pi/core/messages.d.ts`, `pi-ai/dist/types.d.ts:275-279`; `corral/ui/DESIGN.md`, Images |
+| Compaction divider and expandable summary | Entry `compaction.summary/tokensBefore`, or role `compactionSummary` | `compaction.summary`, `tokens_before` | `pi/core/session-manager.d.ts:46-59`; `pi/modes/interactive/interactive-mode.js:3466-3471`; `corral/ui/DESIGN.md`, Compaction and long sessions |
+| Branch summary | Entry `branch_summary`, or role `branchSummary` | `branch_summary.summary`, optional `from_id` | `pi/core/session-manager.d.ts:60-70`; `pi/modes/interactive/interactive-mode.js:3473-3478` |
+| Summary billing notice | Compaction/branch entry `usage` | `card.title: Summary cost`, `data` with the complete `usage` | `pi/modes/interactive/interactive-mode.js:3678-3679,3701-3713` |
+| Cache-warming usage notice | `usage` entry with `kind: cache_warm` | `card.title: Cache warming`, `data` complete entry (provider/model/note/usage) | `pi/modes/interactive/interactive-mode.js:3685-3699`; other usage categories are not transcript rows |
+| Model or effort change | `model_change.provider/modelId`, `thinking_level_change.thinkingLevel`; richer `corral_mark.kind: model` | `model_change.provider/model`; `thinking_level_change.level`; `card.title: corral_mark`, `data` retains `model`, `effort`, `was`, `at` | `pi/core/session-manager.d.ts:27-35`; `corral/host/transcript-marks.ts:36-42`, `ui/mark-rows.ts:120-136` |
+| Label/bookmark | `label.targetId/label` | `label.target_id`, optional `label` (absence removes a label) | `pi/core/session-manager.d.ts:86-91`; labels are tree/bookmark UI facts, included even though `sessionEntryToContextMessages` draws no chat row |
+| Aborted/not-run turn | Assistant `stopReason: aborted`, `errorMessage`, `providerFailure`; tool call of that assistant turn without a result | `aborted.message`, optional `facts` (complete pretty JSON), `tool_call.state: not_run` | `pi/modes/interactive/interactive-mode.js:3535-3560`; `components/assistant-message.js:208-225`; `corral/ui/error-copy.ts` |
+| Provider error or reply cut at the output limit | Assistant `stopReason: error/length`, `errorMessage`, `providerFailure` | `provider_error.message/facts`; `card.title: Reply cut`, `text`; failed unexecuted calls have `state: failed` | `pi/modes/interactive/components/assistant-message.js:198-245`; `corral/ui/error-copy.ts` |
+| Turn footer and diagnostic facts | Assistant metadata excluding `content` | `SessionMessage.model`, `stop_reason`, `usage` (original token/cost object); `card.title: Turn footer`, `data` retains **all** original metadata, including `diagnostics`, provider failure, model/provider/response ids, effort, raw stop reason and `durationMs` | `pi-ai/dist/types.d.ts:294-322,384-415`; `corral/ui/usage-format.ts`, `ui/error-copy.ts` |
+| Run-end mark (done/waiting/stopped/error/length/continue-stopped), waits, counts, duration/cost/rebilled tokens | `custom.customType: corral_mark`, `data.kind: turn_end` | `card.title: corral_mark`, `data` retains the whole typed mark, including `notRun`, `waits`, `note` | `corral/host/transcript-marks.ts:14-34`; `ui/mark-rows.ts:76-118` |
+| Host note and owner/child asked/answered/steered mark | `corral_mark` with `kind: note/child` | `card.title: corral_mark`, `data` retains every field/text | `corral/host/transcript-marks.ts:44-61`; `ui/mark-rows.ts:138-158` |
+| Delivered code-cell/job/inbox/Corral host notices and host prompt rows | Aggregate user text beginning `[corral `, `[corral_`, `[corral] `, `[command `, `NEW REVIEW ROUND `; host kickoff/session-prompt and relink shapes recognized by `host_input`; owner-input-tagged text is excluded | `card.title: Host notice`, `text` complete joined text; renderer can reproduce the notice classifier without losing expanded text | `corral/ui/host-notices.ts:35-155,191-223`; `ui/host-envelopes.ts:240-317`; `session_replay.rs::host_input` |
+| Tagged owner input and `ask_user` answer bubble | Ordinary owner/user text, including `[owner input …]` or `[ask_user answer …]` | `text.text` complete original; a renderer can remove framing for presentation, not from the data | `corral/ui/host-notices.ts:157-189,246-313` |
+| Deferred owner questions and answers | `corral_owner_question.data` snapshots | `card.title: corral_owner_question`, `data` keeps id, questions/options, status, answers, expiry and delivery state | `corral/host/pending-questions.ts:22-26,61-83`; `ui/owner-questions.ts` |
+| Displayed extension custom message, including build owner exit/board/finish cards | Entry `custom_message` or role `custom`, `display: true` | `card.title` is `customType`, `text` is the full textual content, `data` is the complete message/entry including `details`; image blocks also have `image` items | `pi/modes/interactive/interactive-mode.js:3457-3464`; `components/custom-message.js:50-93`; `corral/ui/build/build-entries.ts:20-27,149-170` |
+| Canonical assistant owner/assistant/PM words and cards | Canonical `ThreadEntry`, not duplicated from Pi messages | `text`; existing `question_card`; other cards as `card.title: Owner card`; links/attachments as `card.title: Attachments`; canonical model/cost retained in `Turn footer` | `crates/corral-ops/src/agent/app_runtime/projection.rs:322-368` |
+| Existing compatibility tool item | Old app wire only | `tool { tool: ToolLine }` remains defined but is never emitted by replay | The app migrates to `tool_call` |
+
+`ToolCall.arguments`, `call`, `result`, and `Card.data` are JSON **strings**, not
+flattened field/value summaries. Decode them as JSON after resolving any continuation.
+An absent result remains unknown/running unless the recorded assistant stop says the
+call did not run or failed. Matching never treats an id as a tool name. A result folded
+into a call is not emitted a second time; its image items remain available.
+
+The supplemental cell/job/question cards preserve journal snapshots used to rebuild
+their live TUI models; clients may coalesce snapshots by their recorded cell/job/question
+identity. Build message cards retain the original `details` instead of guessing a live
+outcome. An item's expanded recorded content is the source of truth, not its preview.
+
+### Intentionally invisible entries
+
+The entry inventory is `pi/core/session-manager.d.ts:5-126`; the role inventory is
+`pi/core/messages.d.ts:16-58` and `pi-ai/dist/types.d.ts:379-451`.
+
+* `session` is file/header metadata, not a transcript entry. `session_info` renames
+  the session/header; `context_edit` changes model context, not past visible words.
+  None yields chat content in `sessionEntryToContextMessages`
+  (`pi/core/session-manager.js:166-191`). Original history stays readable after
+  compaction (`interactive-mode.js:3780-3784`).
+* Role `system` is deliberately not displayed
+  (`pi/modes/interactive/interactive-mode.js:3480-3481`). This includes a compaction's
+  stored `systemMessage`; its visible summary is still replayed.
+* `custom_message` / role `custom` with `display: false` is hidden by the terminal
+  too (`pi/core/session-manager.d.ts:105-115`;
+  `pi/modes/interactive/interactive-mode.js:3457-3464`).
+* `usage` categories other than `cache_warm` are accounting, not transcript rows
+  (`pi/modes/interactive/interactive-mode.js:3670-3673`).
+* Plain `custom` entries draw only with a registered entry renderer
+  (`pi/modes/interactive/interactive-mode.js:3427-3435`). Corral's inline renderer is
+  `corral_mark` (`corral/ui/mark-rows.ts:330-340`). Cell/job/question journal snapshots
+  needed by other Corral surfaces are retained as the supplemental cards above.
+  The other journals appended by `corral/host/session.ts` are intentionally invisible:
+  `corral_review_base` (review baseline), `corral_hook` (hook state),
+  `corral_checkpoint` (recovery context), `corral_effect_lifecycle` (effect recovery),
+  `corral_cost_turn` (cost attribution), `corral_host_bound` (binding provenance).
+  Delivery/fixture-delivery records restore delivery identity, not a second copy of
+  their user-message envelope (`host/session.ts`, delivery restore).
+* Text/thinking signatures and image/transcript layout controls are not prose:
+  the call/result and footer metadata retain presenter inputs, but opaque provider
+  thinking signatures are not drawn (`components/assistant-message.js:140-197`).
+
+### Bounds and continuation
+
+The JSON-RPC reply, not merely its strings, must fit `APP_CONTROL_MAX` = 60 KiB.
+The reader scans backwards through 128 KiB windows to find complete record boundaries,
+then streams **one record** through a buffered JSON decoder; it never loads a whole
+session file. A record may exceed a window. Work per history page is at most 32
+records (including invisible/off-branch entries), rather than a whole-history scan.
+Allocations for a selected record are proportional to that record; this is not a
+constant-memory streaming JSON-field parser.
+
+Each emitted item is at most 2,048 serialized bytes as a preview. If the complete
+item is larger, its preview is followed immediately by
+`{"kind":"continuation","token":"…","bytes":N}`. That token belongs only to the
+preceding item. Previews can contain clipped pretty-JSON strings and incomplete
+base64: do not parse/decode these as complete payloads while a continuation follows.
+Every original block remains pageable: item-count limits never discard the tail of
+a message. `SessionPage.older` addresses older records or the earlier items of the
+same record, and is passed back unchanged as `DetailGet.page` for the same session.
+Items of a split record retain their original order across the older slices.
+
+For the complete item, send
+`{"kind":"session_item","id":"<session id>","token":"<item token>"}`
+as the flattened `DetailGet.target` (with `etag` and `page` null/absent).
+The response is `DetailBody` kind `session_item`, with body:
+
+* `json`: at most 4,096 UTF-8 bytes of the complete serialized **one `SessionItem`**;
+* `offset`: byte offset of this fragment in that serialized item, starting at zero;
+* `bytes`: total UTF-8 byte length of that serialization, constant for this chain;
+* `next`: token for the immediately following fragment, absent on the final one.
+
+Concatenate the decoded `json` strings in order, requiring each `offset` to equal
+the number of UTF-8 bytes already assembled. Request each `next` using another
+`session_item` selector with the **same session id**, not `DetailGet.page`.
+At completion the byte count equals `bytes`; deserialize the concatenation as
+`SessionItem` and replace the preview plus its `continuation` item. Fragments are
+not independently JSON documents. This applies unchanged to images: the assembled
+item is `image`, with `encoding: base64`; only then decode its complete `data`
+and check the decoded size against `size`. No image path or URL is accepted from
+the client.
+
+Tokens authenticate the session id, source record/item, paired-result record/item,
+content digest and fragment offset with process-keyed HMAC-SHA256. A cross-session,
+modified, stale-content or previous-daemon-process token is refused before using
+its source offsets. The server resolves paths only from the session's trusted
+record. The client must reload after a daemon restart instead of interpreting tokens.
+
+Normal transcript payloads target 28 KiB, reserving up to 4 KiB per selected tool
+for post-selection pairing. Assistant pages allocate 12 KiB each to canonical thread
+content and supplemental Pi facts. Message metadata is separately bounded; full
+assistant metadata stays in the continued `Turn footer` item. Session identifiers
+and row metadata have bounded previews. For worst-case escaping, a 4 KiB item fragment
+can expand to at most 24 KiB of JSON string content, plus a token below 2 KiB and
+fixed metadata. History payloads plus bounded row metadata remain below 52 KiB.
+`paging::reply` and the daemon's `views::bounded` independently measure serialized
+replies against `APP_CONTROL_MAX - 2048`, reserving the JSON-RPC envelope.
+
+When a canonical assistant thread exists it remains the authority for owner/assistant
+words, question cards and attachments. Its recorded Pi file supplies tools, thinking,
+images, notices, markers and footer/diagnostic facts. Pi owner/assistant `text` items
+are suppressed there, and legacy canonical tool summaries are suppressed when Pi
+is available, so neither words nor calls appear twice. The two append-only sources
+have independent positions inside the opaque older cursor. Merge loaded pages by
+their `at` timestamps; do not assume their time ranges cannot overlap.
+
+### Not in a replay
+
+* `quietNote` rows deliberately exist only in the live transcript component
+  (`corral/ui/mark-rows.ts:8-9,266-279`), not in the session journal. Reopening also
+  loses these rows: `renderInitialMessages` rebuilds from `getBranch()` and
+  `renderSessionEntries` only converts persisted entries
+  (`pi/modes/interactive/interactive-mode.js:3665-3683,3780-3784`); it does not
+  consult a separate quiet-note store.
+* Cache-miss labels/cost estimates depend on earlier usage, the live model catalog
+  and display settings (`pi/core/cache-stats.js:14-40`;
+  `pi/modes/interactive/interactive-mode.js:3565-3569,3765-3778`). All recorded usage,
+  provider/model, timing and diagnostic inputs are retained in `Turn footer`; an
+  exact historical live catalog price/setting is not recorded or fabricated.
+* In-flight streaming deltas, expansion/toggle state, animation clocks, viewport
+  folds and transient dialogs/toasts have no durable session entry. Recorded
+  settled calls, owner question snapshots and displayed custom cards are replayed;
+  a past unrecorded frame is not.
+
+### Rust wire definitions
+
+These are the replay type definitions in
+`crates/corral-protocol/src/detail/session.rs`; variant/field spellings below the
+Serde rename attributes are the renderer's binding contract.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionMessage {
+    pub author: String,
+    pub at: Option<String>,
+    pub items: Vec<SessionItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionItem {
+    Text {
+        text: String,
+    },
+    Tool {
+        tool: ToolLine,
+    },
+    QuestionCard {
+        key: String,
+        rev: u32,
+        text: String,
+        options: Vec<QuestionOption>,
+        answer: Option<QuestionAnswer>,
+    },
+    Thinking {
+        text: String,
+    },
+    ToolCall {
+        call_id: String,
+        name: String,
+        /// Pretty JSON, not a flattened argument description.
+        arguments: String,
+        summary: String,
+        state: SessionToolState,
+        paired: bool,
+        /// Original call metadata, including argument validation errors and namespaces.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        /// Complete structured result, including images and presenter-specific details.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        elapsed_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diff: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+    },
+    BashExecution {
+        command: String,
+        output: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i64>,
+        cancelled: bool,
+        truncated: bool,
+        exclude_from_context: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        full_output_path: Option<String>,
+    },
+    Image {
+        media_type: String,
+        size: u64,
+        encoding: String,
+        data: String,
+    },
+    Compaction {
+        summary: String,
+        tokens_before: u64,
+    },
+    BranchSummary {
+        summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_id: Option<String>,
+    },
+    ModelChange {
+        provider: String,
+        model: String,
+    },
+    ThinkingLevelChange {
+        level: String,
+    },
+    Label {
+        target_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+    Aborted {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        facts: Option<String>,
+    },
+    ProviderError {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        facts: Option<String>,
+    },
+    /// All persisted fields read by an extension presenter, without reducing them to prose.
+    Card {
+        title: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<String>,
+    },
+    /// Immediately follows the preview it replaces. Fetch and concatenate JSON fragments.
+    Continuation {
+        token: String,
+        bytes: u64,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionToolState {
+    Running,
+    Done,
+    Failed,
+    NotRun,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionItemPage {
+    /// A UTF-8 fragment of the complete serialized SessionItem.
+    pub json: String,
+    pub offset: u64,
+    pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+```
+
+`DetailRef` adds `SessionItem { id: String, token: String }`, serialized with
+`kind: session_item`. `DetailBody` adds `SessionItem(SessionItemPage)`, serialized
+as `{"kind":"session_item","body":{...}}`. Existing `Text`, `QuestionCard` and
+legacy `Tool` remain wire-compatible, and old clients can decode new item kinds as
+`Other`. Optional new fields default to absent.
+
+## Live session topic
+
+`session.v1` advertises the scoped `session` topic on both authenticated app carriers.
+Open with `sub.open {topic:"session", scope:<AgentRow.id>, since:null}`. Scope is the
+public session id (`pm`, `A-<n>`, or a task session's Agents row id), not a pane id
+or an inferred container key. A host without a healthy corral-pi bridge or without
+`hello.commands` advertising `live_since` leaves the subscription open with no live
+events; it never produces a connection-level error. Ops exposes stable `no_bridge`
+and `live_unsupported` refusal codes to its caller. Pane-hosted sessions use the
+recipient's generation directory; daemon-hosted assistants use their assistant
+runtime directory. Reading neither writes the store nor sends input.
+
+### Delivery and client rules
+
+- Each scope has exactly one shared host reader/cursor, regardless of subscriber
+  count. One dedicated `corrald-session-live` thread performs bridge I/O, independently
+  of the socket, app read worker, Thread topic and assistant supervisor. It checks
+  `Shared.closed` between scopes, and daemon cleanup joins it after closing Shared.
+  A scope's final close/drop releases its buffer and reader; no unsubscribed scope
+  performs `live_since` calls.
+- A healthy idle tick is one `live_since` call, with hello capability negotiation
+  cached on the connection. Each pass sleeps `SESSION_POLL = 100 ms` after all reads,
+  so no scope is polled faster than 10 Hz. A failed bridge is re-resolved on a later
+  tick; subscriptions survive termination, loss and relaunch.
+- Limits in `topics/app/session.rs`: `SESSION_SCOPES = 128` watched scopes globally,
+  `SESSION_SUBSCRIPTIONS = 32` total app-topic subscriptions per connection,
+  `SESSION_SCOPE_BYTES = 512`, `SESSION_BUFFER_EVENTS = 512`,
+  `SESSION_BUFFER_BYTES = 512 * 1024` serialized event bytes per scope,
+  `SESSION_PAGE_EVENTS = 32`, `SESSION_ENVELOPE_BYTES = 4 * 1024`, and
+  `SESSION_PAGE_BYTES = APP_CONTROL_MAX - SESSION_ENVELOPE_BYTES` (56 KiB of event
+  JSON including separators). The full JSON-RPC `sub.delta` notification is checked
+  against `app::APP_CONTROL_MAX = 60 * 1024`, not just its event array.
+- Limits in ops `session_live.rs`: `LIVE_IO_TIMEOUT = 250 ms` per socket read/write,
+  `LIVE_HOST_EVENTS = 512` accepted events per host page, `LIVE_EVENT_BYTES = 8 * 1024`
+  per event, `LIVE_PAYLOAD_BYTES = 1024` for each text/thinking chunk, args or partial
+  output, and `LIVE_ERROR_BYTES = 512`. The bridge additionally enforces
+  `FRAME_MAX_BYTES = 64 * 1024`. The host's separate live ring retains 512 events;
+  its existing page reader returns at most 256 events and one frame.
+- There is exactly one page in flight per subscriber. Ack with
+  `sub.ack {topic:"session",scope,cursor}` using the exact delivered cursor. An
+  incorrect or duplicate ack does not advance the stream. `epoch` is the daemon's
+  normal topic epoch. `cursor.rev` is the last delivered host sequence (or the
+  resume point for an empty gap page); `cursor.after` is an opaque
+  `session:<buffer-revision>:<page-serial>` token. Buffer revisions are unique across
+  scope recreation within the daemon. Pass an acknowledged cursor and epoch in
+  `since` to resume only while that buffer is still compatible. `more` means the
+  buffer or host has more events; ack and await the next page, never create another
+  bridge reader.
+- Apply a page's gap first, then its events in their provided sequence order.
+  Sequences are local to `generation`; never compare sequences across generations.
+  Message ordinals are one-based within a turn. Text and thinking have independent
+  UTF-8 byte offsets, keyed by `(generation,turn,message,kind)`. Write chunks at
+  their offsets rather than appending: a duplicate chunk is idempotent. Do not
+  splice at character indices or carry offsets into a new generation. Tool partial
+  output replaces the displayed bounded tail; it is not another append-only stream.
+- `gap.reconcile` is always true. On a gap, discard the live overlay and re-read
+  `detail.get` with `DetailRef::Session { id: scope, ... }` before reconciling the
+  new overlay. A gap can have `missing:0`: it still means discontinuity (host
+  generation change, bridge loss, ending, reconnect, or epoch change).
+  `generation:null` means no healthy supported host is currently available.
+  A subscriber lagging beyond either buffer bound gets an empty gap page and
+  resumes from the present instead of retaining a catch-up queue.
+- Re-read that session's transcript detail whenever a turn ends **and whenever a
+  tool ends**, because the journal then contains the recorded entries. The live
+  overlay is ephemeral, never canonical transcript content. Also discard/re-read
+  on a generic `sub.reset`; re-open only if that generic reset closed the topic.
+  Session discontinuities themselves use the gap field and keep the topic open.
+  Ignore unknown `Other` kinds/states without treating them as durable content.
+
+### Rust wire definitions
+
+These are the verbatim additions to the existing `Topic` and `SubDelta` enums in
+`corral-protocol/src/subscription.rs` (their existing snake-case serde tags remain):
+
+```rust
+    Session,
+```
+
+```rust
+    Session {
+        scope: String,
+        epoch: u64,
+        generation: Option<u32>,
+        events: Vec<SessionLiveEvent>,
+        cursor: BoardCursor,
+        more: bool,
+        gap: Option<SessionLiveGap>,
+    },
+```
+
+The new protocol types are:
+
+```rust
+/// Text/thinking offsets are UTF-8 bytes, independent per (generation, turn, message,
+/// kind). Applying chunks at their offsets, rather than appending, is idempotent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionLiveEvent {
+    pub seq: u64,
+    pub generation: u32,
+    pub at: String,
+    #[serde(flatten)]
+    pub kind: SessionLiveKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionLiveKind {
+    LiveTurn {
+        turn: u64,
+        #[serde(flatten)]
+        state: SessionLiveTurnState,
+    },
+    LiveText {
+        turn: u64,
+        message: u64,
+        offset: u64,
+        text: String,
+    },
+    LiveThinking {
+        turn: u64,
+        message: u64,
+        offset: u64,
+        text: String,
+    },
+    LiveTool {
+        turn: u64,
+        call: String,
+        tool: String,
+        #[serde(flatten)]
+        state: SessionLiveToolState,
+    },
+    LiveQueue {
+        steer: u64,
+        follow_up: u64,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum SessionLiveTurnState {
+    Started,
+    Ended {
+        aborted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum SessionLiveToolState {
+    Started {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        args: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        args_truncated: Option<bool>,
+    },
+    Updated {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        partial: Option<String>,
+    },
+    Ended {
+        failed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        elapsed_ms: Option<u64>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+/// Drop the live overlay and reconcile from `detail.get { session }`. A zero
+/// `missing` still signals discontinuity (generation change or unavailable host).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionLiveGap {
+    pub after: u64,
+    pub resumed: u64,
+    pub missing: u64,
+    pub reconcile: bool,
+}
+```
+
+The typed bridge result in ops `agent/bridge/client.rs` mirrors the host page:
+
+```rust
+/// A page of ephemeral live events, with a separate cursor from lifecycle events.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct LivePage {
+    pub generation: u32,
+    pub events: Vec<corral_protocol::subscription::SessionLiveEvent>,
+    pub last: u64,
+    pub next: u64,
+    pub more: bool,
+    #[serde(default)]
+    pub gap: Option<corral_protocol::subscription::SessionLiveGap>,
+}
+```
+

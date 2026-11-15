@@ -317,6 +317,7 @@ pub(crate) fn prepare_bootstrap_host(
     pane: Option<&str>,
     spec: &HostSpec,
 ) -> Result<Prepared> {
+    crate::availability::continuation::require_automation_start(ctx, &target.container())?;
     super::connections::validate(
         spec.binding.as_ref(),
         spec.provider.as_deref(),
