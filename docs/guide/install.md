@@ -257,7 +257,8 @@ steps; `just` alone lists them:
 | `just daemon-status`, `just daemon-logs` | Health, and the service journal |
 | `just daemon-service` | Writes the service definition, then enables and starts it |
 | `just agent-install`, `just agent-doctor` | Reinstalls or reports the corral-pi host |
-| `just app`, `just app web` | Runs the [app](../../apps/corral-app/README.md) against the workspace daemon in this terminal or a browser |
+| `just app` | Runs the [app](../../apps/corral-app/README.md) in this terminal against the workspace daemon |
+| `just app-web` | Rebuilds the packaged web app that a loopback server serves; `just app-serve` is such a server |
 | `just app-check`, `just app-test` | Checks and tests the app |
 
 The stop, start, logs and service recipes drive the systemd user service. Recipes address
