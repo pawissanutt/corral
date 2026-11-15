@@ -36,6 +36,7 @@ import { subscriptionRoutes } from "./subscriptions.ts";
 import { guardTerminalStop } from "./terminal-stop.ts";
 import { NEW_ASSISTANT_EXIT, RELINK_ASSISTANT_EXIT } from "./assistant-relink.ts";
 import { RESUME_ASSISTANT_EXIT } from "./assistant-resume.ts";
+import { CONTINUE_ASSISTANT_EXIT } from "./continuation.ts";
 import { admitConnection } from "./connections.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
 import { errorPresenter } from "../ui/error-copy.ts";
@@ -138,6 +139,7 @@ export async function runHost(config: HostConfig, overrides: {
     ...(overrides.build ? { build: overrides.build } : {}),
     ...(config.identity.role === "assistant" && process.argv.includes("--assistant-new")
       ? { relinkAssistant: () => restart(RELINK_ASSISTANT_EXIT),
+        continueAssistant: () => restart(CONTINUE_ASSISTANT_EXIT),
         ...(!headlessEnabled(config.capabilities) ? { newAssistant: () => restart(NEW_ASSISTANT_EXIT),
           resumeAssistant: () => restart(RESUME_ASSISTANT_EXIT) } : {}),
       } : {}),
@@ -194,7 +196,7 @@ export async function runHost(config: HostConfig, overrides: {
     await session.runtime.dispose();
     await session.drained();
     await bridge?.close();
-    process.exit(code); // 75 = /new, 76 = relink, 77 = /resume; none is an ordinary quit.
+    process.exit(code); // 75 = /new, 76 = relink, 77 = /resume, 78 = quota continuation request.
   }
   await session.hello(config.secrets.bindNonce, config.pane, sha256Hex(config.secrets.ctlCap));
   if (overrides.build) {

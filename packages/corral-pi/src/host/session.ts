@@ -101,6 +101,7 @@ import { PlanReviews, reviewAssociation } from "./plan-review.ts";
 import { type ConnectionBinding, admitConnection, parseBinding } from "./connections.ts";
 import { CONNECTIONS, type ConnectionId, resolveConnection } from "../auth/connections.ts";
 import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
+import type { ProviderFailure } from "./provider-failure.ts";
 import { HostQueue } from "./queue.ts";
 import { pmCacheKeyMode } from "../roles/pm/context.ts";
 import { pmCacheKeyStream } from "./pm-cache-key.ts";
@@ -108,6 +109,7 @@ import { recordTranscriptMark, type MarkSink, type ModelMark, type TranscriptMar
 import { TurnFacts, turnWaits } from "./turn-facts.ts";
 import { holdContextOnly } from "./lifecycle.ts";
 import { RemotePrompts } from "./remote-prompts.ts";
+import { HostContinuation } from "./continuation.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -155,6 +157,8 @@ export interface HostSessionOptions {
   readonly relinkAssistant?: () => void;
   /** The supervisor resumes the session named in this generation's switch request (`/resume`). */
   readonly resumeAssistant?: () => void;
+  /** Requests a drained quota continuation; Rust alone selects and authorizes its successor. */
+  readonly continueAssistant?: () => void;
 }
 
 type TurnOrigin = { kind: "bridge" | "continuation"; idempotency_key: string } | { kind: "owner_terminal" }
@@ -382,6 +386,8 @@ export class HostSession {
   );
   private readonly relink: AssistantRelink | undefined;
   private readonly resume: AssistantResume | undefined;
+  private readonly paidContinuation: HostContinuation;
+  private continuationUi: { notify(message: string, type?: "info" | "warning" | "error"): void } | undefined;
   private readonly planning: PlanningPolicy | undefined;
   private planningRead = 0;
   private readonly planningResources = new Map<string, Promise<AdmissionHandle>>();
@@ -397,6 +403,13 @@ export class HostSession {
 
   private constructor(private readonly options: HostSessionOptions) {
     this.provider = options.provider ?? "openai-codex";
+    this.paidContinuation = new HostContinuation({
+      identity: options.identity, binding: () => options.binding, manager: options.sessionManager, events: options.events,
+      notify: text => this.notice(text, "warning", this.continuationUi
+        ?? { notify: message => { process.stderr.write(`${message}\n`); } }),
+      ...(options.identity.role === "assistant" && options.continueAssistant
+        ? { restart: () => { this.closing = true; options.continueAssistant?.(); } } : {}),
+    });
     this.remotePrompts = options.daemonHosted ? new RemotePrompts(options.client, options.events,
       () => this.sessionId(), () => this.currentTurn(), () => this.writeAbort.signal) : undefined;
     this.marks = options.ui === "plain" ? undefined : { add: mark => this.addMark(mark) };
@@ -520,8 +533,10 @@ export class HostSession {
     });
     const registerCapability = capabilityRegistry(() => this.session?.sessionFile);
     const remotePrompts = this.remotePrompts;
+    const continuation = this.paidContinuation;
     this.roleContext = {
       identity: options.identity, cwd: options.cwd, workspaceRoot: options.client.workspaceRoot,
+      get continuation() { return continuation.notice; },
       ...(options.daemonHosted ? { daemonHosted: true } : {}),
       model: options.model, registerCapability,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
@@ -1125,6 +1140,7 @@ export class HostSession {
       return Reflect.get(target, property, receiver);
     } }) : api;
     this.dialogPi = pi;
+    this.paidContinuation.extend(pi, this.roleContext);
     registerCacheStats(pi);
     pi.on("model_select", event => {
       this.modelChanged(`${event.model.provider}/${event.model.id}`,
@@ -1158,7 +1174,8 @@ export class HostSession {
       if (text) event.systemPromptOptions.sections.model_calibration = text;
       else delete event.systemPromptOptions.sections.model_calibration;
     });
-    pi.on("session_start", async () => {
+    pi.on("session_start", async (_event, ctx) => {
+      this.continuationUi = ctx.hasUI ? ctx.ui : undefined;
       if (this.bound) { this.commands?.bound(); await this.recoverPlanReviews(); }
     });
     const code = this.code;
@@ -1551,6 +1568,7 @@ export class HostSession {
     this.writeAbort.abort();
     this.writeAbort = new AbortController();
     this.turn++;
+    this.paidContinuation.started();
     this.open = true;
     this.stopCause = this.budget.state().stopped ? "budget" : undefined;
     if (this.marks && this.attached !== "headless") this.turnFacts.start(this.turn, Date.now(), this.session.getSessionStats().cost);
@@ -1666,10 +1684,25 @@ export class HostSession {
           this.stats.lastError = JSON.stringify(receipt.result).slice(0, 256);
         } else {
           this.stats.committed++;
+          if (payload.kind === "provider_error" && receipt.state === "committed") {
+            const failure = payload.failure as ProviderFailure | undefined;
+            if (failure) this.paidContinuation.failed(turn, failure);
+          }
           if (payload.kind === "turn_ended" && receipt.state === "committed") {
             const relinked = await this.relink?.check(() => !this.closing && !this.open && this.turn === turn
               && !this.session.isStreaming && !this.session.isBashRunning);
             if (relinked) { this.turnFacts.finish(turn); return; }
+            if (this.paidContinuation.quota(turn)) {
+              this.continuations = this.continuations.then(async () => {
+                await this.drained();
+                const requested = this.paidContinuation.request(turn, () => !this.closing && !this.open && this.turn === turn
+                  && !this.session.isStreaming && !this.session.isBashRunning && !this.commands?.pending()
+                  && this.session.getSteeringMessages().length === 0 && this.session.getFollowUpMessages().length === 0
+                  && this.currentWaits().length === 0);
+                if (requested) this.turnFacts.finish(turn); else this.turnRecorded(receipt.result, turn);
+              });
+              return;
+            }
             this.turnRecorded(receipt.result, turn);
           }
         }
@@ -1749,6 +1782,7 @@ export class HostSession {
   markAttached(mode: "interactive" | "headless"): void {
     this.attached = mode;
     this.options.events.emit(mode);
+    if (this.bound) this.paidContinuation.show();
   }
 
   drained(): Promise<unknown> {
@@ -1823,6 +1857,9 @@ export class HostSession {
       const result = receipt.result as { code?: string; reason?: string } | undefined;
       throw new Error(`hello_refused: ${result?.code ?? receipt.state}: ${result?.reason ?? ""}`);
     }
+    const result = receipt.result;
+    this.paidContinuation.accept(typeof result === "object" && result !== null && "continuation" in result
+      ? result.continuation : undefined);
     // Session order, unlike cross-process wall clocks, is a stable recovery boundary.
     // The one-shot nonce distinguishes children that reuse this session and restart at g1.
     // No turn is admitted until this generation's committed hello has been recorded.
