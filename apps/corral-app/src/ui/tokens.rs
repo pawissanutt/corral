@@ -149,3 +149,7 @@ pub fn tone(tone: Tone) -> AdaptiveColor {
         Tone::Muted => Token::Ink3,
     })
 }
+
+#[cfg(test)]
+#[path = "tokens_tests.rs"]
+mod tests;

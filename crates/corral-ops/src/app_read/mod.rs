@@ -8,10 +8,14 @@
 pub(crate) mod agents;
 mod artifacts;
 mod attachments;
+mod attention;
+mod change_kinds;
 mod changes;
 mod paging;
 mod plans;
+mod question_context;
 mod questions;
+mod read_budget;
 mod review;
 mod settings;
 mod tasks;
@@ -45,6 +49,11 @@ macro_rules! rows {
     };
 }
 rows!(inbox_rows, questions, InboxRow);
+
+/// Canonical owner-attention items and destination counts. Board grouping is not a count source.
+pub fn attention_snapshot(ctx: &Ctx) -> Result<corral_protocol::rows::AttentionSnapshot> {
+    ctx.read_step(|ctx| Ok(attention::snapshot(questions::inbox_rows(ctx)?)))
+}
 rows!(plans_rows, plans, PlanRow);
 rows!(agents_rows, agents, AgentRow);
 rows!(assistant_rows, agents, AssistantRow);

@@ -251,6 +251,8 @@ pub struct FileView {
     pub loose: Vec<usize>,
     /// Whether pressing a code line opens a new line comment there.
     pub annotatable: bool,
+    /// Identity captured by the displayed patch's line actions, never inferred on click.
+    pub candidate: Option<super::CandidateAt>,
     pub body: FileBody,
 }
 

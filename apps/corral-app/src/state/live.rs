@@ -5,9 +5,7 @@
 use std::time::Duration;
 
 use corral_protocol::app::{ActPreviewRequest, ActSubmit, ConfirmProof, PREVIEW_TTL_SECS};
-use corral_protocol::assistant::{
-    AskTarget as WireTarget, AssistantSend, ContextRef, PromptPreview,
-};
+use corral_protocol::assistant::{AssistantSend, ContextRef, PromptPreview};
 use corral_protocol::cmd::mode::ModeCommand;
 use corral_protocol::cmd::{CmdResultQuery, Command};
 use corral_protocol::detail::{DetailGet, DetailRef};
@@ -17,7 +15,7 @@ use nsh_core::prelude::*;
 use super::AppState;
 use crate::client::requests;
 use crate::model::act::{self, Confirmable, Confirmation, PreviewState};
-use crate::model::daemon::{DetailCache, Feed, Link, Operation};
+use crate::model::daemon::{DetailCache, Feed, Operation};
 use crate::model::health::{self, Availability};
 use crate::model::{
     Act, ActStatus, AskTarget, Authority, Destination, Effect, Env, Id, Live, Overlay, Selection,
@@ -100,18 +98,14 @@ impl AppState {
         self.feed.with(|feed| granted(feed, authority))
     }
 
-    /// Hands a message in the one chat to the client, which keeps it in the device outbox when
-    /// there is no session. True only when the client took it: false after a visible refusal
-    /// (this device may not message the assistant) or when the client is not running. What it
-    /// carries leaves the attachment tray only once the client took it.
+    /// Enqueues an intent for client admission, not an ownership transfer. The composer
+    /// retains its words and attachments until the matching persisted acceptance arrives.
     pub fn send_message(&self, message: AssistantSend) -> bool {
         if let Some(refusal) = self.assistant_refusal() {
             self.toast(refusal);
             return false;
         }
-        let carried = crate::model::assistant::carried(&message.attachments);
         if requests::assistant_send(message) {
-            self.sent_attachments(&carried);
             true
         } else {
             self.toast("Not sent: the app's connection to corrald is not running. Your words and attachments stay here.");
@@ -281,6 +275,11 @@ impl AppState {
         }
     }
 
+    /// Pins a mounted/selected detail against aggregate cache eviction.
+    pub fn watch_detail(&self, target: DetailRef, open: bool) {
+        _ = requests::send(requests::ClientRequest::DetailWatch { target, open });
+    }
+
     /// Tracked read of a detail's cache.
     pub fn with_detail<R>(
         &self,
@@ -348,23 +347,65 @@ impl AppState {
                 confirm,
             } => self.prompt(answer, title, confirm),
             Effect::Thread { scope, open } => _ = requests::thread(scope, open),
-            Effect::Stop(stop) => self.assistant_call(|| _ = requests::assistant_stop(stop)),
+            Effect::Stop(stop) => {
+                if let Some(refusal) = self.refusal(Authority::Assistant, true) {
+                    self.assistant
+                        .update(|state| state.stop_failed(&stop.session, stop.turn));
+                    self.toast(refusal);
+                } else {
+                    let session = stop.session.clone();
+                    let turn = stop.turn;
+                    let correlation = requests::new_id();
+                    if requests::send(requests::ClientRequest::AssistantStop {
+                        request_id: correlation.clone(),
+                        request: stop,
+                    }) {
+                        self.assistant.update(|state| {
+                            state
+                                .live
+                                .stop_ops
+                                .insert(Id::from(correlation), (session, turn));
+                        });
+                    } else {
+                        self.assistant
+                            .update(|state| state.stop_failed(&session, turn));
+                        self.toast("Stop was not sent: the connection task is not running.");
+                    }
+                }
+            }
             Effect::Warm(warm) => self.assistant_call(|| _ = requests::assistant_warm(warm)),
             Effect::Draft { thread, text } => _ = requests::save_draft(thread, text),
-            Effect::Session { key, op } => self.assistant_call(|| {
-                let correlation = Id::from(requests::assistant_session(op));
-                self.sessions
-                    .update(|sessions| _ = sessions.insert(key, correlation));
-            }),
+            Effect::Session { key, op } => {
+                if let Some(refusal) = self.refusal(Authority::Assistant, true) {
+                    self.assistant.update(|state| {
+                        state.settle(
+                            &key,
+                            crate::model::assistant::OpOutcome::Failed(refusal.into()),
+                        );
+                    });
+                    self.toast(refusal);
+                } else {
+                    let correlation = requests::new_id();
+                    if requests::send(requests::ClientRequest::AssistantSession {
+                        request_id: correlation.clone(),
+                        request: op,
+                    }) {
+                        self.sessions.update(|sessions| {
+                            sessions.insert(key, Id::from(correlation));
+                        });
+                    } else {
+                        let why = "Not sent: the connection task is not running.";
+                        self.assistant.update(|state| {
+                            state.settle(
+                                &key,
+                                crate::model::assistant::OpOutcome::Failed(why.into()),
+                            );
+                        });
+                        self.toast(why);
+                    }
+                }
+            }
             _ => {}
-        }
-    }
-
-    /// The wire recipient of the composer's current target.
-    pub fn ask_wire_target(&self) -> WireTarget {
-        match self.ask_target.get_untracked() {
-            AskTarget::Assistant => WireTarget::Assistant,
-            AskTarget::Pm => WireTarget::Pm,
         }
     }
 
@@ -431,6 +472,23 @@ impl AppState {
     /// Keeps corrald's preview with the open sheet once it arrives, so the client's bounded
     /// operation table dropping the reply cannot turn a ready sheet back into a wait.
     pub(super) fn latch_previews(self) {
+        effect(move || {
+            let stops = self
+                .assistant
+                .with(|state| state.live.stop_ops.keys().cloned().collect::<Vec<_>>());
+            for key in stops {
+                let operation = self
+                    .feed
+                    .with(|feed| feed.operations.get(&key).filter(|op| !op.loading).cloned());
+                if let Some(operation) = operation {
+                    untracked(|| {
+                        self.act(self.assistant, |state, _| {
+                            state.settle_stop(&key, &operation)
+                        })
+                    });
+                }
+            }
+        });
         effect(move || {
             let Some(pending) = self.confirmation.get().filter(|c| c.ready.is_none()) else {
                 return;
@@ -516,7 +574,7 @@ impl AppState {
     /// The refusal a command meets on this device now, if any.
     fn refusal(&self, authority: Authority, needs_link: bool) -> Option<&'static str> {
         self.feed.with_untracked(|feed| {
-            if needs_link && feed.link != Link::Up {
+            if needs_link && !feed.ready() {
                 Some(NO_LINK)
             } else if feed.session.is_none() {
                 Some(NO_SESSION)

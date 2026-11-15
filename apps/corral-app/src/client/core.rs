@@ -1,12 +1,15 @@
 use corral_protocol::board::BoardRow;
+use corral_protocol::cmd::{
+    APP_READ_DEADLINE_MS, APP_READ_WAIT_MS, APP_REQUEST_DEADLINE_MS, APP_REQUEST_MARGIN_MS,
+};
 use corral_protocol::frame::{Frame, FrameKind};
-use corral_protocol::rpc::{ErrorCode, JSONRPC, Notification, Request, Response, ResponseOutcome};
+#[cfg(test)]
+use corral_protocol::rpc::Request;
+use corral_protocol::rpc::{ErrorCode, JSONRPC, Notification, Response, ResponseOutcome};
 use corral_protocol::subscription::{SubAck, SubClose, SubDelta, SubOpen, SubReset, Topic};
 use corral_protocol::{self as wire, ClientInfo, Health, Hello, Proto, Welcome};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-
-const REQUEST_DEADLINE_MS: u64 = 5_000;
 
 const MAX_TOPIC_RESET_ERRORS: u8 = 3;
 
@@ -56,7 +59,7 @@ struct Pending {
     method: &'static str,
     tag: Option<String>,
     params: Value,
-    deadline: u64,
+    deadline: Option<u64>,
     closing: Option<String>,
 }
 
@@ -86,7 +89,7 @@ pub(super) struct Core {
     batch: Batch,
     outbox: VecDeque<Frame>,
     pages: BTreeMap<String, PageBatch>,
-    deferred_opens: BTreeMap<String, (u64, Frame)>,
+    deferred_opens: BTreeMap<String, (u64, Frame, SubOpen)>,
     adjacent_reset: Option<(Topic, Option<String>)>,
     reset_errors: BTreeMap<String, u8>,
 }
@@ -166,35 +169,45 @@ impl Core {
         now_ms: u64,
         reset_reopen: bool,
     ) -> Result<(), String> {
-        if self.pending.len() >= 1024 {
-            return Err("daemon request limit exceeded".into());
-        }
-        self.next_id = self
-            .next_id
-            .checked_add(1)
-            .ok_or_else(|| "daemon request ids exhausted".to_owned())?;
-        let request = Request {
-            jsonrpc: JSONRPC.into(),
-            id: self.next_id.into(),
-            method: method.into(),
-            params,
+        let payload = if self.pending.len() < 1024 && self.next_id < u64::MAX {
+            request_payload(method, &params, self.next_id + 1)?
+        } else {
+            Vec::new()
         };
-        let payload = serde_json::to_vec(&request).map_err(decode)?;
-        if payload.len() > corral_protocol::app::APP_CONTROL_MAX {
-            return Err("daemon CONTROL request exceeds 60 KiB".into());
+        let problem = if self.pending.len() >= 1024 {
+            Some((ErrorCode::Busy, "daemon request limit exceeded".to_owned()))
+        } else if payload.len() > wire::app::APP_CONTROL_MAX {
+            Some((
+                ErrorCode::TooLarge,
+                "daemon CONTROL request exceeds 60 KiB".to_owned(),
+            ))
+        } else if self.next_id == u64::MAX {
+            Some((
+                ErrorCode::Internal,
+                "daemon request ids exhausted".to_owned(),
+            ))
+        } else {
+            None
+        };
+        if let Some((code, message)) = problem {
+            if matches!(method, wire::HELLO | wire::PING) {
+                return Err(message);
+            }
+            self.events.push_back(Event::Reply {
+                method,
+                tag,
+                params,
+                outcome: Err((code, message)),
+                error_data: None,
+            });
+            return Ok(());
         }
+        self.next_id += 1;
         let mut opening = None;
         let closing = if method == wire::SUB_CLOSE {
-            let close: SubClose = serde_json::from_value(request.params.clone()).map_err(decode)?;
-            let key = topic_key(
-                close.topic,
-                close
-                    .scope
-                    .as_deref()
-                    .filter(|_| matches!(close.topic, Topic::Thread | Topic::Session)),
-            );
-            self.clear_topic_errors(&key);
-            if let Some((id, _)) = self.deferred_opens.remove(&key) {
+            let close: SubClose = serde_json::from_value(params.clone()).map_err(decode)?;
+            let key = topic_key(close.topic, close.scope.as_deref());
+            if let Some((id, _, _)) = self.deferred_opens.remove(&key) {
                 self.pending.remove(&id);
             }
             Some(key)
@@ -202,49 +215,31 @@ impl Core {
             None
         };
         if method == wire::SUB_OPEN {
-            let open: SubOpen = serde_json::from_value(request.params.clone()).map_err(decode)?;
-            let key = topic_key(
-                open.topic,
-                open.scope
-                    .as_deref()
-                    .filter(|_| matches!(open.topic, Topic::Thread | Topic::Session)),
-            );
-            if !reset_reopen {
-                self.clear_topic_errors(&key);
-            }
-            opening = Some(key);
-            match open.topic {
-                Topic::Board => {
-                    self.batch = Batch::default();
-                    self.epoch = None;
-                    self.replacement = true;
-                }
-                Topic::Health | Topic::Classic | Topic::Other => {}
-                topic => {
-                    self.pages.insert(
-                        topic_key(topic, open.scope.as_deref()),
-                        PageBatch {
-                            replacement: true,
-                            ..PageBatch::default()
-                        },
-                    );
-                }
-            }
+            let open: SubOpen = serde_json::from_value(params.clone()).map_err(decode)?;
+            opening = Some((topic_key(open.topic, open.scope.as_deref()), open));
         }
         let frame = Frame {
             kind: FrameKind::Control,
             stream: 0,
             payload,
         };
-        if let Some(key) = opening.filter(|key| {
-            self.pending
+        let mut deadline = now_ms.saturating_add(request_deadline(method, &params));
+        if let Some((key, open)) = opening {
+            if self
+                .pending
                 .values()
-                .any(|pending| pending.closing.as_ref() == Some(key))
-        }) {
-            // The close reply is an ordered barrier after every retired notification.
-            // Keep only the latest reopen intent for this identity, within its deadline.
-            if let Some((id, _)) = self.deferred_opens.insert(key, (self.next_id, frame)) {
-                self.pending.remove(&id);
+                .any(|pending| pending.closing.as_ref() == Some(&key))
+            {
+                // Only the latest intent survives, without extending its original deadline.
+                if let Some((id, _, _)) =
+                    self.deferred_opens.insert(key, (self.next_id, frame, open))
+                    && let Some(previous) = self.pending.remove(&id)
+                {
+                    deadline = previous.deadline.unwrap_or(deadline);
+                }
+            } else {
+                self.prepare_open(&open, reset_reopen);
+                self.outbox.push_back(frame);
             }
         } else {
             self.outbox.push_back(frame);
@@ -254,12 +249,36 @@ impl Core {
             Pending {
                 method,
                 tag,
-                params: request.params,
-                deadline: now_ms.saturating_add(REQUEST_DEADLINE_MS),
+                params,
+                deadline: Some(deadline),
                 closing,
             },
         );
         Ok(())
+    }
+
+    fn prepare_open(&mut self, open: &SubOpen, reset_reopen: bool) {
+        let key = topic_key(open.topic, open.scope.as_deref());
+        if !reset_reopen {
+            self.clear_topic_errors(&key);
+        }
+        match open.topic {
+            Topic::Board => {
+                self.batch = Batch::default();
+                self.epoch = None;
+                self.replacement = true;
+            }
+            Topic::Health | Topic::Classic | Topic::Other => {}
+            _ => {
+                self.pages.insert(
+                    key,
+                    PageBatch {
+                        replacement: true,
+                        ..PageBatch::default()
+                    },
+                );
+            }
+        }
     }
 
     #[cfg(test)]
@@ -288,11 +307,44 @@ impl Core {
         self.events.pop_front()
     }
 
-    pub(super) fn expired(&self, now_ms: u64) -> Option<&'static str> {
+    /// Heartbeats must not race a daemon operation waiting on its reader worker.
+    pub(super) fn has_pending(&self) -> bool {
         self.pending
             .values()
-            .find(|request| request.deadline <= now_ms)
-            .map(|request| request.method)
+            .any(|pending| pending.deadline.is_some())
+    }
+
+    /// Resolve operation deadlines as replies; only hello/ping expiry kills the link.
+    pub(super) fn expired(&mut self, now_ms: u64) -> Option<&'static str> {
+        loop {
+            let id = self
+                .pending
+                .iter()
+                .find(|(_, pending)| pending.deadline.is_some_and(|deadline| deadline <= now_ms))
+                .map(|(id, _)| *id)?;
+            let pending = self.pending.get_mut(&id)?;
+            if matches!(pending.method, wire::HELLO | wire::PING) {
+                return Some(pending.method);
+            }
+            self.events.push_back(Event::Reply {
+                method: pending.method,
+                tag: pending.tag.take(),
+                params: pending.params.take(),
+                outcome: Err((
+                    ErrorCode::Unavailable,
+                    "daemon request deadline expired".into(),
+                )),
+                error_data: None,
+            });
+            if pending.closing.is_some() {
+                // A timed-out close still owns the ordered retirement barrier.
+                pending.deadline = None;
+            } else {
+                self.pending.remove(&id);
+                self.deferred_opens
+                    .retain(|_, (opening, _, _)| *opening != id);
+            }
+        }
     }
 
     pub(super) fn receive(&mut self, frame: Frame, now_ms: u64) -> Result<(), String> {
@@ -389,9 +441,13 @@ impl Core {
                     .pending
                     .values()
                     .any(|request| request.closing.as_ref() == Some(key))
-                && let Some((_, frame)) = self.deferred_opens.remove(key)
             {
-                self.outbox.push_back(frame);
+                self.pages.remove(key);
+                self.clear_topic_errors(key);
+                if let Some((_, frame, open)) = self.deferred_opens.remove(key) {
+                    self.prepare_open(&open, false);
+                    self.outbox.push_back(frame);
+                }
             }
             if pending.method == wire::HELLO {
                 let welcome: Welcome = serde_json::from_value(result).map_err(decode)?;
@@ -430,12 +486,12 @@ impl Core {
         if matches!(topic, Topic::Other | Topic::Classic) {
             return Ok(());
         }
-        if self.pending.values().any(|pending| {
-            pending.closing.is_some()
-                && pending.params.get("topic") == notification.params.get("topic")
-                && (!matches!(topic, Topic::Thread | Topic::Session)
-                    || pending.params["scope"].as_str() == notification.params["scope"].as_str())
-        }) {
+        let key = topic_key(topic, notification.params["scope"].as_str());
+        if self
+            .pending
+            .values()
+            .any(|pending| pending.closing.as_ref() == Some(&key))
+        {
             // The producer may have sent this page before receiving our close.
             // It belongs to the retired subscription: neither publish nor ACK it.
             return Ok(());
@@ -670,122 +726,73 @@ pub(super) fn topic_key(topic: Topic, scope: Option<&str>) -> String {
     scope.map_or(name.clone(), |scope| format!("{name}:{scope}"))
 }
 
-fn decode(error: serde_json::Error) -> String {
-    format!("invalid daemon JSON: {error}")
+#[derive(serde::Serialize)]
+struct ControlEnvelope<'a> {
+    jsonrpc: &'static str,
+    id: u64,
+    method: &'a str,
+    params: &'a Value,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
+fn request_payload(method: &str, params: &Value, id: u64) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&ControlEnvelope {
+        jsonrpc: JSONRPC,
+        id,
+        method,
+        params,
+    })
+    .map_err(decode)
+}
 
-    fn frame(value: Value) -> Frame {
-        Frame {
-            kind: FrameKind::Control,
-            stream: 0,
-            payload: serde_json::to_vec(&value).unwrap(),
+/// Reserve the largest RPC id so admission remains valid as the connection ages.
+pub(super) fn preflight_request(method: &str, params: &Value) -> Result<(), String> {
+    struct Size(usize);
+    impl std::io::Write for Size {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len());
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
         }
     }
-
-    #[test]
-    fn device_errors_are_replies_but_subscription_errors_close_the_session() {
-        let mut core = Core::new();
-        core.request(
-            corral_protocol::device::DEVICE_ATTACH,
-            json!({"device":"dev-test"}),
-            10,
-        )
-        .unwrap();
-        core.receive(
-            frame(json!({
-                "jsonrpc":"2.0", "id":1,
-                "error":{"code":"revoked", "message":"device_revoked"}
-            })),
-            11,
-        )
-        .unwrap();
-        assert!(matches!(
-            core.next_event(),
-            Some(Event::Reply {
-                method: corral_protocol::device::DEVICE_ATTACH,
-                outcome: Err((ErrorCode::Revoked, _)),
-                ..
-            })
-        ));
-        core.open(Topic::Board, 12).unwrap();
-        assert!(
-            core.receive(
-                frame(json!({
-                    "jsonrpc":"2.0", "id":2,
-                    "error":{"code":"refused", "message":"topic_refused"}
-                })),
-                13
-            )
-            .is_err()
-        );
+    let mut size = Size(0);
+    serde_json::to_writer(
+        &mut size,
+        &ControlEnvelope {
+            jsonrpc: JSONRPC,
+            id: u64::MAX,
+            method,
+            params,
+        },
+    )
+    .map_err(decode)?;
+    if size.0 > wire::app::APP_CONTROL_MAX {
+        return Err("daemon CONTROL request exceeds 60 KiB".into());
     }
+    Ok(())
+}
 
-    #[test]
-    fn notices_survive_and_requests_expire_at_the_supplied_deadline() {
-        let mut core = Core::new();
-        core.request(wire::PING, json!({}), 100).unwrap();
-        assert_eq!(core.expired(5_099), None);
-        assert_eq!(core.expired(5_100), Some(wire::PING));
-        core.receive(
-            frame(json!({
-                "jsonrpc":"2.0", "method":"bye", "params":{"reason":"revoked"}
-            })),
-            101,
-        )
-        .unwrap();
-        assert!(
-            matches!(core.next_event(), Some(Event::Notice { method, params })
-            if method == "bye" && params["reason"] == "revoked")
-        );
-        core.receive(frame(json!({"jsonrpc":"2.0", "id":1, "result":{}})), 102)
-            .unwrap();
-        assert_eq!(core.expired(5_100), None);
-    }
-
-    #[test]
-    fn live_frames_never_finish_or_replace_a_scoped_history_snapshot() {
-        let mut core = Core::new();
-        for (more, live) in [
-            (true, Value::Null),
-            (
-                false,
-                json!({
-                    "entry":"reply-1","turn":1,"offset":0,"text":"answer","done":false
-                }),
-            ),
-        ] {
-            core.receive(
-                frame(json!({"jsonrpc":"2.0","method":"sub.delta","params":{
-                    "topic":"thread","scope":"quick","epoch":1,"rows":[],"left":[],
-                    "cursor":{"rev":1,"after":null},"more":more,"live":live
-                }})),
-                0,
-            )
-            .unwrap();
+fn request_deadline(method: &str, params: &Value) -> u64 {
+    match method {
+        wire::app::DETAIL_GET | wire::app::CHANGES_PAGE | wire::app::SEEN_ADVANCE => {
+            APP_READ_DEADLINE_MS
         }
-        assert!(matches!(core.next_event(), Some(Event::Live { scope, .. }) if scope == "quick"));
-        assert!(core.next_event().is_none());
-        core.receive(
-            frame(json!({"jsonrpc":"2.0","method":"sub.delta","params":{
-                "topic":"thread","scope":"quick","epoch":1,"rows":[],"left":[],
-                "cursor":{"rev":1,"after":null},"more":false,"live":null
-            }})),
-            1,
-        )
-        .unwrap();
-        assert!(matches!(
-            core.next_event(),
-            Some(Event::Rows {
-                replacement: true,
-                ..
-            })
-        ));
+        wire::app::ACT_RESULT => params["wait_ms"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(APP_REQUEST_MARGIN_MS),
+        wire::device::PAIR_STATUS => params["wait_ms"]
+            .as_u64()
+            .unwrap_or(0)
+            .min(APP_READ_WAIT_MS)
+            .saturating_add(APP_REQUEST_MARGIN_MS),
+        _ => APP_REQUEST_DEADLINE_MS,
     }
+}
+
+fn decode(error: serde_json::Error) -> String {
+    format!("invalid daemon JSON: {error}")
 }
 
 #[cfg(test)]

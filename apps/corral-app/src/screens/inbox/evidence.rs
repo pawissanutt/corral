@@ -2,6 +2,7 @@
 //! file excerpt, a log tail, the fixture's rendered screenshot, or why a reference could not be
 //! resolved), and their loading, empty and error looks.
 
+use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
 
 use super::{button, code, press, rich_at, ring, words};
@@ -11,7 +12,7 @@ use crate::model::{Form, Hue, Rich};
 use crate::state::AppState;
 use crate::ui::kit::chip::illus;
 use crate::ui::kit::marks::hue_ink;
-use crate::ui::kit::notice::{notice, skeleton};
+use crate::ui::kit::notice::{loading, notice};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, Token, color};
 
@@ -27,15 +28,7 @@ pub(super) fn assessment(app: AppState, part: Assessment) -> AnyElement {
         Assessment::Loading {
             skeleton_count,
             note,
-        } => view()
-            .label("Loading")
-            .gap(px(6.0))
-            .child(skeleton(
-                app,
-                &vec![LOADING_BAR; usize::from(skeleton_count)],
-            ))
-            .child(illus(app, note))
-            .into_element(),
+        } => loading(app, note, &vec![LOADING_BAR; usize::from(skeleton_count)]),
         Assessment::Error(failure) => notice(
             app,
             failure.hue,
@@ -181,7 +174,8 @@ fn artifact(app: AppState, body: EvidenceBody) -> AnyElement {
     }
 }
 
-/// The artifact's path in mono ink-3 (`.ev-file`), cut at the end, its illustrative tag after.
+/// The artifact's path in mono ink-3 (`.ev-file`), cut in the middle so both its root and its
+/// file name stay, its illustrative tag after.
 fn file_line(app: AppState, file: String, attribution: Option<&'static str>) -> AnyElement {
     view()
         .flex_row()
@@ -192,7 +186,8 @@ fn file_line(app: AppState, file: String, attribution: Option<&'static str>) -> 
             code(app, file, 11.0, Token::Ink3)
                 .flex_shrink(1.0)
                 .min_w(px(0.0))
-                .truncate(),
+                .truncate()
+                .text_overflow(EllipsizeMode::Middle),
         )
         .children(attribution.map(|tag| illus(app, tag)))
         .into_element()
@@ -201,7 +196,8 @@ fn file_line(app: AppState, file: String, attribution: Option<&'static str>) -> 
 /// The hunk (`.diff`): its header on the sunken ground, then numbered lines in mono, additions
 /// and deletions on the ok and failure grounds with their sign in that colour. The phone drops
 /// the old-number column; a terminal shows the unified lines, signs and code in their colour.
-/// An excerpt served without a hunk header has no header row.
+/// An excerpt served without a hunk header has no header row. Lines are never cut: the box
+/// scrolls sideways (all lines together, so they stay aligned) as well as down.
 fn diff(app: AppState, at: String, lines: Vec<DiffLine>) -> AnyElement {
     let form = app.form;
     let header = (!at.is_empty()).then_some(at);
@@ -229,9 +225,14 @@ fn diff(app: AppState, at: String, lines: Vec<DiffLine>) -> AnyElement {
                 .child(code(app, at, 11.5, Token::Ink3).truncate())
         }))
         .child(
-            scroll()
-                .max_h(px(box_height - 22.0))
-                .child(view().children(lines.into_iter().map(|line| diff_line(app, line, phone)))),
+            scroll().max_h(px(box_height - 22.0)).child(
+                scroll().horizontal().child(
+                    view()
+                        .flex_shrink_0()
+                        .min_w(relative(1.0))
+                        .children(lines.into_iter().map(|line| diff_line(app, line, phone))),
+                ),
+            ),
         )
         .into_element()
 }
@@ -287,10 +288,9 @@ fn diff_line(app: AppState, line: DiffLine, phone: bool) -> AnyElement {
         )
         .child(
             code(app, line.text, size, Token::Ink)
-                .flex_1()
-                .min_w(px(0.0))
-                .pr(px(10.0))
-                .truncate(),
+                .flex_shrink_0()
+                .number_of_lines(1u32)
+                .pr(px(10.0)),
         )
         .into_element()
 }
@@ -376,7 +376,10 @@ fn terminal_box(app: AppState, lines: &[Rich], cursor: bool, width: Option<f32>)
             row.into_element()
         }
     });
-    let content = view().children(rows.collect::<Vec<_>>());
+    // A log line is never cut either: the lines scroll sideways together.
+    let content = scroll()
+        .horizontal()
+        .child(view().flex_shrink_0().children(rows.collect::<Vec<_>>()));
     let framed = view()
         .px(px(12.0))
         .py(px(10.0))

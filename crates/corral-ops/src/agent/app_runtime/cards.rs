@@ -12,14 +12,18 @@ pub(super) struct Snapshot {
     questions: Vec<corral_core::agent::AgentQuestion>,
     prompts: Vec<owner_prompt::Prompt>,
     now: jiff::Timestamp,
+    pub(super) costs: super::super::turns::Costs,
 }
 
 pub(super) fn load(ctx: &Ctx, session: &str) -> Result<Snapshot> {
+    let container = ctx.store.get_assistant_container(session)?;
+    let costs = super::super::turns::costs(ctx, &container.state);
     Ok(Snapshot {
         session: session.into(),
-        questions: ctx.store.get_assistant_container(session)?.state.questions,
+        questions: container.state.questions,
         prompts: owner_prompt::list(&ctx.store, session)?,
         now: ctx.store.now(),
+        costs,
     })
 }
 
@@ -32,6 +36,14 @@ fn card(
     text: Option<String>,
     card: EntryCard,
 ) -> ThreadEntry {
+    let links = match &card {
+        EntryCard::Question { key, rev, .. } => vec![corral_protocol::assistant::ContextRef {
+            kind: "question".into(),
+            id: key.clone(),
+            rev: Some(u64::from(*rev)),
+        }],
+        _ => Vec::new(),
+    };
     ThreadEntry {
         id,
         rev,
@@ -45,8 +57,11 @@ fn card(
         model: message.model.clone(),
         cost_usd: None,
         tools: Vec::new(),
-        links: Vec::new(),
+        cost_basis: None,
+        completion: None,
+        part: None,
         attachments: Vec::new(),
+        links,
         card: Some(card),
     }
 }
@@ -185,6 +200,8 @@ pub(super) fn append(
                 cost: None,
                 recommended: question.recommendation.as_deref() == Some(label.as_str()),
                 evidence: None,
+                consequence_missing: true,
+                consequence_derived: false,
             })
             .collect();
         entries.push(card(
@@ -199,6 +216,7 @@ pub(super) fn append(
                 rev: question.revision,
                 options,
                 answer,
+                accepts_text: question.recorded_pending(),
             },
         ));
         if !question.recorded_pending()
@@ -222,6 +240,9 @@ pub(super) fn append(
                 cost_usd: None,
                 tools: Vec::new(),
                 links: Vec::new(),
+                cost_basis: None,
+                completion: None,
+                part: None,
                 attachments: Vec::new(),
                 card: None,
             });
@@ -255,6 +276,7 @@ pub(super) fn revision(snapshot: &Snapshot, base: u64) -> Result<u64> {
     let digest = crate::agent::payload_sha256(
         &serde_json::json!({"base":base,"session":snapshot.session,
         "questions":snapshot.questions.iter().map(|q| (&q.key,q.revision)).collect::<Vec<_>>(),
+        "costs":snapshot.costs.iter().map(|(turn,usage)| (turn,usage.reported_usd,usage.estimated_usd,usage.unpriced_tokens)).collect::<Vec<_>>(),
         "prompts":snapshot.prompts.iter().map(|p| (&p.key,p.revision,&p.state,p.expires_at <= snapshot.now)).collect::<Vec<_>>() }),
     );
     u64::from_str_radix(&digest[..16], 16).context("encoding thread revision")

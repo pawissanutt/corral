@@ -99,6 +99,9 @@ pub trait ReadView {
     /// Current-only reads exclude historical runs before reading their payloads.
     fn run_worktrees(&self, current_only: bool) -> Result<Vec<RunWorktree>, ViewError>;
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError>;
+    /// Count the same filtered set as `events`, without decoding event documents.
+    /// Ordering flags have no effect.
+    fn count_events(&self, q: &EventQuery) -> Result<u64, ViewError>;
     fn conditions(
         &self,
         q: &ConditionQuery,

@@ -3,19 +3,17 @@
 //! removable context chip and the staged attachments, the offline or waiting line, the
 //! Screenshot, Link and File controls. Enter sends and Shift+Enter breaks the line; Send hands
 //! the draft, target and attachment refs to the assistant model, which stores the message with
-//! its state at once, and the draft clears after a nonblank send.
+//! its state at once; the draft and the attachments clear once the device outbox accepted it.
 
 use nsh_base::{SheetEvent, sheet, toggle, toggle_group};
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
-use std::time::Duration;
-
 use crate::model::assistant::{self, Composer, KeyHint, ModelList, ThreadRef};
 use crate::model::hue::Hue;
 use crate::model::text::Rich;
-use crate::model::{Effect, Form, Id, Overlay};
+use crate::model::{Form, Overlay};
 use crate::state::AppState;
 use crate::ui::ask::{act, chip_row, drawer, field_row, foot_controls, models, tray};
 use crate::ui::atoms::key_hint;
@@ -26,8 +24,12 @@ use crate::ui::kit::text::rich_small;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
-/// How long typing pauses before the draft is kept on this device.
-const DRAFT_PAUSE: Duration = Duration::from_millis(800);
+mod draft;
+mod pending;
+mod send;
+
+use draft::keep_draft;
+use send::send;
 
 /// Where a composer's model list opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,12 +114,13 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
         docked,
     } = host;
     let named = !thread.is_quick();
-    // Ask and the quick thread's docked composer share the app's draft; a named session's
-    // composer keeps its own, so words typed for one thread are never saved under another.
-    let draft = if named {
-        signal(String::new())
-    } else {
-        app.ask_draft
+    // Ask and the quick thread's docked composer share the app's draft; a served session's
+    // composer keeps its own, owned by the root so its words outlive the composer, and a
+    // fixture session's dies with it. Words typed for one thread are never saved under another.
+    let draft = match (&thread, named) {
+        (ThreadRef::Live(scope), true) => pending::named_draft(app, scope),
+        (_, true) => signal(String::new()),
+        _ => app.ask_draft,
     };
     let source = thread.clone();
     let built = computed(move || {
@@ -279,149 +282,6 @@ struct To {
     thread: ThreadRef,
     docked: bool,
     draft: Signal<String>,
-}
-
-/// Sends the draft to the composer's session or Ask's target. The fixture stores it with its
-/// state; with the daemon it goes out as one `assistant.send` under an identity allocated here
-/// once (the client keeps it in this device's outbox while offline), with Ask's real context
-/// and the refs of every staged attachment, all of them ready. The words leave the composer
-/// only once the root handed the message to the client; a refusal keeps them exactly as typed.
-fn send(app: AppState, to: &To) {
-    let text = to.draft.get_untracked();
-    let target = app.ask_target.get_untracked();
-    match &to.thread {
-        ThreadRef::Fixture(id) => {
-            let session = (!to.thread.is_quick()).then_some(*id);
-            let mut clear = false;
-            app.act(app.assistant, |state, env| {
-                let outcome = state.key(assistant::Key::Send, &text, target, session, env);
-                clear = outcome.clear_draft;
-                outcome.effects
-            });
-            if clear {
-                to.draft.set(String::new());
-            }
-        }
-        ThreadRef::Live(scope) => {
-            if text.trim().is_empty() {
-                return;
-            }
-            let staged = app.ask_staged.get_untracked();
-            let refs = match app
-                .feed
-                .with_untracked(|feed| assistant::send_refs(&staged, feed))
-            {
-                Ok(refs) => refs,
-                Err(why) => {
-                    app.toast(why);
-                    return;
-                }
-            };
-            let context = if to.thread.is_quick() {
-                app.ask_context.get_untracked()
-            } else {
-                None
-            };
-            let stamp = assistant::Stamp {
-                cmd_id: crate::client::requests::new_id(),
-                typed_at: jiff::Timestamp::now().to_string(),
-            };
-            let docked = to.docked;
-            let mut ready = None;
-            app.reduce(app.assistant, |state, _, _, env| {
-                match state.send_live(
-                    scope.as_str(),
-                    target,
-                    &text,
-                    context,
-                    refs,
-                    stamp,
-                    docked,
-                    env,
-                ) {
-                    Ok(message) => {
-                        ready = Some(message);
-                        Vec::new()
-                    }
-                    Err(refusal) => refusal,
-                }
-            });
-            let Some((message, after)) = ready else {
-                return;
-            };
-            if !app.send_message(message) {
-                return;
-            }
-            // The client retires the saved draft in the same durable write as the message, a
-            // moment from now; until then no composer of this scope may bring it back.
-            let saved = app
-                .feed
-                .with_untracked(|feed| feed.drafts.get(scope.as_str()).cloned());
-            if let Some(saved) = saved {
-                app.assistant
-                    .update(|state| state.handed_off(scope.as_str(), saved));
-            }
-            to.draft.set(String::new());
-            app.run(after);
-        }
-    }
-}
-
-/// Keeps the unsent draft of a served thread on this device a moment after typing pauses, and
-/// restores the saved one into an empty composer when the session brings it back. Only the
-/// scope's own saved draft is watched, so the accepted message's other updates never re-run the
-/// restore, and a draft whose words were already sent is never brought back.
-fn keep_draft(app: AppState, scope: Id, draft: Signal<String>) {
-    let watched = scope.clone();
-    let saved = computed(move || {
-        app.feed
-            .with(|feed| feed.drafts.get(watched.as_str()).cloned())
-    });
-    let restore = scope.clone();
-    effect(move || {
-        let saved = saved.get();
-        let handed = app
-            .assistant
-            .with_untracked(|state| state.live.handed.get(restore.as_str()).cloned());
-        if let Some(sent) = handed {
-            if saved.as_ref() == Some(&sent) {
-                return;
-            }
-            untracked(|| {
-                app.assistant.update(|state| {
-                    state.already_sent(restore.as_str(), saved.as_deref());
-                });
-            });
-        }
-        if let Some(saved) = saved.filter(|saved| !saved.is_empty())
-            && draft.with_untracked(String::is_empty)
-        {
-            draft.set(saved);
-        }
-    });
-    let pending = stored(None::<Spawned<()>>);
-    effect(move || {
-        let text = draft.get();
-        if let Some(old) = pending.replace(None) {
-            old.cancel();
-        }
-        let scope = scope.clone();
-        let task = set_timeout(DRAFT_PAUSE, move || {
-            // Nothing to keep or remove: an untouched composer never writes, and so never
-            // reports a missing device outbox before pairing.
-            let kept = app
-                .feed
-                .with_untracked(|feed| feed.drafts.get(scope.as_str()).cloned());
-            if kept.as_deref().unwrap_or("") == text {
-                return;
-            }
-            app.run(vec![Effect::Draft {
-                thread: scope.to_string(),
-                text,
-            }]);
-        });
-        let _ = pending.replace(Some(task));
-    });
 }
 
 /// A status line above the composer (`.savedline`): its first run as a chip in its colour

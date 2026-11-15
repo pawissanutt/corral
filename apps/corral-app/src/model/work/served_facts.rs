@@ -21,18 +21,51 @@ pub const NOTHING_HELD: &str = "Nothing is held or parked.";
 /// Said by the Goals panel when no task on the board names a goal.
 pub const NO_GOALS: &str = "No task on the board names a goal.";
 
-/// Stale flags in the Daemon state: a board received before the link went down stays, dimmed,
-/// stamped with the last time the daemon was heard. The health strip carries the banner.
+/// Board-topic failure is independent of socket health.
+pub(super) fn board_problem(feed: &daemon::Feed) -> Option<String> {
+    let topic = feed.topics.get("board")?;
+    if let Some(error) = &topic.error {
+        return Some(format!("Board unavailable: {}", error.message));
+    }
+    (topic.stale && !topic.loading).then(|| "The board subscription is out of date.".into())
+}
+
+/// Retained rows are last known while either the topic or its transport is not current.
 pub fn daemon_status(feed: &daemon::Feed) -> Status {
-    let dimmed = feed.link == Link::Down && feed.board.complete;
+    let topic = feed.topics.get("board");
+    let stale = feed.link != Link::Up
+        || topic.is_some_and(|topic| topic.stale || topic.loading || topic.error.is_some());
+    let dimmed = stale && feed.board.complete;
+    let problem = board_problem(feed);
+    let pending = topic.is_some_and(|topic| topic.loading);
     Status {
         dimmed,
-        as_of: feed
-            .synced
-            .as_ref()
-            .filter(|_| dimmed)
-            .map(|clock| format!("as of {clock}")),
-        banner: None,
+        as_of: dimmed.then(|| {
+            feed.synced
+                .as_ref()
+                .filter(|clock| !clock.is_empty())
+                .map_or_else(
+                    || "last known board".into(),
+                    |clock| format!("last known board · as of {clock}"),
+                )
+        }),
+        banner: problem
+            .or_else(|| (dimmed && pending).then(|| "Refreshing the board…".into()))
+            .map(|message| super::Banner {
+                hue: Hue::Held,
+                text: vec![
+                    span(message),
+                    span(if dimmed {
+                        " Showing last known rows."
+                    } else {
+                        ""
+                    }),
+                ],
+                actions: vec![
+                    Button::new("Retry board", Press::RetryBoard, ButtonKind::Ghost)
+                        .enabled(feed.link == Link::Up && !pending),
+                ],
+            }),
     }
 }
 
@@ -53,7 +86,7 @@ pub fn daemon_holds(feed: &daemon::Feed) -> Vec<HoldRow> {
             }
             HoldRow {
                 id: task.id.to_string(),
-                since: daemon::age(task.since, feed.now),
+                since: super::when::age(task.since, feed.now),
                 title: task.title.clone(),
                 mark: Mark::Na,
                 text,
@@ -149,8 +182,9 @@ fn daemon_chips(feed: &daemon::Feed) -> Vec<SummaryChip> {
     if feed.capable(CHANGES_V1)
         && let Some(seen) = &feed.seen
     {
-        let new = u32::try_from(feed.changes.range(seen.through.saturating_add(1)..).count())
-            .unwrap_or(u32::MAX);
+        let unseen = super::live_changes::unseen_count(feed);
+        let new = u32::try_from(unseen.count).unwrap_or(u32::MAX);
+        let qualifier = if unseen.total { "" } else { " loaded" };
         let since = seen
             .at
             .as_deref()
@@ -158,8 +192,8 @@ fn daemon_chips(feed: &daemon::Feed) -> Vec<SummaryChip> {
             .filter(|at| !at.is_empty());
         chips.push(SummaryChip::new(
             match since {
-                Some(at) => format!("▲ {new} since {at}"),
-                None => format!("▲ {new} new"),
+                Some(at) => format!("▲ {new}{qualifier} since {at}"),
+                None => format!("▲ {new}{qualifier} new"),
             },
             Hue::Neutral,
             new,

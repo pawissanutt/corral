@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::{conn::Conn, state::Shared};
 
 type Failure = (rpc::ErrorCode, String);
-const READ_WAIT: Duration = Duration::from_secs(25);
+const READ_WAIT: Duration = Duration::from_millis(wire::cmd::APP_READ_WAIT_MS);
 
 pub(crate) fn is_method(method: &str) -> bool {
     matches!(
@@ -28,6 +28,12 @@ pub(crate) fn is_method(method: &str) -> bool {
             | app::CHANGES_PAGE
             | app::SEEN_ADVANCE
             | app::DEVICE_SET_AUTHORITY
+            | device::DEVICE_AUTHORITY_PREVIEW
+            | device::DEVICE_REVOKE
+            | device::PAIR_BEGIN
+            | device::PAIR_STATUS
+            | device::PAIR_CONFIRM
+            | device::PAIR_CANCEL
             | assistant::ASSISTANT_SEND
             | assistant::ASSISTANT_WARM
             | assistant::ASSISTANT_STOP
@@ -136,9 +142,13 @@ fn dispatch(
             value(receive_read(receive)?)
         }
         app::CHANGES_PAGE => {
-            let receive = crate::views::changes(shared, decode(params)?).map_err(read_failure)?;
-            let mut page = receive_read(receive)?;
-            page.seen = devices.seen(id).map_err(|problem| problem.wire())?;
+            let receive = crate::views::changes(
+                shared,
+                decode(params)?,
+                devices.seen(id).map_err(|problem| problem.wire())?,
+            )
+            .map_err(read_failure)?;
+            let page = receive_read(receive)?;
             value(page)
         }
         app::SEEN_ADVANCE => {
@@ -150,6 +160,7 @@ fn dispatch(
                     after: None,
                     limit: 1,
                 },
+                app::SeenCursor::default(),
             )
             .map_err(read_failure)?;
             if request.through > receive_read(receive)?.head {
@@ -161,12 +172,80 @@ fn dispatch(
                     .map_err(|problem| problem.wire())?,
             )
         }
+        device::DEVICE_AUTHORITY_PREVIEW => value(crate::commands::app::authority_preview(
+            shared,
+            id,
+            decode(params)?,
+        )?),
         app::DEVICE_SET_AUTHORITY => {
-            let result = devices
-                .set_authority(id, decode(params)?)
-                .map_err(|problem| problem.wire())?;
+            let result = crate::commands::app::set_authority(shared, id, decode(params)?)?;
             shared.wake_projection();
             value(result)
+        }
+        device::DEVICE_REVOKE
+        | device::PAIR_BEGIN
+        | device::PAIR_STATUS
+        | device::PAIR_CONFIRM
+        | device::PAIR_CANCEL => {
+            if !authority.admin {
+                return Err((rpc::ErrorCode::Refused, "admin_only".into()));
+            }
+            let via = format!("app:{id}");
+            let result = match method {
+                device::DEVICE_REVOKE => {
+                    let request: device::DeviceRevoke = decode(params)?;
+                    value(
+                        devices
+                            .revoke(&request.device, &via)
+                            .map_err(|error| error.wire())?,
+                    )
+                }
+                device::PAIR_BEGIN => {
+                    let _: device::PairBegin = decode(params)?;
+                    value(
+                        devices
+                            .pair_begin(std::time::Instant::now())
+                            .map_err(|error| error.wire())?,
+                    )
+                }
+                device::PAIR_STATUS => {
+                    let request: device::PairStatusQuery = decode(params)?;
+                    let state = devices
+                        .pairings
+                        .status(
+                            &request.pair_id,
+                            std::time::Instant::now(),
+                            Duration::from_millis(
+                                u64::from(request.wait_ms).min(wire::cmd::APP_READ_WAIT_MS),
+                            ),
+                        )
+                        .map_err(|error| crate::devices::DeviceError::from(error).wire())?;
+                    value(device::PairStatus {
+                        pair_id: request.pair_id,
+                        state,
+                    })
+                }
+                device::PAIR_CONFIRM => {
+                    let request: device::PairConfirm = decode(params)?;
+                    value(
+                        devices
+                            .pair_confirm(&request.pair_id, &via)
+                            .map_err(|error| error.wire())?,
+                    )
+                }
+                _ => {
+                    let request: device::PairCancel = decode(params)?;
+                    devices
+                        .pairings
+                        .cancel(&request.pair_id, std::time::Instant::now())
+                        .map_err(|error| crate::devices::DeviceError::from(error).wire())?;
+                    value(())
+                }
+            };
+            if result.is_ok() && matches!(method, device::DEVICE_REVOKE | device::PAIR_CONFIRM) {
+                shared.wake_projection();
+            }
+            result
         }
         device::DEVICE_LIST => {
             let _: device::DeviceList = decode(params)?;

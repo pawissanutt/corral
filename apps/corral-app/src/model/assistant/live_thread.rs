@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use corral_protocol::assistant::{
     AssistantSend, ContextRef, EntryCard, EntryKind, MessageState as WireState, ThreadEntry,
-    ToolLine,
+    ToolLine, TurnCompletion,
 };
 
 use super::cards::{WAIT_LIFETIME, WAIT_NOTE};
@@ -127,6 +127,7 @@ struct Thread<'a> {
     can_send: bool,
     /// Tasks the owner's own message was filed as, as written, with no model.
     as_written: BTreeSet<String>,
+    scope: &'a str,
 }
 
 impl Thread<'_> {
@@ -134,6 +135,18 @@ impl Thread<'_> {
         let (tool_summary, tools) = tools(&entry.tools);
         AssistantMessage {
             key: entry.id.clone(),
+            anchored: self.state.anchor.as_ref().is_some_and(|(scope, key)| {
+                let matches_scope = match scope {
+                    super::ThreadRef::Live(scope) => scope.as_str() == self.scope,
+                    super::ThreadRef::Fixture(_) => false,
+                };
+                matches_scope
+                    && entry.card.as_ref().is_some_and(|card| match card {
+                        EntryCard::Prompt { key: entry_key, .. }
+                        | EntryCard::Question { key: entry_key, .. } => entry_key == key,
+                        _ => false,
+                    })
+            }),
             // Each reply names the session that wrote it, never whichever is current now.
             id: entry_session(&entry.id).map_or_else(|| self.author.clone(), str::to_owned),
             at: clock(&entry.at, &self.feed.date),
@@ -147,7 +160,9 @@ impl Thread<'_> {
             tools,
             streaming: false,
             stop: None,
-            cost: entry.cost_usd.map(|usd| format!("this ask ${usd:.2}")),
+            cost: entry
+                .cost_usd
+                .map(|usd| format!("this ask {}", super::cost(Some(usd), entry.cost_basis))),
             sources: entry
                 .links
                 .iter()
@@ -203,6 +218,7 @@ impl Thread<'_> {
                 rev,
                 options,
                 answer,
+                ..
             } => Body::AskUser(question_card(
                 self.state,
                 self.feed,
@@ -256,6 +272,20 @@ impl Thread<'_> {
         body.extend(card);
         let mut message = self.message(entry, body);
         self.turn(&mut message, live);
+        match entry.completion {
+            Some(TurnCompletion::Aborted) => {
+                message.streaming = false;
+                message.stop = None;
+                message.state = Some(Chip::new("stopped", Hue::Neutral));
+                message.stopped_note = Some("This turn was stopped · partial answer kept.");
+            }
+            Some(TurnCompletion::Failed) => {
+                message.streaming = false;
+                message.stop = None;
+                message.state = Some(Chip::new("turn failed", Hue::Fail));
+            }
+            _ => {}
+        }
         if message.state.is_none() {
             message.state = if asks {
                 Some(Chip::new("waiting on you", Hue::You))
@@ -300,10 +330,6 @@ impl Thread<'_> {
                 stop.enabled = self.can_send && !stopping;
                 message.stop = Some(stop);
             }
-        } else if stopping {
-            message.state = Some(Chip::new("stopped", Hue::Neutral));
-            message.stopped_note =
-                Some("you stopped this turn · partial answer kept · host still live");
         }
     }
 
@@ -370,9 +396,9 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
         session: current.clone(),
         can_send,
         as_written: BTreeSet::new(),
+        scope,
     };
-    let mut entries: Vec<&ThreadEntry> = snapshot.entries.values().collect();
-    entries.sort_by(|a, b| a.at.cmp(&b.at).then_with(|| a.id.cmp(&b.id)));
+    let entries = super::live_parts::assemble(&snapshot.entries);
     let pm_items: BTreeSet<&str> = entries
         .iter()
         .filter(|entry| entry.kind == EntryKind::PmMessage)
@@ -492,6 +518,7 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
             | EntryKind::Prompt => {
                 let streamed = live
                     .filter(|live| live.entry == entry.id)
+                    .filter(|live| !super::live_parts::covers(entry, &live.text))
                     .map(|live| (live.text.as_str(), live.turn, live.done));
                 items.push(ThreadItem::Assistant(thread.reply(entry, streamed)));
             }
@@ -527,6 +554,9 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
                 card: None,
                 attachments: Vec::new(),
                 typed_at: None,
+                part: None,
+                completion: None,
+                cost_basis: None,
             },
             paragraphs(&live.text),
         );

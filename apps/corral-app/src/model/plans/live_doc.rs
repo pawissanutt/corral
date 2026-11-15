@@ -652,8 +652,8 @@ fn classify(line: &str) -> DiffLine {
     }
 }
 
-/// The diff between two revisions, every page received so far, with the earlier revisions to
-/// compare against and, while the plan awaits acceptance, its decide bar.
+/// The fully assembled diff between two revisions, with the earlier revisions to compare
+/// against and, while the plan awaits acceptance, its decide bar.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn diff(
     state: &State,
@@ -679,9 +679,6 @@ pub(super) fn diff(
             truncated = page.truncated;
         }
     }
-    let next = cache
-        .and_then(|cache| cache.pages.last())
-        .and_then(|page| page.next.as_ref());
     let loading = cache.is_none_or(|cache| cache.loading);
     let note = match cache.and_then(|cache| cache.error.as_ref()) {
         Some(error) => Some(refused(format!(
@@ -700,9 +697,7 @@ pub(super) fn diff(
             text: format!("No differences between {from} and {to}."),
             hue: Hue::Neutral,
         }),
-        None if truncated && next.is_none() => {
-            Some(waiting("corrald cut this diff at its size bound."))
-        }
+        None if truncated => Some(waiting("corrald cut this diff at its size bound.")),
         None => None,
     };
     let mut actions: Vec<Button> = diff_toggle(state, id, detail).into_iter().collect();
@@ -733,9 +728,7 @@ pub(super) fn diff(
         },
         lines,
         note,
-        more: next
-            .filter(|_| !loading)
-            .map(|_| Button::new("Show more", Action::Live(LiveAction::MoreDiff(id.clone())))),
+        more: None,
         decide: (detail.state == WireState::Awaiting).then(|| decide(state, feed, id, detail, env)),
     }
 }

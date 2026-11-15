@@ -527,6 +527,9 @@ mod tests {
             today_usd: Some(2.5),
             week_usd: None,
             cost_basis: Some(CostBasis::Estimated),
+            quotas: Vec::new(),
+            today_completeness: Default::default(),
+            week_completeness: Default::default(),
             rev: 1,
         };
         let tz = TimeZone::UTC;

@@ -130,6 +130,9 @@ pub struct PatchPage {
     /// At most 48 KiB; remaining text is fetched with DetailReply.next.
     pub patch: String,
     pub truncated: bool,
+    /// Present for candidate-bound review patches; absent on plan diffs and older daemons.
+    #[serde(default)]
+    pub candidate: Option<ReviewCandidate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

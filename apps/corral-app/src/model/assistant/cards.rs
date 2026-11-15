@@ -277,21 +277,21 @@ pub enum Grant {
 }
 
 impl Grant {
-    /// Standing grants on phone require Face ID or PIN before the action is dispatched.
+    /// Standing grants ask for an explicit confirmation tap on a phone.
     pub const fn requires_presence(self, env: Env) -> bool {
         matches!(env.form, Form::Phone) && matches!(self, Self::Hour | Self::Session)
     }
 
-    /// Illustrative outcome after any required presence check has succeeded.
+    /// Illustrative outcome after any required confirmation tap.
     pub const fn outcome(self, env: Env) -> &'static str {
         match self {
             Self::Once => "Allowed once · permission input recorded",
             Self::Hour if matches!(env.form, Form::Phone) => {
-                "Face ID confirmed · allowed for 1 hour on ~/miti-workspace/notes"
+                "Confirmation tapped · allowed for 1 hour on ~/miti-workspace/notes (preview)"
             }
             Self::Hour => "Allowed for 1 hour on ~/miti-workspace/notes",
             Self::Session if matches!(env.form, Form::Phone) => {
-                "Face ID confirmed · allowed for this session on ~/miti-workspace/notes"
+                "Confirmation tapped · allowed for this session on ~/miti-workspace/notes (preview)"
             }
             Self::Session => "Allowed for this session on ~/miti-workspace/notes",
             Self::Deny => "Denied · recorded · not asked again this turn",
@@ -359,7 +359,8 @@ pub fn permission_card(env: Env) -> PermissionCard {
         PermissionChoice {
             button,
             requires_presence,
-            presence_prompt: requires_presence.then_some("Face ID or PIN"),
+            presence_prompt: requires_presence
+                .then_some("a confirmation tap on this device; no biometric or PIN check"),
         }
     })
     .collect();
@@ -379,7 +380,7 @@ pub fn permission_card(env: Env) -> PermissionCard {
         ],
         choices,
         presence_note: Some(
-            "On a phone, the two standing grants ask for Face ID or PIN first; Allow once and Deny do not.",
+            "Standing grants require a confirmation tap and, when connected, daemon device-bound proof; no biometric or PIN check. This preview runs no daemon command.",
         ),
         timer_note: Some("The tool waited 120 s, then deferred; this prompt stays answerable here and in Inbox until 22:05 tomorrow. One answer wins.".into()),
         illustrative: Some("path and preview illustrative"),

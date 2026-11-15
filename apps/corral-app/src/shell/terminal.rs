@@ -1,6 +1,7 @@
 //! The terminal shell: the top bar on the first row, the sidebar and the content as two framed
 //! regions under it, the toast's row while one shows, and the key line on the last row. The
-//! sidebar folds to a rail of keys and counts by choice (`mod+b`) or on a narrow grid.
+//! sidebar folds to a rail of keys and counts by choice (`mod+b`), on a narrow grid, and while
+//! Ask docks beside the page.
 //! Everything is sized in whole Cells (8 x 16 points by default) and drawn in the terminal's own
 //! font and colours; colour means state, and the structure is lines and weight (`ui::term`).
 
@@ -9,6 +10,7 @@ use nsh_core::prelude::*;
 use crate::{
     model::{
         DataState, Destination, Live, Overlay, Page, SettingsSection, Workspace,
+        assistant::COMPOSER_KEYS,
         commands::{destination_key, key_legend, key_legend_live},
         nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, THIS_DEVICE},
     },
@@ -32,6 +34,8 @@ pub fn shell(app: AppState) -> AnyElement {
     let destination = computed(move || app.destination());
     let workspace = computed(move || app.snapshot().workspace);
     let collapsed = computed(move || term::sidebar_collapsed(app));
+    let focus = Focus::watch();
+    let typing = computed(move || focus.typing(app));
     view()
         .flex_1()
         .flex_col()
@@ -48,20 +52,52 @@ pub fn shell(app: AppState) -> AnyElement {
                         untracked(|| sidebar(app, destination, workspace))
                     }
                 }))
-                .child(content(app)),
+                .child(content(app, focus)),
         )
         .child(toast(app))
-        .child(key_line(app))
+        .child(key_line(app, typing))
         .child(ask::hotkey(app))
         .into_element()
 }
 
+/// Where the keyboard focus is: anywhere in the content row (the page and Ask beside it), and in
+/// the page.
+#[derive(Clone, Copy)]
+struct Focus {
+    row: ElementRef,
+    page: ElementRef,
+    in_row: Signal<bool>,
+    in_page: Signal<bool>,
+}
+
+impl Focus {
+    fn watch() -> Focus {
+        let focus = Focus {
+            row: element_ref(),
+            page: element_ref(),
+            in_row: signal(false),
+            in_page: signal(false),
+        };
+        focus.row.on_focus_in(move || focus.in_row.set(true));
+        focus.row.on_focus_out(move || focus.in_row.set(false));
+        focus.page.on_focus_in(move || focus.in_page.set(true));
+        focus.page.on_focus_out(move || focus.in_page.set(false));
+        focus
+    }
+
+    /// Tracked: whether Ask's composer has the keys, so letters typed go into its field and not
+    /// to the page or the destinations: Ask is open and the focus is in the row, outside the page.
+    fn typing(self, app: AppState) -> bool {
+        app.is_open(Overlay::Ask) && self.in_row.get() && !self.in_page.get()
+    }
+}
+
 /// The connection banner in the content frame's first rows, its rule joined to the frame; under
 /// it the page with Ask beside it. The palette and the confirmation are dialogs standing on the
-/// content frame's lines. On a narrow grid Ask takes the whole frame and the page steps out
-/// while it is open: covering it would leave the page's bands showing under Ask's rows (an
-/// opaque fill clears what was drawn beneath it, not its colours).
-fn content(app: AppState) -> AnyElement {
+/// content frame's lines. Where Ask cannot dock (`term::ask_docked`) it takes the whole frame and
+/// the page steps out while it is open: covering it would leave the page's bands showing under
+/// Ask's rows (an opaque fill clears what was drawn beneath it, not its colours).
+fn content(app: AppState, focus: Focus) -> AnyElement {
     term::framed(
         view()
             .flex_1()
@@ -71,6 +107,7 @@ fn content(app: AppState) -> AnyElement {
             .child(banner(app))
             .child(
                 view()
+                    .element_ref(&focus.row)
                     .flex_1()
                     .flex_row()
                     .relative()
@@ -78,12 +115,13 @@ fn content(app: AppState) -> AnyElement {
                     .min_h(px(0.0))
                     .child(
                         view()
+                            .element_ref(&focus.page)
                             .flex_1()
                             .min_w(px(0.0))
                             .min_h(px(0.0))
                             .overflow_hidden()
                             .style_when(
-                                move || app.is_open(Overlay::Ask) && !term::wide(),
+                                move || app.is_open(Overlay::Ask) && !term::ask_docked(app),
                                 |s| s.hidden(),
                             )
                             .child(screens::content(app)),
@@ -339,6 +377,14 @@ struct Entry {
 }
 
 impl Entry {
+    fn new(keys: impl Into<String>, name: &'static str, keep: u8) -> Entry {
+        Entry {
+            keys: keys.into(),
+            name,
+            keep,
+        }
+    }
+
     /// The cap (the keys and a Cell each side), then the name a Cell after it.
     fn cells(&self, named: bool) -> usize {
         self.keys.chars().count()
@@ -351,8 +397,11 @@ impl Entry {
     }
 }
 
-/// The page's own keys keep their names longest: they are the ones the page in view answers
-/// to, and no other line of the screen lists them.
+/// Go to's and Ask's names give way after every destination's.
+const KEEP_GO_TO: u8 = 9;
+const KEEP_ASK: u8 = 10;
+/// The keys in focus keep their names longest: they are the ones the page in view (or Ask's
+/// field) answers to, and no other line of the screen lists them.
 const KEEP_PAGE: u8 = 11;
 
 /// How long each destination's name stays when the key line is short: the daily ones and
@@ -371,72 +420,133 @@ fn keep(destination: Destination) -> u8 {
     }
 }
 
-/// The key line's groups in order, a line between each two: the keys of the page in view (when
-/// the model gives it any), the destinations, then Ask and Go to.
-fn groups(
+/// The key line's groups in order, a line between each two: the keys in focus, the
+/// destinations, then Ask and Go to.
+struct Line {
+    own: Vec<Entry>,
+    destinations: Vec<Entry>,
+    actions: Vec<Entry>,
+}
+
+/// One way of fitting the key line: names from `keep` on, the destinations or not.
+#[derive(Debug, Clone, Copy)]
+struct Fit {
+    keep: u8,
+    destinations: bool,
+}
+
+/// Every fit, longest first. Each destination's name gives way, the least used first; then the
+/// destinations go whole (the sidebar, folded or not, lists their keys); then Go to's and Ask's
+/// names; last the names of the keys in focus. A cap never gives way to a name.
+fn fits() -> impl Iterator<Item = Fit> {
+    (0..=KEEP_GO_TO)
+        .map(|keep| Fit {
+            keep,
+            destinations: true,
+        })
+        .chain((KEEP_GO_TO..=KEEP_PAGE + 1).map(|keep| Fit {
+            keep,
+            destinations: false,
+        }))
+}
+
+/// The key line for what is in view. While Ask's field has the keys, letters typed go into it:
+/// the line gives the composer's own keys and Go to, the one chord that still reaches past it.
+/// Otherwise the keys of the page in view (when the model gives it any and the destination is
+/// served), the destinations, then Ask and Go to.
+fn line(
     destination: Destination,
     page: Option<Page>,
     live: Option<Live>,
-    daemon: bool,
-) -> Vec<Vec<Entry>> {
-    let legend = if daemon {
-        key_legend_live(destination, live.as_ref())
-    } else {
-        key_legend(destination, page)
-    };
-    let own: Vec<Entry> = legend
-        .into_iter()
-        .map(|(keys, name)| Entry {
-            keys: String::from(keys),
-            name,
-            keep: KEEP_PAGE,
-        })
-        .collect();
-    let destinations = Destination::ALL
-        .into_iter()
-        .map(|destination| Entry {
-            keys: String::from(destination.key()),
-            name: destination.label(),
-            keep: keep(destination),
-        })
-        .collect();
-    let actions = vec![
-        Entry {
-            keys: String::from(ASK_KEY),
-            name: ASK_LABEL,
-            keep: 10,
-        },
-        Entry {
-            keys: String::from(PALETTE_CHORD),
-            name: PALETTE_LABEL,
-            keep: 9,
-        },
-    ];
-    let mut groups = Vec::with_capacity(3);
-    if !own.is_empty() {
-        groups.push(own);
+    data: DataState,
+    served: bool,
+    typing: bool,
+) -> Line {
+    let go_to = Entry::new(PALETTE_CHORD, PALETTE_LABEL, KEEP_GO_TO);
+    if typing {
+        return Line {
+            own: COMPOSER_KEYS
+                .iter()
+                .map(|hint| Entry::new(hint.keys, hint.action, KEEP_PAGE))
+                .collect(),
+            destinations: Vec::new(),
+            actions: vec![go_to],
+        };
     }
-    groups.push(destinations);
-    groups.push(actions);
-    groups
+    let legend = match (served, data) {
+        (false, _) => Vec::new(),
+        (true, DataState::Daemon) => key_legend_live(destination, live.as_ref()),
+        (true, _) => key_legend(destination, page),
+    };
+    Line {
+        own: legend
+            .into_iter()
+            .map(|(keys, name)| Entry::new(keys, name, KEEP_PAGE))
+            .collect(),
+        destinations: Destination::ALL
+            .into_iter()
+            .map(|item| Entry::new(item.key(), item.label(), keep(item)))
+            .collect(),
+        actions: vec![Entry::new(ASK_KEY, ASK_LABEL, KEEP_ASK), go_to],
+    }
 }
 
-/// The Cells the key line takes with names from `keep` on: its margins, each entry a Cell
-/// apart, and a line with a Cell each side between two groups.
-fn line_cells(groups: &[Vec<Entry>], keep: u8) -> usize {
-    let entries = groups.iter().flatten();
-    2 + entries
-        .clone()
-        .map(|e| e.cells(e.keep >= keep))
-        .sum::<usize>()
-        + entries.count().saturating_sub(1)
-        + 2 * groups.len().saturating_sub(1)
+impl Line {
+    /// The entries `fit` shows, each with the index of its group.
+    fn entries(&self, fit: Fit) -> impl Iterator<Item = (usize, &Entry)> {
+        let destinations: &[Entry] = if fit.destinations {
+            &self.destinations
+        } else {
+            &[]
+        };
+        [self.own.as_slice(), destinations, self.actions.as_slice()]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(group, entries)| entries.iter().map(move |entry| (group, entry)))
+    }
+
+    /// The Cells the first `count` entries take with `fit`: the line's margins, a Cell between
+    /// two entries, and a line with a Cell each side between two groups.
+    fn cells(&self, fit: Fit, count: usize) -> usize {
+        let mut cells = 2;
+        let mut last = None;
+        for (group, entry) in self.entries(fit).take(count) {
+            cells += match last {
+                None => 0,
+                Some(previous) if previous == group => 1,
+                Some(_) => 3,
+            };
+            cells += entry.cells(entry.keep >= fit.keep);
+            last = Some(group);
+        }
+        cells
+    }
+
+    /// The longest fit within `room` and how many entries it shows: all of them, unless even
+    /// bare caps overflow, when the last caps go whole rather than any being cut.
+    fn layout(&self, room: usize) -> (Fit, usize) {
+        for fit in fits() {
+            let count = self.entries(fit).count();
+            if self.cells(fit, count) <= room {
+                return (fit, count);
+            }
+        }
+        let bare = Fit {
+            keep: KEEP_PAGE + 1,
+            destinations: false,
+        };
+        let count = (0..self.entries(bare).count())
+            .rev()
+            .find(|&count| self.cells(bare, count) <= room)
+            .unwrap_or(0);
+        (bare, count)
+    }
 }
 
-/// The last row, a legend: each key as a cap and the name it goes to, the page's own keys first.
-/// When the grid is short of room the names give way one by one, the least used first; the
-/// page's keep theirs.
-fn key_line(app: AppState) -> AnyElement {
+/// The last row, a legend: each key as a cap and the name it goes to, the keys in focus first.
+/// When the grid is short of room the names give way one by one, then whole groups, as
+/// [`fits`] orders them; a key's cap is never cut.
+fn key_line(app: AppState, typing: Memo<bool>) -> AnyElement {
     let route = computed(move || {
         (
             app.destination(),
@@ -449,19 +559,13 @@ fn key_line(app: AppState) -> AnyElement {
         let room = term::columns();
         let (destination, page, live, data) = route.get();
         // An unserved destination answers no keys of its own; disconnected, none is served.
-        let daemon = data == DataState::Daemon;
         let served = match data {
             DataState::Fixture => true,
             DataState::Daemon => app.available(destination) == crate::model::Availability::Ready,
             DataState::Disconnected => false,
         };
-        let mut groups = groups(destination, page, live, daemon);
-        if !served && groups.len() > 2 {
-            groups.remove(0);
-        }
-        let keep = (0..=KEEP_PAGE)
-            .find(|&keep| line_cells(&groups, keep) <= room)
-            .unwrap_or(KEEP_PAGE);
+        let line = line(destination, page, live, data, served, typing.get());
+        let (fit, count) = line.layout(room);
         let mut row = view()
             .h(term::rows(1.0))
             .flex_shrink_0()
@@ -469,24 +573,65 @@ fn key_line(app: AppState) -> AnyElement {
             .items_center()
             .px(cells(1.0))
             .overflow_hidden();
-        for (at, group) in groups.into_iter().enumerate() {
-            if at > 0 {
-                row = row
-                    .child(term::space(1.0))
-                    .child(term::quiet("│"))
-                    .child(term::space(1.0));
-            }
-            for (index, entry) in group.into_iter().enumerate() {
-                if index > 0 {
-                    row = row.child(term::space(1.0));
+        let mut last = None;
+        for (group, entry) in line.entries(fit).take(count) {
+            match last {
+                None => {}
+                Some(previous) if previous == group => row = row.child(term::space(1.0)),
+                Some(_) => {
+                    row = row
+                        .child(term::space(1.0))
+                        .child(term::quiet("│"))
+                        .child(term::space(1.0));
                 }
-                row = row.child(if entry.keep >= keep {
-                    term::legend(entry.keys, entry.name)
-                } else {
-                    term::key_cap(entry.keys)
-                });
             }
+            last = Some(group);
+            let keys = entry.keys.clone();
+            row = row.child(if entry.keep >= fit.keep {
+                term::legend(keys, entry.name)
+            } else {
+                term::key_cap(keys)
+            });
         }
         row.into_element()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_line_drops_names_and_groups_before_any_key_is_cut() {
+        let views = [
+            (Destination::Inbox, None),
+            (Destination::Now, None),
+            (Destination::Plans, None),
+            (Destination::Review, None),
+            (Destination::Settings, None),
+            (Destination::Inbox, Some(Page::Question)),
+        ];
+        for (destination, page) in views {
+            for typing in [false, true] {
+                let line = line(destination, page, None, DataState::Fixture, true, typing);
+                for room in 20..=240 {
+                    let (fit, count) = line.layout(room);
+                    assert!(
+                        line.cells(fit, count) <= room,
+                        "{destination:?} at {room}: {fit:?} overflows"
+                    );
+                }
+                // The classic 80-column grid keeps every key in focus, named.
+                let (fit, count) = line.layout(80);
+                assert!(
+                    count >= line.own.len(),
+                    "{destination:?} at 80 drops own keys"
+                );
+                assert!(
+                    fit.keep <= KEEP_PAGE,
+                    "{destination:?} at 80 drops own names"
+                );
+            }
+        }
+    }
 }

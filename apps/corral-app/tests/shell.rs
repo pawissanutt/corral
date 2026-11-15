@@ -24,18 +24,35 @@ fn phone() -> EngineConfig {
     config
 }
 
-/// Starts the app on the explicitly chosen fixture preview, stored as the palette's
-/// `Data: fixture` choice remembers it; normal startup without a daemon is disconnected.
-/// `entries` may override it.
+/// Starts the app with `entries` in Storage. Without a daemon that is the disconnected state:
+/// no launch restores the fixture preview.
 fn with_storage(config: EngineConfig, entries: &[(&str, &str)]) -> Headless {
     let mut config = config;
     config.storage = Some(MemoryStorage::new(
-        std::iter::once(("corral.data", "preview"))
-            .chain(entries.iter().copied())
+        entries
+            .iter()
             .map(|(key, value)| (key.to_string(), value.to_string())),
     ));
     let mut app = Headless::start(config).unwrap();
     app.wait_for("id:ask-open").unwrap();
+    app
+}
+
+/// Starts the app as [`with_storage`] does, then chooses the fixture preview from the palette,
+/// as a person does after every launch.
+fn preview(config: EngineConfig, entries: &[(&str, &str)]) -> Headless {
+    let opener = if config.environment.idiom == Idiom::Phone {
+        "id:btn-search"
+    } else {
+        "id:palette-open"
+    };
+    let mut app = with_storage(config, entries);
+    app.press(opener).unwrap();
+    app.wait_for("id:palette-input").unwrap();
+    app.type_text("id:palette-input", "Data: fixture").unwrap();
+    app.press("text:Data: fixture").unwrap();
+    app.wait_for_gone("id:palette-input", Duration::from_secs(5))
+        .unwrap();
     app
 }
 
@@ -53,17 +70,17 @@ fn assert_text(app: &mut Headless, id: &str, expected: &str) {
 
 #[test]
 fn phone_opens_on_inbox_and_desktop_on_now() {
-    let mut app = with_storage(phone(), &[]);
+    let mut app = preview(phone(), &[]);
     assert_text(&mut app, "page-title", "Inbox");
     drop(app);
 
-    let mut app = with_storage(desktop(), &[]);
+    let mut app = preview(desktop(), &[]);
     app.wait_for("text:Who acts next").unwrap();
 }
 
 #[test]
 fn desktop_sidebar_reaches_every_destination() {
-    let mut app = with_storage(desktop(), &[]);
+    let mut app = preview(desktop(), &[]);
     for (slug, title) in [
         ("inbox", "Inbox"),
         ("now", "Now"),
@@ -92,7 +109,7 @@ fn desktop_sidebar_reaches_every_destination() {
 
 #[test]
 fn phone_tabs_and_more_reach_every_destination() {
-    let mut app = with_storage(phone(), &[]);
+    let mut app = preview(phone(), &[]);
     for (slug, title) in [
         ("inbox", "Inbox"),
         ("now", "Now"),
@@ -121,7 +138,7 @@ fn phone_tabs_and_more_reach_every_destination() {
 
 #[test]
 fn phone_settings_sections_push_their_pages() {
-    let mut app = with_storage(phone(), &[]);
+    let mut app = preview(phone(), &[]);
     app.press("id:tab-more").unwrap();
     app.press("id:nav-settings").unwrap();
     assert_text(&mut app, "page-title", "Settings");
@@ -141,7 +158,7 @@ fn phone_settings_sections_push_their_pages() {
 
 #[test]
 fn typing_in_ask_does_not_navigate() {
-    let mut app = with_storage(desktop(), &[]);
+    let mut app = preview(desktop(), &[]);
     app.press("id:nav-inbox").unwrap();
     app.wait_for("id:inbox-list").unwrap();
     app.press("id:ask-open").unwrap();
@@ -159,7 +176,7 @@ fn typing_in_ask_does_not_navigate() {
 
 #[test]
 fn ask_opens_with_the_field_focused() {
-    let mut app = with_storage(desktop(), &[]);
+    let mut app = preview(desktop(), &[]);
     app.press("id:ask-open").unwrap();
     app.wait_for("id:ask-input").unwrap();
     // Selector-free keystrokes cannot give an unfocused field the focus.
@@ -172,7 +189,7 @@ fn ask_opens_with_the_field_focused() {
     );
     drop(app);
 
-    let mut app = with_storage(desktop(), &[]);
+    let mut app = preview(desktop(), &[]);
     app.press("id:palette-open").unwrap();
     app.wait_for("id:palette-input").unwrap();
     let draft = "Why do violet badgers collect moonstones?";
@@ -193,7 +210,7 @@ fn ask_opens_with_the_field_focused() {
     );
     drop(app);
 
-    let mut app = with_storage(phone(), &[]);
+    let mut app = preview(phone(), &[]);
     app.press("id:ask-open").unwrap();
     app.wait_for("id:ask-input").unwrap();
     for key in ["h", "e", "l", "l", "o"] {
@@ -207,7 +224,7 @@ fn ask_opens_with_the_field_focused() {
 
 #[test]
 fn palette_free_text_opens_ask_with_the_text() {
-    let mut app = with_storage(desktop(), &[]);
+    let mut app = preview(desktop(), &[]);
     app.press("id:palette-open").unwrap();
     app.wait_for("id:palette-input").unwrap();
     let draft = "Why do violet badgers collect moonstones?";
@@ -229,7 +246,7 @@ fn palette_free_text_opens_ask_with_the_text() {
 #[test]
 fn disconnected_state_shows_no_healthy_segment_and_no_count() {
     for config in [desktop(), phone()] {
-        let mut app = with_storage(config, &[("corral.data", "disconnected")]);
+        let mut app = with_storage(config, &[]);
         app.wait_for("text:not connected").unwrap();
         app.wait_for("text:No connection to corrald.").unwrap();
         let texts = app.screen().texts();
@@ -245,7 +262,7 @@ fn disconnected_state_shows_no_healthy_segment_and_no_count() {
 
 #[test]
 fn sending_from_ask_appends_to_the_quick_thread_and_clears_the_draft() {
-    let mut app = with_storage(desktop(), &[]);
+    let mut app = preview(desktop(), &[]);
     app.press("id:ask-open").unwrap();
     app.wait_for("id:thread-A-7-items").unwrap();
     let message = "Why do violet badgers collect moonstones?";
@@ -262,7 +279,7 @@ fn sending_from_ask_appends_to_the_quick_thread_and_clears_the_draft() {
 #[test]
 fn destination_is_restored_from_storage() {
     for (config, home) in [(desktop(), "Now"), (phone(), "Inbox")] {
-        let mut app = with_storage(config.clone(), &[("corral.destination", "plans")]);
+        let mut app = preview(config.clone(), &[("corral.destination", "plans")]);
         app.wait_for("id:plans-list").unwrap();
         if home == "Now" {
             app.wait_for("id:qhead-title").unwrap();
@@ -271,7 +288,7 @@ fn destination_is_restored_from_storage() {
         }
         drop(app);
 
-        let mut app = with_storage(config, &[("corral.destination", "not-a-destination")]);
+        let mut app = preview(config, &[("corral.destination", "not-a-destination")]);
         if home == "Now" {
             app.wait_for("text:Who acts next").unwrap();
         } else {
@@ -282,7 +299,7 @@ fn destination_is_restored_from_storage() {
 
 #[test]
 fn answering_the_question_marks_it_answered_and_drops_the_inbox_count() {
-    let mut app = with_storage(desktop(), &[]);
+    let mut app = preview(desktop(), &[]);
     app.press("id:nav-inbox").unwrap();
     assert_text(&mut app, "count-inbox", "5");
     app.wait_for("id:inbox-question").unwrap();
@@ -296,7 +313,7 @@ fn answering_the_question_marks_it_answered_and_drops_the_inbox_count() {
 
 #[test]
 fn offline_approval_refuses_without_opening_confirmation() {
-    let mut app = with_storage(desktop(), &[]);
+    let mut app = preview(desktop(), &[]);
     app.press("id:palette-open").unwrap();
     app.type_text("id:palette-input", "Connection: offline")
         .unwrap();
@@ -317,7 +334,7 @@ fn offline_approval_refuses_without_opening_confirmation() {
 
 #[test]
 fn phone_question_back_returns_to_the_inbox_list() {
-    let mut app = with_storage(phone(), &[]);
+    let mut app = preview(phone(), &[]);
     app.press("id:inbox-question").unwrap();
     app.wait_for("id:qhead-title").unwrap();
     assert_eq!(app.screen().count("id:inbox-list").unwrap(), 0);
@@ -325,4 +342,56 @@ fn phone_question_back_returns_to_the_inbox_list() {
     app.wait_for("id:inbox-list").unwrap();
     app.wait_for("id:inbox-question").unwrap();
     assert_text(&mut app, "page-title", "Inbox");
+}
+
+#[test]
+fn tab_moves_the_keyboard_focus_instead_of_being_swallowed() {
+    let mut app = preview(desktop(), &[("corral.destination", "now")]);
+    app.wait_for("text:Who acts next").unwrap();
+    let expanded = |app: &Headless| {
+        app.screen()
+            .accessibility_state("id:sidebar-toggle")
+            .unwrap()
+            .expanded
+    };
+    assert_eq!(expanded(&app), Some(true));
+    // The first stop is the top bar's sidebar toggle: Enter presses it there, and Now stays.
+    app.press_key("tab").unwrap();
+    app.press_key("enter").unwrap();
+    assert_eq!(expanded(&app), Some(false));
+    app.wait_for("text:Who acts next").unwrap();
+}
+
+#[test]
+fn enter_on_a_focused_sidebar_item_goes_there_instead_of_opening_the_list_row() {
+    // The shell decides the Tab order; each try starts afresh and Tabs one stop further.
+    for stops in 1..=24 {
+        let mut app = preview(desktop(), &[("corral.destination", "inbox")]);
+        app.wait_for("id:inbox-list").unwrap();
+        for _ in 0..stops {
+            app.press_key("tab").unwrap();
+        }
+        app.press_key("enter").unwrap();
+        if app
+            .wait_for_within("id:plans-list", Duration::from_millis(300))
+            .is_ok()
+        {
+            assert_eq!(app.screen().count("id:question-main").unwrap(), 0);
+            return;
+        }
+    }
+    panic!("Tab never reached the sidebar's Plans item, or Enter did not press it");
+}
+
+#[test]
+fn confirmation_takes_the_focus_so_enter_cancels_it() {
+    let mut app = preview(desktop(), &[]);
+    app.press("id:nav-review").unwrap();
+    app.wait_for("id:btn-approve").unwrap();
+    app.press("id:btn-approve").unwrap();
+    app.wait_for("id:confirm").unwrap();
+    app.press_key("enter").unwrap();
+    app.wait_for_gone("id:confirm", Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(app.screen().count("id:toast").unwrap(), 0);
 }

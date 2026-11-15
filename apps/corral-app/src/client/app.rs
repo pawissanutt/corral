@@ -1,4 +1,5 @@
 //! Shared native/browser application semantics; transports only carry CONTROL frames.
+mod cache;
 mod cancellation;
 mod commands;
 mod details;
@@ -27,7 +28,7 @@ use corral_protocol::{
 use nsh_core::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) type Outgoing = (&'static str, Value, Option<String>);
 pub(super) const CAPS: &[&str] = &[
@@ -70,12 +71,12 @@ pub(super) struct AppState {
     outbox: Option<Outbox>,
     scopes: BTreeSet<String>,
     session_scopes: BTreeMap<String, usize>,
+    retained: cache::RetainedCache,
     detail_inflight: BTreeMap<String, String>,
     detail_pages: BTreeMap<String, Vec<DetailReply>>,
     detail_bytes: BTreeMap<String, usize>,
     detail_reread: BTreeMap<String, u64>,
     item_fetches: BTreeMap<String, session_items::ItemAssembly>,
-    item_ready: VecDeque<String>,
     changes_inflight: bool,
     changes_cursor: Option<u64>,
     device_walk: Option<(String, Vec<DeviceInfo>)>,
@@ -90,12 +91,12 @@ impl AppState {
             outbox: None,
             scopes: BTreeSet::from([QUICK_THREAD.into()]),
             session_scopes: BTreeMap::new(),
+            retained: cache::RetainedCache::default(),
             detail_inflight: BTreeMap::new(),
             detail_pages: BTreeMap::new(),
             detail_bytes: BTreeMap::new(),
             detail_reread: BTreeMap::new(),
             item_fetches: BTreeMap::new(),
-            item_ready: VecDeque::new(),
             changes_inflight: false,
             changes_cursor: None,
             device_walk: None,
@@ -107,6 +108,7 @@ impl AppState {
         self.ready = false;
         feed.update(|feed| {
             feed.mark_stale();
+            feed.link = Link::Connecting;
             for thread in feed.threads.values_mut() {
                 thread.live = None;
             }
@@ -148,7 +150,7 @@ impl AppState {
             self.scopes = BTreeSet::from([QUICK_THREAD.into()]);
             self.uploads.clear();
             self.item_fetches.clear();
-            self.item_ready.clear();
+            self.retained = cache::RetainedCache::default();
             self.cancel_inflight.clear();
             feed.update(|feed| {
                 feed.board = Board::default();
@@ -169,6 +171,7 @@ impl AppState {
                 }
                 feed.changes.clear();
                 feed.changes_head = 0;
+                feed.changes_unseen = None;
                 feed.changes_older = None;
                 feed.topics.clear();
                 feed.operations.clear();
@@ -196,7 +199,7 @@ impl AppState {
             if feed.devices.is_empty() && feed.registry != Registry::Current {
                 feed.devices = vec![super::map::device(session.device.clone())];
             }
-            feed.seen = Some(session.seen.clone());
+            feed.seen_received(session.seen.clone());
             feed.session = Some(session);
         });
         if refresh_only {
@@ -339,30 +342,7 @@ impl AppState {
                 outgoing.extend(self.request(feed, message));
             }
         }
-        let targets = feed.with_untracked(|feed| {
-            feed.details
-                .values()
-                .map(|detail| detail.target.clone())
-                .collect::<Vec<_>>()
-        });
-        for target in targets {
-            let etag = feed.with_untracked(|feed| {
-                feed.detail(&target)
-                    .and_then(|detail| detail.pages.first())
-                    .map(|page| page.etag.clone())
-            });
-            outgoing.extend(self.request(
-                feed,
-                ClientRequest::Detail {
-                    request_id: requests::new_id(),
-                    request: DetailGet {
-                        target,
-                        etag,
-                        page: None,
-                    },
-                },
-            ));
-        }
+        outgoing.extend(self.refresh_details(feed));
         outgoing.extend(self.pump_uploads());
         Ok(outgoing)
     }
@@ -424,6 +404,7 @@ impl AppState {
                 feed.update(|feed| feed.problem = Some(problem));
             }
         }
+        self.trim_retained(feed);
     }
     /// Native drains multiple intents before registration; browser dispatch/flush is synchronous.
     /// Drop prepared sends/uploads or filings reads retired by a later intent in the batch.
@@ -560,27 +541,6 @@ fn error_status(error: &ClientError) -> CommandStatus {
         _ => CommandStatus::Failed,
     }
 }
-fn without_proofs(mut value: Value) -> Value {
-    fn strip(value: &mut Value) {
-        match value {
-            Value::Object(object) => {
-                object.remove("confirm");
-                object.remove("operation_token");
-                for value in object.values_mut() {
-                    strip(value);
-                }
-            }
-            Value::Array(array) => {
-                for value in array {
-                    strip(value);
-                }
-            }
-            _ => {}
-        }
-    }
-    strip(&mut value);
-    value
-}
 
 pub(super) fn devices() -> Outgoing {
     out(
@@ -593,9 +553,16 @@ pub(super) fn devices() -> Outgoing {
     )
 }
 
-fn request_digest(params: &Value) -> String {
+fn request_digest(method: &str, params: &Value) -> String {
     use sha2::{Digest, Sha256};
-    let encoded = serde_json::to_vec(&without_proofs(params.clone())).unwrap_or_default();
+    // Store/device are bound by the outbox namespace. Keep canonical command values intact:
+    // nested user data named `confirm` must not disappear with envelope proofs.
+    let semantic = if method == ACT_SUBMIT {
+        json!([method, params["command"], params["expect"]])
+    } else {
+        json!([method, params["key"], params["rev"], params["choice"]])
+    };
+    let encoded = serde_json::to_vec(&semantic).unwrap_or_default();
     format!("{:x}", Sha256::digest(encoded))
 }
 
@@ -603,13 +570,117 @@ fn request_digest(params: &Value) -> String {
 mod tests {
     use super::*;
     #[test]
-    fn recovery_identity_ignores_short_lived_proofs_but_not_command_input() {
-        let mut request = json!({"cmd_id":"once","command":{"family":"task","args":{"id":"T-1"}}});
-        let digest = request_digest(&request);
+    fn same_id_confirmation_retry_ignores_freshness_but_not_command_input() {
+        let mut request = json!({"cmd_id":"once","issued_at":"2026-11-14T10:00:00Z","expires_at":"2026-11-14T10:01:00Z","expect":{"revision":1},"command":{"family":"task","args":{"id":"T-1"}}});
+        let digest = request_digest(ACT_SUBMIT, &request);
         request["confirm"] = json!({"preview_id":"temporary","digest":"proof"});
-        assert_eq!(request_digest(&request), digest);
+        request["issued_at"] = json!("2026-11-14T10:00:10Z");
+        request["expires_at"] = json!("2026-11-14T10:01:10Z");
+        assert_eq!(request_digest(ACT_SUBMIT, &request), digest);
         request["command"]["args"]["id"] = json!("T-2");
-        assert_ne!(request_digest(&request), digest);
+        assert_ne!(request_digest(ACT_SUBMIT, &request), digest);
+    }
+
+    #[test]
+    fn reconnect_and_unenrolled_welcome_never_render_healthy() {
+        use crate::model::{Form, devices::DeviceLink, effect::Conn, health};
+        let health_reading = DaemonHealth {
+            level: DaemonLevel::Healthy,
+            reasons: vec![],
+            runtimes: vec![],
+            pm: PmLevel::Live,
+            pass_seq: 1,
+            last_pass: None,
+            last_pass_ms: None,
+            version: "1".into(),
+        };
+        let mut feed = Feed::default();
+        feed.welcome_received("/readiness/.corral".into(), health_reading.clone());
+        for identity in [
+            DeviceLink::Unenrolled,
+            DeviceLink::Failed("credential read failed".into()),
+        ] {
+            feed.device = identity;
+            assert_eq!(health::daemon_env(&feed, Form::Terminal).conn, Conn::Down);
+            assert!(
+                health::daemon_snapshot(&feed, Form::Terminal)
+                    .health
+                    .segments
+                    .iter()
+                    .all(|segment| segment.tone != health::Tone::Ok)
+            );
+        }
+        feed.device = DeviceLink::Enrolled {
+            id: "dev-ready".into(),
+            name: "Ready".into(),
+        };
+        feed.session = Some(serde_json::from_value(json!({
+            "device":{"id":"dev-ready","name":"Ready","platform":"native","app_version":"0","enrolled_at":"2026-11-14T09:00:00Z","revoked_at":null},
+            "authority":{"reply":true,"act":true,"assistant":true,"assistant_act":true,"admin":true},
+            "seen":{"through":0,"at":null},"server_time":"2026-11-14T09:00:00Z"
+        })).unwrap());
+        feed.board_received(1, vec![], &[], true);
+        assert_eq!(
+            health::daemon_env(&feed, Form::Terminal).conn,
+            Conn::Healthy
+        );
+        feed.link_lost("connection interrupted".into());
+        feed.connecting("test".into());
+        assert!(!feed.ready());
+        assert_eq!(health::daemon_env(&feed, Form::Terminal).conn, Conn::Down);
+        assert!(health::daemon_connection_banner(&feed, Form::Terminal).is_some());
+        assert!(feed.board.complete);
+        assert_eq!(feed.problem.as_deref(), Some("connection interrupted"));
+    }
+
+    #[test]
+    fn offline_new_end_and_profile_never_become_phantom_pending_operations() {
+        use crate::model::assistant::{Action, State};
+        let feed = Feed::default();
+        let mut state = State::default();
+        for action in [
+            Action::NewSession,
+            Action::ConfirmEnd("A-1".into()),
+            Action::PickProfile {
+                thread: "A-1".into(),
+                profile: "other".into(),
+            },
+        ] {
+            let effects = state.act_live(action, &feed);
+            assert!(matches!(
+                effects.as_slice(),
+                [crate::model::Effect::Toast(_)]
+            ));
+            assert!(state.live.waiting_ops().is_empty());
+        }
+        assert!(state.live.picks.is_empty());
+        assert!(state.live.ends.is_empty());
+    }
+
+    #[test]
+    fn failed_stop_releases_the_turn_for_retry_without_claiming_abort() {
+        let mut state = crate::model::assistant::State::default();
+        let key = Id::from("failed-stop");
+        state.live.stopping.insert("A-1".into(), 3);
+        state.live.stop_ops.insert(key.clone(), ("A-1".into(), 3));
+        let effects = state.settle_stop(
+            &key,
+            &Operation {
+                method: ASSISTANT_STOP.into(),
+                loading: false,
+                value: None,
+                error: Some(ClientError {
+                    code: "refused".into(),
+                    message: "Stop failed".into(),
+                }),
+            },
+        );
+        assert!(!state.live.stopping.contains_key("A-1"));
+        assert!(state.live.stop_ops.is_empty());
+        assert!(matches!(
+            effects.as_slice(),
+            [crate::model::Effect::Toast(_)]
+        ));
     }
 }
 

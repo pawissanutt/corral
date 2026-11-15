@@ -11,7 +11,7 @@ use crate::model::assistant::{
     live_prompt_pane, live_thread_header, prompt_pane, thread_header,
 };
 use crate::model::{Destination, Form, Id};
-use crate::screens::PhonePage;
+use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
 use crate::ui::ask;
 use crate::ui::icons::Icon;
@@ -70,9 +70,14 @@ fn page(app: AppState, source: ThreadRef) -> AnyElement {
         context(app, "thread-facts", dynamic(move || facts(app, &source)))
     };
     let end = end_dialog(app, &source);
+    // The host is a column: growing along it fills the frame, so the transcript's scroll takes
+    // the height and the composer sits at the bottom. A percentage height does not resolve
+    // against the host's flexed size and collapsed the page to its content.
     view()
-        .size_full()
+        .flex_1()
         .flex_col()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
         .bg(color(Token::Bg))
         .child(dynamic(move || Some(head(app, &source))))
         .child(columns(
@@ -366,7 +371,7 @@ pub fn live_thread_title(app: AppState, id: Id) -> Memo<String> {
     })
 }
 
-/// The thread as a pushed phone page: the compact title, back to Agents, the thread's state and
+/// The thread as a pushed phone page: the compact title, the thread's state and
 /// End (while the served session can be ended) at the trailing edge, the transcript scrolling
 /// itself, the composer docked in place of the tab bar and no floating Ask button.
 fn phone_page(app: AppState, source: ThreadRef) -> PhonePage {
@@ -375,9 +380,6 @@ fn phone_page(app: AppState, source: ThreadRef) -> PhonePage {
         || source.as_str().to_owned(),
         |info| info.phone_title.clone(),
     );
-    let back = info
-        .as_ref()
-        .map_or(Destination::Agents.label(), |info| info.back_label);
     let live = matches!(source, ThreadRef::Live(_));
     let trailing = (live || info.as_ref().is_some_and(|info| info.state.is_some())).then(|| {
         let source = source.clone();
@@ -416,10 +418,9 @@ fn phone_page(app: AppState, source: ThreadRef) -> PhonePage {
         .into_element();
     PhonePage {
         title,
-        back,
         body,
         trailing,
-        bar: Some(ask::docked(app, source)),
+        bar: Some(PhoneBar::always(ask::docked(app, source))),
         ask: false,
         scroll: false,
     }

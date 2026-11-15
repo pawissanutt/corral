@@ -167,6 +167,31 @@ impl<'a> Shown<'a> {
             .and_then(|detail| detail.run.as_ref())
             .map(|run| run.id.as_str())
     }
+
+    pub fn identity(&self) -> Option<super::CandidateAt> {
+        Some(super::CandidateAt {
+            task: self.id().clone(),
+            candidate: corral_protocol::detail::ReviewCandidate {
+                run: self.run()?.to_owned(),
+                base: self.review?.base.clone()?,
+                head: self.review?.candidate_sha.clone()?,
+            },
+        })
+    }
+
+    pub fn matches(&self, at: &super::CandidateAt) -> bool {
+        at.task == *self.id() && self.matches_candidate(&at.candidate)
+    }
+
+    pub fn matches_candidate(&self, candidate: &corral_protocol::detail::ReviewCandidate) -> bool {
+        self.run() == Some(candidate.run.as_str())
+            && self.review.and_then(|review| review.base.as_deref())
+                == Some(candidate.base.as_str())
+            && self
+                .review
+                .and_then(|review| review.candidate_sha.as_deref())
+                == Some(candidate.head.as_str())
+    }
 }
 
 /// A SHA as Review prints it: eight characters.
@@ -174,39 +199,9 @@ pub(super) fn short(sha: &str) -> &str {
     sha.get(..8).unwrap_or(sha)
 }
 
-/// A daemon instant in this device's wall clock: `18:40` today, `Nov 12 18:40` before. The
-/// offset comes from the feed's own tick (UTC seconds beside the local `HH:MM`).
+/// The shared local date/time formatter also used by work and plans.
 pub(super) fn when(at: &str, feed: &Feed) -> String {
-    let Ok(stamp) = at.parse::<jiff::Timestamp>() else {
-        return String::new();
-    };
-    let offset = feed
-        .clock
-        .split_once(':')
-        .and_then(|(h, m)| Some(h.trim().parse::<i64>().ok()? * 60 + m.trim().parse::<i64>().ok()?))
-        .map(|local| {
-            let utc = i64::try_from((feed.now / 60) % 1440).unwrap_or(0);
-            let minutes = (local - utc).rem_euclid(1440);
-            if minutes > 14 * 60 {
-                minutes - 1440
-            } else {
-                minutes
-            }
-        })
-        .unwrap_or(0)
-        * 60;
-    let local = stamp.as_second() + offset;
-    let today = (i64::try_from(feed.now).unwrap_or(0) + offset).div_euclid(86_400);
-    let minute = local.rem_euclid(86_400) / 60;
-    let clock = format!("{:02}:{:02}", minute / 60, minute % 60);
-    if local.div_euclid(86_400) == today {
-        return clock;
-    }
-    jiff::Timestamp::from_second(local)
-        .ok()
-        .map(|day| day.to_zoned(jiff::tz::TimeZone::UTC))
-        .map(|day| format!("{} {clock}", day.strftime("%b %-d")))
-        .unwrap_or(clock)
+    crate::model::work::when(at, feed)
 }
 
 fn stage_word(mark: Mark) -> &'static str {
@@ -684,6 +679,7 @@ mod tests {
             question_rev: None,
             answerable: false,
             unanswerable_reason: Some("open_review".into()),
+            attention: None,
             rev: 1,
         }
     }

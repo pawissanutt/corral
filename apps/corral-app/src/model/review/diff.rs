@@ -261,7 +261,21 @@ pub fn parse_patch(text: &str, complete: bool) -> ParsedPatch {
             }
         }
         let Some(current) = patch.hunks.last_mut() else {
-            if line.starts_with("Binary files") || line.starts_with("rename ") {
+            if [
+                "Binary files",
+                "GIT binary patch",
+                "rename ",
+                "copy ",
+                "old mode ",
+                "new mode ",
+                "new file mode ",
+                "deleted file mode ",
+                "similarity index ",
+                "dissimilarity index ",
+            ]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+            {
                 patch.notes.push(line.to_owned());
             }
             continue;
@@ -404,5 +418,18 @@ mod tests {
         assert_eq!(parse_patch(text, true).hunks[1].lines.len(), 2);
         assert_eq!(line_index(&patch.hunks[0].lines, 4, true), Some(1));
         assert_eq!(line_index(&patch.hunks[0].lines, 4, false), Some(2));
+    }
+
+    #[test]
+    fn mode_only_and_empty_file_changes_preserve_git_metadata() {
+        for headers in [
+            "old mode 100644\nnew mode 100755\n",
+            "new file mode 100644\n",
+            "deleted file mode 100644\n",
+        ] {
+            let patch = parse_patch(&format!("diff --git a/x b/x\n{headers}"), true);
+            assert!(patch.hunks.is_empty());
+            assert_eq!(patch.notes, headers.lines().collect::<Vec<_>>());
+        }
     }
 }

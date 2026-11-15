@@ -13,6 +13,7 @@ fn detail_pages_reassemble_every_typed_array_item() -> Result<()> {
     let full = DetailBody::Burnup(Burnup {
         scope: "all".to_owned(),
         points: points.clone(),
+        completeness: Default::default(),
     });
     let mut offset = 0;
     let mut assembled = Vec::new();
@@ -40,6 +41,7 @@ fn continuation_rejects_another_selector_or_content_revision() -> Result<()> {
         DetailBody::Burnup(Burnup {
             scope: "all".to_owned(),
             points: vec![],
+            completeness: Default::default(),
         }),
         Some(1),
         "a".repeat(64),
@@ -61,6 +63,7 @@ fn utf8_bounds_and_oversized_metadata_fail_explicitly() -> Result<()> {
     let body = DetailBody::Burnup(Burnup {
         scope: "x".repeat(70 * 1024),
         points: vec![],
+        completeness: Default::default(),
     });
     assert!(paging::body_page(body, 0).is_err());
     Ok(())

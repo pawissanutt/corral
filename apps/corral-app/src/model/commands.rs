@@ -1,5 +1,10 @@
 //! Palette rows, their actions and fresh-confirmation previews. Renderers display these values
-//! and delegate actions to AppState; filtering and command wording stay here.
+//! and delegate actions to AppState; filtering and command wording stay here. Which keys each
+//! destination answers, and their terminal legend, are in `keys`.
+
+mod keys;
+
+pub use keys::{key_legend, key_legend_live, list_keys, list_keys_live};
 
 use corral_protocol::rows::{InboxKind, InboxState, PlanState};
 
@@ -12,8 +17,15 @@ use crate::model::{
 /// Search field placeholder shared by every palette form.
 pub const PALETTE_PLACEHOLDER: &str = "Go to, open a task id, answer, accept…";
 
-/// Keyboard help beneath the desktop palette.
-pub const PALETTE_HINTS: [(&str, &str); 3] = [("↑↓", "move"), ("Enter", "run"), ("Esc", "close")];
+/// Keyboard help beneath the desktop palette and in the terminal palette's head. Escape first
+/// clears a typed query (the command field's own behaviour), so the hint says what it does now.
+pub const fn palette_hints(query_empty: bool) -> [(&'static str, &'static str); 3] {
+    [
+        ("↑↓", "move"),
+        ("Enter", "run"),
+        ("Esc", if query_empty { "close" } else { "clear" }),
+    ]
+}
 
 /// The palette footer's command-system attribution.
 pub const PALETTE_FOOTER: &str = "Command · NSH";
@@ -55,8 +67,11 @@ pub const CONFIRM_EFFECT_HEADING: &str = "Exact effect";
 /// Confirmation cancellation button label.
 pub const CONFIRM_CANCEL: &str = "Cancel";
 
-/// Phone presence-check prompt above the confirmation buttons.
-pub const CONFIRM_PRESENCE: &str = "Confirm with Face ID, or enter your PIN";
+/// What a tap on the phone's Confirm is checked against. There is no biometric or PIN step on
+/// any client: the tap is the confirmation, and corrald accepts it only from this paired device
+/// and only while the preview still matches.
+pub const CONFIRM_CHECK: &str = "Tapping Confirm is the check. corrald accepts it only from this \
+     paired device, and only while the preview above still matches.";
 
 /// Phone confirmation is generic; other forms name the command's first verb.
 pub fn confirm_label(command: Risk, form: Form) -> String {
@@ -93,48 +108,6 @@ pub fn act_confirm_word(title: &str) -> String {
         .next()
         .unwrap_or_default()
         .to_lowercase()
-}
-
-/// Screen-local terminal key hints, using the same page guards as the domain reducers.
-/// Destination navigation and global Ask/palette hints are rendered separately by the shell.
-pub fn key_legend(
-    destination: Destination,
-    page: Option<Page>,
-) -> Vec<(&'static str, &'static str)> {
-    match (destination, page) {
-        (_, Some(Page::Question)) => vec![("1 2", "choose"), ("e", "evidence")],
-        (Destination::Inbox, None) => vec![
-            ("j k", "move"),
-            ("Enter", "open"),
-            ("f", "focus"),
-            ("1 2", "choose"),
-        ],
-        (Destination::Now, None | Some(Page::Task(_))) => {
-            vec![("j k", "move"), ("Enter", "open"), ("Tab", "tab")]
-        }
-        (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member"), ("x", "scale")],
-        (Destination::Review, None) => vec![("s", "split")],
-        _ => Vec::new(),
-    }
-}
-
-/// The daemon-mode terminal key hints of the destination or the live page on top.
-pub fn key_legend_live(
-    destination: Destination,
-    top: Option<&Live>,
-) -> Vec<(&'static str, &'static str)> {
-    match (destination, top) {
-        (_, Some(Live::Question(_))) => {
-            vec![("1-9", "choose"), ("j k", "move"), ("e", "evidence")]
-        }
-        (_, Some(Live::Session(_))) => vec![("`", "transcript/terminal")],
-        (_, Some(Live::Thread(_))) => Vec::new(),
-        (Destination::Inbox, _) => vec![("j k", "move"), ("Enter", "open"), ("1-9", "choose")],
-        (Destination::Now, _) => vec![("j k", "move"), ("Enter", "open")],
-        (Destination::Plans, _) => vec![("j k", "plan"), ("Enter", "open")],
-        (Destination::Review, _) => vec![("s", "split")],
-        _ => Vec::new(),
-    }
 }
 
 /// A local app command, including demo switches not represented by reducer effects.
@@ -243,13 +216,7 @@ pub fn commands(
     } else if preview {
         rows.extend(fixture_open());
     }
-    rows.push(row(
-        "pair",
-        "Device",
-        "Pair a new device",
-        None,
-        Action::Go(Destination::Settings),
-    ));
+    rows.push(pair_row(data));
     if preview {
         rows.push(row(
             "toggle-term",
@@ -315,7 +282,8 @@ pub fn commands(
     rows
 }
 
-/// The free-text Ask row, unless the text reads as navigation.
+/// The free-text Ask row, unless the text reads as navigation. It is ranked after every
+/// command the text also matches (`filtered`), so Enter runs a typed command, not a question.
 fn ask_with(query: &str) -> Option<Command> {
     let folded = query.to_lowercase();
     if query.is_empty()
@@ -329,11 +297,33 @@ fn ask_with(query: &str) -> Option<Command> {
         "ask-with",
         "Ask",
         format!("Ask: “{query}”"),
-        Some("Enter"),
+        None,
         Action::Ask(Some(query.into())),
     );
     ask.always = true;
     Some(ask)
+}
+
+/// Where pairing happens from here: an enrolled device pairs others from Devices; anything
+/// else pairs itself from Connection. The palette only navigates; pairing is that page's.
+fn pair_row(data: DataState) -> Command {
+    if data == DataState::Daemon {
+        row(
+            "pair",
+            "Device",
+            "Pair a new device",
+            None,
+            Action::Settings(SettingsSection::Devices),
+        )
+    } else {
+        row(
+            "pair",
+            "Device",
+            "Pair this device",
+            None,
+            Action::Settings(SettingsSection::Connection),
+        )
+    }
 }
 
 /// Adds live rows of one group: those matching the query, a few without one.
@@ -398,6 +388,11 @@ fn live_needs_you(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
                         Live::Review(task.into()),
                     )
                 }
+                InboxKind::OwnerDecision => (
+                    format!("Decide {} · {}", row.id, row.title),
+                    crate::model::inbox::target(row)?,
+                ),
+                InboxKind::PmAction => return None,
                 InboxKind::Stuck | InboxKind::Escalated | InboxKind::Other => {
                     let task = row.task.as_deref()?;
                     (format!("{task} · {}", row.title), Live::Task(task.into()))
@@ -592,7 +587,8 @@ fn demo_rows() -> Vec<Command> {
     rows
 }
 
-/// Commands matching group plus label, case-insensitively; the Ask row always survives.
+/// Commands matching group plus label, case-insensitively. The free-text Ask row always
+/// survives, after the commands the text matches, so the first match is the default.
 pub fn filtered(
     query: &str,
     socket_configured: bool,
@@ -600,16 +596,19 @@ pub fn filtered(
     feed: &Feed,
 ) -> Vec<Command> {
     let folded = query.trim().to_lowercase();
-    commands(query, socket_configured, data, feed)
-        .into_iter()
-        .filter(|command| {
-            command.always
-                || folded.is_empty()
-                || format!("{} {}", command.group, command.label)
-                    .to_lowercase()
-                    .contains(&folded)
-        })
-        .collect()
+    let (ask, mut rows): (Vec<Command>, Vec<Command>) =
+        commands(query, socket_configured, data, feed)
+            .into_iter()
+            .filter(|command| {
+                command.always
+                    || folded.is_empty()
+                    || format!("{} {}", command.group, command.label)
+                        .to_lowercase()
+                        .contains(&folded)
+            })
+            .partition(|command| command.always);
+    rows.extend(ask);
+    rows
 }
 
 /// Resolves a selected command without interpreting arbitrary ids as executable commands.
@@ -645,7 +644,6 @@ pub const fn destination_key(destination: Destination) -> Option<&'static str> {
 pub fn shortcut(id: &str) -> Option<&'static str> {
     match id {
         "ask" => Some("/"),
-        "ask-with" => Some("Enter"),
         "toggle-term" => Some("`"),
         _ => id
             .strip_prefix("go:")

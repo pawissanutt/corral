@@ -2,7 +2,6 @@ use super::*;
 use crate::model::session_feed::ItemFetch;
 
 const MAX_ITEM_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_READY_ITEMS: usize = 64;
 
 pub(super) struct ItemAssembly {
     session: String,
@@ -13,6 +12,14 @@ pub(super) struct ItemAssembly {
 }
 
 impl ItemAssembly {
+    pub(super) fn root(&self) -> &str {
+        &self.root
+    }
+
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.json.capacity() + self.root.len() + self.session.len() + self.token.len()
+    }
+
     fn request(&self, id: String) -> Outgoing {
         out(
             DETAIL_GET,
@@ -76,17 +83,21 @@ impl AppState {
                 Some(ItemFetch::Loading | ItemFetch::Ready(_))
             )
         }) {
+            self.touch_item(feed, &session, &token);
+            self.trim_retained(feed);
             return vec![];
         }
         if !self.ready {
             feed.update(|feed| {
                 feed.items
-                    .insert(token, ItemFetch::Failed(offline().message));
+                    .insert(token.clone(), ItemFetch::Failed(offline().message));
             });
+            self.touch_item(feed, &session, &token);
+            self.trim_retained(feed);
             return vec![];
         }
         let assembly = ItemAssembly {
-            session,
+            session: session.clone(),
             root: token.clone(),
             token: token.clone(),
             bytes: None,
@@ -94,11 +105,17 @@ impl AppState {
         };
         let id = requests::new_id();
         let outgoing = assembly.request(id.clone());
-        self.item_fetches.insert(id, assembly);
+        self.item_fetches.insert(id.clone(), assembly);
         feed.update(|feed| {
-            feed.items.insert(token, ItemFetch::Loading);
+            feed.items.insert(token.clone(), ItemFetch::Loading);
         });
-        vec![outgoing]
+        self.touch_item(feed, &session, &token);
+        self.trim_retained(feed);
+        if self.item_fetches.contains_key(&id) {
+            vec![outgoing]
+        } else {
+            vec![]
+        }
     }
 
     pub(super) fn resume_items(&mut self) -> Vec<Outgoing> {
@@ -141,28 +158,33 @@ impl AppState {
         let Some(mut assembly) = self.item_fetches.remove(&id) else {
             return Ok(vec![]);
         };
+        let root = assembly.root.clone();
         match result.and_then(|page| assembly.append(page)) {
             Ok(None) => {
                 let outgoing = assembly.request(id.clone());
-                self.item_fetches.insert(id, assembly);
-                Ok(vec![outgoing])
+                self.item_fetches.insert(id.clone(), assembly);
+                self.touch_item(feed, session, &root);
+                self.trim_retained(feed);
+                Ok(if self.item_fetches.contains_key(&id) {
+                    vec![outgoing]
+                } else {
+                    vec![]
+                })
             }
             Ok(Some(item)) => {
-                self.item_ready.push_back(assembly.root.clone());
                 feed.update(|feed| {
                     feed.items.insert(assembly.root, ItemFetch::Ready(item));
-                    while self.item_ready.len() > MAX_READY_ITEMS {
-                        if let Some(oldest) = self.item_ready.pop_front() {
-                            feed.items.remove(&oldest);
-                        }
-                    }
                 });
+                self.touch_item(feed, session, &root);
+                self.trim_retained(feed);
                 Ok(vec![])
             }
             Err(reason) => {
                 feed.update(|feed| {
                     feed.items.insert(assembly.root, ItemFetch::Failed(reason));
                 });
+                self.touch_item(feed, session, &root);
+                self.trim_retained(feed);
                 Ok(vec![])
             }
         }

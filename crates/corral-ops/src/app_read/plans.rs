@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, ensure};
 use corral_core::backend::{HeadQuery, PageReq, RowQuery, TaskPart};
-use corral_core::{PlanHead, Status, TaskHead};
+use corral_core::{PlanHead, PlanRunState, Reviewer, Status, TaskHead, Verdict};
 use corral_protocol::detail::{
     DetailBody, PatchPage, PlanDetail, PlanDocument, PlanEdge, PlanMember, PlanPosition,
     PlanProposal, PlanReview,
@@ -37,7 +37,7 @@ pub fn plans_rows(ctx: &Ctx) -> Result<Vec<PlanRow>> {
             title: short(&head.title, 120),
             role: Some(role(&head)),
             linked: linked(ctx, &head)?,
-            state: state(&head),
+            state: state(ctx, &head),
             revision: selected.as_ref().map(|(_, plan)| plan.id.clone()),
             delivery: delivery(&head, selected.as_ref().map(|(_, p)| p)),
             members_total: count(members.len()),
@@ -206,7 +206,7 @@ pub(super) fn plan(ctx: &Ctx, id: &str) -> Result<DetailBody> {
         role: Some(role(&head)),
         linked: linked(ctx, &head)?,
         revision: selected.as_ref().map(|(_, p)| p.id.clone()),
-        state: state(&head),
+        state: state(ctx, &head),
         document,
         revisions,
         owner_decisions,
@@ -330,6 +330,7 @@ pub(super) fn plan_diff(
             path: design.id.clone(),
             patch,
             truncated: next.is_some(),
+            candidate: None,
         }),
         next,
     ))
@@ -417,20 +418,56 @@ fn linked(ctx: &Ctx, head: &TaskHead) -> Result<Option<String>> {
         .map(|tracker| tracker.task.id))
 }
 
-fn state(head: &TaskHead) -> PlanState {
+/// Design intent and planner history stay visible, but only a submitted document can
+/// await acceptance. Current planner/reviewer work takes precedence over old verdicts.
+pub(super) fn state(ctx: &Ctx, head: &TaskHead) -> PlanState {
     match head.status {
-        Status::Dropped => PlanState::Cancelled,
-        Status::Done if head.tracker => PlanState::Complete,
-        _ if head.tracker => PlanState::Executing,
-        _ if !head.design && !head.children.is_empty() => PlanState::Executing,
-        _ if head
-            .last_plan
-            .as_ref()
-            .is_some_and(|p| p.approval.is_some()) =>
-        {
-            PlanState::Approved
+        Status::Dropped => return PlanState::Cancelled,
+        Status::Done if head.tracker => return PlanState::Complete,
+        _ if head.tracker => return PlanState::Executing,
+        _ if !head.design && !head.children.is_empty() => return PlanState::Executing,
+        _ => {}
+    }
+    let run = head.last_plan_run.as_deref();
+    if let Some(run) = run {
+        match run.state {
+            PlanRunState::Failed | PlanRunState::Escalated => return PlanState::PlanFailed,
+            PlanRunState::Cancelled => return PlanState::Cancelled,
+            PlanRunState::Planning | PlanRunState::Changes => return PlanState::Drafting,
+            _ => {}
         }
-        _ => PlanState::Awaiting,
+    }
+    let Some(plan) = head.last_plan.as_deref() else {
+        return PlanState::Drafting;
+    };
+    if plan.approval.is_some() {
+        return PlanState::Approved;
+    }
+    if head.status == Status::Done {
+        return PlanState::Complete;
+    }
+    let awaiting_owner = run.is_some_and(|run| {
+        run.state == PlanRunState::AwaitingOwner
+            && run.submitted.as_deref() == Some(plan.id.as_str())
+            && plan.run.as_deref() == Some(run.id.as_str())
+    });
+    match plan.current_review.as_ref() {
+        Some(review) if review.cancelled => PlanState::Reviewing,
+        Some(review) => match review.verdict {
+            Some(Verdict::Approve) if awaiting_owner || head.status == Status::NeedsMe => {
+                PlanState::Awaiting
+            }
+            Some(Verdict::Changes) => PlanState::Drafting,
+            Some(Verdict::Escalate) => PlanState::PlanFailed,
+            None if review.reviewer == "owner" => PlanState::Awaiting,
+            _ => PlanState::Reviewing,
+        },
+        None if plan.run.is_none()
+            && ctx.store.config.task_review_policy(head).reviewer == Reviewer::None =>
+        {
+            PlanState::Awaiting
+        }
+        None => PlanState::Reviewing,
     }
 }
 
@@ -582,3 +619,7 @@ pub(super) fn plan_context(
 fn count(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
+
+#[cfg(test)]
+#[path = "plans_tests.rs"]
+mod tests;

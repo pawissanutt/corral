@@ -6,7 +6,9 @@ use corral_protocol::rows::{AgentRow, AgentStatus, ControlState, SessionControls
 
 use super::super::{Action, State};
 use super::{KeyPress, Keys, keys};
-use crate::model::daemon::{CommandState, CommandStatus, Feed, Link};
+use crate::model::daemon::{
+    CommandState, CommandStatus, DaemonHealth, DaemonLevel, Feed, Link, PmLevel,
+};
 use crate::model::effect::Effect;
 use crate::model::health::daemon_env;
 use crate::model::{Form, Id, Selection};
@@ -14,12 +16,22 @@ use crate::model::{Form, Id, Selection};
 const ID: &str = "T-1/run/R1";
 
 /// A foreign harness's session in a pane, with corrald's `keys` control as given, seen from an
-/// admin device over a live link.
+/// admin device after the welcome, authenticated app session and complete board have arrived.
 fn feed(keys: ControlState) -> Feed {
-    let mut feed = Feed {
-        link: Link::Up,
-        ..Feed::default()
-    };
+    let mut feed = Feed::default();
+    feed.welcome_received(
+        "/workspace/.corral".into(),
+        DaemonHealth {
+            level: DaemonLevel::Healthy,
+            reasons: Vec::new(),
+            runtimes: Vec::new(),
+            pm: PmLevel::Absent,
+            pass_seq: 1,
+            last_pass: None,
+            last_pass_ms: None,
+            version: "test".into(),
+        },
+    );
     feed.session = Some(AppSession {
         device: DeviceInfo {
             id: "dev-1".into(),
@@ -40,6 +52,8 @@ fn feed(keys: ControlState) -> Feed {
         seen: SeenCursor::default(),
         server_time: "2026-11-15T10:00:00Z".into(),
     });
+    feed.board_received(1, Vec::new(), &[], true);
+    assert!(feed.ready());
     feed.agents.insert(
         Id::from(ID),
         AgentRow {
@@ -96,6 +110,33 @@ fn keys_refused_on_the_row_are_neither_offered_nor_sent() {
     assert!(keys(&state, &Id::from(ID), row, &feed, env).is_none());
     assert!(press(&mut state, &feed, KeyPress::Add("enter")).is_empty());
     assert!(press(&mut state, &feed, KeyPress::Send("ls".into())).is_empty());
+}
+
+#[test]
+fn keys_wait_for_the_authenticated_projection_even_if_the_link_says_up() {
+    for missing in ["welcome", "session", "board"] {
+        let mut feed = feed(ControlState {
+            available: true,
+            refusal: None,
+        });
+        match missing {
+            "welcome" => feed.transport_ready = false,
+            "session" => feed.session = None,
+            "board" => feed.projection_ready = false,
+            _ => unreachable!(),
+        }
+        assert_eq!(feed.link, Link::Up);
+        assert!(!feed.ready());
+        let mut state = State::default();
+        assert!(press(&mut state, &feed, KeyPress::Add("ctrl-c")).is_empty());
+        assert!(press(&mut state, &feed, KeyPress::Send("ls".into())).is_empty());
+        let env = daemon_env(&feed, Form::Desktop);
+        let Some(Keys::Open(bar)) = keys(&state, &Id::from(ID), &feed.agents[ID], &feed, env)
+        else {
+            panic!("the offered keys bar remains visible while waiting for readiness");
+        };
+        assert!(!bar.enabled);
+    }
 }
 
 #[test]

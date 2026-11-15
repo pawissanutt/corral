@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use corral_protocol::cmd::Command;
 use corral_protocol::cmd::question::QuestionCommand;
 use corral_protocol::detail::{DetailBody, DetailGet, DetailRef, QuestionDetail};
-use corral_protocol::rows::{InboxKind, InboxRow, InboxState};
+use corral_protocol::rows::{AttentionDestination, InboxKind, InboxRow, InboxState};
 
 use super::{Action, QuestionState, State};
 use crate::model::act::{self, Act, ActStatus};
@@ -107,7 +107,7 @@ pub fn is_question(row: &InboxRow) -> bool {
 
 /// Whether a row still waits on the owner.
 pub fn is_open(row: &InboxRow) -> bool {
-    matches!(row.state, InboxState::Open)
+    row.kind != InboxKind::PmAction && matches!(row.state, InboxState::Open)
 }
 
 /// Where opening a row leads: its question, assistant thread, plan, review or task.
@@ -116,6 +116,15 @@ pub fn target(row: &InboxRow) -> Option<Live> {
     match row.kind {
         _ if is_question(row) => Some(Live::Question(Id::new(&row.id))),
         InboxKind::Prompt => (!row.from.is_empty()).then(|| Live::Thread(Id::new(&row.from))),
+        InboxKind::OwnerDecision => Some(
+            match row.attention.as_ref().map(|a| a.destination) {
+                Some(AttentionDestination::Now) => id(&row.task).map(Live::Task),
+                Some(AttentionDestination::Plans) => id(&row.plan).map(Live::Plan),
+                Some(AttentionDestination::Review) => id(&row.task).map(Live::Review),
+                _ => None,
+            }
+            .unwrap_or_else(|| Live::Question(Id::new(&row.id))),
+        ),
         InboxKind::PlanAcceptance => Some(Live::Plan(
             id(&row.plan).unwrap_or_else(|| Id::new(&row.id)),
         )),
@@ -129,7 +138,11 @@ pub fn target(row: &InboxRow) -> Option<Live> {
 /// Rows in the order the owner works them: open before settled, blocking first, then the
 /// oldest ask, then id.
 pub fn ordered(feed: &Feed) -> Vec<&InboxRow> {
-    let mut rows: Vec<&InboxRow> = feed.inbox.values().collect();
+    let mut rows: Vec<&InboxRow> = feed
+        .inbox
+        .values()
+        .filter(|row| row.kind != InboxKind::PmAction)
+        .collect();
     rows.sort_by_cached_key(|row| {
         (
             !is_open(row),

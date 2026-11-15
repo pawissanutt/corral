@@ -14,6 +14,11 @@ pub(super) fn cases() -> Vec<Case> {
             run: exclusive_event_sequence_bounds,
         },
         Case {
+            name: "owner_change_counts_match_filtered_pages_without_decoding_events",
+            covers: &[OpKind::AppendEvents],
+            run: owner_change_counts_match_filtered_pages_without_decoding_events,
+        },
+        Case {
             name: "scratch_transitions",
             covers: &[
                 OpKind::ScratchRegister,
@@ -108,6 +113,75 @@ fn exclusive_event_sequence_bounds(make: MakeFixture<'_>) -> Result<()> {
         .is_empty(),
         "first event is excluded"
     );
+    Ok(())
+}
+
+fn owner_change_counts_match_filtered_pages_without_decoding_events(
+    make: MakeFixture<'_>,
+) -> Result<()> {
+    let fx = make();
+    let start = fx.clock.now();
+    let events = ["moved", "attention_resolved", "moved", "verdict", "moved"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, kind)| {
+            let mut row = event(&fx, None, kind, json!({}));
+            row.ts = start + jiff::SignedDuration::from_secs(index as i64);
+            row.task = Some(if index % 2 == 0 { "T-001" } else { "T-002" }.into());
+            row.run = (index % 2 == 0).then(|| "R1".into());
+            row
+        })
+        .collect();
+    apply(
+        &fx,
+        Operation::AppendEvents(AppendEvents {
+            events,
+            reservations: vec![],
+        }),
+    )?;
+    let view = fx.backend.view()?;
+    let all = view
+        .events(&EventQuery::default(), PageReq::first(10))?
+        .items;
+    for query in [
+        EventQuery::default(),
+        EventQuery {
+            kinds: vec!["moved".into(), "verdict".into(), "moved".into()],
+            after: Some(all[0].seq),
+            before: Some(all[4].seq),
+            ..Default::default()
+        },
+        EventQuery {
+            task: Some("T-001".into()),
+            run: Some("R1".into()),
+            valid_only: true,
+            since: Some(start + jiff::SignedDuration::from_secs(1)),
+            until: Some(start + jiff::SignedDuration::from_secs(4)),
+            ..Default::default()
+        },
+        EventQuery {
+            run: Some("R1".into()),
+            include_runless: true,
+            newest_first: true,
+            chronological: true,
+            ..Default::default()
+        },
+        EventQuery {
+            kinds: vec!["absent".into()],
+            ..Default::default()
+        },
+    ] {
+        let expected = all_pages(|page| view.events(&query, page))?.len() as u64;
+        let before = crate::work::snapshot().total(crate::work::Counter::EventDecodes);
+        ensure!(
+            view.count_events(&query)? == expected,
+            "count differs from filtered pages"
+        );
+        ensure!(
+            crate::work::snapshot().total(crate::work::Counter::EventDecodes) == before,
+            "count decoded event payloads"
+        );
+    }
     Ok(())
 }
 

@@ -147,6 +147,7 @@ struct PauseHost {
     _host: crate::agent::bridge::fixture::HostProc,
     bridge: crate::agent::bridge::fixture::Bridge,
     events: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    cancel_results: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -188,6 +189,10 @@ impl PauseHost {
         let events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
         let queued_events = events.clone();
         let active = AtomicBool::new(open);
+        let cancel_results = Arc::new(Mutex::new(
+            std::collections::VecDeque::<serde_json::Value>::new(),
+        ));
+        let queued_cancels = cancel_results.clone();
         let bridge = f::bridge(
             &fx.ctx.store,
             &corral_core::inbox::Recipient::Assistant {
@@ -201,8 +206,16 @@ impl PauseHost {
                     "get_state" => json!({"bound": true,
                         "turn": {"current": 7, "open": active.load(Ordering::SeqCst)}}),
                     "cancel" => {
-                        active.store(false, Ordering::SeqCst);
-                        json!({"cancelled": true, "turn": 7})
+                        if let Some(reply) = queued_cancels.lock().unwrap().pop_front() {
+                            if reply["cancelled"] == true {
+                                active.store(false, Ordering::SeqCst);
+                            }
+                            reply
+                        } else if active.swap(false, Ordering::SeqCst) {
+                            json!({"cancelled": true, "turn": 7})
+                        } else {
+                            json!({"cancelled": false, "reason": "idle"})
+                        }
                     }
                     "events_since" => {
                         let after = frame["args"]["seq"].as_u64().unwrap();
@@ -232,6 +245,7 @@ impl PauseHost {
             _host: host,
             bridge,
             events,
+            cancel_results,
         }
     }
 }
@@ -417,3 +431,6 @@ fn pausing_does_not_shutdown_host_or_fence_generation() {
     let row = projection::row(ctx, &host.session).unwrap();
     assert_eq!(row.state, corral_protocol::rows::AssistantState::Ready);
 }
+
+#[path = "audit_tests.rs"]
+mod audit;

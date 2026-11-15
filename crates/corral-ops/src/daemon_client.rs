@@ -43,6 +43,12 @@ mod classic;
 pub use classic::ClassicWatch;
 
 #[cfg(unix)]
+#[path = "daemon_client_app.rs"]
+mod app;
+#[cfg(unix)]
+pub use app::{AppClient, new_id as new_app_command_id};
+
+#[cfg(unix)]
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub fn runtime_dir(store: &Store) -> PathBuf {

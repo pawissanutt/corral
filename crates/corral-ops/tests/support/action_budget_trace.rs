@@ -243,6 +243,9 @@ impl ReadView for View {
         }
         Ok(result)
     }
+    fn count_events(&self, q: &EventQuery) -> Result<u64, ViewError> {
+        self.0.count_events(q)
+    }
     fn conditions(
         &self,
         q: &ConditionQuery,

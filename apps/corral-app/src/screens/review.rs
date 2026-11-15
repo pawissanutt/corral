@@ -26,7 +26,7 @@ use crate::model::act;
 use crate::model::daemon::Link;
 use crate::model::review::{self, Action, Body, ButtonStyle, DetailView, Layout, PageView, Tab};
 use crate::model::{Form, Hue, Id, Rich};
-use crate::screens::PhonePage;
+use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with, seg, tab_strip};
@@ -101,22 +101,21 @@ pub fn screen(app: AppState) -> AnyElement {
 /// The fixture replay pushed on the phone: the scrolling body and the decide bar in place of
 /// the tab bar.
 pub fn page_phone(app: AppState) -> PhonePage {
-    phone_page(Ctx::new(app, Source::Fixture), "Back")
+    phone_page(Ctx::new(app, Source::Fixture))
 }
 
 /// A served candidate pushed on the phone, by its task id.
 pub fn live_review_phone(app: AppState, task: Id) -> PhonePage {
-    phone_page(Ctx::new(app, Source::Live(Some(task))), "Review")
+    phone_page(Ctx::new(app, Source::Live(Some(task))))
 }
 
-fn phone_page(cx: Ctx, back: &'static str) -> PhonePage {
+fn phone_page(cx: Ctx) -> PhonePage {
     let title = untracked(|| page_view(&cx, 0.0).title);
     PhonePage {
         title,
-        back,
         body: phone_body(cx.clone()),
         trailing: None,
-        bar: Some(decide(cx)),
+        bar: Some(PhoneBar::always(decide(cx))),
         ask: true,
         scroll: true,
     }
@@ -532,7 +531,7 @@ fn button_id(action: &Action) -> String {
         Action::Select(id) => format!("task-{id}"),
         Action::Pick(id) => format!("task-{id}"),
         Action::Tab(_) | Action::Layout(_) => "seg-review".to_owned(),
-        Action::Annotate(at) => format!("btn-annotate-{}-{}", slug(&at.path), at.line),
+        Action::Annotate { at, .. } => format!("btn-annotate-{}-{}", slug(&at.path), at.line),
         Action::CancelCompose => "btn-cancel".to_owned(),
         Action::Submit { .. } => "btn-send".to_owned(),
         Action::Resolve { thread, .. } => format!("btn-resolve-{}", slug(thread)),

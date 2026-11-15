@@ -313,7 +313,7 @@ pub fn composer(
     } else {
         None
     };
-    let next_message = if pickable && state.model_name() != MODELS[0].name {
+    let next_message = if pickable && state.model_note {
         let model = MODELS
             .iter()
             .find(|model| model.name == state.model_name())

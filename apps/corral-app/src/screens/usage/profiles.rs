@@ -51,8 +51,9 @@ const TERM_METER_CELLS: usize = 12;
 const TERM_INDENT: f32 = 2.0;
 
 /// The desktop table: the model's six column names over one row per profile; a share corral
-/// cannot know reads "unknown" in place of its meter. test_id "usage-profiles" around the kit's
-/// "devtable".
+/// cannot know reads "unknown" in place of its meter. A profile name too long for its column
+/// wraps to a second line, then ends in an ellipsis, so it never runs into the window figure.
+/// test_id "usage-profiles" around the kit's "devtable".
 pub fn desktop(app: AppState, page: &Page) -> AnyElement {
     let form = app.form;
     let rows = page
@@ -62,7 +63,11 @@ pub fn desktop(app: AppState, page: &Page) -> AnyElement {
         .map(|row| {
             vec![
                 provider_name(row.provider),
-                mono(app, row.profile).into_element(),
+                mono(app, row.profile)
+                    .flex_shrink(1.0)
+                    .min_w(px(0.0))
+                    .number_of_lines(2u32)
+                    .into_element(),
                 figure(form, row.window),
                 match row.share_percent {
                     Some(share) => share_meter(share, row.level),
@@ -172,6 +177,8 @@ fn provider_name(provider: String) -> AnyElement {
         return view().into_element();
     }
     text(provider)
+        .flex_shrink(1.0)
+        .min_w(px(0.0))
         .font_family(FONT_TEXT)
         .text_size(px(12.5))
         .text_color(color(Token::Ink))
@@ -239,3 +246,7 @@ fn share_meter(share: u32, provider_level: Level) -> AnyElement {
         )
         .into_element()
 }
+
+#[cfg(test)]
+#[path = "profiles_tests.rs"]
+mod tests;

@@ -33,6 +33,7 @@ const PHONE: ImageAsset = asset!("icons/phone.svg");
 const QR: ImageAsset = asset!("icons/qr.svg");
 const SIGNAL: ImageAsset = asset!("icons/signal.svg");
 const BATTERY: ImageAsset = asset!("icons/batt.svg");
+const SIDEBAR: ImageAsset = asset!("icons/sidebar.svg");
 
 /// The mock's sprite (`ui.js`, `i-*`). `Ask` is the sprite's `i-chat` speech bubble.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,7 +62,7 @@ pub enum Icon {
     Term,
     /// The composer's Send arrow.
     Send,
-    /// A device confirmation (Face ID or PIN).
+    /// A lock: a confirmation on this device, an end-to-end encrypted path.
     Lock,
     /// A paired phone.
     Phone,
@@ -71,6 +72,8 @@ pub enum Icon {
     Signal,
     /// The battery of a drawn phone status bar, 2:1 wide; drawn square it sits centred.
     Battery,
+    /// A window with its sidebar: the desktop's control that shows or hides the sidebar labels.
+    Sidebar,
 }
 
 impl Icon {
@@ -127,6 +130,7 @@ impl Icon {
             Icon::Qr => QR,
             Icon::Signal => SIGNAL,
             Icon::Battery => BATTERY,
+            Icon::Sidebar => SIDEBAR,
         }
     }
 }

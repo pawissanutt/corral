@@ -63,7 +63,11 @@ pub(super) fn compute(store: &Store, head: &TaskHead) -> Result<Computed> {
                 .map(|q| q.question.asked.at),
         )
         .min();
-    let held_reason = head.hold.as_ref().map(|hold| hold.reason.clone());
+    let held_reason = head
+        .hold
+        .as_ref()
+        .map(|hold| hold.reason.clone())
+        .or_else(|| head.dispatch_hold.then(|| "Owner dispatch hold".into()));
     let (group, code, text, since) = now(store, head, owner_since)?;
     let run = head.current_run.as_deref();
     let agent = agent(head, run)?;
@@ -116,7 +120,7 @@ fn now(store: &Store, head: &TaskHead, owner_since: Option<jiff::Timestamp>) -> 
         let reason = head
             .hold
             .as_ref()
-            .map_or("dispatch hold", |hold| hold.reason.as_str());
+            .map_or("Owner dispatch hold", |hold| hold.reason.as_str());
         return Ok((
             BoardGroup::Held,
             "held",
@@ -183,10 +187,10 @@ fn now(store: &Store, head: &TaskHead, owner_since: Option<jiff::Timestamp>) -> 
                 }
                 AutoStage::Landing => Some((BoardGroup::Verifying, "landing", "landing".into())),
                 AutoStage::Blocked => Some((
-                    BoardGroup::Held,
-                    "held",
+                    BoardGroup::NeedsYou,
+                    "blocked",
                     format!(
-                        "held · {}",
+                        "blocked · {}",
                         stage.reason.as_deref().unwrap_or("landing precondition")
                     ),
                 )),

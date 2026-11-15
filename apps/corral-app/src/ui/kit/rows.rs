@@ -264,7 +264,9 @@ fn desktop_cells(app: AppState, line: TaskLine, columns: Memo<TaskColumns>) -> V
     ]
 }
 
-/// Two lines: `id · title · rail` / `Δ now · age · cost`, the second under the title.
+/// Two lines: `id · title · rail` / `Δ now · age · cost`, the second under the title. The title
+/// may take two lines before it is cut: at 16 pt one line holds some 25 characters, too few to
+/// tell like titles apart.
 fn phone_lines(app: AppState, line: TaskLine) -> Vec<AnyElement> {
     let quieter = line.actor == Actor::Queued;
     let now_ink = now_ink(&line);
@@ -286,7 +288,7 @@ fn phone_lines(app: AppState, line: TaskLine) -> Vec<AnyElement> {
                     text(line.title)
                         .flex_1()
                         .min_w(px(0.0))
-                        .truncate()
+                        .number_of_lines(2u32)
                         .font_family(FONT_TEXT)
                         .text_size(px(text_size(app.form)))
                         .font_weight(if quieter {

@@ -1,7 +1,7 @@
 //! Live lifecycle details over canonical scalar records and the existing phase projector.
 //!
-//! Instants are RFC3339, ranges are half-open and at most 366 days. Query budgets fail
-//! explicitly instead of returning a deceptively complete truncated timeline/burnup.
+//! Instants are RFC3339, ranges are half-open and at most 366 days. Bounds return
+//! completed projections with explicit coverage, never a whole-read row-limit error.
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -16,8 +16,10 @@ use jiff::Timestamp;
 use crate::Ctx;
 use crate::phases::{Phase, Span};
 
+use super::read_budget as budget;
 #[path = "timeline_history.rs"]
 mod history;
+use budget::Budget;
 
 #[cfg(not(test))]
 const PAGE: u32 = 256;
@@ -52,7 +54,12 @@ const PHASE_EVENTS: &[&str] = &[
     "review_cancelled",
 ];
 
-fn headers(ctx: &Ctx, project: Option<&str>, since: Option<Timestamp>) -> Result<Vec<TaskHeader>> {
+fn headers(
+    ctx: &Ctx,
+    project: Option<&str>,
+    since: Option<Timestamp>,
+    budget: &mut Budget,
+) -> Result<Vec<TaskHeader>> {
     let view = ctx.store.view()?;
     let query = TaskQuery {
         statuses: Vec::new(),
@@ -69,10 +76,14 @@ fn headers(ctx: &Ctx, project: Option<&str>, since: Option<Timestamp>) -> Result
             if since.is_some_and(|since| task.fields.updated < since) {
                 return Ok(tasks);
             }
-            ensure!(
-                tasks.len() < MAX_TASKS,
-                "unavailable: timeline task query exceeds {MAX_TASKS} tasks; select a narrower scope"
-            );
+            if tasks.len() == MAX_TASKS {
+                budget.partial("task_limit");
+                return Ok(tasks);
+            }
+            if !budget.admit(1) {
+                return Ok(tasks);
+            }
+            budget.observe(task.created);
             tasks.push(task);
         }
         match found.next {
@@ -82,7 +93,7 @@ fn headers(ctx: &Ctx, project: Option<&str>, since: Option<Timestamp>) -> Result
     }
 }
 
-fn indexed_headers(ctx: &Ctx, query: HeadQuery) -> Result<Vec<TaskHeader>> {
+fn indexed_headers(ctx: &Ctx, query: HeadQuery, budget: &mut Budget) -> Result<Vec<TaskHeader>> {
     let view = ctx.store.view()?;
     let mut page = PageReq::first(PAGE);
     let mut tasks = Vec::new();
@@ -90,11 +101,17 @@ fn indexed_headers(ctx: &Ctx, query: HeadQuery) -> Result<Vec<TaskHeader>> {
         let found = view
             .heads(&query, page.clone())
             .context("reading timeline scope index")?;
-        ensure!(
-            tasks.len() + found.items.len() <= MAX_TASKS,
-            "unavailable: timeline scope exceeds {MAX_TASKS} tasks"
-        );
-        tasks.extend(found.items.into_iter().map(|doc| doc.header));
+        for doc in found.items {
+            if tasks.len() == MAX_TASKS {
+                budget.partial("task_limit");
+                return Ok(tasks);
+            }
+            if !budget.admit(1) {
+                return Ok(tasks);
+            }
+            budget.observe(doc.header.created);
+            tasks.push(doc.header);
+        }
         match found.next {
             Some(next) => page.after = Some(next),
             None => return Ok(tasks),
@@ -116,7 +133,12 @@ fn header(ctx: &Ctx, id: &str) -> Result<TaskHeader> {
         .with_context(|| format!("task {id} not found"))
 }
 
-fn events(ctx: &Ctx, task: Option<&str>, kinds: &[&str], budget: &mut usize) -> Result<Vec<Event>> {
+fn events(
+    ctx: &Ctx,
+    task: Option<&str>,
+    kinds: &[&str],
+    budget: &mut Budget,
+) -> Result<Vec<Event>> {
     let mut after = 0;
     let mut result = Vec::new();
     loop {
@@ -124,17 +146,18 @@ fn events(ctx: &Ctx, task: Option<&str>, kinds: &[&str], budget: &mut usize) -> 
             .store
             .events_page(task, kinds, None, after, PAGE)
             .context("reading recorded lifecycle events")?;
-        *budget += found.len();
-        ensure!(
-            *budget <= MAX_ROWS,
-            "unavailable: lifecycle exceeds {MAX_ROWS} events; select a narrower scope"
-        );
+        if !budget.admit(found.len()) {
+            return Ok(result);
+        }
         let Some(last) = found.last() else {
             return Ok(result);
         };
         after = last.seq;
         let done = found.len() < PAGE as usize;
-        result.extend(found);
+        for event in found {
+            budget.observe(event.ts);
+            result.push(event);
+        }
         if done {
             return Ok(result);
         }
@@ -321,13 +344,13 @@ pub(super) fn timeline(ctx: &Ctx, from: &str, to: &str, by: TimelineBy) -> Resul
     let mut lanes = BTreeMap::new();
     let mut owner_actions = Vec::new();
     let mut pm = Vec::new();
-    let mut budget = 0;
+    let mut budget = Budget::new(MAX_ROWS);
     let point_events = history::read(ctx, &history::query(None, Some(from), to), &mut budget)?;
-    let mut tasks: BTreeMap<_, _> = headers(ctx, None, Some(from))?
+    let mut tasks: BTreeMap<_, _> = headers(ctx, None, Some(from), &mut budget)?
         .into_iter()
         .map(|task| (task.id.clone(), task))
         .collect();
-    for task in indexed_headers(ctx, HeadQuery::Open { project: None })? {
+    for task in indexed_headers(ctx, HeadQuery::Open { project: None }, &mut budget)? {
         tasks.insert(task.id.clone(), task);
     }
     let view = ctx.store.view()?;
@@ -339,18 +362,28 @@ pub(super) fn timeline(ctx: &Ctx, from: &str, to: &str, by: TimelineBy) -> Resul
         if tasks.contains_key(id) {
             continue;
         }
+        if tasks.len() >= MAX_TASKS {
+            budget.partial("task_limit");
+            break;
+        }
+        if !budget.admit(1) {
+            break;
+        }
         if let Ok(id) = corral_core::Store::normalize_id(id)
             && let Some(num) = id.strip_prefix("T-").and_then(|num| num.parse().ok())
             && let Some(doc) = view.head(TaskNum(num))?
         {
+            budget.observe(doc.header.created);
             tasks.insert(doc.header.id.clone(), doc.header);
         }
     }
-    ensure!(
-        tasks.len() <= MAX_TASKS,
-        "unavailable: timeline range exceeds {MAX_TASKS} tasks"
-    );
-    for task in tasks.into_values() {
+    if tasks.len() > MAX_TASKS {
+        budget.partial("task_limit");
+    }
+    for task in tasks.into_values().take(MAX_TASKS) {
+        if budget.exhausted() {
+            break;
+        }
         if task.created >= to {
             continue;
         }
@@ -405,6 +438,11 @@ pub(super) fn timeline(ctx: &Ctx, from: &str, to: &str, by: TimelineBy) -> Resul
         task_events.dedup_by_key(|event| event.seq);
         // Context can name a reviewer session that ended before the range.
         history::run_rows(ctx, &task, None, &task_events, &mut runs, &mut budget)?;
+        // A truncated context can omit a real closing event. Do not project that
+        // incomplete task as a still-running interval; keep earlier complete tasks.
+        if budget.exhausted() {
+            break;
+        }
         let head = ctx.store.head(&task.id)?;
         let mut shell = head.to_shell_task()?;
         shell.runs = runs
@@ -649,15 +687,17 @@ pub(super) fn timeline(ctx: &Ctx, from: &str, to: &str, by: TimelineBy) -> Resul
         owner_actions,
         pm,
         last_visit: None,
+        completeness: budget.coverage,
     }))
 }
 
 /// Burnup uses actual creation and integration events, not status-update timestamps.
 /// `plan:` selects current canonical members; it does not reconstruct past membership.
 pub(super) fn burnup(ctx: &Ctx, scope: &str) -> Result<DetailBody> {
+    let mut budget = Budget::new(MAX_ROWS);
     let mut tasks = if let Some(project) = scope.strip_prefix("project:") {
         ensure!(!project.is_empty(), "invalid burnup project");
-        headers(ctx, Some(project), None)?
+        headers(ctx, Some(project), None, &mut budget)?
     } else if let Some(plan) = scope.strip_prefix("plan:") {
         let owner = header(ctx, plan)?;
         indexed_headers(
@@ -666,6 +706,7 @@ pub(super) fn burnup(ctx: &Ctx, scope: &str) -> Result<DetailBody> {
                 kind: "plan".into(),
                 other: owner.id,
             },
+            &mut budget,
         )?
     } else if let Some(id) = scope
         .strip_prefix("task:")
@@ -673,16 +714,18 @@ pub(super) fn burnup(ctx: &Ctx, scope: &str) -> Result<DetailBody> {
     {
         vec![header(ctx, id)?]
     } else if matches!(scope, "all" | "workspace") {
-        headers(ctx, None, None)?
+        headers(ctx, None, None, &mut budget)?
     } else {
         bail!("invalid burnup scope: use all, workspace, project:<name>, plan:<id> or task:<id>");
     };
     tasks.retain(|task| !task.fields.tracker);
     let mut changes: BTreeMap<Timestamp, (u32, u32)> = BTreeMap::new();
-    let mut budget = 0;
     for task in tasks {
-        changes.entry(task.created).or_default().0 += 1;
         let approvals = events(ctx, Some(&task.id), &["approved"], &mut budget)?;
+        if budget.exhausted() {
+            break;
+        }
+        changes.entry(task.created).or_default().0 += 1;
         if let Some(first) = approvals
             .iter()
             .filter(|event| event.detail["strategy"] != "keep_branch")
@@ -709,9 +752,14 @@ pub(super) fn burnup(ctx: &Ctx, scope: &str) -> Result<DetailBody> {
     Ok(DetailBody::Burnup(Burnup {
         scope: scope.to_owned(),
         points,
+        completeness: budget.coverage,
     }))
 }
 
 #[cfg(test)]
 #[path = "timeline_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "timeline_budget_tests.rs"]
+mod budget_tests;

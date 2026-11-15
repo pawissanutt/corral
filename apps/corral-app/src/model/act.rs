@@ -3,8 +3,6 @@
 //! through preview, confirmation, submission and recovery.
 
 use corral_protocol::app::ActClass;
-use corral_protocol::cmd::question::QuestionCommand;
-use corral_protocol::cmd::task::TaskCommand;
 use corral_protocol::cmd::{self, Command};
 use corral_protocol::rpc::ErrorCode;
 
@@ -87,15 +85,10 @@ impl Act {
         self
     }
 
-    /// Answers, follow-ups and session replies need `reply`; everything else `act`.
+    /// Use the same command classification as corrald, including annotation replies.
     pub fn authority(&self) -> Authority {
-        match &self.command {
-            Command::Question(
-                QuestionCommand::Answer { .. }
-                | QuestionCommand::AnswerGroup { .. }
-                | QuestionCommand::Followup { .. },
-            )
-            | Command::Task(TaskCommand::Reply { .. }) => Authority::Reply,
+        match self.command.app_class() {
+            ActClass::Reply => Authority::Reply,
             _ => Authority::Act,
         }
     }
@@ -321,7 +314,9 @@ mod tests {
     use super::*;
     use crate::model::daemon::{ClientError, CommandState, Operation};
     use corral_protocol::app::ActPreview;
+    use corral_protocol::cmd::plan::PlanCommand;
     use corral_protocol::cmd::review::ReviewCommand;
+    use corral_protocol::cmd::task::TaskCommand;
 
     #[test]
     fn only_outcomes_settle_and_lost_results_stay_uncertain() {
@@ -336,35 +331,65 @@ mod tests {
 
     #[test]
     fn confirm_class_commands_preview_before_they_are_sent() {
-        let changes = Act::with_key(
-            Id::new("app-1"),
-            "Request changes on T-2",
+        for command in [
+            Command::Review(ReviewCommand::Approve {
+                id: "T-2".into(),
+                sha: "abc1234".into(),
+            }),
+            Command::Plan(PlanCommand::Accept {
+                id: "T-2".into(),
+                revision: "P1".into(),
+                owner_ok: true,
+                notes: None,
+            }),
+            Command::Task(TaskCommand::Revert { id: "T-2".into() }),
+            Command::Task(TaskCommand::Move {
+                id: "T-2".into(),
+                status: "done".into(),
+                force: false,
+                owner_ok: true,
+                reason: None,
+            }),
+        ] {
+            assert_eq!(command.app_class(), ActClass::Confirm);
+            let act = Act::with_key(Id::new("app-1"), command.name(), command);
+            assert!(act.confirm, "{} must preview first", act.command.name());
+        }
+    }
+
+    #[test]
+    fn act_and_reply_class_commands_do_not_require_a_preview() {
+        for command in [
             Command::Review(ReviewCommand::RequestChanges {
                 id: "T-2".into(),
                 text: "add a check".into(),
                 escalate: false,
             }),
-        );
-        assert!(changes.confirm);
-        let retry = Act::with_key(
-            Id::new("app-2"),
-            "Retry T-2",
+            Command::Plan(PlanCommand::RequestChanges {
+                id: "T-2".into(),
+                revision: "P1".into(),
+                text: "add a check".into(),
+            }),
             Command::Task(TaskCommand::Retry {
                 id: "T-2".into(),
                 run: None,
                 profile: None,
             }),
-        );
-        assert!(retry.confirm);
-        let reply = Act::with_key(
-            Id::new("app-3"),
-            "Reply to T-2",
-            Command::Task(TaskCommand::Reply {
-                id: "T-2".into(),
-                text: "ok".into(),
-            }),
-        );
-        assert!(!reply.confirm);
+        ] {
+            assert_eq!(command.app_class(), ActClass::Act);
+            let act = Act::with_key(Id::new("app-2"), command.name(), command);
+            assert!(
+                !act.confirm,
+                "{} must not require a preview",
+                act.command.name()
+            );
+        }
+        let command = Command::Task(TaskCommand::Reply {
+            id: "T-2".into(),
+            text: "ok".into(),
+        });
+        assert_eq!(command.app_class(), ActClass::Reply);
+        assert!(!Act::with_key(Id::new("app-3"), "Reply to T-2", command).confirm);
     }
 
     fn refused(code: &str) -> CommandState {

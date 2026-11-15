@@ -11,8 +11,8 @@ use crate::Ctx;
 use anyhow::{Context, Result, ensure};
 use corral_core::{RunHead, TaskHead};
 use corral_protocol::detail::{
-    AnnotationMessage, ArtifactRef, DetailBody, PatchPage, ReviewAnnotation, ReviewDetail,
-    ReviewFile, ReviewVerdict,
+    AnnotationMessage, ArtifactRef, DetailBody, PatchPage, ReviewAnnotation, ReviewCandidate,
+    ReviewDetail, ReviewFile, ReviewVerdict,
 };
 
 // Even JSON's worst-case six-byte control-character escaping remains below CONTROL's
@@ -413,6 +413,11 @@ pub(super) fn review_file(
             path: path.into(),
             patch,
             truncated: next.is_some(),
+            candidate: Some(ReviewCandidate {
+                run: run.id.to_string(),
+                base: candidate.base,
+                head: candidate.head,
+            }),
         }),
         next,
     ))
@@ -552,3 +557,7 @@ pub(super) fn text_page<'a>(
     ensure!(skip == 0, "patch offset exceeds content");
     Ok((patch, None))
 }
+
+#[cfg(test)]
+#[path = "review_tests.rs"]
+mod tests;

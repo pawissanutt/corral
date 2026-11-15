@@ -19,6 +19,54 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
 /// The minimum touch target on the phone.
 const TARGET: f32 = 44.0;
+/// The most of a pushed head's width its back label takes; a long title below cuts short so the
+/// page's own title keeps the middle.
+const BACK_SHARE: f32 = 0.38;
+/// Scroll movement shorter than this is a hand resting on the page, not a direction.
+const SCROLL_SLOP: f32 = 6.0;
+/// Shorter than this (a phone held sideways), the phone's chrome closes up around the content.
+const SHORT_WINDOW: f32 = 500.0;
+
+/// Tracked: whether the window is short enough for the phone's compact chrome: the health line
+/// on one row, the Ask button out of a page bar's way, the Ask sheet without its grab handle.
+pub fn short_window() -> bool {
+    window().height.0 < SHORT_WINDOW
+}
+
+/// Where the phone's main content is scrolled, for the shell: it tucks the floating Ask button
+/// away while the reader moves down through rows and brings it back as they turn up or reach
+/// either end, so the button does not sit over the rows being read.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PageScroll {
+    /// The offset from the top when the reader last moved.
+    pub offset: f32,
+    /// Moving toward the end, away from both ends.
+    pub reading: bool,
+}
+
+/// The phone's [`PageScroll`], which every page's main scroll reports through [`follow_scroll`].
+pub fn page_scroll() -> Signal<PageScroll> {
+    global::<PageScroll>()
+}
+
+/// Reports the scroll of a phone page's main content to [`page_scroll`]; pass each scroll view
+/// that holds a page's rows through it. Off the phone it returns the view as it is.
+pub fn follow_scroll(form: Form, view: Scroll) -> Scroll {
+    if form != Form::Phone {
+        return view;
+    }
+    view.on_scroll(move |event: &ScrollEvent| {
+        let offset = event.offset.y.0;
+        let end = (event.content_size.height.0 - event.size.height.0).max(0.0);
+        let state = page_scroll();
+        let moved = offset - state.with_untracked(|s| s.offset);
+        if moved.abs() < SCROLL_SLOP {
+            return;
+        }
+        let reading = moved > 0.0 && offset > SCROLL_SLOP && offset < end - SCROLL_SLOP;
+        state.set(PageScroll { offset, reading });
+    })
+}
 
 /// A section of a page (`.pband` on the phone): an optional head (caps label, a note at the
 /// trailing edge) over the content, a rule under the section. Desktop: padding 12 24, the head
@@ -110,19 +158,23 @@ pub fn search(app: AppState) -> AnyElement {
 /// `nav_page().header(..)` as `shell/phone.rs` does for its pushed pages. Desktop: the page
 /// head with a quiet back button before the title. Terminal: `‹ <back>` as a pressable entry,
 /// the title in bold, a joined rule under them. test_id "page-back" on the back control,
-/// "page-title" on the title; the back control is labelled "Back to <back>". The title may be a
-/// fixed text or a memo or closure: a page whose subject changes while it is shown (an assistant
-/// thread rolling to its next session) keeps its head current without being pushed again.
+/// "page-title" on the title; the back control is labelled "Back to <back>". The back label
+/// and the title may be fixed texts or memos or closures: the phone shell names the page under
+/// this one, and a page whose subject changes while it is shown (an assistant thread rolling to
+/// its next session) keeps its head current without being pushed again.
 pub fn pushed_head(
     app: AppState,
     title: impl IntoReactive<SharedString>,
-    back: &'static str,
+    back: impl IntoReactive<SharedString>,
     on_back: impl Fn() + 'static,
     trailing: Option<AnyElement>,
 ) -> AnyElement {
     let form = app.form;
     let title = title.into_reactive();
-    let back_label = format!("Back to {back}");
+    let back = back.into_reactive();
+    let back_label = back
+        .clone()
+        .map(|back| SharedString::from(format!("Back to {back}")));
     match form {
         Form::Desktop => view()
             .flex_row()
@@ -135,7 +187,7 @@ pub fn pushed_head(
             .border_color(color(Token::Rule))
             .child(button_with(
                 app,
-                back,
+                untracked(|| back.get()).to_string(),
                 ButtonKind::Quiet,
                 ButtonOptions {
                     icon: Some(Icon::Back),
@@ -166,6 +218,7 @@ pub fn pushed_head(
                     .flex_shrink_0()
                     .gap(px(2.0))
                     .min_w(px(TARGET))
+                    .max_w(relative(BACK_SHARE))
                     .min_h(px(TARGET))
                     .ml(px(-8.0))
                     .pl(px(4.0))
@@ -185,6 +238,9 @@ pub fn pushed_head(
                     .child(icon(Icon::Back, 20.0, color(Token::Ink2)))
                     .child(
                         text(back)
+                            .flex_shrink(1.0)
+                            .min_w(px(0.0))
+                            .truncate()
                             .font_family(FONT_TEXT)
                             .text_size(px(16.0))
                             .text_color(color(Token::Ink2)),

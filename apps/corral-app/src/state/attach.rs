@@ -112,8 +112,8 @@ impl AppState {
         }
     }
 
-    /// The client took a send carrying these staged keys: they now belong to that message.
-    pub(super) fn sent_attachments(&self, carried: &[String]) {
+    /// Persisted acceptance transfers these staged keys to their message.
+    pub(crate) fn sent_attachments(&self, carried: &[String]) {
         if carried.is_empty() {
             return;
         }
@@ -201,7 +201,12 @@ impl AppState {
     }
 
     fn stage_link(&self, text: &str) -> Result<(), String> {
-        let url = assistant::check_link(text).map_err(|why| format!("not a web link: {why}"))?;
+        let mut url =
+            assistant::check_link(text).map_err(|why| format!("not a web link: {why}"))?;
+        // Only the scheme is case-insensitive; preserve the opaque URL remainder.
+        if let Some(colon) = url.find(':') {
+            url.replace_range(..colon, &url[..colon].to_ascii_lowercase());
+        }
         let mut full = false;
         self.ask_staged.update(|staged| {
             if staged.iter().any(|item| item.key() == url) {

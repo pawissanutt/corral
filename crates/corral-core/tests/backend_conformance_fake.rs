@@ -30,6 +30,7 @@ conformance!(
     change_feed_one_entry_per_commit,
     change_feed_gap_after_pruning,
     exclusive_event_sequence_bounds,
+    owner_change_counts_match_filtered_pages_without_decoding_events,
     head_form_keeps_history,
     authorization_transitions,
     task_operation_preconditions,

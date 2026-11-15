@@ -388,18 +388,7 @@ impl ReadView for FakeView {
     }
 
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
-        let matches = |e: &StoredEvent| {
-            (!q.valid_only || !e.malformed)
-                && q.after.is_none_or(|after| e.seq > after)
-                && q.before.is_none_or(|before| e.seq < before)
-                && (q.task.is_none() || e.event.task == q.task)
-                && (q.kinds.is_empty() || q.kinds.contains(&e.event.kind))
-                && (q.run.is_none()
-                    || e.event.run == q.run
-                    || (q.include_runless && e.event.run.is_none()))
-                && q.since.is_none_or(|at| e.event.ts >= at)
-                && q.until.is_none_or(|at| e.event.ts < at)
-        };
+        let matches = |event: &StoredEvent| event_matches(event, q);
         let ordered: Box<dyn Iterator<Item = &std::sync::Arc<StoredEvent>> + '_> =
             if q.chronological {
                 let mut events: Vec<_> = self.state.events.iter().filter(|e| matches(e)).collect();
@@ -424,6 +413,18 @@ impl ReadView for FakeView {
             );
         }
         Ok(result)
+    }
+
+    fn count_events(&self, q: &EventQuery) -> Result<u64, ViewError> {
+        self.fresh()?;
+        u64::try_from(
+            self.state
+                .events
+                .iter()
+                .filter(|event| event_matches(event, q))
+                .count(),
+        )
+        .map_err(|error| ViewError::Io(error.into()))
     }
 
     fn conditions(
@@ -605,4 +606,17 @@ impl ReadView for FakeView {
             ),
         }
     }
+}
+
+fn event_matches(event: &StoredEvent, query: &EventQuery) -> bool {
+    (!query.valid_only || !event.malformed)
+        && query.after.is_none_or(|after| event.seq > after)
+        && query.before.is_none_or(|before| event.seq < before)
+        && (query.task.is_none() || event.event.task == query.task)
+        && (query.kinds.is_empty() || query.kinds.contains(&event.event.kind))
+        && (query.run.is_none()
+            || event.event.run == query.run
+            || (query.include_runless && event.event.run.is_none()))
+        && query.since.is_none_or(|at| event.event.ts >= at)
+        && query.until.is_none_or(|at| event.event.ts < at)
 }

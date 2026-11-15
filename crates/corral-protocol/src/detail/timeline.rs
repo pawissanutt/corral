@@ -17,6 +17,8 @@ pub struct TimelinePage {
     pub owner_actions: Vec<TimelineAction>,
     pub pm: Vec<TimelineAction>,
     pub last_visit: Option<String>,
+    #[serde(default)]
+    pub completeness: super::usage::UsageCompleteness,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -61,6 +63,8 @@ pub struct TimelineAction {
 pub struct Burnup {
     pub scope: String,
     pub points: Vec<BurnupPoint>,
+    #[serde(default)]
+    pub completeness: super::usage::UsageCompleteness,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

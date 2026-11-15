@@ -15,6 +15,7 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::state::AppState;
+use crate::ui::kit::page_phone;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -26,6 +27,14 @@ const ASK_CLEARANCE: f32 = 64.0;
 /// Desktop points per terminal Cell for a fixed column: a 400 pt list keeps 33 Cells, which
 /// leaves the detail room beside it on a 120-column grid.
 const POINTS_PER_COLUMN_CELL: f32 = 12.0;
+/// A part that gives way in a head row is shrunk this many times faster than the title, so the
+/// title keeps its words until the part is gone.
+const GIVE_WAY_SHRINK: f32 = 1000.0;
+/// Narrower than this a desktop sub line would show a few letters and an ellipsis, which says
+/// nothing: it goes instead.
+const SUB_MIN_WIDTH: f32 = 48.0;
+/// Scrolled further than this, a phone root page's large title folds to its bar size.
+const COLLAPSE_AFTER: f32 = 40.0;
 
 /// How wide a column is: the rest of the row, or fixed (desktop points, as the mockup's grid
 /// columns: `400`, `340`, `300`).
@@ -36,8 +45,9 @@ pub enum Width {
 }
 
 /// The page head (`.pagehead`): the title, an optional sub line, the actions at the trailing
-/// edge. Desktop: a 46 pt row under a rule, title 15 pt bold, sub 12 pt quiet. Phone: the large
-/// title (`.plarge`, 30 pt) with the actions at its trailing edge, on its last line (pass
+/// edge. Desktop: a 46 pt row under a rule, title 15 pt bold, sub 12 pt quiet on one line; as
+/// the row runs short the sub line gives way first (cut, then gone), the title last. Phone: the
+/// large title (`.plarge`, 30 pt) with the actions at its trailing edge, on its last line (pass
 /// [`search`] there on the tab roots); the sub line is left out, as the mockup's phone heads
 /// have none. Terminal: one row, the title bold and never cut, the actions at the end, the sub
 /// line quiet between them taking what room is left: cut with an ellipsis, gone below six Cells;
@@ -49,12 +59,7 @@ pub fn head(
     actions: Vec<AnyElement>,
 ) -> AnyElement {
     let form = app.form;
-    let title = title_text(
-        form,
-        Into::<SharedString>::into(title),
-        "page-title",
-        Title::Page,
-    );
+    let title: SharedString = title.into();
     match form {
         Form::Desktop => view()
             .flex_row()
@@ -65,24 +70,12 @@ pub fn head(
             .px(px(18.0))
             .border_b(px(1.0))
             .border_color(color(Token::Rule))
-            .child(title)
-            .when_some(sub, |row, sub| row.child(quiet(form, sub, 12.0)))
+            .child(title_text(form, title, "page-title", Title::Page))
+            .when_some(sub, |row, sub| row.child(desktop_sub(sub)))
             .child(spacer())
             .child(actions_row(form, actions, 8.0))
             .into_element(),
-        Form::Phone => view()
-            .flex_row()
-            .flex_none()
-            .items_end()
-            .gap(px(10.0))
-            .px(px(18.0))
-            .pt(px(6.0))
-            .pb(px(8.0))
-            .bg(color(Token::Bg))
-            .child(title)
-            .child(spacer())
-            .child(actions_row(form, actions, 2.0))
-            .into_element(),
+        Form::Phone => phone_head(title, actions),
         Form::Terminal => view()
             .flex_none()
             .child(
@@ -91,7 +84,7 @@ pub fn head(
                     .items_center()
                     .h(term::rows(1.0))
                     .px(term::cells(1.0))
-                    .child(title)
+                    .child(title_text(form, title, "page-title", Title::Page))
                     .when_some(sub, |row, sub| row.child(yielding_sub(sub)))
                     .child(spacer())
                     .child(actions_row(form, actions, 2.0)),
@@ -99,6 +92,44 @@ pub fn head(
             .child(term::hrule())
             .into_element(),
     }
+}
+
+/// The phone's page head: the large title (`.plarge`, 30 pt) with the actions at its trailing
+/// edge, on its last line. Once the page has scrolled past [`COLLAPSE_AFTER`] the title folds to
+/// the 17 pt bold of a navigation bar and the head tightens, giving the rows the room; it opens
+/// again back at the top (the shell resets the scroll on every tab or page change).
+fn phone_head(title: SharedString, actions: Vec<AnyElement>) -> AnyElement {
+    let collapsed = computed(|| page_phone::page_scroll().with(|s| s.offset > COLLAPSE_AFTER));
+    let title = text(title)
+        .test_id("page-title")
+        .role(AccessibilityRole::Header)
+        .flex_shrink(1.0)
+        .min_w(px(0.0))
+        .font_weight(FontWeight::BOLD)
+        .text_color(color(Token::Ink))
+        .font_family(FONT_TEXT)
+        .text_size(px(30.0))
+        .line_height(px(33.0))
+        .letter_spacing(px(-0.6))
+        .style_when(collapsed, |s| {
+            s.text_size(px(17.0))
+                .line_height(px(22.0))
+                .letter_spacing(px(-0.2))
+        });
+    view()
+        .flex_row()
+        .flex_none()
+        .items_end()
+        .gap(px(10.0))
+        .px(px(18.0))
+        .pt(px(6.0))
+        .pb(px(8.0))
+        .style_when(collapsed, |s| s.pt(px(4.0)).pb(px(4.0)))
+        .bg(color(Token::Bg))
+        .child(title)
+        .child(spacer())
+        .child(actions_row(Form::Phone, actions, 2.0))
+        .into_element()
 }
 
 /// The handover head (`.qhead`): a meta row of chips and short texts, the title, an optional
@@ -275,7 +306,7 @@ pub fn pane(app: AppState, test_id: &str, content: AnyElement) -> AnyElement {
     } else {
         inner
     };
-    scroll()
+    page_phone::follow_scroll(app.form, scroll())
         .test_id(test_id)
         .flex_1()
         .min_h(px(0.0))
@@ -292,7 +323,7 @@ pub fn body(app: AppState, test_id: &str, content: AnyElement) -> AnyElement {
         Form::Phone => inner.pb(px(ASK_CLEARANCE)),
         Form::Terminal => inner.px(term::cells(1.0)),
     };
-    scroll()
+    page_phone::follow_scroll(app.form, scroll())
         .test_id(test_id)
         .flex_1()
         .min_h(px(0.0))
@@ -343,7 +374,7 @@ pub fn bar_pane(app: AppState, test_id: &str, content: AnyElement, bar: AnyEleme
 /// The decision bar (`.decide`, `.pdecide`): the actions in a row and, on desktop and in a
 /// terminal, an attribution at the trailing edge. Desktop: padding 12 24, 10 pt apart, a rule
 /// above, the attribution right-aligned in 11.5 pt quiet text at most 430 pt wide. Phone: the
-/// actions only (pass them `wide`), padding 10 14 and the home indicator's inset under them.
+/// actions only (pass them `wide`), padding 10 14 12; the shell adds the home indicator's inset.
 /// Terminal: a joined rule, then one row of actions two Cells apart, never cut; the attribution
 /// under them, a Cell in, clipped to two rows on a wide grid and one on a narrow one.
 /// test_id "decide-bar", role toolbar.
@@ -382,7 +413,7 @@ pub fn bar(app: AppState, actions: Vec<AnyElement>, attribution: Option<AnyEleme
             .gap(px(8.0))
             .px(px(14.0))
             .pt(px(10.0))
-            .pb_safe_area_plus(px(12.0))
+            .pb(px(12.0))
             .bg(color(Token::Bg))
             .border_t(px(1.0))
             .border_color(color(Token::Rule))
@@ -613,6 +644,65 @@ fn yielding_sub(content: String) -> AnyElement {
                 .flex_shrink(1.0)
                 .min_w(px(0.0))
                 .truncate(),
+        )
+        .into_element()
+}
+
+/// The desktop head's sub line: one line that gives way before the title, cut with an ellipsis,
+/// and gone once narrower than [`SUB_MIN_WIDTH`].
+fn desktop_sub(content: String) -> AnyElement {
+    let cramped = signal(false);
+    text(content)
+        .flex_shrink(GIVE_WAY_SHRINK)
+        .min_w(px(0.0))
+        .truncate()
+        .font_family(FONT_TEXT)
+        .text_size(px(12.0))
+        .text_color(color(Token::Ink3))
+        .on_layout(move |frame: &Bounds<Points>| {
+            let short = frame.size.width.0 < SUB_MIN_WIDTH;
+            if cramped.get_untracked() != short {
+                cramped.set(short);
+            }
+        })
+        .style_when(move || cramped.get(), |s| s.invisible())
+        .into_element()
+}
+
+/// A part of a head row that shows whole or not at all: it gives up its width before anything
+/// else in the row and hides, for sight and for screen readers, as soon as the row has less room
+/// than it needs; it comes back once the room is there. For aids another place also offers,
+/// such as a key legend the palette and `?` list too, which a cut would turn into nonsense.
+pub fn give_way(content: AnyElement) -> AnyElement {
+    let room = signal(None::<f32>);
+    let needed = signal(0.0_f32);
+    let gone = computed(move || room.get().is_some_and(|room| room + 0.5 < needed.get()));
+    view()
+        .flex_row()
+        .items_center()
+        .flex_shrink(GIVE_WAY_SHRINK)
+        .min_w(px(0.0))
+        .overflow_hidden()
+        .on_layout(move |frame: &Bounds<Points>| {
+            let width = Some(frame.size.width.0);
+            if room.get_untracked() != width {
+                room.set(width);
+            }
+        })
+        .style_when(move || gone.get(), |s| s.invisible())
+        .accessibility_elements_hidden(move || gone.get())
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .flex_shrink_0()
+                .on_layout(move |frame: &Bounds<Points>| {
+                    let width = frame.size.width.0;
+                    if needed.get_untracked() != width {
+                        needed.set(width);
+                    }
+                })
+                .child(content),
         )
         .into_element()
 }

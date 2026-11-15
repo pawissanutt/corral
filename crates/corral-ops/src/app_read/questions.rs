@@ -6,10 +6,11 @@ use corral_core::agent::{
 use corral_core::{TaskHead, TaskRef};
 use corral_protocol::detail::{
     DetailBody, EvidenceBlock, EvidenceBody, Followup, QuestionAnswer, QuestionDeadline,
-    QuestionDetail, QuestionFrom, QuestionHistory, QuestionOption, QuestionPlace, QuestionWaiting,
-    WaitKind,
+    QuestionDetail, QuestionFrom, QuestionHistory, QuestionOption, QuestionPlace,
 };
-use corral_protocol::rows::{InboxKind, InboxRow, InboxState};
+use corral_protocol::rows::{
+    AttentionActor, AttentionDestination, AttentionMove, InboxKind, InboxRow, InboxState,
+};
 use std::collections::BTreeMap;
 
 use super::{revision, short, tasks::excerpt};
@@ -40,81 +41,25 @@ pub fn inbox_rows(ctx: &Ctx) -> Result<Vec<InboxRow>> {
             question_rev: Some(view.question.revision),
             answerable: view.pending,
             unanswerable_reason: None,
+            attention: Some(AttentionMove {
+                whose_move: if crate::questions::needs_owner(&view.question) {
+                    AttentionActor::Owner
+                } else {
+                    AttentionActor::Pm
+                },
+                reason: excerpt(&view.question.text, 2048),
+                next_step:
+                    "Inspect and answer the exact question revision through its question workflow"
+                        .into(),
+                command: Some(format!("corral question show {} --json", view.question.key)),
+                destination: AttentionDestination::Inbox,
+            }),
             rev: 0,
         };
         row.rev = revision(&row)?;
         rows.push(row);
     }
-    for head in ctx
-        .store
-        .heads_checked(&corral_core::backend::HeadQuery::Open { project: None })?
-    {
-        let has_question = tasks.contains_key(&head.id);
-        let planner_waits = head
-            .last_plan_run
-            .as_deref()
-            .is_some_and(|run| run.state == corral_core::PlanRunState::AwaitingOwner);
-        let candidate_waits = head.last_plan.as_deref().is_some_and(|plan| {
-            plan.approval.is_none()
-                && plan.current_review.as_ref().is_some_and(|review| {
-                    review.verdict == Some(corral_core::Verdict::Approve) && !review.cancelled
-                })
-        });
-        let run = head.current_run.as_deref();
-        let escalated = head.status == corral_core::Status::NeedsMe
-            && run.is_some_and(|run| {
-                run.outcome == Some(corral_core::RunOutcome::Done)
-                    && run
-                        .autopilot
-                        .as_ref()
-                        .is_some_and(|stage| stage.stage == corral_core::AutoStage::Escalated)
-            });
-        let stuck = run.is_some_and(|run| run.outcome.is_none() && run.stuck.is_some());
-        let selected = if planner_waits || candidate_waits {
-            Some((InboxKind::PlanAcceptance, "plan_acceptance", "open_plan"))
-        } else if escalated {
-            Some((InboxKind::Escalated, "escalated", "open_task"))
-        } else if stuck {
-            Some((InboxKind::Stuck, "stuck", "open_task"))
-        } else if head.status == corral_core::Status::Review {
-            Some((InboxKind::Review, "review", "open_review"))
-        } else if !has_question
-            && (head.status == corral_core::Status::NeedsMe
-                || head.attention.records.values().any(|record| {
-                    record.resolved_at.is_none()
-                        && record.responsible == corral_core::Responsible::Owner
-                }))
-        {
-            Some((InboxKind::Other, "attention", "open_task"))
-        } else {
-            None
-        };
-        if let Some((kind, suffix, reason)) = selected {
-            let mut row = InboxRow {
-                id: format!("{}/{suffix}", head.id),
-                kind,
-                task: Some(head.id.clone()),
-                plan: if kind == InboxKind::PlanAcceptance {
-                    Some(head.id.clone())
-                } else {
-                    plan_id(&head)
-                },
-                project: head.project.clone(),
-                title: short(&head.title, 120),
-                from: String::new(),
-                asked_at: head.status_since.map(|at| at.to_string()),
-                needed_by: None,
-                blocking: true,
-                state: InboxState::Open,
-                question_rev: None,
-                answerable: false,
-                unanswerable_reason: Some(reason.into()),
-                rev: 0,
-            };
-            row.rev = revision(&row)?;
-            rows.push(row);
-        }
-    }
+    super::attention::append(ctx, &mut rows)?;
     for session in ctx.store.active_assistant_ids()? {
         for prompt in crate::agent::ops::owner_prompt::list(&ctx.store, &session)? {
             if prompt.state != "open" || prompt.expires_at <= corral_core::clock::now() {
@@ -135,6 +80,14 @@ pub fn inbox_rows(ctx: &Ctx) -> Result<Vec<InboxRow>> {
                 question_rev: Some(prompt.revision),
                 answerable: true,
                 unanswerable_reason: None,
+                attention: Some(AttentionMove {
+                    whose_move: AttentionActor::Owner,
+                    reason: short(prompt.command.as_deref().unwrap_or(&prompt.kind), 2048),
+                    next_step: "Inspect the pending permission request and approve or refuse it"
+                        .into(),
+                    command: None,
+                    destination: AttentionDestination::Inbox,
+                }),
                 rev: 0,
             };
             row.rev = revision(&row)?;
@@ -158,19 +111,11 @@ pub(super) fn question(ctx: &Ctx, key: &str) -> Result<DetailBody> {
         .map(|head| super::plans::plan_context(ctx, head))
         .transpose()?
         .flatten();
-    let mut waiting = Vec::new();
-    if let Some(head) = &head {
-        for id in &head.depends_on {
-            let dependency = ctx.store.head(id)?;
-            if dependency.status != corral_core::Status::Done {
-                waiting.push(QuestionWaiting {
-                    id: dependency.id.clone(),
-                    title: short(&dependency.title, 160),
-                    kind: WaitKind::Info,
-                });
-            }
-        }
-    }
+    let waiting = head
+        .as_ref()
+        .map(|head| super::question_context::waiting(ctx, head))
+        .transpose()?
+        .unwrap_or_default();
     let mut evidence = Vec::new();
     for reference in q.evidence.iter().take(5) {
         evidence.push(evidence_block(ctx, reference));
@@ -186,12 +131,20 @@ pub(super) fn question(ctx: &Ctx, key: &str) -> Result<DetailBody> {
                 .option_details
                 .iter()
                 .find(|option| option.label == *label);
-            QuestionOption {
-                label: excerpt(label, 512),
-                next: detail
-                    .and_then(|option| option.next.as_deref())
-                    .map(|text| excerpt(text, 1024)),
-                unblocks: detail
+            let next = detail
+                .and_then(|option| option.next.as_deref())
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| excerpt(text, 1024));
+            let cost = detail
+                .and_then(|option| option.cost.as_deref())
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| excerpt(text, 256));
+            let derived =
+                detail.is_none_or(|option| option.unblocks.is_empty()) && !waiting.is_empty();
+            let unblocks: Vec<String> = if derived {
+                waiting.iter().map(|task| task.id.clone()).collect()
+            } else {
+                detail
                     .map(|option| {
                         option
                             .unblocks
@@ -199,10 +152,15 @@ pub(super) fn question(ctx: &Ctx, key: &str) -> Result<DetailBody> {
                             .map(|text| excerpt(text, 256))
                             .collect()
                     })
-                    .unwrap_or_default(),
-                cost: detail
-                    .and_then(|option| option.cost.as_deref())
-                    .map(|text| excerpt(text, 256)),
+                    .unwrap_or_default()
+            };
+            QuestionOption {
+                label: excerpt(label, 512),
+                consequence_missing: next.is_none() && cost.is_none() && unblocks.is_empty(),
+                consequence_derived: derived,
+                next,
+                unblocks,
+                cost,
                 recommended: detail.map_or_else(
                     || q.recommendation.as_deref() == Some(label),
                     |option| option.recommended,
@@ -216,6 +174,8 @@ pub(super) fn question(ctx: &Ctx, key: &str) -> Result<DetailBody> {
     let mut history = q
         .triage
         .iter()
+        .rev()
+        .take(5)
         .map(|entry| QuestionHistory {
             by: actor(entry.by).into(),
             via: None,
@@ -231,22 +191,9 @@ pub(super) fn question(ctx: &Ctx, key: &str) -> Result<DetailBody> {
         })
         .collect::<Vec<_>>();
     if let Some(head) = &head {
-        for id in &q.owner_decisions {
-            if let Some(decision) = head.decision_by_id(id)? {
-                history.push(QuestionHistory {
-                    by: decision.request.owner.clone(),
-                    via: None,
-                    at: decision.registered_at.to_string(),
-                    text: excerpt(&decision.request.question, 1024),
-                    source_ref: Some(format!("{}/decision/{}", head.id, decision.request.id)),
-                });
-            }
-        }
+        history.extend(super::question_context::related(ctx, head, q)?);
     }
     history.sort_by(|a, b| a.at.cmp(&b.at));
-    if history.len() > 5 {
-        history.drain(..history.len() - 5);
-    }
     let from = question_from(ctx, &view, head.as_ref())?;
     let answer = q.answer.as_ref().map(|answer| QuestionAnswer {
         by: answer_by(answer.by).into(),
@@ -351,7 +298,7 @@ fn state(view: &QuestionView) -> InboxState {
     }
 }
 
-fn plan_id(head: &TaskHead) -> Option<String> {
+pub(super) fn plan_id(head: &TaskHead) -> Option<String> {
     head.parent.clone().or_else(|| {
         head.plan
             .as_deref()
@@ -470,11 +417,10 @@ fn resolve_evidence(ctx: &Ctx, reference: &QuestionEvidenceRef) -> Result<Eviden
             )
         }
         QuestionEvidenceRef::Artifact { task, id } => {
-            let artifact = crate::resolve_artifact(ctx, id)?;
-            anyhow::ensure!(
-                crate::artifact_storage::task_of(&artifact.path) == Some(task.as_str()),
-                "artifact belongs to a different container"
-            );
+            let artifact = super::artifacts::select(ctx, task, id)?;
+            if artifact.kind == corral_core::ArtifactKind::Screenshot {
+                return super::question_context::image(ctx, id, &artifact);
+            }
             let bytes =
                 crate::artifact_storage::artifact_read_confined_limited(ctx, &artifact, 8192)?;
             let text = std::str::from_utf8(&bytes).context("artifact is not UTF-8 text")?;

@@ -2,6 +2,7 @@ mod agent_cmd;
 mod annotation_cmd;
 mod artifact_cmd;
 mod artifact_show;
+mod ask_cmd;
 mod assistant_cmd;
 mod assistant_effects_cmd;
 mod assistant_handoff_cmd;
@@ -89,6 +90,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Send a question or idea to the assistant or PM
+    Ask(ask_cmd::AskArgs),
     /// Inspect and manage durable assistant sessions (no coding slot)
     Assistant(assistant_cmd::AssistantArgs),
     /// Control task and PM sessions

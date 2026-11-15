@@ -171,11 +171,10 @@ fn filters(app: AppState, changes: Memo<Changes>) -> AnyElement {
 /// The recent events, the seen line, the dimmed history, the older-page control and the notes.
 fn feed(app: AppState, changes: &Changes) -> AnyElement {
     let form = app.form;
-    if changes.recent.is_empty() && changes.history.is_empty() {
-        if let Some(notice) = &changes.notice {
-            return quiet(app, notice.clone());
-        }
-    }
+    let notice = changes
+        .notice
+        .as_ref()
+        .filter(|_| changes.recent.is_empty() && changes.history.is_empty());
     let recent = changes
         .recent
         .iter()
@@ -186,9 +185,16 @@ fn feed(app: AppState, changes: &Changes) -> AnyElement {
         .iter()
         .enumerate()
         .map(|(index, event)| row(app, event, format!("change-seen-{index}")));
-    let mut events: Vec<AnyElement> = recent.collect();
-    events.push(seen_line(app, changes.seen_line.clone()));
-    events.extend(history);
+    // An empty loaded page with a notice shows the notice in the feed's place, so the older-page
+    // control below stays reachable: an older page may hold what the filter matches.
+    let mut events: Vec<AnyElement> = Vec::new();
+    if let Some(notice) = notice {
+        events.push(quiet(app, notice.clone()));
+    } else {
+        events.extend(recent);
+        events.push(seen_line(app, changes.seen_line.clone()));
+        events.extend(history);
+    }
     view()
         .child(
             view()

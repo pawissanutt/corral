@@ -19,6 +19,9 @@ pub struct InboxRow {
     pub question_rev: Option<u32>,
     pub answerable: bool,
     pub unanswerable_reason: Option<String>,
+    /// Canonical next mover and blocker; absent only for older producers.
+    #[serde(default)]
+    pub attention: Option<AttentionMove>,
     pub rev: u64,
 }
 
@@ -33,6 +36,8 @@ pub enum InboxKind {
     Review,
     Stuck,
     Escalated,
+    OwnerDecision,
+    PmAction,
     #[serde(other)]
     Other,
 }
@@ -50,6 +55,74 @@ pub enum InboxState {
     Expired,
     #[serde(other)]
     Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AttentionMove {
+    pub whose_move: AttentionActor,
+    pub reason: String,
+    pub next_step: String,
+    /// A CLI hint, never permission to execute a command on the client.
+    pub command: Option<String>,
+    pub destination: AttentionDestination,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionActor {
+    Owner,
+    Pm,
+    Worker,
+    External,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionDestination {
+    Inbox,
+    Now,
+    Plans,
+    Review,
+    #[serde(other)]
+    Other,
+}
+
+/// Counts of open owner moves, not task statuses or loaded board groups.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AttentionCounts {
+    pub total: u64,
+    pub inbox: u64,
+    pub now: u64,
+    pub plans: u64,
+    pub review: u64,
+}
+
+impl AttentionCounts {
+    pub fn from_rows(rows: &[InboxRow]) -> Self {
+        let mut counts = Self::default();
+        for row in rows {
+            let Some(attention) = &row.attention else {
+                continue;
+            };
+            if row.state != InboxState::Open || attention.whose_move != AttentionActor::Owner {
+                continue;
+            }
+            counts.total += 1;
+            counts.inbox += 1;
+            counts.now += u64::from(row.task.is_some());
+            counts.plans += u64::from(attention.destination == AttentionDestination::Plans);
+            counts.review += u64::from(attention.destination == AttentionDestination::Review);
+        }
+        counts
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AttentionSnapshot {
+    pub items: Vec<InboxRow>,
+    pub counts: AttentionCounts,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -84,6 +157,13 @@ pub enum PlanRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanState {
+    /// No submitted revision is waiting for the owner; planning or changes remain.
+    Drafting,
+    /// A submitted document still needs independent review or automatic processing.
+    Reviewing,
+    /// Planning or its review failed or escalated, not an acceptance request.
+    PlanFailed,
+    /// A submitted, unapproved document is waiting for the owner's decision.
     Awaiting,
     Executing,
     /// The document is accepted; a design may already have published its tracker.
@@ -243,6 +323,12 @@ pub struct UsageRow {
     pub today_usd: Option<f64>,
     pub week_usd: Option<f64>,
     pub cost_basis: Option<CostBasis>,
+    #[serde(default)]
+    pub today_completeness: crate::detail::UsageCompleteness,
+    #[serde(default)]
+    pub week_completeness: crate::detail::UsageCompleteness,
+    #[serde(default)]
+    pub quotas: Vec<crate::detail::UsageQuota>,
     pub rev: u64,
 }
 

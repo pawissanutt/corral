@@ -127,11 +127,10 @@ pub fn task_phone(app: AppState) -> PhonePage {
         let env = app.env();
         app.work.with(|state| work::task_page(state, env))
     });
-    let (title, back, ask) = untracked(|| {
+    let (title, ask) = untracked(|| {
         page.with(|page| {
             (
                 page.title.to_owned(),
-                page.back_label,
                 page.actions
                     .iter()
                     .find(|button| {
@@ -150,11 +149,10 @@ pub fn task_phone(app: AppState) -> PhonePage {
         .into_element();
     PhonePage {
         title,
-        back,
         body,
         trailing,
         bar: None,
-        ask: true,
+        ask: false,
         scroll: true,
     }
 }
@@ -221,11 +219,10 @@ pub fn live_task_phone(app: AppState, id: Id) -> PhonePage {
         .into_element();
     PhonePage {
         title: id.to_string(),
-        back: "Now",
         body,
         trailing,
         bar: None,
-        ask: true,
+        ask: false,
         scroll: true,
     }
 }

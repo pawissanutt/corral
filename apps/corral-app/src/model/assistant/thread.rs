@@ -112,6 +112,8 @@ pub struct SourceLink {
 pub struct AssistantMessage {
     /// Stable identity of the reply in its thread, for per-reply view state.
     pub key: String,
+    /// One-shot reveal and highlight of the decision opened from Inbox.
+    pub anchored: bool,
     /// Session id in the author header.
     pub id: String,
     /// Reply time.
@@ -219,6 +221,7 @@ fn owner(
 fn assistant(id: &str, at: &str, body: Vec<Body>) -> AssistantMessage {
     AssistantMessage {
         key: format!("{id}@{at}"),
+        anchored: false,
         id: id.into(),
         at: at.into(),
         model: "pi-sol xhigh".into(),
@@ -403,7 +406,11 @@ fn append_sent(items: &mut Vec<ThreadItem>, state: &State, id: &str) {
                 message.state,
             )));
             match message.state {
-                MessageState::Sent => items.push(ThreadItem::Assistant(assistant(message.thread, "now", vec![Body::Illustrative("mock: the assistant's reply to new messages is not simulated")]))),
+                MessageState::Sent => {
+                    let mut reply = assistant(message.thread, "now", vec![Body::Illustrative("mock: the assistant's reply to new messages is not simulated")]);
+                    reply.model = message.model.into();
+                    items.push(ThreadItem::Assistant(reply));
+                }
                 MessageState::Waiting(reason) => items.push(ThreadItem::Waiting(waiting_block(reason, false))),
                 MessageState::Saved(id) => items.push(ThreadItem::Saved(saved_as_written(id, &message.text))),
                 MessageState::Withdrawn => {},
@@ -512,6 +519,9 @@ pub fn thread(state: &State, id: &'static str, env: Env) -> Vec<ThreadItem> {
     )));
     let mut pause = assistant(id, "22:02", vec![Body::Action(mode_pause_card())]);
     pause.state = Some(Chip::new("waiting on you", Hue::You));
+    pause.anchored = state.anchor.as_ref().is_some_and(|(thread, key)| {
+        *thread == super::ThreadRef::Fixture(id) && key == "confirmation"
+    });
     items.push(ThreadItem::Assistant(pause));
     items.push(ThreadItem::Owner(owner(
         "22:04",
@@ -531,6 +541,9 @@ pub fn thread(state: &State, id: &'static str, env: Env) -> Vec<ThreadItem> {
         MessageState::Sent,
     )));
     let mut permission = assistant(id, "22:05", vec![Body::Permission(permission_card(env))]);
+    permission.anchored = state.anchor.as_ref().is_some_and(|(thread, key)| {
+        *thread == super::ThreadRef::Fixture(id) && key == "permission"
+    });
     permission.state = Some(Chip::new("waiting on you", Hue::You));
     items.push(ThreadItem::Assistant(permission));
     items.push(pm(

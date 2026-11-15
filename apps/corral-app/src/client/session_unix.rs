@@ -79,13 +79,13 @@ impl Session {
             if let Some(event) = self.core.next_event() {
                 return Ok(event);
             }
-            if self.last_activity.elapsed() >= IDLE_TIMEOUT {
+            if self.last_activity.elapsed() >= IDLE_TIMEOUT && !self.core.has_pending() {
                 self.request(wire::PING, serde_json::json!({}))?;
                 self.last_activity = Instant::now();
             }
             if Instant::now() >= deadline || !self.receive(deadline)? {
                 self.check_deadlines()?;
-                return Ok(Event::Idle);
+                return Ok(self.core.next_event().unwrap_or(Event::Idle));
             }
         }
     }
@@ -94,7 +94,7 @@ impl Session {
         self.started.elapsed().as_millis().min(u64::MAX as u128) as u64
     }
 
-    fn check_deadlines(&self) -> Result<(), String> {
+    fn check_deadlines(&mut self) -> Result<(), String> {
         if let Some(method) = self.core.expired(self.now_ms()) {
             return Err(format!("daemon {method} deadline expired"));
         }

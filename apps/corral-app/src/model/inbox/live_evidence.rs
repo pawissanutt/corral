@@ -117,6 +117,15 @@ fn body(block: &EvidenceBlock) -> EvidenceBody {
                 .collect(),
             note: cut.then(|| truncated(block)),
         },
+        Body::Image { artifact } => EvidenceBody::Text {
+            file: block.title.clone(),
+            attribution: None,
+            lines: vec![vec![span(format!(
+                "Image: {} ({})",
+                artifact.title, artifact.source_ref
+            ))]],
+            note: None,
+        },
         Body::Unresolved { reason } => EvidenceBody::Unresolved {
             file: block.title.clone(),
             reason: reason.clone(),

@@ -223,7 +223,11 @@ pub fn steps4(app: AppState, items: Vec<(StepState, String, String)>) -> AnyElem
 }
 
 /// One row of a table: each cell at its column's width, at its trailing edge where `align_end`
-/// holds, padded `(x, y)` on desktop and phone.
+/// holds, padded `(x, y)` on desktop and phone. A cell never draws past its column: a text that
+/// does not shrink (pass `.flex_shrink(1.0).min_w(px(0.0))` to let it wrap) is clipped at the
+/// column's edge rather than written over its neighbour's figures. Desktop and phone centre the
+/// cells on the row, as the mockup; a terminal sets them on the row's first line, so a label
+/// stays beside the first line of a value that runs to several.
 fn table_row(
     app: AppState,
     widths: &[Width],
@@ -232,14 +236,17 @@ fn table_row(
     (pad_x, pad_y): (f32, f32),
 ) -> AnyElement {
     let form = app.form;
+    let terminal = form == Form::Terminal;
     let mut parts = Vec::with_capacity(cells.len() * 2);
     for (at, cell) in cells.into_iter().enumerate() {
         let width = widths.get(at).copied().unwrap_or(Width::Fill);
         let slot = view()
             .role(AccessibilityRole::Cell)
             .flex_row()
-            .items_center()
+            .when(terminal, |slot| slot.items_start())
+            .when(!terminal, |slot| slot.items_center())
             .min_w(px(0.0))
+            .overflow_hidden()
             .when(align_end.get(at).copied().unwrap_or(false), |slot| {
                 slot.justify_end()
             });
@@ -262,7 +269,8 @@ fn table_row(
     let row = view()
         .role(AccessibilityRole::Row)
         .flex_row()
-        .items_center()
+        .when(terminal, |row| row.items_start())
+        .when(!terminal, |row| row.items_center())
         .children(parts);
     match form {
         Form::Terminal => row.px(term::cells(1.0)).into_element(),

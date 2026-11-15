@@ -3,6 +3,7 @@ use super::{AuthenticatedDevice, excerpt};
 use crate::Ctx;
 use crate::agent::{bridge::BridgeClient, hooks::pm::Overrides, launch, ops::assistant::Claim};
 use anyhow::{Context, Result, ensure};
+use corral_protocol::assistant::{StopAck, StopOutcome, TurnCompletion};
 use corral_protocol::subscription::LiveText;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
@@ -534,8 +535,18 @@ fn event(
                 .or_else(|| event["message"].as_str())
                 .map(|s| excerpt(s, 2048))
                 .or_else(|| (event["aborted"] == true).then(|| "Stopped by owner".into()));
+            let completion = if event["aborted"] == true {
+                TurnCompletion::Aborted
+            } else if kind == "owner_error" || failure.is_some() {
+                TurnCompletion::Failed
+            } else {
+                TurnCompletion::Completed
+            };
+            super::turns::settle(ctx, &message, completion)?;
+            // A zero-text settlement still needs a canonical answer carrying its outcome.
             ctx.store.update_app_message(id, |m| {
                 m.state = "done".into();
+                m.reply.get_or_insert_with(String::new);
                 m.failure = failure;
                 m.model = event["model"].as_str().map(str::to_owned);
                 Ok(())
@@ -641,7 +652,7 @@ pub fn pump(ctx: &Ctx, runtime: &mut Runtime) -> Result<RuntimeUpdate> {
     Ok(update)
 }
 
-pub fn stop(ctx: &Ctx, device: &AuthenticatedDevice, scope: &str, turn: u64) -> Result<()> {
+pub fn stop(ctx: &Ctx, device: &AuthenticatedDevice, scope: &str, turn: u64) -> Result<StopAck> {
     super::input::recheck_authority(&ctx.store, &device.id, false)?;
     ensure!(device.assistant, "authority_assistant");
     let head = ctx.store.app_thread(scope)?;
@@ -657,8 +668,31 @@ pub fn stop(ctx: &Ctx, device: &AuthenticatedDevice, scope: &str, turn: u64) -> 
     );
     let dir =
         launch::assistant_runtime_dir(&ctx.store, &head.session).join(format!("g{generation}"));
-    BridgeClient::connect_dir(&dir, generation)?.cancel(Some(turn))?;
-    Ok(())
+    let reply = BridgeClient::connect_dir(&dir, generation)?.cancel(Some(turn))?;
+    Ok(stop_ack(&head.session, turn, &reply))
+}
+
+fn stop_ack(session: &str, turn: u64, reply: &Value) -> StopAck {
+    let reason = reply["reason"].as_str();
+    let outcome = if reply["cancelled"] == true && reply["turn"].as_u64() == Some(turn) {
+        StopOutcome::Accepted
+    } else if reply["cancelled"] == false
+        && (reason == Some("idle")
+            || (reason == Some("turn_not_current")
+                && reply["turn"].as_u64().is_some_and(|current| current > turn)))
+    {
+        StopOutcome::AlreadyStopped
+    } else {
+        StopOutcome::Failed
+    };
+    StopAck {
+        session: session.into(),
+        turn,
+        outcome,
+        reason: reason
+            .map(|reason| excerpt(reason, 1024))
+            .or_else(|| (outcome == StopOutcome::Failed).then(|| "invalid_stop_response".into())),
+    }
 }
 
 pub fn shutdown(ctx: &Ctx, runtime: &mut Runtime) -> Result<()> {

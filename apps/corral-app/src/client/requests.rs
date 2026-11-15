@@ -39,6 +39,10 @@ pub enum ClientRequest {
         name: String,
     },
     Forget,
+    DetailWatch {
+        target: corral_protocol::detail::DetailRef,
+        open: bool,
+    },
     Detail {
         request_id: String,
         request: DetailGet,
@@ -231,4 +235,18 @@ pub fn assistant_cancel(cmd_id: String) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn attach_path(request: AttachPath) -> bool {
     send(ClientRequest::AttachPath(request))
+}
+
+/// Full jitter in the upper half of a capped exponential reconnect window.
+pub(super) fn reconnect_delay_ms(failures: usize) -> u64 {
+    let cap = match failures {
+        0 => 1_000,
+        1 => 2_000,
+        2 => 5_000,
+        _ => 10_000,
+    };
+    let entropy = new_id().bytes().fold(0u64, |seed, byte| {
+        seed.wrapping_mul(31).wrapping_add(u64::from(byte))
+    });
+    cap / 2 + entropy % (cap / 2 + 1)
 }

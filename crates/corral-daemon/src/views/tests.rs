@@ -66,9 +66,9 @@ fn read_admission_is_bounded_without_waiting_for_the_worker() {
     };
     let mut replies = Vec::new();
     for _ in 0..QUEUE {
-        replies.push(changes(&shared, query.clone()).unwrap());
+        replies.push(changes(&shared, query.clone(), app::SeenCursor::default()).unwrap());
     }
-    assert!(changes(&shared, query).is_err());
+    assert!(changes(&shared, query, app::SeenCursor::default()).is_err());
     assert!(
         changes(
             &shared,
@@ -76,7 +76,8 @@ fn read_admission_is_bounded_without_waiting_for_the_worker() {
                 before: None,
                 after: None,
                 limit: 201
-            }
+            },
+            app::SeenCursor::default()
         )
         .is_err()
     );

@@ -20,16 +20,20 @@ impl AppState {
         let result = self
             .outbox
             .as_mut()
-            .expect("message came from the outbox")
-            .update(|saved| {
-                if local {
-                    saved.messages.remove(&id);
-                } else if let Some(message) = saved.messages.get_mut(&id) {
-                    message.cancel = true;
-                }
+            .ok_or_else(|| local_error("Device cancellation storage unavailable.".into()))
+            .and_then(|outbox| {
+                outbox
+                    .update(|saved| {
+                        if local {
+                            saved.messages.remove(&id);
+                        } else if let Some(message) = saved.messages.get_mut(&id) {
+                            message.cancel = true;
+                        }
+                    })
+                    .map_err(local_error)
             });
         if let Err(problem) = result {
-            feed.update(|feed| feed.problem = Some(problem));
+            feed.update(|feed| feed.problem = Some(problem.message));
             return vec![];
         }
         feed.update(|feed| {
@@ -118,12 +122,16 @@ impl AppState {
         if let Err(problem) = self
             .outbox
             .as_mut()
-            .expect("pending cancellation has an outbox")
-            .update(|saved| {
-                saved.messages.remove(&id);
+            .ok_or_else(|| local_error("Device cancellation storage unavailable.".into()))
+            .and_then(|outbox| {
+                outbox
+                    .update(|saved| {
+                        saved.messages.remove(&id);
+                    })
+                    .map_err(local_error)
             })
         {
-            feed.update(|feed| feed.problem = Some(problem));
+            feed.update(|feed| feed.problem = Some(problem.message));
             return Ok(vec![]);
         }
         feed.update(|feed| {

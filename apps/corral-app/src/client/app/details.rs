@@ -1,6 +1,5 @@
 use super::*;
 
-const MAX_DETAILS: usize = 128;
 const MAX_PAGES: usize = 256;
 const MAX_DETAIL_BYTES: usize = 8 * 1024 * 1024;
 
@@ -37,13 +36,10 @@ impl AppState {
         };
         for (retired_key, retired_id) in &mut retired {
             *retired_id = self.detail_inflight.remove(retired_key);
-            self.detail_pages.remove(retired_key);
-            self.detail_bytes.remove(retired_key);
+            self.evict_detail(feed, retired_key);
         }
-        let mut accepted = true;
         feed.update(|feed| {
-            for (retired_key, retired_id) in &retired {
-                feed.details.remove(retired_key);
+            for (_, retired_id) in &retired {
                 if let Some(operation) = retired_id
                     .as_ref()
                     .and_then(|id| feed.operations.get_mut(id.as_str()))
@@ -54,20 +50,6 @@ impl AppState {
                         code: "superseded".into(),
                         message: "A different filings page replaced this detail request.".into(),
                     });
-                }
-            }
-            if !feed.details.contains_key(&key) && feed.details.len() >= MAX_DETAILS {
-                let evict = feed
-                    .details
-                    .iter()
-                    .find(|(_, detail)| !detail.loading)
-                    .map(|(key, _)| key.clone());
-                if let Some(evict) = evict {
-                    feed.details.remove(&evict);
-                } else {
-                    feed.problem = Some("Too many details are loading; wait for a reply.".into());
-                    accepted = false;
-                    return;
                 }
             }
             let cache = feed
@@ -85,7 +67,10 @@ impl AppState {
             cache.stale = true;
             cache.error = (!self.ready).then(offline);
         });
-        if !accepted || !self.ready {
+        self.retained.select(&request, &id);
+        if !self.ready {
+            self.touch_detail(feed, &request.target);
+            self.trim_retained(feed);
             return vec![];
         }
         if let DetailRef::Session { id } = &request.target {
@@ -110,8 +95,16 @@ impl AppState {
             });
         }
         self.detail_pages.insert(key.clone(), vec![]);
-        self.detail_bytes.insert(key, 0);
-        self.operation(feed, id, DETAIL_GET, value(request))
+        self.detail_bytes.insert(key.clone(), 0);
+        let target = request.target.clone();
+        let outgoing = self.operation(feed, id.clone(), DETAIL_GET, value(request));
+        self.touch_detail(feed, &target);
+        self.trim_retained(feed);
+        if self.detail_inflight.get(&key) == Some(&id) {
+            outgoing
+        } else {
+            vec![]
+        }
     }
     pub(super) fn detail_reply(
         &mut self,
@@ -184,12 +177,12 @@ impl AppState {
             self.detail_pages.remove(&key);
             self.detail_inflight.remove(&key);
             self.detail_bytes.remove(&key);
+            self.touch_detail(feed, &request.target);
+            self.trim_retained(feed);
             return Ok(vec![]);
         }
         let next = page.next.clone();
-        let size = serde_json::to_vec(&page)
-            .map_err(|error| error.to_string())?
-            .len();
+        let size = cache::bytes(&page);
         let bytes = self.detail_bytes.entry(key.clone()).or_default();
         *bytes = bytes.saturating_add(size);
         pages.push(page);
@@ -206,6 +199,11 @@ impl AppState {
             return Ok(vec![]);
         }
         if let Some(next) = next {
+            self.touch_detail(feed, &request.target);
+            self.trim_retained(feed);
+            if self.detail_inflight.get(&key) != Some(&id) {
+                return Ok(vec![]);
+            }
             return Ok(vec![out(
                 DETAIL_GET,
                 value(DetailGet {
@@ -265,6 +263,8 @@ impl AppState {
                 operation.error = None;
             }
         });
+        self.touch_detail(feed, &request.target);
+        self.trim_retained(feed);
         Ok(vec![])
     }
     fn detail_failed(&mut self, feed: Signal<Feed>, key: &str, id: &str, error: ClientError) {
@@ -283,6 +283,11 @@ impl AppState {
                 operation.error = Some(error);
             }
         });
+        let target = self.retained_target(feed, key);
+        if let Some(target) = target {
+            self.touch_detail(feed, &target);
+        }
+        self.trim_retained(feed);
     }
     pub(super) fn refresh_details(&mut self, feed: Signal<Feed>) -> Vec<Outgoing> {
         let targets = feed.with_untracked(|feed| {
@@ -296,14 +301,13 @@ impl AppState {
             outgoing.extend(self.detail_request(
                 feed,
                 requests::new_id(),
-                DetailGet {
-                    target,
-                    etag: None,
-                    page: None,
-                },
+                self.retained.selected(target),
             ));
         }
         outgoing
+    }
+    fn retained_target(&self, feed: Signal<Feed>, key: &str) -> Option<DetailRef> {
+        feed.with_untracked(|feed| feed.details.get(key).map(|cache| cache.target.clone()))
     }
 }
 

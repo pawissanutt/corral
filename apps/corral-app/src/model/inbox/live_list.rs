@@ -39,6 +39,8 @@ fn lead(row: &InboxRow) -> String {
         InboxKind::Review => "Review needs you".into(),
         InboxKind::Stuck => "Stuck".into(),
         InboxKind::Escalated => "Escalated".into(),
+        InboxKind::OwnerDecision => "Owner decision".into(),
+        InboxKind::PmAction => "PM's move".into(),
         InboxKind::Other => "Needs you".into(),
     }
 }
@@ -82,6 +84,9 @@ fn row_state(state: &State, feed: &Feed, row: &InboxRow) -> QuestionState {
 
 fn plan_state(state: PlanState) -> &'static str {
     match state {
+        PlanState::Drafting => "drafting",
+        PlanState::Reviewing => "in plan review",
+        PlanState::PlanFailed => "plan failed",
         PlanState::Awaiting => "awaits acceptance",
         PlanState::Executing => "executing",
         PlanState::Approved => "approved",

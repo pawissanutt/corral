@@ -23,12 +23,18 @@ fn native(registry: &mut Registry) {
     registry.assets(assets!());
 }
 
+/// A tablet whose longer edge reaches this gets the desktop shell, whose sidebar folds to its
+/// rail while the window is narrow; a smaller one keeps the phone's tabs. The longer edge, so
+/// turning the tablet does not change the shell it started with.
+const PAD_DESKTOP: f32 = 900.0;
+
 /// The root: the shell of the device's idiom over the app's state.
 #[component]
 pub fn App() -> impl IntoElement {
     let form = match idiom() {
         Idiom::Terminal => Form::Terminal,
         Idiom::Desktop => Form::Desktop,
+        Idiom::Pad if long_edge() >= PAD_DESKTOP => Form::Desktop,
         _ => Form::Phone,
     };
     let app = AppState::install(form);
@@ -39,7 +45,14 @@ pub fn App() -> impl IntoElement {
     };
     view()
         .flex_1()
+        .element_ref(&app.focus_root)
         .bg(color(Token::Bg))
         .text_color(color(Token::Ink))
         .child(frame)
+}
+
+/// The window's longer edge, read once: the shell is chosen when the app starts.
+fn long_edge() -> f32 {
+    let size = untracked(window);
+    size.width.0.max(size.height.0)
 }

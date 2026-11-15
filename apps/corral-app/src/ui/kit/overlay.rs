@@ -53,7 +53,8 @@ pub struct Confirm {
     pub cancel: String,
     /// The word a terminal asks to be typed: the command's first word, "approve".
     pub word: String,
-    /// The phone's device check under a lock: "Confirm with Face ID, or enter your PIN".
+    /// The phone's line over the buttons saying what Confirm checks (the model's: the tap, then
+    /// corrald's check of this device and the preview).
     pub check: Option<String>,
     /// Runs the command. It does not close the modal: the confirmation's state leaving the
     /// app state does.
@@ -65,9 +66,11 @@ pub struct Confirm {
 /// Desktop: bottom centre of its parent, 22 pt up, on the button colour (`.toast`: padding
 /// 9 14, radius 8, 12.5 pt), at most 560 pt wide and wrapping to three lines, rising in over
 /// 220 ms; put it last in the content container.
-/// Phone: 100 pt up from the bottom of the shell root, above the tab bar, at most 340 pt wide
-/// and wrapping. Terminal: a row in the flow on a raised band, the message in bold; put it in
-/// the shell's column just above the key line, where it takes a row only while it shows.
+/// Phone: under the top safe area, clear of the docked composer, the floating Ask and the
+/// keyboard that a bottom toast would cover, at most 340 pt wide and wrapping; it takes no
+/// presses, so the page head under it stays usable. Terminal: a row in the flow on a raised
+/// band, the message in bold; put it in the shell's column just above the key line, where it
+/// takes a row only while it shows.
 /// test_id "toast".
 pub fn toast(
     app: AppState,
@@ -91,10 +94,12 @@ pub fn toast(
 /// call `on_close`. Desktop: a dialog over the window on a dimmed scrim, the panel centred
 /// (520 pt, padding 18 20 16, radius 12, the title 15 pt bold, the sub line 12.5 pt quiet, the
 /// body scrolling when it runs long), then Cancel and the confirming button at the trailing
-/// edge. Phone: a bottom sheet (`.psheet`: radius 14 at the top, a grab handle, the title row
-/// 16 pt bold with Done at its end, the body scrolling within 82 % of the screen); a
-/// confirmation adds the device check under a lock and Cancel and Confirm side by side, full
-/// width. Terminal: a framed region over the content pane, the title and its keys in the first
+/// edge, the keyboard focus on Cancel once it shows: Enter or Space cancels, Tab reaches the
+/// confirming button. Phone: a bottom sheet (`.psheet`: radius 14 at the top, a grab handle,
+/// the title row 16 pt bold with Done at its end, the body scrolling within 82 % of the
+/// screen); a confirmation adds what Confirm checks, then Cancel (focused, for a hardware
+/// keyboard) and Confirm side by side, full width. Terminal: a framed region over the content
+/// pane, the title and its keys in the first
 /// row, the sub line, the body between joined rules; a confirmation asks for its word to be
 /// typed ("Type approve to confirm") and confirms on Enter when it matches. Role alert dialog
 /// with a confirmation, dialog without; named by the title, described by the sub line.
@@ -155,9 +160,13 @@ fn toast_face(app: AppState, message: String) -> AnyElement {
             .into_element();
     }
     let phone = form == Form::Phone;
+    // The phone's drops in from the top edge it sits under; the desktop's rises from below.
     let rise = motion().entering(
         MotionSpec::new(KeyframeTiming::new(220.0).easing(Easing::Bezier(0.16, 1.0, 0.3, 1.0)))
-            .values(MotionChannel::TranslateY, [8.0, 0.0])
+            .values(
+                MotionChannel::TranslateY,
+                [if phone { -8.0 } else { 8.0 }, 0.0],
+            )
             .values(MotionChannel::Opacity, [0.0, 1.0]),
     );
     let face = view()
@@ -186,16 +195,22 @@ fn toast_face(app: AppState, message: String) -> AnyElement {
     // edges; three desktop lines hold a refusal, and the page keeps the full status.
     let face = face.max_w(px(if phone { 340.0 } else { 560.0 }));
     // The strip spans its parent to centre the toast; it takes no presses of its own.
-    view()
+    let strip = view()
         .absolute()
         .left(px(0.0))
         .right(px(0.0))
-        .bottom(px(if phone { 100.0 } else { 22.0 }))
         .px(px(16.0))
-        .items_center()
-        .pointer_events(PointerEvents::BoxNone)
-        .child(face)
-        .into_element()
+        .items_center();
+    let strip = if phone {
+        strip
+            .top(move || px(8.0) + safe_area().top)
+            .pointer_events(PointerEvents::None)
+    } else {
+        strip
+            .bottom(px(22.0))
+            .pointer_events(PointerEvents::BoxNone)
+    };
+    strip.child(face).into_element()
 }
 
 /// The desktop dialog: scrim, centred panel, actions at the trailing edge.
@@ -233,18 +248,25 @@ fn desktop_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEle
                 .text_color(color(Token::Ink)),
         )
         .children(done.map(|label| close_button(app, label, &test_id, on_close.clone())));
+    let cancel = element_ref();
     let actions = confirm.map(|confirm| {
         let close = on_close.clone();
         let go = confirm.on_confirm.clone();
+        // Cancel is the safe default; once the dialog is laid out the keyboard starts there.
+        after_answer(move || cancel.focus());
         view()
             .flex_row()
             .justify_end()
             .gap(px(8.0))
             .mt(px(16.0))
-            .child(button(
+            .child(button_with(
                 app,
                 confirm.cancel,
                 ButtonKind::Ghost,
+                ButtonOptions {
+                    focus: Some(cancel),
+                    ..ButtonOptions::default()
+                },
                 format!("{test_id}-cancel"),
                 move || close(),
             ))
@@ -325,9 +347,11 @@ fn phone_sheet(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyElemen
                 .text_color(color(Token::Ink)),
         )
         .children(done.map(|label| close_button(app, label, &test_id, on_close.clone())));
+    let cancel = element_ref();
     let confirming = confirm.map(|confirm| {
         let close = on_close.clone();
         let go = confirm.on_confirm.clone();
+        after_answer(move || cancel.focus());
         let wide = ButtonOptions {
             wide: true,
             ..ButtonOptions::default()
@@ -335,19 +359,14 @@ fn phone_sheet(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyElemen
         view()
             .when_some(confirm.check, |part, check| {
                 part.child(
-                    view()
-                        .items_center()
-                        .gap(px(8.0))
-                        .mt(px(18.0))
-                        .mb(px(6.0))
-                        .child(lock_tile())
-                        .child(
-                            text(check)
-                                .text_center()
-                                .font_family(FONT_TEXT)
-                                .text_size(px(14.0))
-                                .text_color(color(Token::Ink3)),
-                        ),
+                    text(check)
+                        .mt(px(14.0))
+                        .mb(px(4.0))
+                        .text_center()
+                        .font_family(FONT_TEXT)
+                        .text_size(px(14.0))
+                        .line_height(px(20.0))
+                        .text_color(color(Token::Ink3)),
                 )
             })
             .child(
@@ -359,7 +378,10 @@ fn phone_sheet(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyElemen
                         app,
                         confirm.cancel,
                         ButtonKind::Ghost,
-                        wide,
+                        ButtonOptions {
+                            focus: Some(cancel),
+                            ..wide
+                        },
                         format!("{test_id}-cancel"),
                         move || close(),
                     ))
@@ -558,41 +580,4 @@ fn close_button(app: AppState, label: String, test_id: &str, on_close: Rc<dyn Fn
         format!("{test_id}-done"),
         move || on_close(),
     )
-}
-
-/// The phone's device check: a lock in a 64 pt rounded tile, drawn from two outlined boxes (the
-/// shackle and the body), as the mockup's lock icon.
-fn lock_tile() -> AnyElement {
-    let ink = color(Token::Ink2);
-    view()
-        .size(px(64.0))
-        .items_center()
-        .justify_center()
-        .rounded(px(16.0))
-        .border(px(2.0))
-        .border_color(ink)
-        .accessibility_elements_hidden(true)
-        .child(
-            view()
-                .items_center()
-                .child(
-                    view()
-                        .w(px(8.0))
-                        .h(px(6.0))
-                        .rounded_t(px(4.0))
-                        .border_t(px(1.5))
-                        .border_l(px(1.5))
-                        .border_r(px(1.5))
-                        .border_color(ink),
-                )
-                .child(
-                    view()
-                        .w(px(13.0))
-                        .h(px(9.0))
-                        .rounded(px(2.0))
-                        .border(px(1.5))
-                        .border_color(ink),
-                ),
-        )
-        .into_element()
 }

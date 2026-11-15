@@ -80,9 +80,10 @@ fn decide_view(app: AppState, part: DecideBar, compact: bool) -> AnyElement {
     for model in &part.buttons {
         let asks = matches!(model.action, Action::Thread);
         let options = ButtonOptions {
-            // The phone's ask-the-asker button keeps its icon and its own width; the others
-            // share the rest of the bar.
-            icon: (form == Form::Phone && asks).then_some(Icon::Ask),
+            // The phone's ask-the-asker button keeps its own width, the others share the rest
+            // of the bar. It leads with the agents' glyph: it talks to the worker, not to the
+            // assistant that the chat glyph opens elsewhere on the page.
+            icon: (form == Form::Phone && asks).then_some(Icon::Agents),
             wide: form == Form::Phone && !asks,
             ..ButtonOptions::default()
         };

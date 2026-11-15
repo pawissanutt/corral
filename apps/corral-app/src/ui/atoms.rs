@@ -12,6 +12,7 @@
 //! the daemon's segment and the reach press through to Settings › Connection, and so does the
 //! whole phone strip.
 
+use nsh_core::AccessibilityCurrent;
 use nsh_core::prelude::*;
 
 use crate::model::{Destination, Form, Segment, SettingsSection, Snapshot, Tone};
@@ -118,8 +119,26 @@ pub fn count(app: AppState, destination: Destination) -> AnyElement {
     })
 }
 
-/// A pressable row for lists of destinations and sections: label, optional trailing element, selected look,
-/// role button, the given test id. Height `row_height(app.form)`.
+/// What a destination's row says to assistive technology: its name, then its count as the
+/// count reads ("Inbox, 5 need you"), as the figure beside the name is part of what it shows.
+pub fn destination_spoken(app: AppState, destination: Destination) -> impl Fn() -> SharedString {
+    move || {
+        let snapshot = app.snapshot();
+        match snapshot.count(destination) {
+            Some(n) => format!(
+                "{}, {}",
+                destination.label(),
+                count_words(n, snapshot.needs_you(destination))
+            )
+            .into(),
+            None => destination.label().into(),
+        }
+    }
+}
+
+/// A pressable row for lists of destinations and sections: label, optional trailing element,
+/// selected look, role button, the given test id. Height `row_height(app.form)`. The selected
+/// row is the current page for assistive technology.
 pub fn nav_row(
     app: AppState,
     label: &'static str,
@@ -128,14 +147,20 @@ pub fn nav_row(
     trailing: Option<AnyElement>,
     on_press: impl Fn() + 'static,
 ) -> AnyElement {
-    row(app, None, label, test_id, selected, trailing, on_press)
+    let spoken = move || SharedString::from(label);
+    row(
+        app, None, label, spoken, test_id, selected, trailing, on_press,
+    )
 }
 
-/// nav_row with a leading icon in the label's colour.
+/// nav_row with a leading icon in the label's colour, named by `spoken` for assistive
+/// technology ([`destination_spoken`] for a destination with a count).
+#[allow(clippy::too_many_arguments)]
 pub fn nav_row_icon(
     app: AppState,
     icon: Icon,
     label: &'static str,
+    spoken: impl Fn() -> SharedString + 'static,
     test_id: String,
     selected: impl Fn() -> bool + 'static,
     trailing: Option<AnyElement>,
@@ -145,6 +170,7 @@ pub fn nav_row_icon(
         app,
         Some(icon),
         label,
+        spoken,
         test_id,
         selected,
         trailing,
@@ -155,10 +181,12 @@ pub fn nav_row_icon(
 /// The body of [`nav_row`] and [`nav_row_icon`]. The terminal shows no images, so a glyph is
 /// left out there; its rows lead with a bar on the selected one instead, which reads at every
 /// colour depth.
+#[allow(clippy::too_many_arguments)]
 fn row(
     app: AppState,
     glyph: Option<Icon>,
     label: &'static str,
+    spoken: impl Fn() -> SharedString + 'static,
     test_id: String,
     selected: impl Fn() -> bool + 'static,
     trailing: Option<AnyElement>,
@@ -201,9 +229,12 @@ fn row(
         .rounded(px(look.radius))
         .cursor_pointer()
         .role(AccessibilityRole::Button)
-        .label(label)
+        .label(spoken)
+        // `current` is what a screen reader announces for the page shown (`aria-current`);
+        // `selected` stays for the terminal, which bands the selected row from it.
         .accessibility_state(move || AccessibilityState {
             selected: selected.get(),
+            current: selected.get().then_some(AccessibilityCurrent::Page),
             ..AccessibilityState::default()
         })
         .test_id(&test_id)
@@ -300,16 +331,21 @@ fn on_shell(token: Token) -> AdaptiveColor {
     AdaptiveColor { light: dark, dark }
 }
 
+/// A count as it is spoken: "5 need you" where the count is what needs the owner, else "5".
+fn count_words(n: u32, needs_you: bool) -> String {
+    if needs_you {
+        format!("{n} need you")
+    } else {
+        n.to_string()
+    }
+}
+
 /// A count. On the phone a pill of its own fill: the Inbox count (what needs you) a solid
 /// needs-you pill in bold, the others quiet. The desktop sidebar's counts are figures on the
 /// shell, as the mock's; a terminal's are figures in a column: a column of small fills reads as
 /// one band there.
 fn count_chip(form: Form, n: u32, needs_you: bool, test_id: &str) -> AnyElement {
-    let label = if needs_you {
-        format!("{n} need you")
-    } else {
-        n.to_string()
-    };
+    let label = count_words(n, needs_you);
     if form == Form::Terminal {
         return text(n.to_string())
             .test_id(test_id)
@@ -522,7 +558,8 @@ fn bar(app: AppState, snapshot: &Snapshot, fit: Fit) -> Vec<AnyElement> {
                 .map(|(at, segment)| {
                     let face = shell_segment(segment, false, at == 0);
                     if at == 0 {
-                        to_connection(app, face, "btn-connection", segment_text(segment))
+                        let filled = segment.tone == Tone::Fail;
+                        to_connection(app, face, "btn-connection", segment_text(segment), filled)
                     } else {
                         face.into_element()
                     }
@@ -630,9 +667,10 @@ fn segment_text(segment: &Segment) -> String {
 }
 
 /// One segment on the shell: tone dot, the name in the quieter shell ink, the value. A warning
-/// is outlined in the held tone and worded in it; a failure is filled in the failure tone, its
-/// words bold, so each reads as what it is without its colour. The compact form is the phone
-/// strip's.
+/// is outlined in the held tone and worded in it; a failure is filled in the failure tone with
+/// its words in the shell's own dark (6.7:1 on that fill; the light shell ink reached 2.5:1),
+/// the value bold, so each reads as what it is without its colour. The compact form is the
+/// phone strip's.
 fn shell_segment(segment: &Segment, compact: bool, first: bool) -> View {
     let tone = segment.tone;
     let framed = matches!(tone, Tone::Warn | Tone::Fail);
@@ -649,11 +687,10 @@ fn shell_segment(segment: &Segment, compact: bool, first: bool) -> View {
             color(Token::ShellInk2),
         ),
         Tone::Warn => (held, held, held),
-        Tone::Fail => (
-            color(Token::ShellInk).opacity(0.8),
-            color(Token::ShellInk),
-            color(Token::ShellInk),
-        ),
+        Tone::Fail => {
+            let ink = on_shell(Token::Shell);
+            (ink, ink, ink)
+        }
     };
     let (height, pad, gap, size) = if compact {
         (STRIP_ROW, 5.0, 4.0, STRIP_CAPTION)
@@ -694,14 +731,28 @@ fn shell_segment(segment: &Segment, compact: bool, first: bool) -> View {
         )
 }
 
-/// A shell control that opens Settings › Connection: the daemon's segment, the reach.
-fn to_connection(app: AppState, face: View, test_id: &str, label: String) -> AnyElement {
+/// A shell control that opens Settings › Connection: the daemon's segment, the reach. A
+/// `filled` face (a failing segment) keeps its fill on hover and only fades a little, as the
+/// shell's hover fill would put its dark words on a dark ground.
+fn to_connection(
+    app: AppState,
+    face: View,
+    test_id: &str,
+    label: String,
+    filled: bool,
+) -> AnyElement {
     face.role(AccessibilityRole::Button)
         .label(label)
         .test_id(test_id)
         .cursor_pointer()
         .rounded(px(SEGMENT_RADIUS))
-        .hover(|s| s.bg(color(Token::ShellSel)))
+        .hover(move |s| {
+            if filled {
+                s.opacity(0.9)
+            } else {
+                s.bg(color(Token::ShellSel))
+            }
+        })
         .focus_visible(|s| {
             s.outline(px(FOCUS_RING))
                 .outline_color(on_shell(Token::Focus))
@@ -741,6 +792,7 @@ fn shell_part(app: AppState, part: usize, content: &str, e2e: bool, size: f32) -
                     reach.px(px(8.0)).py(px(2.0)),
                     "btn-reach",
                     content.to_owned(),
+                    false,
                 )
             } else {
                 reach.into_element()

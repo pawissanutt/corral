@@ -3,6 +3,10 @@ use super::*;
 impl AppState {
     pub fn request(&mut self, feed: Signal<Feed>, request: ClientRequest) -> Vec<Outgoing> {
         match request {
+            ClientRequest::DetailWatch { target, open } => {
+                self.watch_detail(feed, target, open);
+                vec![]
+            }
             ClientRequest::SaveDraft { thread, text } => {
                 let result = self
                     .outbox
@@ -101,6 +105,8 @@ impl AppState {
                         );
                     }
                 });
+                self.touch_thread(feed, &scope);
+                self.trim_retained(feed);
                 if !self.ready {
                     return vec![];
                 }
@@ -150,6 +156,7 @@ impl AppState {
                             .remove(&topic_key(Topic::Session, Some(&session)));
                     });
                 }
+                self.trim_retained(feed);
                 if !self.ready || !feed.with_untracked(|feed| feed.capable(SESSION_V1)) {
                     return vec![];
                 }
@@ -251,8 +258,8 @@ impl AppState {
                 .get("_request_digest")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
-                .unwrap_or_else(|| request_digest(&prior.request));
-            if previous != request_digest(&params) || prior.method != method {
+                .unwrap_or_else(|| request_digest(&prior.method, &prior.request));
+            if previous != request_digest(method, &params) || prior.method != method {
                 feed.update(|feed| {
                     feed.problem =
                         Some("Command identity already belongs to different input.".into())
@@ -285,9 +292,15 @@ impl AppState {
         if !self.ready {
             state.status = CommandStatus::Refused;
             state.error = Some(offline());
+        } else if let Err(problem) = super::super::core::preflight_request(method, &params) {
+            state.status = CommandStatus::Refused;
+            state.error = Some(ClientError {
+                code: "local_admission".into(),
+                message: problem,
+            });
         } else {
             // Persist only recovery identity, never arbitrary command bodies or credentials.
-            let safe = json!({"_request_digest": request_digest(&params)});
+            let safe = json!({"_request_digest": request_digest(method, &params)});
             let result =
                 self.outbox
                     .as_mut()
@@ -344,23 +357,30 @@ impl AppState {
             .as_ref()
             .and_then(|outbox| outbox.saved.messages.get(&id));
         if existing.is_some_and(|message| message.request != request) {
-            feed.update(|feed| {
-                feed.problem = Some("Message identity already belongs to different text.".into())
-            });
+            self.refuse_send(
+                feed,
+                &request,
+                "Message identity already belongs to different text.".into(),
+                false,
+            );
             return vec![];
         }
         if existing.is_some_and(|message| message.cancel) {
             return self.cancel_message(feed, id);
         }
+        if let Err(problem) = super::super::core::preflight_request(ASSISTANT_SEND, &params) {
+            self.refuse_send(feed, &request, problem, true);
+            return vec![];
+        }
         if !outbox::valid_message(&request)
             || (existing.is_none() && !self.ready_uploads(feed, &request))
         {
-            feed.update(|feed| {
-                feed.problem = Some(
-                    "Message needs text and successfully uploaded attachments (maximum four)."
-                        .into(),
-                )
-            });
+            self.refuse_send(
+                feed,
+                &request,
+                "Message needs text and successfully uploaded attachments (maximum four).".into(),
+                true,
+            );
             return vec![];
         }
         if feed.with_untracked(|feed| {
@@ -422,6 +442,13 @@ impl AppState {
         }
         let send = state.status == CommandStatus::Pending;
         feed.update(|feed| {
+            feed.send_acceptance.insert(
+                Id::from(&id),
+                match &result {
+                    Ok(()) => SendAcceptance::Accepted,
+                    Err(problem) => SendAcceptance::Refused(local_error(problem.clone())),
+                },
+            );
             if result.is_ok()
                 && consumed_draft
                     .as_ref()
@@ -432,12 +459,42 @@ impl AppState {
             feed.commands.insert(Id::from(&id), state);
         });
         if result.is_ok() {
-            self.release_upload_bytes(&request);
+            self.release_upload_bytes(feed, &request);
         }
         if send {
             vec![out(ASSISTANT_SEND, params, Some(id))]
         } else {
             vec![]
+        }
+    }
+
+    fn refuse_send(
+        &mut self,
+        feed: Signal<Feed>,
+        request: &AssistantSend,
+        message: String,
+        quarantine: bool,
+    ) {
+        let error = ClientError {
+            code: "local_admission".into(),
+            message,
+        };
+        feed.update(|feed| {
+            feed.problem = Some(error.message.clone());
+            feed.send_acceptance.insert(
+                Id::from(&request.cmd_id),
+                SendAcceptance::Refused(error.clone()),
+            );
+            if quarantine {
+                let mut state =
+                    command_state(feed, ASSISTANT_SEND, value(request), CommandStatus::Refused);
+                state.error = Some(error.clone());
+                feed.commands.insert(Id::from(&request.cmd_id), state);
+            }
+        });
+        if quarantine {
+            // Legacy oversized entries stay editable/cancellable, but never poison replay.
+            self.settled(feed, &request.cmd_id);
         }
     }
 }
@@ -530,5 +587,68 @@ mod tests {
             "keep this draft"
         );
         assert!(!persisted.saved.messages.contains_key("invalid-intent"));
+    }
+
+    #[test]
+    fn full_outbox_refuses_before_retiring_the_composer_draft_and_attachments() {
+        let runtime = nsh_core::element::Runtime::default();
+        let _entered = runtime.enter();
+        let feed = signal(Feed::default());
+        let mut app = AppState::new();
+        let mut outbox = Outbox::load("full-outbox-regression", "device").unwrap();
+        let request = AssistantSend {
+            cmd_id: "keep-intent".into(),
+            thread: QUICK_THREAD.into(),
+            target: AskTarget::Assistant,
+            text: "keep my newest draft".into(),
+            typed_at: "2026-11-14T10:00:00Z".into(),
+            context: vec![],
+            attachments: vec![SendAttachment::Link {
+                url: "https://example.com/owner".into(),
+                title: None,
+            }],
+        };
+        outbox
+            .update(|saved| {
+                saved
+                    .drafts
+                    .insert(QUICK_THREAD.into(), request.text.clone());
+                for n in 0..128 {
+                    let mut queued = request.clone();
+                    queued.cmd_id = format!("queued-{n}");
+                    saved.messages.insert(
+                        queued.cmd_id.clone(),
+                        outbox::Message {
+                            request: queued,
+                            attempted: false,
+                            cancel: false,
+                            refused: false,
+                            error: None,
+                        },
+                    );
+                }
+            })
+            .unwrap();
+        app.outbox = Some(outbox);
+        feed.update(|feed| {
+            feed.drafts
+                .insert(Id::from(QUICK_THREAD), request.text.clone());
+        });
+        assert!(app.send_message(feed, request.clone()).is_empty());
+        assert!(feed.with_untracked(|feed| matches!(
+            feed.send_acceptance.get("keep-intent"),
+            Some(SendAcceptance::Refused(_))
+        )));
+        assert_eq!(
+            feed.with_untracked(|feed| feed.drafts[QUICK_THREAD].clone()),
+            request.text
+        );
+        let saved = Outbox::load("full-outbox-regression", "device").unwrap();
+        assert_eq!(saved.saved.drafts[QUICK_THREAD], request.text);
+        assert!(!saved.saved.messages.contains_key("keep-intent"));
+        assert_eq!(
+            feed.with_untracked(|feed| feed.commands["keep-intent"].request["attachments"].clone()),
+            value(&request.attachments)
+        );
     }
 }

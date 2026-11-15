@@ -96,6 +96,7 @@ fn file_view(file: &File, layout: Layout) -> FileView {
         discussions: file.comment.map(fixture_comment).into_iter().collect(),
         loose: Vec::new(),
         annotatable: false,
+        candidate: None,
         body,
     }
 }

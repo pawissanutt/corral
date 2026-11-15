@@ -282,6 +282,13 @@ impl Operation {
     }
 }
 
+/// Local ownership transfer, published only after the outbox write succeeds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendAcceptance {
+    Accepted,
+    Refused(ClientError),
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Feed {
     pub link: Link,
@@ -290,6 +297,9 @@ pub struct Feed {
     pub health: Option<DaemonHealth>,
     pub board: Board,
     pub session: Option<AppSession>,
+    /// Current transport welcome, authenticated identity and projection readiness are distinct.
+    pub transport_ready: bool,
+    pub projection_ready: bool,
     pub capabilities: BTreeSet<String>,
     pub date: String,
     pub inbox: BTreeMap<Id, InboxRow>,
@@ -306,6 +316,7 @@ pub struct Feed {
     /// The open turn of each watched session, by session id.
     pub live: BTreeMap<Id, crate::model::session_feed::LiveSession>,
     pub commands: BTreeMap<Id, CommandState>,
+    pub send_acceptance: BTreeMap<Id, SendAcceptance>,
     pub operations: BTreeMap<Id, Operation>,
     /// Upload metadata only; file bytes never enter the model or persistent storage.
     pub uploads: BTreeMap<Id, UploadState>,
@@ -313,6 +324,8 @@ pub struct Feed {
     pub not_withdrawn: BTreeSet<Id>,
     pub changes: BTreeMap<u64, ChangeLine>,
     pub changes_head: u64,
+    /// Canonical owner-relevant count, tied to the seen cursor used by the reader.
+    pub changes_unseen: Option<(u64, u64)>,
     pub changes_older: Option<u64>,
     pub seen: Option<SeenCursor>,
     pub drafts: BTreeMap<Id, String>,
@@ -339,6 +352,12 @@ pub struct Feed {
 }
 
 impl Feed {
+    pub fn seen_received(&mut self, seen: SeenCursor) {
+        if self.seen.as_ref().map(|cursor| cursor.through) != Some(seen.through) {
+            self.changes_unseen = None;
+        }
+        self.seen = Some(seen);
+    }
     pub fn capable(&self, capability: &str) -> bool {
         self.capabilities.contains(capability)
     }
@@ -356,7 +375,16 @@ impl Feed {
         }
     }
 
+    pub fn ready(&self) -> bool {
+        self.transport_ready
+            && self.session.is_some()
+            && self.projection_ready
+            && self.link == Link::Up
+    }
+
     pub fn mark_stale(&mut self) {
+        self.transport_ready = false;
+        self.projection_ready = false;
         self.session = None;
         self.registry = crate::model::devices::Registry::Unknown;
         for state in self.topics.values_mut() {
@@ -404,10 +432,12 @@ impl Feed {
     pub fn connecting(&mut self, endpoint: String) {
         self.endpoint = Some(endpoint);
         self.link = Link::Connecting;
-        self.problem = Some("Waiting for the daemon board".into());
+        self.problem
+            .get_or_insert_with(|| "Waiting for the daemon board".into());
     }
 
     pub fn welcome_received(&mut self, store: String, health: DaemonHealth) {
+        self.transport_ready = true;
         self.workspace = std::path::Path::new(&store)
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -419,7 +449,9 @@ impl Feed {
 
     pub fn health_received(&mut self, health: DaemonHealth) {
         self.health = Some(health);
-        self.synced = Some(self.clock.clone());
+        if self.ready() {
+            self.synced = Some(self.clock.clone());
+        }
     }
 
     pub fn begin_epoch(&mut self, epoch: u64) {
@@ -437,8 +469,11 @@ impl Feed {
             self.begin_epoch(epoch);
         }
         self.board.apply_batch(epoch, rows, left);
-        self.link = Link::Up;
-        self.problem = None;
+        self.projection_ready = true;
+        if self.transport_ready && self.session.is_some() {
+            self.link = Link::Up;
+            self.problem = None;
+        }
         self.synced = Some(self.clock.clone());
     }
 
@@ -468,6 +503,7 @@ impl Feed {
         self.cancelling.clear();
         self.not_withdrawn.clear();
         self.changes.clear();
+        self.changes_unseen = None;
         self.capabilities.clear();
         self.link_lost("This device was revoked.".into());
     }
@@ -510,19 +546,9 @@ impl Feed {
     }
 }
 
-/// Whole-unit age: `12s`, `4m`, `3h`, `2d`; empty when unknown.
+/// The shared task-card age formatter.
 pub fn age(since: Option<u64>, now: u64) -> String {
-    let Some(since) = since else {
-        return String::new();
-    };
-    let seconds = now.saturating_sub(since);
-    let (amount, unit) = match seconds {
-        0..60 => (seconds, "s"),
-        60..3600 => (seconds / 60, "m"),
-        3600..86400 => (seconds / 3600, "h"),
-        _ => (seconds / 86400, "d"),
-    };
-    format!("{amount}{unit}")
+    crate::model::work::age(since, now)
 }
 
 #[cfg(test)]
@@ -583,6 +609,6 @@ mod tests {
         assert_eq!(feed.board.epoch, 2);
         assert!(feed.board.task("T-9").is_none());
         assert!(feed.board.task("T-10").is_some());
-        assert_eq!(feed.link, Link::Up);
+        assert!(!feed.ready());
     }
 }

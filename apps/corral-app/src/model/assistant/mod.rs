@@ -15,7 +15,10 @@ mod live;
 mod live_act;
 mod live_cards;
 mod live_filings;
+mod live_parts;
 mod live_thread;
+#[cfg(test)]
+mod parts_tests;
 mod surfaces;
 mod thread;
 mod views;
@@ -255,6 +258,8 @@ pub struct SentMessage {
     pub state: MessageState,
     /// Session to which it belongs.
     pub thread: &'static str,
+    /// Profile selected when these words were sent, never changed by a later picker choice.
+    pub model: &'static str,
 }
 
 /// Assistant domain state; the app separately owns Ask's target, draft and visibility.
@@ -264,6 +269,8 @@ pub struct State {
     pub chip: Option<&'static str>,
     /// Selected profile, absent for the default.
     pub model: Option<&'static str>,
+    /// Whether the newly selected fixture model still needs its next-send explanation.
+    pub model_note: bool,
     /// Model list visibility.
     pub model_menu: bool,
     /// Host/turn studio state.
@@ -288,6 +295,8 @@ pub struct State {
     pub withdrawn: bool,
     /// Open fixture thread, initially A-7.
     pub thread: &'static str,
+    /// Inbox decision to reveal once in its original thread.
+    pub anchor: Option<(ThreadRef, String)>,
     /// Daemon-mode requests in flight and edits in progress.
     pub live: LiveState,
 }
@@ -297,6 +306,7 @@ impl Default for State {
         Self {
             chip: None,
             model: None,
+            model_note: false,
             model_menu: false,
             mode: Mode::Answering,
             stream: 1.0,
@@ -309,6 +319,7 @@ impl Default for State {
             saved_now: false,
             withdrawn: false,
             thread: "A-7",
+            anchor: None,
             live: LiveState::default(),
         }
     }
@@ -317,8 +328,20 @@ impl Default for State {
 impl State {
     /// Selects the fixture session opened by the app's `Page::Thread` navigation.
     pub fn open_thread(&mut self, id: &'static str) {
+        if self
+            .anchor
+            .as_ref()
+            .is_some_and(|(thread, _)| *thread != ThreadRef::Fixture(id))
+        {
+            self.clear_anchor();
+        }
         self.thread = id;
         self.model_menu = false;
+    }
+
+    /// Retire a one-shot Inbox reveal without affecting the thread's conversation.
+    pub fn clear_anchor(&mut self) {
+        self.anchor = None;
     }
 
     /// Attaches or removes the context supplied by Ask about this.
@@ -353,6 +376,7 @@ impl State {
             return Vec::new();
         }
         self.model = Some(name);
+        self.model_note = true;
         self.model_menu = false;
         vec![Effect::Toast(format!(
             "Model: {name} · applies to your next message · conversation kept"
@@ -405,7 +429,11 @@ impl State {
             pm,
             state,
             thread: "A-7",
+            model: self.model_name(),
         });
+        if !pm {
+            self.model_note = false;
+        }
         if env.form == Form::Phone {
             vec![Effect::CloseAsk, Effect::Open(Page::Thread("A-7"))]
         } else {
@@ -435,6 +463,7 @@ impl State {
         if text.is_empty() {
             return Vec::new();
         }
+        self.model_note = false;
         if env.conn.refuses() {
             self.sent.push(SentMessage {
                 text: text.into(),
@@ -442,6 +471,7 @@ impl State {
                 pm: false,
                 state: MessageState::QueuedOnDevice,
                 thread: id,
+                model: self.model_name(),
             });
             return Vec::new();
         }
@@ -486,6 +516,7 @@ impl State {
 
     /// Opens the quick thread in Agents, closing Ask.
     pub fn open_in_agents(&mut self) -> Vec<Effect> {
+        self.clear_anchor();
         self.open_thread("A-7");
         vec![Effect::CloseAsk, Effect::Open(Page::Thread("A-7"))]
     }
@@ -570,8 +601,27 @@ impl State {
             Action::CloseAsk => self.close_ask(),
             Action::OpenQuickThread | Action::HotkeyOpen => self.open_in_agents(),
             Action::OpenThread(id) => {
+                self.clear_anchor();
                 self.open_thread(id);
                 vec![Effect::CloseAsk, Effect::Open(Page::Thread(id))]
+            }
+            Action::OpenPrompt {
+                thread: ThreadRef::Fixture(id),
+                key,
+            } => {
+                self.open_thread(id);
+                self.anchor = Some((ThreadRef::Fixture(id), key));
+                vec![Effect::CloseAsk, Effect::Open(Page::Thread(id))]
+            }
+            Action::OpenPrompt {
+                thread: ThreadRef::Live(id),
+                key,
+            } => {
+                self.anchor = Some((ThreadRef::Live(id.clone()), key));
+                vec![
+                    Effect::CloseAsk,
+                    Effect::OpenLive(crate::model::live::Live::Thread(id)),
+                ]
             }
             Action::Send => self.send(text, target, env),
             Action::SendToThread(id) => self.send_to_thread(id, text, env),
@@ -717,6 +767,7 @@ impl State {
                     pm,
                     state,
                     thread: "A-7",
+                    model: self.model_name(),
                 }];
             }
             _ => return false,

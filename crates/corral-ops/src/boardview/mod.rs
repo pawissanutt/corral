@@ -1,8 +1,9 @@
 //! Rebuildable board read model; no socket, background thread, runtime probe or history scan.
 //!
-//! Attention keys are the bounded ledger published by `attention` reconciliation. Missing
-//! legacy facts remain unknown: EventSeq, runtime/machine, bare dispatch-hold reason and
-//! progress publication time. Rail freshness compares recorded candidates, not live Git.
+//! Attention keys are the bounded ledger published by `attention` reconciliation.
+//! Canonical owner counts come from `app_read::attention_snapshot`, not board groups.
+//! Missing legacy facts remain unknown: EventSeq, runtime/machine and progress
+//! publication time. Rail freshness compares recorded candidates, not live Git.
 mod cache;
 pub mod changes;
 pub(crate) mod rail;
@@ -12,6 +13,9 @@ pub use cache::cache_path;
 
 #[cfg(test)]
 mod projection_tests;
+
+#[cfg(test)]
+mod held_tests;
 
 use anyhow::{Context, Result};
 use corral_core::backend::{ChangeScope, ChangeSeq, FeedError, HeadQuery};

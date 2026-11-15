@@ -228,16 +228,16 @@ pub enum LiveAction {
         decision: String,
         text: String,
     },
-    /// Fetch the diff's next page.
-    MoreDiff(Id),
     /// Request the plan's detail again after an error.
     Retry(Id),
     /// Ask corrald for the result of an uncertain command, under the same identity.
     Recover(Id),
 }
 
-/// NSH spellings of the Plans screen keys; uppercase J/K cycle members.
-pub const KEYS: &[&str] = &["j", "k", "down", "up", "x", "J", "K"];
+/// The Plans letter commands, bound wherever the focus is outside a text field: `J`/`K`
+/// (Shift+J/K) cycle the selected plan's members, `x` opens the fixture's scale tracker. j/k
+/// and the arrows are `commands::list_keys`, bound only while the list has the focus.
+pub const KEYS: &[&str] = &["x", "J", "K"];
 
 impl State {
     /// Select S-900 without changing the fixture selection, or leave scale for a fixture plan.
@@ -437,28 +437,6 @@ impl State {
                     live.lens = None;
                 }
                 vec![]
-            }
-            LiveAction::MoreDiff(id) => {
-                let Some(Lens::Diff { from, to }) = live.lens_of(&id) else {
-                    return vec![];
-                };
-                let target = DetailRef::PlanDiff {
-                    id: id.to_string(),
-                    from: from.clone(),
-                    to: to.clone(),
-                };
-                let next = feed
-                    .detail(&target)
-                    .filter(|cache| !cache.loading)
-                    .and_then(|cache| cache.pages.last())
-                    .and_then(|page| page.next.clone());
-                next.map_or_else(Vec::new, |page| {
-                    vec![Effect::Detail(DetailGet {
-                        target,
-                        etag: None,
-                        page: Some(page),
-                    })]
-                })
             }
             LiveAction::Retry(id) => vec![Effect::Detail(DetailGet {
                 target: DetailRef::Plan { id: id.to_string() },

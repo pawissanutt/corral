@@ -1,6 +1,5 @@
-//! The daemon's RFC 3339 instants in this device's wall clock, without reading a time zone
-//! database: the client's tick carries both the Unix time and the local `HH:MM` it reads, and
-//! their difference is the local offset.
+//! Shared live date/age formatting. The tick's local date and clock together disambiguate
+//! offsets on either side of the date line; a clock alone cannot distinguish UTC+14 from −10.
 
 use crate::model::daemon::Feed;
 
@@ -8,23 +7,27 @@ const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-/// The local offset from UTC in seconds, from the feed's last tick; zero before the first tick.
+/// The actual local offset at the last tick; UTC before a complete local tick arrives.
 fn offset(feed: &Feed) -> i64 {
+    let day = feed
+        .date
+        .parse::<jiff::civil::Date>()
+        .ok()
+        .and_then(|date| date.to_zoned(jiff::tz::TimeZone::UTC).ok())
+        .map(|date| date.timestamp().as_second());
+    let Some(day) = day else { return 0 };
     let Some((hours, minutes)) = feed.clock.split_once(':') else {
         return 0;
     };
-    let (Ok(hours), Ok(minutes)) = (hours.parse::<i64>(), minutes.parse::<i64>()) else {
+    let (Ok(hours), Ok(minutes)) = (hours.parse::<i8>(), minutes.parse::<i8>()) else {
         return 0;
     };
-    let utc = i64::try_from((feed.now / 60) % 1440).unwrap_or(0);
-    let mut minutes = hours * 60 + minutes - utc;
-    // Offsets run from UTC−12 to UTC+14; anything else crossed midnight.
-    if minutes > 14 * 60 {
-        minutes -= 1440;
-    } else if minutes < -12 * 60 {
-        minutes += 1440;
+    if !(0..24).contains(&hours) || !(0..60).contains(&minutes) {
+        return 0;
     }
-    minutes * 60
+    let local = day + i64::from(hours) * 3600 + i64::from(minutes) * 60;
+    let utc = i64::try_from(feed.now / 60 * 60).unwrap_or(0);
+    local - utc
 }
 
 fn seconds(at: &str) -> Option<i64> {
@@ -79,10 +82,23 @@ pub fn when(at: &str, feed: &Feed) -> String {
     }
 }
 
-/// Whole-unit age of a daemon instant: `12s`, `4m`, `3h`, `2d`; empty when unparseable.
+/// The CLI's elapsed-age units, including minutes for ages under a day.
+pub fn age(since: Option<u64>, now: u64) -> String {
+    let Some(since) = since else {
+        return String::new();
+    };
+    let seconds = now.saturating_sub(since);
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m", seconds / 60),
+        3600..86400 => format!("{}h{:02}m", seconds / 3600, seconds % 3600 / 60),
+        _ => format!("{}d", seconds / 86400),
+    }
+}
+
+/// Age of a daemon instant; empty when unparseable.
 pub fn ago(at: &str, feed: &Feed) -> String {
-    let since = seconds(at).and_then(|at| u64::try_from(at).ok());
-    crate::model::daemon::age(since, feed.now)
+    age(seconds(at).and_then(|at| u64::try_from(at).ok()), feed.now)
 }
 
 #[cfg(test)]
@@ -91,12 +107,32 @@ mod tests {
 
     #[test]
     fn instants_read_in_the_ticks_local_offset_across_midnight() {
-        let mut feed = Feed::default();
         // 2026-11-14T23:30:00Z read as 00:30 local: UTC+1, already the 15th.
+        let mut feed = Feed {
+            date: "2026-11-15".into(),
+            ..Feed::default()
+        };
         feed.tick(1_794_699_000, "00:30".into());
         assert_eq!(stamp("2026-11-14T23:10:00Z", &feed), "00:10");
         assert_eq!(stamp("2026-11-14T22:10:00Z", &feed), "Nov 14");
         assert_eq!(when("2026-11-14T22:10:00Z", &feed), "Nov 14 23:10");
         assert_eq!(stamp("not a time", &feed), "");
+    }
+
+    #[test]
+    fn local_dates_disambiguate_offsets_twenty_four_hours_apart() {
+        let mut feed = Feed {
+            now: "2026-11-14T12:00:00Z"
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+                .as_second() as u64,
+            clock: "02:00".into(),
+            date: "2026-11-15".into(),
+            ..Feed::default()
+        };
+        assert_eq!(when("2026-11-13T12:00:00Z", &feed), "Nov 14 02:00");
+        feed.date = "2026-11-14".into();
+        assert_eq!(when("2026-11-13T12:00:00Z", &feed), "Nov 13 02:00");
+        assert_eq!(age(Some(feed.now - 11_100), feed.now), "3h05m");
     }
 }

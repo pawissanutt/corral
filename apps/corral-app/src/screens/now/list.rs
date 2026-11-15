@@ -2,7 +2,9 @@
 //! from the fixtures or, in the Daemon state, from the daemon's board. On desktop and phone a
 //! task row is the kit's; the plan and PM-ask rows, the collapsed queued line and the parked
 //! block are this list's own, laid in the same columns. The list measures its width once, and its
-//! own head and rows give way as the kit's task rows do (`rows::task_columns`).
+//! own head and rows give way as the kit's task rows do (`rows::task_columns`). It is the
+//! destination's keyboard list (`AppState::list_keys`), and a row the keyboard selects scrolls
+//! into its panel's view.
 
 use nsh_core::prelude::*;
 
@@ -12,17 +14,20 @@ use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::{actor, delta, dot, hue_ink};
-use crate::ui::kit::notice::skeleton;
+use crate::ui::kit::notice::{notice, skeleton};
 use crate::ui::kit::rows::{TaskColumns, group_header, list_row, task_row};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
 use super::cells;
-use super::parts::{act, action_id, by_data, model_button, press, press_id, question_open, quiet};
+use super::parts::{
+    act, action_id, by_data, model_button, press, press_id, pressable, question_open, quiet,
+};
 
 const RING: f32 = 2.0;
 
-/// The desktop and terminal list: the stale board's `as of` chip, the column head, the groups.
+/// The desktop and terminal list: corrald's word on a board it cannot keep current, with its
+/// Retry, the stale board's `as of` chip, the column head, the groups.
 pub(super) fn list(app: AppState) -> AnyElement {
     let form = app.form;
     let source = computed(move || {
@@ -38,6 +43,15 @@ pub(super) fn list(app: AppState) -> AnyElement {
         app.work
             .with(|state| work::grouped_list_with_question(state, env, open))
     });
+    // The board notice is the daemon's: the fixture preview's connection demo is the shell's
+    // banner already.
+    let board = computed(move || {
+        if app.daemon() {
+            app.feed.with(|feed| work::daemon_status(feed).banner)
+        } else {
+            None
+        }
+    });
     let as_of = computed(move || {
         if app.daemon() {
             app.feed.with(|feed| work::daemon_status(feed).as_of)
@@ -48,6 +62,7 @@ pub(super) fn list(app: AppState) -> AnyElement {
     let label = untracked(|| source.with(|list| list.label));
     let (width, columns) = cells::measured(app.form);
     view()
+        .element_ref(&app.list_keys)
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
         .pt(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
         .pb(px(if app.form == Form::Terminal {
@@ -57,6 +72,11 @@ pub(super) fn list(app: AppState) -> AnyElement {
         }))
         .role(AccessibilityRole::List)
         .label(label)
+        .child(dynamic(move || {
+            board
+                .get()
+                .map(|banner| untracked(|| board_notice(app, &banner)))
+        }))
         .child(dynamic(move || {
             as_of.get().map(|stamp| {
                 view()
@@ -68,6 +88,21 @@ pub(super) fn list(app: AppState) -> AnyElement {
             })
         }))
         .child(rows(app, source, columns))
+        .into_element()
+}
+
+/// corrald's notice that the board is out of date or refreshing, with its Retry (the only
+/// action the daemon's board notice carries; `btn-retry-board`), above the rows it qualifies.
+fn board_notice(app: AppState, banner: &work::Banner) -> AnyElement {
+    let retry = banner
+        .actions
+        .first()
+        .map(|button| pressable(app, button, false));
+    let room = match app.form {
+        Form::Terminal => view(),
+        Form::Desktop | Form::Phone => view().px(px(16.0)).pb(px(8.0)),
+    };
+    room.child(notice(app, banner.hue, &banner.text, retry))
         .into_element()
 }
 
@@ -224,12 +259,19 @@ fn groups(
                     let id = task.line.id.clone();
                     let action = task.action.clone();
                     let test_id = format!("task-{id}");
-                    task_row(
-                        app,
-                        task.line.clone(),
-                        move || is_selected(source, &id),
-                        move || press(app, action.clone()),
-                        test_id,
+                    let selected = {
+                        let id = id.clone();
+                        computed(move || is_selected(source, &id))
+                    };
+                    revealing(
+                        selected,
+                        task_row(
+                            app,
+                            task.line.clone(),
+                            move || is_selected(source, &id),
+                            move || press(app, action.clone()),
+                            test_id,
+                        ),
                     )
                 }
                 Row::Extra(extra) => extra_row(app, extra, columns),
@@ -247,6 +289,20 @@ fn groups(
         }
     }
     view().children(out).into_element()
+}
+
+/// `row`, scrolled into its panel's view whenever it becomes the selected one, so a selection
+/// the keyboard moves never leaves the viewport. A row already in view stays where it is.
+fn revealing(selected: Memo<bool>, row: AnyElement) -> AnyElement {
+    let handle = element_ref();
+    effect(move || {
+        if selected.get() {
+            after_answer(move || {
+                handle.reveal(RevealOptions::default().vertical(ScrollAlignment::Nearest));
+            });
+        }
+    });
+    view().element_ref(&handle).child(row).into_element()
 }
 
 /// Placeholder rows while the projection's detail loads (`.skel` in the list's columns).
