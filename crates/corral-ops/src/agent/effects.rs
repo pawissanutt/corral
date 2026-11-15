@@ -454,7 +454,7 @@ fn complete(ctx: &Ctx, home: &Home, receipt: &mut RequestReceipt) -> Result<()> 
                     return Ok(false);
                 };
                 clear(&mut stored)?;
-                task.put_agent_record(container, agent::NativeRecord::Receipt(stored))
+                task.put_agent_record(container, agent::NativeRecord::Receipt(Box::new(stored)))
             }
             Home::PmTask(_) => task.edit_pm_receipt(&receipt.request_id, clear),
         }

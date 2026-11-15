@@ -30,6 +30,9 @@ pub(crate) fn record_head(
             format!("the container already holds {RECEIPTS_MAX} receipts"),
         ));
     }
-    task.put_agent_record(container, agent::NativeRecord::Receipt(receipt.clone()))?;
+    task.put_agent_record(
+        container,
+        agent::NativeRecord::Receipt(Box::new(receipt.clone())),
+    )?;
     Ok(receipt)
 }

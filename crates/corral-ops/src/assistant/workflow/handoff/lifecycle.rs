@@ -32,7 +32,7 @@ pub enum Instruction {
     /// Existing C1 Check/Ship provenance only. It cannot authorize transfer or Dispatch.
     Completion {
         instruction: String,
-        via: Option<crate::assistant::owner_action::ViaAssistant>,
+        via: Option<Box<crate::assistant::owner_action::ViaAssistant>>,
         at: Timestamp,
     },
 }

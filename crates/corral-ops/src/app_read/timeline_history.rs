@@ -125,6 +125,7 @@ fn effective(event: &Event) -> bool {
 /// - accept/landing keep the first opener after their last closing transition;
 /// - needs-me retains its decision receipts since its last unconditional close,
 ///   because one answered decision does not necessarily resume the worker.
+///
 /// These are real event records, sorted back into original `(ts, seq)` order.
 pub(super) fn context(
     ctx: &Ctx,

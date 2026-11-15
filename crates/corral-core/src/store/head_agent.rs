@@ -66,7 +66,7 @@ impl TaskHeadMut {
                 task: self.head.id.clone(),
                 run: run.into(),
             },
-            NativeRecord::Receipt(receipt),
+            NativeRecord::Receipt(Box::new(receipt)),
             Some(row),
         )
         .map(drop)

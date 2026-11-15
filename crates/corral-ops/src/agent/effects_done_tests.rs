@@ -69,7 +69,10 @@ fn completion_then_same_worker_reopen_appends_without_overwriting_prior_native_r
     fx.ctx
         .store
         .update_head(&fx.id, |head| {
-            head.put_agent_record(&fx.worker(), core_agent::NativeRecord::Receipt(old.clone()))?;
+            head.put_agent_record(
+                &fx.worker(),
+                core_agent::NativeRecord::Receipt(Box::new(old.clone())),
+            )?;
             for entry in [&reserved, &settled] {
                 head.put_agent_record(
                     &fx.worker(),
@@ -120,7 +123,7 @@ fn completion_then_same_worker_reopen_appends_without_overwriting_prior_native_r
         .update_head(&fx.id, |head| {
             head.put_agent_record(
                 &fx.worker(),
-                core_agent::NativeRecord::Receipt(next.clone()),
+                core_agent::NativeRecord::Receipt(Box::new(next.clone())),
             )?;
             head.put_agent_record(
                 &fx.worker(),

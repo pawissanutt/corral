@@ -30,7 +30,7 @@ fn records(task: &str, n: u32) -> [NativeRecord; 10] {
         NativeRecord::Generation(Box::new(serde_json::from_value(json!({
             "n":n,"bind_nonce_sha256":"00","pane":"p1","created":at(0)
         })).unwrap())),
-        NativeRecord::Receipt(receipt),
+        NativeRecord::Receipt(Box::new(receipt)),
         NativeRecord::Question(serde_json::from_value(json!({
             "version":1,"key":format!("{task}/R0001/Q{n}"),"revision":1,
             "asked":{"request_id":format!("q-{n}"),"payload_sha256":"hash",

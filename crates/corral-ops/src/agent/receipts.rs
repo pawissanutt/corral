@@ -283,7 +283,10 @@ pub(crate) fn commit_head(
             .into());
         }
         let receipt = new_receipt(origin, commit)?;
-        task.put_agent_record(container, agent::NativeRecord::Receipt(receipt.clone()))?;
+        task.put_agent_record(
+            container,
+            agent::NativeRecord::Receipt(Box::new(receipt.clone())),
+        )?;
         outcome = Some((receipt, false));
         Ok(true)
     })?;
@@ -528,7 +531,7 @@ fn complete_post_pending(
                 if stored.post_pending.len() == before {
                     return Ok(false);
                 }
-                task.put_agent_record(container, agent::NativeRecord::Receipt(stored))?;
+                task.put_agent_record(container, agent::NativeRecord::Receipt(Box::new(stored)))?;
                 Ok(true)
             })?;
         }

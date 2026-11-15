@@ -56,7 +56,10 @@ pub fn terminalize(ctx: &Ctx, task_id: &str) -> Result<Vec<String>> {
                 });
                 super::bound_triage(&ctx.store, &mut question)?;
                 cancelled.push(question.key.clone());
-                task.put_agent_record(&container, agent::NativeRecord::Question(question))?;
+                task.put_agent_record(
+                    &container,
+                    agent::NativeRecord::Question(Box::new(question)),
+                )?;
             }
             // A closed review child no longer holds its task in Needs me. A worker's own closing
             // operation already moved its task.

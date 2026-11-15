@@ -48,7 +48,7 @@ fn enqueue(
         out = Some(receipt.clone());
         task.put_agent_record(
             &origin.binding.container,
-            agent::NativeRecord::Receipt(receipt),
+            agent::NativeRecord::Receipt(Box::new(receipt)),
         )?;
         task.review_wait = crate::hold::require_clear(&ctx.store, &*task)
             .is_ok()
@@ -153,7 +153,7 @@ pub(crate) fn requeue_cancelled(ctx: &Ctx, task: &mut corral_core::TaskHeadMut) 
         receipt.result = json!({"outcome":"queued", "attempt":next, "requeued_from":old, "reason":"previous attempt cancelled"});
         wake.target = next;
         wake.state = agent::WakeState::Armed;
-        task.put_agent_record(&container, agent::NativeRecord::Receipt(receipt))?;
+        task.put_agent_record(&container, agent::NativeRecord::Receipt(Box::new(receipt)))?;
         task.put_agent_record(&container, agent::NativeRecord::Wake(wake))?;
     }
     Ok(())
@@ -215,7 +215,7 @@ pub(crate) fn advance_heads(ctx: &Ctx, tasks: &[corral_core::TaskHead]) -> Resul
             stored.executor = Some(me.clone());
             task.put_agent_record(
                 &origin.binding.container,
-                agent::NativeRecord::Receipt(stored),
+                agent::NativeRecord::Receipt(Box::new(stored)),
             )?;
             claimed = true;
             Ok(true)

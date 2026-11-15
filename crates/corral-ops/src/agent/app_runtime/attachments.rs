@@ -125,7 +125,7 @@ pub fn put(ctx: &Ctx, device: &AuthenticatedDevice, request: &AttachmentPut) -> 
         "invalid_params: invalid upload identity"
     );
     ensure!(
-        request.offset % ATTACHMENT_CHUNK as u64 == 0
+        request.offset.is_multiple_of(ATTACHMENT_CHUNK as u64)
             && !request.data.is_empty()
             && request.data.len() <= ATTACHMENT_CHUNK.div_ceil(3) * 4,
         "offset_mismatch: invalid attachment chunk bounds"
@@ -145,9 +145,10 @@ pub fn discard(ctx: &Ctx, device: &AuthenticatedDevice, request: &AttachmentDisc
     ctx.store.app_upload_discard(&device.id, &request.upload)
 }
 
-pub(super) fn references(
-    requests: &[SendAttachment],
-) -> Result<(Vec<Attachment>, Vec<(String, String)>)> {
+/// A message's attachments and the `(upload, sha256)` pairs they claim.
+type References = (Vec<Attachment>, Vec<(String, String)>);
+
+pub(super) fn references(requests: &[SendAttachment]) -> Result<References> {
     ensure!(
         requests.len() <= ATTACHMENTS_PER_MESSAGE,
         "invalid_params: too many attachments"

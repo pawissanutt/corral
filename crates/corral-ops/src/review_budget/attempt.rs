@@ -516,7 +516,7 @@ pub(crate) fn settle(
             stored.committed_at = Some(now);
         }
         let settled = stored.clone();
-        task.put_agent_record(&container, agent::NativeRecord::Receipt(stored))?;
+        task.put_agent_record(&container, agent::NativeRecord::Receipt(Box::new(stored)))?;
         if let Some(to) = wake
             && let Some(mut wake) = task.agent_wake(&container, &request)?
             && matches!(wake.state, WakeState::PendingStart | WakeState::Armed)

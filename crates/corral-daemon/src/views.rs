@@ -409,17 +409,16 @@ fn refresh_with(
                 let view = snapshot.store.view()?;
                 Ok((view.seq().0, crate::reader::unchanged(view.as_ref(), after)))
             })?;
-            if quiet {
-                if let Some(entry) = service
+            if quiet
+                && let Some(entry) = service
                     .entries
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .get_mut(&key)
-                    && entry.checked == checked_before
-                {
-                    entry.checked = Some((through, generation));
-                    continue;
-                }
+                && entry.checked == checked_before
+            {
+                entry.checked = Some((through, generation));
+                continue;
             }
         }
         // The sequence and rows belong to one pinned view. Publish that coherent

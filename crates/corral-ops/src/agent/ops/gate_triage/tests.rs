@@ -310,7 +310,7 @@ fn delegated_attribution_records_without_confirmation_or_stage_changes() {
     unchanged(&s, &before, &credit);
     assert_eq!(
         status(&s.fx.ctx, &s.task).unwrap().failures[0].diagnoses,
-        [s.report.clone()]
+        std::slice::from_ref(&s.report)
     );
 }
 
@@ -510,7 +510,7 @@ fn reattribution_requires_new_bound_owner_confirmation_even_inside_grant() {
     assert_eq!(proposed["outcome"], "proposed");
     assert_eq!(
         status(&s.fx.ctx, &s.task).unwrap().failures[0].diagnoses,
-        [s.report.clone()]
+        std::slice::from_ref(&s.report)
     );
     let (request, payload) = decision(&s, &proposed, true);
     ts::committed(&send(&s, &s.host, &request, payload));

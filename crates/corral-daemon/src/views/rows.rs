@@ -41,6 +41,7 @@ impl Rows {
         each!(self, rows, rows[index].id.as_str())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn delta(
         &self,
         epoch: u64,

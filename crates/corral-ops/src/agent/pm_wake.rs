@@ -144,7 +144,10 @@ fn acknowledge(
         }
         question.wake.state = OutboxState::Posted;
         question.wake.message_id = Some(message.id.clone());
-        task.put_agent_record(&container, agent::NativeRecord::Question(question))?;
+        task.put_agent_record(
+            &container,
+            agent::NativeRecord::Question(Box::new(question)),
+        )?;
         Ok(true)
     })?;
     Ok(saved.is_some())

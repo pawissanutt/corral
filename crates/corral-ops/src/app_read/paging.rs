@@ -234,7 +234,7 @@ fn chunks(value: Value, budget: usize) -> Result<Vec<Value>> {
     let mut nested = Vec::new();
     for group in groups {
         for value in group.values {
-            if json_len(&value)? <= budget - metadata - 1 {
+            if json_len(&value)? < budget - metadata {
                 nested.push(value);
             } else {
                 nested.extend(chunks(value, budget - metadata - 1)?);

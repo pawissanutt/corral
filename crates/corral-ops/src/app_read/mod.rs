@@ -135,10 +135,9 @@ fn read_snapshot(ctx: &Ctx, request: &DetailGet) -> Result<DetailReply> {
             _ => unreachable!(),
         };
         if let (DetailRef::ReviewFile { task, .. }, Some(candidate)) = (&request.target, candidate)
+            && review::patch_revision(ctx, task)? != candidate
         {
-            if review::patch_revision(ctx, task)? != candidate {
-                bail!("app review candidate changed while reading the patch");
-            }
+            bail!("app review candidate changed while reading the patch");
         }
         return paging::reply(body, next, etag, selector, as_of, seq);
     }
