@@ -12,6 +12,8 @@ use crate::cleanup::{Cleanup, cleanup_head};
 use crate::{Change, Ctx};
 use corral_core::TaskRef as _;
 
+#[path = "fallback_paid.rs"]
+pub(super) mod fallback_paid;
 pub(crate) fn continue_review(
     ctx: &Ctx,
     task: &Task,
@@ -20,6 +22,27 @@ pub(crate) fn continue_review(
     reason: &str,
     now: Timestamp,
 ) -> Result<Vec<Change>> {
+    if fallback_paid::reconcile(ctx, &task.id, &run.id, &child.id)?.is_some() {
+        return Ok(Vec::new());
+    }
+    let paid = fallback_paid::selected(ctx, task, run, child)?;
+    if paid {
+        // Paid preparation owns the interruption, after the exact successor is fenced in.
+        let launched = {
+            let _action =
+                corral_core::work::action(&task.id, corral_core::OperatingActionKind::Review);
+            super::review_run_automatic(ctx, &task.id, Some(&child.agent))
+        };
+        if let Err(error) = launched {
+            fallback_paid::failed(ctx, &task.id, &run.id, &child.id, &error)?;
+            crate::provider_stall::block_continuation(
+                ctx,
+                &crate::provider_stall::agent_key(&task.id, child),
+                "paid review continuation paused",
+            )?;
+        }
+        return Ok(Vec::new());
+    }
     let notes = notes_of(ctx, &task.id, &corral_core::RunHead::of(run)?)?;
     let kept = notes.with_file_name(format!("{}-{}-interrupted-notes.md", task.id, child.id));
     if notes.is_file() {

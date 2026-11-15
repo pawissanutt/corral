@@ -17,6 +17,14 @@ use serde_json::json;
 
 use crate::Ctx;
 
+fn connection(run: &RunHead) -> Result<Option<corral_core::connection::ConnectionBinding>> {
+    run.execution
+        .as_ref()
+        .map(|e| e.resolved.connection_binding())
+        .transpose()
+        .map(Option::flatten)
+}
+
 use crate::provider_session;
 
 mod claude;
@@ -142,6 +150,17 @@ fn header(path: &Path, cwd: &Path) -> Result<String> {
 
 /// Capture only a saved binding or a unique transcript in this role's private directory.
 pub(crate) fn capture(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Result<RoleSession> {
+    if let Some(generation) = run
+        .agent_host
+        .as_deref()
+        .and_then(|host| host.current_generation())
+        && let Some(execution) = &run.execution
+    {
+        ensure!(
+            generation.connection == execution.resolved.connection_binding()?,
+            "session connection is incompatible with its execution binding"
+        );
+    }
     let native = run
         .agent_host
         .as_deref()
@@ -164,6 +183,19 @@ pub(crate) fn capture_head<T: TaskRef + ?Sized>(
             .map(|bound| (bound.session_id, bound.session_file)),
         None => None,
     };
+    if let Some(generation) = run
+        .agent_host
+        .as_deref()
+        .map(|host| task.agent_generation(container, host.binding.generation))
+        .transpose()?
+        .flatten()
+        && let Some(execution) = &run.execution
+    {
+        ensure!(
+            generation.connection == execution.resolved.connection_binding()?,
+            "session connection is incompatible with its execution binding"
+        );
+    }
     capture_metadata(
         ctx,
         task,
@@ -286,8 +318,22 @@ pub(crate) fn reviewer_head<T: TaskRef + ?Sized>(
             previous.harness == child.harness
                 && previous.model == child.model
                 && previous.vendor == child.vendor
-                && previous.worktree == child.worktree,
-            "reviewer session is incompatible with the selected harness/model/vendor/worktree"
+                && previous.worktree == child.worktree
+                && {
+                    let container = ContainerRef::Reviewer {
+                        task: task.id().clone(),
+                        run: parent.id.clone(),
+                        review: previous.id.clone(),
+                    };
+                    let prior = match previous.agent_host.as_deref() {
+                        Some(host) => task
+                            .agent_generation(&container, host.binding.generation)?
+                            .and_then(|g| g.connection),
+                        None => connection(previous)?,
+                    };
+                    prior == connection(&RunHead::of(child)?)?
+                },
+            "reviewer session is incompatible with the selected harness/model/vendor/worktree/connection"
         );
         let container = ContainerRef::Reviewer {
             task: task.id().clone(),
