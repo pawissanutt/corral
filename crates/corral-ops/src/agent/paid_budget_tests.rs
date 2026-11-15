@@ -376,10 +376,7 @@ fn paid_replacement_preserves_independent_money_and_token_caps() {
         .unwrap();
     assert_eq!(state(&fx, &target("R2").container()).budget, before);
     // Each cap independently rejects a request, despite ample paid allowance.
-    for (seq, request, tokens, nanos) in [
-        (1, "over-tokens", 51, 1),
-        (2, "over-money", 1, 50_001),
-    ] {
+    for (seq, request, tokens, nanos) in [(1, "over-tokens", 51, 1), (2, "over-money", 1, 50_001)] {
         let result = event(&replacement, seq, "reserve", request, tokens, nanos).result;
         assert_eq!(result["admitted"], false);
         assert_eq!(result["tokens"], 50);
