@@ -10,6 +10,7 @@ import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { type AssistantMessage, type Context, type Credential, normalizeContext } from "@earendil-works/pi-ai";
 
 import { type SdkBoundary, overrideSdk } from "../../src/claude/sdk.ts";
+import { closeResidentSessions } from "../../src/claude/resident.ts";
 import { guardedFetch } from "../../src/host/restrict.ts";
 import { restrictProvider } from "../../src/host/session.ts";
 
@@ -18,37 +19,56 @@ export const PAID = "sk-ant-api03-SYNTHETIC-PAID-KEY";
 const temps: string[] = [];
 
 export function resetSdkFixture(): void {
+  closeResidentSessions();
   overrideSdk(undefined);
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 }
 
-type Script = (options: Options, control: { interrupted: Promise<void> }) => AsyncGenerator<unknown>;
+export interface ScriptControl {
+  readonly interrupted: Promise<void>;
+  readonly turn: number;
+  readonly message: SDKUserMessage;
+  readonly query: number;
+}
+
+type Script = (options: Options, control: ScriptControl) => AsyncGenerator<unknown>;
 
 interface FakeRun {
   options: Options[];
   prompts: SDKUserMessage[];
   interrupts: number;
   closes: number;
+  closeCalls: number[];
 }
 
 export function fakeSdk(script: Script): FakeRun {
-  const run: FakeRun = { options: [], prompts: [], interrupts: 0, closes: 0 };
+  const run: FakeRun = { options: [], prompts: [], interrupts: 0, closes: 0, closeCalls: [] };
   const boundary: SdkBoundary = {
     query: ({ prompt, options }) => {
       run.options.push(options);
-      let interrupted!: () => void;
-      const control = { interrupted: new Promise<void>((resolve) => { interrupted = resolve; }) };
+      const index = run.options.length - 1;
+      run.closeCalls.push(0);
+      const interrupted = Promise.withResolvers<void>();
       const generator = (async function* () {
-        for await (const message of prompt) run.prompts.push(message);
-        yield* script(options, control);
+        let turn = 0;
+        for await (const message of prompt) {
+          run.prompts.push(message);
+          let terminal = false;
+          for await (const event of script(options, { interrupted: interrupted.promise, turn: turn++, message, query: index })) {
+            if (event !== null && typeof event === "object" && "type" in event && event.type === "result") terminal = true;
+            yield event;
+          }
+          // An incomplete script models a closed SDK output, not a hung resident query.
+          if (!terminal) return;
+        }
       })();
       return Object.assign(generator, {
         interrupt: async () => {
           run.interrupts++;
-          interrupted();
+          interrupted.resolve();
           return undefined;
         },
-        close: () => { run.closes++; },
+        close: () => { run.closes++; run.closeCalls[index] = (run.closeCalls[index] ?? 0) + 1; interrupted.resolve(); },
       }) as never;
     },
     createSdkMcpServer: (options) => ({ type: "sdk", name: options.name, instance: options }) as never,
@@ -73,8 +93,8 @@ export async function anthropic(env: NodeJS.ProcessEnv = { PATH: "/bin" }) {
   });
   const guard = guardedFetch(async () => new Response("unexpected", { status: 500 }), undefined, "anthropic");
   const configDir = join(root, "claude-code");
-  restrictProvider(models, "anthropic", guard.fetch as typeof fetch,
-    { configDir, cwd: root, env, executable: () => "/synthetic/claude" });
+  const config = { configDir, cwd: root, env, executable: () => "/synthetic/claude" };
+  restrictProvider(models, "anthropic", guard.fetch as typeof fetch, config);
   const model = models.getModel("anthropic", "claude-sonnet-5-5")!;
   const provider = models.getProvider("anthropic")!;
   const send = async (context: Context, options: Record<string, unknown> = {}) => {
@@ -85,7 +105,7 @@ export async function anthropic(env: NodeJS.ProcessEnv = { PATH: "/bin" }) {
     for await (const event of stream) events.push(event.type);
     return { events, message: await stream.result() as AssistantMessage };
   };
-  return { send, guard, configDir };
+  return { send, guard, configDir, config, model };
 }
 
 export const user = (text: string) => ({ role: "user" as const, content: text, timestamp: Date.now() });

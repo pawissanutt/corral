@@ -147,8 +147,10 @@ no error). Budget: 6 of the 10 authorised requests (1 direct lane check, 1 refus
 system-prompt fix, 4 for the worker turn). No API key was present: the token came from the
 corral-owned login and every `ANTHROPIC_*` variable was stripped.
 
-Not ported (follow-ups): a resident long-lived SDK session, session reuse, Claude Code native
-compaction, multiple accounts, failover, rate-limit polling and auto-downloading Claude Code.
-The resident session's design and partial work are handed off in
-`pi-native-claude-resident-handoff.md`.
+Resident SDK processes now send proven Pi-history deltas, with full-replay reseeding on uncertainty
+and `CORRAL_CLAUDE_RESIDENT=0|off|false|no` restoring independent queries. Pi still owns history,
+tools and compaction; Claude Code persistence stays off. See `../guide/corral-pi.md`.
+
+Not ported: Claude Code session resumption/transcript persistence, native compaction, multiple
+accounts, failover, rate-limit polling and auto-downloading Claude Code.
 The live smoke result is attached to T-493.

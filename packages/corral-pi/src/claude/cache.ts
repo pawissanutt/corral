@@ -10,12 +10,19 @@ const MAX_SCOPES = 64;
 type Frontier = { readonly index: number; readonly digest: string; readonly startedAt: number; readonly request: number };
 
 export interface ReplayObservation {
-  readonly localState: "disabled" | "untracked" | "cold" | "continued" | "changed" | "expired";
+  /** `resident`: only new Pi messages were sent; this says nothing about provider cache reuse. */
+  readonly localState: "disabled" | "untracked" | "cold" | "continued" | "changed" | "expired" | "resident";
   readonly historyBlocks: number;
   readonly cachedThroughBlock: number;
   readonly uncachedTailBlocks: number;
   readonly prefixHash?: string;
   readonly sinceConfirmedStartMs?: number;
+}
+
+export interface PreparedReplay {
+  readonly blocks: PromptBlock[];
+  readonly observation: ReplayObservation;
+  commit(): void;
 }
 
 function plain(block: PromptBlock): PromptBlock {
@@ -34,9 +41,7 @@ export class ReplayCache {
   private readonly written = new Map<string, Frontier>();
   private request = 0;
 
-  prepare(blocks: PromptBlock[], scope?: string, now = performance.now()): {
-    blocks: PromptBlock[]; observation: ReplayObservation; commit(): void;
-  } {
+  prepare(blocks: PromptBlock[], scope?: string, now = performance.now()): PreparedReplay {
     const request = ++this.request;
     const latest = blocks.findLastIndex((block) => block.type === "text" && block.cache_control !== undefined);
     const marker = blocks[latest];

@@ -1,10 +1,9 @@
-// The Claude Agent SDK lane (T-493): a Pi API provider whose every model call runs one `query()`
-// of the official SDK, which spawns Claude Code on the subscription. Claude Code only plans: its
-// tool calls stream back as Pi tool calls, and Pi executes them. Ported from senpi's
-// anthropic-subscription stream.js and options.js (MIT), per-turn lane only.
+// Claude Agent SDK subscription lane (T-493): Claude Code only plans; Pi executes its tools
+// and owns history. Eligible sessions keep a disposable process and send proven deltas; all
+// other calls use a fresh full replay. Ported from senpi's anthropic-subscription lane (MIT).
 import { mkdirSync } from "node:fs";
 
-import type { Options, Query } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   type AssistantMessageEventStream, type Model, type SimpleStreamOptions, type TranscriptContext,
   type Message, createAssistantMessageEventStream, getCurrentSystemMessage, getCurrentTools,
@@ -12,16 +11,18 @@ import {
 import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 
 import { buildCustomToolServers } from "./custom-tools.ts";
-import { ReplayCache, cacheScope } from "./cache.ts";
+import { ReplayCache, cacheScope, type ReplayObservation, type PreparedReplay } from "./cache.ts";
 import {
-  type StreamEvent, applyStreamEvent, assertPiCompactionOwner, emptyOutput,
+  type StreamEvent, type ClaudeLaneMode, applyStreamEvent, assertPiCompactionOwner, emptyOutput,
   hasPromptUsage, mapStopReason, nativeSdkFailure, recordClaudeCache, updateUsage,
 } from "./events.ts";
-import { buildPromptBlocks, promptStream } from "./prompt.ts";
+import { buildPromptBlocks, promptStream, userMessage } from "./prompt.ts";
 import { DEFAULT_CACHE_TTL, resolveCacheRetention, type ClaudeCacheRetention } from "./cache-policy.ts";
 import { loadSdk, resolveClaudeCode } from "./sdk.ts";
 import { NativeFailure, failureSummary, normalizeFailure, type ProviderFailure } from "../host/provider-failure.ts";
 import { HOST_TOOL_DENIAL_HOOKS, canUseTool, resolveSdkTools } from "./tools.ts";
+import { ResidentSessions, type ResidentEntry, deltaBlocks, messageHash, residentTranscript,
+  residentTurn, residentSessions } from "./resident.ts";
 
 /** The Pi API id of this lane; Anthropic models are re-addressed to it by the restricted provider. */
 export const CLAUDE_SDK_API = "claude-agent-sdk";
@@ -33,6 +34,8 @@ export interface ClaudeLaneConfig {
   readonly cwd?: string;
   readonly executable?: () => string;
   readonly cacheRetention?: ClaudeCacheRetention;
+  /** Host's explicit connection binding, distinct from provider/model identity. */
+  readonly connection?: string;
   /** Host-created search runtime only; never enabled for the coding lane. */
   readonly searchOnly?: boolean;
 }
@@ -101,15 +104,15 @@ export function claudeEnvironment(
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
   // Claude Code only requests fine-grained tool input streaming with this flag; otherwise values arrive whole.
   env.CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING = "1";
-  // Each query is fresh: the preset's Git snapshot would precede replay and invalidate it after
-  // edits/commits. Corral's role contract and Git skill own the workflow; tools supply live state.
+  // Git state comes from Pi's tools, not a spawn-time snapshot preceding the replay.
+  // Corral's role contract and Git skill own the workflow.
   env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS = "1";
   // SDK and explicit history markers must agree; never inherit an ambient lifetime override.
   env.CLAUDE_CODE_PROMPT_CACHE_TTL = retention === "none" ? DEFAULT_CACHE_TTL : retention;
   if (retention === "5m") env.FORCE_PROMPT_CACHING_5M = "1";
   if (retention === "none") env.DISABLE_PROMPT_CACHING = "1";
-  // Pi owns compaction. Claude Code's per-turn token-budget reminder changes the prompt every turn and
-  // defeats cache reuse, and its native compaction must stay off at the window Pi plans against.
+  // Pi owns compaction and context budgeting; disable Claude Code's independent per-turn reminder
+  // and native compaction at the window Pi plans against.
   env.CLAUDE_CODE_TOTAL_TOKENS_REMINDER = "off";
   env.DISABLE_COMPACT = "1";
   if (model) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(claudeMaxContextTokens(model));
@@ -135,7 +138,7 @@ function thinkingOptions(model: Model<string>, options: SimpleStreamOptions | un
 
 export function streamClaudeSdk(
   config: ClaudeLaneConfig, model: Model<string>, context: TranscriptContext, options?: SimpleStreamOptions,
-  cache = new ReplayCache(),
+  cache = new ReplayCache(), residents?: ResidentSessions,
 ): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
   void (async () => {
@@ -143,10 +146,13 @@ export function streamClaudeSdk(
     const blocks: Parameters<typeof applyStreamEvent>[0]["blocks"] = [];
     const argumentsStreams: Parameters<typeof applyStreamEvent>[0]["argumentsStreams"] = new Map();
     let query: Query | undefined;
+    let entry: ResidentEntry | undefined;
+    let released = false;
     let closed = false;
     let aborted = false;
     let started = false;
     let sawStreamEvent = false;
+    let streamUsage = false;
     let succeeded = false;
     let usageReported = false;
     let recordCache = () => {};
@@ -154,16 +160,14 @@ export function streamClaudeSdk(
     const close = () => {
       if (closed || !query) return;
       closed = true;
-      query.close();
+      if (entry) residents?.close(entry);
+      else query.close();
     };
     const interrupt = () => {
       if (!query) return;
       void query.interrupt().catch(() => undefined).finally(close);
     };
-    const onAbort = () => {
-      aborted = true;
-      interrupt();
-    };
+    const onAbort = () => { aborted = true; interrupt(); };
     if (options?.signal?.aborted) onAbort();
     else options?.signal?.addEventListener("abort", onAbort, { once: true });
     try {
@@ -175,59 +179,88 @@ export function streamClaudeSdk(
       const sdk = await loadSdk();
       mkdirSync(config.configDir, { recursive: true, mode: 0o700 });
       const messages = context.messages;
-      const retention = resolveCacheRetention(config.cacheRetention ?? (config.env ?? process.env).CORRAL_CLAUDE_CACHE_TTL,
-        options?.cacheRetention);
+      const env = config.env ?? process.env;
+      const retention = resolveCacheRetention(config.cacheRetention ?? env.CORRAL_CLAUDE_CACHE_TTL, options?.cacheRetention);
       const toolLess = options?.toolChoice === "none";
       const tools = resolveSdkTools(toolLess ? [] : getCurrentTools(messages));
       const mcpServers = await buildCustomToolServers(tools.customTools);
       const queryOptions: Options = {
-        cwd: config.cwd ?? process.cwd(),
-        model: model.id,
-        tools: tools.sdkTools,
-        permissionMode: "dontAsk",
-        includePartialMessages: true,
-        canUseTool,
-        hooks: HOST_TOOL_DENIAL_HOOKS,
-        systemPrompt: claudeSystemPrompt(messages),
-        settingSources: [],
+        cwd: config.cwd ?? process.cwd(), model: model.id, tools: tools.sdkTools,
+        permissionMode: "dontAsk", includePartialMessages: true, canUseTool, hooks: HOST_TOOL_DENIAL_HOOKS,
+        systemPrompt: claudeSystemPrompt(messages), settingSources: [],
         settings: { autoCompactEnabled: false, autoMemoryEnabled: false },
-        strictMcpConfig: true,
-        persistSession: false,
-        pathToClaudeCodeExecutable: executable,
-        env: claudeEnvironment(config.env ?? process.env, token, config.configDir, retention, model),
-        ...(mcpServers ? { mcpServers } : {}),
-        ...(toolLess ? { maxTurns: 1 } : {}),
+        strictMcpConfig: true, persistSession: false, pathToClaudeCodeExecutable: executable,
+        env: claudeEnvironment(env, token, config.configDir, retention, model),
+        ...(mcpServers ? { mcpServers } : {}), ...(toolLess ? { maxTurns: 1 } : {}),
         ...thinkingOptions(model, options),
       };
-      const prompt = cache.prepare(buildPromptBlocks(messages, tools.customToolNameToSdk, retention), options?.sessionId
-        ? cacheScope([options.sessionId, model.provider, model.id, queryOptions.cwd, queryOptions.systemPrompt,
-          tools.sdkTools, tools.customTools, queryOptions.thinking, queryOptions.effort,
-          queryOptions.maxThinkingTokens, retention]) : undefined);
+      const scopeParts = [options?.sessionId, model.provider, model.id, queryOptions.cwd, queryOptions.systemPrompt,
+        tools.sdkTools, tools.customTools, queryOptions.thinking, queryOptions.effort,
+        queryOptions.maxThinkingTokens, retention];
+      const transcript = residentTranscript(messages);
+      const hashes = transcript.map(messageHash);
+      const questionState = getCurrentSystemMessage(messages)?.sections?.owner_questions;
+      const question = typeof questionState === "string" ? questionState : undefined;
+      let lane: ClaudeLaneMode = { mode: "one-shot" };
+      let prompt: PreparedReplay | undefined;
+      let observation: ReplayObservation;
+      let turns: AsyncIterable<SDKMessage>;
+      // The off switch never calls the registry, preserving the independent-query lane exactly.
+      const eligible = residents && options?.sessionId && !toolLess && retention !== "none" &&
+        !/^(0|off|false|no)$/i.test(env.CORRAL_CLAUDE_RESIDENT ?? "");
+      const plan = eligible && residents && options?.sessionId ? residents.plan(options.sessionId, cacheScope([...scopeParts, config.connection,
+        cacheScope(token), executable, config.configDir]), transcript, hashes,
+      input => sdk.query({ prompt: input, options: queryOptions })) : undefined;
       const startedAt = performance.now();
-      recordCache = () => recordClaudeCache(output, retention, prompt.observation, startedAt, usageReported);
-      query = sdk.query({ prompt: promptStream(prompt.blocks), options: queryOptions });
+      if (plan && plan.kind !== "one-shot") {
+        entry = plan.entry;
+        query = entry.query;
+        let sent: SDKUserMessage;
+        if (plan.kind === "delta") {
+          sent = userMessage(deltaBlocks(plan.messages, tools.customToolNameToSdk,
+            question !== entry.questionState ? question ?? "" : undefined));
+          lane = { mode: "resident-delta", deltaMessages: plan.messages.length };
+          observation = { localState: "resident", historyBlocks: 0, cachedThroughBlock: 0, uncachedTailBlocks: 0 };
+        } else {
+          prompt = cache.prepare(buildPromptBlocks(messages, tools.customToolNameToSdk, retention),
+            cacheScope(scopeParts));
+          sent = userMessage(prompt.blocks);
+          lane = { mode: "resident-seed", reason: plan.reason };
+          observation = prompt.observation;
+        }
+        entry.input.push(sent);
+        turns = residentTurn(entry, sent.uuid!);
+      } else {
+        if (plan) lane = { mode: "one-shot", reason: plan.reason };
+        prompt = cache.prepare(buildPromptBlocks(messages, tools.customToolNameToSdk, retention),
+          options?.sessionId ? cacheScope(scopeParts) : undefined);
+        observation = prompt.observation;
+        query = sdk.query({ prompt: promptStream(prompt.blocks), options: queryOptions });
+        turns = query;
+      }
+      recordCache = () => recordClaudeCache(output, retention, observation, startedAt, usageReported, lane);
       if (aborted) interrupt();
-      for await (const message of query) {
+      for await (const message of turns) {
         assertPiCompactionOwner(message);
-        if (message.type === "result") {
+        if (message.type === "result" && (!entry || !streamUsage)) {
           usageReported = hasPromptUsage(message.usage) || usageReported;
           updateUsage(model, output, message.usage);
         }
         if (message.type === "rate_limit_event") rateLimit = message.rate_limit_info;
-        const failure = nativeSdkFailure(message, rateLimit, "coding");
+        // Throw on the first typed assistant evidence, before a generic result can overwrite it.
+        const failure = nativeSdkFailure(message, entry ? entry.rateLimit : rateLimit, "coding");
         if (failure) throw failure;
-        if (!started) {
-          stream.push({ type: "start", partial: output });
-          started = true;
-        }
+        if (!started) { stream.push({ type: "start", partial: output }); started = true; }
         if (message.type === "stream_event") {
           sawStreamEvent = true;
           const event = message.event as StreamEvent;
-          if (event.type === "message_start") usageReported = hasPromptUsage(event.message.usage) || usageReported;
+          const usage = event.type === "message_start" ? event.message.usage
+            : event.type === "message_delta" ? event.usage : undefined;
+          streamUsage = usage !== undefined || streamUsage;
+          usageReported = hasPromptUsage(usage) || usageReported;
           applyStreamEvent({ model, output, blocks, argumentsStreams, stream, customToolNameToPi: tools.customToolNameToPi }, event);
         } else if (message.type === "result" && message.subtype === "success") {
           succeeded = true;
-          // A terminal result never downgrades a tool-use turn, or Pi would not run the calls.
           if (message.stop_reason != null && output.stopReason !== "toolUse") output.stopReason = mapStopReason(message.stop_reason);
           if (!sawStreamEvent) output.content.push({ type: "text", text: message.result });
         }
@@ -239,7 +272,12 @@ export function streamClaudeSdk(
         stream.push({ type: "error", reason: "aborted", error: output });
       } else {
         if (!succeeded) throw new Error("claude_query_incomplete: Claude Code ended without a terminal success result");
-        prompt.commit();
+        prompt?.commit();
+        if (entry) {
+          entry.questionState = question;
+          residents?.release(entry, [...hashes, messageHash(output)], output.stopReason === "toolUse");
+          released = true;
+        }
         recordCache();
         const reason = output.stopReason === "toolUse" ? "toolUse" : output.stopReason === "length" ? "length" : "stop";
         stream.push({ type: "done", reason, message: output });
@@ -252,11 +290,14 @@ export function streamClaudeSdk(
       (output as typeof output & { providerFailure: ProviderFailure }).providerFailure = failure;
       output.errorMessage = output.stopReason === "aborted" ? "Operation aborted"
         : failureSummary(failure, error instanceof Error ? error.message : undefined);
+      if (error instanceof Error && /^claude_resident_[a-z_]+:/.test(error.message) && output.stopReason !== "aborted") {
+        output.errorMessage = `${error.message.split(":")[0]}: ${failureSummary(failure)}`;
+      }
       recordCache();
       stream.push({ type: "error", reason: output.stopReason, error: output });
     } finally {
       options?.signal?.removeEventListener("abort", onAbort);
-      close();
+      if (!released) close();
       stream.end();
     }
   })();
@@ -266,6 +307,6 @@ export function streamClaudeSdk(
 export function registerClaudeSdkApi(config: ClaudeLaneConfig): void {
   const cache = new ReplayCache();
   const run = (model: Model<string>, context: TranscriptContext, options?: SimpleStreamOptions) =>
-    streamClaudeSdk(config, model, context, options, cache);
+    streamClaudeSdk(config, model, context, options, cache, residentSessions);
   registerApiProvider({ api: CLAUDE_SDK_API, stream: run, streamSimple: run }, "corral-claude-sdk");
 }

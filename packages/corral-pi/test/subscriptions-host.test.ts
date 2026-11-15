@@ -41,8 +41,12 @@ for (const role of ["assistant", "pm"] as const) test(`${role}: GPT -> Claude ->
     globalThis.fetch = network.fetch as typeof fetch;
     overrideSdk({
       query: ({ prompt }) => Object.assign((async function* () {
-        for await (const message of prompt) claudePrompts.push(message);
-        yield { type: "result", subtype: "success", is_error: false, result: "CLAUDE", stop_reason: "end_turn", usage: { input_tokens: 12, output_tokens: 5 } };
+        // One reply per pushed message, as Claude Code's streaming input does; a one-shot prompt ends after its only message.
+        for await (const message of prompt) {
+          claudePrompts.push(message);
+          yield { type: "result", subtype: "success", is_error: false, result: "CLAUDE", stop_reason: "end_turn",
+            usage: { input_tokens: 12, output_tokens: 5 }, user_message_uuid: message.uuid };
+        }
       })(), { interrupt: async () => undefined, close: () => undefined }) as never,
       createSdkMcpServer: (options) => ({ type: "sdk", name: options.name, instance: options }) as never,
     });
