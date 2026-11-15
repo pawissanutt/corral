@@ -150,3 +150,41 @@ fn launch_exports_stable_attempt_marker_only_to_child() {
     let other = ownership_marker(&tmp.path().join("R2.exited")).unwrap();
     assert_ne!(marker, other);
 }
+
+#[test]
+#[cfg(unix)]
+fn killed_raw_terminal_child_restores_shell_mode_before_exit_receipt() {
+    let (_root, ctx) = fixture();
+    let path = receipt(&ctx, "T-001", "R1").unwrap();
+    let command = arm(
+        &ctx,
+        "stty raw -echo; printf '\\033[?2004h'; kill -KILL $$",
+        &path,
+    )
+    .unwrap();
+    let output = std::process::Command::new("python3")
+        .args([
+            "-I",
+            "-c",
+            r#"import os, pty, subprocess, sys, termios
+master, slave = pty.openpty()
+try:
+    before = termios.tcgetattr(slave)
+    child = subprocess.Popen(["/bin/sh", "-c", sys.argv[1]], stdin=slave, stdout=slave, stderr=slave)
+    assert child.wait(timeout=10) == 0
+    assert open(sys.argv[2]).read() == "137\n"
+    after = termios.tcgetattr(slave)
+    assert after == before, f"shell terminal mode was not restored: before={before}, after={after}"
+    assert b"\x1b[?2004l" in os.read(master, 4096), "bracketed paste was not disabled"
+finally:
+    os.close(slave)
+    os.close(master)
+"#,
+        ])
+        .arg(command)
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
