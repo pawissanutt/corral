@@ -1,6 +1,7 @@
 //! The terminal look of the mockup (`.term`, `.bigterm`, `.termbar`, `.tlab`): mono lines on a
 //! surface that stays dark in both appearances, each line coloured by its model class; and a
-//! pane's screen as read, row for row in one ink, never wrapped.
+//! pane's screen as read without its styles, row for row in one ink, never wrapped (`grid` draws
+//! a screen that carries its colours).
 //!
 //! The theme has no terminal roles, so the surface takes the dark appearance's value of the
 //! shell, ink and state roles in both appearances: the same colours the mockup's `--term-*` and
@@ -120,17 +121,19 @@ pub const PHONE: Set = Set {
     leading: 16.5,
     wrap: true,
 };
-/// A pane's screen on the desktop surface: a size that keeps a wide pane's rows within reach,
-/// at about a terminal's own leading (the system monospaces are near 1.17 em tall), so `│`
-/// columns and box frames meet from row to row as they do in the pane.
+/// A pane's screen on the desktop surface, in `FONT_SCREEN`: a size that keeps a wide pane's rows
+/// within reach, at Cascadia Mono's own line height (1.16 em), as a terminal sets it. Its box
+/// drawing and blocks are drawn 1.32 em tall, but a hinting renderer (FreeType) shrinks them to
+/// about 1.15 em, so a taller row leaves a gap in every vertical line; at this leading they meet
+/// or overlap under either renderer.
 pub const SCREEN: Set = Set {
-    size: 12.0,
-    leading: 14.5,
+    size: 12.25,
+    leading: 14.0,
     wrap: false,
 };
-/// A pane's screen on the phone surface.
+/// A pane's screen on the phone surface, set by the same rule.
 pub const PHONE_SCREEN: Set = Set {
-    size: 10.0,
+    size: 10.5,
     leading: 12.0,
     wrap: false,
 };
@@ -209,7 +212,7 @@ pub fn lines(lines: &[Line], set: Set, with_cursor: bool) -> AnyElement {
 }
 
 /// A pane's screen on the dark surface (desktop, phone): each row exactly as read, in the
-/// system monospace (`FONT_SCREEN`) and the surface's ink, its spaces kept; the rows sit at their
+/// terminal face (`FONT_SCREEN`) and the surface's ink, its spaces kept; the rows sit at their
 /// full width in a sideways scroll, so a screen wider than the surface scrolls rather than wraps.
 /// The insets are inside the sideways scroll, so its bar never covers the last row.
 pub fn screen_rows(lines: &[Line], set: Set, (sides, ends): (f32, f32)) -> AnyElement {

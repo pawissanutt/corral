@@ -449,46 +449,6 @@ fn lines(bytes: &[u8]) -> Vec<String> {
     lines
 }
 
-/// Preserve screen columns while bounding escaped rows below the CONTROL reply budget.
-pub(super) fn screen(text: &str) -> Vec<String> {
-    let mut rows = Vec::new();
-    let mut budget = 40 * 1024 - 2;
-    for row in text.rsplit('\n') {
-        let clean = if row.chars().any(char::is_control) {
-            std::borrow::Cow::Owned(
-                row.chars()
-                    .filter(|ch| !ch.is_control())
-                    .collect::<String>(),
-            )
-        } else {
-            std::borrow::Cow::Borrowed(row)
-        };
-        let mut row = short(clean.trim_end(), 2048);
-        row.truncate(row.trim_end().len());
-        if rows.is_empty() && row.is_empty() {
-            continue;
-        }
-        let cost = row
-            .chars()
-            .map(|ch| match ch {
-                '"' | '\\' => 2,
-                ch => ch.len_utf8(),
-            })
-            .sum::<usize>()
-            + 3;
-        if cost > budget {
-            break;
-        }
-        budget -= cost;
-        rows.push(row);
-        if rows.len() == 200 {
-            break;
-        }
-    }
-    rows.reverse();
-    rows
-}
-
 pub(super) fn gate_snapshot(ctx: &Ctx, task: &str, run: &str) -> Result<TerminalSnapshot> {
     let head = ctx.store.head(task)?;
     let run = head.run_head(run)?.context("gate run not found")?;
@@ -514,6 +474,7 @@ pub(super) fn gate_snapshot(ctx: &Ctx, task: &str, run: &str) -> Result<Terminal
             lines: lines(&bytes),
             captured_at: attempt.ended.unwrap_or(attempt.started).to_string(),
             live: false,
+            rows: Vec::new(),
         });
     }
     // Canonical gate_paths chooses only this recorded attempt's registered scratch log.
@@ -546,6 +507,7 @@ pub(super) fn gate_snapshot(ctx: &Ctx, task: &str, run: &str) -> Result<Terminal
         lines: lines(&bytes[first..]),
         captured_at,
         live: false,
+        rows: Vec::new(),
     })
 }
 

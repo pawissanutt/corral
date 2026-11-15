@@ -186,7 +186,7 @@ Destination keys are `i` Inbox, `n` Now, `.` Changes, `p` Plans, `a` Agents, `r`
 - `src/screens/`: destination screen modules, their subdirectories and page routing.
 - `tests/shell.rs`: headless shell tests.
 - `theme.json` and `nsh.json`: theme and app configuration.
-- `assets/fonts/` (one static face per weight) and `assets/icons/` (the mock's glyphs as SVG).
+- `assets/fonts/`: one static file per face. Atkinson Hyperlegible Next and Mono set the interface; Cascadia Mono (regular, bold, italic, bold italic) sets an agent's live terminal, so it looks the same whatever the owner's own terminal font. Cascadia Mono is © Microsoft Corporation under the SIL Open Font License 1.1; its licence, `assets/fonts/CascadiaMono-LICENSE.txt`, ships with the app as a plain file of `assets!()`. `assets/icons/` holds the mock's glyphs as SVG.
 - `docs/NSH-NOTES.md`: what NSH 0.5.0 does differently from what its docs suggest, with sources.
 - `docs/shots/`: renders of the content build; see Screenshots below.
 

@@ -96,6 +96,10 @@ fn error_objects_and_codes() {
 fn read_text_plain_and_wrapped() {
     assert_eq!(extract_read_text("echo hi\n"), "echo hi\n");
     assert_eq!(extract_read_text(r#"{"result":{"text":"abc"}}"#), "abc");
+    let ansi = "  \x1b[38;2;1;2;3mcoloured\x1b[0m  \n";
+    assert_eq!(extract_read_text(ansi), ansi);
+    let wrapped = serde_json::json!({ "result": { "text": ansi } }).to_string();
+    assert_eq!(extract_read_text(&wrapped), ansi);
 }
 
 #[test]

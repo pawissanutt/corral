@@ -349,7 +349,7 @@ fn live_terminal_fixture() -> Result<(tempfile::TempDir, Ctx, String)> {
         &bin,
         concat!(
             "#!/bin/sh\n",
-            "[ \"$*\" = '--session terminal-fixture pane read pane-live --source visible --format text' ] || exit 70\n",
+            "[ \"$*\" = '--session terminal-fixture pane read pane-live --source visible --format ansi' ] || exit 70\n",
             "dir=$(dirname \"$0\")\n",
             "printf called > \"$dir/probed\"\n",
             "cat \"$dir/screen\"\n",
@@ -374,7 +374,7 @@ fn live_terminal_preserves_screen_columns_and_reuses_unchanged_etag() -> Result<
     let (tmp, ctx, id) = live_terminal_fixture()?;
     std::fs::write(
         tmp.path().join("screen"),
-        "  heading   \n  ┌─┐  \n\n  │ x │\u{7}   \n   \n\n",
+        "  \x1b[38;2;10;20;30;1mheading\x1b[0m   \n  ┌─┐  \n\n  │ x │\u{7}   \n   \n\n",
     )?;
     let rows = agents_rows(&ctx)?;
     assert_eq!(
@@ -397,12 +397,33 @@ fn live_terminal_preserves_screen_columns_and_reuses_unchanged_etag() -> Result<
     };
     assert!(snapshot.live);
     assert_eq!(snapshot.lines, ["  heading", "  ┌─┐", "", "  │ x │"]);
+    assert_eq!(snapshot.lines.len(), snapshot.rows.len());
+    assert_eq!(
+        snapshot.rows[0][1].fg,
+        Some(corral_protocol::detail::session::TerminalColor::Rgb([
+            10, 20, 30
+        ]))
+    );
+    assert!(snapshot.rows[0][1].bold);
     snapshot.captured_at.parse::<jiff::Timestamp>()?;
     assert!(first.next.is_none());
     request.etag = Some(first.etag.clone());
     let unchanged = read(&ctx, &request)?;
     assert_eq!(unchanged.etag, first.etag);
     assert!(unchanged.body.is_none());
+
+    std::fs::write(
+        tmp.path().join("screen"),
+        "  \x1b[38;2;30;20;10;1mheading\x1b[0m   \n  ┌─┐  \n\n  │ x │\u{7}   \n   \n\n",
+    )?;
+    let recoloured = read(&ctx, &request)?;
+    let Some(DetailBody::Terminal(recoloured_screen)) = &recoloured.body else {
+        panic!("expected a colour-only terminal change");
+    };
+    assert_eq!(recoloured_screen.lines, snapshot.lines);
+    assert_ne!(recoloured_screen.rows, snapshot.rows);
+    assert_ne!(recoloured.etag, first.etag);
+    request.etag = Some(recoloured.etag);
 
     let large = (0..220)
         .map(|n| format!("{n:03} {}é\n", "\"\\".repeat(1020)))
@@ -450,5 +471,25 @@ fn foreign_and_unowned_terminal_panes_are_refused_before_herdr_reads() -> Result
         assert!(!error.to_string().starts_with("not_found"));
         assert!(!tmp.path().join("probed").exists());
     }
+    task.runs[0].herdr.as_mut().unwrap().socket = Some(ctx.herdr.socket_path()?);
+    ctx.store.fixture_put_task(&task)?;
+    std::fs::write(tmp.path().join("screen"), "\x1b[42;3mowned\x1b[0m\n")?;
+    let reply = read(
+        &ctx,
+        &DetailGet {
+            target: DetailRef::Terminal { id },
+            etag: None,
+            page: None,
+        },
+    )?;
+    let Some(DetailBody::Terminal(snapshot)) = reply.body else {
+        panic!("expected an owned terminal snapshot");
+    };
+    assert_eq!(snapshot.lines, ["owned"]);
+    assert_eq!(
+        snapshot.rows[0][0].bg,
+        Some(corral_protocol::detail::session::TerminalColor::Indexed(2))
+    );
+    assert!(snapshot.rows[0][0].italic);
     Ok(())
 }

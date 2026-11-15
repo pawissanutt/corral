@@ -1,5 +1,8 @@
 //! The mockup preview of Agents: the fixture wall, and the T-868 session with its illustrative
-//! transcript and terminal. Used only while the fixture data state is selected.
+//! transcript and its pane's styled screen. Used only while the fixture data state is selected.
+
+use corral_protocol::detail::{TerminalColor, TerminalRun};
+use unicode_width::UnicodeWidthStr;
 
 use crate::model::board::{self, Mark};
 use crate::model::effect::Env;
@@ -9,7 +12,7 @@ use crate::model::text::span;
 use super::{
     AGENTS, Action, AgentStatus, FactValue, Feed, Fill, Line, LineClass, Message, MessageItem,
     Note, QuestionCard, Reply, ReplyMode, Run, RunFact, Session, State, Terminal, Tile, Tool,
-    Transcript, View, Wall, line, tail_line,
+    Transcript, View, Wall, line, screen, tail_line,
 };
 
 /// The session a fixture id stands for: the PM tile opens T-868's session in the mockup.
@@ -260,80 +263,142 @@ fn transcript(id: &'static str) -> Transcript {
     )
 }
 
-fn terminal_lines(id: &'static str) -> Vec<Line> {
-    if id != "T-868" {
-        let a = AGENTS
-            .iter()
-            .find(|a| a.task == Some(id))
-            .unwrap_or(&AGENTS[0]);
-        return a.tail.iter().map(|s| tail_line(s)).collect();
+/// A fixture agent's tail as its terminal's lines.
+fn tail_lines(id: &'static str) -> Vec<Line> {
+    let agent = AGENTS
+        .iter()
+        .find(|a| a.task == Some(id))
+        .unwrap_or(&AGENTS[0]);
+    agent.tail.iter().map(|s| tail_line(s)).collect()
+}
+
+/// The colours of T-868's pane: its frame in a grey of the 256-colour ramp, accents from the
+/// theme's sixteen, the cube and 24-bit, so each kind of colour shows in the preview.
+const FRAME: Option<TerminalColor> = Some(TerminalColor::Indexed(244));
+const CYAN: Option<TerminalColor> = Some(TerminalColor::Indexed(6));
+const RED: Option<TerminalColor> = Some(TerminalColor::Indexed(9));
+const AMBER: Option<TerminalColor> = Some(TerminalColor::Indexed(214));
+const GREEN: Option<TerminalColor> = Some(TerminalColor::Rgb([0x4E, 0xC9, 0x7A]));
+const BAR: Option<TerminalColor> = Some(TerminalColor::Rgb([0x1F, 0x3A, 0x5F]));
+const BAR_INK: Option<TerminalColor> = Some(TerminalColor::Rgb([0xC8, 0xD8, 0xEC]));
+/// The cells inside the pane's frame and its one-cell margins.
+const INNER: usize = 60;
+
+/// A run of the pane: its text and colour, and the marks `b`old, `d`im, `i`talic, `u`nderline,
+/// `s`trike and in`v`erse.
+fn run(text: &str, fg: Option<TerminalColor>, marks: &str) -> TerminalRun {
+    TerminalRun {
+        text: text.into(),
+        fg,
+        bold: marks.contains('b'),
+        dim: marks.contains('d'),
+        italic: marks.contains('i'),
+        underline: marks.contains('u'),
+        strike: marks.contains('s'),
+        inverse: marks.contains('v'),
+        ..TerminalRun::default()
     }
-    let mut lines = vec![
-        line(
-            "pi 1.5.0 · corral bound session · T-868 R1 · pi-sol xhigh",
-            LineClass::Dim,
-        ),
-        line(
-            "───────────────────────────────────────────────────────────",
-            LineClass::Dim,
-        ),
-        line(
-            "● Edit packages/corral-pi/src/bridge/queue.ts",
-            LineClass::Bold,
-        ),
-    ];
-    lines.push(Line {
-        text: vec![
-            span("  "),
-            span("+88").hue(Hue::Ok),
-            span(" "),
-            span("-3").hue(Hue::Fail),
+}
+
+/// A row inside the frame, padded to its right side.
+fn framed(runs: Vec<TerminalRun>) -> Vec<TerminalRun> {
+    let used: usize = runs.iter().map(|run| run.text.width()).sum();
+    let side = format!("{} │", " ".repeat(INNER.saturating_sub(used)));
+    std::iter::once(run("│ ", FRAME, ""))
+        .chain(runs)
+        .chain([run(&side, FRAME, "")])
+        .collect()
+}
+
+/// T-868's pane as corrald serves a live screen: a framed tool block holding characters Cascadia
+/// Mono lacks (`⟦ ⟧`, `✔`, an emoji), the open question, and a status bar on its own background.
+fn pane_screen() -> Vec<Vec<TerminalRun>> {
+    let rule = |left: &str, right: &str, cells: usize| {
+        run(&format!("{left}{}{right}", "─".repeat(cells)), FRAME, "")
+    };
+    let gap = || run(" ", None, "");
+    vec![
+        vec![run(
+            " pi 1.5.0 · corral bound session · T-868 R1 · pi-sol xhigh",
+            None,
+            "d",
+        )],
+        vec![
+            run("╭─ ", FRAME, ""),
+            run("⟦", CYAN, ""),
+            run(" T-868 R1 ", None, "b"),
+            run("⟧", CYAN, ""),
+            rule(" ", "╮", INNER - 13),
         ],
-        class: LineClass::Plain,
-    });
-    lines.push(line("● Bash bun run --bun typecheck", LineClass::Bold));
-    lines.push(Line {
-        text: vec![span("  "), span("ok").hue(Hue::Ok), span(" 11.0s")],
-        class: LineClass::Plain,
-    });
-    lines.extend([
-        line("", LineClass::Plain),
-        Line {
-            text: vec![span("? T-868/R1/Q1 · waiting on the owner").hue(Hue::You)],
-            class: LineClass::Plain,
-        },
-        line(
-            "  Restore policy: pane-origin input only, or all origins?",
-            LineClass::Plain,
-        ),
-        line(
-            "  1. Restore only pane-origin input; leave Corral/extension items queued",
-            LineClass::Plain,
-        ),
-        line(
-            "  2. Retain restore-all; journal removals, resubmit as new pane input",
-            LineClass::Plain,
-        ),
-        line("", LineClass::Plain),
-        Line {
-            text: vec![
-                span("owner (app:pawis-iphone):").dim(),
-                span(" Does option 1 change anything in rich mode?"),
-            ],
-            class: LineClass::Plain,
-        },
-        line(
-            "● No. Rich mode stays read-only/count-only; neither option restores there.",
-            LineClass::Bold,
-        ),
-        line("", LineClass::Plain),
-        line(
-            "queued  0 steering · 0 follow-ups · queued, not execution",
-            LineClass::Dim,
-        ),
-        line("›", LineClass::Prompt),
-    ]);
-    lines
+        framed(vec![
+            run("●", GREEN, ""),
+            gap(),
+            run("Edit", None, "b"),
+            gap(),
+            run("packages/corral-pi/src/bridge/queue.ts", None, "u"),
+        ]),
+        framed(vec![run("    +88", GREEN, ""), gap(), run("-3", RED, "s")]),
+        framed(vec![
+            run("●", GREEN, ""),
+            gap(),
+            run("Bash", None, "b"),
+            run(" bun run --bun typecheck", None, ""),
+        ]),
+        framed(vec![
+            run("    ✔", GREEN, "b"),
+            run(" ok", None, ""),
+            run(" 11.0s", None, "d"),
+        ]),
+        framed(vec![
+            run("📝", None, ""),
+            gap(),
+            run("handover note drafted", None, "i"),
+        ]),
+        vec![rule("╰", "╯", INNER + 2)],
+        Vec::new(),
+        vec![run(" ? T-868/R1/Q1 · waiting on the owner", AMBER, "b")],
+        vec![run(
+            "   Restore policy: pane-origin input only, or all origins?",
+            None,
+            "",
+        )],
+        vec![run(
+            "   1. Restore only pane-origin input; leave Corral/extension items queued",
+            None,
+            "",
+        )],
+        vec![run(
+            "   2. Retain restore-all; journal removals, resubmit as new pane input",
+            None,
+            "",
+        )],
+        Vec::new(),
+        vec![
+            run(" owner (app:pawis-iphone):", None, "di"),
+            run(" Does option 1 change anything in rich mode?", None, ""),
+        ],
+        vec![
+            run(" ●", GREEN, ""),
+            run(
+                " No. Rich mode stays read-only/count-only; neither option restores there.",
+                None,
+                "b",
+            ),
+        ],
+        Vec::new(),
+        vec![
+            run(" INSERT ", None, "bv"),
+            TerminalRun {
+                bg: BAR,
+                ..run(
+                    " queued  0 steering · 0 follow-ups · queued, not execution ",
+                    BAR_INK,
+                    "",
+                )
+            },
+        ],
+        vec![run(" ›", None, "b")],
+    ]
 }
 
 /// Build the fixture session header, transcript, reply and terminal for the selected session.
@@ -351,6 +416,8 @@ pub fn session(state: &State, _env: Env) -> Session {
         "herdr-core"
     };
     let pane = task.pane.unwrap_or("w12C:p2");
+    // T-868's pane is a styled screen as read; the other sessions show their tails.
+    let pane_rows = (id == "T-868").then(pane_screen);
     Session {
         id: id.into(),
         title: task.title.into(),
@@ -385,9 +452,19 @@ pub fn session(state: &State, _env: Env) -> Session {
                 "keys go to the agent's pane as owner input · actor=owner"
             }
             .into(),
-            lines: terminal_lines(id),
-            cursor: true,
-            verbatim: false,
+            lines: match &pane_rows {
+                Some(rows) => rows
+                    .iter()
+                    .map(|runs| {
+                        let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+                        line(&text, LineClass::Plain)
+                    })
+                    .collect(),
+                None => tail_lines(id),
+            },
+            cursor: pane_rows.is_none(),
+            verbatim: pane_rows.is_some(),
+            styled: pane_rows.as_deref().map(screen::rows).unwrap_or_default(),
             empty: None,
             phone_keys: vec!["Esc", "Tab", "Ctrl", "↑", "↓", "⏎"],
             refresh: None,

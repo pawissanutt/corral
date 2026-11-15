@@ -8,7 +8,7 @@
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
-use crate::model::agents::{Action, FactValue, Feed, Line, Run, Session, Terminal, View};
+use crate::model::agents::{Action, FactValue, Feed, Line, Run, Session, Terminal, View, screen};
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::text::span;
@@ -26,8 +26,8 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::console::{self, BIG, PHONE, PHONE_SCREEN, SCREEN};
-use super::run;
 use super::transcript::{line, phone_reply, reply, transcript};
+use super::{grid, run};
 
 /// The run column's width (`minmax(0, 1fr) 280px`).
 const RUN_WIDTH: f32 = 280.0;
@@ -39,6 +39,7 @@ struct Rows {
     empty: Option<String>,
     cursor: bool,
     verbatim: bool,
+    styled: Vec<screen::Row>,
 }
 
 impl Rows {
@@ -48,6 +49,7 @@ impl Rows {
             empty: screen.empty.clone(),
             cursor: screen.cursor,
             verbatim: screen.verbatim,
+            styled: screen.styled.clone(),
         }
     }
 }
@@ -412,6 +414,7 @@ fn rows_view(
                 .px(term::cells(1.0))
                 .child(term::quiet(words))
                 .into_element(),
+            None if rows.verbatim && !rows.styled.is_empty() => grid::cell_screen(&rows.styled),
             None if rows.verbatim => console::cell_screen(&rows.lines),
             None => view()
                 .px(term::cells(1.0))
@@ -434,7 +437,11 @@ fn rows_view(
             } else {
                 SCREEN
             };
-            console::screen_rows(&rows.lines, screen, (sides, ends))
+            if rows.styled.is_empty() {
+                console::screen_rows(&rows.lines, screen, (sides, ends))
+            } else {
+                grid::screen(&rows.styled, screen, (sides, ends))
+            }
         }
         None => padded(console::lines(&rows.lines, set, rows.cursor)),
     }

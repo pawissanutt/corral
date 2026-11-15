@@ -275,10 +275,10 @@ impl Herdr {
         }
     }
 
-    /// The pane's visible screen as plain text.
+    /// The pane's visible screen with its SGR colours and text attributes.
     pub fn pane_screen(&self, pane_id: &str) -> Result<Option<String>> {
         match self.raw(&[
-            "pane", "read", pane_id, "--source", "visible", "--format", "text",
+            "pane", "read", pane_id, "--source", "visible", "--format", "ansi",
         ]) {
             Ok(text) => Ok(Some(extract_read_text(&text))),
             Err(error) if error_code(&error) == Some("pane_not_found") => Ok(None),
@@ -595,7 +595,7 @@ fn parse_created(result: &Value) -> Result<Created> {
     })
 }
 
-/// `pane read` prints plain text; accept a JSON-wrapped result too.
+/// `pane read` prints raw text (possibly ANSI); accept a JSON-wrapped result too.
 fn extract_read_text(out: &str) -> String {
     if let Ok(v) = serde_json::from_str::<Value>(out.trim())
         && let Some(r) = v.get("result")

@@ -15,6 +15,7 @@ mod questions;
 mod review;
 mod settings;
 mod tasks;
+mod terminal_screen;
 mod timeline;
 mod usage;
 
@@ -186,9 +187,12 @@ fn read_snapshot(ctx: &Ctx, request: &DetailGet) -> Result<DetailReply> {
         DetailRef::PlanDiff { .. } | DetailRef::ReviewFile { .. } => unreachable!(),
     };
     let etag = match (&request.target, &body) {
-        (DetailRef::Terminal { .. }, DetailBody::Terminal(snapshot)) => {
-            digest(&(&request.target, &snapshot.lines, snapshot.live))?
-        }
+        (DetailRef::Terminal { .. }, DetailBody::Terminal(snapshot)) => digest(&(
+            &request.target,
+            &snapshot.lines,
+            &snapshot.rows,
+            snapshot.live,
+        ))?,
         _ => digest(&(&request.target, &body))?,
     };
     paging::check(cursor.as_ref(), &etag)?;

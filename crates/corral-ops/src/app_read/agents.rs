@@ -10,15 +10,13 @@ use corral_core::backend::HeadQuery;
 use corral_core::{AgentHostHead, GateResult, RunHead, TaskHead, UsageTotals};
 use corral_protocol::assistant::{EntryCard, EntryKind};
 use corral_protocol::detail::DetailBody;
-use corral_protocol::detail::session::{
-    SessionItem, SessionMessage, SessionPage, TerminalSnapshot,
-};
+use corral_protocol::detail::session::{SessionItem, SessionMessage, SessionPage};
 use corral_protocol::rows::{
     AgentRow, AgentStatus, AssistantLocation, AssistantRow, AssistantState,
 };
 use jiff::Timestamp;
 
-use super::{now, revision, short};
+use super::{revision, short};
 use crate::Ctx;
 
 #[path = "agent_transcript.rs"]
@@ -644,11 +642,9 @@ pub(super) fn terminal(ctx: &Ctx, id: &str) -> Result<DetailBody> {
         .pane_screen(pane)
         .context("reading live terminal screen")?
         .with_context(|| format!("not_found: terminal pane {pane} is gone"))?;
-    Ok(DetailBody::Terminal(TerminalSnapshot {
-        lines: transcript::screen(&screen),
-        captured_at: now(),
-        live: true,
-    }))
+    Ok(DetailBody::Terminal(super::terminal_screen::snapshot(
+        &screen,
+    )?))
 }
 
 /// Global summaries remain readable without a live assistant or loaded threads.

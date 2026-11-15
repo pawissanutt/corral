@@ -1,4 +1,4 @@
-//! The app's design tokens: the colours of `theme.json` by role, the two fonts in `assets/`, and the
+//! The app's design tokens: the colours of `theme.json` by role, the fonts in `assets/`, and the
 //! text size and row height of each form.
 
 use nsh_core::prelude::*;
@@ -92,12 +92,37 @@ pub fn color(token: Token) -> AdaptiveColor {
 
 pub const FONT_TEXT: &str = asset!("fonts/AtkinsonHyperlegibleNext-Regular.woff2").family;
 pub const FONT_MONO: &str = asset!("fonts/AtkinsonHyperlegibleMono-Regular.woff2").family;
-/// A pane's screen as read: the system's monospace, which draws box drawing, blocks and shapes at
-/// the letters' advance, so frames line up; `FONT_MONO` has none of those glyphs. NSH maps
-/// `ui-monospace`/`monospace` to each platform's own (SF Mono, Consolas, Pango's or Android's
-/// monospace); on the web `ui-monospace` is Safari's alone, so the named families give the
-/// other browsers a terminal face before the generic one.
-pub const FONT_SCREEN: &str = "ui-monospace, Menlo, \"DejaVu Sans Mono\", Consolas, monospace";
+/// A pane's screen as read: Cascadia Mono, the product's terminal face (its regular, bold and
+/// italic files are in `assets/fonts/`), so the screen looks the same for every owner whatever
+/// their own terminal's font; `FONT_MONO` has no box drawing. Its box drawing, blocks, braille and
+/// shapes take the letters' advance, so frames line up. A character it lacks falls to the
+/// system's monospace: NSH maps `ui-monospace`/`monospace` to each platform's own, and on the web
+/// `ui-monospace` is Safari's alone, so named families come before the generic one.
+pub const FONT_SCREEN: &str =
+    "Cascadia Mono, ui-monospace, Menlo, \"DejaVu Sans Mono\", Consolas, monospace";
+const _: () = assert!(
+    leads(
+        FONT_SCREEN,
+        asset!("fonts/CascadiaMono-Regular.woff2").family
+    ),
+    "FONT_SCREEN must start with the family the shipped Cascadia Mono file names"
+);
+
+/// Whether the family list `list` starts with `family`.
+const fn leads(list: &str, family: &str) -> bool {
+    let (list, family) = (list.as_bytes(), family.as_bytes());
+    if list.len() < family.len() {
+        return false;
+    }
+    let mut at = 0;
+    while at < family.len() {
+        if list[at] != family[at] {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
 
 /// Text size and row height for the form: Desktop 13 / 30, Phone 16 / 56, Terminal 13 / 16 (points).
 pub fn text_size(form: Form) -> f32 {
