@@ -181,6 +181,7 @@ pub(crate) fn plan_reviewer(
                     plan: plan.id.clone(),
                     review: review.id.clone(),
                 },
+                paid,
             )?
         {
             bail!("SuccessorAmbiguous: paid plan reviewer cannot relaunch");

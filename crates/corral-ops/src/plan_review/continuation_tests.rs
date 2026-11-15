@@ -145,7 +145,7 @@ fn quota(fx: &ts::Fx, source: &ContainerRef) -> policy::QuotaEvidence {
         state.generations[0].connection = config.resolve_candidate("pi", config.execution_candidate("pi", "sub")?)?.connection_binding()?;
         let now = corral_core::clock::now();
         let turn: AgentTurn = serde_json::from_value(json!({
-            "generation":1,"seq":1,"origin":{"kind":"bridge"},"started":now,"ended":now,"class":"provider_failed",
+            "generation":1,"seq":1,"origin":{"kind":"bridge"},"started":now,"ended":now,
             "provider_failure":{"version":1,"connection":"openai-subscription","category":"subscription_quota","scope":"account"}
         }))?;
         state.turns.push(turn);
@@ -546,7 +546,7 @@ fn hello(fx: &ts::Fx, host: &ts::Host, container: &ContainerRef) {
 
 #[test]
 fn planning_sweep_reads_only_keyed_evidence_after_role_opt_in() {
-    use crate::plan_dispatch::continuation::{due, enabled};
+    use crate::plan_dispatch::continuation::due;
     use corral_core::work::{Counter, HotScope, snapshot};
 
     let (mut fx, id, _, source) = fixture();
@@ -554,7 +554,10 @@ fn planning_sweep_reads_only_keyed_evidence_after_role_opt_in() {
     {
         let _hot = HotScope::enter();
         let before = snapshot();
-        assert!(enabled(&fx.ctx.store.config));
+        assert!(policy::configured(
+            &fx.ctx.store.config,
+            corral_core::agent::AgentRole::Planner
+        ));
         assert!(!due(&fx.ctx, &head).unwrap());
         assert_eq!(snapshot(), before);
     }
@@ -605,7 +608,10 @@ fn planning_sweep_reads_only_keyed_evidence_after_role_opt_in() {
         }
         let _hot = HotScope::enter();
         let before = snapshot();
-        assert!(!(enabled(&fx.ctx.store.config) && due(&fx.ctx, &head).unwrap()));
+        assert!(
+            !(policy::configured(&fx.ctx.store.config, corral_core::agent::AgentRole::Planner)
+                && due(&fx.ctx, &head).unwrap())
+        );
         let after = snapshot();
         if paid {
             assert_eq!(

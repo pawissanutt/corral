@@ -54,7 +54,12 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let _span = corral_core::timing::span("sync.availability_advance_all");
     let mut changes = Vec::new();
     let mut panes: Option<HashMap<String, PaneInfo>> = None;
-    let planning_enabled = crate::plan_dispatch::continuation::enabled(&ctx.store.config);
+    let planning_enabled =
+        super::policy::configured(&ctx.store.config, corral_core::agent::AgentRole::Planner)
+            || super::policy::configured(
+                &ctx.store.config,
+                corral_core::agent::AgentRole::PlanReviewer,
+            );
     for head in ctx
         .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?
