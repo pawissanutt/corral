@@ -163,6 +163,34 @@ pub(crate) fn plan_reviewer(
             }
         }
     } else {
+        if let Some(plan) = task.plans.last()
+            && let Some(review) = plan.reviews.last()
+            && crate::plan_review::has_prepared(ctx, &task.id, &plan.id)?
+            && !crate::plan_dispatch::continuation::resume_allowed(
+                ctx,
+                &corral_core::agent::ContainerRef::PlanReviewer {
+                    task: task.id.clone(),
+                    plan: plan.id.clone(),
+                    review: review.id.clone(),
+                },
+            )?
+        {
+            bail!("SuccessorAmbiguous: paid plan reviewer cannot relaunch");
+        }
+        if let Some(id) = super::continuation::prepared_candidate(
+            &ctx.store,
+            &task.id,
+            corral_core::agent::AgentRole::PlanReviewer,
+        )? {
+            let candidate = config.execution_candidate(&resolved.profile, &id)?;
+            let selected = config.resolve_candidate(&resolved.profile, candidate)?;
+            let planner = corral_core::plan_policy::planner(task)?
+                .map(corral_core::plan_policy::PlannerProfile::from);
+            corral_core::plan_policy::independent_resolved_reviewer(
+                config, task, planner, &selected,
+            )?;
+            return Ok(selected);
+        }
         let author = config
             .task_review_policy(task)
             .cross_family_required()

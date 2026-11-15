@@ -62,18 +62,15 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             continue;
         }
         let task = head.to_shell_task()?;
-        let Some(subject) = continuation(&task) else {
-            continue;
-        };
-        if selected(ctx, &task.id, subject.run, &subject.episode)?.is_none() {
-            continue;
-        }
         // The stall driver and owner replies share this claim: the recheck and the
         // replacement cannot interleave with a retry prompt or a reply.
         let Some(_delivery) = ctx.store.try_lock(&format!("delivery-{}", task.id))? else {
             continue;
         };
         let task = ctx.store.get(&task.id)?;
+        changes.extend(crate::plan_dispatch::continuation::advance_all(
+            ctx, &task, now,
+        )?);
         let Some(subject) = continuation(&task) else {
             continue;
         };

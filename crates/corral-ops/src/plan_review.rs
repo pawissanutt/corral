@@ -9,6 +9,9 @@ use serde_json::json;
 use crate::{Ctx, plan};
 
 pub(crate) mod context;
+pub(crate) mod continuation;
+#[cfg(all(test, unix))]
+mod continuation_tests;
 mod launch;
 pub(crate) mod prepared;
 use launch::review_with_origin;
@@ -129,6 +132,16 @@ pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
         return Ok(false);
     };
     preparation.check(task.plans.last().context("prepared plan disappeared")?)?;
+    if !crate::plan_dispatch::continuation::resume_allowed(
+        ctx,
+        &corral_core::agent::ContainerRef::PlanReviewer {
+            task: task.id.clone(),
+            plan: preparation.plan.clone(),
+            review: preparation.review.id.clone(),
+        },
+    )? {
+        return Ok(true);
+    }
     if crate::operating::is_automatic(&preparation.authorization) {
         review_auto(ctx, &task.id)?;
     }
@@ -308,6 +321,7 @@ fn verdict_report_inner(
         if recovery.is_some() && accepted {
             task.dispatch_hold = true;
         }
+        continuation::close_pending(ctx, task)?;
         let p = current(task, input.plan)?;
         p.approval = accepted.then(|| PlanApproval {
             by: reviewer.clone(), at: corral_core::clock::now(), policy_digest: digest.clone(),

@@ -148,6 +148,7 @@ fn plan_submit_inner(
             Some(_) => bail!("planner run is not accepting submissions"),
             None => None,
         };
+        crate::plan_dispatch::continuation::close_current(ctx, task)?;
         previous = task.plans.last().cloned();
         if let Some(plan) = task.plans.last_mut() {
             crate::plan_review::terminalize_pending(plan, "Superseded by a new plan submission.");

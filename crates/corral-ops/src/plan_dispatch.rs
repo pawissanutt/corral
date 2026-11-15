@@ -12,6 +12,7 @@ use crate::dispatch::Admission;
 use crate::{Ctx, DispatchOpts, DispatchOutcome, prompt};
 
 mod claim;
+pub(crate) mod continuation;
 #[cfg(test)]
 mod snapshot_tests;
 
@@ -87,6 +88,7 @@ pub(crate) fn dispatch(
         None
     };
     let head = refreshed.as_ref().unwrap_or(head);
+    continuation::before_dispatch(ctx, head)?;
     let task = &head.shell_task()?;
     let project = task
         .project
@@ -149,7 +151,7 @@ pub(crate) fn dispatch(
             replacement_allowed(store, &*current, opts)?,
             "cancelled plan run requires explicit replacement dispatch with --plan"
         );
-        let reason = admission.reason(ctx, store, &*current, opts)?;
+        let reason = continuation::admission_reason(ctx, store, current, opts, admission, &id)?;
         if let Some(reason) = &reason {
             if !opts.queue_if_blocked {
                 bail!("cannot dispatch {}: {reason}", current.id);
@@ -755,6 +757,9 @@ pub(crate) fn resume_prepared(ctx: &Ctx, head: &TaskHead) -> Result<bool> {
     let Some(claim) = claim::load(task)? else {
         return Ok(false);
     };
+    if !continuation::resume_planner(ctx, head)? {
+        return Ok(true);
+    }
     let authorization = crate::operating::load(
         ctx,
         &task.id,

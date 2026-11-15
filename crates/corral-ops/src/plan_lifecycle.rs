@@ -167,6 +167,7 @@ pub(crate) fn fail(ctx: &Ctx, task: &Task, reason: &str, now: Timestamp) -> Resu
         t.status = Status::NeedsMe;
         t.queued = false;
         failed = true;
+        crate::plan_dispatch::continuation::close_current(ctx, t)?;
         ctx.store.log_event(
             Some(&task.id),
             "needs_me",
@@ -267,6 +268,7 @@ pub fn plan_cancel(ctx: &Ctx, id: &str) -> Result<Task> {
         } else {
             Status::Ready
         };
+        crate::plan_dispatch::continuation::close_current(ctx, t)?;
         ctx.store.log_event(
             Some(id),
             "plan_cancelled",
