@@ -129,18 +129,15 @@ pub(super) fn transfer(
             .context("LegacyBinding"),
     )?;
     // A previous Prepared attempt is not an invitation to launch it again after a crash.
-    let previous = continuation::INTENTS
-        .list(&ctx.store)
-        .context("reading worker continuation intents")?;
+    let previous = continuation::from_source(&ctx.store, &source)
+        .context("reading worker continuation intent")?;
     checked(
         ctx,
         &source,
         PauseReason::SuccessorAmbiguous,
         (|| {
             ensure!(
-                !previous
-                    .iter()
-                    .any(|(_, intent)| intent.source.container == source),
+                previous.is_none(),
                 "SuccessorAmbiguous: worker already has a successor intent"
             );
             Ok(())
@@ -310,9 +307,10 @@ pub(super) fn close(ctx: &Ctx, head: &TaskHead, prev: &Run) -> Result<()> {
         .filter(|r| r.id == prev.id)
         .and_then(|r| r.agent_host.as_ref())
         && (state.paid_episode.is_some()
-            || continuation::intent_for(&ctx.store, &source, state.binding.generation)
-                .context("reading superseded worker intent")?
-                .is_some())
+            || (policy::configured(&ctx.store.config, AgentRole::Worker)
+                && continuation::latest_for(&ctx.store, &source)
+                    .context("reading superseded worker intent")?
+                    .is_some()))
     {
         continuation::close(ctx, &source, "worker superseded without transfer")
             .context("closing superseded worker paid episode")?;
@@ -328,7 +326,7 @@ pub(super) fn finish<T>(
     if let Some(intent) = intent {
         checked(
             ctx,
-            &intent.source.container,
+            &intent.successor.container,
             PauseReason::SuccessorAmbiguous,
             result,
         )
@@ -348,7 +346,7 @@ pub(super) fn launched(
     {
         continuation::pause(
             ctx,
-            &intent.source.container,
+            &intent.successor.container,
             PauseReason::SuccessorAmbiguous,
             "worker successor did not launch",
         )?;

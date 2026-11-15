@@ -556,7 +556,25 @@ pub(crate) fn bind_route<T: corral_core::TaskRef + ?Sized>(
         ProfileRole::Implementation => corral_core::agent::AgentRole::Worker,
         _ => corral_core::agent::AgentRole::Planner,
     };
-    if let Some(id) = continuation::prepared_candidate(&ctx.store, task.id(), agent_role)? {
+    let previous = if role == ProfileRole::Implementation {
+        task.current_run_head()?
+    } else {
+        None
+    };
+    let paid = policy::configured(config, agent_role)
+        || match agent_role {
+            corral_core::agent::AgentRole::Worker => previous.as_ref().is_some_and(|r| {
+                r.agent_host
+                    .as_ref()
+                    .is_some_and(|h| h.paid_episode.is_some())
+            }),
+            _ => task.last_plan_run_head()?.is_some_and(|r| {
+                r.agent_host
+                    .as_ref()
+                    .is_some_and(|h| h.paid_episode.is_some())
+            }),
+        };
+    if paid && let Some(id) = continuation::prepared_candidate(&ctx.store, task.id(), agent_role)? {
         let candidate = config.execution_candidate(&decision.profile, &id)?;
         let resolved = config.resolve_candidate(&decision.profile, candidate)?;
         apply(
@@ -573,7 +591,7 @@ pub(crate) fn bind_route<T: corral_core::TaskRef + ?Sized>(
         return Ok(());
     }
     if role == ProfileRole::Implementation
-        && let Some(previous) = task.current_run_head()?
+        && let Some(previous) = previous
         && let Some(episode) = load(ctx, &run_episode_head(task.id(), &previous))?
         && episode.profile == decision.profile
         && let Some(next) = episode.current().filter(|attempt| {

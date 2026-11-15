@@ -2,10 +2,13 @@
 //! The recovery lease serializes quota transfer with every ordinary PM recovery entry.
 use anyhow::{Context, Result, ensure};
 use corral_core::agent::{AgentPm, AgentRole, AgentRunState, ContainerRef, pm_state};
+use corral_core::availability::AvailabilityClass;
+use corral_core::connection::BillingMode;
 use corral_core::paid_episode::PaidBinding;
 use corral_core::records::RecordArea;
 use corral_core::{ProfileRole, ResolvedProfile};
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 use crate::agent::recovery::{PmRecoveryInProgress, PmRecoveryLease};
@@ -13,6 +16,66 @@ use crate::availability::{checkpoint, continuation, policy};
 use continuation::{ContextSource, IntentPhase, PauseReason, SubjectRevision, Transfer};
 
 const PAUSED: RecordArea<u32> = RecordArea::new("pm-continuation-pauses");
+const SIGNAL: RecordArea<QuotaSignal> = RecordArea::new("pm-continuation-signals");
+
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
+struct QuotaSignal {
+    generation: u32,
+    turn: u64,
+    quota: bool,
+}
+
+/// Publish from the native event transaction; never discover quota by scanning PM history.
+pub(crate) fn record_signal(ctx: &Ctx, state: &AgentRunState) -> Result<()> {
+    let config = &ctx.store.config;
+    if state.binding.role != AgentRole::Pm
+        || (!policy::profile_configured(config, &config.pm.agent, AgentRole::Pm)
+            && state.paid_episode.is_none())
+    {
+        return Ok(());
+    }
+    let Some(turn) = state
+        .turns
+        .iter()
+        .filter(|turn| turn.generation == state.binding.generation)
+        .max_by_key(|turn| turn.seq)
+    else {
+        return Ok(());
+    };
+    let Some(binding) = state
+        .current_generation()
+        .and_then(|g| g.connection.as_ref())
+    else {
+        return Ok(());
+    };
+    if binding.validate().is_err() || binding.connection.billing() != BillingMode::Subscription {
+        return Ok(());
+    }
+    let Some(failure) = turn.provider_failure.as_ref() else {
+        return Ok(());
+    };
+    if failure.connection != binding.connection
+        || !matches!(
+            failure.availability(),
+            Some(AvailabilityClass::QuotaExhausted { .. })
+        )
+    {
+        return Ok(());
+    }
+    let signal = QuotaSignal {
+        generation: turn.generation,
+        turn: turn.seq,
+        quota: true,
+    };
+    if SIGNAL.load(&ctx.store, "latest")?.is_some_and(|old| {
+        (old.generation, old.turn) > (signal.generation, signal.turn) || old == signal
+    }) {
+        return Ok(());
+    }
+    // Only confirmed quota events touch this sticky signal. The supervisor revalidates
+    // the canonical latest turn before attaching any financial root.
+    SIGNAL.save(&ctx.store, "latest", &signal)
+}
 
 fn subject() -> SubjectRevision {
     SubjectRevision {
@@ -22,70 +85,121 @@ fn subject() -> SubjectRevision {
     }
 }
 
+fn clear_signal(ctx: &Ctx, generation: u32) -> Result<()> {
+    if let Some(mut signal) = SIGNAL.load(&ctx.store, "latest")?
+        && signal.generation == generation
+    {
+        signal.quota = false;
+        SIGNAL.save(&ctx.store, "latest", &signal)?;
+    }
+    Ok(())
+}
+
 fn pause(ctx: &Ctx, generation: u32, reason: PauseReason) -> Result<()> {
     continuation::pause(ctx, &ContainerRef::Pm, reason, "PM continuation refused")?;
-    PAUSED.save(&ctx.store, "generation", &generation)
+    PAUSED.save(&ctx.store, "generation", &generation)?;
+    clear_signal(ctx, generation)
 }
 
 /// Busy recovery is owned by the winner; the supervisor must not open a second PM.
-pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<()> {
+pub(crate) fn advance(ctx: &Ctx, current: &AgentPm, now: Timestamp) -> Result<bool> {
+    let config = &ctx.store.config;
+    if !policy::profile_configured(config, &config.pm.agent, AgentRole::Pm)
+        && !has_paid_state(&current.state)
+    {
+        return Ok(false);
+    }
+    if !SIGNAL
+        .load(&ctx.store, "latest")?
+        .is_some_and(|signal| signal.quota)
+    {
+        return Ok(false);
+    }
     let lease = match PmRecoveryLease::acquire(ctx) {
         Ok(lease) => lease,
-        Err(error) if error.downcast_ref::<PmRecoveryInProgress>().is_some() => return Ok(()),
+        Err(error) if error.downcast_ref::<PmRecoveryInProgress>().is_some() => return Ok(false),
         Err(error) => return Err(error),
     };
     if lease.pending(ctx) {
-        return Ok(());
+        return Ok(false);
     }
-    let Some(pm) =
-        pm_state::load_selected(&ctx.store, &pm_state::Selection::current().family("turns"))?
+    let Some(signal) = SIGNAL
+        .load(&ctx.store, "latest")?
+        .filter(|signal| signal.quota)
     else {
-        return Ok(());
+        return Ok(false);
+    };
+    let selection = pm_state::Selection::current().key(
+        "turns",
+        format!("turn:{}:{}", signal.generation, signal.turn),
+    );
+    let Some(pm) = pm_state::load_selected(&ctx.store, &selection)? else {
+        return Ok(false);
     };
     let n = pm.state.binding.generation;
+    if n != signal.generation {
+        clear_signal(ctx, signal.generation)?;
+        return Ok(false);
+    }
     if PAUSED.load(&ctx.store, "generation")? == Some(n) {
-        return Ok(());
+        clear_signal(ctx, n)?;
+        return Ok(false);
     }
     let Some(evidence) = policy::quota_evidence(&pm.state, None) else {
-        return Ok(());
+        // A provider error signals before its turn ends. Keep it until that boundary.
+        return Ok(false);
     };
     if evidence.at > now {
-        return Ok(());
+        return Ok(false);
     }
     let pm = pm_state::load(&ctx.store)?.context("bound PM disappeared during quota assessment")?;
+    if pm.state.binding.generation != n
+        || pm
+            .state
+            .turns
+            .iter()
+            .filter(|turn| turn.generation == n)
+            .max_by_key(|turn| turn.seq)
+            .is_none_or(|turn| turn.seq != signal.turn || turn.ended.is_none())
+        || policy::quota_evidence(&pm.state, None).is_none_or(|e| e.turn != signal.turn)
+    {
+        clear_signal(ctx, n)?;
+        return Ok(false);
+    }
+    let refuse = |reason| pause(ctx, n, reason).map(|()| false);
     let Some(source) = pm
         .state
         .current_generation()
         .and_then(|g| g.connection.as_ref())
     else {
-        return pause(ctx, n, PauseReason::LegacyBinding);
+        return refuse(PauseReason::LegacyBinding);
     };
     let profile = ctx.store.config_layers()?.config()?.pm.agent;
     if policy::approval(ctx, &profile, AgentRole::Pm).is_err() {
-        return pause(ctx, n, PauseReason::PolicyNotApproved);
+        return refuse(PauseReason::PolicyNotApproved);
     }
     let target = match policy::target(ctx, &profile, AgentRole::Pm, source) {
         Ok(target) => target,
-        Err(_) => return pause(ctx, n, PauseReason::NoApprovedCandidate),
+        Err(_) => return refuse(PauseReason::NoApprovedCandidate),
     };
     // Pre-check before creating the financial root: a blocker leaves native state byte-equal.
     if !crate::pm_rotation::survey(ctx, n, false)?.0.is_empty() {
-        return pause(ctx, n, PauseReason::EnteringEffect);
+        return refuse(PauseReason::EnteringEffect);
     }
     if let Err(reason) = checkpoint::quiescent(&pm.state, n) {
-        return pause(ctx, n, reason);
+        return refuse(reason);
     }
     if super::save_native_context(ctx)
         .and_then(|path| std::fs::read(path).context("reading native PM continuation context"))
         .is_err()
     {
-        return pause(ctx, n, PauseReason::MissingCheckpoint);
+        return refuse(PauseReason::MissingCheckpoint);
     }
     if policy::ensure_root(ctx, &ContainerRef::Pm, &profile, &subject()).is_err() {
-        return pause(ctx, n, PauseReason::PolicyNotApproved);
+        return refuse(PauseReason::PolicyNotApproved);
     }
     if crate::agent::hooks::pm::preflight(ctx, Some(&target.resolved)).is_err() {
-        return pause(ctx, n, PauseReason::UnsupportedHost);
+        return refuse(PauseReason::UnsupportedHost);
     }
     let decide = || frozen(ctx, &pm, &profile, &target, &evidence.summary);
     match super::successor(
@@ -96,7 +210,10 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<()> {
         Some(&decide),
         Some(&target.resolved),
     ) {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            clear_signal(ctx, n)?;
+            Ok(true)
+        }
         Err(error) => {
             pause(ctx, n, PauseReason::SuccessorAmbiguous)?;
             Err(error.context("launching PM continuation"))
@@ -122,6 +239,18 @@ fn frozen(
     }
     let pm = pm_state::load(&ctx.store)?.context("PM disappeared during continuation")?;
     if pm.state.binding.generation != n {
+        return refuse(PauseReason::SubjectChanged);
+    }
+    let expected = policy::quota_evidence(&previous.state, None);
+    let latest = pm
+        .state
+        .turns
+        .iter()
+        .filter(|turn| turn.generation == n)
+        .max_by_key(|turn| turn.seq);
+    if latest.is_none_or(|turn| {
+        turn.ended.is_none() || expected.as_ref().is_none_or(|e| e.turn != turn.seq)
+    }) {
         return refuse(PauseReason::SubjectChanged);
     }
     let Some(binding) = pm
@@ -215,7 +344,10 @@ pub(crate) fn recovery_profile(ctx: &Ctx, state: &AgentRunState) -> Result<Resol
 }
 
 /// Called after recovery's fence, before opening n+1. Unbound/paused successors never retry.
-pub(crate) fn regenerate(ctx: &Ctx) -> Result<()> {
+pub(crate) fn regenerate(ctx: &Ctx, state: &AgentRunState) -> Result<()> {
+    if !has_paid_state(state) {
+        return Ok(());
+    }
     if let Err(error) = continuation::regenerate(ctx, &ContainerRef::Pm) {
         continuation::pause(
             ctx,
@@ -228,7 +360,18 @@ pub(crate) fn regenerate(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+fn has_paid_state(state: &AgentRunState) -> bool {
+    state.paid_episode.is_some()
+        || state
+            .current_generation()
+            .and_then(|g| g.connection.as_ref())
+            .is_some_and(|binding| binding.connection.api_key())
+}
+
 pub(crate) fn require_recoverable(ctx: &Ctx, state: &AgentRunState) -> Result<()> {
+    if !has_paid_state(state) {
+        return Ok(());
+    }
     let n = state.binding.generation;
     for generation in [n, n.saturating_add(1)] {
         if let Some(intent) = continuation::intent_for(&ctx.store, &ContainerRef::Pm, generation)?

@@ -2,10 +2,15 @@ use super::*;
 use crate::agent::BindTarget;
 use crate::agent::bridge::fixture::{self as f, Fx, HostProc, SESSION};
 use crate::agent::test_support as ts;
-use corral_core::agent::{AgentTurn, paths};
+use corral_core::agent::paths;
 use corral_core::connection::ConnectionBinding;
 use corral_core::inbox::Recipient;
 use serde_json::{Value, json};
+
+fn advance_current(ctx: &Ctx, now: Timestamp) -> Result<bool> {
+    let pm = pm_state::load_current(&ctx.store)?.context("fixture PM is missing")?;
+    advance(ctx, &pm, now)
+}
 
 fn fixture() -> (Fx, ts::Host, HostProc, ConnectionBinding) {
     let mut fx = crate::agent::hooks::pm::tests::fixture();
@@ -82,12 +87,6 @@ fn fixture() -> (Fx, ts::Host, HostProc, ConnectionBinding) {
     continuation::with_state(&fx.ctx, &ContainerRef::Pm, |state| {
         state.generations[0].connection = Some(subscription);
         let now = fx.ctx.store.now();
-        state.turns.push(serde_json::from_value::<AgentTurn>(json!({
-            "generation":1,"seq":1,"origin":{"kind":"bridge"},"started":now,"ended":now,
-            "class":"provider_failed", "provider_failure":{
-                "version":1,"connection":"openai-subscription","category":"subscription_quota","scope":"account"
-            }
-        }))?);
         state.receipts.push(ts::receipt(&bound, "owner-action", "reply", "committed", json!({"reply":"recorded"})));
         state.questions.push(serde_json::from_value(json!({
             "version":1,"key":"pm/Q1","revision":1,
@@ -98,6 +97,32 @@ fn fixture() -> (Fx, ts::Host, HostProc, ConnectionBinding) {
         }))?);
         Ok(())
     }).unwrap();
+    // Exercise the quota-only publication hook while the provider-failed turn is open.
+    let failure: corral_core::availability::ProviderFailure = serde_json::from_value(json!({
+        "version":1,"connection":"openai-subscription","category":"subscription_quota","scope":"account"
+    })).unwrap();
+    for (seq, payload) in [
+        (
+            1,
+            json!({"kind":"turn_started","turn":1,"provider":"openai-codex","model":"gpt-fixture"}),
+        ),
+        (
+            2,
+            json!({"kind":"provider_error","turn":1,"class":failure.class(),"failure":failure}),
+        ),
+        (3, json!({"kind":"turn_ended","turn":1})),
+    ] {
+        let request = crate::agent::event_request_id(1, seq);
+        ts::committed(
+            &crate::agent::call(
+                &fx.ctx,
+                "event",
+                &ts::envelope(&bound, "event", &request, payload, false),
+            )
+            .unwrap(),
+        );
+    }
+    assert!(SIGNAL.load(&fx.ctx.store, "latest").unwrap().unwrap().quota);
     (fx, bound, host, api)
 }
 
@@ -105,7 +130,7 @@ fn fixture() -> (Fx, ts::Host, HostProc, ConnectionBinding) {
 fn pm_continuation_retains_container_fences_generation_and_preserves_native_journals() {
     let (fx, _bound, mut host, api) = fixture();
     let before = pm_state::load(&fx.ctx.store).unwrap().unwrap();
-    advance(&fx.ctx, fx.ctx.store.now()).unwrap();
+    assert!(advance_current(&fx.ctx, fx.ctx.store.now()).unwrap());
     let after = pm_state::load(&fx.ctx.store).unwrap().unwrap();
     assert_eq!(after.pane, before.pane);
     assert_eq!(
@@ -186,10 +211,10 @@ fn pm_continuation_queued_input_pauses_without_changing_generation_or_journals()
     }})));
     std::fs::write(path, text).unwrap();
     let before = pm_state::load(&fx.ctx.store).unwrap();
-    advance(&fx.ctx, fx.ctx.store.now()).unwrap();
+    assert!(!advance_current(&fx.ctx, fx.ctx.store.now()).unwrap());
     assert_eq!(pm_state::load(&fx.ctx.store).unwrap(), before);
     assert_eq!(fx.events("continuation_paused").len(), 1);
-    advance(&fx.ctx, fx.ctx.store.now()).unwrap();
+    assert!(!advance_current(&fx.ctx, fx.ctx.store.now()).unwrap());
     assert_eq!(fx.events("continuation_paused").len(), 1);
     assert!(fx.calls("pane run").is_empty());
     assert!(!host.reaped());
@@ -202,12 +227,12 @@ fn pm_continuation_concurrent_advance_skips_the_recovery_in_progress() {
     let winner = PmRecoveryLease::acquire(&fx.ctx).unwrap();
     let error = PmRecoveryLease::acquire(&fx.ctx).err().unwrap();
     assert!(error.downcast_ref::<PmRecoveryInProgress>().is_some());
-    advance(&fx.ctx, fx.ctx.store.now()).unwrap();
+    assert!(!advance_current(&fx.ctx, fx.ctx.store.now()).unwrap());
     assert_eq!(pm_state::load(&fx.ctx.store).unwrap(), before);
     assert!(fx.calls("pane run").is_empty());
     assert!(!host.reaped());
     drop(winner);
-    advance(&fx.ctx, fx.ctx.store.now()).unwrap();
+    assert!(advance_current(&fx.ctx, fx.ctx.store.now()).unwrap());
     assert_eq!(
         pm_state::load(&fx.ctx.store)
             .unwrap()
@@ -229,4 +254,80 @@ fn pm_continuation_concurrent_advance_skips_the_recovery_in_progress() {
             .binding
             .store
     );
+}
+
+#[test]
+fn pm_continuation_removed_permission_still_pauses_an_existing_paid_root() {
+    let (mut fx, _bound, mut host, _) = fixture();
+    policy::ensure_root(&fx.ctx, &ContainerRef::Pm, "pm-pi", &subject()).unwrap();
+    fx.ctx
+        .store
+        .config
+        .profiles
+        .get_mut("pm-pi")
+        .unwrap()
+        .metadata
+        .as_mut()
+        .unwrap()
+        .fallback
+        .as_mut()
+        .unwrap()
+        .paid_roles
+        .clear();
+    fx.ctx.store.save_config().unwrap();
+    let before = pm_state::load(&fx.ctx.store).unwrap();
+    assert!(!advance_current(&fx.ctx, fx.ctx.store.now()).unwrap());
+    assert_eq!(pm_state::load(&fx.ctx.store).unwrap(), before);
+    let paused = fx.events("continuation_paused");
+    assert_eq!(paused.len(), 1);
+    assert_eq!(paused[0].detail["pause"], "policy_not_approved");
+    assert!(fx.calls("pane run").is_empty());
+    assert!(!host.reaped());
+}
+
+#[test]
+fn pm_continuation_rechecks_sticky_quota_before_attaching_a_paid_root() {
+    let (fx, _bound, mut host, _) = fixture();
+    let before = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+    continuation::with_state(&fx.ctx, &ContainerRef::Pm, |state| {
+        state.turns.push(serde_json::from_value(json!({
+            "generation":1,"seq":2,"origin":{"kind":"bridge"},"started":fx.ctx.store.now()
+        }))?);
+        // Ordinary events cannot clear the previous quota signal.
+        record_signal(&fx.ctx, state)
+    })
+    .unwrap();
+    record_signal(&fx.ctx, &before.state).unwrap();
+    assert!(!advance_current(&fx.ctx, fx.ctx.store.now()).unwrap());
+    assert!(
+        pm_state::load_current(&fx.ctx.store)
+            .unwrap()
+            .unwrap()
+            .state
+            .paid_episode
+            .is_none()
+    );
+    // The supervisor consumed the stale signal; idle passes never acquire recovery.
+    let _policy = fx.ctx.store.try_lock("pm-policy").unwrap().unwrap();
+    assert!(!advance_current(&fx.ctx, fx.ctx.store.now()).unwrap());
+    assert!(fx.calls("pane run").is_empty());
+    assert!(!host.reaped());
+}
+
+#[test]
+fn pm_continuation_disabled_probe_adds_no_native_or_record_work() {
+    let fx = ts::fx();
+    let binding = serde_json::from_value(json!({
+        "role":"pm","store":paths::store_id(&fx.ctx.store),"project":"",
+        "generation":1,"health":"healthy"
+    }))
+    .unwrap();
+    let current = AgentPm::new("unused".into(), AgentRunState::new(binding));
+    let now = fx.ctx.store.now();
+    let before = corral_core::work::snapshot();
+    assert!(!advance(&fx.ctx, &current, now).unwrap());
+    let delta = corral_core::work::snapshot().since(&before);
+    for counter in corral_core::work::Counter::ALL {
+        assert_eq!(delta.cells(counter).total, 0, "{counter:?}");
+    }
 }

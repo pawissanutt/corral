@@ -286,6 +286,27 @@ fn prompt_pm<T: TaskRef + ?Sized>(
     Ok(pane)
 }
 
+fn check_linked_paid_launch(
+    ctx: &Ctx,
+    task: &TaskHead,
+    run: &RunHead,
+    pending_paid: &mut bool,
+) -> Result<()> {
+    if !*pending_paid
+        && run
+            .current_child
+            .as_deref()
+            .and_then(|child| child.agent_host.as_ref())
+            .is_some_and(|state| state.paid_episode.is_some())
+    {
+        *pending_paid = true;
+        if super::fallback::fallback_paid::launch_failed(ctx, &task.id)? {
+            bail!("SuccessorAmbiguous: an unbound paid review cannot be relaunched");
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn review_run_origin(
     ctx: &Ctx,
     id: &str,
@@ -293,11 +314,18 @@ pub(super) fn review_run_origin(
     origin: crate::operating::Origin,
     recovery: Option<&corral_core::RecoveryRecord>,
 ) -> Result<ReviewRecord> {
-    if super::fallback::fallback_paid::launch_failed(ctx, id)? {
-        bail!("SuccessorAmbiguous: an unbound paid review cannot be relaunched");
-    }
-    let result = review_run_inner(ctx, id, reviewer, origin, recovery);
-    if result.is_err() {
+    let mut pending_paid = false;
+    let mut cleanup_paid = false;
+    let result = review_run_inner(
+        ctx,
+        id,
+        reviewer,
+        origin,
+        recovery,
+        &mut pending_paid,
+        &mut cleanup_paid,
+    );
+    if result.is_err() && cleanup_paid {
         super::fallback::fallback_paid::launch_failed(ctx, id)?;
     }
     result
@@ -309,6 +337,8 @@ fn review_run_inner(
     reviewer: Option<&str>,
     origin: crate::operating::Origin,
     recovery: Option<&corral_core::RecoveryRecord>,
+    pending_paid: &mut bool,
+    cleanup_paid: &mut bool,
 ) -> Result<ReviewRecord> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     crate::recovery::require_no_pending(ctx, id, recovery)?;
@@ -344,6 +374,13 @@ fn review_run_inner(
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
+    *pending_paid = crate::availability::policy::configured(
+        &ctx.store.config,
+        corral_core::agent::AgentRole::Reviewer,
+    );
+    if *pending_paid && super::fallback::fallback_paid::launch_failed(ctx, id)? {
+        bail!("SuccessorAmbiguous: an unbound paid review cannot be relaunched");
+    }
     ctx.store.config.validate_review()?;
     let mut launch = crate::review_budget::ReviewLaunch::reserve_origin(
         ctx,
@@ -356,6 +393,7 @@ fn review_run_inner(
     if launch.restored() {
         let task = ctx.store.head(id)?;
         let run = current_run_head(&task)?;
+        check_linked_paid_launch(ctx, &task, &run, pending_paid)?;
         let routed = run.review.as_ref().and_then(|r| r.route.as_deref());
         let profiles: Vec<&str> = routed
             .map(|route| route.profile.as_str())
@@ -387,6 +425,7 @@ fn review_run_inner(
         );
     }
     let run = current_run_head(&task)?;
+    check_linked_paid_launch(ctx, &task, &run, pending_paid)?;
     let mut policy = ctx.store.config.task_review_policy(&task);
     let explicit = reviewer.is_some();
     let reviewer = crate::review_routing::choice(&ctx.store.config, &task, reviewer);
@@ -540,6 +579,7 @@ fn review_run_inner(
         }
     })?;
     if resolved.connection.is_some_and(|c| c.api_key()) {
+        *cleanup_paid = true;
         super::fallback::fallback_paid::prepare(
             ctx,
             &task,

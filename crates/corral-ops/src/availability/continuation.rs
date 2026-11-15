@@ -17,6 +17,9 @@ use serde_json::{Value, json};
 #[path = "continuation_close.rs"]
 mod closure;
 pub(crate) use closure::{close, close_in, close_task_in};
+#[path = "continuation_index.rs"]
+mod index;
+pub(crate) use index::{from_source, latest_for, task_intent};
 
 pub(crate) const INTENTS: RecordArea<ContinuationIntent> = RecordArea::new("role-continuations");
 
@@ -148,6 +151,7 @@ pub(crate) fn intent_for(
                 && intent.successor.generation == generation,
             "SuccessorAmbiguous"
         );
+        index::validate(store, intent)?;
     }
     Ok(intent)
 }
@@ -156,7 +160,8 @@ fn save(store: &Store, intent: &ContinuationIntent) -> Result<()> {
         store,
         &key(&intent.successor.container, intent.successor.generation)?,
         intent,
-    )
+    )?;
+    index::publish(store, intent)
 }
 fn approved(store: &Store, episode: &PaidEpisode, source: &ConnectionBinding) -> Result<()> {
     let config = store.config_layers()?.config()?;
@@ -313,30 +318,19 @@ pub(crate) fn prepare(ctx: &Ctx, mut transfer: Transfer) -> Result<ContinuationI
     with_state(ctx, &transfer.source, |state| {
         // Search by predecessor before any mutation, including after a retained generation
         // advanced. A different successor or checkpoint must not rewrite any durable bytes.
-        let previous = INTENTS
-            .list(&ctx.store)?
-            .into_iter()
-            .map(|(_, i)| i)
-            .filter(|i| {
-                i.source.container == transfer.source
-                    && (i.source.generation == state.binding.generation
-                        || i.phase == IntentPhase::Prepared
-                            && state.paid_episode.as_ref() == Some(&i.link))
-            })
-            .max_by_key(|i| i.source.generation);
+        let previous = from_source(&ctx.store, &transfer.source)?.filter(|i| {
+            i.source.generation == state.binding.generation
+                || i.phase == IntentPhase::Prepared && state.paid_episode.as_ref() == Some(&i.link)
+        });
         if let Some(intent) = previous {
-            ensure!(
-                intent.successor.container == transfer.successor
-                    && intent.successor.binding == transfer.target
-                    && intent.subject == transfer.subject
-                    && intent.context == transfer.context,
-                "SuccessorAmbiguous"
+            return index::matching(
+                intent,
+                &transfer.source,
+                &transfer.successor,
+                &transfer.target,
+                &transfer.subject,
+                &transfer.context,
             );
-            ensure!(
-                matches!(intent.phase, IntentPhase::Prepared | IntentPhase::Active),
-                "SuccessorAmbiguous"
-            );
-            return Ok(intent);
         }
         let source = PaidBinding {
             container: transfer.source.clone(),
@@ -348,6 +342,20 @@ pub(crate) fn prepare(ctx: &Ctx, mut transfer: Transfer) -> Result<ContinuationI
         };
         let source_link = state.paid_episode.clone().context("PolicyNotApproved")?;
         let mut episode = ctx.store.paid_episode(&source_link.episode)?;
+        // The financial row is canonical if an index is absent. Never interpret a lost
+        // pointer as permission to prepare a second successor.
+        if let PaidPhase::Prepared { successor, .. } = &episode.phase {
+            let intent = intent_for(&ctx.store, &successor.container, successor.generation)?
+                .context("SuccessorAmbiguous: prepared episode has no indexed intent")?;
+            return index::matching(
+                intent,
+                &transfer.source,
+                &transfer.successor,
+                &transfer.target,
+                &transfer.subject,
+                &transfer.context,
+            );
+        }
         approved(&ctx.store, &episode, &source.binding)?;
         ensure!(!state.binding.closing, "TerminalResult");
         subject_current(&ctx.store, &source.container, &transfer.subject)?;
@@ -633,15 +641,7 @@ pub(crate) fn pause(
     reason: PauseReason,
     _detail: &str,
 ) -> Result<()> {
-    let intents = INTENTS.list(&ctx.store)?;
-    let intent = intents
-        .into_iter()
-        .map(|(_, i)| i)
-        .filter(|i| {
-            (&i.successor.container == container || &i.source.container == container)
-                && i.phase != IntentPhase::Closed
-        })
-        .max_by_key(|i| i.created);
+    let intent = latest_for(&ctx.store, container)?.filter(|i| i.phase != IntentPhase::Closed);
     let pending_generation = intent
         .as_ref()
         .filter(|i| i.successor.container == *container)
@@ -685,19 +685,10 @@ pub(crate) fn pause(
     };
     if let Some(task) = container.task() {
         ctx.store.update(task, |task| {
-            if needs_fence(
-                agent::container_state(task, container)
-                    .context("continuation container has no native state")?,
-            ) {
+            if agent::container_state(task, container).is_some_and(&needs_fence) {
                 close_task_in(&ctx.store, container, task, "continuation paused")?;
             }
-            write(
-                Some(
-                    agent::container_state_mut(task, container)
-                        .context("continuation container has no native state")?,
-                ),
-                true,
-            )
+            write(agent::container_state_mut(task, container), true)
         })?;
         return Ok(());
     }
@@ -712,30 +703,22 @@ pub(crate) fn prepared_candidate(
     task: &str,
     role: AgentRole,
 ) -> Result<Option<String>> {
-    let mut candidate = None;
-    for (_, intent) in INTENTS.list(store)? {
-        if intent.phase != IntentPhase::Prepared
-            || intent.role != role
-            || intent.successor.container.task() != Some(task)
-        {
-            continue;
-        }
-        let episode = store.paid_episode(&intent.link.episode)?;
-        approved(store, &episode, &intent.source.binding)?;
-        ensure!(
-            episode.epoch == intent.link.epoch
-                && matches!(&episode.phase,
-            PaidPhase::Prepared { successor, .. } if successor == &intent.successor),
-            "SuccessorAmbiguous"
-        );
-        ensure!(candidate.is_none(), "SuccessorAmbiguous");
-        candidate = Some(
-            intent
-                .successor
-                .binding
-                .candidate
-                .context("NoApprovedCandidate")?,
-        );
-    }
-    Ok(candidate)
+    let Some(intent) = task_intent(store, task, role)?.filter(|i| i.phase == IntentPhase::Prepared)
+    else {
+        return Ok(None);
+    };
+    let episode = store.paid_episode(&intent.link.episode)?;
+    approved(store, &episode, &intent.source.binding)?;
+    ensure!(
+        episode.epoch == intent.link.epoch
+            && matches!(&episode.phase, PaidPhase::Prepared { successor, .. } if successor == &intent.successor),
+        "SuccessorAmbiguous"
+    );
+    Ok(Some(
+        intent
+            .successor
+            .binding
+            .candidate
+            .context("NoApprovedCandidate")?,
+    ))
 }

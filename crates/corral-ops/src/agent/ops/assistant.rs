@@ -376,7 +376,7 @@ pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<
             ),
         ));
     }
-    if let Some(prepared) = crate::assistant::continuation::recover(ctx, id, pane)? {
+    if let Some(prepared) = crate::assistant::continuation::recover(ctx, id, pane, &container)? {
         return Ok((container.state.binding.generation, prepared));
     }
     crate::assistant::workflow::boundary::require_resume(&ctx.store, id, &container)?;

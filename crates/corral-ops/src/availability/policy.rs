@@ -26,6 +26,23 @@ pub(crate) struct QuotaEvidence {
     pub summary: String,
 }
 
+/// In-memory eligibility signal only; spending approval is revalidated at the boundary.
+pub(crate) fn profile_configured(config: &Config, profile: &str, role: AgentRole) -> bool {
+    config
+        .profiles
+        .get(profile)
+        .and_then(|p| p.metadata.as_ref())
+        .and_then(|m| m.fallback.as_ref())
+        .is_some_and(|f| f.paid_roles.contains(&role))
+}
+
+pub(crate) fn configured(config: &Config, role: AgentRole) -> bool {
+    config
+        .profiles
+        .keys()
+        .any(|profile| profile_configured(config, profile, role))
+}
+
 /// Frozen approval from the role profile's fallback; refusal never chooses another policy.
 pub(crate) fn approval(ctx: &Ctx, profile: &str, role: AgentRole) -> Result<PaidApproval> {
     approved(&ctx.store.config_layers()?.config()?, profile, role)
@@ -329,7 +346,9 @@ pub(crate) fn quota_evidence(
         .chain(latest)
         .filter(|turn| turn.generation == generation.n && turn.ended.is_some())
         .max_by_key(|turn| turn.seq)?;
-    if turn.class != Some(TurnClass::ProviderFailed) {
+    if matches!(state.binding.role, AgentRole::Worker | AgentRole::Reviewer)
+        && turn.class != Some(TurnClass::ProviderFailed)
+    {
         return None;
     }
     let failure = turn.provider_failure.as_ref()?;

@@ -316,6 +316,17 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 post_pending.push("event:agent_provider_error".into());
             }
         }
+        if kind == EventKind::ProviderError
+            && state.binding.role == corral_core::agent::AgentRole::Pm
+            && failure.as_ref().is_some_and(|failure| {
+                matches!(
+                    failure.availability(),
+                    Some(corral_core::AvailabilityClass::QuotaExhausted { .. })
+                )
+            })
+        {
+            crate::pm::continuation::record_signal(ctx, state)?;
+        }
         evict(&mut state.turns);
         let closes = settles_turn.is_some()
             && (state.binding.closing || closure == Some(ClosureReason::ReviewClosed));

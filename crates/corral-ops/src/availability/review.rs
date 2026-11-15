@@ -163,12 +163,13 @@ pub(crate) fn plan_reviewer(
             }
         }
     } else {
-        let paid = task
-            .plans
-            .last()
-            .and_then(|plan| plan.reviews.last())
-            .and_then(|review| review.agent_host.as_deref())
-            .is_some_and(crate::plan_dispatch::continuation::paid_bound);
+        let paid = super::policy::configured(config, corral_core::agent::AgentRole::PlanReviewer)
+            || task
+                .plans
+                .last()
+                .and_then(|plan| plan.reviews.last())
+                .and_then(|review| review.agent_host.as_deref())
+                .is_some_and(crate::plan_dispatch::continuation::paid_bound);
         if paid
             && let Some(plan) = task.plans.last()
             && let Some(review) = plan.reviews.last()

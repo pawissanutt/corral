@@ -398,10 +398,12 @@ fn watchdog(ctx: &Ctx, heartbeat: &mut Heartbeat, now: i64) -> Result<()> {
 }
 
 fn supervise_pm(ctx: &Ctx, heartbeat: &mut Heartbeat, now: i64) -> Result<bool> {
-    crate::pm::continuation::advance(ctx, ctx.store.now())?;
-    let Some(pm) = pm_state::load_current(&ctx.store)? else {
+    let Some(mut pm) = pm_state::load_current(&ctx.store)? else {
         return Ok(false);
     };
+    if crate::pm::continuation::advance(ctx, &pm, ctx.store.now())? {
+        pm = pm_state::load_current(&ctx.store)?.context("PM disappeared after continuation")?;
+    }
     let generation = pm.state.binding.generation;
     let mut force = false;
     let previous = heartbeat.generation;

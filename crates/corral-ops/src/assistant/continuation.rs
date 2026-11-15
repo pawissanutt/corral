@@ -217,8 +217,13 @@ fn transfer(ctx: &Ctx, id: &str, pane: &str, container: &AssistantContainer) -> 
 }
 
 /// A dead paid host resumes only its exact sticky binding, without replacing any journal.
-pub(crate) fn recover(ctx: &Ctx, id: &str, pane: &str) -> Result<Option<Prepared>> {
-    let container = ctx.store.get_assistant_container(id)?;
+/// The caller holds the scratch lease and supplies its already-validated stopped container.
+pub(crate) fn recover(
+    ctx: &Ctx,
+    id: &str,
+    pane: &str,
+    container: &AssistantContainer,
+) -> Result<Option<Prepared>> {
     let Some(binding) = container
         .state
         .current_generation()
@@ -229,7 +234,7 @@ pub(crate) fn recover(ctx: &Ctx, id: &str, pane: &str) -> Result<Option<Prepared
     };
     let source = reference(id);
     let recovered = (|| {
-        gate(ctx, id, &container)?;
+        gate(ctx, id, container)?;
         ensure!(
             ops::continued_session(ctx, id)?.is_some(),
             "MissingCheckpoint"
