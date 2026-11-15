@@ -148,8 +148,7 @@ app-serve port='4173':
 _unit:
     @socket=$({{ corral }} daemon socket); echo "corrald@$(basename "$(dirname "$socket")").service"
 
-# The answering daemon's process id; empty when none answers (status then reports pid 0) or
-# `corral` is not installed yet.
+# The answering daemon's process id; empty when none answers (status reports pid 0) or without `corral`.
 [private]
 _pid:
     @{{ corral }} daemon status --json 2>/dev/null | sed -n 's/.*"pid": *\([1-9][0-9]*\).*/\1/p' || true
