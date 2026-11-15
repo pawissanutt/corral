@@ -6,12 +6,14 @@ use sha2::{Digest, Sha256};
 // Picker bytes remain Arc-shared. Native file reads own one bounded allocation.
 enum Bytes {
     Picked(nsh_core::image::ImageData),
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     Local(Vec<u8>),
 }
 impl Bytes {
     fn as_slice(&self) -> &[u8] {
         match self {
             Self::Picked(data) => data,
+            #[cfg(any(test, not(target_arch = "wasm32")))]
             Self::Local(data) => data,
         }
     }

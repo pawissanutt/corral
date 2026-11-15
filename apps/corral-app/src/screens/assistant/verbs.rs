@@ -1,8 +1,7 @@
 //! The canonical record verbs of an assistant session (`work::record_verbs`), such as Revoke
 //! permissions: each a quiet outlined button that starts its verb through the work reducer (a
 //! verb with fields opens the one verb composer the shells host, a confirm-class verb asks this
-//! device first), with the model's reason after a verb that cannot run now. The fixture has no
-//! daemon records and shows none.
+//! device first), with the model's reason after a verb that cannot run now.
 
 use nsh_core::prelude::*;
 

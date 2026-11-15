@@ -33,7 +33,7 @@ use crate::ui::kit::button::tab_strip;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color, row_height, text_size};
 
-pub use phone::{live_task_phone, task_phone};
+pub use phone::live_task_phone;
 pub use verbs::verb_composer;
 pub(crate) use verbs::{verb_buttons, verb_menu, with_menu};
 
@@ -90,17 +90,13 @@ pub fn screen(app: AppState) -> AnyElement {
     }
 }
 
-/// The tab titles, from the model: the list's label, the Goals control's, and each tab enum's.
+/// The tab titles, from the model: the list's label, the Goals panel's, and each tab enum's.
 type Titles = Rc<Vec<(&'static str, SharedString)>>;
 
-fn titles(app: AppState) -> Titles {
-    let view = untracked(|| {
-        let env = app.env();
-        app.work.with(|state| work::workspace(state, env))
-    });
+fn titles() -> Titles {
     let mut titles: Vec<(&'static str, SharedString)> = vec![
-        (layout::WHO, view.list.label.into()),
-        (layout::GOALS, view.goals.label.to_string().into()),
+        (layout::WHO, work::GroupedList::LABEL.into()),
+        (layout::GOALS, list::GOALS_LABEL.into()),
     ];
     titles.extend(
         NowTab::ALL
@@ -120,8 +116,7 @@ fn titles(app: AppState) -> Titles {
     Rc::new(titles)
 }
 
-/// The title of panel `key`, tracked: in the Daemon state the lower tabs carry the board's count
-/// instead of the fixture's clock and count.
+/// The title of panel `key`, tracked: the lower tabs carry the board's count.
 fn title(app: AppState, titles: &Titles, key: &str) -> impl Fn() -> SharedString + use<> {
     let fixed = titles
         .iter()
@@ -131,10 +126,8 @@ fn title(app: AppState, titles: &Titles, key: &str) -> impl Fn() -> SharedString
         .into_iter()
         .find(|tab| layout::lower_panel(*tab) == key);
     move || match lower {
-        Some(tab) if app.daemon() => {
-            SharedString::from(app.feed.with(|feed| work::daemon_lower_label(tab, feed)))
-        }
-        _ => fixed.clone(),
+        Some(tab) => SharedString::from(app.feed.with(|feed| work::daemon_lower_label(tab, feed))),
+        None => fixed.clone(),
     }
 }
 
@@ -168,8 +161,8 @@ fn workspace(app: AppState) -> AnyElement {
         size.get()
             .map(|(width, height)| arrangement(width, height, minimum))
     });
-    let titles = titles(app);
-    // In the Daemon state the selected task's detail stays loaded for every panel showing it.
+    let titles = titles();
+    // The selected task's detail stays loaded for every panel showing it.
     keep_loaded(app, selected_task(app));
 
     let seen_reset = stored(app.now_reset.get_untracked());
@@ -220,14 +213,10 @@ fn workspace(app: AppState) -> AnyElement {
         if let Some(old) = pending.replace(Some(task)) {
             old.cancel();
         }
-        // A tab the user brought forward is the model's tab now. The fixture's Goals tab
-        // explains its filter; the daemon's Goals panel is the filter itself.
-        let daemon = untracked(|| app.daemon());
+        // A tab the user brought forward is the model's tab now.
         for key in shown {
-            match layout::panel_action(key) {
-                Some(work::Action::Goals) if daemon => {}
-                Some(action) => act(app, action),
-                None => {}
+            if let Some(action) = layout::panel_action(key) {
+                act(app, action);
             }
         }
     };

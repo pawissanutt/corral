@@ -1,7 +1,6 @@
-//! The phone's Now: the tab's root (the changes summary over the grouped two-line rows) and the
-//! task page pushed from a row (its story, actions, live tail and plan). In the Daemon state the
-//! root lists the daemon's board under its real summary, and the live task page shows corrald's
-//! detail of the task with its legal commands, its captured log tail and its real plan.
+//! The phone's Now: the tab's root (the board's summary over the grouped two-line rows) and the
+//! task page pushed from a row: the task's detail with its legal commands, its captured log tail
+//! and its plan.
 
 use nsh_core::prelude::*;
 
@@ -17,7 +16,7 @@ use crate::ui::kit::text::dim;
 use crate::ui::tokens::{Token, color};
 
 use super::context::{live_graph, tail};
-use super::inspector::{content, story};
+use super::inspector::content;
 use super::list::rows;
 use super::parts::{act, action_id, dim_when, keep_loaded, press, pressable, quiet, stale, wanted};
 
@@ -27,15 +26,11 @@ const RING: f32 = 2.0;
 /// Changes; a stale board adds its `as of` chip) and the grouped list.
 pub(super) fn root(app: AppState) -> AnyElement {
     let now = computed(move || {
-        if app.daemon() {
-            let selection = app.selection();
-            return app.feed.with(|feed| {
-                app.work
-                    .with(|state| work::daemon_phone_now(state, feed, &selection))
-            });
-        }
-        let env = app.env();
-        app.work.with(|state| work::phone_now(state, env))
+        let selection = app.selection();
+        app.feed.with(|feed| {
+            app.work
+                .with(|state| work::daemon_phone_now(state, feed, &selection))
+        })
     });
     let title = untracked(|| now.with(|now| now.title));
     let list: Memo<GroupedList> = computed(move || now.with(|now| now.list.clone()));
@@ -119,48 +114,10 @@ fn ask_head(app: AppState, label: String, action: Press) -> AnyElement {
         .into_element()
 }
 
-/// The fixture's task page pushed from a Now row (`Page::Task`): titled with the task id, back to
-/// Now, the header's trailing control asks about the task. Its body is the story, the Session,
-/// Ask and Review buttons, the live tail and the plan graph; the shell scrolls it.
-pub fn task_phone(app: AppState) -> PhonePage {
-    let page = computed(move || {
-        let env = app.env();
-        app.work.with(|state| work::task_page(state, env))
-    });
-    let (title, ask) = untracked(|| {
-        page.with(|page| {
-            (
-                page.title.to_owned(),
-                page.actions
-                    .iter()
-                    .find(|button| {
-                        matches!(button.action, Some(Press::Work(work::Action::AskAbout(_))))
-                    })
-                    .cloned(),
-            )
-        })
-    });
-    let trailing = ask.and_then(|button| {
-        let action = button.action?;
-        Some(ask_head(app, button.label.to_string(), action))
-    });
-    let body = dim_when(view(), stale(app))
-        .child(dynamic(move || page.with(|page| task_body(app, page))))
-        .into_element();
-    PhonePage {
-        title,
-        body,
-        trailing,
-        bar: None,
-        ask: false,
-        scroll: true,
-    }
-}
-
-/// The task page pushed for a daemon task (`Live::Task`): titled with its id, back to Now, the
-/// header asking about it. Its body is corrald's story of the task, the Session, Ask and Review
-/// buttons, the captured log tail and the task's real plan graph; the task's detail stays
-/// loaded while the page is open.
+/// The task page pushed for a task (`Live::Task`): titled with its id, back to Now, the header
+/// asking about it. Its body is the task's story, the Session, Ask and Review buttons, the
+/// captured log tail and the task's plan graph; the task's detail stays loaded while the page
+/// is open.
 pub fn live_task_phone(app: AppState, id: Id) -> PhonePage {
     let target = {
         let id = id.clone();
@@ -295,60 +252,8 @@ fn live_task_body(app: AppState, page: &LiveTaskView) -> AnyElement {
 fn body_buttons(app: AppState, buttons: &[work::Button]) -> Vec<AnyElement> {
     buttons
         .iter()
-        .filter(|button| {
-            !matches!(
-                button.action,
-                Some(Press::Ask { .. } | Press::Work(work::Action::AskAbout(_)))
-            )
-        })
+        .filter(|button| !matches!(button.action, Some(Press::Ask { .. })))
         .enumerate()
         .map(|(index, button)| pressable(app, button, index < 2))
         .collect()
-}
-
-fn task_body(app: AppState, page: &work::TaskPage) -> AnyElement {
-    let actions = body_buttons(app, &page.actions);
-    let plan = match page.plan.plan {
-        Some(plan) => crate::screens::plans::graph(app, plan, page.plan.member),
-        None => match page.plan.empty {
-            Some(empty) => dim(app, empty).into_element(),
-            None => view().into_element(),
-        },
-    };
-    view()
-        .child(
-            view()
-                .px(px(18.0))
-                .py(px(14.0))
-                .child(story(app, &page.story)),
-        )
-        .child(
-            view()
-                .flex_row()
-                .gap(px(8.0))
-                .px(px(18.0))
-                .pb(px(14.0))
-                .children(actions),
-        )
-        .child(group_header(
-            app,
-            page.live_label,
-            None,
-            Hue::Neutral,
-            Some(page.live_illustrative),
-        ))
-        .child(view().px(px(18.0)).pb(px(10.0)).child(tail(
-            app,
-            &page.tail,
-            Some("btn-live-session".into()),
-        )))
-        .child(group_header(
-            app,
-            page.plan.heading.clone(),
-            None,
-            Hue::Neutral,
-            None,
-        ))
-        .child(view().px(px(18.0)).pb(px(20.0)).child(plan))
-        .into_element()
 }

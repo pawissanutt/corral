@@ -363,8 +363,6 @@ impl State {
                 Vec::new()
             }
             Action::Go(destination) => vec![Effect::Go(destination)],
-            // Fixture-only controls are never built from served data.
-            _ => Vec::new(),
         }
     }
 
@@ -500,6 +498,7 @@ impl State {
         };
         let rev = detail.rev;
         let act = Act::new(
+            &mut self.ids,
             format!("Answer {key}"),
             Command::Question(QuestionCommand::Answer {
                 key: key.to_string(),
@@ -546,6 +545,7 @@ impl State {
         }
         let rev = detail.rev;
         let act = Act::new(
+            &mut self.ids,
             format!("Follow-up on {key}"),
             Command::Question(QuestionCommand::Followup {
                 key: key.to_string(),

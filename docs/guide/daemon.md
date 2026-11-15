@@ -68,7 +68,7 @@ WebSocket-to-Unix proxy.
 
 - `corral device pair`: offer a short-lived pairing link suitable for QR encoding (raw-code fallback),
   wait for the browser's explicit Pair action, then confirm only if its six-digit
-  code matches. Settings › Devices in an enrolled native app offers the same flow.
+  code matches. Settings › Devices on any administrator app, browser or native, offers the same flow.
 - `corral device list [--json]`: list native/browser records, including revoked ones.
 - `corral device revoke <id>`: revoke once and close every live session for that device.
   Pair and revoke require the owner; list is read-only. An absent daemon exits 2.
@@ -121,10 +121,15 @@ workspace store. The daemon's static key does not: it is a private `0600`
 `$XDG_STATE_HOME/corral/<store-id>/identity.key` file (fallback `$HOME/.local/state`).
 Keep that state directory to preserve browser pins across daemon restarts.
 
-Enrolled WebSocket sessions negotiate typed app subscriptions, detail pages, assistant
-chat and permitted actions. Device authority, canonical revisions and confirmations
-are checked on the daemon. Newly enrolled native devices and paired browsers have all authority flags, including `admin` and `assistant_act`, editable per device. Generic CLI commands, opaque CLI reads, nudges and shutdown
-remain refused on this carrier. Existing CLI executable/build checks are unchanged.
+Enrolled native and WebSocket sessions negotiate the same typed app subscriptions,
+details, chat and permitted actions. Browser and native authority is identical:
+new devices start with `reply`, `act`, `assistant`, `assistant_act`, `admin`, editable
+per device. Any admin device can pair/revoke or edit authority, but cannot raise its
+own flags. Setting `admin=true` needs fresh device-bound preview/proof. Authority
+changes notify active sessions to refresh authority and invalidate confirmations.
+Confirm/Admin commands need a tap against the daemon's current preview plus device
+proof, not biometric verification. Generic CLI commands, opaque CLI reads, nudges and
+shutdown remain refused on WebSocket; existing CLI executable/build checks are unchanged.
 
 ### Opt-in Web Push
 
@@ -197,16 +202,16 @@ read again every two seconds; it is published only when a row changed. A session
 is one bounded window of its transcript: `older` is the cursor of the window before it
 and stays valid after later writes, and the reply never has a continuation.
 
-A terminal detail of a running session with a pane is the pane's visible screen, read
-from herdr when the app asks for it (`herdr pane read --source visible --format ansi`):
-plain text rows, at most 200, marked `live`. The reply also carries parallel styled runs
-(colours, bold, dim, italic, underline, strike and inverse); the client owns the palette
-and default colours, and an over-budget screen falls back to plain lines. The app asks
-about once per second while the terminal
-is on screen, and an unchanged screen answers not-modified. Nothing is read while no
-one looks, topic reads never probe a pane, and a pane recorded for another herdr
-server is refused. The view is read-only: no keys are sent. A gate's terminal detail
-stays its recorded log.
+Pane-backed sessions negotiate `stream.terminal.v1`: acknowledged, scoped
+`Topic::Terminal` replacement windows with bounded scrollback and visible screen.
+Updates publish at most once per second; at most 200 rows and 52 KiB of line/style
+arrays fit inside the 60 KiB CONTROL envelope. Parallel styled runs retain colour,
+bold, dim, italic, underline, strike and inverse; over-budget styling falls back
+to plain lines. Slow consumers coalesce and closing a view unsubscribes.
+The reader verifies pane ownership against the configured herdr server. Session
+Send/Cancel use Act authority; raw Keys use Admin plus fresh device-bound proof.
+Input never queues offline. Daemon-hosted assistants have no raw terminal; a gate's
+terminal remains its recorded log.
 
 See [the app guide](../../apps/corral-app/README.md#live-data) for enrolment and recovery.
 

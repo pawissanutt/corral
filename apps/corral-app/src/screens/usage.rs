@@ -2,8 +2,8 @@
 //! mockup's `.ugrid` of provider cells over the profile table and the cost-per-day column; the
 //! phone stacks the provider blocks, the cost bars and the note; a terminal draws a gauge line
 //! per provider, the table in columns and the costs as Cell bars. Every word and figure is
-//! `model::usage`'s: the mockup's illustrative page in the fixture preview, corral's recorded
-//! usage in a daemon session (`shown`), whose loading, stale and failed states are said in place.
+//! `model::usage`'s, built from the selected feed's recorded usage (`shown`) in a daemon session
+//! and the explicit sample preview alike; loading, stale and failed states are said in place.
 //! The period switch runs its reducer.
 
 mod cellbar;
@@ -49,9 +49,7 @@ const COLUMN: f32 = 8.0;
 /// head), "usage" (the scroll), "seg-period-<n>", "usage-<provider id>", "usage-profiles",
 /// "usage-sessions", "usage-costs", "usage-quotas-<provider id>", "btn-retry-usage".
 pub fn screen(app: AppState) -> AnyElement {
-    if untracked(|| app.daemon()) {
-        shown::keep_loaded(app);
-    }
+    shown::keep_loaded(app);
     let data = computed(move || shown::shown(app));
     match app.form {
         Form::Desktop => desktop(app, data),

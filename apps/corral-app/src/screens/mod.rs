@@ -18,9 +18,7 @@ pub mod usage;
 use nsh_core::prelude::*;
 
 use crate::model::settings::connect;
-use crate::model::{
-    Availability, DataState, Destination, Form, Live, Page, Route, SettingsSection,
-};
+use crate::model::{Availability, DataState, Destination, Form, Live, Route, SettingsSection};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::page;
@@ -67,7 +65,7 @@ impl PhoneBar {
 /// state otherwise.
 ///
 /// `root` is a phone tab's root: its unavailable frame keeps the head's search button, so a
-/// disconnected phone still reaches the palette (the way into the fixture preview).
+/// disconnected phone still reaches the palette (the way into the labelled preview).
 pub fn destination(app: AppState, destination: Destination, root: bool) -> AnyElement {
     let gate = computed(move || (app.data.get(), unavailable(app, destination)));
     dynamic(move || {
@@ -98,25 +96,15 @@ pub fn content(app: AppState) -> AnyElement {
         )
     });
     dynamic(move || {
-        let (destination, top, data, unavailable) = route.get();
+        let (destination, top, _, unavailable) = route.get();
         untracked(move || {
             if unavailable {
                 return frame(app, destination, false);
             }
-            match (data, top) {
-                (DataState::Daemon, Some(Route::Live(Live::Question(key)))) => {
-                    inbox::live_question(app, key)
-                }
-                (DataState::Daemon, Some(Route::Live(Live::Session(id)))) => {
-                    agents::live_session(app, id)
-                }
-                (DataState::Daemon, Some(Route::Live(Live::Thread(id)))) => {
-                    assistant::live_thread(app, id)
-                }
-                (DataState::Fixture, Some(Route::Page(Page::Question))) => inbox::question(app),
-                (DataState::Fixture, Some(Route::Page(Page::Session(_)))) => agents::session(app),
-                (DataState::Fixture, Some(Route::Page(Page::Thread(_)))) => assistant::thread(app),
-                // Pages of the other source never render: its destination shows instead.
+            match top {
+                Some(Route::Live(Live::Question(key))) => inbox::live_question(app, key),
+                Some(Route::Live(Live::Session(id))) => agents::live_session(app, id),
+                Some(Route::Live(Live::Thread(id))) => assistant::live_thread(app, id),
                 _ => screen(app, destination),
             }
         })
@@ -124,12 +112,12 @@ pub fn content(app: AppState) -> AnyElement {
 }
 
 /// Tracked: whether the destination shows the unavailable frame instead of its screen.
-/// Settings never does: its sections say for themselves what waits for corrald.
+/// Settings never does: its sections say for themselves what waits for corrald. The preview
+/// feed serves what it illustrates through the same availability as corrald's.
 fn unavailable(app: AppState, destination: Destination) -> bool {
     match app.data.get() {
         DataState::Disconnected => destination != Destination::Settings,
-        DataState::Daemon => app.available(destination) != Availability::Ready,
-        DataState::Fixture => false,
+        DataState::Daemon | DataState::Fixture => app.available(destination) != Availability::Ready,
     }
 }
 
@@ -263,12 +251,9 @@ pub(crate) fn unavailable_body(app: AppState, destination: Destination) -> AnyEl
     let web = crate::client::pairing_supported();
     dynamic(move || {
         if app.data.get() != DataState::Disconnected {
-            let line = if app.daemon() {
-                app.feed
-                    .with(|feed| crate::model::health::unavailable_line(feed, destination))
-            } else {
-                app.snapshot().body_line(destination).into_owned()
-            };
+            let line = app
+                .feed
+                .with(|feed| crate::model::health::unavailable_line(feed, destination));
             return untracked(move || {
                 text(line)
                     .test_id("page-body")

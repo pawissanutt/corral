@@ -1,7 +1,7 @@
-//! What the Timeline shows, read tracked: the fixture preview's illustrative day, or the
-//! daemon's recorded Timeline and Burnup details in the viewer's time zone (the one the driver
-//! put on the feed). Also keeps those details requested while the page is open and revalidates
-//! them when the board moves; the burn-up is the scope the owner picked.
+//! What the Timeline shows, read tracked: the selected feed's recorded Timeline and Burnup
+//! details in the viewer's time zone (the one the driver put on the feed). Also keeps those
+//! details requested while the page is open and revalidates them when the board moves; the
+//! burn-up is the scope the owner picked.
 
 use corral_protocol::detail::DetailBody;
 use jiff::tz::TimeZone;
@@ -31,7 +31,6 @@ pub struct Shown {
     pub gaps: Vec<Gap>,
     /// Said when the range has no gaps worth a look.
     pub gaps_empty: Option<&'static str>,
-    pub gaps_note: &'static str,
     pub burnup: Option<BurnupSeries>,
     pub burnup_status: Status,
     /// How complete corrald's count of the burn-up is, said even when it found no change to plot.
@@ -80,19 +79,6 @@ fn zone(feed: &Feed) -> TimeZone {
 /// Tracked: the page's content now.
 pub fn shown(app: AppState) -> Shown {
     let state = app.timeline.get();
-    if !app.daemon() {
-        return Shown {
-            plot: Some(timeline::fixture_plot()),
-            status: Status::Ready,
-            gaps_title: timeline::gaps_title(state.range),
-            gaps: timeline::fixture_gaps(),
-            gaps_empty: None,
-            gaps_note: timeline::GAPS_DISCLOSURE,
-            burnup: Some(timeline::fixture_burnup()),
-            burnup_status: Status::Ready,
-            burnup_coverage: None,
-        };
-    }
     app.feed.with(|feed| {
         let now = minute(feed);
         let window = timeline::window(state.range, now, &zone(feed));
@@ -135,7 +121,6 @@ pub fn shown(app: AppState) -> Shown {
             status,
             gaps_title: timeline::gaps_title(state.range),
             gaps,
-            gaps_note: timeline::LIVE_GAPS_NOTE,
             burnup,
             burnup_status: state_of(burnup_cache),
             burnup_coverage,

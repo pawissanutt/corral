@@ -1,52 +1,39 @@
 //! Pure Review model: candidate-bound verdicts, evidence, line discussions and decisions.
 //!
-//! Two sources share one set of view types. The fixture replay of T-868 ([`page`],
-//! [`page_for_width`], [`phone`]) is the explicit preview; its controls change local state or
-//! say that nothing is sent. The served candidate ([`live_page`]) lists the tasks corrald's
-//! inbox holds for review and the board's verifying candidates, reads the `Review` and `Task`
-//! details and each expanded file's `ReviewFile` patch from the feed, and every decision and
-//! comment is a canonical command ([`State::apply_live`]) carrying the current candidate's
-//! preconditions. The protocol's canonical command classification decides whether a command
-//! requires corrald's preview and a fresh confirmation on this device.
+//! The feed-backed candidate lists tasks awaiting review and reads their immutable candidate,
+//! task details and expanded file patches. Every decision and comment is a canonical command
+//! carrying the current candidate's preconditions.
 //! Render the builders' fields without consulting state again.
 //! Patches and new-comment composers carry the same immutable run/base/head identity. An older
 //! daemon that omits a patch identity can still be read, but cannot safely accept line actions.
 
-mod data;
 mod decide;
 mod diff;
 mod evidence;
 mod live;
 mod live_files;
-mod replay;
 mod view;
 
 #[cfg(test)]
 mod candidate_tests;
-pub use data::{
-    Acceptance, CANDIDATES, Candidate, Comment, FILES, File, GATE_LOG, GATE_LOG_NOTE, HunkSource,
-    LogLine, REPORT, Report, SCREENSHOT, Screenshot, SourceLine, VERDICTS, Verdict,
-};
 pub use diff::{
-    Anchor, Highlight, NumberedLine, ParsedHunk, ParsedPatch, SplitRow, UnifiedRow, hunk_header,
-    hunk_lines, line_index, number_lines, parse_patch, split_rows, unified_rows, word_mark,
+    Anchor, Highlight, NumberedLine, ParsedHunk, ParsedPatch, SplitRow, UnifiedRow, line_index,
+    parse_patch, split_rows, unified_rows, word_mark,
 };
 pub use live::{candidate_list, candidates, live_page, selected};
-pub use replay::{files, page, page_for_width, phone, verdicts};
 pub use view::{
     AcceptanceView, ArtifactContent, ArtifactView, ArtifactsView, Body, Button, ButtonStyle,
     CandidateGroup, CandidateRow, Chip, CommentView, Composer, DecideBar, DetailView, DiffContent,
     DiffView, FileBody, FileView, Header, HunkView, LayoutChoice, LogView, MessageView, Notice,
-    PageView, ReportView, ScreenshotView, StatusLine, TabView, VerdictView, effective_layout,
+    PageView, ReportView, StatusLine, TabView, VerdictView, effective_layout,
 };
 
 use std::collections::BTreeSet;
 
 use crate::model::daemon::Feed;
-use crate::model::effect::{Effect, Env, Page, Risk};
+use crate::model::effect::{Effect, Env};
 use crate::model::id::Id;
 use crate::model::live::{Live, Selection};
-use crate::model::nav::Form;
 
 /// Review's keyboard shortcut toggles the stored split/unified preference.
 pub const KEYS: &[&str] = &["s"];
@@ -61,8 +48,7 @@ pub enum Layout {
     Unified,
 }
 
-/// Evidence tabs. The fixture phone omits Gate log and calls Screenshot `Screen`; a served
-/// candidate shows its artifact records under Shot.
+/// Evidence tabs for the candidate's patches and artifact records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
     /// Changed files.
@@ -70,7 +56,7 @@ pub enum Tab {
     Diff,
     /// Rendered implementation report and acceptance list.
     Report,
-    /// Fixture screenshot, or the served candidate's artifact records.
+    /// Candidate artifact records.
     Shot,
     /// Gate output.
     Log,
@@ -113,8 +99,6 @@ pub enum Compose {
     },
     /// The request-changes note for this candidate.
     Changes(CandidateAt),
-    /// The fixture replay's thread, which sends nothing.
-    Fixture,
 }
 
 /// A command this page sent, kept until its outcome is dismissed or confirmed by the detail.
@@ -161,6 +145,7 @@ pub enum Intent {
 /// being written or in flight is Review's.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct State {
+    pub ids: crate::model::id::IdSupply,
     /// Preferred desktop diff presentation.
     pub layout: Layout,
     /// Active evidence tab; the default is Diff.
@@ -177,23 +162,17 @@ pub struct State {
     pub sent: Vec<Sent>,
 }
 
-/// Button intents of both sources.
+/// Candidate interaction intents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Fixture: acknowledge a candidate-list click without changing the replay.
-    Select(&'static str),
     /// Select an evidence tab (`rtab`).
     Tab(Tab),
     /// Set the preferred diff presentation (`rlayout`).
     Layout(Layout),
-    /// Approve the shown candidate: fixture confirmation, or corrald's preview and confirm.
+    /// Approve the shown candidate through preview and confirmation.
     Approve,
-    /// Fixture: the request-changes toast. Served: open the note for the worker.
+    /// Open the request-changes note for the worker.
     RequestChanges,
-    /// Fixture: open Ask with the diff-hunk context chip.
-    AskHunk,
-    /// Fixture: the source's `Expanded {path}` toast; no hidden lines were supplied.
-    ExpandFile(&'static str),
     /// Show a served candidate.
     Pick(Id),
     /// Show a served file's patch, fetching it once.
@@ -246,9 +225,6 @@ pub enum Action {
     Refresh,
 }
 
-/// Refusal shown instead of opening confirmation while offline or down.
-pub const APPROVAL_REFUSED: &str = "Refused: needs a live connection. Nothing was queued.";
-
 impl State {
     /// Selects the evidence body without a toast, as `rtab` does.
     pub fn rtab(&mut self, tab: Tab) -> Vec<Effect> {
@@ -260,68 +236,6 @@ impl State {
     pub fn rlayout(&mut self, layout: Layout) -> Vec<Effect> {
         self.layout = layout;
         Vec::new()
-    }
-
-    /// Fixture: requests confirmation; offline/down refuses and never queues approval.
-    pub fn approve(&mut self, env: Env) -> Vec<Effect> {
-        if env.conn.refuses() {
-            vec![Effect::Toast(APPROVAL_REFUSED.into())]
-        } else {
-            vec![Effect::Confirm(Risk::ApproveReview, None)]
-        }
-    }
-
-    /// Fixture: shows the mockup's phone or desktop toast; nothing is submitted or queued.
-    pub fn request_changes(&mut self, env: Env) -> Vec<Effect> {
-        let message = if env.form == Form::Phone {
-            "Request changes"
-        } else {
-            "Request changes: comments go to the worker as round 2 input"
-        };
-        vec![Effect::Toast(message.into())]
-    }
-
-    /// Fixture: opens Ask with hunk context, without inventing a draft or sending a message.
-    pub fn ask_hunk(&mut self) -> Vec<Effect> {
-        vec![Effect::Ask {
-            chip: Some("hunk"),
-            text: None,
-        }]
-    }
-
-    /// Fixture: acknowledges the collapsed-file click without fabricating unavailable code.
-    pub fn expand_file(&mut self, path: &'static str) -> Vec<Effect> {
-        vec![Effect::Toast(format!("Expanded {path}"))]
-    }
-
-    /// Fixture: acknowledges selection; the replay keeps T-868.
-    pub fn select(&mut self, id: &'static str) -> Vec<Effect> {
-        vec![Effect::Toast(format!("{id} selected"))]
-    }
-
-    /// Applies a fixture control's intent. Served-only intents never reach corrald from here.
-    pub fn apply(&mut self, action: Action, env: Env) -> Vec<Effect> {
-        match action {
-            Action::Select(id) => self.select(id),
-            Action::Tab(tab) => self.rtab(tab),
-            Action::Layout(layout) => self.rlayout(layout),
-            Action::Approve => self.approve(env),
-            Action::RequestChanges => self.request_changes(env),
-            Action::AskHunk => self.ask_hunk(),
-            Action::ExpandFile(path) => self.expand_file(path),
-            Action::Submit { .. } => vec![Effect::Toast(
-                "Preview data: comments are not sent from the replay".into(),
-            )],
-            _ => Vec::new(),
-        }
-    }
-
-    /// Fixture: handles `s` on Review, but not while a pushed cross-domain page is on top.
-    pub fn key(&mut self, key: &str, page: Option<Page>, _env: Env) -> Option<Vec<Effect>> {
-        if page.is_some() {
-            return None;
-        }
-        self.toggle(key)
     }
 
     /// Served: `s` toggles the layout on Review itself, not under a pushed focus page.

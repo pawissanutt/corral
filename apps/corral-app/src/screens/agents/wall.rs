@@ -84,12 +84,10 @@ pub fn screen(app: AppState) -> AnyElement {
     }
 }
 
-/// The footer note: the fixture's illustrative tag, or a quiet sentence about the data.
+/// The footer note: a quiet sentence about the data.
 fn note(app: AppState, note: &Note) -> AnyElement {
-    match note {
-        Note::Illustrative(words) => illus(app, *words),
-        Note::Plain(words) => dim(app, words.clone()).into_element(),
-    }
+    let Note::Plain(words) = note;
+    dim(app, words.clone()).into_element()
 }
 
 /// What stands in for the agents while there are none to show: the loading state (announced

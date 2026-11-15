@@ -10,9 +10,7 @@ use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
 use super::AppState;
-use crate::model::{
-    DataState, Destination, Effect, NavState, Overlay, Page, commands, inbox, plans, review, work,
-};
+use crate::model::{DataState, Destination, Effect, Overlay, commands, inbox, plans, review, work};
 
 /// Where the keyboard focus is, as far as key routing needs it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -85,15 +83,8 @@ impl AppState {
         on_key_with("escape", anywhere, move |_| self.close_newest());
         on_key_with("mod+b", typing, move |_| self.toggle_sidebar());
         on_key_with("mod+shift+m", anywhere, move |_| {
-            match self.data.get_untracked() {
-                DataState::Fixture => {
-                    let mut effects = Vec::new();
-                    self.assistant.update(|state| effects = state.cycle_model());
-                    self.run(effects);
-                    return;
-                }
-                DataState::Disconnected => return,
-                DataState::Daemon => {}
+            if self.data.get_untracked() == DataState::Disconnected {
+                return;
             }
             let top = self.nav.with_untracked(|nav| nav.live().cloned());
             let ask_open = self.nav.with_untracked(|nav| nav.is_open(Overlay::Ask));
@@ -121,7 +112,6 @@ impl AppState {
     /// connection.
     fn list_keys_now(&self) -> &'static [&'static str] {
         if !self.key_focus.get().takes_list_keys()
-            || self.confirm.with(Option::is_some)
             || self.confirmation.with(Option::is_some)
             || self.nav.with(|nav| nav.newest().is_some())
             || self.work.with(|state| state.menu.is_some())
@@ -130,17 +120,15 @@ impl AppState {
         }
         let destination = self.destination();
         match self.data.get() {
-            DataState::Daemon => self
+            DataState::Daemon | DataState::Fixture => self
                 .nav
                 .with(|nav| commands::list_keys_live(destination, nav.live())),
-            DataState::Fixture => commands::list_keys(destination, self.page()),
             DataState::Disconnected => &[],
         }
     }
 
     fn press_key(&self, key: &str) {
-        if self.confirm.get_untracked().is_some()
-            || self.confirmation.with_untracked(Option::is_some)
+        if self.confirmation.with_untracked(Option::is_some)
             || self.nav.with_untracked(|nav| nav.newest().is_some())
             || self.work.with_untracked(|state| state.menu.is_some())
         {
@@ -169,8 +157,7 @@ impl AppState {
             None
         } else {
             match self.data.get_untracked() {
-                DataState::Daemon => self.key_live(key),
-                DataState::Fixture => self.key_fixture(key),
+                DataState::Daemon | DataState::Fixture => self.key_live(key),
                 DataState::Disconnected => None,
             }
         };
@@ -212,29 +199,6 @@ impl AppState {
             }),
             _ => {}
         });
-        effects
-    }
-
-    /// Routes a key to the fixture preview's reducers.
-    fn key_fixture(&self, key: &str) -> Option<Vec<Effect>> {
-        let page = self.nav.with_untracked(NavState::page);
-        let env = self.env_untracked();
-        let mut effects = None;
-        match (self.nav.with_untracked(|nav| nav.destination), page) {
-            (Destination::Inbox, None | Some(Page::Question)) => self
-                .inbox
-                .update(|state| effects = state.key(key, page, env)),
-            (Destination::Now, _) => self
-                .work
-                .update(|state| effects = state.key(key, page, env)),
-            (Destination::Plans, _) => self
-                .plans
-                .update(|state| effects = state.key(key, page, env)),
-            (Destination::Review, _) => self
-                .review
-                .update(|state| effects = state.key(key, page, env)),
-            _ => {}
-        }
         effects
     }
 }

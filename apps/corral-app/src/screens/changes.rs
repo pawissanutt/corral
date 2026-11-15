@@ -1,7 +1,7 @@
-//! Changes: the time feed since this device's last visit, a mark for each kind of event, each
-//! event opening its task, then the per-device seen line and what came before it. In the Daemon
-//! state the feed is corrald's durable change lines with their attribution, the filters narrow
-//! it, older pages load on request, and Mark seen moves this device's own seen cursor.
+//! Changes: the durable change lines since this device's last visit with their attribution, a
+//! mark for each kind of event, each event opening its task, then the per-device seen line and
+//! what came before it. The filters narrow it, older pages load on request, and Mark seen moves
+//! this device's own seen cursor.
 
 use nsh_core::prelude::*;
 
@@ -24,15 +24,11 @@ const MEASURE: f32 = 900.0;
 pub fn screen(app: AppState) -> AnyElement {
     let form = app.form;
     let changes = computed(move || {
-        if app.daemon() {
-            let device = app.device_name();
-            return app.feed.with(|feed| {
-                app.work
-                    .with(|state| work::live_changes(state, feed, device.as_deref(), form))
-            });
-        }
-        let env = app.env();
-        app.work.with(|state| work::changes(state, env))
+        let device = app.device_name();
+        app.feed.with(|feed| {
+            app.work
+                .with(|state| work::live_changes(state, feed, device.as_deref(), form))
+        })
     });
     let stale = stale(app);
     let body = dim_when(view(), stale)

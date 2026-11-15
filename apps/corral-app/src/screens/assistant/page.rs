@@ -1,16 +1,16 @@
 //! The thread page: its head, the transcript with the composer docked under it, the session's
 //! facts beside them; the same as a pushed phone page; and a pending assistant prompt as Inbox's
-//! detail pane shows it. Each comes as the fixture preview and as the served thread.
+//! detail pane shows it, all from the served thread.
 
 use std::rc::Rc;
 
 use nsh_core::prelude::*;
 
 use crate::model::assistant::{
-    Action, Button, Fact, LABELS, LivePrompt, Prompt, PromptCard, PromptPane, QUICK, ThreadHeader,
-    ThreadRef, live_prompt_pane, live_thread_header, prompt_pane, quick_id, thread_header,
+    Action, Button, Fact, LABELS, LivePrompt, PromptCard, PromptPane, QUICK, ThreadHeader,
+    ThreadRef, live_prompt_pane, live_thread_header, quick_id,
 };
-use crate::model::{Destination, Form, Id};
+use crate::model::{Form, Id};
 use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
 use crate::ui::ask;
@@ -35,16 +35,10 @@ const PHONE_INSET: f32 = 14.0;
 /// The prompt pane's measure (`max-width: 760px`).
 const PROMPT_MEASURE: f32 = 760.0;
 
-/// The fixture thread open in `app.assistant` on desktop and in a terminal: the head (back to
-/// Agents, title, the quick thread's state, where it runs), the transcript with its composer
-/// docked under it, and the session's facts (with the Ideas filed from it) beside them. A
-/// terminal narrower than its wide grid keeps the transcript alone.
-pub fn thread(app: AppState) -> AnyElement {
-    let id = computed(move || app.assistant.with(|state| state.thread));
-    dynamic(move || Some(page(app, ThreadRef::Fixture(id.get()))))
-}
-
-/// The served thread `id` ("quick" or A-n) as the same page, subscribed while it is shown.
+/// The served thread `id` ("quick" or A-n) on desktop and in a terminal, subscribed while it is
+/// shown: the head (back to Agents, title, the thread's state, where it runs), the transcript
+/// with its composer docked under it, and the session's facts (with the Ideas filed from it)
+/// beside them. A terminal narrower than its wide grid keeps the transcript alone.
 pub fn live_thread(app: AppState, id: Id) -> AnyElement {
     open_scope(app, id.clone(), false);
     watch_ops(app);
@@ -93,17 +87,12 @@ fn page(app: AppState, source: ThreadRef) -> AnyElement {
 }
 
 /// The thread's head and facts, tracked.
-fn header(app: AppState, source: &ThreadRef) -> Option<ThreadHeader> {
-    match source {
-        ThreadRef::Fixture(id) => {
-            let env = app.env();
-            app.assistant.with(|state| thread_header(state, *id, env))
-        }
-        ThreadRef::Live(scope) => Some(app.feed.with(|feed| {
-            app.assistant
-                .with(|state| live_thread_header(state, feed, scope.as_str()))
-        })),
-    }
+fn header(app: AppState, source: &ThreadRef) -> ThreadHeader {
+    let ThreadRef::Live(scope) = source;
+    app.feed.with(|feed| {
+        app.assistant
+            .with(|state| live_thread_header(state, feed, scope.as_str()))
+    })
 }
 
 /// The page head (`.pagehead`): a quiet back button, the title, the thread's state chip, where
@@ -111,20 +100,16 @@ fn header(app: AppState, source: &ThreadRef) -> Option<ThreadHeader> {
 /// terminal uses the kit's pushed head with the chip and End at its end.
 fn head(app: AppState, source: &ThreadRef) -> AnyElement {
     let header = header(app, source);
-    let title = header
-        .as_ref()
-        .map_or_else(|| source.as_str().to_owned(), |header| header.title.clone());
-    let back = header
-        .as_ref()
-        .map_or(Destination::Agents.label(), |header| header.back_label);
     let state = header
+        .state
         .as_ref()
-        .and_then(|header| header.state.as_ref())
         .map(|state| chip(app, state.label.clone(), state.hue));
     let end = header
-        .as_ref()
-        .and_then(|header| header.end.clone())
+        .end
+        .clone()
         .map(|end| end_button(app, end, ButtonKind::Ghost));
+    let title = header.title;
+    let back = header.back_label;
     if app.form == Form::Terminal {
         let trailing = match (state, end) {
             (None, None) => None,
@@ -173,14 +158,12 @@ fn head(app: AppState, source: &ThreadRef) -> AnyElement {
                 .text_color(color(Token::Ink)),
         )
         .children(state)
-        .when_some(header.map(|header| header.subtitle), |row, sub| {
-            row.child(
-                words(app, sub, 12.0, Token::Ink3)
-                    .number_of_lines(1u32)
-                    .flex_shrink(1.0)
-                    .min_w(px(0.0)),
-            )
-        })
+        .child(
+            words(app, header.subtitle, 12.0, Token::Ink3)
+                .number_of_lines(1u32)
+                .flex_shrink(1.0)
+                .min_w(px(0.0)),
+        )
         .when_some(end, |row, end| row.child(spacer()).child(end))
         .into_element()
 }
@@ -201,9 +184,7 @@ fn end_button(app: AppState, mut end: Button, kind: ButtonKind) -> AnyElement {
 /// `confirm_end` names this served session. Confirming sends the canonical
 /// `assistant.session` End; Cancel, Escape and the scrim leave the session running.
 fn end_dialog(app: AppState, source: &ThreadRef) -> Option<AnyElement> {
-    let ThreadRef::Live(scope) = source else {
-        return None;
-    };
+    let ThreadRef::Live(scope) = source;
     if source.is_quick() {
         return None;
     }
@@ -255,9 +236,7 @@ fn end_modal(app: AppState, session: &str) -> Modal {
 /// how long its host runs, the served session's canonical actions, and the Ideas filed from
 /// this thread.
 fn facts(app: AppState, source: &ThreadRef) -> Vec<AnyElement> {
-    let Some(header) = header(app, source) else {
-        return Vec::new();
-    };
+    let header = header(app, source);
     let form = app.form;
     let mut out = vec![
         h3(app, LABELS.session, None),
@@ -272,20 +251,19 @@ fn facts(app: AppState, source: &ThreadRef) -> Vec<AnyElement> {
     } else {
         view().mt(px(8.0)).child(note).into_element()
     });
-    if let ThreadRef::Live(scope) = source {
-        // The quick thread's actions are its current generation's.
-        let session = if scope.as_str() == QUICK {
-            app.feed.with(quick_id)
-        } else {
-            Some(scope.to_string())
-        };
-        if let Some(session) = session {
-            if form == Form::Terminal {
-                out.push(term::blank());
-            }
-            out.push(h3(app, LABELS.session_actions, None));
-            out.push(session_verbs(app, Id::from(session.as_str())));
+    let ThreadRef::Live(scope) = source;
+    // The quick thread's actions are its current generation's.
+    let session = if scope.as_str() == QUICK {
+        app.feed.with(quick_id)
+    } else {
+        Some(scope.to_string())
+    };
+    if let Some(session) = session {
+        if form == Form::Terminal {
+            out.push(term::blank());
         }
+        out.push(h3(app, LABELS.session_actions, None));
+        out.push(session_verbs(app, Id::from(session.as_str())));
     }
     if !header.filed.is_empty() {
         if form == Form::Terminal {
@@ -369,12 +347,6 @@ fn filed_row(
         .into_element()
 }
 
-/// The fixture thread as a pushed phone page.
-pub fn thread_phone(app: AppState) -> PhonePage {
-    let id = app.assistant.with_untracked(|state| state.thread);
-    phone_page(app, ThreadRef::Fixture(id))
-}
-
 /// The served thread `id` as a pushed phone page, subscribed while it is shown.
 pub fn live_thread_phone(app: AppState, id: Id) -> PhonePage {
     open_scope(app, id.clone(), false);
@@ -386,25 +358,18 @@ pub fn live_thread_phone(app: AppState, id: Id) -> PhonePage {
 /// changes when it rolls to the next generation (A-9 → A-10) while its page stays pushed.
 pub fn live_thread_title(app: AppState, id: Id) -> Memo<String> {
     let source = ThreadRef::Live(id);
-    computed(move || {
-        header(app, &source).map_or_else(|| source.as_str().to_owned(), |header| header.phone_title)
-    })
+    computed(move || header(app, &source).phone_title)
 }
 
 /// The thread as a pushed phone page: the compact title, the thread's state and
 /// End (while the served session can be ended) at the trailing edge, the transcript scrolling
 /// itself, the composer docked in place of the tab bar and no floating Ask button.
 fn phone_page(app: AppState, source: ThreadRef) -> PhonePage {
-    let info = untracked(|| header(app, &source));
-    let title = info.as_ref().map_or_else(
-        || source.as_str().to_owned(),
-        |info| info.phone_title.clone(),
-    );
-    let live = matches!(source, ThreadRef::Live(_));
-    let trailing = (live || info.as_ref().is_some_and(|info| info.state.is_some())).then(|| {
+    let title = untracked(|| header(app, &source)).phone_title;
+    let trailing = {
         let source = source.clone();
         dynamic(move || {
-            let current = header(app, &source)?;
+            let current = header(app, &source);
             let end = current
                 .end
                 .map(|end| end_button(app, end, ButtonKind::Quiet));
@@ -428,7 +393,7 @@ fn phone_page(app: AppState, source: ThreadRef) -> PhonePage {
                     .into_element()
             })
         })
-    });
+    };
     let body = view()
         .flex_1()
         .flex_col()
@@ -439,16 +404,11 @@ fn phone_page(app: AppState, source: ThreadRef) -> PhonePage {
     PhonePage {
         title,
         body,
-        trailing,
+        trailing: Some(trailing),
         bar: Some(PhoneBar::always(ask::docked(app, source))),
         ask: false,
         scroll: false,
     }
-}
-
-/// One fixture assistant prompt as Inbox's detail pane shows it.
-pub fn prompt(app: AppState, which: Prompt) -> AnyElement {
-    dynamic(move || Some(prompt_view(app, &prompt_pane(which, app.env()))))
 }
 
 /// Prompt `key` of thread `thread` as Inbox's detail pane shows it, with its real answers; the

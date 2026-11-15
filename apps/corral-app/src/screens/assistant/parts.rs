@@ -20,19 +20,11 @@ const TARGET: f32 = 44.0;
 /// `.mono` is 0.93 of the text around it.
 const MONO_SCALE: f32 = 0.93;
 
-/// Runs an assistant action through its reducer: with the daemon, the live reducer returns the
-/// canonical send, command or prompt answer; in the fixture, the preview's reducer. Card buttons
-/// never submit the draft, so the fixture text is empty and the target is whatever Ask holds.
+/// Runs an assistant action through the live reducer of the selected feed, which returns the
+/// canonical send, command or prompt answer. Card buttons never submit the draft.
 pub fn act(app: AppState, action: Action) {
-    if untracked(|| app.daemon()) {
-        app.reduce(app.assistant, move |state, feed, _, _| {
-            state.act_live(action, feed)
-        });
-        return;
-    }
-    let target = app.ask_target.get_untracked();
-    app.act(app.assistant, move |state, env| {
-        state.act(action, "", target, env)
+    app.reduce(app.assistant, move |state, feed, _, _| {
+        state.act_live(action, feed)
     });
 }
 
@@ -305,7 +297,6 @@ pub fn button_row(app: AppState, buttons: &[Button], kind: ButtonKind, gap: f32)
 /// cards stay apart (`btn-edit-T-902`).
 pub fn test_id(button: &Button) -> String {
     let subject = match &button.action {
-        Action::Edit(Some(id)) | Action::Merge(id) | Action::Confirm(_, Some(id)) => Some(*id),
         Action::EditIdea(Some(id))
         | Action::MergeIdea(Some(id))
         | Action::SaveIdea { task: id, .. }

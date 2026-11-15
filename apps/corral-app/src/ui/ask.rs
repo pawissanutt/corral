@@ -17,36 +17,27 @@ use crate::model::assistant::{self, ThreadRef};
 use crate::state::AppState;
 use crate::ui::composer::{Host, ListAt, field};
 
-/// Runs one of the assistant model's typed actions. With the daemon the live reducer returns the
-/// canonical effects (Remove context clears Ask's real context); in the fixture the preview's
-/// reducer gets the app's draft and target. Attaching runs at the root, in this press: a
-/// browser opens its file picker only from inside one.
+/// Runs one of the assistant model's typed actions through the feed-backed reducer, which
+/// returns the canonical effects (Remove context clears Ask's real context). Attaching runs at
+/// the root, in this press: a browser opens its file picker only from inside one.
 pub(crate) fn act(app: AppState, action: assistant::Action) {
-    if untracked(|| app.daemon()) {
-        match action {
-            assistant::Action::Unchip => {
-                app.ask_context.set(None);
-                return;
-            }
-            assistant::Action::Attach(pick) => {
-                app.attach(pick);
-                return;
-            }
-            assistant::Action::AttachLink => {
-                app.open_attach_field(assistant::AttachField::Link);
-                return;
-            }
-            _ => {}
+    match action {
+        assistant::Action::Unchip => {
+            app.ask_context.set(None);
+            return;
         }
-        app.reduce(app.assistant, move |state, feed, _, _| {
-            state.act_live(action, feed)
-        });
-        return;
+        assistant::Action::Attach(pick) => {
+            app.attach(pick);
+            return;
+        }
+        assistant::Action::AttachLink => {
+            app.open_attach_field(assistant::AttachField::Link);
+            return;
+        }
+        _ => {}
     }
-    let target = app.ask_target.get_untracked();
-    let text = app.ask_draft.get_untracked();
-    app.act(app.assistant, move |state, env| {
-        state.act(action, &text, target, env)
+    app.reduce(app.assistant, move |state, feed, _, _| {
+        state.act_live(action, feed)
     });
 }
 
@@ -70,16 +61,15 @@ pub fn docked(app: AppState, thread: ThreadRef) -> AnyElement {
     )
 }
 
-/// The small Ask window the global shortcut opens, shown while `app.hotkey` holds: on desktop a
-/// window centred over a dimmed backdrop that stands in for the desktop, closed by Esc or its
-/// Hide control; on a phone and in a terminal the same content in the form's modal. Draws nothing
-/// while closed. A fixture preview demo only.
+/// The labelled preview's small Ask window, shown while `app.hotkey` holds: on desktop a window
+/// centred over a dimmed backdrop that stands in for the desktop, closed by Esc or its Hide
+/// control; in a terminal the same content in the form's modal. Draws nothing while closed.
 pub fn hotkey(app: AppState) -> AnyElement {
     hotkey::hotkey(app)
 }
 
-/// The phone share sheet's steps over the shared page, shown while `app.share` holds. A fixture
-/// preview demo only; it draws nothing while closed.
+/// The labelled preview's phone share extension over the shared page, shown while `app.share`
+/// holds; it draws nothing while closed.
 pub fn share(app: AppState) -> AnyElement {
     share::share(app)
 }

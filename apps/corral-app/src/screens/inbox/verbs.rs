@@ -1,7 +1,7 @@
-//! A served question's record verbs (escalate, cancel, set a deadline) from the shared table
+//! A question's record verbs (escalate, cancel, set a deadline) from the shared table
 //! (`work::record_verbs`), under the handover's bands: the ones that can run as buttons, the
 //! others dimmed with the model's reason. A verb with fields opens the shared composer the
-//! shells host; the fixture preview has no daemon record, so it shows none.
+//! shells host.
 
 use nsh_core::prelude::*;
 
@@ -17,9 +17,6 @@ use crate::ui::tokens::{Token, color};
 /// The shown question's verbs, made again as the feed changes what they can do.
 pub(super) fn row(app: AppState, key: Key) -> AnyElement {
     let verbs = computed(move || {
-        if !app.daemon() {
-            return Vec::new();
-        }
         app.feed.with(|feed| {
             app.inbox.with(|state| {
                 inbox::shown_key(state, feed, key.as_ref())

@@ -53,8 +53,8 @@ const REVIEW_MIX: f32 = 0.45;
 const IDLE_ALPHA: f32 = 0.55;
 
 /// The lanes chart: hour ticks and grid, the owner and supervisor lanes, one lane per task with
-/// its segments drawn by kind (solid run, gate, review, land; hatched idle, stall, stale verdict
-/// and waiting; outlined awaiting acceptance; dashed where times were not recorded), the
+/// its segments drawn by kind (solid run, gate, review, land; hatched idle and waiting;
+/// outlined awaiting acceptance; dashed where times were not recorded), the
 /// question strip and the annotations above their bars, a lane's unrecorded phases written in its
 /// track, and the last-visit and now lines with their captions. It fills its container's width
 /// and lays out again when that or the plot changes; desktop keeps the 190 pt label column, the
@@ -219,8 +219,8 @@ fn segment_rect(top: f32, segment: &timeline::PlacedSegment) -> (Rect, f32) {
 }
 
 /// One bar in the look of its kind: solid for run, gate, review (the mixed corral) and land;
-/// hatched for idle (faint lines, no ground), stall, stale verdict and waiting (lines in
-/// the state colour on its quiet ground; the waiting hatch leans the other way).
+/// hatched for idle (faint lines, no ground) and waiting (lines in the state colour on its quiet
+/// ground, leaning the other way).
 fn bar(p: Painter, kind: Kind, area: Rect, radius: f32) -> Painter {
     let hue = kind.hue();
     match kind {
@@ -239,30 +239,6 @@ fn bar(p: Painter, kind: Kind, area: Rect, radius: f32) -> Painter {
                 line: ink(Token::Ink4).opacity(IDLE_ALPHA),
                 width: 1.4,
                 pitch: 6.0,
-                rising: true,
-            },
-        ),
-        Kind::Stall => hatch(
-            p,
-            area,
-            radius,
-            Stripes {
-                ground: Some(now(hue_fill(hue))),
-                line: now(hue_ink(hue)),
-                width: 1.6,
-                pitch: 6.0,
-                rising: true,
-            },
-        ),
-        Kind::Stale => hatch(
-            p,
-            area,
-            radius,
-            Stripes {
-                ground: Some(now(hue_fill(hue))),
-                line: now(hue_ink(hue)),
-                width: 1.4,
-                pitch: 5.0,
                 rising: true,
             },
         ),

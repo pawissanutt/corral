@@ -1,14 +1,11 @@
-//! The Report, Screenshot, Artifacts and Gate log tabs: the rendered report (`.plan-doc`), the
-//! terminal captures (`.term`) with their provenance lines, and the candidate's artifacts.
+//! The Report, Artifacts and Gate log tabs: the rendered report (`.plan-doc`), the gate log's
+//! terminal capture (`.term`) with its provenance line, and the candidate's artifacts.
 
 use nsh_core::prelude::*;
 
-use crate::model::review::{
-    ArtifactContent, ArtifactView, ArtifactsView, LogView, ReportView, ScreenshotView,
-};
-use crate::model::{Form, Hue, Span};
+use crate::model::review::{ArtifactContent, ArtifactView, ArtifactsView, LogView, ReportView};
+use crate::model::{Form, Hue};
 use crate::state::AppState;
-use crate::ui::kit::chip::illus;
 use crate::ui::kit::marks::{hue_ink, mark};
 use crate::ui::kit::text::{dim, h3, mono, plain};
 use crate::ui::term;
@@ -105,23 +102,9 @@ pub(super) fn report(app: AppState, report: &ReportView) -> AnyElement {
         .into_element()
 }
 
-/// The fixture's terminal capture with its cursor, then the artifact caption.
-pub(super) fn screenshot(app: AppState, shot: &ScreenshotView) -> AnyElement {
-    let spans = shot
-        .terminal
-        .iter()
-        .map(|run| capture_span(app, run))
-        .collect();
-    view()
-        .child(console(app, spans, 11.0, shot.cursor, Some(SHOT_MAX)))
-        .child(below(app))
-        .child(rich_at(app, &shot.caption, 12.0, Token::Ink3, false))
-        .into_element()
-}
-
 /// The gate log, its passing lines in the success colour and failing ones in the failure
-/// colour, then its label: illustrative for the fixture, the served tail's extent otherwise.
-pub(super) fn log(app: AppState, lines: &[LogView], note: &str, illustrative: bool) -> AnyElement {
+/// colour, then the served tail's extent.
+pub(super) fn log(app: AppState, lines: &[LogView], note: &str) -> AnyElement {
     let ink = console_ink(app);
     let mut spans = Vec::with_capacity(lines.len() * 2);
     for (at, line) in lines.iter().enumerate() {
@@ -136,11 +119,7 @@ pub(super) fn log(app: AppState, lines: &[LogView], note: &str, illustrative: bo
     view()
         .child(console(app, spans, 11.5, false, None))
         .child(below(app))
-        .child(if illustrative {
-            illus(app, note.to_owned())
-        } else {
-            dim(app, note.to_owned()).into_element()
-        })
+        .child(dim(app, note.to_owned()))
         .into_element()
 }
 
@@ -272,23 +251,6 @@ fn console_ink(app: AppState) -> AdaptiveColor {
     } else {
         Token::ShellInk
     })
-}
-
-/// One run of the capture: bold runs (`.w8`) bold in the capture's secondary ink, a hue in its
-/// colour.
-fn capture_span(app: AppState, run: &Span) -> Text {
-    let terminal = app.form == Form::Terminal;
-    let mut piece = text(run.text.clone());
-    if run.bold {
-        piece = piece.font_weight(FontWeight::BOLD);
-        if !terminal {
-            piece = piece.text_color(color(Token::ShellInk2));
-        }
-    }
-    if run.hue != Hue::Neutral {
-        piece = piece.text_color(hue_ink(run.hue));
-    }
-    piece
 }
 
 /// A terminal capture (`.term`): preformatted mono lines on the shell's dark ground, radius 6,

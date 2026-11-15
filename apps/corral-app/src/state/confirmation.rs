@@ -40,6 +40,23 @@ impl AppState {
         }
         self.confirmation_revision
             .set(self.feed.with_untracked(|feed| feed.authority_revision));
+        if self.fixture() {
+            match self
+                .feed
+                .with_untracked(|feed| crate::model::preview::confirmation(feed, &subject))
+            {
+                Ok(ready) => self.confirmation.set(Some(Confirmation {
+                    preview: Id::from(ready.preview_id.clone()),
+                    subject,
+                    ready: Some(ready),
+                })),
+                Err(why) => {
+                    self.invalidate_confirmations();
+                    self.toast(format!("Preview · {why}"));
+                }
+            }
+            return;
+        }
         let correlation = match &subject {
             Confirmable::Act(act) => requests::act_preview(ActPreviewRequest {
                 command: act.command.clone(),
@@ -99,6 +116,24 @@ impl AppState {
                 entry.1 = Watch::Confirmed;
             }
         });
+        if self.fixture() {
+            match confirmation.subject {
+                Confirmable::Act(act) => self.simulate(&act),
+                Confirmable::Prompt { answer, title } => {
+                    self.run_preview(crate::model::Effect::Prompt {
+                        answer,
+                        title,
+                        confirm: false,
+                    });
+                }
+                Confirmable::DeviceAuthority { key, title, change } => {
+                    self.run_preview(crate::model::Effect::Device(
+                        crate::model::devices::DeviceOp::SetAuthority { key, title, change },
+                    ));
+                }
+            }
+            return;
+        }
         let token = preview.operation_token.clone();
         let proof = ConfirmProof {
             preview_id: preview.preview_id,

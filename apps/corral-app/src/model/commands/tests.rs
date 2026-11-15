@@ -31,13 +31,13 @@ fn task_id_search_does_not_turn_navigation_into_a_question() {
         "t-894",
         false,
         DataState::Fixture,
-        &Feed::default(),
+        &crate::model::preview::feed(1_794_700_000, "2026-11-15".into(), "12:00".into(), None),
         None,
         Form::Desktop,
     );
     assert!(
         rows.iter()
-            .any(|row| row.action == Action::Open(Page::Task("T-894")))
+            .any(|row| row.action == Action::OpenLive(Live::Task("T-894".into())))
     );
     assert!(!rows.iter().any(|row| matches!(row.action, Action::Ask(_))));
 }
@@ -68,11 +68,10 @@ fn daemon_palette_lists_served_records_only() {
         |row| row.action == Action::OpenLive(Live::Plan("T-31".into()))
             && row.id == "live:plan:T-31"
     ));
-    assert!(!rows.iter().any(|row| row.group == "Demo"
-        || matches!(
-            row.action,
-            Action::Open(_) | Action::Ask(_) | Action::ToggleSession
-        )));
+    assert!(
+        !rows.iter().any(|row| row.group == "Demo"
+            || matches!(row.action, Action::Ask(_) | Action::ToggleSession))
+    );
     assert_eq!(
         run(
             "live:plan:T-31",

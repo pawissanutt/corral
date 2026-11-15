@@ -1,12 +1,8 @@
-//! Typed cards carried inside assistant replies and reused by Inbox and share content. The
-//! fixture builders here fill the same owned records the live thread builds from `EntryCard`s.
+//! Cards carried by canonical assistant replies.
 
-use super::views::button;
-use super::{Action, Button, Chip, Filed, State, WaitReason, filed};
-use crate::model::effect::{Env, Page, Risk};
+use super::{Action, Button, Chip};
 use crate::model::hue::Hue;
-use crate::model::nav::Form;
-use crate::model::text::{Rich, span, task_link};
+use crate::model::text::Rich;
 
 /// Authority class displayed on an owner-action card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,7 +11,7 @@ pub enum ActionClass {
     Run,
     /// Fresh confirmation required on this device.
     Confirm,
-    /// Web client is paired for asking and filing only.
+    /// This device lacks authority to run the proposed action.
     AskAndFileOnly,
     /// Input arrived too late to instruct.
     Late,
@@ -139,37 +135,6 @@ pub struct ActionCard {
     pub outcome: ActionOutcome,
 }
 
-/// The mode-pause action shared by the thread and pending Inbox prompt.
-pub fn mode_pause_card() -> ActionCard {
-    let mut confirm = button(
-        "Confirm on this device",
-        Action::Confirm(Risk::ModePause, None),
-    );
-    confirm.primary = true;
-    ActionCard {
-        heading: "Owner action",
-        command: "corral mode pause".into(),
-        class: ActionClass::Confirm,
-        why: Some("mode is confirm-class".into()),
-        input: Some("A-7/g2/i19".into()),
-        confirmed: None,
-        outcome: ActionOutcome::Waiting {
-            explanation: vec![
-                span("Nothing runs until you confirm here; Decline records a "),
-                span("declined").bold(),
-                span(" receipt."),
-            ],
-            buttons: vec![
-                confirm,
-                button(
-                    "Decline",
-                    Action::Toast("Declined · receipt recorded · nothing changed"),
-                ),
-            ],
-        },
-    }
-}
-
 /// A choice with its visible consequences in an ask_user prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskOption {
@@ -211,109 +176,6 @@ pub struct AskUserCard {
     /// Answer time, input id and response surface, or the pending/refused state of an answer.
     pub answer: Option<Rich>,
 }
-
-/// Builds the fixture's duplicate-check prompt with its recorded merge choice.
-pub fn duplicate_card() -> AskUserCard {
-    AskUserCard {
-        heading: "assistant asks · ask_user · before filing · 22:04".into(),
-        question: vec![
-            span("This looks close to "),
-            task_link("T-874"),
-            span(" Pi review annotations: durable candidate-bound threads").dim(),
-            span(". Merge, or file separately?"),
-        ],
-        options: vec![
-            AskOption {
-                label: "Merge into T-874".into(),
-                consequence: "Your words become a comment on T-874. Nothing new is filed.".into(),
-                selected: true,
-                enabled: false,
-                action: None,
-            },
-            AskOption {
-                label: "File separately".into(),
-                consequence: "A new Idea, linked to T-874 as related. It can be merged later."
-                    .into(),
-                selected: false,
-                enabled: false,
-                action: None,
-            },
-        ],
-        reply: None,
-        answer: Some(vec![
-            span("Answered inline by you after 40 s · "),
-            span("A-7/g2/i18").mono(),
-            span(" · dialog"),
-        ]),
-    }
-}
-
-/// A merge appends unchanged words to the existing task instead of filing anything new.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MergedCard {
-    /// Result chip.
-    pub chip: Chip,
-    /// Linked task and title.
-    pub destination: Rich,
-    /// Quotation caption.
-    pub quote_label: &'static str,
-    /// Owner words, unmodified.
-    pub words: &'static str,
-    /// Attribution and explicit no-new-task outcome.
-    pub attribution: &'static str,
-}
-
-/// Builds the merged outcome of the T-874 duplicate check.
-pub fn merged_card() -> MergedCard {
-    MergedCard {
-        chip: Chip::new("merged · T-874", Hue::Neutral),
-        destination: vec![
-            span("comment added to "),
-            task_link("T-874"),
-            span(" Pi review annotations: durable candidate-bound threads"),
-        ],
-        quote_label: "appended as a comment, your words unchanged",
-        words: "review diffs need an inline comment box tied to the candidate SHA",
-        attribution: "added by assistant A-7 from your message · nothing new filed",
-    }
-}
-
-/// A permission grant's duration, or explicit denial.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Grant {
-    /// Only this operation, no user-presence prompt.
-    Once,
-    /// Standing grant for one hour.
-    Hour,
-    /// Standing grant for the current session.
-    Session,
-    /// Record denial for this turn.
-    Deny,
-}
-
-impl Grant {
-    /// Standing grants ask for an explicit confirmation tap on a phone.
-    pub const fn requires_presence(self, env: Env) -> bool {
-        matches!(env.form, Form::Phone) && matches!(self, Self::Hour | Self::Session)
-    }
-
-    /// Illustrative outcome after any required confirmation tap.
-    pub const fn outcome(self, env: Env) -> &'static str {
-        match self {
-            Self::Once => "Allowed once · permission input recorded",
-            Self::Hour if matches!(env.form, Form::Phone) => {
-                "Confirmation tapped · allowed for 1 hour on ~/miti-workspace/notes (preview)"
-            }
-            Self::Hour => "Allowed for 1 hour on ~/miti-workspace/notes",
-            Self::Session if matches!(env.form, Form::Phone) => {
-                "Confirmation tapped · allowed for this session on ~/miti-workspace/notes (preview)"
-            }
-            Self::Session => "Allowed for this session on ~/miti-workspace/notes",
-            Self::Deny => "Denied · recorded · not asked again this turn",
-        }
-    }
-}
-
 /// One line of the write-permission preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffLine {
@@ -356,52 +218,6 @@ pub struct PermissionCard {
     /// Preview disclosure (fixture only).
     pub illustrative: Option<&'static str>,
 }
-
-/// Builds the write prompt; a renderer must complete `requires_presence` before dispatching a standing grant.
-pub fn permission_card(env: Env) -> PermissionCard {
-    let choices = [
-        ("Allow once", Grant::Once),
-        ("Allow for 1 hour", Grant::Hour),
-        ("Allow for this session", Grant::Session),
-        ("Deny", Grant::Deny),
-    ]
-    .into_iter()
-    .map(|(label, grant)| {
-        let mut button = button(label, Action::Grant(grant));
-        button.primary = grant == Grant::Once;
-        button.danger = grant == Grant::Deny;
-        let requires_presence = grant.requires_presence(env);
-        PermissionChoice {
-            button,
-            requires_presence,
-            presence_prompt: requires_presence
-                .then_some("a confirmation tap on this device; no biometric or PIN check"),
-        }
-    })
-    .collect();
-    let added = |line: u32, text: &str| DiffLine {
-        line: Some(line),
-        marker: "+",
-        text: text.into(),
-    };
-    PermissionCard {
-        heading: "assistant wants to write · edit · 22:05".into(),
-        state: Chip::new("waiting on you", Hue::You),
-        path: "~/miti-workspace/notes/corral-log.md · replacement 1 · +6 lines".into(),
-        lines: vec![
-            added(41, "## 2026-11-07 night"),
-            added(42, "- T-867 stale on 5949a4b (base moved), re-gate queued"),
-            added(43, "- T-870 waits on T-868/R1/Q1"),
-        ],
-        choices,
-        presence_note: Some(
-            "Standing grants require a confirmation tap and, when connected, daemon device-bound proof; no biometric or PIN check. This preview runs no daemon command.",
-        ),
-        timer_note: Some("The tool waited 120 s, then deferred; this prompt stays answerable here and in Inbox until 22:05 tomorrow. One answer wins.".into()),
-        illustrative: Some("path and preview illustrative"),
-    }
-}
-
 /// An Idea's unchanged request and the fields the assistant wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdeaFields {
@@ -419,26 +235,11 @@ pub struct IdeaFields {
     pub duplicates: String,
 }
 
-impl IdeaFields {
-    fn fixture(idea: &Filed) -> IdeaFields {
-        IdeaFields {
-            id: idea.id.into(),
-            words: idea.words.into(),
-            title: idea.title.into(),
-            labels: idea.labels.iter().map(|label| (*label).into()).collect(),
-            criteria: idea.criteria.iter().map(|line| (*line).into()).collect(),
-            duplicates: idea.duplicates.into(),
-        }
-    }
-}
-
 /// How the filed card's title is edited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Editing {
     /// Not editing.
     No,
-    /// The fixture's free fields: title, project and criteria, kept by the inputs only.
-    Fixture,
     /// The live title, held in `LiveState::editing` and saved with `task edit`. The owner's
     /// words and the criteria in the task body are never rewritten from here.
     Title,
@@ -482,53 +283,6 @@ pub struct FiledCard {
     /// Whether this card carries a shared attachment.
     pub attached: bool,
 }
-
-/// Builds a known filed card; unknown ids never borrow another Idea's content.
-pub fn filed_card(state: &State, id: &str, attached: bool) -> Option<FiledCard> {
-    let idea = *filed(id)?;
-    let editing = state.edit == Some(idea.id);
-    let buttons = if editing {
-        let mut save = button("Save", Action::Edit(None));
-        save.primary = true;
-        vec![save, button("Cancel", Action::Edit(None))]
-    } else {
-        let mut discard = button("Discard", Action::Confirm(Risk::Discard, Some(idea.id)));
-        discard.danger = true;
-        vec![
-            button("Edit", Action::Edit(Some(idea.id))),
-            button("Merge into T-…", Action::Merge(idea.id)),
-            discard,
-        ]
-    };
-    Some(FiledCard {
-        chip: Chip::new(format!("filed · {}", idea.id), Hue::Ok),
-        idea: IdeaFields::fixture(&idea),
-        project: "corral".into(),
-        provenance: vec![
-            span("Idea · project "),
-            span("corral").bold(),
-            span(" · "),
-            span(format!("via=app:{}", idea.device)).mono(),
-        ],
-        attribution: "filed by assistant A-7 from your message · your words kept as the request"
-            .into(),
-        quote_label: "your words, unchanged",
-        editing: if editing {
-            Editing::Fixture
-        } else {
-            Editing::No
-        },
-        merge: None,
-        related: idea
-            .related
-            .map(|id| vec![span("· related ").dim(), task_link(id)]),
-        buttons,
-        discard_note: (!editing).then_some("Discard asks on this device"),
-        status: None,
-        attached,
-    })
-}
-
 /// An owner-filed Idea made from pending text with no model invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedCard {
@@ -583,75 +337,7 @@ pub struct WaitingBlock {
     pub lifetime: &'static str,
 }
 
-/// The waiting block's lasting promise; shared by fixture and live blocks.
+/// Waiting never silently expires or files the owner's words.
 pub(super) const WAIT_LIFETIME: &str = "It waits until the assistant can run, you file it, or you withdraw it. It never expires and corrald never files it by itself.";
 /// The full waiting block's storage note.
 pub(super) const WAIT_NOTE: &str = "Your message is stored and every device shows it; the assistant takes it as soon as it can run.";
-
-/// Builds a full host wait or a compact wait for a just-submitted message.
-pub fn waiting_block(reason: WaitReason, full: bool) -> WaitingBlock {
-    let mut buttons = Vec::new();
-    if full && reason == WaitReason::HostDown {
-        buttons.push(button(
-            "Resume A-7",
-            Action::SetMode(super::Mode::Answering),
-        ));
-    }
-    buttons.push(button("File as idea now", Action::FileNow));
-    buttons.push(button("Withdraw", Action::Withdraw));
-    WaitingBlock {
-        state: Chip::new(
-            format!("waiting for assistant · {}", reason.label()),
-            Hue::Held,
-        ),
-        explanation: full.then(|| reason.explanation().to_owned()),
-        note: if full { WAIT_NOTE } else { "" },
-        buttons,
-        status: None,
-        lifetime: WAIT_LIFETIME,
-    }
-}
-
-/// The shared link's filed outcome after delivery from the phone outbox.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SharedFiledCard {
-    /// Filed result chip.
-    pub chip: Chip,
-    /// Card's project/type facts.
-    pub description: &'static str,
-    /// Shared-link chip.
-    pub attachment: &'static str,
-    /// Assistant/source attribution.
-    pub attribution: &'static str,
-    /// Generated title.
-    pub title: &'static str,
-    /// Generated labels and related task.
-    pub labels: Rich,
-    /// Edit, merge and device-confirmed discard.
-    pub buttons: Vec<Button>,
-}
-
-/// Builds the T-905 outcome of the captionless fixture share.
-pub fn shared_filed_card() -> SharedFiledCard {
-    let mut discard = button("Discard", Action::Confirm(Risk::Discard, Some("T-905")));
-    discard.danger = true;
-    SharedFiledCard {
-        chip: Chip::new("filed · T-905", Hue::Ok),
-        description: "Idea · project corral",
-        attachment: "link attached",
-        attribution: "filed by assistant A-7 from your share",
-        title: "Review: evaluate NSH DiffView annotations for inline comments",
-        labels: vec![
-            span("review"),
-            span(" "),
-            span("nsh"),
-            span(" · related ").dim(),
-            span("T-874").mono().link(Page::Task("T-874")),
-        ],
-        buttons: vec![
-            button("Edit", Action::Edit(Some("T-905"))),
-            button("Merge into T-…", Action::Merge("T-905")),
-            discard,
-        ],
-    }
-}

@@ -8,14 +8,28 @@ use nsh_core::{Points, Size};
 use nsh_engine::{EngineConfig, Root};
 use nsh_testing::{Headless, LayoutNode, MemoryStorage};
 
-/// The fixture's last plan, below the fold of a 360 pt window.
+/// The synthetic feed's last plan (the approved T-385, after T-885, the executing plans and the
+/// 64-member preview tracker S-900), below the fold of a 360 pt window.
 const LAST: &str = "plan-T-385";
+const LIST: &str = "plans-list";
 
 fn bounds_of<'a>(nodes: &'a [LayoutNode], id: &str) -> &'a LayoutNode {
     nodes
         .iter()
         .find(|node| node.test_id.as_deref() == Some(id))
         .unwrap_or_else(|| panic!("id:{id} is on the page"))
+}
+
+/// Whether `node` sits inside the view whose test id is `id`.
+fn inside(nodes: &[LayoutNode], node: &LayoutNode, id: &str) -> bool {
+    let mut parent = node.parent;
+    while let Some(view) = nodes.iter().find(|view| view.id == parent) {
+        if view.test_id.as_deref() == Some(id) {
+            return true;
+        }
+        parent = view.parent;
+    }
+    false
 }
 
 #[test]
@@ -37,12 +51,31 @@ fn a_plan_selected_with_j_scrolls_into_the_list() {
         .unwrap();
     // The first plan takes the press and with it the focus, so j and k are the list's keys.
     app.press("id:plan-T-885").unwrap();
-    for _ in 0..5 {
+    // j walks the list in its drawn order; however many plans the feed serves, the last is at
+    // most one press per row away.
+    let nodes = app.screen().layout_nodes();
+    let rows = nodes
+        .iter()
+        .filter(|node| {
+            node.test_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("plan-"))
+                && inside(&nodes, node, LIST)
+        })
+        .count();
+    let target = format!("id:{LAST}");
+    for _ in 0..rows {
+        if app.screen().selected(&target).unwrap() {
+            break;
+        }
         app.press_key("j").unwrap();
     }
-    app.wait_for(&format!("id:{LAST}")).unwrap();
+    assert!(
+        app.screen().selected(&target).unwrap(),
+        "j through {rows} plans never selected {LAST}"
+    );
     let nodes = app.screen().layout_nodes();
-    let list = bounds_of(&nodes, "plans-list");
+    let list = bounds_of(&nodes, LIST);
     let row = bounds_of(&nodes, LAST);
     let (top, bottom) = (
         list.bounds.origin.y.0,

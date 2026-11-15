@@ -94,9 +94,7 @@ fn span_of(app: AppState, run: &Span, size: f32) -> Text {
     if run.strike {
         piece = piece.line_through();
     }
-    if let Some(page) = run.link {
-        piece = link_style(piece).on_press(move || app.open(page));
-    } else if let Some(live) = run.live.clone() {
+    if let Some(live) = run.live.clone() {
         piece = link_style(piece).on_press(move || app.open_live(live.clone()));
     }
     piece

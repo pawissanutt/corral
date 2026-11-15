@@ -9,6 +9,7 @@ use corral_protocol::rows::{OperatingMode, SettingsSnapshot};
 use super::live::grant_on;
 use crate::model::Act;
 use crate::model::hue::Hue;
+use crate::model::id::IdSupply;
 
 /// One operating-mode change the owner may make from here. corrald's `mode off` is only an alias
 /// of pause, so it is not offered separately.
@@ -68,7 +69,7 @@ impl ModeVerb {
     }
 
     /// The confirmed canonical command.
-    pub fn act(self) -> Act {
+    pub fn act(self, ids: &mut IdSupply) -> Act {
         let command = match self {
             ModeVerb::Pause => ModeCommand::Pause {},
             ModeVerb::Resume => ModeCommand::Resume {},
@@ -76,7 +77,7 @@ impl ModeVerb {
             ModeVerb::TurboOff => ModeCommand::Turbo { off: true },
             ModeVerb::Assist => ModeCommand::Assist {},
         };
-        Act::new(self.label(), Command::Mode(command)).confirmed()
+        Act::new(ids, self.label(), Command::Mode(command)).confirmed()
     }
 }
 
@@ -225,7 +226,7 @@ impl GrantForm {
 
     /// The grant as a confirmed canonical command: corrald previews the exact scope, and the
     /// confirmation carries its automation preview identity.
-    pub fn act(&self) -> Option<Act> {
+    pub fn act(&self, ids: &mut IdSupply) -> Option<Act> {
         if self.problem().is_some() {
             return None;
         }
@@ -244,7 +245,7 @@ impl GrantForm {
             confirm: String::new(),
             json: false,
         };
-        Some(Act::new("Grant autopilot", Command::Mode(command)).confirmed())
+        Some(Act::new(ids, "Grant autopilot", Command::Mode(command)).confirmed())
     }
 }
 
@@ -256,9 +257,9 @@ mod tests {
     fn grant_without_scope_is_never_built() {
         let mut form = GrantForm::default();
         form.powers[Power::Dispatch as usize] = true;
-        assert!(form.act().is_none());
+        assert!(form.act(&mut IdSupply::new("grant-test")).is_none());
         form.set(Field::Tasks, "T-1, T-2".into());
-        let act = form.act().unwrap();
+        let act = form.act(&mut IdSupply::new("grant-test")).unwrap();
         let Command::Mode(ModeCommand::Autopilot { tasks, confirm, .. }) = act.command else {
             panic!("autopilot command expected");
         };

@@ -22,7 +22,7 @@ use self::nav::{Entry, Nav};
 use super::{confirmation, lock, stale, toast};
 use crate::{
     model::{
-        Availability, DataState, Destination, Live, Overlay, Page, PhoneTab, Route,
+        Availability, DataState, Destination, Live, Overlay, PhoneTab, Route,
         nav::{ASK_BUTTON, ASK_BUTTON_LABEL},
         work::{self, MoreRow},
     },
@@ -104,10 +104,9 @@ pub fn shell(app: AppState) -> AnyElement {
         .child(when(
             move || app.lock.get(),
             move || {
-                lock::lock_screen(app, move |page: Page| {
+                lock::lock_screen(app, move |live: Live| {
                     app.lock.set(false);
-                    app.go(page.owner());
-                    app.open(page);
+                    app.open_live(live);
                 })
             },
         ))
@@ -192,43 +191,20 @@ fn root(nav: Nav, tab: PhoneTab) -> Screen {
 }
 
 /// The page an entry shows, and whether it starts with its own large-title head (which draws the
-/// connection banner under the title). Against corrald a live record opens its domain's live
-/// page, a destination its served screen (or the frame saying why it is not), and a fixture page
-/// left over from the preview only its destination. Without a connection every page is its
-/// destination's frame, and Settings keeps its sections (browser pairing lives in Connection).
+/// connection banner under the title). Against corrald or the labelled preview's feed a record
+/// opens its domain's page, a destination its screen (or the frame saying why it is not served).
+/// Without a connection every page is its destination's frame, and Settings keeps its sections
+/// (browser pairing lives in Connection).
 fn page_of(app: AppState, entry: Entry) -> (PhonePage, bool) {
     let pushed = |page: PhonePage| (page, false);
-    match untracked(|| app.data.get()) {
-        DataState::Daemon => {
-            return match entry {
-                Entry::Page(Route::Live(live))
-                    if untracked(|| app.available(live.owner())) == Availability::Ready =>
-                {
-                    pushed(live_page(app, live))
-                }
-                Entry::Page(route) => destination_page(app, route.owner()),
-                Entry::Destination(destination) => destination_page(app, destination),
-                Entry::Section(section) => pushed(settings::section_phone(app, section)),
-            };
-        }
-        DataState::Disconnected => {
-            return match entry {
-                Entry::Page(route) => destination_page(app, route.owner()),
-                Entry::Destination(destination) => destination_page(app, destination),
-                Entry::Section(section) => pushed(settings::section_phone(app, section)),
-            };
-        }
-        DataState::Fixture => {}
-    }
+    let connected = untracked(|| app.data.get()) != DataState::Disconnected;
     match entry {
-        Entry::Page(Route::Page(Page::Question)) => pushed(inbox::question_phone(app)),
-        Entry::Page(Route::Page(Page::Task(_))) => pushed(now::task_phone(app)),
-        Entry::Page(Route::Page(Page::Plan(_))) => pushed(plans::plan_phone(app)),
-        Entry::Page(Route::Page(Page::Session(_))) => pushed(agents::session_phone(app)),
-        Entry::Page(Route::Page(Page::Thread(_))) => pushed(assistant::thread_phone(app)),
-        // A live record never opens over the fixture preview: its destination shows instead.
-        Entry::Page(Route::Live(live)) => destination_page(app, live.owner()),
-        Entry::Destination(Destination::Review) => pushed(review::page_phone(app)),
+        Entry::Page(Route::Live(live))
+            if connected && untracked(|| app.available(live.owner())) == Availability::Ready =>
+        {
+            pushed(live_page(app, live))
+        }
+        Entry::Page(route) => destination_page(app, route.owner()),
         Entry::Destination(destination) => destination_page(app, destination),
         Entry::Section(section) => pushed(settings::section_phone(app, section)),
     }
@@ -280,7 +256,9 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
     // A served assistant thread's subject moves while it stays pushed (the quick thread rolls
     // to its next session): its head follows the thread; every other page keeps its title.
     let title: Reactive<SharedString> = match &entry {
-        Entry::Page(Route::Live(Live::Thread(id))) if untracked(|| app.daemon()) => {
+        Entry::Page(Route::Live(Live::Thread(id)))
+            if untracked(|| app.data.get()) != DataState::Disconnected =>
+        {
             let live = assistant::live_thread_title(app, id.clone());
             (move || SharedString::from(live.get())).into_reactive()
         }
@@ -406,16 +384,10 @@ fn page_bar(bar: PhoneBar) -> AnyElement {
 }
 
 /// The More tab's root (`SCREENS.more`): the large title with search, then a row per
-/// destination with its icon, label and the model's subtitle, each pushing its destination.
-/// Only the fixture preview has illustrative subtitles; otherwise the rows are bare.
+/// destination with its icon, label and the feed's subtitle, each pushing its destination.
 fn more_list(nav: Nav) -> AnyElement {
     let app = nav.app;
-    let more = if untracked(|| app.data.get()) == DataState::Fixture {
-        app.work
-            .with_untracked(|state| work::more(state, untracked(|| app.env())))
-    } else {
-        app.feed.with_untracked(work::daemon_more)
-    };
+    let more = app.feed.with_untracked(work::daemon_more);
     let rows: Vec<AnyElement> = more.rows.iter().map(|&row| more_row(nav, row)).collect();
     let list = view()
         .mt(px(6.0))

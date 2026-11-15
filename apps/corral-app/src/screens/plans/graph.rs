@@ -16,7 +16,7 @@ use crate::ui::kit::rows::list_row;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
-use super::{RING, press, target_id};
+use super::{RING, press};
 
 /// The share of a line's size above its baseline: converts the model's text baselines (SVG
 /// `y`) to the top of a text box whose line is as tall as its size.
@@ -198,7 +198,9 @@ fn card_rail(app: AppState, node: &Node, geometry: &CardGeometry) -> AnyElement 
 
 /// A card (`.gnode`): surface with a rule-2 edge, 6 pt corners; selected a 1.6 pt ink ring;
 /// needs you the you ground and edge. Id, title and now-phrase on the model's baselines, the
-/// rail at its points. A button named by id and title, with its selected state.
+/// rail at its points. A button named by id and title, with its selected state; test_id
+/// `task-<id>` whatever the press does, so a member asking a question never takes the decide
+/// bar's "btn-answer" where the graph sits beside it.
 fn card(app: AppState, node: &Node) -> AnyElement {
     let Some(geometry) = node.card.as_ref() else {
         return view().into_element();
@@ -240,7 +242,7 @@ fn card(app: AppState, node: &Node) -> AnyElement {
             selected: node.selected,
             ..AccessibilityState::default()
         })
-        .test_id(&target_id(&action))
+        .test_id(&format!("task-{}", node.id))
         .on_press(move || press(app, action.clone()))
         .focus_visible(|s| {
             s.outline(px(RING))
@@ -337,7 +339,7 @@ fn layer_row(app: AppState, node: &Node) -> AnyElement {
     let action = node.action.clone();
     let selected = node.selected;
     let label = format!("{} {}", node.id, node.title);
-    let id = target_id(&action);
+    let id = format!("task-{}", node.id);
     if app.form == Form::Terminal {
         return list_row(
             app,

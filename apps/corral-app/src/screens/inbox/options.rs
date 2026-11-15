@@ -307,7 +307,11 @@ fn draft_row(app: AppState, part: &Recommendation) -> AnyElement {
         .placeholder(part.draft_placeholder)
         .readonly(locked)
         .value(move || app.inbox.with(|state| state.draft_of(read_key.as_ref())))
-        .on_change(move |typed: &str| act(app, Action::draft(write_key.as_ref(), typed.to_owned())))
+        .on_change(move |typed: &str| {
+            if let Some(action) = Action::draft(write_key.as_ref(), typed.to_owned()) {
+                act(app, action);
+            }
+        })
         .flex_1()
         .min_w(px(0.0))
         .text_color(color(Token::Ink))

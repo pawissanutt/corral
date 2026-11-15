@@ -48,8 +48,8 @@ fn with_storage(config: EngineConfig, entries: &[(&str, &str)]) -> Headless {
     app
 }
 
-/// Starts the app as [`with_storage`] does, then chooses the fixture preview from the palette,
-/// as a person does after every launch.
+/// Starts the app as [`with_storage`] does, then chooses the sample preview from the palette,
+/// as a person does after every launch: the synthetic feed through the live screens.
 fn preview(config: EngineConfig, entries: &[(&str, &str)]) -> Headless {
     let opener = if config.environment.idiom == Idiom::Phone {
         "id:btn-search"
@@ -65,6 +65,10 @@ fn preview(config: EngineConfig, entries: &[(&str, &str)]) -> Headless {
         .unwrap();
     app
 }
+
+/// The synthetic feed's open worker question, the first of its three owner moves (with the
+/// T-885 plan acceptance and the T-868 review).
+const QUESTION: &str = "id:inbox-T-868/R1/Q1";
 
 fn assert_text(app: &mut Headless, id: &str, expected: &str) {
     app.wait_for(&format!("id:{id}")).unwrap();
@@ -275,7 +279,7 @@ fn disconnected_state_shows_no_healthy_segment_and_no_count() {
 fn sending_from_ask_appends_to_the_quick_thread_and_clears_the_draft() {
     let mut app = preview(desktop(), &[]);
     app.press("id:ask-open").unwrap();
-    app.wait_for("id:thread-A-7-items").unwrap();
+    app.wait_for("id:thread-quick-items").unwrap();
     let message = "Why do violet badgers collect moonstones?";
     app.type_text("id:ask-input", message).unwrap();
     assert!(app.screen().enabled("id:btn-send").unwrap());
@@ -312,46 +316,25 @@ fn destination_is_restored_from_storage() {
 fn answering_the_question_marks_it_answered_and_drops_the_inbox_count() {
     let mut app = preview(desktop(), &[]);
     app.press("id:nav-inbox").unwrap();
-    assert_text(&mut app, "count-inbox", "5");
-    app.wait_for("id:inbox-question").unwrap();
-    app.press("id:inbox-question").unwrap();
+    assert_text(&mut app, "count-inbox", "3");
+    app.wait_for(QUESTION).unwrap();
+    app.press(QUESTION).unwrap();
     app.press_key("enter").unwrap();
     app.wait_for("id:question-main").unwrap();
     app.press("id:btn-answer").unwrap();
-    app.wait_for("text:ANSWERED").unwrap();
-    assert_text(&mut app, "count-inbox", "4");
-}
-
-#[test]
-fn offline_approval_refuses_without_opening_confirmation() {
-    let mut app = preview(desktop(), &[]);
-    app.press("id:palette-open").unwrap();
-    app.type_text("id:palette-input", "Connection: offline")
-        .unwrap();
-    app.press("text:Connection: offline · last sync").unwrap();
-    app.wait_for_gone("id:palette-input", Duration::from_secs(5))
-        .unwrap();
-    app.press("id:nav-review").unwrap();
-    app.wait_for("id:btn-approve").unwrap();
-    app.press("id:btn-approve").unwrap();
-    app.wait_for("id:toast").unwrap();
-    app.wait_for(&format!(
-        "text:{}",
-        nsh_app_corral::model::review::APPROVAL_REFUSED
-    ))
-    .unwrap();
-    assert_eq!(app.screen().count("id:confirm").unwrap(), 0);
+    app.wait_for("text:/^ANSWERED/").unwrap();
+    assert_text(&mut app, "count-inbox", "2");
 }
 
 #[test]
 fn phone_question_back_returns_to_the_inbox_list() {
     let mut app = preview(phone(), &[]);
-    app.press("id:inbox-question").unwrap();
+    app.press(QUESTION).unwrap();
     app.wait_for("id:qhead-title").unwrap();
     assert_eq!(app.screen().count("id:inbox-list").unwrap(), 0);
     app.press("id:page-back").unwrap();
     app.wait_for("id:inbox-list").unwrap();
-    app.wait_for("id:inbox-question").unwrap();
+    app.wait_for(QUESTION).unwrap();
     assert_text(&mut app, "page-title", "Inbox");
 }
 
@@ -394,6 +377,8 @@ fn enter_on_a_focused_sidebar_item_goes_there_instead_of_opening_the_list_row() 
     panic!("Tab never reached the sidebar's Plans item, or Enter did not press it");
 }
 
+/// Enter on the fresh confirmation presses Cancel, which has the focus: the sheet closes, the
+/// cancellation's receipt says nothing was sent, and the candidate is still there to approve.
 #[test]
 fn confirmation_takes_the_focus_so_enter_cancels_it() {
     let mut app = preview(desktop(), &[]);
@@ -404,7 +389,16 @@ fn confirmation_takes_the_focus_so_enter_cancels_it() {
     app.press_key("enter").unwrap();
     app.wait_for_gone("id:confirm", Duration::from_secs(5))
         .unwrap();
-    assert_eq!(app.screen().count("id:toast").unwrap(), 0);
+    app.wait_for("text:/ · cancelled, nothing was sent$/")
+        .unwrap();
+    assert_eq!(app.screen().count("id:toast").unwrap(), 1);
+    // Nothing ran: once the receipt leaves, the approval is still offered and opens a fresh
+    // confirmation again.
+    assert!(app.screen().enabled("id:btn-approve").unwrap());
+    app.wait_for_gone("id:toast", Duration::from_secs(5))
+        .unwrap();
+    app.press("id:btn-approve").unwrap();
+    app.wait_for("id:confirm").unwrap();
 }
 
 #[test]
@@ -412,7 +406,7 @@ fn phone_landscape_question_keeps_next_in_the_header() {
     let mut config = phone();
     config.viewport = Size::new(Points(844.0), Points(390.0));
     let mut app = preview(config, &[]);
-    app.press("id:inbox-question").unwrap();
+    app.press(QUESTION).unwrap();
     app.wait_for("id:qhead-title").unwrap();
     app.wait_for("id:btn-next").unwrap();
     // Held sideways the pager row is gone; Next sits among the header's controls, not below.
@@ -433,7 +427,7 @@ fn phone_landscape_question_keeps_next_in_the_header() {
 fn terminal_80_columns_stacks_the_inbox_list_instead_of_hiding_it() {
     let mut app = preview(terminal_80(), &[("corral.destination", "inbox")]);
     app.wait_for("id:inbox-list").unwrap();
-    app.wait_for("id:inbox-question").unwrap();
+    app.wait_for(QUESTION).unwrap();
     let nodes = app.screen().layout_nodes();
     let list = nodes
         .iter()
@@ -444,4 +438,15 @@ fn terminal_80_columns_stacks_the_inbox_list_instead_of_hiding_it() {
         "the list has room: {:?}",
         list.bounds
     );
+}
+
+/// The grouping switch asks the feed for the other grouping and redraws the lanes from its
+/// answer: By agent draws the gate session's lane, which By task does not have.
+#[test]
+fn timeline_grouping_redraws_the_lanes_from_the_feed() {
+    let mut app = preview(terminal_80(), &[("corral.destination", "timeline")]);
+    app.wait_for("label:/^T-871 /").unwrap();
+    assert_eq!(app.screen().count("label:/^gate-T-890 /").unwrap(), 0);
+    app.press("id:seg-group-1").unwrap();
+    app.wait_for("label:/^gate-T-890 /").unwrap();
 }

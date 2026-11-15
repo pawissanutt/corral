@@ -1,15 +1,3 @@
-//! Pure content for Now, its task page, Changes and the phone More list.
-//!
-//! Render [`workspace`] as the desktop/terminal dock contents, [`phone_now`] as the phone
-//! tab, and [`task_page`] as its pushed task page. Rows carry their resolved facts
-//! ([`TaskLine`](crate::model::board::TaskLine)) so the renderer reads no store. Controls carry a
-//! [`Press`]: a fixture [`Action`] for [`State::act`], or a live press for [`State::press`],
-//! which turns it into root effects (live navigation, Ask context, typed canonical commands,
-//! changes paging and the per-device seen cursor). The mockup's Split and Zoom controls have no
-//! handlers; their descriptors intentionally carry no action. In the Daemon data state,
-//! [`daemon_list`], [`daemon_inspector`], [`live_changes`] and their siblings build Now and
-//! Changes from the daemon's feed instead of the fixtures.
-
 mod data;
 mod inspector;
 mod list;
@@ -49,8 +37,8 @@ pub use when::*;
 use std::borrow::Cow;
 
 use crate::model::daemon;
-use crate::model::effect::{Effect, Env, Page};
-use crate::model::nav::{Destination, SettingsSection};
+use crate::model::effect::{Effect, Env};
+use crate::model::nav::Destination;
 use crate::model::{Id, Live};
 use corral_protocol::app::{ChangesQuery, SeenAdvance};
 
@@ -117,11 +105,11 @@ impl LowTab {
     /// The lower dock tab strip.
     pub const ALL: [Self; 2] = [Self::Since, Self::Parked];
 
-    /// The fixture's complete tab label, including its snapshot count or clock.
+    /// Stable tab label; counts and timestamps are supplied by the feed builder.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Since => "Since your last visit · 18:40",
-            Self::Parked => "Parked 32",
+            Self::Since => "Since your last visit",
+            Self::Parked => "Parked",
         }
     }
 }
@@ -182,8 +170,7 @@ pub const CHANGES_PER_PAGE: u16 = 100;
 /// T-890's story in the fixture. The Daemon state's selected task is the root's live selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State {
-    /// Fixture task id selected in the list and all inspector/context content.
-    pub sel: &'static str,
+    pub ids: crate::model::id::IdSupply,
     /// Selected inspector tab.
     pub now_tab: NowTab,
     /// Selected context tab.
@@ -211,7 +198,7 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            sel: "T-890",
+            ids: Default::default(),
             now_tab: NowTab::Story,
             ctx_tab: CtxTab::Live,
             low_tab: LowTab::Since,
@@ -227,54 +214,26 @@ impl Default for State {
     }
 }
 
-/// Every handled fixture or form-independent control in the Now, task, Changes and More
-/// builders.
+/// Local controls shared by Now, Changes and More.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    /// Select a desktop row without changing destination.
-    Select(&'static str),
-    /// Open a feed/phone task row, selecting it first.
-    OpenTask(&'static str),
     /// Switch the inspector tab.
     NowTab(NowTab),
     /// Switch the context tab.
     CtxTab(CtxTab),
     /// Switch the lower-left tab.
     LowTab(LowTab),
-    /// Open the selected task's full session.
-    OpenSession(&'static str),
-    /// Open a plan review or context graph.
-    OpenPlan(&'static str),
-    /// Open Ask with the task as its context chip.
-    AskAbout(&'static str),
-    /// Open the needs-you task's handover sheet.
-    OpenQuestion,
     /// Open a destination, including entries on the More page.
     Go(Destination),
     /// Return from a pushed task or Changes page.
     Back,
-    /// Show the mockup's goals-filter explanation.
-    Goals,
-    /// Explain the collapsed queued rows, with phone-specific counts.
-    MoreQueued,
-    /// Explain the parked summary.
-    ParkedSummary,
-    /// Open the illustrative PM question's sample notice.
-    SampleQuestion,
-    /// Show the fixture's per-device seen-cursor notice without altering snapshot marks.
-    MarkSeen,
-    /// Open connection settings from a connection banner.
-    Connection,
-    /// Show the mockup's service-manager restart notice.
-    RestartDaemon,
     /// Show every row of a collapsed daemon group (Queued, Held or Parked).
     ShowAll(GroupKey),
     /// Narrow the Changes feed.
     Filter(ChangeFilter),
 }
 
-/// What pressing a control does: a fixture or form-independent [`Action`], or a live press on
-/// owned daemon ids that [`State::press`] turns into root effects.
+/// Local interaction or a canonical record action against owned feed identities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Press {
     Work(Action),
@@ -324,7 +283,7 @@ pub enum ButtonKind {
     Quiet,
 }
 
-/// A labelled control; `None` actions reproduce unimplemented mockup controls visibly.
+/// A labelled control with its action, emphasis and current availability.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Button {
     /// Complete visible wording, static unless it embeds a selected id.
@@ -333,7 +292,7 @@ pub struct Button {
     pub action: Option<Press>,
     /// Whether the user can press this control.
     pub enabled: bool,
-    /// The mockup's button emphasis.
+    /// The button emphasis.
     pub kind: ButtonKind,
     /// Why an offered canonical action is currently unavailable.
     pub reason: Option<String>,
@@ -371,70 +330,14 @@ pub const START_MARK: &str = "▶";
 pub const KEYS: &[&str] = &["]"];
 
 impl State {
-    /// Select a fixture task for every Now panel; navigation is the app's responsibility.
-    pub fn select(&mut self, id: &'static str) {
-        self.sel = id;
-    }
-
-    /// Apply a fixture or form-independent action, returning all cross-domain effects.
-    pub fn act(&mut self, action: Action, env: Env) -> Vec<Effect> {
-        use crate::model::nav::Form;
+    /// Apply form-independent local controls.
+    pub fn act(&mut self, action: Action) -> Vec<Effect> {
         match action {
-            Action::Select(id) => self.select(id),
-            Action::OpenTask(id) => {
-                self.select(id);
-                return vec![Effect::Open(Page::Task(id))];
-            }
             Action::NowTab(tab) => self.now_tab = tab,
             Action::CtxTab(tab) => self.ctx_tab = tab,
             Action::LowTab(tab) => self.low_tab = tab,
-            Action::OpenSession(id) => return vec![Effect::Open(Page::Session(id))],
-            Action::OpenPlan(id) => return vec![Effect::Open(Page::Plan(id))],
-            Action::AskAbout(id) => {
-                return vec![Effect::Ask {
-                    chip: Some(id),
-                    text: None,
-                }];
-            }
-            Action::OpenQuestion => return vec![Effect::Open(Page::Question)],
             Action::Go(to) => return vec![Effect::Go(to)],
             Action::Back => return vec![Effect::Back],
-            Action::Connection => return vec![Effect::GoSettings(SettingsSection::Connection)],
-            Action::Goals => return vec![Effect::Toast("Goals is a filter: g toggles it".into())],
-            Action::MoreQueued => {
-                return vec![Effect::Toast(
-                    if env.form == Form::Phone {
-                        "+19 more queued, collapsed by reason"
-                    } else {
-                        "Expanded: 15 more queued, collapsed by reason (capacity)"
-                    }
-                    .into(),
-                )];
-            }
-            Action::ParkedSummary => {
-                return vec![Effect::Toast(
-                    if env.form == Form::Phone {
-                        "Parked by you"
-                    } else {
-                        "Parked: 32 tasks with your dispatch hold"
-                    }
-                    .into(),
-                )];
-            }
-            Action::SampleQuestion => {
-                return vec![Effect::Toast("Sample question (illustrative)".into())];
-            }
-            Action::MarkSeen => {
-                return vec![Effect::Toast(
-                    "Seen-cursor moved to 22:12 for pawis-desktop only".into(),
-                )];
-            }
-            Action::RestartDaemon => {
-                return vec![Effect::Toast(
-                    "Restart requested via service manager (systemctl --user restart corrald)"
-                        .into(),
-                )];
-            }
             Action::ShowAll(GroupKey::Parked) => self.all_parked = true,
             Action::ShowAll(GroupKey::Held) => self.all_held = true,
             Action::ShowAll(_) => self.all_queued = true,
@@ -443,11 +346,10 @@ impl State {
         Vec::new()
     }
 
-    /// Apply any press: fixture actions through [`State::act`], live presses into root effects
-    /// against the daemon's feed.
-    pub fn press(&mut self, press: Press, feed: &daemon::Feed, env: Env) -> Vec<Effect> {
+    /// Apply local interactions or dispatch canonical record effects against the feed.
+    pub fn press(&mut self, press: Press, feed: &daemon::Feed, _env: Env) -> Vec<Effect> {
         match press {
-            Press::Work(action) => self.act(action, env),
+            Press::Work(action) => self.act(action),
             Press::Select(id) => vec![Effect::Select(Live::Task(id))],
             Press::Open(live) => vec![Effect::OpenLive(live)],
             Press::Ask { about, rev } => vec![Effect::AskAbout {
@@ -493,115 +395,18 @@ impl State {
             NowTab::Session => NowTab::Story,
         };
     }
-
-    /// Port Now's j/k, arrows, Enter and inspector-tab handler for the fixture preview.
-    ///
-    /// `page` prevents handling keys for another domain's pushed page. Collapsed summaries
-    /// and extra plan/PM rows are not keyboard-selectable, as in the mockup. Empty/elsewhere
-    /// projections omit their hidden question task from the selection order.
-    pub fn key(&mut self, key: &str, page: Option<Page>, env: Env) -> Option<Vec<Effect>> {
-        self.key_with_question(key, page, env, question_open(env))
-    }
-
-    /// The key handler with the inbox's question-open projection supplied by the app.
-    /// This mirrors `grouped_list_with_question` without coupling the two domain modules.
-    pub fn key_with_question(
-        &mut self,
-        key: &str,
-        page: Option<Page>,
-        env: Env,
-        question_open: bool,
-    ) -> Option<Vec<Effect>> {
-        if page.is_some_and(|page| !matches!(page, Page::Task(_))) {
-            return None;
-        }
-        match key {
-            "j" | "down" | "ArrowDown" | "k" | "up" | "ArrowUp" => {
-                let mut ids = list::selectable_tasks(env, question_open).peekable();
-                let mut selected = ids.peek().copied();
-                let mut previous = selected;
-                while let Some(id) = ids.next() {
-                    if id == self.sel {
-                        selected = if matches!(key, "j" | "down" | "ArrowDown") {
-                            Some(ids.peek().copied().unwrap_or(id))
-                        } else {
-                            previous
-                        };
-                        break;
-                    }
-                    previous = Some(id);
-                }
-                if let Some(id) = selected {
-                    self.select(id);
-                }
-                Some(Vec::new())
-            }
-            // The question task opens its decision; any other shows its session in the
-            // inspector, on Now, so Escape has no other destination to come back from.
-            "enter" | "Enter" if self.sel == "T-868" => Some(vec![Effect::Open(Page::Question)]),
-            "enter" | "Enter" => {
-                self.now_tab = NowTab::Session;
-                Some(Vec::new())
-            }
-            "]" => {
-                self.cycle_tab();
-                Some(Vec::new())
-            }
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::effect::{Conn, DataMode};
+    use crate::model::effect::Conn;
     use crate::model::nav::Form;
-
-    #[test]
-    fn selection_walks_group_boundaries_without_wrapping() {
-        let env = Env {
-            conn: Conn::Healthy,
-            mode: DataMode::Live,
-            form: Form::Desktop,
-        };
-        let ids = visible_task_ids(env, true);
-        let mut state = State::default();
-        state.select(ids[0]);
-        state.key("k", None, env);
-        assert_eq!(state.sel, ids[0]);
-        for id in ids.iter().skip(1) {
-            state.key("j", None, env);
-            assert_eq!(state.sel, *id);
-        }
-        state.key("j", None, env);
-        assert_eq!(state.sel, "T-852");
-        for id in ids.iter().rev().skip(1) {
-            state.key("k", None, env);
-            assert_eq!(state.sel, *id);
-        }
-        state.key("k", None, env);
-        assert_eq!(state.sel, "T-868");
-    }
-
-    #[test]
-    fn hidden_question_cannot_receive_keyboard_selection() {
-        let env = Env {
-            conn: Conn::Healthy,
-            mode: DataMode::Elsewhere,
-            form: Form::Desktop,
-        };
-        let mut state = State::default();
-        state.key("k", None, env);
-        assert_eq!(state.sel, "T-890");
-        assert!(!visible_task_ids(env, false).contains(&"T-868"));
-    }
 
     #[test]
     fn a_task_command_needs_the_loaded_owner_revision_and_is_never_reissued_while_uncertain() {
         let env = Env {
             conn: Conn::Healthy,
-            mode: DataMode::Live,
             form: Form::Desktop,
         };
         let mut feed = daemon::Feed::default();

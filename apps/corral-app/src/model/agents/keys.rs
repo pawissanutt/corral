@@ -366,17 +366,8 @@ pub(super) fn keys(
     }))
 }
 
-/// A fixture terminal key: the preview has no pane to type into.
-pub(super) fn fixture(key: &str) -> Vec<Effect> {
-    vec![Effect::Toast(format!(
-        "Preview: {key} stays in this preview; nothing was sent to a pane."
-    ))]
-}
-
 impl State {
-    /// A press on a daemon session's keys bar. Nothing is sent unless corrald offers keys on
-    /// the row, this device has admin authority over a live link, and no keys command of the
-    /// session is in flight.
+    /// Gather one sequence per session; only the shared command path may send it.
     pub(super) fn press_keys(
         &mut self,
         session: Id,
@@ -434,13 +425,11 @@ impl State {
                 latest.choosing = open;
                 Vec::new()
             }
-            KeyPress::Send(text) => send(latest, &session, row, text),
+            KeyPress::Send(text) => send(&mut self.ids, latest, &session, row, text),
             KeyPress::Settled(_) => Vec::new(),
         }
     }
 
-    /// The latest keys command settled: the gathered keys it sent are done with once it ran,
-    /// and the pane's screen is read again now rather than at the next periodic read.
     fn keys_settled(&mut self, session: Id, key: &Id, feed: &daemon::Feed) -> Vec<Effect> {
         if let Some(latest) = self.keys.get_mut(&session)
             && latest.sent.as_ref().is_some_and(|typed| typed.key == *key)
@@ -457,9 +446,13 @@ impl State {
     }
 }
 
-/// The gathered keys and the words, when not blank, as one command; the words go as typed.
-/// What corrald would refuse is held back with the reason instead.
-fn send(latest: &mut Latest, session: &Id, row: &AgentRow, text: String) -> Vec<Effect> {
+fn send(
+    ids: &mut crate::model::id::IdSupply,
+    latest: &mut Latest,
+    session: &Id,
+    row: &AgentRow,
+    text: String,
+) -> Vec<Effect> {
     let text = (!text.trim().is_empty()).then_some(text);
     if latest.pending.is_empty() && text.is_none() {
         latest.held = Some("Nothing to send: add a key or type some text.".into());
@@ -476,6 +469,7 @@ fn send(latest: &mut Latest, session: &Id, row: &AgentRow, text: String) -> Vec<
     }
     let what = describe(&latest.pending, text.as_deref());
     let act = Act::new(
+        ids,
         format!("Send {what} to {}", shown_id(row)),
         Command::Session(SessionCommand::Keys {
             id: row.id.clone(),

@@ -77,8 +77,7 @@ pub fn bind_escape(app: AppState, session: Memo<Session>) {
         ..KeyOptions::default()
     };
     on_key_with("escape", typing, move |_| {
-        let covered = app.confirm.with_untracked(Option::is_some)
-            || app.confirmation.with_untracked(Option::is_some)
+        let covered = app.confirmation.with_untracked(Option::is_some)
             || app.ask_field.with_untracked(Option::is_some)
             || app.assistant.with_untracked(|state| state.model_menu)
             || app.nav.with_untracked(|nav| nav.newest().is_some());

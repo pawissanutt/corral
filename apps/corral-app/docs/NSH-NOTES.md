@@ -17,6 +17,7 @@ and not yet exercised.
 | Fonts | Each shipped font file registers as one face, at the single weight in its OS/2 table, under the family name in the file. A variable font is not treated as a range of weights: the app ships one static file per weight. A subset variable file whose name table says "… ExtraLight" registers under that name. | observed in the browser (`document.fonts`), `docs/fonts` |
 | Font styles | An italic file registers as the italic face of its family (the web passes ttf-parser's `is_italic` to `FontFace`), so Cascadia Mono's regular, bold, italic and bold italic files are one family that `font_weight` and `italic()` choose from. `assets!()` registers only `ttf`, `otf`, `woff` and `woff2` as fonts; any other file in `assets/` (the font's licence) is a plain file asset. | read, `nsh-macros/src/assets.rs` (`FONT_EXTENSIONS`), `nsh-platform-web/src/text.rs` `register_font` |
 | Font fallback | A `font_family` value is a CSS list; text is set in the first family a platform has, and a character that family lacks in the next family that has it, so a fallback glyph comes with that font's own advance. A monospace grid has to box such characters to their cells. | read, `nsh-core/src/style.rs` `font_families` |
+| Inline JS modules | `wasm_bindgen(inline_js = …)` ships an addressable ES module in development and hashed web packages. A same-origin module can register its own `import.meta.url` as a module service worker; use its directory scope, not a root intercept. Cross-origin asset/CDN hosting cannot register it. | read, `src/client/web/push.rs`; real vendor push delivery unverified |
 
 ## Names that collide with the prelude
 
@@ -34,6 +35,7 @@ that has the same names fails with E0659. Import app items by name (`use crate::
 | `on_key` fires on desktop platforms only; on phones the bindings are kept but no key reaches them. | read, `element/ambient.rs:1520` |
 | A shifted character is named by its unshifted key: `on_key("?")` panics, so the app binds `shift+/`. The web key mapper uses `code: "Slash"` and the shift modifier for a real `key: "?"` event. | read, `nsh-core/src/keymap.rs`, `nsh-platform-web/web/nsh.js` `keyCode`, `src/state.rs` |
 | For headless browser key tests, send the real key and code, such as `key: "?"`, `code: "Slash"`, `shiftKey: true`. The web mapper uses the code for shifted keys, so a claim that `key: "/"` alone prevents a match is not established when the same code is supplied. | read, `nsh-platform-web/web/nsh.js` `keyCode` |
+| **List-key scope:** the app binds list moves, Enter and answer digits only with list focus or no focused control, and no overlay/confirmation. Tab and Space remain platform controls. Global destination/domain letters use `When::NotEditing`; `.` is a row action menu in live Now/Review list scope, Changes elsewhere. | read, `src/state/keys.rs`, `src/model/commands/keys.rs` |
 
 ## Components
 
@@ -55,12 +57,14 @@ that has the same names fails with E0659. Import app items by name (`use crate::
 | A phone sheet's content can be built before it opens. The pairing sheet builds content for its own sheet kind rather than relying on which sheet is open at construction time. | read, `src/screens/settings/devices.rs` `sheet_host`, `sheet_content` |
 | [INFERENCE] NSH has no blur or animated gradient. The decide bar uses the plain page colour and the loading skeleton pulses opacity instead. | read, `src/ui/kit/page.rs` `bar`, `src/ui/kit/notice.rs` `skeleton`; absence of APIs not established |
 | Canvas drawings can take stroke and fill colours from the canvas view. Usage sets adaptive colours on its canvas layers so the chart follows light and dark appearance. | read, `src/screens/usage/chart.rs` `layers` |
+| **Web input names:** NSH 0.5.0 puts `aria-label` on the wrapper, not the inner input. The placeholder names the web input; settings fields therefore repeat their label as placeholder and put hints beneath. Pairing codes are not numeric, so a number-pad keyboard is unsuitable. | source finding DW-16 in SettingsFirstRun handoff; `src/screens/settings/parts.rs`, `enrolment.rs` |
 
 ## Storage
 
 | Finding | Checked |
 |---|---|
 | Web Storage uses `localStorage`, with keys prefixed `nsh:<app id>:`. This app's destination key is `nsh:com.example.corral:corral.destination`. | read, `nsh-platform-web/src/storage.rs`, `nsh-engine/src/local_storage.rs`, `nsh.json`, `src/state.rs` |
+| **Durable client state:** NSH Storage is not the outbox/cache transaction boundary. Browser `corral-local-state` v1 uses `records`/`meta` stores and acknowledges transaction completion; native `durable.json` uses a retained lock, file/directory sync and atomic replacement. Pairing is separately encrypted in `corral-app` v1, `credentials`. | read, `src/client/{durable,durable_web,durable_native}.rs`, `web/keystore.rs` |
 
 ## Terminal
 
@@ -87,6 +91,14 @@ that has the same names fails with E0659. Import app items by name (`use crate::
 
 ## Not available on this host
 
-Native window chrome, tray, global shortcut and second windows (`nsh_core::element::desktop`) need a
-desktop backend build, which needs GTK 4 development packages here or a Windows or macOS machine. None of
-it was built or run.
+Native window APIs, tray, global shortcuts and second windows (`nsh_core::element::desktop`)
+need a desktop backend build, requiring GTK 4 here or a supported Windows/macOS machine.
+The app implements a root-owned global Ask shortcut and tray. Setting
+`WindowAttributes.close_on_press = Some(false)` plus `on_close_press(...hide())` keeps the root/shortcut alive after window
+close; tray Quit ends the app. Source: `src/os_integration.rs` and `os_integration/tray.rs`.
+This is source-level integration, not native runtime verification on this host. TUI/web
+do not install these hooks.
+
+Inbound share targets are not supplied by NSH 0.5.0: Android routes `ACTION_VIEW`, iOS
+URL contexts do not carry share-extension payloads, and web packaging has no
+`share_target`/manifest override. See the [app guide's source evidence](../README.md#native-entry-points).

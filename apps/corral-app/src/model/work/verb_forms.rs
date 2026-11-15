@@ -195,7 +195,7 @@ impl State {
         verb: Verb,
         command: corral_protocol::cmd::Command,
     ) -> Vec<Effect> {
-        let mut act = Act::new(verb.title(&at.record), command);
+        let mut act = Act::new(&mut self.ids, verb.title(&at.record), command);
         if let Some(expect) = at.expect() {
             act = act.expect(expect);
         }

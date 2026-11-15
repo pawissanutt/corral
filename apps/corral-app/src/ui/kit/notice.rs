@@ -7,7 +7,7 @@
 
 use nsh_core::prelude::*;
 
-use crate::model::health::{ConnectionBanner, connection_banner, daemon_connection_banner};
+use crate::model::health::{ConnectionBanner, daemon_connection_banner};
 use crate::model::{DataState, Form, Hue, Rich, Tone};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
@@ -246,10 +246,9 @@ pub fn loading(app: AppState, caption: impl Into<SharedString>, bars: &[(f32, f3
 /// page's large title ([`super::page::head`]). Buttons "btn-<label>".
 pub fn connection(app: AppState) -> AnyElement {
     let shown = computed(move || match app.data.get() {
-        DataState::Daemon => app
+        DataState::Daemon | DataState::Fixture => app
             .feed
             .with(|feed| daemon_connection_banner(feed, app.form)),
-        DataState::Fixture => connection_banner(app.env().conn, app.form),
         DataState::Disconnected => None,
     });
     dynamic(move || {

@@ -1,9 +1,6 @@
-//! Diff numbering, side-by-side pairing, discussion placement and served-patch parsing. The
-//! fixture replay and the daemon's candidate patches share these builders.
+//! Diff numbering, side-by-side pairing, discussion placement and served-patch parsing.
 
-use crate::model::board::{LineKind, hunk};
-
-use super::data::{File, HunkSource, SourceLine};
+use crate::model::board::LineKind;
 
 /// A half-open UTF-8 byte range in the original, unescaped code text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,41 +102,6 @@ fn numbered(
         },
         text: text.to_owned(),
         highlight: word_mark(text, word),
-    }
-}
-
-/// Numbers source lines: context advances both counters, deletion only old, addition only new.
-pub fn number_lines(lines: &[SourceLine], start: (u32, u32)) -> Vec<NumberedLine> {
-    let (mut old, mut new) = start;
-    lines
-        .iter()
-        .map(|line| numbered(line.kind, line.text, line.word, &mut old, &mut new))
-        .collect()
-}
-
-/// Returns the fixture file's hunk heading; collapsed files have no supplied heading.
-pub fn hunk_header(file: &File) -> Option<&'static str> {
-    match file.hunk {
-        HunkSource::Inline { header, .. } => Some(header),
-        HunkSource::Board => Some(hunk().at),
-        HunkSource::Collapsed => None,
-    }
-}
-
-/// Ports `hunkLines`: the real board patch uses Review's historical (1990, 1990) gutters.
-/// Its header still reads `-1959`; this intentionally preserves the supplied mockup.
-pub fn hunk_lines(file: &File) -> Vec<NumberedLine> {
-    match file.hunk {
-        HunkSource::Inline { start, lines, .. } => number_lines(lines, start),
-        HunkSource::Board => {
-            let (mut old, mut new) = (1990, 1990);
-            hunk()
-                .lines
-                .iter()
-                .map(|&(kind, text)| numbered(kind, text, None, &mut old, &mut new))
-                .collect()
-        }
-        HunkSource::Collapsed => Vec::new(),
     }
 }
 
@@ -309,21 +271,21 @@ pub fn line_index(lines: &[NumberedLine], number: u32, old_side: bool) -> Option
 mod tests {
     use super::*;
 
-    fn source(kind: LineKind) -> SourceLine {
-        SourceLine {
-            kind,
-            text: "",
-            word: None,
-        }
+    fn number_lines(lines: &[LineKind], start: (u32, u32)) -> Vec<NumberedLine> {
+        let (mut old, mut new) = start;
+        lines
+            .iter()
+            .map(|&kind| numbered(kind, "", None, &mut old, &mut new))
+            .collect()
     }
 
     #[test]
     fn split_pairs_following_additions_without_dropping_unmatched_lines() {
         for (deleted, added) in [(3, 1), (1, 3), (2, 2), (0, 2), (2, 0)] {
-            let mut source_lines = vec![source(LineKind::Context)];
-            source_lines.extend((0..deleted).map(|_| source(LineKind::Del)));
-            source_lines.extend((0..added).map(|_| source(LineKind::Add)));
-            source_lines.push(source(LineKind::Context));
+            let mut source_lines = vec![LineKind::Context];
+            source_lines.extend((0..deleted).map(|_| LineKind::Del));
+            source_lines.extend((0..added).map(|_| LineKind::Add));
+            source_lines.push(LineKind::Context);
             let lines = number_lines(&source_lines, (10, 20));
             let rows = split_rows(&lines, &[]);
             assert_eq!(rows.len(), deleted.max(added) + 2);
@@ -346,12 +308,12 @@ mod tests {
     #[test]
     fn unified_numbering_does_not_advance_the_absent_side() {
         let lines = [
-            source(LineKind::Context),
-            source(LineKind::Del),
-            source(LineKind::Del),
-            source(LineKind::Add),
-            source(LineKind::Context),
-            source(LineKind::Add),
+            LineKind::Context,
+            LineKind::Del,
+            LineKind::Del,
+            LineKind::Add,
+            LineKind::Context,
+            LineKind::Add,
         ];
         let actual = number_lines(&lines, (10, 20));
         let numbers: Vec<_> = actual.iter().map(|line| (line.old, line.new)).collect();
@@ -372,11 +334,11 @@ mod tests {
     fn split_discussion_follows_the_row_of_its_anchored_line_once() {
         let lines = number_lines(
             &[
-                source(LineKind::Del),
-                source(LineKind::Del),
-                source(LineKind::Del),
-                source(LineKind::Add),
-                source(LineKind::Add),
+                LineKind::Del,
+                LineKind::Del,
+                LineKind::Del,
+                LineKind::Add,
+                LineKind::Add,
             ],
             (1, 1),
         );

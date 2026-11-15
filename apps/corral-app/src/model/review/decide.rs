@@ -396,6 +396,7 @@ impl State {
         build: impl FnOnce(String) -> AnnotationCommand,
     ) -> Vec<Effect> {
         let mut act = Act::new(
+            &mut self.ids,
             format!(
                 "{verb} on {} {}",
                 shown.id(),
@@ -416,15 +417,11 @@ impl State {
         env: Env,
     ) -> Vec<Effect> {
         let text = text.trim().to_owned();
-        if matches!(target, Compose::Fixture) {
-            return toast("Preview data: comments are not sent from the replay");
-        }
         if text.is_empty() {
             return toast("Write the note first; nothing was sent.");
         }
         let task = shown.id().clone();
         match target {
-            Compose::Fixture => Vec::new(),
             Compose::Changes(candidate) => {
                 if !shown.matches(&candidate) {
                     return toast(
@@ -437,6 +434,7 @@ impl State {
                 };
                 self.changes = None;
                 let act = Act::new(
+                    &mut self.ids,
                     format!("Request changes on {task}"),
                     Command::Review(ReviewCommand::RequestChanges {
                         id: task.to_string(),
@@ -580,6 +578,7 @@ impl State {
                     return toast("corrald reports no candidate SHA; nothing was sent.");
                 };
                 let act = Act::new(
+                    &mut self.ids,
                     format!("Approve {task} candidate {sha}"),
                     Command::Review(ReviewCommand::Approve {
                         id: task.to_string(),
@@ -592,6 +591,7 @@ impl State {
             }
             Action::Retry => {
                 let act = Act::new(
+                    &mut self.ids,
                     format!("Retry {task}"),
                     Command::Task(TaskCommand::Retry {
                         id: task.to_string(),
@@ -604,6 +604,7 @@ impl State {
             }
             Action::Discard => {
                 let act = Act::new(
+                    &mut self.ids,
                     format!("Discard {task} candidate {sha}"),
                     Command::Review(ReviewCommand::Discard {
                         id: task.to_string(),

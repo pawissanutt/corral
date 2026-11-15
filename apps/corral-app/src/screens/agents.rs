@@ -1,7 +1,7 @@
 //! The Agents destination: the wall of agents and one agent's session, its transcript beside
-//! the run, or its terminal. Everything shown comes from `model::agents`, built from the fixture
-//! preview or from corrald's rows and details; this module lays it out per form and sends every
-//! press to the model's reducer.
+//! the run, or its terminal. Everything shown comes from `model::agents`, built from the feed's
+//! rows and details; this module lays it out per form and sends every press to the model's
+//! reducer.
 
 mod console;
 mod controls;
@@ -31,20 +31,10 @@ pub fn screen(app: AppState) -> AnyElement {
     wall::screen(app)
 }
 
-/// The fixture session page (`Page::Session`) on desktop and terminal: the header with back to
-/// Agents, the Transcript | Terminal switch (the `` ` `` key toggles it too), then the
-/// transcript with its reply box beside the run, or the terminal surface.
-pub fn session(app: AppState) -> AnyElement {
-    session::page(app, computed(move || fixture_session(app)), None)
-}
-
-/// The fixture session page on the phone.
-pub fn session_phone(app: AppState) -> PhonePage {
-    session::phone(app, computed(move || fixture_session(app)), None)
-}
-
-/// A daemon session page on desktop and terminal, by its session id: the same page as the
-/// fixture's, from corrald's row, transcript page and its pane's screen.
+/// A session page on desktop and terminal, by its session id: the header with back to Agents,
+/// the Transcript | Terminal switch (the `` ` `` key toggles it too), then the transcript with
+/// its reply box beside the run, or the terminal surface, from the feed's row, transcript page
+/// and its pane's screen.
 pub fn live_session(app: AppState, id: Id) -> AnyElement {
     let view = computed({
         let id = id.clone();
@@ -53,10 +43,10 @@ pub fn live_session(app: AppState, id: Id) -> AnyElement {
     follow(app, id.clone());
     transcript::watch(app, id.clone());
     chat(app, id.clone());
-    session::page(app, view, Some(id))
+    session::page(app, view, id)
 }
 
-/// A daemon session page on the phone, by its session id.
+/// A session page on the phone, by its session id.
 pub fn live_session_phone(app: AppState, id: Id) -> PhonePage {
     let view = computed({
         let id = id.clone();
@@ -65,14 +55,16 @@ pub fn live_session_phone(app: AppState, id: Id) -> PhonePage {
     follow(app, id.clone());
     transcript::watch(app, id.clone());
     chat(app, id.clone());
-    session::phone(app, view, Some(id))
+    session::phone(app, view, id)
 }
 
 /// While an assistant's session page is open, subscribes the thread its composer chats in (the
-/// reference-counted thread scope; released when the page closes or the scope changes) and
-/// settles the composer's session operations, as the thread page does.
+/// reference-counted thread scope; released when the page closes or the scope changes, through
+/// the source it mounted on) and settles the composer's session operations, as the thread page
+/// does.
 fn chat(app: AppState, id: Id) {
     assistant::watch_ops(app);
+    let scoped = untracked(|| app.scope());
     let scope = computed(move || {
         app.feed.with(|feed| {
             feed.agents
@@ -83,42 +75,27 @@ fn chat(app: AppState, id: Id) {
     });
     effect(move || {
         if let Some(scope) = scope.get() {
-            untracked(|| assistant::open_scope(app, scope, false));
+            untracked(|| assistant::open_scope(scoped, scope, false));
         }
     });
 }
 
-/// Runs one of the model's actions through the app state, which applies its effects: the
-/// fixture reducer in the preview, the daemon reducer (with the feed and the root selection)
-/// otherwise.
+/// Runs one of the model's actions through the feed-backed reducer (with the feed and the root
+/// selection), which applies its effects.
 fn run(app: AppState, action: Action) {
-    if untracked(|| app.daemon()) {
-        app.reduce(app.agents, move |state, feed, selection, env| {
-            state.act_live(action, feed, selection, env)
-        });
-    } else {
-        app.act(app.agents, move |state, env| state.act(action, env));
-    }
+    app.reduce(app.agents, move |state, feed, selection, env| {
+        state.act_live(action, feed, selection, env)
+    });
 }
 
 /// The wall as the model builds it now (tracked).
 fn wall_view(app: AppState) -> agents::Wall {
     let env = app.env();
-    if app.daemon() {
-        app.feed
-            .with(|feed| app.agents.with(|state| agents::live_wall(state, feed, env)))
-    } else {
-        app.agents.with(|state| agents::wall(state, env))
-    }
+    app.feed
+        .with(|feed| app.agents.with(|state| agents::live_wall(state, feed, env)))
 }
 
-/// The open fixture session as the model builds it now (tracked).
-fn fixture_session(app: AppState) -> agents::Session {
-    let env = app.env();
-    app.agents.with(|state| agents::session(state, env))
-}
-
-/// A daemon session as the model builds it now (tracked), with the reply to its latest
+/// A session as the model builds it now (tracked), with the reply to its latest
 /// `assistant.session` control operation.
 fn daemon_session(app: AppState, id: &Id) -> agents::Session {
     let env = app.env();
@@ -140,8 +117,9 @@ fn daemon_session(app: AppState, id: &Id) -> agents::Session {
 /// comes back, or by the owner's Refresh. A corrald that streams terminals sends the screen
 /// itself, its first frame complete, to the session page's stream; reading it here as well
 /// would race that stream, so then nothing is read. The session page itself refreshes the
-/// transcript once a reply is delivered.
+/// transcript once a reply is delivered. Reads go to the source the page mounted on.
 fn follow(app: AppState, id: Id) {
+    let scoped = untracked(|| app.scope());
     let transcript = DetailRef::Session { id: id.to_string() };
     let capture = DetailRef::Terminal { id: id.to_string() };
     let rev = computed({
@@ -160,9 +138,9 @@ fn follow(app: AppState, id: Id) {
                 .agents
                 .with_untracked(|state| state.earlier.contains(id.as_str()));
             match seen_rev.replace(Some(now)) {
-                None => untracked(|| app.load(transcript.clone())),
+                None => untracked(|| scoped.load(transcript.clone())),
                 Some(before) if before != now && !earlier => {
-                    untracked(|| app.refresh(transcript.clone()));
+                    untracked(|| scoped.refresh(transcript.clone()));
                 }
                 Some(_) => {}
             }
@@ -185,7 +163,7 @@ fn follow(app: AppState, id: Id) {
         let capture = capture.clone();
         effect(move || {
             if shown.get() {
-                untracked(|| app.load(capture.clone()));
+                untracked(|| scoped.load(capture.clone()));
             }
         });
     }
@@ -212,7 +190,7 @@ fn follow(app: AppState, id: Id) {
                     .is_some_and(|cache| cache.error.is_some())
             });
             if changed || !failed {
-                app.refresh(capture.clone());
+                scoped.refresh(capture.clone());
             }
         });
     });

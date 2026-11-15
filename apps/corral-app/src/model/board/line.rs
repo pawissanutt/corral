@@ -1,10 +1,9 @@
-//! One task row's facts, resolved to the words and marks a row draws, whether they come from
-//! the compiled-in board or from the daemon's.
+//! Owned task-row facts projected from the shared daemon feed.
 
 use crate::model::daemon;
 use crate::model::hue::Hue;
 
-use super::{Actor, Mark, Rail, Task, money, rail_label};
+use super::{Actor, Mark, Rail, money, rail_label};
 
 /// The cost above which a row draws its cost in the held colour.
 const COST_WARNING: f64 = 20.0;
@@ -64,22 +63,6 @@ fn daemon_cost(cost: Option<f64>, estimated: bool) -> String {
 }
 
 impl TaskLine {
-    /// The row of a task on the compiled-in board.
-    pub fn fixture(task: &Task) -> TaskLine {
-        TaskLine {
-            id: task.id.to_owned(),
-            title: task.title.to_owned(),
-            actor: task.actor,
-            changed: task.changed,
-            rail: task.rail,
-            now: task.now.to_owned(),
-            now_hue: task.now_hue(),
-            age: task.age.unwrap_or_default().to_owned(),
-            cost: money(task.cost),
-            cost_high: task.hot(),
-        }
-    }
-
     /// The row of a daemon task at the daemon's `now` (Unix seconds). `changed` says whether
     /// the daemon's changes feed holds an event for it past this device's seen cursor.
     pub fn daemon(task: &daemon::Task, now: u64, changed: bool) -> TaskLine {
@@ -143,11 +126,23 @@ pub const fn stage_word(mark: Mark) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Task, TaskLine};
+    use super::{Actor, Hue, Mark, TaskLine};
 
     #[test]
     fn row_label_leaves_out_a_missing_age_and_cost_instead_of_empty_parts() {
-        let label = TaskLine::fixture(&Task::unknown("T-1")).label();
+        let label = TaskLine {
+            id: "T-1".into(),
+            title: "Task".into(),
+            actor: Actor::Queued,
+            changed: false,
+            rail: [Mark::Next; 4],
+            now: "queued".into(),
+            now_hue: Hue::Neutral,
+            age: String::new(),
+            cost: String::new(),
+            cost_high: false,
+        }
+        .label();
         assert!(!label.contains(", ,"));
         assert!(!label.ends_with(", "));
     }

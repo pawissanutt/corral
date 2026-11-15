@@ -1,16 +1,16 @@
 use super::live::{Shown, file_ref, review_ref, task_ref};
 use super::live_files::{diff, draft_key};
 use super::*;
+use crate::model::Form;
 use crate::model::board::Mark;
 use crate::model::daemon::{DetailCache, Feed, Group, Link, Step, Task, detail_key};
-use crate::model::effect::{Conn, DataMode, Effect};
+use crate::model::effect::{Conn, Effect};
 use corral_protocol::detail::{DetailBody, PatchPage, ReviewCandidate, ReviewFile};
 use serde_json::json;
 
 fn env() -> Env {
     Env {
         conn: Conn::Healthy,
-        mode: DataMode::Live,
         form: Form::Desktop,
     }
 }

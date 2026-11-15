@@ -9,18 +9,17 @@ use super::feed::{feed_row, more_row};
 use super::{
     attention, blind, button, code, live, press, rich_at, ring, sheet, with_source, words,
 };
-use crate::model::assistant::Prompt;
 use crate::model::daemon::Link;
 use crate::model::inbox::{
     self, Action, EmptyState, InboxList, InboxPreview, ItemPreview, NeedYouItem, Notice,
-    PlanPreview, Selection,
+    PlanPreview,
 };
 use crate::model::work::Record;
 use crate::model::{Effect, Form, Hue, Id, Rich, flat};
 use crate::screens::assistant;
 use crate::screens::now::with_menu;
 use crate::state::AppState;
-use crate::ui::kit::chip::{chip, illus};
+use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::{dot, hue_ink};
 use crate::ui::kit::notice::{empty, error, loading, notice, skeleton};
 use crate::ui::kit::page::{self, group_head, pane};
@@ -35,14 +34,13 @@ const PANE_BARS: [(f32, f32); 3] = [(0.3, 10.0), (0.7, 18.0), (1.0, 90.0)];
 /// The changes the list previews: eight on desktop, six on the phone.
 const CHANGES_PREVIEW: u16 = 8;
 
-/// Served: fetch the newest changes once when none have arrived, so "Since your last visit"
-/// shows corrald's history rather than nothing.
+/// Fetch the newest changes once when none have arrived, so "Since your last visit" shows the
+/// feed's history rather than nothing.
 pub(super) fn load_changes(app: AppState) {
     let wanted = computed(move || {
-        app.daemon()
-            && app.feed.with(|feed| {
-                feed.changes.is_empty() && feed.capable(CHANGES_V1) && feed.link == Link::Up
-            })
+        app.feed.with(|feed| {
+            feed.changes.is_empty() && feed.capable(CHANGES_V1) && feed.link == Link::Up
+        })
     });
     let asked = stored(false);
     effect(move || {
@@ -93,8 +91,8 @@ pub(super) fn phone(app: AppState) -> AnyElement {
         .into_element()
 }
 
-/// The pane of the selected row: the handover, an assistant prompt, the plan, PM or item
-/// preview, or the loading, empty and failed states. Only a change of kind replaces the pane;
+/// The pane of the selected row: the handover, an assistant prompt, the plan or item preview,
+/// or the loading, empty and failed states. Only a change of kind replaces the pane;
 /// the handover updates band by band. `compact`: the pane is narrow (a terminal, a small
 /// desktop window), so the handover stacks its bands' parts and keeps the decide bar to one row.
 pub(super) fn preview(app: AppState, compact: bool) -> AnyElement {
@@ -110,8 +108,7 @@ pub(super) fn preview(app: AppState, compact: bool) -> AnyElement {
             let kind = kind.get();
             Some(untracked(move || match kind {
                 Kind::Question => sheet::inline(app, compact),
-                Kind::Prompt(prompt) => assistant::prompt(app, prompt),
-                Kind::Served { thread, key } => assistant::live_prompt(app, thread, key),
+                Kind::Prompt { thread, key } => assistant::live_prompt(app, thread, key),
                 Kind::Other => pane(
                     app,
                     "inbox-preview",
@@ -125,8 +122,7 @@ pub(super) fn preview(app: AppState, compact: bool) -> AnyElement {
 #[derive(Clone, PartialEq)]
 enum Kind {
     Question,
-    Prompt(Prompt),
-    Served { thread: Id, key: Id },
+    Prompt { thread: Id, key: Id },
     Other,
 }
 
@@ -134,11 +130,7 @@ impl Kind {
     fn of(preview: &InboxPreview) -> Kind {
         match preview {
             InboxPreview::Question(_) => Kind::Question,
-            InboxPreview::Assistant(prompt) => Kind::Prompt(match prompt.prompt {
-                Selection::Confirmation => Prompt::Confirmation,
-                _ => Prompt::Permission,
-            }),
-            InboxPreview::Prompt { thread, key } => Kind::Served {
+            InboxPreview::Prompt { thread, key } => Kind::Prompt {
                 thread: thread.clone(),
                 key: key.clone(),
             },
@@ -348,16 +340,19 @@ fn with_verbs(app: AppState, item_action: &Action, question: bool, row: AnyEleme
 }
 
 /// A needs-you row. The selected one, when the selection has just moved to it, scrolls into the
-/// list's view, so a keyboard move never leaves it off screen; one already in view stays put.
+/// list's view, so a keyboard move never leaves it off screen; one already in view stays put. The
+/// row counts as revealed only once the scroll has run: a rebuild of the rows before then (the
+/// feed's next revision) drops the pending scroll with the row it was for, and the rebuilt row
+/// asks again.
 fn selectable(app: AppState, item: NeedYouItem, revealed: Stored<Option<String>>) -> AnyElement {
     if !item.selected {
         return row(app, item);
     }
-    let before = revealed.replace(Some(item.test_id.clone()));
-    let moved = before.as_deref() != Some(item.test_id.as_str());
     let handle = element_ref();
-    if moved {
+    if revealed.with(|shown| shown.as_deref() != Some(item.test_id.as_str())) {
+        let id = item.test_id.clone();
         after_answer(move || {
+            revealed.replace(Some(id));
             handle.reveal(RevealOptions::default().vertical(ScrollAlignment::Nearest));
         });
     }
@@ -619,35 +614,7 @@ fn other_pane(app: AppState, shown: InboxPreview) -> AnyElement {
             .into_element(),
         InboxPreview::Plan(plan) => plan_pane(app, plan),
         InboxPreview::Item(item) => item_pane(app, item),
-        InboxPreview::Pm {
-            chip: state,
-            record,
-            attribution,
-            title,
-            body,
-        } => view()
-            .child(page::qhead(
-                app,
-                vec![
-                    chip(app, state.label, state.hue),
-                    code(app, record, 12.0, Token::Ink3).into_element(),
-                    illus(app, attribution),
-                ],
-                title,
-                None,
-                Vec::new(),
-            ))
-            .child(
-                pane_body(app).child(
-                    words(app, body, 14.0, Token::Ink)
-                        .line_height(px(21.7))
-                        .max_w(px(620.0)),
-                ),
-            )
-            .into_element(),
-        InboxPreview::Question(_) | InboxPreview::Assistant(_) | InboxPreview::Prompt { .. } => {
-            view().into_element()
-        }
+        InboxPreview::Question(_) | InboxPreview::Prompt { .. } => view().into_element(),
     }
 }
 

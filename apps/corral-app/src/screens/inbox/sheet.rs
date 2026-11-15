@@ -52,16 +52,14 @@ struct Want {
     gets: Vec<DetailGet>,
 }
 
-/// Served: request the shown question's detail when it is absent or stale, and revalidate it
-/// with its etag whenever its inbox row's revision moves (an answer elsewhere, a follow-up);
-/// request the plan and the selected image it draws on. All of them stay pinned in the client's
-/// cache while the handover shows them and are let go when it moves on or closes. A failed load
-/// waits for Retry rather than looping.
+/// Request the shown question's detail when it is absent or stale, and revalidate it with its
+/// etag whenever its inbox row's revision moves (an answer elsewhere, a follow-up); request the
+/// plan and the selected image it draws on. All of them stay pinned in the client's cache while
+/// the handover shows them and are let go when it moves on or closes, through the source it
+/// mounted on (`AppState::scope`). A failed load waits for Retry rather than looping.
 pub(super) fn load(app: AppState, key: Key) {
+    let scoped = untracked(|| app.scope());
     let wanted = computed(move || {
-        if !app.daemon() {
-            return None;
-        }
         app.feed.with(|feed| {
             app.inbox.with(|state| {
                 let shown = inbox::shown_key(state, feed, key.as_ref())?;
@@ -85,7 +83,7 @@ pub(super) fn load(app: AppState, key: Key) {
     let pinned = stored(Vec::<DetailRef>::new());
     effect(move || {
         let Some(want) = wanted.get() else {
-            untracked(|| pin(app, pinned, Vec::new()));
+            untracked(|| pin(scoped, pinned, Vec::new()));
             return;
         };
         let previous = last.replace(Some((want.shown.clone(), want.rev)));
@@ -95,21 +93,21 @@ pub(super) fn load(app: AppState, key: Key) {
             let mut shown = Vec::with_capacity(want.context.len() + 1);
             shown.push(target.clone());
             shown.extend(want.context);
-            pin(app, pinned, shown);
+            pin(scoped, pinned, shown);
             if moved {
-                app.refresh(target);
+                scoped.refresh(target);
             } else {
-                app.load(target);
+                scoped.load(target);
             }
             for get in want.gets {
-                app.detail(get);
+                scoped.detail(get);
             }
         });
     });
     // The owner may already be letting go of its values when this runs.
     cleanup(move || {
         for gone in pinned.try_with(std::mem::take).unwrap_or_default() {
-            app.watch_detail(gone, false);
+            scoped.watch_detail(gone, false);
         }
     });
 }
@@ -125,8 +123,8 @@ fn pin(app: AppState, pinned: Stored<Vec<DetailRef>>, wanted: Vec<DetailRef>) {
     }
 }
 
-/// The served question's handover once it can be drawn: its skeleton with the model's caption
-/// while it loads, the failure with Retry, or why it is gone. The fixture is always ready.
+/// The question's handover once it can be drawn: its skeleton with the model's caption while it
+/// loads, the failure with Retry, or why it is gone.
 pub(super) fn gate(
     app: AppState,
     key: Key,
@@ -636,7 +634,7 @@ fn body(app: AppState, sheet: Memo<Sheet>, which: BandKind, place: Place) -> Any
         ),
         BandKind::Background => live(
             computed(move || sheet.with(|s| s.background.clone())),
-            move |part| graph::background(app, part, place),
+            move |part| graph::background(app, part),
         ),
         BandKind::Assessment => live(
             computed(move || sheet.with(|s| s.assessment.clone())),

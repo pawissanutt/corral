@@ -47,7 +47,6 @@ fn scope_selection_requests_the_selected_daemon_burnup() {
     state.set_grouping(Grouping::ByAgent);
     let env = crate::model::effect::Env {
         conn: crate::model::effect::Conn::Healthy,
-        mode: crate::model::effect::DataMode::Live,
         form: crate::model::nav::Form::Phone,
     };
     assert!(

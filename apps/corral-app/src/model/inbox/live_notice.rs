@@ -134,7 +134,7 @@ pub(super) fn situation_notice(
                 Some(button("Check result", Action::Recover(sent.cmd.clone()), ButtonKind::Quiet)),
             )
         }),
-        QuestionState::Open | QuestionState::Queued => {
+        QuestionState::Open => {
             let outcome = sent.and_then(|sent| {
                 let told = sent_what(detail, sent);
                 match sent_status(feed, Some(sent))? {

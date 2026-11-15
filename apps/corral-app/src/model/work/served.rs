@@ -11,8 +11,7 @@ use crate::model::nav::Form;
 use crate::model::{Id, Live, Selection};
 
 use super::{
-    Action, Button, ButtonKind, GROUPS, GroupKey, GroupView, GroupedList, Press, Row, State,
-    TaskRow,
+    Action, Button, ButtonKind, GroupKey, GroupView, GroupedList, Press, Row, State, TaskRow,
 };
 
 /// Said instead of the list while the link is down and no board has arrived.
@@ -56,10 +55,14 @@ pub fn group_label(key: GroupKey) -> &'static str {
     if key == GroupKey::Queued {
         return UPCOMING;
     }
-    GROUPS
-        .iter()
-        .find(|group| group.key == key)
-        .map_or_else(|| key.key(), |group| group.label)
+    match key {
+        GroupKey::You => "Needs you",
+        GroupKey::Corral => "Corral is verifying",
+        GroupKey::Worker => "Worker runs in progress",
+        GroupKey::Queued => UPCOMING,
+        GroupKey::Held => "Held",
+        GroupKey::Parked => "Parked",
+    }
 }
 
 /// The Daemon state's heading of the broad bucket `GroupKey::Queued`.
@@ -394,7 +397,7 @@ impl State {
 mod tests {
     use super::*;
     use crate::model::board::Mark;
-    use crate::model::effect::{Conn, DataMode};
+    use crate::model::effect::Conn;
 
     fn task(id: &str, group: daemon::Group) -> daemon::Task {
         daemon::Task {
@@ -533,12 +536,7 @@ mod tests {
             selected_after(effects, &mut current);
         }
         assert_eq!(current, Some(tasks[COLLAPSED - 1].id.clone()));
-        let env = Env {
-            conn: Conn::Healthy,
-            mode: DataMode::Live,
-            form: Form::Desktop,
-        };
-        state.act(Action::ShowAll(GroupKey::Queued), env);
+        state.act(Action::ShowAll(GroupKey::Queued));
         for _ in 0..tasks.len() {
             let effects = state.key_tasks("j", current.as_ref(), &refs, &feed, Form::Desktop);
             selected_after(effects, &mut current);
@@ -742,7 +740,6 @@ mod tests {
                 &feed,
                 Env {
                     conn: Conn::Healthy,
-                    mode: DataMode::Live,
                     form: Form::Desktop,
                 }
             ),

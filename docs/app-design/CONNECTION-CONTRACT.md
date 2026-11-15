@@ -18,11 +18,14 @@ Status: enrolled native Unix and paired Noise WebSocket sessions implement the a
 | Identity | Enrol a device over the trusted Unix channel after peer verification | Owner-authorized enrolment binds a device public key and the daemon's pinned static key |
 | Application session | Server-issued device context bound to the enrolled local connection; no identity accepted from command fields | Noise IK authenticates the device static key against the registry before any application request |
 | Storage | Private 0600 device-id file, visibly identified (not an OS keychain) | Encrypted IndexedDB credential with non-extractable WebCrypto wrapping key; no long-lived secret in URLs or NSH Storage. Short-lived pairing codes may use a fragment that the app clears before pairing. |
-| Reconnect | Re-establish identity and subscriptions | Fresh Noise IK, then hello and subscriptions; no resumption from an unauthenticated cache |
+| Reconnect / offline boot | Re-establish identity/subscriptions; saved native credential may restore bounded last-known snapshots marked stale | Fresh Noise IK, hello/subscriptions; saved credential may restore stale snapshots, never authenticated readiness |
 
 The local UID trust boundary remains explicit: this is not protection against a hostile process already running as the owner. Device enrolment and audit still distinguish legitimate app surfaces. Browser Origin checking is an additional boundary, never authentication by itself. Reject missing, `null`, unexpected or insecure Origins before upgrading; do not reflect arbitrary origins or enable wildcard CORS. Never expose an unencrypted WebSocket-to-Unix proxy.
 
-Pairing uses single-use Noise IKpsk2 and trusted-side SAS confirmation; ordinary sessions use pinned Noise IK. Revocation closes sessions and prevents automatic reconnect.
+Pairing uses single-use Noise IKpsk2 and matching-code confirmation by the owner CLI or
+any already authenticated admin device, browser or native. A pending device cannot confirm
+itself. Ordinary sessions use pinned Noise IK. Revocation closes sessions and prevents
+automatic reconnect; Forget removes local identity/state, not the daemon registry entry.
 
 Direct reach remains opt-in: absent `[daemon] listen` opens no TCP socket. One concrete
 unicast IPv4/IPv6 address may be configured; wildcard and multicast binds are rejected.
@@ -83,11 +86,52 @@ Authorization comes from a server-owned connection context, not `Caller`, `Clien
 2. The app route establishes its device principal from enrolment/session authentication. It derives `actor = owner`, device-bound `via` and event provenance on the server. Browser requests cannot impersonate the PM, an assistant, a different device or a local CLI client.
 3. Both routes call the existing typed command executor with the same preconditions and authority resolver. App admission rejects unsupported verbs before scheduling them. Do not forward browser-provided `HOME`, `PATH`, cwd, Herdr socket, executable or file paths as host authority.
 4. App admission uses an explicit allowlist and the canonical services, preconditions and confirmation rules. It does not grant arbitrary host administration, shell or file access.
-5. Per-device assistant instruction capability and direct question-answer permission are distinct. Newly enrolled native devices and paired browsers have all authority flags, including `admin` and `assistant_act`, editable per device. Confirm-class actions use a fresh device-bound preview and confirmation.
+5. Browser and native have the same per-device authority model: `reply`, `act`, `assistant`,
+   `assistant_act`, `admin`, initially enabled for newly enrolled devices. Assistant instruction
+   and direct answer permission are distinct. Any admin device can pair/revoke and edit
+   authority; raising any of its own flags is refused. Setting `admin=true` requires
+   `device.authority_preview` followed by fresh device-bound proof, even if admin was
+   already on. `device.session_authority_changed {device, revision}` notifies active
+   Unix/browser sessions; clients refresh `app.session` and invalidate pending confirmations.
+
+`Command::app_class` in `corral-protocol/src/cmd/mod.rs` is canonical:
+
+| Class | Examples / confirmation |
+|---|---|
+| Reply | Question answer/group/follow-up, task reply/comment, annotation reply |
+| Act | Dispatch, queue, park/unpark, verdict, unstick, plan changes/cancel/membership, session Send/Cancel |
+| Confirm | Revert, plan accept, review approve/land, move task to Done, session Stop/terminate, assistant permissions revoke |
+| Admin | Config/profile writes, mode changes, raw session Keys |
+| Refused | Unknown/unlisted commands |
+
+Confirm/Admin require the owner's tap against the daemon's current preview and fresh
+device-bound proof. This binds command, expectation and target freshness; it does not
+assert OS biometric/PIN verification. Authority is rechecked server-side at execution.
 
 Keep `cmd_id`, expiry, digest checking, reserved/settled state and `cmd.result` recovery. After a possibly accepted submit, never resubmit with a new id or execute locally. A disconnected app has no local-store fallback. Report an unknown result distinctly from a definite refusal.
 
-Question answers race on the canonical question revision; follow-ups also change that revision. Do not substitute `BoardRow.rev` (a projection change sequence) for the question revision or for `Expect::TaskRevision` (the owner's task revision). A stale answer is a conflict, not an automatic retry. Bounded assistant messages and drafts can persist offline with their original IDs; other offline actions are refused. Queue policy cannot create authority absent at delivery.
+Question answers race on the canonical question revision; follow-ups also change it.
+Do not substitute `BoardRow.rev` or `Expect::TaskRevision` for that revision.
+A stale answer is a conflict, not an automatic retry.
+
+Local send acceptance, draft retirement and command submission follow acknowledged
+transaction completion, never a fire-and-forget storage write. Outbox records are
+per device/store with revision/CAS merging, cross-instance refresh and cancellation
+tombstones. Queued assistant messages retain IDs and remain visible/cancellable;
+other offline actions refuse. Durable acceptance is not daemon delivery.
+Offline boot checks the saved credential before restoring bounded complete
+Board/Inbox/Plans/Health snapshots as stale. Cached authority is not a live grant.
+Forget records retryable intent/tombstones so another tab cannot resurrect the identity.
+
+## Live terminal
+
+`stream.terminal.v1` negotiates scoped `Topic::Terminal` replacement windows through
+the acknowledged subscription channel. At most one update per second, 200
+scrollback/screen rows and 52 KiB serialized line/style arrays fit within the 60 KiB
+CONTROL envelope. Slow consumers coalesce; closing a view unsubscribes. Replacement
+windows must not be appended as repeated screen rows. Session Send/Cancel are Act;
+raw Keys are Admin with fresh device proof. No terminal input queues offline, and
+daemon-hosted assistants have no raw terminal. Gate windows are recorded logs.
 
 ## Acceptance boundaries
 

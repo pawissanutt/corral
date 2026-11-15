@@ -6,11 +6,12 @@ R24 to R35, decisions 36 to 41).
 Companion to `REQUIREMENTS.md` (final) and `mockup/` (visuals, owned by `ui`).
 Not a task contract; grants no authority. No code was changed to write this.
 
-This document is a historical proposal, including the section titled “Current state” and
-the delivery phases. For implemented behavior and verification limits, see the
-[integration overview](README.md) and [app guide](../../apps/corral-app/README.md).
-In particular, the proposed alternate rollover summary profile is not a canonical
-supported setting.
+This document is a historical proposal, including “Current state” and delivery phases.
+Owner corrections and current integration notes below were updated on 2026-11-15.
+For the implementation inventory and verification limits, use the [integration overview](README.md)
+and [app guide](../../apps/corral-app/README.md). In particular, `assistant.summary_profile`
+is now canonical, effective at the next assistant-host start; paid-API summary profiles
+are refused without independent spending authority.
 
 Citation legend. Corral paths are relative to `/home/pawis/miti-workspace/corral` as read on 2026-11-11:
 `core/` = `crates/corral-core/src/`, `ops/` = `crates/corral-ops/src/`, `herdr/` = `crates/corral-herdr/src/`,
@@ -270,8 +271,8 @@ and `docs/herdr-cli.md` once no open ref names a Herdr TUI socket.
 | Record areas | `daemon` (key `state`), `devices`, `device-cursors`, `app-commands`, `owner-decisions`, `pm-causes`, `usage-buckets`, `quota-observations`, `burnup-buckets`, `assistant-threads`, `thread-entries`, `owner-prompts` |
 | Record changes | `RuntimeRef` replaces `HerdrRef`; `AgentQuestion` gains `options_v2`, `followups`, typed `context_refs`; PM and assistant containers gain questions; `AssistantSession.kind` (`quick`); generation `host` (`pane`, `daemon`); `OwnerInputSource::{Device, Cli}` and `OwnerInput.{device, typed_at, citable}`; task `owner_request` (write-once) and `filed_from`; device `caps` |
 | Event kinds | `daemon_started`, `daemon_degraded`, `daemon_recovered`, `device_paired`, `device_revoked`, `owner_confirmed`, `assistant_thread_rolled`, `owner_prompt_opened`, `owner_prompt_answered` |
-| `via` values | `app:<device-name>` (with `detail.device`); existing values unchanged |
-| Config (workspace layer, owner-only) | `[daemon] listen`, `allow_insecure_web_origin`; `[daemon.relay] url`; `[daemon.push] kinds`; `[daemon.authority] confirm`, `host_only`; `[runtime] default`; `[runtime.hc] supervise`, `session`, `bin`; `[pm] runtime`; `[projects.<p>] runtime`; `[usage.limits.<connection>]`; `[machines.<alias>]`; `[assistant.quick] agent`, `models`, `summary_agent`, `compact_at_tokens`, `prompt_wait_secs` |
+| `via` values | Implemented: stable `app:<device-id>`, with device id and display name in provenance; existing values unchanged |
+| Config | Implemented direct access uses `[daemon] listen`, `web_endpoint`, `web_origins` and `[daemon.push]`; no insecure-Origin override. Summary selection is `assistant.summary_profile`. The runtime/relay/machine config names elsewhere in this proposal are not an implementation inventory. |
 | Files outside the store | `$XDG_STATE_HOME/corral/<store-key>/identity.key`; `$XDG_RUNTIME_DIR/corral/<store-key>/{corrald.sock,heartbeat}`; cache root `boardview-v1.bin` |
 
 ---
@@ -433,19 +434,20 @@ JSON-RPC 2.0 is chosen because herdr-core and the Pi bridge already speak line J
 | Uncertain crash | A `reserved` entry is re-run only because every retryable command carries `expect` (revision or state); a second execution is then a `conflict`, not a second effect. One exception: a keyed create (a message's thread entry, a PM item, `message.file_as_idea`) stores its key on the created record and is looked up before creating. |
 | Bound | 2,048 entries per device; settled entries older than 7 days are evicted, unsettled never. Commands older than `expires_at` or than the eviction horizon are refused `expired`, so eviction cannot cause re-execution. |
 | Router | One table maps each command name to the same `corral-ops` entry point its CLI verb calls. The daemon adds no mutation of its own except devices, cursors and confirmations. |
-| Attribution | The router opens a store handle attributed `actor=owner`, `via=app:<device-name>`, with event detail `device=<id>` (new `Store::reattributed`, using the existing detail hook `core/attribution.rs:90-95`). |
+| Attribution | Implemented router attribution is `actor=owner`, stable `via=app:<device-id>` and device id/display-name provenance. |
 
-| May queue offline (max 64 per device, each with `expect` or a create key) | Must refuse offline, visibly |
-|---|---|
-| `question.answer`, `question.followup`, `comment.add`, `annotation.add/reply/resolve`, `plan.request_changes`, `review.request_changes`, `park`, `hold`, `seen.advance`, `idea.edit`, `idea.merge`, `idea.discard` (these expire after 24 h by default); `assistant.send` to either target (no expiry) | Anything with a preview or confirmation (`operating.confirm`, `land`, `plan.accept`, `unstick`, `recover.apply`), `dispatch`, `retry`, `kill`, settings writes, `device.*`, `pair.*`, `session.reply`, terminal input, `assistant.stop`, `assistant.session`, `prompt.answer`, `message.file_as_idea`, `message.withdraw` |
+Current offline support is narrower than the original queue proposal: only bounded
+assistant messages/drafts persist for offline composition/delivery. Other mutations,
+session input and settings changes refuse offline. Commands already submitted retain
+their IDs for uncertain-result recovery; this is not permission to queue new commands.
 
-Messages always queue (`queued on this device`) and are delivered exactly once. What a stale message loses
-is authority, not delivery: one that reaches the assistant more than 15 minutes after it was typed is
-journaled as not citable (`late · cannot instruct`); the assistant still answers it and files from it
-(section 13.5).
-
-Queued items are listed in Inbox as `queued · offline`. On reconnect they are sent in order; a `conflict`
-becomes a visible "answered elsewhere" item. Nothing is dropped silently (R9).
+Local persistence must acknowledge its transaction before send acceptance, matching
+draft retirement or command submission. Per-item namespace records, revisions/CAS,
+cross-instance refresh and cancellation tombstones prevent stale tabs from overwriting
+other words. Credential-checked offline boot restores complete Board/Inbox/Plans/Health
+snapshots marked stale, never live authority. Queued messages stay visible/cancellable;
+delivery races and storage failures remain explicit. See the app guide for exact
+store/key names and bounds.
 
 ### Error model
 
@@ -623,26 +625,26 @@ feeds Settings › Machines; `AgentRow.machine` feeds the agent wall. Not design
 |---|---|---|
 | Daemon | X25519 static (Noise), Ed25519 relay-auth key | `$XDG_STATE_HOME/corral/<store-key>/identity.key`, mode 0600, outside the workspace so `storage backup` and worktrees never copy it |
 | Device registry | Public keys, name, platform, paired-at, last seen (coarse), last reach, revoked-at | Store record area `devices`; events `device_paired`, `device_revoked` |
-| iOS | X25519 static; P-256 confirmation key with user presence | Keychain (`ThisDeviceOnly`), Secure Enclave for the confirmation key [INFERENCE: API specifics] |
-| Android | same | Keystore-wrapped; biometric-bound confirmation key [INFERENCE] |
-| macOS, Windows, Linux desktop | X25519 static; confirmation by OS user-presence prompt where available | Keychain, DPAPI, Secret Service; fallback 0600 file with a visible warning [INFERENCE: crate choice] |
-| Web | X25519 static wrapped by a non-extractable WebCrypto key | IndexedDB; weakest tier, so web sessions idle out after 12 h and every high-risk command needs a typed confirmation [INFERENCE] |
-| Terminal target | X25519 static | 0600 file under `$XDG_STATE_HOME/corral-app/` |
+| iOS / Android | Native packaged secure-key integration remains unverified | The earlier Secure Enclave/biometric-key proposals are not shipped guarantees |
+| Native Unix app / terminal | Enrolled device id, trusted peer UID | Private `0600` `corral-app/devices.json`; visibly identified file fallback, not an OS keychain |
+| Web | X25519 static wrapped by a non-extractable WebCrypto AES-GCM key | IndexedDB `corral-app` v1, `credentials`; same authority as native, no browser-only reduction |
 
-NSH documents plain `Storage` only (JSON file or `localStorage`, `nsh:modules/nsh`) and no keychain API, so
-key storage is a native shim behind `trait KeyStore` in `apps/corral-app/shims/`.
+NSH Storage is for preferences/non-secret markers, not credentials or the transactional
+outbox. Native/browser persistence lives in app-local `src/client/` modules, not the
+proposed `shims/` or a standalone `corral-client` crate. Fresh confirmation is a tap plus
+daemon-validated device proof; OS user-presence/biometric verification is not implemented.
 
 ### Pairing
 
 ```mermaid
 sequenceDiagram
-  participant T as Trusted surface (CLI or desktop Settings › Devices)
+  participant T as Trusted surface (owner CLI or any admin app)
   participant D as corrald
   participant N as New device
-  T->>D: pair.begin{name_hint, ttl:120s} (fresh confirmation on T)
+  T->>D: pair.begin (authenticated admin device or owner CLI)
   D-->>T: pair.offer{qr}
   Note over T: QR = daemon public key, reach hints (lan, tailscale, relay id), one-time token, expiry
-  N->>N: scan QR, create device keys in the platform keystore
+  N->>N: scan/open offer, create device keys (web: encrypted IndexedDB)
   N->>D: Noise IKpsk2 handshake (psk from token) + pair.claim{device_name, platform, app_version}
   D->>D: token valid and unused? burn it, hold claim as pending
   D-->>T: pair.sas{code: 6 digits from the handshake hash, device_name, platform, reach}
@@ -650,13 +652,13 @@ sequenceDiagram
   Note over T,N: owner compares the two codes
   T->>D: pair.confirm{pair_id}
   D->>D: write device record, event device_paired (actor=owner, via of T)
-  D-->>N: pair.done{device_id, relay_ticket}
+  D-->>N: pair.done (enrolled device; no relay ticket implemented)
   D-->>T: device list updated
 ```
 
 No confirmation within the TTL discards the claim. A second claimant with the same QR fails on the burned
-token. The desktop app on the daemon host enrols over the Unix socket without a QR (peer uid check) but
-still gets a device record, so `via=app:<device-name>` is right from the first slice.
+token. A native Unix app enrols over the trusted peer-UID channel without a QR, but
+still gets a device record and stable `via=app:<device-id>` provenance.
 
 ### Transport encryption
 
@@ -665,24 +667,24 @@ still gets a device record, so `via=app:<device-name>` is right from the first s
 | Why IK | The device always knows the daemon's static key (from the QR), and sends its own static key encrypted in the first message, so the daemon can look it up or reject before any application byte. One round trip. |
 | Why not TLS with pinned keys | Browsers cannot pin; self-signed certificates need trust prompts on iOS and Android; the relay path would still need an end-to-end layer inside TLS. One mechanism on every path is simpler to review. |
 | Why not XX | Costs a round trip and hides nothing we need hidden; the daemon key is already known. |
-| Web caveat | The web client is served only from a secure origin: `http://127.0.0.1` or HTTPS in front of the daemon. Plain HTTP on a LAN address is refused (`[daemon] allow_insecure_web_origin = false`), because a page delivered over plain HTTP can be rewritten in transit and no in-page crypto survives that. |
+| Web caveat | Secure origins only: HTTP loopback or HTTPS; plain LAN HTTP origins are refused with no insecure override. Remote browsers require operator TLS/Tailscale Serve, `daemon.web_endpoint` WSS and exact `web_origins`. Noise remains end-to-end; corrald has no embedded TLS. |
 | Rekey and lifetime | Rekey every 2^20 messages or hourly. No session resumption: a reconnect is a fresh IK handshake. |
 
-`snow` in wasm32 is not verified here [INFERENCE]; it is the first spike of Phase 2.
+The earlier wasm32/Noise feasibility uncertainty is resolved; see [transport proof](TRANSPORT-PROOF.md) and the app guide for the distinction between that proof and integrated-app verification.
 
 ### Replay, revocation, authority
 
 | Topic | Rule |
 |---|---|
 | Replay | Noise transport nonces reject replayed frames. The IK first message is replayable by design, so the daemon accepts no command in handshake payloads; `hello` follows the handshake. Commands carry `cmd_id`, `issued_at`, `expires_at` and `expect`. |
-| Revocation | `device.revoke` sets `revoked_at`, closes live sessions of that key, deregisters its relay ticket and push handle, refuses future handshakes and queued commands, emits `device_revoked`. Available from any trusted device and from `corral device revoke`. |
+| Revocation | Implemented: any admin device or owner CLI can revoke; sessions close and future attach/handshakes refuse. Browser push subscriptions are cleared. Relay ticket/native push registration remains unimplemented. |
 | Daemon key compromise | `corral device rotate-daemon-key`: new key, all devices re-pair. |
 | Authority ceiling | The app can do exactly what the owner can do in the CLI: the router calls the same ops entry points, so grants, holds, owner-only settings and candidate freshness are enforced where they are today. No rule is relaxed for remote use (REQUIREMENTS section 4). |
-| Fresh local confirmation | `[daemon.authority] confirm = ["operating.confirm", "land", "plan.accept", "unstick", "recover.apply", "pair.begin", "device.revoke", "device.caps", "settings.write"]`. The daemon issues a challenge bound to the preview id and digest, valid 60 s; the device answers with a user-presence signature (biometric or passcode; typed phrase on web and terminal). Recorded as event `owner_confirmed{cmd_id, device, method}`. |
-| Host-only actions | `[daemon.authority] host_only = []` lets the owner pin commands to the Unix socket. Empty by default because D4 requires grants on the phone. |
-| Audit | Every app command produces ordinary events with `actor=owner`, `via=app:<device-name>`, `detail.device=<id>`. |
-| Owner input from devices | Only the composer's typed `text` becomes owner input (`source = device`), journaled by the daemon at delivery; a daemon-hosted host cannot write the journal. Context chips, shares, screenshots, tool output and PM replies never become owner input. An input delivered more than 15 minutes after it was typed is journaled as not citable (section 13.3). |
-| Text never beats the button | From a device, an owner action is confirm-class for `approve` (which lands), `plan_accept`, `revert` and `finish` (D18), for the existing confirm class, when the turn is tainted by an attachment or web content, and for standing write grants. `dispatch`, `queue`, `park` and verdicts run on the owner's word. Per-device `caps` (`assistant`, `assistant_act`, `terminal_control`): desktop, phone and terminal may instruct from pairing, web may ask and file only until the owner turns acting on (D17). |
+| Fresh local confirmation | Implemented Confirm/Admin commands need a fresh matching daemon preview and device-bound proof. The owner taps; the daemon checks command, expectation, target freshness and expiry. No biometric, passcode, typed-phrase or user-presence-signature claim follows. Canonical classes are in `corral-protocol/src/cmd/mod.rs::Command::app_class`. |
+| Carrier parity | Browser and native use the same authority checks; the carrier does not reduce permission. Any admin device can pair/revoke and edit authority; self-raise is refused and setting `admin=true` needs proof. Authority-change notifications refresh active sessions and invalidate pending confirmations. |
+| Audit | Ordinary app events use `actor=owner`, stable `via=app:<device-id>`, plus device id/display-name detail. |
+| Owner input from devices | Only typed composer text becomes device owner input. Context chips, shares, screenshots, tool output and PM replies are not owner input. Late delivery cannot create acting authority. |
+| Text never beats the button | D18 keeps land/approve, plan accept, revert and finish Confirm-class; session termination and assistant permission revoke also confirm. Dispatch, queue, park, unstick and verdicts are Act-class. Config, modes and raw keys are Admin-class. Per-device `reply`, `act`, `assistant`, `assistant_act`, `admin` flags apply equally to browser/native; attachment and standing-grant confirmation rules are not bypassed through text. |
 
 ### What a relay can and cannot do
 
@@ -1107,9 +1109,9 @@ What text adds over the command path, and the controls:
 
 | Rule | Detail |
 |---|---|
-| Per-device capabilities (D17) | `devices/<id>.caps = {assistant, assistant_act, terminal_control}`. With `assistant_act` off the device's inputs are journaled as not citable, so it can ask and file but not instruct. From pairing: on for desktop, phone and terminal; off for web clients until the owner turns acting on for that device. |
-| `typed_at` | The device clock, corrected by the offset measured at `hello`; a value in the future is clamped to `received_at`. A device that lies about it gains nothing a fresh message would not give it. |
-| Confirmation | `confirm.challenge` goes to the sending device; any device with presence may answer. The answer is journaled as `confirmation` with the command line and the request, as today (`docs/guide/assistants.md:672-677`, `ops/agent/ops/owner_input.rs:83-91`), plus the device. |
+| Per-device authority (D17, corrected 2026-11-15) | `reply`, `act`, `assistant`, `assistant_act`, `admin` gate device actions equally on browser and native. Newly enrolled devices start with all flags; admins edit them. No browser-only acting restriction. |
+| `typed_at` | Device typing time and daemon receipt time are distinct; late input does not gain authority by being queued. |
+| Confirmation | Fresh daemon previews and device-bound proofs must match the acting device and intended effect. The UI asks for a tap, not a biometric/PIN claim; standing write grants retain their dedicated confirmation path. |
 | `corral ask` | Source `cli`. Admitted only for actor owner via `cli`; refused from `CORRAL_ASSISTANT`, `CORRAL_PM=1` and run worktrees by the entry classification (`cli/entry.rs:52-84,162-176`). It adds nothing over the plain CLI on the same host. |
 | Pane sessions | Unchanged: the host journals pane typing, and the pane rules apply. |
 
@@ -1128,7 +1130,7 @@ from a device (each instruction would become a dialog).
 | Compaction | Pi's own compaction stays on (`docs/guide/assistants.md:173`). Quick generations launch with a small trigger (`compact_at_tokens`, default 80,000), written into the generation's capability snapshot, which is resolved per generation (`docs/guide/assistants.md:163-167`). |
 | Model | The thread answers with `assistant.agent` by default (decision 39). The composer has a selector over `[assistant.quick] models`, a list of corral-pi profile names (`[profiles.<name>]`: harness, model, effort; `docs/guide/configuration.md:412-423`). An entry that is not a corral-pi profile naming a model is rejected at config load, the rule assistant profiles already follow (`docs/guide/assistants.md:42-44`). The choice is thread state (`assistant-threads/quick.profile`), so every device shows the same one, and it applies to the next message: `assistant.session{op:"set_profile"}`, then bridge `set_model{provider, model, effort}`, then the host's existing in-process switch. That switch refuses during a turn (`model_switch_refused`, `pi/host/subscriptions.ts:41-61`), so the daemon applies it at the turn boundary, before it delivers the next message. The conversation is kept. When the host refuses because the provider was not approved at startup (`credentials_unavailable … start a new session`, `pi/host/subscriptions.ts:47-50`), the daemon opens the next generation with the profile as launch overrides, as `corral pi --model --provider --effort` do (`docs/guide/assistants.md:40`); that costs one generation. Each `answer` entry records the profile that produced it, and cost follows the model's price (section 12). A switch loses the provider's prompt cache for the conversation so far [INFERENCE]. Daemon-hosted named sessions get the same selector; pane sessions keep Pi's own picker; the PM target shows none, the PM runs its own profile. `corral ask --profile <name>` sets it from a terminal. |
 | Generation use | One per host start: daemon restarts, host exits, `input_limit` rolls (`cmd_id` is the bridge input key; roll at 75% of 4,096, section 11). With no idle stops a quiet day uses none. |
-| Roll rules (R4) | Roll the session when generations reach 48 of 64, receipts reach 75% of 16,384, or the session is 30 days old. Only at a barrier: no open turn and no pending question, prompt or owner-action reservation. Steps: one keyed turn asks the outgoing host for a handoff summary (if the host is down, the last 24 KiB of transcript is used instead); `assistant end`; create the next quick session with that brief; compare-and-swap the pointer; event `assistant_thread_rolled`. The summary turn runs on `[assistant.quick] summary_agent` when it is set (decision 40): at the barrier the daemon switches the outgoing host to that profile with the same `set_model` command, so the summary reads the whole conversation at that model's price. The owner's candidate is a profile on `gpt-6-luna` (catalog price 0.1 / 0.5 USD per million tokens, `core/pricing.rs:144`). If the switch is refused, or the conversation is larger than that model's context window, the thread's current profile writes the summary. The new session starts on the thread's selected profile, not on the summary profile. |
+| Roll / summary | The generation/receipt/age rollover thresholds in this proposal are historical design, not current acceptance evidence. Implemented quick-thread compaction uses optional `assistant.summary_profile`, or the session model when unset. The choice is captured at the next assistant-host start, makes one summary request, and retains profile/model/connection usage attribution. Independent paid-API summary profiles are refused without separate spending authority; do not use the obsolete `[assistant.quick] summary_agent` key. |
 | Never refused at a cap | A send that meets a cap rolls first, then launches. End-before-check and the hello reserve of section 11 apply to assistant containers. |
 | Two devices at once | The daemon serialises per thread. Each message gets the next `i<seq>` and is delivered with busy policy `follow_up`: it queues behind the running turn and never steers it. Both devices see both entries in the daemon's order. |
 | Cold start | Launch, hello and first token take seconds [INFERENCE: not measured]. The message is stored at once (`sent`); the session state is `starting`, then `thinking`. The composer stays usable and later messages queue as follow-ups. |
@@ -1403,13 +1405,13 @@ the runtime port, because the host is a daemon child. "Ask about this" chips arr
 | 31 | An assistant-filed Idea has origin `assistant` and a write-once `owner_request`; its drafted spec is editable without `owner-ok`, its dispositions stay owner-protected. An Idea the owner filed himself keeps today's rule. | Origin `owner` (edit ceremony for text the assistant wrote); origin `assistant` with no protection (the PM could drop the owner's request) | R26; `core/origin.rs:79-148` |
 | 32 | When the assistant cannot run, messages wait in the thread with the reason, without limit. "File as idea now" is an owner action (keyed, no model). The daemon never files by itself. | Auto-file after a timeout; expire waiting messages | The daemon cannot tell a question from an idea; R25 says the owner can file it |
 | 33 | Share intent is a structured flag set by the gesture. A bare share journals no owner input and can only cause a filing. | A synthesised "file this" owner input; intent read from the shared content | Shared content must never instruct |
-| 34 | Devices that may instruct from pairing: desktop, phone, terminal. Web clients ask and file only, until the owner turns acting on. | All devices; none | Owner decision D17 (was open question 9) |
+| 34 | Corrected 2026-11-15: browser and native have the same per-device authority; any admin device pairs/revokes, admin grants need device-bound proof and self-raise is refused | Browser-only ask/file restriction (superseded) | Owner correction to D17 |
 | 35 | From a device, `approve`, `plan_accept`, `revert` and `finish` are confirm-class; `dispatch`, `queue`, `park` and verdicts run on the owner's word | Only the commands already in `[daemon.authority] confirm`; everything confirm-class | Owner decision D18 (was open question 10) |
 | 36 | No idle stop: the daemon never stops an assistant host for being idle. A host runs until its work is done or it stops on its own (it exits, the owner ends the session, its task is Done, the daemon restarts). | Idle stop after 15 minutes with warm-on-open (the earlier 23) | Owner decision (was open question 12). The stop only saved memory, and it cost a cold start and one generation per pause. |
 | 37 | Both filing paths record origin `assistant`: the `idea_file` op and bash `corral new` from an assistant shell, in a pane or under the daemon. An Idea filed the second way without an owner input gets no `owner_request`. | Leave pane filing at origin `owner` | Owner decision (was open question 16). It changes which Ideas the owner-intent rule protects in existing pane use: specs a pane assistant drafts become editable without `owner-ok`. |
 | 38 | The assistant has no destination of its own. Agents lists assistant sessions with the other agents, the quick thread first. Phone tab bar: Inbox, Now, Agents, Plans, More; Ask opens from a compose control on every screen. | A separate Assistant destination; Ask as the centre tab with Agents under More | Owner decision: asking is a chat to an agent, so it lives where the agents are |
 | 39 | The quick thread answers with the assistant profile. The composer has a model selector over a configurable list of profiles (`[assistant.quick] models`); the choice is thread-wide and applies between turns through the host's existing in-process switch. | One fixed fast profile for the quick thread; a model field on every message; free-text model ids | Owner decision (was open question 11). Profiles already carry harness, model, effort and the credential preflight; the host already switches models between turns |
-| 40 | A quick-thread roll spends one summary call, on its own profile (`[assistant.quick] summary_agent`; candidate `gpt-6-luna`), with the thread's profile as fallback and the transcript slice when the host is down | Transcript slice only; always the thread's model | Owner decision (was open question 14). The summary reads the whole conversation, so its price is the model's input price |
+| 40 | Optional canonical `assistant.summary_profile` selects quick-thread compaction summaries at the next host start; unset uses the session model, paid-API profiles refuse without separate spending authority | Obsolete `[assistant.quick] summary_agent` proposal | D23, now implemented; see app guide |
 | 41 | Standing write grants (one hour, this session) can be given from a phone, with user presence; "Allow once" and "Deny" need none | No standing grants from a phone | Owner decision (was open question 15); it is the rule already stated in 13.3 |
 
 ### Open questions for the owner

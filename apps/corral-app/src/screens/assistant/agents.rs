@@ -1,11 +1,11 @@
 //! The assistant's blocks inside Agents: the pinned quick-thread tile (a compact row on the
 //! phone and in a terminal), then the assistant sessions with + New session, and Filed from chat
-//! naming the session each Idea came from. With the daemon they show the served rows.
+//! naming the session each Idea came from, all from the served rows of the selected feed.
 
 use nsh_core::prelude::*;
 
 use crate::model::assistant::{
-    Agents, FiledLine, LABELS, QuickThread, SessionRow, agents, filings_target, live_agents,
+    Agents, FiledLine, LABELS, QuickThread, SessionRow, filings_target, live_agents,
 };
 use crate::model::{Authority, Form, Hue};
 use crate::state::AppState;
@@ -20,18 +20,13 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::parts::{act, button_row, model_button, ring, spacer, test_id, words};
 
-/// The blocks from the current source, tracked.
-fn blocks(app: AppState, daemon: bool) -> Agents {
-    if daemon {
-        let can_send = app.can(Authority::Assistant);
-        app.feed.with(|feed| {
-            app.assistant
-                .with(|state| live_agents(state, feed, can_send))
-        })
-    } else {
-        let env = app.env();
-        app.assistant.with(|state| agents(state, env))
-    }
+/// The blocks from the selected feed, tracked.
+fn blocks(app: AppState) -> Agents {
+    let can_send = app.can(Authority::Assistant);
+    app.feed.with(|feed| {
+        app.assistant
+            .with(|state| live_agents(state, feed, can_send))
+    })
 }
 
 /// The quick thread pinned first in Agents. Desktop: the tile (`.tile.qt`) that fills its cell:
@@ -39,16 +34,12 @@ fn blocks(app: AppState, daemon: bool) -> Agents {
 /// scope and cost in its foot. Phone: the pinned row on the surface (`.prow.qtrow`).
 /// Terminal: one row. Pressing it opens the quick thread.
 ///
-/// With the daemon the tile quotes the quick thread's latest question and answer, so the page
-/// placing it holds the thread's subscription for its own lifetime ([`super::open_scope`]).
-/// The tile itself subscribes nothing: the Agents wall rebuilds it whenever agent rows change,
-/// and a subscription per build would close and reopen the thread on every update.
+/// The tile quotes the quick thread's latest question and answer, so the page placing it holds
+/// the thread's subscription for its own lifetime ([`super::open_scope`]). The tile itself
+/// subscribes nothing: the Agents wall rebuilds it whenever agent rows change, and a
+/// subscription per build would close and reopen the thread on every update.
 pub fn agents_head(app: AppState) -> AnyElement {
-    let daemon = untracked(|| app.daemon());
-    if !daemon {
-        super::drive_stream(app);
-    }
-    let quick = computed(move || blocks(app, daemon).quick_thread);
+    let quick = computed(move || blocks(app).quick_thread);
     dynamic(move || {
         let qt = quick.get();
         Some(match app.form {
@@ -238,14 +229,11 @@ fn terminal_row(app: AppState, qt: QuickThread) -> AnyElement {
 /// Phone: two sections with their heads (+ New session at the trailing edge) and two-line rows.
 /// Terminal: the two sections stacked, one line per row.
 ///
-/// With the daemon, the page placing these blocks settles their session operations for its own
-/// lifetime ([`super::watch_ops`]); the blocks are rebuilt with every agent update.
+/// The page placing these blocks settles their session operations for its own lifetime
+/// ([`super::watch_ops`]); the blocks are rebuilt with every agent update.
 pub fn agents_tail(app: AppState) -> AnyElement {
-    let daemon = untracked(|| app.daemon());
-    if daemon {
-        load_filings(app);
-    }
-    let built = computed(move || blocks(app, daemon));
+    load_filings(app);
+    let built = computed(move || blocks(app));
     dynamic(move || {
         let blocks = built.get();
         Some(match app.form {

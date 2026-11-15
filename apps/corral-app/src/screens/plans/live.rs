@@ -1,5 +1,5 @@
-//! Daemon-mode plumbing for Plans: keeping a shown plan's detail (and its open diff) loaded,
-//! current and pinned in the client's cache, the pushed phone page of a served plan, and the
+//! Plans plumbing over the served feed: keeping a shown plan's detail (and its open diff)
+//! loaded, current and pinned in the client's cache, the pushed phone page of a plan, and the
 //! plan graph Now's panel embeds.
 
 use corral_protocol::detail::DetailRef;
@@ -99,8 +99,9 @@ fn plan_ref(plan: &Id) -> DetailRef {
 /// With `commands`, the plan's task detail too, so the plan's verbs can carry its canonical
 /// owner revision (RC-03). A failed request is fetched again only when the plan is shown anew:
 /// the detail offers Retry. While shown, what it loads is pinned, so the cache keeps it over
-/// older details.
+/// older details. Requests and pins go to the source the view mounted on (`AppState::scope`).
 fn keep_current(app: AppState, commands: bool, plan: impl Fn() -> Option<Id> + 'static) {
+    let app = untracked(|| app.scope());
     let wanted = computed(move || {
         if !app.daemon() {
             return None;
@@ -177,7 +178,9 @@ pub(super) fn keep_selected_loaded(app: AppState) {
 /// Keeps the executing plans' details loaded so their list rows can show member strips;
 /// revalidates one when its row revision moves. A complete plan's members have all landed, and
 /// a long history of them would crowd the bounded cache, so its detail loads when it is opened.
+/// Requests go to the source the view mounted on (`AppState::scope`).
 pub(super) fn keep_rows_loaded(app: AppState) {
+    let app = untracked(|| app.scope());
     let rows = computed(move || {
         if !app.daemon() {
             return vec![];
@@ -207,8 +210,8 @@ pub(super) fn keep_rows_loaded(app: AppState) {
     });
 }
 
-/// The pushed phone page of a served plan (`Live::Plan`): the same anatomy as the fixture's,
-/// from corrald's plan; its detail is kept current while the page is up.
+/// The pushed phone page of a plan (`Live::Plan`); its detail is kept current while the page
+/// is up.
 pub fn live_plan_phone(app: AppState, id: Id) -> PhonePage {
     let shown = id.clone();
     keep_current(app, true, move || Some(shown.clone()));
@@ -217,7 +220,7 @@ pub fn live_plan_phone(app: AppState, id: Id) -> PhonePage {
         app.feed
             .with(|feed| plans::live_phone_page(state, &id, feed, env))
     });
-    super::phone_page(app, page, Some(id))
+    super::phone_page(app, page, id)
 }
 
 /// What the embedded graph shows: the plan's members, or what stands in for them.

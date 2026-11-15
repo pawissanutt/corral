@@ -1,13 +1,9 @@
-//! Timeline plots and canvas-ready geometry. A [`Plot`] is either the fixture preview's
-//! illustrative day (`data`) or the daemon's recorded spans (`live`); both are laid out by the
-//! same geometry. Plot times are whole minutes on the plot's own clock; horizontal coordinates
-//! include the label column.
+//! Recorded timeline plots and canvas-ready geometry. Plot times are whole minutes on the
+//! plot's own clock; horizontal coordinates include the label column.
 
-mod data;
 mod live;
 mod scope;
 
-pub use data::GAPS_DISCLOSURE;
 pub use live::{
     LIVE_GAPS_NOTE, Window, burnup_series, empty_gaps_line, gaps as live_gaps, plot as live_plot,
     request, window,
@@ -78,12 +74,8 @@ pub enum Kind {
     Land,
     /// Idle hatch.
     Idle,
-    /// Stalled hatch (illustrative preview only).
-    Stall,
     /// Waiting hatch; the owner of the wait is not encoded.
     Ask,
-    /// Stale-verdict hatch (illustrative preview only).
-    Stale,
     /// Waiting for the owner's acceptance.
     Held,
     /// A phase whose times corral did not record.
@@ -98,9 +90,7 @@ impl Kind {
             Self::Review => "review",
             Self::Land => "land",
             Self::Idle => "idle",
-            Self::Stall => "stall",
             Self::Ask => "ask",
-            Self::Stale => "stale",
             Self::Held => "awaiting acceptance",
             Self::Unavailable => "not recorded",
         }
@@ -112,9 +102,8 @@ impl Kind {
             Self::Gate | Self::Review => Hue::Corral,
             Self::Land => Hue::Ok,
             Self::Idle | Self::Unavailable => Hue::Neutral,
-            Self::Stall => Hue::Fail,
             Self::Ask => Hue::You,
-            Self::Stale | Self::Held => Hue::Held,
+            Self::Held => Hue::Held,
         }
     }
 }
@@ -179,11 +168,6 @@ pub struct Plot {
     pub now: Marker,
     pub accessible_label: String,
     pub completeness: Option<String>,
-}
-
-/// The illustrative day of the fixture preview.
-pub fn fixture_plot() -> Plot {
-    data::plot()
 }
 
 /// An axis tick with canvas x and optional label (minor ticks are blank on phone).
@@ -381,7 +365,6 @@ pub struct GroupOption {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Head {
     pub title: &'static str,
-    pub subtitle: &'static str,
     pub ranges: [RangeOption; 2],
     /// Grouping controls on desktop, terminal and phone.
     pub grouping: Option<[GroupOption; 2]>,
@@ -390,7 +373,6 @@ pub struct Head {
 pub fn head(state: &State, _env: Env, _phone: bool) -> Head {
     Head {
         title: "Timeline",
-        subtitle: "who worked when · run, gate, review, land · idle and stalls",
         ranges: [
             RangeOption {
                 label: "Today",
@@ -427,30 +409,17 @@ pub struct LegendItem {
     pub hue: Hue,
 }
 /// Timeline legend: the mockup's order in the preview; recorded kinds only when live.
-pub fn legend(live: bool) -> Vec<LegendItem> {
-    let kinds: &[(&str, Kind)] = if live {
-        &[
-            ("run", Kind::Run),
-            ("gate", Kind::Gate),
-            ("review", Kind::Review),
-            ("land", Kind::Land),
-            ("waiting", Kind::Ask),
-            ("awaiting acceptance", Kind::Held),
-            ("idle", Kind::Idle),
-            ("times not recorded", Kind::Unavailable),
-        ]
-    } else {
-        &[
-            ("run", Kind::Run),
-            ("gate", Kind::Gate),
-            ("review", Kind::Review),
-            ("land", Kind::Land),
-            ("waiting", Kind::Ask),
-            ("idle", Kind::Idle),
-            ("stale verdict", Kind::Stale),
-            ("stall", Kind::Stall),
-        ]
-    };
+pub fn legend() -> Vec<LegendItem> {
+    let kinds: &[(&str, Kind)] = &[
+        ("run", Kind::Run),
+        ("gate", Kind::Gate),
+        ("review", Kind::Review),
+        ("land", Kind::Land),
+        ("waiting", Kind::Ask),
+        ("awaiting acceptance", Kind::Held),
+        ("idle", Kind::Idle),
+        ("times not recorded", Kind::Unavailable),
+    ];
     kinds
         .iter()
         .map(|&(label, kind)| LegendItem {
@@ -476,11 +445,6 @@ pub fn gaps_title(range: Range) -> &'static str {
         Range::SevenDays => "Gaps worth a look · 7 days",
     }
 }
-/// The illustrative gaps of the fixture preview.
-pub fn fixture_gaps() -> Vec<Gap> {
-    data::gaps()
-}
-
 /// Burn-up input: points at fractions of the period with their scope and landed counts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BurnupSeries {
@@ -490,12 +454,7 @@ pub struct BurnupSeries {
     pub points: Vec<(f32, u32, u32)>,
     pub first: String,
     pub last: String,
-    pub disclosure: Option<&'static str>,
     pub completeness: Option<String>,
-}
-/// The illustrative burn-up of the fixture preview.
-pub fn fixture_burnup() -> BurnupSeries {
-    data::burnup()
 }
 /// A plotted chart point.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -510,7 +469,6 @@ pub struct Burnup {
     pub title: String,
     pub period: String,
     pub accessible_label: String,
-    pub disclosure: Option<&'static str>,
     pub completeness: Option<String>,
     pub size: (f32, f32),
     pub scope: Vec<Point>,
@@ -588,7 +546,6 @@ pub fn burnup(series: &BurnupSeries, width: f32, height: f32) -> Burnup {
                 .map(|note| format!(" · {note}"))
                 .unwrap_or_default()
         ),
-        disclosure: series.disclosure,
         completeness: series.completeness.clone(),
         size: (width, height),
         scope,
@@ -611,14 +568,6 @@ pub fn burnup(series: &BurnupSeries, width: f32, height: f32) -> Burnup {
 mod tests {
     use super::*;
     #[test]
-    fn segment_coordinates_use_plot_width_not_canvas_width() {
-        let view = layout(&fixture_plot(), 1190.0, false);
-        let segment = &view.lanes[0].segments[0];
-        let scale = (1190.0 - 190.0 - 10.0) / (data::END - data::START) as f32;
-        assert!((segment.x - (190.0 + 43.0 * scale)).abs() < 0.001);
-        assert!((segment.width - (147.0 * scale - 1.0)).abs() < 0.001);
-    }
-    #[test]
     fn burnup_end_labels_clear_the_day_labels_and_each_other() {
         let series = BurnupSeries {
             title: String::new(),
@@ -626,7 +575,6 @@ mod tests {
             points: vec![(0.0, 9, 0), (1.0, 9, 0)],
             first: "11-14".into(),
             last: "today".into(),
-            disclosure: None,
             completeness: None,
         };
         let chart = burnup(&series, 404.0, 150.0);

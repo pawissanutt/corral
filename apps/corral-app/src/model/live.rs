@@ -3,7 +3,6 @@
 use corral_protocol::assistant::ContextRef;
 use corral_protocol::detail::DetailRef;
 
-use crate::model::effect::Page;
 use crate::model::id::Id;
 use crate::model::nav::{Destination, Form};
 
@@ -144,17 +143,15 @@ impl Selection {
     }
 }
 
-/// One page above a destination: a fixture page of the preview, or a live record.
+/// One canonical record above a destination, for real and synthetic feeds.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Route {
-    Page(Page),
     Live(Live),
 }
 
 impl Route {
     pub fn owner(&self) -> Destination {
         match self {
-            Route::Page(page) => page.owner(),
             Route::Live(live) => live.owner(),
         }
     }
@@ -163,8 +160,7 @@ impl Route {
     pub fn is_detail(&self) -> bool {
         matches!(
             self,
-            Route::Page(Page::Task(_) | Page::Plan(_))
-                | Route::Live(Live::Task(_) | Live::Plan(_) | Live::Review(_))
+            Route::Live(Live::Task(_) | Live::Plan(_) | Live::Review(_))
         )
     }
 }

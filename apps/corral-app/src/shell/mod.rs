@@ -15,7 +15,7 @@ use crate::model::act::{Confirmable, PreviewState};
 use crate::model::board::Mark;
 use crate::model::commands::{
     CONFIRM_CANCEL, CONFIRM_CHECK, CONFIRM_EFFECT_HEADING, CONFIRM_SUB, act_confirm_label,
-    act_confirm_word, confirm_label, confirm_word, risk,
+    act_confirm_word,
 };
 use crate::model::{DataState, Form, Hue, SettingsSection, work};
 use crate::state::AppState;
@@ -70,29 +70,29 @@ pub fn toast(app: AppState) -> AnyElement {
 }
 
 /// The fresh confirmation of a high-risk command while one is pending: its title, the sub
-/// line, the exact effect as a list, the command's preview line, then Cancel and the
-/// confirming button (`app.confirm_no()`, `app.confirm_yes()`). A live command shows corrald's
-/// own preview as it arrives; the fixture preview shows its sample. The phone shows it as a
-/// sheet with the device check; a terminal asks for the command's word to be typed. Escape and
-/// the scrim cancel. test_id "confirm" ("confirm-cancel", "confirm-confirm", "confirm-word").
+/// line, the exact effect as a list, the frozen command and its preview line, then Cancel and
+/// the confirming button (`app.confirm_no()`, `app.confirm_yes()`). The preview comes from
+/// corrald, or in the labelled preview from its local simulation, which says that nothing is
+/// sent and asks for no device check. The phone shows it as a sheet with the device check; a
+/// terminal asks for the command's word to be typed. Escape and the scrim cancel. test_id
+/// "confirm" ("confirm-cancel", "confirm-confirm", "confirm-word").
 pub fn confirmation(app: AppState) -> AnyElement {
     overlay::modal(
         app,
-        move || app.confirm.with(Option::is_some) || app.confirmation.with(Option::is_some),
+        move || app.confirmation.with(Option::is_some),
         move || app.confirm_no(),
-        move || {
-            if app.confirmation.with_untracked(Option::is_some) {
-                live_modal(app)
-            } else {
-                confirm_modal(app)
-            }
-        },
+        move || live_modal(app),
     )
 }
 
-/// A live command's sheet: its title, then corrald's exact preview once it arrives, or why
-/// there is none. Confirming before the preview arrives does nothing.
+/// What the sheet says in the labelled preview: the command runs only in the local simulation.
+const PREVIEW_SUB: &str = "Preview simulation · runs on this device only; nothing is sent.";
+const PREVIEW_ACTOR: &str = "preview simulation · nothing sent";
+
+/// A command's sheet: its title, then the exact preview once it arrives, or why there is none.
+/// Confirming before the preview arrives does nothing.
 fn live_modal(app: AppState) -> Modal {
+    let simulated = untracked(|| app.data.get()) == DataState::Fixture;
     let title = app
         .confirmation
         .with_untracked(|pending| pending.as_ref().map(|p| p.subject.title().to_owned()))
@@ -163,7 +163,11 @@ fn live_modal(app: AppState) -> Modal {
                     .child(
                         mono(
                             app,
-                            format!("actor=owner · {} · preview expires {expires}", app.via()),
+                            if simulated {
+                                format!("{PREVIEW_ACTOR} · preview expires {expires}")
+                            } else {
+                                format!("actor=owner · {} · preview expires {expires}", app.via())
+                            },
                         )
                         .mt(px(gap))
                         .text_color(color(Token::Ink3)),
@@ -174,14 +178,14 @@ fn live_modal(app: AppState) -> Modal {
     });
     Modal {
         test_id: String::from("confirm"),
-        sub: Some(CONFIRM_SUB.to_owned()),
+        sub: Some(if simulated { PREVIEW_SUB } else { CONFIRM_SUB }.to_owned()),
         body,
         done: None,
         confirm: Some(Confirm {
             label: act_confirm_label(&title, app.form),
             cancel: CONFIRM_CANCEL.to_owned(),
             word: act_confirm_word(&title),
-            check: (app.form == Form::Phone).then(|| CONFIRM_CHECK.to_owned()),
+            check: (app.form == Form::Phone && !simulated).then(|| CONFIRM_CHECK.to_owned()),
             on_confirm: Rc::new(move || app.confirm_yes()),
         }),
         title,
@@ -205,56 +209,5 @@ fn command_rows(app: AppState, rows: Vec<(String, String)>) -> AnyElement {
             .max_h(px(200.0))
             .child(list)
             .into_element(),
-    }
-}
-
-/// The modal's content, made on each opening from the confirmation then pending.
-fn confirm_modal(app: AppState) -> Modal {
-    let pending = app.confirm.get_untracked();
-    let kind = pending.as_ref().map(|(kind, _)| *kind);
-    let name = pending
-        .and_then(|(_, name)| name)
-        .filter(|name| !name.is_empty());
-    let info = kind.map(risk);
-    let env = app.env();
-    let title = info.map_or_else(String::new, |info| match &name {
-        Some(name) => format!("{} {name}", info.title),
-        None => info.title.to_owned(),
-    });
-    let preview = info
-        .map(|info| info.preview(name.as_deref(), env))
-        .unwrap_or_default();
-    let effects = info.map_or_else(Vec::new, |info| {
-        info.effects
-            .iter()
-            .map(|effect| (Mark::Na, Hue::Neutral, plain(app, *effect).into_element()))
-            .collect()
-    });
-    let body = view()
-        .child(h3(app, CONFIRM_EFFECT_HEADING, None))
-        .child(steps(app, effects))
-        .child(
-            mono(app, preview)
-                .mt(px(if app.form == Form::Terminal {
-                    0.0
-                } else {
-                    10.0
-                }))
-                .text_color(color(Token::Ink3)),
-        )
-        .into_element();
-    Modal {
-        test_id: String::from("confirm"),
-        title,
-        sub: Some(CONFIRM_SUB.to_owned()),
-        body,
-        done: None,
-        confirm: kind.map(|kind| Confirm {
-            label: confirm_label(kind, app.form),
-            cancel: CONFIRM_CANCEL.to_owned(),
-            word: confirm_word(kind),
-            check: (app.form == Form::Phone).then(|| CONFIRM_CHECK.to_owned()),
-            on_confirm: Rc::new(move || app.confirm_yes()),
-        }),
     }
 }

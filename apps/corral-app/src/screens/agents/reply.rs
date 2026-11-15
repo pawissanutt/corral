@@ -187,7 +187,7 @@ fn closed(app: AppState, reason: &str, action: &Option<(&'static str, Action)>) 
 /// Desktop: `.composer` (a rule above, 10 24 12, the box at most 772 pt wide). Terminal: a
 /// rule, the field and the sends, the hint quiet. A session that takes no replies says why
 /// instead. The phone docks [`phone_reply`] instead.
-pub fn reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
+fn reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
     let form = app.form;
     let status = outcome(app, reply);
     if form == Form::Terminal {
@@ -282,7 +282,7 @@ pub fn reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement 
 
 /// The phone's docked reply (`.reply`): the field, Steer and Send in one rounded box, for the
 /// page's bar, with the latest reply's outcome above it; or why the session takes none.
-pub fn phone_reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
+fn phone_reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
     let entry = match &reply.mode {
         ReplyMode::Closed { reason, action } => closed(app, reason, action),
         ReplyMode::Open | ReplyMode::Busy => view()

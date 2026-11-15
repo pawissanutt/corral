@@ -1,28 +1,24 @@
 //! "Who acts next": the grouped list of the model (`work::GroupedList`) in each form's rows, built
-//! from the fixtures or, in the Daemon state, from the daemon's board. On desktop and phone a
-//! task row is the kit's; the plan and PM-ask rows, the collapsed queued line and the parked
-//! block are this list's own, laid in the same columns. The list measures its width once, and its
-//! own head and rows give way as the kit's task rows do (`rows::task_columns`). It is the
+//! from the feed's board. On desktop and phone a task row is the kit's; the collapsed queued line
+//! is this list's own, laid in the same columns. The list measures its width once, and its own
+//! head and rows give way as the kit's task rows do (`rows::task_columns`). It is the
 //! destination's keyboard list (`AppState::list_keys`), and a row the keyboard selects scrolls
 //! into its panel's view.
 
 use nsh_core::prelude::*;
 
-use crate::model::work::{self, ExtraRow, GroupedList, ParkedRow, Row};
+use crate::model::work::{self, GroupedList, Row};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::chip::chip;
-use crate::ui::kit::marks::{actor, delta, dot, hue_ink};
 use crate::ui::kit::notice::{notice, skeleton};
 use crate::ui::kit::rows::{TaskColumns, group_header, list_row, task_row};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
+use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::cells;
-use super::parts::{
-    act, action_id, by_data, model_button, press, press_id, pressable, question_open, quiet,
-};
+use super::parts::{press, press_id, pressable, quiet};
 use super::verbs::{row_record, with_menu};
 
 const RING: f32 = 2.0;
@@ -32,34 +28,14 @@ const RING: f32 = 2.0;
 pub(super) fn list(app: AppState) -> AnyElement {
     let form = app.form;
     let source = computed(move || {
-        if app.daemon() {
-            let selection = app.selection();
-            return app.feed.with(|feed| {
-                app.work
-                    .with(|state| work::daemon_list(state, feed, &selection, form))
-            });
-        }
-        let env = app.env();
-        let open = question_open(app, env);
-        app.work
-            .with(|state| work::grouped_list_with_question(state, env, open))
+        let selection = app.selection();
+        app.feed.with(|feed| {
+            app.work
+                .with(|state| work::daemon_list(state, feed, &selection, form))
+        })
     });
-    // The board notice is the daemon's: the fixture preview's connection demo is the shell's
-    // banner already.
-    let board = computed(move || {
-        if app.daemon() {
-            app.feed.with(|feed| work::daemon_status(feed).banner)
-        } else {
-            None
-        }
-    });
-    let as_of = computed(move || {
-        if app.daemon() {
-            app.feed.with(|feed| work::daemon_status(feed).as_of)
-        } else {
-            work::status(app.env()).as_of
-        }
-    });
+    let board = computed(move || app.feed.with(|feed| work::daemon_status(feed).banner));
+    let as_of = computed(move || app.feed.with(|feed| work::daemon_status(feed).as_of));
     let label = untracked(|| source.with(|list| list.label));
     let (width, columns) = cells::measured(app.form);
     view()
@@ -107,56 +83,33 @@ fn board_notice(app: AppState, banner: &work::Banner) -> AnyElement {
         .into_element()
 }
 
-/// The Goals panel: in the fixture the model's Goals control (its press explains the filter);
-/// in the Daemon state the goals the board's tasks serve, each narrowing the list to it.
+/// The Goals panel's title and list label.
+pub(super) const GOALS_LABEL: &str = "Goals";
+
+/// The Goals panel: the goals the board's tasks serve, each narrowing the list to it.
 pub(super) fn goals(app: AppState) -> AnyElement {
-    by_data(
-        app,
-        move || {
-            let goals = untracked(|| {
-                let env = app.env();
-                app.work.with(|state| work::workspace(state, env).goals)
-            });
+    let rows = computed(move || {
+        app.feed
+            .with(|feed| app.work.with(|state| work::daemon_goals(state, feed)))
+    });
+    dynamic(move || {
+        rows.with(|rows| {
+            if rows.is_empty() {
+                return quiet(app, work::NO_GOALS);
+            }
             view()
-                .flex_row()
-                .px(px(if app.form == Form::Terminal {
-                    8.0
-                } else {
-                    16.0
-                }))
-                .py(px(if app.form == Form::Terminal {
-                    0.0
-                } else {
-                    14.0
-                }))
-                .child(model_button(app, &goals, "btn-goals".into(), false))
+                .py(px(if app.form == Form::Terminal { 0.0 } else { 4.0 }))
+                .role(AccessibilityRole::List)
+                .label(GOALS_LABEL)
+                .children(
+                    rows.iter()
+                        .enumerate()
+                        .map(|(index, row)| goal_row(app, row, index))
+                        .collect::<Vec<_>>(),
+                )
                 .into_element()
-        },
-        move || {
-            let rows = computed(move || {
-                app.feed
-                    .with(|feed| app.work.with(|state| work::daemon_goals(state, feed)))
-            });
-            dynamic(move || {
-                rows.with(|rows| {
-                    if rows.is_empty() {
-                        return quiet(app, work::NO_GOALS);
-                    }
-                    view()
-                        .py(px(if app.form == Form::Terminal { 0.0 } else { 4.0 }))
-                        .role(AccessibilityRole::List)
-                        .label("Goals")
-                        .children(
-                            rows.iter()
-                                .enumerate()
-                                .map(|(index, row)| goal_row(app, row, index))
-                                .collect::<Vec<_>>(),
-                        )
-                        .into_element()
-                })
-            })
-        },
-    )
+        })
+    })
 }
 
 /// One goal the board serves: its words, then how many tasks serve it in mono figures; the
@@ -280,7 +233,6 @@ fn groups(
                     };
                     revealing(selected, row)
                 }
-                Row::Extra(extra) => extra_row(app, extra, columns),
                 Row::More(button) => {
                     let label = button.label.to_string();
                     let action = button.action.clone();
@@ -290,7 +242,6 @@ fn groups(
                         }
                     })
                 }
-                Row::Parked(parked) => parked_row(app, parked, columns),
             });
         }
     }
@@ -454,171 +405,9 @@ fn column_head(list: &GroupedList, columns: Memo<TaskColumns>) -> AnyElement {
         .into_element()
 }
 
-/// A plan accept or the sample PM ask, in the task columns: the changed mark, the needs-you dot,
-/// the id, the title, the kind where the rail sits, the note in its hue, the age. The phone's two
-/// lines: id and title, then the note and the age.
-fn extra_row(app: AppState, row: &ExtraRow, columns: Memo<TaskColumns>) -> AnyElement {
-    let form = app.form;
-    let label = [
-        row.display_id,
-        row.extra.title,
-        row.kind_label,
-        row.extra.note,
-        row.age,
-    ]
-    .into_iter()
-    .filter(|part| !part.is_empty())
-    .collect::<Vec<_>>()
-    .join(", ");
-    if form == Form::Terminal {
-        return cells::extra_row(app, row, label, columns);
-    }
-    let size = text_size(form);
-    let note_ink = match row.note_hue {
-        Hue::Neutral => color(Token::Ink2),
-        hue => hue_ink(hue),
-    };
-    let leading = if row.changed { delta(app) } else { blank() };
-    let content = match form {
-        Form::Phone => vec![
-            view()
-                .flex_1()
-                .min_w(px(0.0))
-                .gap(px(2.0))
-                .child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(10.0))
-                        .child(fixed(12.0, false, dot(app, Hue::You)))
-                        .child(line(form, row.display_id, 13.0, color(Token::Ink3), true))
-                        .child(
-                            line(form, row.extra.title, size, color(Token::Ink), false)
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .font_weight(FontWeight::SEMIBOLD),
-                        ),
-                )
-                .child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(8.0))
-                        .pl(px(22.0))
-                        .child(
-                            line(form, row.extra.note, 13.5, note_ink, false)
-                                .flex_1()
-                                .min_w(px(0.0)),
-                        )
-                        .child(line(form, row.age, 12.0, color(Token::Ink3), true)),
-                )
-                .into_element(),
-        ],
-        Form::Desktop | Form::Terminal => vec![
-            fixed(10.0, false, leading),
-            fixed(14.0, false, dot(app, Hue::You)),
-            fixed(
-                50.0,
-                false,
-                line(form, row.display_id, 11.5, color(Token::Ink3), true).into_element(),
-            ),
-            line(form, row.extra.title, size, color(Token::Ink), false)
-                .flex_1()
-                .min_w(px(0.0))
-                .into_element(),
-            fixed(
-                64.0,
-                false,
-                line(form, row.kind_label, 11.5, color(Token::Ink3), false).into_element(),
-            ),
-            give_way(
-                150.0,
-                false,
-                move || columns.get().now,
-                line(form, row.extra.note, 12.0, note_ink, false).into_element(),
-            ),
-            give_way(
-                34.0,
-                true,
-                move || columns.get().age,
-                line(form, row.age, 11.0, color(Token::Ink3), true).into_element(),
-            ),
-            give_way(46.0, true, move || columns.get().cost, blank()),
-        ],
-    };
-    let action = row.action;
-    list_row(
-        app,
-        label,
-        action_id(action),
-        || false,
-        move || act(app, action),
-        content,
-    )
-}
-
-/// The parked block (`.r-parked`): the held count where the id sits, the projects in the title's
-/// place, "held by you" where the now-phrase sits; on the phone one quiet line.
-fn parked_row(app: AppState, row: &ParkedRow, columns: Memo<TaskColumns>) -> AnyElement {
-    let form = app.form;
-    let action = row.action;
-    if form == Form::Phone {
-        return quiet_row(app, row.title.clone(), Some(action_id(action)), move || {
-            act(app, action)
-        });
-    }
-    let label = format!("{}, {}, {}", row.summary.n, row.title, row.now);
-    if form == Form::Terminal {
-        return cells::parked_row(app, row, label, columns);
-    }
-    let content = vec![
-        fixed(10.0, false, blank()),
-        fixed(14.0, false, actor(app, crate::model::board::Actor::Parked)),
-        fixed(
-            50.0,
-            false,
-            line(
-                form,
-                row.summary.n.to_string(),
-                11.5,
-                color(Token::Ink3),
-                true,
-            )
-            .into_element(),
-        ),
-        line(
-            form,
-            row.title.clone(),
-            text_size(form),
-            color(Token::Ink2),
-            false,
-        )
-        .flex_1()
-        .min_w(px(0.0))
-        .into_element(),
-        fixed(64.0, false, blank()),
-        give_way(
-            150.0,
-            false,
-            move || columns.get().now,
-            line(form, row.now, 12.0, color(Token::Ink3), false).into_element(),
-        ),
-        give_way(34.0, true, move || columns.get().age, blank()),
-        give_way(46.0, true, move || columns.get().cost, blank()),
-    ];
-    list_row(
-        app,
-        label,
-        action_id(action),
-        || false,
-        move || act(app, action),
-        content,
-    )
-}
-
-/// A quiet pressable line (`.more`): the collapsed queued tasks; on the phone also the parked
-/// block. Desktop 26 pt, under the titles (48 pt in), a chevron after the words; phone at least
-/// 48 pt with a hairline under it; terminal one row of Cells.
+/// A quiet pressable line (`.more`): the collapsed queued tasks. Desktop 26 pt, under the titles
+/// (48 pt in), a chevron after the words; phone at least 48 pt with a hairline under it;
+/// terminal one row of Cells.
 fn quiet_row(
     app: AppState,
     label: String,

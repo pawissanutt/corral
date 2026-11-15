@@ -9,6 +9,7 @@ use corral_protocol::cmd::config::ConfigCommand;
 use corral_protocol::rows::{ProfileChoice, SettingsSnapshot};
 
 use crate::model::Act;
+use crate::model::id::IdSupply;
 
 /// One configured profile, with what the owner may do to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,7 +151,7 @@ impl ProfileForm {
     }
 
     /// The hash-guarded, Confirm-class add, when the form can be sent.
-    pub fn act(&self, settings: &SettingsSnapshot) -> Option<Act> {
+    pub fn act(&self, ids: &mut IdSupply, settings: &SettingsSnapshot) -> Option<Act> {
         if self.problem(settings).is_some() {
             return None;
         }
@@ -158,6 +159,7 @@ impl ProfileForm {
         let title = format!("Add profile {name}, a copy of {}", self.from);
         Some(
             Act::new(
+                ids,
                 title,
                 Command::Config(ConfigCommand::ProfileAdd {
                     name,
@@ -173,7 +175,7 @@ impl ProfileForm {
 }
 
 /// The hash-guarded, Confirm-class removal of `profile`'s workspace entry.
-pub fn remove_act(settings: &SettingsSnapshot, profile: &str) -> Act {
+pub fn remove_act(ids: &mut IdSupply, settings: &SettingsSnapshot, profile: &str) -> Act {
     let inherited = settings
         .profiles
         .iter()
@@ -184,6 +186,7 @@ pub fn remove_act(settings: &SettingsSnapshot, profile: &str) -> Act {
         format!("Remove profile {profile}")
     };
     Act::new(
+        ids,
         title,
         Command::Config(ConfigCommand::ProfileRemove {
             name: profile.to_owned(),
@@ -247,14 +250,22 @@ mod tests {
             ..ProfileForm::default()
         };
         assert_eq!(form.from, "pi-luna");
-        assert!(form.act(&settings).is_none());
+        assert!(
+            form.act(&mut IdSupply::new("profile-test"), &settings)
+                .is_none()
+        );
         form.set(ProfileField::Name, "pi-sol".into());
         assert!(form.problem(&settings).unwrap().contains("already exists"));
         form.set(ProfileField::Name, "bad name".into());
-        assert!(form.act(&settings).is_none());
+        assert!(
+            form.act(&mut IdSupply::new("profile-test"), &settings)
+                .is_none()
+        );
         form.set(ProfileField::Name, " pi-fast ".into());
         form.set(ProfileField::Effort, "low".into());
-        let act = form.act(&settings).unwrap();
+        let act = form
+            .act(&mut IdSupply::new("profile-test"), &settings)
+            .unwrap();
         assert!(act.confirm);
         assert_eq!(
             act.command,
@@ -279,7 +290,7 @@ mod tests {
         );
         assert_eq!(rows[1].remove, Some("Remove"));
         assert_eq!(rows[2].remove, Some("Remove override"));
-        let act = remove_act(&settings, "pi-base");
+        let act = remove_act(&mut IdSupply::new("remove-test"), &settings, "pi-base");
         assert!(act.confirm && act.title.contains("override"));
     }
 }
