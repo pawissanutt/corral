@@ -2,7 +2,7 @@
 use super::{IntentPhase, PauseReason, intent_for, pause};
 use crate::Ctx;
 use anyhow::Result;
-use corral_core::{Status, TaskRef as _, agent::ContainerRef};
+use corral_core::{Status, agent::ContainerRef};
 
 /// Call only after detecting failure on a potentially paid native attempt. The keyed
 /// intent lookup is enough to exclude ordinary starts; only a Prepared intent writes.
@@ -18,18 +18,10 @@ pub(crate) fn failed_start(ctx: &Ctx, container: &ContainerRef, generation: u32)
     if intent.phase != IntentPhase::Prepared {
         return Ok(false);
     }
-    // A synchronous launch failure may precede creation of the native successor.
-    // Its predecessor still owns the durable preparation and can revoke it.
-    let target = if let Some(task) = container.task()
-        && ctx.store.head(task)?.agent_head(container)?.is_none()
-    {
-        &intent.source.container
-    } else {
-        container
-    };
+    // Pause owns the successor even when its native state has not been created.
     pause(
         ctx,
-        target,
+        container,
         PauseReason::SuccessorAmbiguous,
         "successor host lost before healthy bind",
     )?;

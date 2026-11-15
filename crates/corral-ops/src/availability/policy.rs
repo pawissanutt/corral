@@ -13,6 +13,10 @@ use corral_core::{
 };
 use jiff::Timestamp;
 
+#[cfg(test)]
+#[path = "policy_tests.rs"]
+mod tests;
+
 pub(crate) struct Target {
     pub candidate: ExecutionCandidate,
     pub resolved: ResolvedProfile,

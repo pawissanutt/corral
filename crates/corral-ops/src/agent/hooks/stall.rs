@@ -246,15 +246,7 @@ fn select_quota_fallback<T: TaskRef + ?Sized>(
         ),
         _ => return Ok(false),
     };
-    if !ctx
-        .store
-        .config
-        .profiles
-        .get(&run.agent)
-        .and_then(|profile| profile.metadata.as_ref())
-        .and_then(|metadata| metadata.fallback.as_ref())
-        .is_some_and(|fallback| fallback.paid_roles.contains(&paid_role))
-    {
+    if !crate::availability::policy::profile_configured(&ctx.store.config, &run.agent, paid_role) {
         return Ok(false);
     }
     let Some(_delivery) = ctx.store.try_lock(&format!("delivery-{}", task.id()))? else {

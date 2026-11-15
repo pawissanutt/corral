@@ -267,7 +267,11 @@ pub(crate) fn plan_review(
         )?
     };
     let lost = review.agent_host.as_ref().is_some_and(|host| {
-        host.paid_episode.is_some() && host.binding.health == corral_core::agent::HostHealth::Lost
+        host.paid_episode.is_some()
+            && matches!(
+                host.binding.health,
+                corral_core::agent::HostHealth::Lost | corral_core::agent::HostHealth::Fenced
+            )
     });
     if !returned && !gone && !lost {
         return Ok(None);

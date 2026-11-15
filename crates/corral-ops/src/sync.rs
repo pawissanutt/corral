@@ -503,7 +503,12 @@ fn reconcile(
             .current_generation()
             .and_then(|generation| generation.connection.as_ref())
             .is_some_and(|binding| binding.connection.api_key())
-        && (exited || gone || host.binding.health == corral_core::agent::HostHealth::Lost)
+        && (exited
+            || gone
+            || matches!(
+                host.binding.health,
+                corral_core::agent::HostHealth::Lost | corral_core::agent::HostHealth::Fenced
+            ))
         && crate::availability::continuation::failed_start(
             ctx,
             &corral_core::agent::ContainerRef::Worker {
