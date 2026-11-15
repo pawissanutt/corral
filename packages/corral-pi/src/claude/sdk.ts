@@ -13,7 +13,7 @@ export interface SdkBoundary {
   createSdkMcpServer: typeof createSdkMcpServer;
 }
 
-let override: SdkBoundary | undefined;
+let override: SdkBoundary | Promise<SdkBoundary> | undefined;
 let loaded: Promise<SdkBoundary> | undefined;
 
 export function loadSdk(): Promise<SdkBoundary> {
@@ -28,8 +28,8 @@ export function loadSdk(): Promise<SdkBoundary> {
   return loaded;
 }
 
-/** Tests only: route every query to `boundary`; `undefined` restores the real SDK. */
-export function overrideSdk(boundary: SdkBoundary | undefined): void {
+/** Tests only: a boundary or controlled setup promise; `undefined` restores the real SDK. */
+export function overrideSdk(boundary: SdkBoundary | Promise<SdkBoundary> | undefined): void {
   override = boundary;
 }
 

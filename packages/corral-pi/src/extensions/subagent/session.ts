@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
+import { closeResidentSession } from "../../claude/resident.ts";
 import { executionRefusal, exploreLoadout } from "../../roles/common/execution.ts";
 import type { AuxiliaryResult, Invocation } from "./runtime.ts";
 import { HELPER_TEXT_LIMIT, type HelperEvent } from "./inspection.ts";
@@ -258,7 +259,10 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
       status: snapshotCoverage === "incomplete" && result.report.status === "completed" ? "partial" : result.report.status }, outcome };
   } finally {
     signal.removeEventListener("abort", abort);
-    unsubscribe();
-    session.dispose();
+    try { unsubscribe(); }
+    finally {
+      try { closeResidentSession(session.sessionId); }
+      finally { session.dispose(); }
+    }
   }
 }

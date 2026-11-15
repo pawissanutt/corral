@@ -146,8 +146,16 @@ const scheduleResidentIdle: ResidentScheduler = (expire, delayMs) => {
   return () => clearTimeout(timer);
 };
 
+/** A setup lease; closing its session invalidates its epoch even before a process exists. */
+export interface ResidentAcquisition {
+  readonly sessionId: string;
+  readonly epoch: number;
+}
+
 export class ResidentSessions {
   private readonly slots = new Map<string, Slot>();
+  private readonly acquisitions = new Map<string, { epoch: number; pending: number }>();
+  private nextEpoch = 0;
   /** Timer expiry must remain distinguishable from a cold start after the slot is gone. */
   private readonly expired = new Set<string>();
   private exitHooked = false;
@@ -162,11 +170,34 @@ export class ResidentSessions {
     return this.slots.size;
   }
 
+  /** Retain epochs only while setup/turns are in flight, not for every historical session. */
+  acquire(sessionId: string): ResidentAcquisition {
+    let current = this.acquisitions.get(sessionId);
+    if (!current) {
+      current = { epoch: ++this.nextEpoch, pending: 0 };
+      this.acquisitions.set(sessionId, current);
+    }
+    current.pending++;
+    return { sessionId, epoch: current.epoch };
+  }
+
+  finishAcquisition(acquisition: ResidentAcquisition): void {
+    const current = this.acquisitions.get(acquisition.sessionId);
+    if (current?.epoch !== acquisition.epoch) return;
+    if (--current.pending === 0) this.acquisitions.delete(acquisition.sessionId);
+  }
+
   /** Plans and opens synchronously: a cold seed owns a busy slot before another call can plan. */
   plan(
-    sessionId: string, scope: string, transcript: readonly Message[], hashes: readonly string[],
+    acquisition: ResidentAcquisition, scope: string, transcript: readonly Message[], hashes: readonly string[],
     start: (input: InputQueue) => Query,
   ): ResidentPlan {
+    const { sessionId, epoch } = acquisition;
+    if (this.acquisitions.get(sessionId)?.epoch !== epoch) {
+      throw new Error("claude_resident_stale: the session closed or changed while Claude setup was pending");
+    }
+    // No awaits below: validation and open are atomic. Replacing an old entry may invalidate
+    // other pending acquisitions, but this already-validated plan completes synchronously.
     const slot = this.slots.get(sessionId);
     if (slot?.entry.busy) return { kind: "one-shot", reason: "busy" };
     let reason: "cold" | "changed" | "diverged" | "idle" = this.expired.has(sessionId) ? "idle" : "cold";
@@ -228,6 +259,7 @@ export class ResidentSessions {
     const slot = this.slots.get(entry.sessionId);
     // A replaced entry was closed when it was replaced.
     if (slot?.entry !== entry) return;
+    this.acquisitions.delete(entry.sessionId);
     this.slots.delete(entry.sessionId);
     slot.cancelIdle?.();
     entry.input.close();
@@ -239,12 +271,14 @@ export class ResidentSessions {
   }
 
   closeSession(sessionId: string): void {
+    this.acquisitions.delete(sessionId);
     const slot = this.slots.get(sessionId);
     if (slot) this.close(slot.entry);
     this.expired.delete(sessionId);
   }
 
   closeAll(): void {
+    this.acquisitions.clear();
     for (const slot of [...this.slots.values()]) this.close(slot.entry);
     process.removeListener("exit", this.onExit);
     this.exitHooked = false;

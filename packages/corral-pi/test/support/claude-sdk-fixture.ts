@@ -41,7 +41,7 @@ interface FakeRun {
   closeCalls: number[];
 }
 
-export function fakeSdk(script: Script): FakeRun {
+export function fakeSdk(script: Script, setup?: Promise<void>): FakeRun {
   const run: FakeRun = { options: [], prompts: [], interrupts: 0, closes: 0, closeCalls: [] };
   const boundary: SdkBoundary = {
     query: ({ prompt, options }) => {
@@ -73,7 +73,7 @@ export function fakeSdk(script: Script): FakeRun {
     },
     createSdkMcpServer: (options) => ({ type: "sdk", name: options.name, instance: options }) as never,
   };
-  overrideSdk(boundary);
+  overrideSdk(setup ? setup.then(() => boundary) : boundary);
   return run;
 }
 

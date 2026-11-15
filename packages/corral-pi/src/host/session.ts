@@ -642,8 +642,7 @@ export class HostSession {
           return runAuxiliarySession({ sdk: options.sdk, models: this.auxiliaryModels, provider: this.provider,
             cwd: options.cwd, agentDir: options.agentDir,
             parentLoadout: this.loadout.filter(name => this.planning?.visible(name) !== false),
-            localTools: this.localTools.map(tool => this.planningTool(tool)) }, invocation, signal)
-            .finally(() => closeResidentSession(invocation.sessionId));
+            localTools: this.localTools.map(tool => this.planningTool(tool)) }, invocation, signal);
         },
       });
     }
