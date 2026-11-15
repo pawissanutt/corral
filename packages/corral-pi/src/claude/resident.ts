@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 
 import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { appendContent, type PromptBlock } from "./prompt.ts";
 import { mapPiToolNameToSdk } from "./tools.ts";
@@ -318,4 +319,13 @@ export function closeResidentSession(sessionId: string): void {
 
 export function closeResidentSessions(): void {
   residentSessions.closeAll();
+}
+
+/** Install both boundaries inside an owner's extension, or serve as a standalone bare factory. */
+export function residentLifecycle(pi: ExtensionAPI): void {
+  const close = (_event: unknown, context: ExtensionContext) => {
+    closeResidentSession(context.sessionManager.getSessionId());
+  };
+  pi.on("model_select", close);
+  pi.on("session_shutdown", close);
 }

@@ -493,6 +493,7 @@ for (const cause of ["finish", "model-change"] as const) {
     const finished = Promise.withResolvers<void>();
     const messages: AssistantMessage[] = [];
     let disposed = false;
+    const handlers = new Map<string, (event: unknown, context: sdk.ExtensionContext) => void | Promise<void>>();
     const session = {
       sessionId: `fleet-sdk-${cause}`, model: setup.model, thinkingLevel: "off", messages, isStreaming: false,
       subscribe() { return () => {}; },
@@ -503,7 +504,12 @@ for (const cause of ["finish", "model-change"] as const) {
         await finished.promise;
       },
       async abort() { finished.resolve(); },
-      async setModel(model: typeof setup.model) { this.model = model; },
+      async setModel(model: typeof setup.model) {
+        const previousModel = this.model;
+        this.model = model;
+        await handlers.get("model_select")?.({ type: "model_select", model, previousModel, source: "set" },
+          { sessionManager: { getSessionId: () => this.sessionId } } as unknown as sdk.ExtensionContext);
+      },
       setThinkingLevel(level: string) { this.thinkingLevel = level; },
       getLastAssistantText() { return "ok"; },
       getSessionStats() { return { tokens: { input: 12, output: 5 }, cost: 0 }; },
@@ -514,7 +520,15 @@ for (const cause of ["finish", "model-change"] as const) {
       CURRENT_SESSION_VERSION: sdk.CURRENT_SESSION_VERSION,
       SettingsManager: { inMemory: () => ({}) },
       SessionManager: { open: () => ({}) },
-      async createAgentSessionServices() { return {}; },
+      async createAgentSessionServices(options: {
+        resourceLoaderOptions: { extensionFactories: sdk.ExtensionFactory[] };
+      }) {
+        const api = { registerTool() {}, on(name: string, handler: (event: unknown, context: sdk.ExtensionContext) => void | Promise<void>) {
+          handlers.set(name, handler);
+        } } as unknown as sdk.ExtensionAPI;
+        for (const extension of options.resourceLoaderOptions.extensionFactories) await extension(api);
+        return {};
+      },
       async createAgentSessionFromServices() { return { session }; },
     } as unknown as typeof sdk;
     const root = setup.config.cwd;
