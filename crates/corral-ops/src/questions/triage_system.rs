@@ -84,7 +84,7 @@ pub(in crate::questions) fn transact_system(
             message_id: message.as_ref().map(|message| message.id.clone()),
             delivery: if message.is_some() { "queued" } else { "none" },
         };
-        task.put_agent_record(&container, NativeRecord::Question(question))?;
+        task.put_agent_record(&container, NativeRecord::Question(Box::new(question)))?;
         if super::apply_needs_me_ref(task, &container, &change.needs_me)?
             && let NeedsMe::Raise(reason) = change.needs_me
         {

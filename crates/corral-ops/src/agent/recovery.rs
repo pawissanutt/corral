@@ -777,7 +777,7 @@ pub fn post_updates(ctx: &Ctx, task_id: &str) -> Result<usize> {
                 UPDATE_SOURCE,
                 reserved.as_ref().map(|m| m.id.clone()),
             );
-            task.put_agent_record(&container, agent::NativeRecord::Receipt(receipt))?;
+            task.put_agent_record(&container, agent::NativeRecord::Receipt(Box::new(receipt)))?;
             message = reserved;
             Ok(true)
         })?;

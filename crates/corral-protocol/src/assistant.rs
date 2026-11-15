@@ -222,7 +222,7 @@ pub enum EntryCard {
         words: String,
     },
     Action {
-        command: cmd::Command,
+        command: Box<cmd::Command>,
         class: ActClass,
         outcome: Option<cmd::CmdResult>,
         input: Option<String>,

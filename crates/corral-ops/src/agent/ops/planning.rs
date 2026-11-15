@@ -278,7 +278,10 @@ fn settle(
             stored.result = result;
             stored.executor = None;
             stored.committed_at = (state == ReceiptState::Committed).then_some(ctx.store.now());
-            task.put_agent_record(container, agent::NativeRecord::Receipt(stored.clone()))?;
+            task.put_agent_record(
+                container,
+                agent::NativeRecord::Receipt(Box::new(stored.clone())),
+            )?;
         }
         out = Some(stored);
         Ok(changed)

@@ -154,7 +154,7 @@ fn native_keyed_mutations_match_full_facade_for_all_container_roles() {
             // Bridge events can arrive out of order: latest means max seq, not last append.
             turn(10000, 2),
             turn(10000, 1),
-            NativeRecord::Receipt(receipt(&id, "queued", "queued")),
+            NativeRecord::Receipt(Box::new(receipt(&id, "queued", "queued"))),
         ];
         for record in records.drain(..) {
             expected
@@ -169,11 +169,14 @@ fn native_keyed_mutations_match_full_facade_for_all_container_roles() {
         let mut committed = receipt(&id, "queued", "committed");
         committed.post_pending.push("effect:fixture".into());
         expected
-            .put_agent_record(&container, NativeRecord::Receipt(committed.clone()))
+            .put_agent_record(
+                &container,
+                NativeRecord::Receipt(Box::new(committed.clone())),
+            )
             .unwrap();
         store
             .update_head(&id, |head| {
-                head.put_agent_record(&container, NativeRecord::Receipt(committed))
+                head.put_agent_record(&container, NativeRecord::Receipt(Box::new(committed)))
                     .map(drop)
             })
             .unwrap();
@@ -213,7 +216,7 @@ fn native_keyed_mutations_match_full_facade_for_all_container_roles() {
         finished.state = ReceiptState::Committed;
         store
             .update_head(&id, |head| {
-                head.put_agent_record(&container, NativeRecord::Receipt(finished))
+                head.put_agent_record(&container, NativeRecord::Receipt(Box::new(finished)))
                     .map(drop)
             })
             .unwrap();
@@ -282,7 +285,7 @@ fn unfinished_native_index_skips_settled_terminal_tasks_and_retains_owed_receipt
             .update_head(&task.id, |head| {
                 head.put_agent_record(
                     &container,
-                    NativeRecord::Receipt(receipt(&task.id, "queued", "committed")),
+                    NativeRecord::Receipt(Box::new(receipt(&task.id, "queued", "committed"))),
                 )
                 .map(drop)
             })
@@ -354,11 +357,11 @@ fn native_receipt_mutation_has_equal_work_with_grown_completed_history() {
             .update_head(&task.id, |head| {
                 head.put_agent_record(
                     &container,
-                    NativeRecord::Receipt(receipt(&task.id, "queued", "committed")),
+                    NativeRecord::Receipt(Box::new(receipt(&task.id, "queued", "committed"))),
                 )?;
                 head.put_agent_record(
                     &container,
-                    NativeRecord::Receipt(receipt(&task.id, "new", "queued")),
+                    NativeRecord::Receipt(Box::new(receipt(&task.id, "new", "queued"))),
                 )?;
                 Ok(())
             })

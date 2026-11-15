@@ -517,7 +517,9 @@ impl TaskRef for Task {
             .map(|s| {
                 s.receipts
                     .iter()
-                    .filter(|r| crate::agent::NativeRecord::Receipt((*r).clone()).pending())
+                    .filter(|r| {
+                        crate::agent::NativeRecord::Receipt(Box::new((*r).clone())).pending()
+                    })
                     .cloned()
                     .collect()
             })

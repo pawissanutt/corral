@@ -9,6 +9,7 @@
 //! - `check` answers whether an active grant covers a target, and `list` returns the active
 //!   grants. Both are authenticated lookups that store no receipt and require the caller's
 //!   generation to be current and its session open.
+//!
 //! Remote generations may check grants but cannot decide for the owner. Their device-bound
 //! prompts use the same validation and record_permission transition through owner_prompt.
 use std::path::{Path, PathBuf};

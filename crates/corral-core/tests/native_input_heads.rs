@@ -102,7 +102,7 @@ fn unfinished_native_owner_order_and_retirement_match_full_without_decoding_sett
                 assert!(TaskRef::unfinished_native_containers(head)?.contains(&container));
                 let mut question = head.agent_question(&container, &key)?.unwrap();
                 question.state = QuestionState::Cancelled;
-                head.put_agent_record(&container, NativeRecord::Question(question))?;
+                head.put_agent_record(&container, NativeRecord::Question(Box::new(question)))?;
                 assert!(!TaskRef::unfinished_native_containers(head)?.contains(&container));
                 Ok(())
             })

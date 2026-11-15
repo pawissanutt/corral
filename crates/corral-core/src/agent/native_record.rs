@@ -8,8 +8,8 @@ use serde_json::Value;
 #[serde(untagged)]
 pub enum NativeRecord {
     Generation(Box<AgentGeneration>),
-    Receipt(RequestReceipt),
-    Question(AgentQuestion),
+    Receipt(Box<RequestReceipt>),
+    Question(Box<AgentQuestion>),
     Turn(AgentTurn),
     Wake(WakeSubscription),
     Report(AgentReport),
@@ -124,8 +124,8 @@ impl NativeRecord {
         }
         match self {
             Self::Generation(r) => put(&mut state.generations, *r, |a, b| a.n == b.n),
-            Self::Receipt(r) => put(&mut state.receipts, r, |a, b| a.request_id == b.request_id),
-            Self::Question(r) => put(&mut state.questions, r, |a, b| a.key == b.key),
+            Self::Receipt(r) => put(&mut state.receipts, *r, |a, b| a.request_id == b.request_id),
+            Self::Question(r) => put(&mut state.questions, *r, |a, b| a.key == b.key),
             Self::Turn(r) => put(&mut state.turns, r, |a, b| {
                 (a.generation, a.seq) == (b.generation, b.seq)
             }),

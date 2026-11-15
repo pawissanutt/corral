@@ -110,7 +110,7 @@ fn active_worker_wakes_and_first_queued_effect_are_scoped_keyed_and_history_inde
                 head.put_agent_record(&container, NativeRecord::Wake(record))?;
                 let mut receipt = head.agent_receipt(&container, "worker-first")?.unwrap();
                 receipt.result["queued"] = json!(false);
-                head.put_agent_record(&container, NativeRecord::Receipt(receipt))?;
+                head.put_agent_record(&container, NativeRecord::Receipt(Box::new(receipt)))?;
                 assert_eq!(TaskRef::active_worker_wakes(head)?.len(), 1);
                 assert_eq!(
                     TaskRef::worker_queued_effect_receipt(head, "attempt")?
