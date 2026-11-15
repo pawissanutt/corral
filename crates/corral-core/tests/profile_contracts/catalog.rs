@@ -293,6 +293,7 @@ fn fallback_rejects_unapproved_provider_unknown_cost_and_unbounded_switches() {
                     .remove("anthropic");
             }
             "cost" => {
+                m.candidates[1].cost = CandidateCost::Unknown;
                 m.fallback.as_mut().unwrap().spending = Some(SpendingBound {
                     currency: "USD".into(),
                     maximum_micros: 1,
