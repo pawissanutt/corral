@@ -1,7 +1,7 @@
-//! The Inbox destination and the focused question: the fixture preview's `Page::Question`, and
-//! a served question's live page by its key. The model resolves every word, branch and order
-//! (`model::inbox`); this module lays it out per form and sends each control's [`Action`]
-//! back through the reducer (`State::act` for the fixture, `State::act_live` for corrald).
+//! The Inbox destination and a question's focus page by its key. The model resolves every
+//! word, branch and order (`model::inbox`); this module lays it out per form and sends each
+//! control's [`Action`] back through the feed-backed reducer (`State::act_live`), whether the
+//! feed is corrald's or the labelled preview's.
 //!
 //! Views read the model through memos built from a copy of the state without the typed text
 //! (the alternate answer, the follow-up): typing changes only the decide bar, so the fields
@@ -43,8 +43,8 @@ const SIDE: f32 = 340.0;
 /// Points per terminal Cell for the fixed widths above, as `kit::page::columns` counts them.
 const POINTS_PER_CELL: f32 = 12.0;
 
-/// Which question a handover shows: a served focus page's key, or None for the fixture and
-/// for the inline handover of the selected row.
+/// Which question a handover shows: a focus page's key, or None for the inline handover of the
+/// selected row.
 type Key = Option<Id>;
 
 /// The Inbox destination. Desktop: the 400 pt list beside the selection's pane (the full
@@ -62,22 +62,12 @@ pub fn screen(app: AppState) -> AnyElement {
     }
 }
 
-/// The fixture preview's focused question.
-pub fn question(app: AppState) -> AnyElement {
-    focus_page(app, None)
-}
-
-/// A served question's focus page on desktop and terminal.
+/// A question's focus page on desktop and terminal.
 pub fn live_question(app: AppState, key: Id) -> AnyElement {
     focus_page(app, Some(key))
 }
 
-/// The fixture preview's question pushed on the phone.
-pub fn question_phone(app: AppState) -> PhonePage {
-    phone_page(app, None)
-}
-
-/// A served question pushed on the phone.
+/// A question pushed on the phone.
 pub fn live_question_phone(app: AppState, key: Id) -> PhonePage {
     phone_page(app, Some(key))
 }
@@ -315,15 +305,11 @@ fn terminal_panes(
         .into_element()
 }
 
-/// Runs `action` through the source's reducer, then the effects it returns.
+/// Runs `action` through the feed-backed reducer, then the effects it returns.
 fn act(app: AppState, action: Action) {
-    if untracked(|| app.daemon()) {
-        app.reduce(app.inbox, move |state, feed, _selection, env| {
-            state.act_live(action, feed, env)
-        });
-    } else {
-        app.act(app.inbox, move |state, env| state.act(action, env));
-    }
+    app.reduce(app.inbox, move |state, feed, _selection, env| {
+        state.act_live(action, feed, env)
+    });
 }
 
 /// A press handler dispatching `action`.
@@ -331,14 +317,10 @@ fn press(app: AppState, action: Action) -> impl Fn() + 'static {
     move || act(app, action.clone())
 }
 
-/// Tracked read of the state and the source: the served feed in daemon mode, else the fixture.
+/// Tracked read of the state over the feed.
 fn with_source<R>(app: AppState, read: impl FnOnce(&State, Src) -> R) -> R {
-    if app.daemon() {
-        app.feed
-            .with(|feed| app.inbox.with(|state| read(state, Src::Live(feed))))
-    } else {
-        app.inbox.with(|state| read(state, Src::Fixture))
-    }
+    app.feed
+        .with(|feed| app.inbox.with(|state| read(state, Src::Live(feed))))
 }
 
 /// A memo of a view builder over the state without its typed text (see the module docs).
@@ -391,32 +373,23 @@ fn kind(kind: ModelKind) -> ButtonKind {
 }
 
 /// The stable part of a control's test id: what it does, not what it says, except for the
-/// toast-only controls, which say what they are.
+/// choices and fields, which say what they are.
 fn action_id(action: &Action, label: &str) -> String {
     match action {
-        Action::Answer | Action::Submit(_) => "answer".into(),
+        Action::Submit(_) => "answer".into(),
         Action::Thread => "ask-worker".into(),
         Action::FocusReply => "ask-asker".into(),
-        Action::SendThread | Action::Followup(_) => "send".into(),
+        Action::Followup(_) => "send".into(),
         Action::CloseThread => "done".into(),
-        Action::NextQ | Action::Next(_) => "next".into(),
-        Action::Ask | Action::AskAbout(_, false) => "ask-about".into(),
+        Action::Next(_) => "next".into(),
+        Action::AskAbout(_, false) => "ask-about".into(),
         Action::AskAbout(_, true) => "discuss-pm".into(),
-        Action::OpenQuestion => "open-question".into(),
-        Action::PlanOpen(_) => "open-plan".into(),
         Action::Go(destination) => format!("go-{}", destination.slug()),
-        Action::Open(_) | Action::Live(_) | Action::OpenRow(_) => "open".into(),
-        Action::Evidence(_) | Action::Proof(..) => "proof".into(),
+        Action::Live(_) | Action::OpenRow(_) => "open".into(),
+        Action::Proof(..) => "proof".into(),
         Action::Recover(_) => "check-result".into(),
         Action::Refetch(_) => "reload".into(),
-        Action::Select(_)
-        | Action::Row(_)
-        | Action::Choose(_)
-        | Action::Pick(..)
-        | Action::Draft(_)
-        | Action::Text(..)
-        | Action::Reply(..)
-        | Action::Toast(_) => slug(label),
+        Action::Row(_) | Action::Pick(..) | Action::Text(..) | Action::Reply(..) => slug(label),
     }
 }
 
@@ -455,8 +428,7 @@ fn code(app: AppState, content: impl Into<SharedString>, size: f32, ink: Token) 
 
 /// The model's [`Rich`] at `size` in `ink`, line height 1.5: the kit's `rich` has two sizes
 /// only, and the sheet's metadata, consequences and attributions sit at others. Mono runs are
-/// 0.93 of the size; dim runs ink-3; hued runs their hue. Fixture links open their page, live
-/// links their record.
+/// 0.93 of the size; dim runs ink-3; hued runs their hue. Links open their record.
 fn rich_at(app: AppState, content: &Rich, size: f32, ink: AdaptiveColor) -> Text {
     let terminal = app.form == Form::Terminal;
     let root = text("").flex_shrink(1.0).min_w(px(0.0)).text_color(ink);
@@ -483,13 +455,7 @@ fn rich_at(app: AppState, content: &Rich, size: f32, ink: AdaptiveColor) -> Text
         if run.strike {
             piece = piece.line_through();
         }
-        if let Some(page) = run.link {
-            piece = piece
-                .underline()
-                .cursor_pointer()
-                .role(AccessibilityRole::Link)
-                .on_press(move || app.open(page));
-        } else if let Some(record) = run.live.clone() {
+        if let Some(record) = run.live.clone() {
             piece = piece
                 .underline()
                 .cursor_pointer()
@@ -498,7 +464,7 @@ fn rich_at(app: AppState, content: &Rich, size: f32, ink: AdaptiveColor) -> Text
         }
         // An inline record link ("plan T-874") is a line tall; on the phone its press reaches
         // the 44 pt target above and below.
-        if app.form == Form::Phone && (run.link.is_some() || run.live.is_some()) {
+        if app.form == Form::Phone && run.live.is_some() {
             let slop = px(((44.0 - size * 1.5) / 2.0).max(0.0));
             piece = piece.hit_slop(EdgeInsets {
                 top: slop,
@@ -515,8 +481,8 @@ fn rich_at(app: AppState, content: &Rich, size: f32, ink: AdaptiveColor) -> Text
 /// for going back.
 fn icon_for(action: &Action) -> Option<Icon> {
     match action {
-        Action::Thread | Action::Ask | Action::AskAbout(..) | Action::FocusReply => Some(Icon::Ask),
-        Action::SendThread | Action::Followup(_) => Some(Icon::Send),
+        Action::Thread | Action::AskAbout(..) | Action::FocusReply => Some(Icon::Ask),
+        Action::Followup(_) => Some(Icon::Send),
         Action::Go(Destination::Inbox) => Some(Icon::Back),
         _ => None,
     }

@@ -1,6 +1,6 @@
-//! What the Usage page shows, read tracked: the fixture preview's illustrative page, or corral's
-//! recorded usage rows, series and session costs in the viewer's time zone. Also keeps the usage
-//! series requested while the page is open and revalidates it when the usage rows move.
+//! What the Usage page shows, read tracked: the selected feed's recorded usage rows, series and
+//! session costs in the viewer's time zone. Also keeps the usage series requested while the page
+//! is open and revalidates it when the usage rows move.
 
 use corral_protocol::detail::DetailBody;
 use jiff::tz::TimeZone;
@@ -45,12 +45,6 @@ fn status(feed: &Feed) -> Status {
 
 /// Tracked: the page's content now.
 pub fn shown(app: AppState) -> Shown {
-    if !app.daemon() {
-        return Shown {
-            page: usage::fixture_page(),
-            status: Status::Ready,
-        };
-    }
     let period = app.usage.with(|state| state.period);
     app.feed.with(|feed| {
         let tz = feed.time_zone.clone().unwrap_or(TimeZone::UTC);

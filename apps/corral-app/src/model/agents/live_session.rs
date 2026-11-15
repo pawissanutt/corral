@@ -187,7 +187,6 @@ fn terminal(
             .map(|capture| screen::rows(&capture.rows))
             .unwrap_or_default(),
         empty,
-        phone_keys: Vec::new(),
         keys,
         refresh: Some(Action::Refresh(DetailRef::Terminal { id: row.id.clone() })),
     }

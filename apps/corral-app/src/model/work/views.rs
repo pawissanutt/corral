@@ -1,17 +1,10 @@
-//! Complete workspace, Changes and More content projections of the fixture preview, and the
-//! owned feed, hold and Changes descriptors the Daemon state's builders share.
+//! Feed-backed work content descriptors and phone destination navigation.
 
-use crate::model::board::{Change, ChangeKind, LAST_VISIT, Mark, changes as board_changes};
-use crate::model::effect::{Conn, Env};
+use super::{Action, Button, ChangeFilter, Press, State};
+use crate::model::board::{ChangeKind, Mark};
 use crate::model::hue::Hue;
 use crate::model::nav::{Destination, Form};
-use crate::model::text::{Rich, span};
-
-use super::{
-    Action, Button, ButtonKind, ChangeFilter, CtxTab, GroupedList, HOLDS, Inspector, LiveDock,
-    LowTab, NowTab, PlanContext, Press, State, grouped_list_with_question, inspector, live,
-    plan_context, question_open,
-};
+use crate::model::text::Rich;
 
 /// A connection banner with its entire inline emphasis and handled controls.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,75 +27,6 @@ pub struct Status {
     /// Connection banner; healthy and relay connections have no banner.
     pub banner: Option<Banner>,
 }
-
-/// Resolve degraded, daemon-down and offline messages without consulting a UI service.
-pub fn status(env: Env) -> Status {
-    let phone = env.form == Form::Phone;
-    let banner = match env.conn {
-        Conn::Degraded => Some(Banner {
-            hue: Hue::Held,
-            text: vec![
-                span("corrald degraded · sync stalled 4m.").bold(),
-                span(
-                    " The board can trail reality by up to 4 minutes; commands still go through and are revision-checked. PM is relaunching.",
-                ),
-            ],
-            actions: if phone {
-                Vec::new()
-            } else {
-                vec![Button::new(
-                    "Details",
-                    Action::Connection,
-                    ButtonKind::Quiet,
-                )]
-            },
-        }),
-        Conn::Down => Some(Banner {
-            hue: Hue::Fail,
-            text: vec![
-                span("corrald is down since 22:09.").bold(),
-                span(
-                    " Showing the board as of 22:08, marked stale. Nothing syncs, gates or lands until it is back.",
-                ),
-            ],
-            actions: if phone {
-                Vec::new()
-            } else {
-                vec![
-                    Button::new("Restart corrald", Action::RestartDaemon, ButtonKind::Ghost),
-                    Button::new("Diagnostics", Action::Connection, ButtonKind::Quiet),
-                ]
-            },
-        }),
-        Conn::Offline => Some(Banner {
-            hue: Hue::Neutral,
-            text: vec![
-                span("Offline · last sync 22:08.").bold(),
-                span(
-                    " Reading the last known state. A command queues only if corrald can check it on reconnect; everything else refuses. ",
-                ),
-                span("2 queued").bold(),
-                span(
-                    " (answer T-868/R1/Q1 at rev 2, checkable on reconnect; one message to the quick thread) · ",
-                ),
-                span("1 refused").bold(),
-                span(" (accept plan T-885 P2)."),
-            ],
-            actions: if phone {
-                Vec::new()
-            } else {
-                vec![Button::new("Queue", Action::Connection, ButtonKind::Quiet)]
-            },
-        }),
-        Conn::Healthy | Conn::Relay => None,
-    };
-    Status {
-        dimmed: env.conn.refuses(),
-        as_of: env.conn.refuses().then(|| "as of 22:08".to_owned()),
-        banner,
-    }
-}
-
 /// A model-owned tab label, selected state and reducer action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Tab {
@@ -125,33 +49,19 @@ pub struct FeedRow {
     pub kind: ChangeKind,
     /// Exact event wording.
     pub text: String,
-    /// Who did it and through what, as corrald attributes it; absent in the fixture.
+    /// Who did it and through what, when corrald records attribution.
     pub by: Option<String>,
     /// New since this device's last visit.
     pub unseen: bool,
     /// The historical rows after the seen line are dimmed.
     pub dim: bool,
-    /// The 21:59 reply and three historical rows are illustrative.
+    /// Whether the source explicitly marks this event as illustrative.
     pub illustrative: bool,
     /// Rows about a task open it; the historical source rows are plain text.
     pub action: Option<Press>,
 }
 
 impl FeedRow {
-    fn fixture(change: &Change, unseen: bool, dim: bool, illustrative: bool) -> FeedRow {
-        FeedRow {
-            at: change.at.to_owned(),
-            id: change.id.to_owned(),
-            kind: change.kind,
-            text: change.text.to_owned(),
-            by: None,
-            unseen,
-            dim,
-            illustrative,
-            action: (!dim).then(|| Press::Work(Action::OpenTask(change.id))),
-        }
-    }
-
     /// What a screen reader hears: time, task, event and attribution.
     pub fn label(&self) -> String {
         [self.at.as_str(), self.id.as_str(), self.text.as_str()]
@@ -162,30 +72,6 @@ impl FeedRow {
             .join(" ")
     }
 }
-
-/// Whether a fixture change passes `filter`, by the mark the feed draws for it.
-fn admits_kind(filter: ChangeFilter, kind: ChangeKind) -> bool {
-    match filter {
-        ChangeFilter::All => true,
-        ChangeFilter::NeedsYou => kind == ChangeKind::Message,
-        ChangeFilter::Verdicts => matches!(kind, ChangeKind::Mark(_)),
-        ChangeFilter::Runs => matches!(kind, ChangeKind::Start | ChangeKind::Note),
-    }
-}
-
-/// The newest-first snapshot feed, ending before the last-visit marker.
-pub fn feed(state: &State, _env: Env) -> Vec<FeedRow> {
-    since_rows(ChangeFilter::All, state)
-}
-
-fn since_rows(filter: ChangeFilter, _state: &State) -> Vec<FeedRow> {
-    board_changes()
-        .iter()
-        .filter(|change| change.at >= LAST_VISIT && admits_kind(filter, change.kind))
-        .map(|change| FeedRow::fixture(change, true, false, change.at == "21:59"))
-        .collect()
-}
-
 /// A displayed hold row, with the source's neutral mark and dim attribution suffix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoldRow {
@@ -202,114 +88,6 @@ pub struct HoldRow {
     /// Open the task, in the Daemon state.
     pub action: Option<Press>,
 }
-
-/// Build the six parked rows displayed by the lower dock tab.
-pub fn holds(_state: &State, _env: Env) -> Vec<HoldRow> {
-    HOLDS
-        .iter()
-        .map(|hold| HoldRow {
-            id: hold.id.to_owned(),
-            since: hold.since.to_owned(),
-            title: hold.title.to_owned(),
-            mark: Mark::Na,
-            text: vec![span(hold.title), span(format!(" · {}", hold.project)).dim()],
-            action: None,
-        })
-        .collect()
-}
-
-/// The selected lower-left dock content.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Lower {
-    /// Changes since this device's last visit.
-    Since(Vec<FeedRow>),
-    /// Owner-held tasks.
-    Parked(Vec<HoldRow>),
-}
-
-/// The selected lower-right dock content.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Context {
-    /// Selected terminal tail and optional running-agent tiles.
-    Live(LiveDock),
-    /// Plan and member ids handed to the Plans graph renderer.
-    PlanGraph(PlanContext),
-}
-
-/// Now's desktop/terminal content, with all four dock panels resolved.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Workspace {
-    /// Connection banner and stale board flags.
-    pub status: Status,
-    /// Who-acts-next list, or its loading placeholders.
-    pub list: GroupedList,
-    /// The Goals control alongside the fixed list tab.
-    pub goals: Button,
-    /// Story/Evidence/Session tab descriptors.
-    pub inspector_tabs: Vec<Tab>,
-    /// Selected inspector body.
-    pub inspector: Inspector,
-    /// Since your last visit/Parked tab descriptors.
-    pub lower_tabs: Vec<Tab>,
-    /// Selected lower-left body.
-    pub lower: Lower,
-    /// Live/Plan graph tab descriptors.
-    pub context_tabs: Vec<Tab>,
-    /// Selected lower-right body.
-    pub context: Context,
-    /// Labelled but unhandled mockup controls at each dock's end; no reducer is invented.
-    pub inert_tools: &'static [&'static str],
-}
-
-/// Build all four Now dock panels from the environment's question projection.
-pub fn workspace(state: &State, env: Env) -> Workspace {
-    workspace_with_question(state, env, question_open(env))
-}
-
-/// Build all Now docks with an app-supplied inbox question-open projection.
-/// This avoids importing the inbox domain for the source's shared `q.state` branch.
-pub fn workspace_with_question(state: &State, env: Env, question_is_open: bool) -> Workspace {
-    Workspace {
-        status: status(env),
-        list: grouped_list_with_question(state, env, question_is_open),
-        goals: Button::new("Goals", Action::Goals, ButtonKind::Quiet),
-        inspector_tabs: NowTab::ALL
-            .iter()
-            .map(|tab| Tab {
-                label: tab.label(),
-                selected: state.now_tab == *tab,
-                action: Action::NowTab(*tab),
-            })
-            .collect(),
-        inspector: inspector(state, env),
-        lower_tabs: LowTab::ALL
-            .iter()
-            .map(|tab| Tab {
-                label: tab.label(),
-                selected: state.low_tab == *tab,
-                action: Action::LowTab(*tab),
-            })
-            .collect(),
-        lower: match state.low_tab {
-            LowTab::Since => Lower::Since(feed(state, env)),
-            LowTab::Parked => Lower::Parked(holds(state, env)),
-        },
-        context_tabs: CtxTab::ALL
-            .iter()
-            .map(|tab| Tab {
-                label: tab.label(),
-                selected: state.ctx_tab == *tab,
-                action: Action::CtxTab(*tab),
-            })
-            .collect(),
-        context: match state.ctx_tab {
-            CtxTab::Live => Context::Live(live(state, env)),
-            CtxTab::PlanGraph => Context::PlanGraph(plan_context(state, env)),
-        },
-        inert_tools: &["Split", "Zoom"],
-    }
-}
-
 /// A Changes filter control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeedFilter {
@@ -349,7 +127,7 @@ pub struct Changes {
     pub seen_line: String,
     /// Rows this device has seen, dimmed.
     pub history: Vec<FeedRow>,
-    /// Desktop-only illustrative attribution below the feed, in the fixture.
+    /// Optional source disclosure below the feed.
     pub illustrative: Option<&'static str>,
     /// Desktop-only Mark seen control.
     pub mark_seen: Option<Button>,
@@ -360,53 +138,6 @@ pub struct Changes {
     /// Connection banner and stale flags.
     pub status: Status,
 }
-
-/// Build Changes; the shell owns the phone stack's back label.
-pub fn changes(state: &State, env: Env) -> Changes {
-    let phone = env.form == Form::Phone;
-    let history = if phone {
-        Vec::new()
-    } else {
-        [
-            Change {
-                at: "18:12",
-                id: "T-885",
-                kind: ChangeKind::Mark(Mark::Na),
-                text: "review P2 approve · pi-sol",
-            },
-            Change {
-                at: "17:40",
-                id: "T-854",
-                kind: ChangeKind::Mark(Mark::Na),
-                text: "checkpoint 2 captured",
-            },
-            Change {
-                at: "16:40",
-                id: "T-852",
-                kind: ChangeKind::Mark(Mark::Na),
-                text: "held · external op started",
-            },
-        ]
-        .iter()
-        .filter(|change| admits_kind(state.filter, change.kind))
-        .map(|change| FeedRow::fixture(change, false, true, true))
-        .collect()
-    };
-    Changes {
-        title: "Changes",
-        subtitle: (!phone).then(|| "since this device's last visit 18:40 · 12 events · seen-cursor is per device: your phone read these at 21:30, the ▲ marks here stay".to_owned()),
-        filters: feed_filters(state, env.form),
-        recent: since_rows(state.filter, state),
-        seen_line: if phone { "last visit 18:40" } else { "your last visit · 18:40 · seen-cursor for pawis-desktop" }.to_owned(),
-        history,
-        illustrative: (!phone).then_some("Events after 18:40 are real snapshot changes; the three before the line and 21:59 are illustrative."),
-        mark_seen: (!phone).then(|| Button::new("Mark seen", Action::MarkSeen, ButtonKind::Ghost)),
-        older: None,
-        notice: None,
-        status: status(env),
-    }
-}
-
 /// One navigation row on phone More, including its subtitle and structured counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MoreRow {
@@ -449,8 +180,7 @@ const fn bare(destination: Destination, label: &'static str) -> MoreRow {
     }
 }
 
-/// The More rows in the Daemon state: the destinations alone, with no fixture count or
-/// subtitle.
+/// More destinations; counts and subtitles are omitted when no canonical summary is served.
 const DAEMON_MORE: &[MoreRow] = &[
     bare(Destination::Changes, "Changes"),
     bare(Destination::Review, "Review"),
@@ -465,61 +195,5 @@ pub fn daemon_more(feed: &crate::model::daemon::Feed) -> More {
         title: "More",
         rows: DAEMON_MORE,
         status: super::daemon_status(feed),
-    }
-}
-
-/// Build the phone More list; count and subtitle wording never live in the UI.
-pub fn more(_state: &State, mut env: Env) -> More {
-    env.form = Form::Phone;
-    More {
-        title: "More",
-        status: status(env),
-        rows: &[
-            MoreRow {
-                destination: Destination::Changes,
-                label: "Changes",
-                subtitle: "12 since 18:40",
-                count: Some(12),
-                secondary_count: None,
-                percent: None,
-                action: Action::Go(Destination::Changes),
-            },
-            MoreRow {
-                destination: Destination::Review,
-                label: "Review",
-                subtitle: "3 candidates · 1 stale verdict",
-                count: Some(3),
-                secondary_count: Some(1),
-                percent: None,
-                action: Action::Go(Destination::Review),
-            },
-            MoreRow {
-                destination: Destination::Timeline,
-                label: "Timeline",
-                subtitle: "today · 1 stall",
-                count: None,
-                secondary_count: Some(1),
-                percent: None,
-                action: Action::Go(Destination::Timeline),
-            },
-            MoreRow {
-                destination: Destination::Usage,
-                label: "Usage",
-                subtitle: "OpenAI 78% of window",
-                count: None,
-                secondary_count: None,
-                percent: Some(78),
-                action: Action::Go(Destination::Usage),
-            },
-            MoreRow {
-                destination: Destination::Settings,
-                label: "Settings",
-                subtitle: "Devices, Machines, notifications",
-                count: None,
-                secondary_count: None,
-                percent: None,
-                action: Action::Go(Destination::Settings),
-            },
-        ],
     }
 }

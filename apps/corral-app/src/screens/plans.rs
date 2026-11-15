@@ -1,12 +1,12 @@
 //! Plans: the grouped plan list beside the selected plan's detail (desktop and terminal), the
 //! Plans tab and the pushed plan page (phone), and the dependency graph Now's panel shows too.
 //!
-//! Everything shown comes from `model::plans`: `list`/`live_list` for the rows, `detail`/
-//! `live_detail` for the review document, tracker, approved state, document, diff or 64-member
-//! strips, `phone_page`/`live_phone_page` for the pushed page and `layout` for the graph. The
-//! fixture preview presses run `plans::State::reduce` through `AppState::act`; corrald's plans
-//! run `plans::State::reduce_live` through `AppState::reduce`, whose effects the root executes.
-//! `live.rs` keeps the shown plan's detail loaded and current.
+//! Everything shown comes from the served feed (corrald's, or the explicitly chosen synthetic
+//! preview) through `model::plans`: `live_list` for the rows, `live_detail` for the review
+//! document, tracker, approved state, document or diff, `live_phone_page` for the pushed page
+//! and `layout` for the graph. Presses run `plans::State::reduce_live` through
+//! `AppState::reduce`, whose effects the root executes. `live.rs` keeps the shown plan's
+//! detail loaded and current.
 
 mod decide;
 mod detail;
@@ -114,20 +114,11 @@ pub fn screen(app: AppState) -> AnyElement {
     }
 }
 
-/// The pushed fixture plan page on the phone (`Page::Plan`): the model's title, the detail as
-/// the body, the Ask control for an executing tracker, and the decide bar in place of the tab
-/// bar while the plan awaits acceptance.
-pub fn plan_phone(app: AppState) -> PhonePage {
-    let env = app.env();
-    let page = app.plans.with(|state| plans::phone_page(state, env));
-    phone_page(app, page, None)
-}
-
-/// A phone page from the model's page: its title, Ask in the navigation bar (which then stands
-/// for the floating Ask), the detail as the body, and the decide bar whenever the detail shown
-/// awaits acceptance, so a served plan opened while its detail was loading gains Accept and
-/// Changes once it arrives. `plan` names a served plan.
-fn phone_page(app: AppState, page: plans::PhonePage, plan: Option<Id>) -> PhonePage {
+/// A plan's pushed phone page from the model's page: its title, Ask in the navigation bar
+/// (which then stands for the floating Ask), the detail as the body, and the decide bar
+/// whenever the detail shown awaits acceptance, so a plan opened while its detail was loading
+/// gains Accept and Changes once it arrives.
+fn phone_page(app: AppState, page: plans::PhonePage, plan: Id) -> PhonePage {
     let trailing = page
         .right
         .zip(page.right_label)
@@ -137,23 +128,19 @@ fn phone_page(app: AppState, page: plans::PhonePage, plan: Option<Id>) -> PhoneP
         computed(move || {
             let env = app.env();
             app.plans.with(|state| {
-                if app.daemon() {
-                    app.feed
-                        .with(|feed| decides(&plans::live_detail(state, plan.as_ref(), feed, env)))
-                } else {
-                    decides(&plans::detail(state, env))
-                }
+                app.feed
+                    .with(|feed| decides(&plans::live_detail(state, Some(&plan), feed, env)))
             })
         })
     };
     PhonePage {
         title: page.title,
-        body: detail::phone_body(app, plan.clone()),
+        body: detail::phone_body(app, Some(plan.clone())),
         ask: trailing.is_none(),
         trailing,
         bar: Some(PhoneBar {
             shown,
-            view: detail::phone_bar(app, plan),
+            view: detail::phone_bar(app, Some(plan)),
         }),
         scroll: true,
     }
@@ -169,75 +156,44 @@ fn decides(detail: &plans::Detail) -> bool {
     }
 }
 
-/// The fixture plan graph alone, measured to its container: cards and dependency curves where
-/// every layer fits, vertical layers otherwise (always in a terminal). A card selects its
-/// member, a needs-you member opens its question, a vertical row opens its task.
-pub fn graph(app: AppState, plan: &'static str, selected: &'static str) -> AnyElement {
-    graph::drawing(app, move || {
-        (
-            plans::fixture_graph(plans::plan(plan)),
-            Some(Id::from(selected)),
-        )
-    })
-}
-
-/// The list content from the source shown: the fixture's, or corrald's plans.
+/// The list content from the served feed.
 fn content(app: AppState) -> PlanList {
     let env = app.env();
-    if app.daemon() {
-        let selection = app.selection();
-        app.feed
-            .with(|feed| plans::live_list(&selection, feed, env))
-    } else {
-        app.plans.with(|state| plans::list(state, env))
-    }
+    let selection = app.selection();
+    app.feed
+        .with(|feed| plans::live_list(&selection, feed, env))
 }
 
-/// Runs one Plans action: the fixture's through its reducer, a served plan's with the live feed.
+/// Runs one Plans press with the served feed.
 fn press(app: AppState, action: Action) {
-    match action {
-        Action::Live(live) => {
-            app.reduce(app.plans, move |state, feed, _, env| {
-                state.reduce_live(live, feed, env)
-            });
-        }
-        fixture => app.act(app.plans, move |state, env| state.reduce(fixture, env)),
-    }
+    let Action::Live(live) = action;
+    app.reduce(app.plans, move |state, feed, _, env| {
+        state.reduce_live(live, feed, env)
+    });
 }
 
 /// The test id of a press target, from its action.
 fn target_id(action: &Action) -> String {
-    match action {
-        Action::SelectPlan(id) | Action::PhonePlan(id) => format!("plan-{id}"),
-        Action::SelectMember(id) | Action::OpenTask(id) => format!("task-{id}"),
-        Action::Question => "btn-answer".into(),
-        Action::Accept => "btn-accept".into(),
-        Action::RequestChanges => "btn-request-changes".into(),
-        Action::Diff => "btn-diff".into(),
-        Action::OpenDocument => "btn-open-document".into(),
-        Action::Ask(id) => format!("btn-ask-{id}"),
-        Action::OpenSession(id) => format!("btn-open-session-{id}"),
-        Action::ReviewCandidate => "btn-review-candidate".into(),
-        Action::Live(live) => match live {
-            LiveAction::Plan(id) => format!("plan-{id}"),
-            LiveAction::Member { member: id, .. } | LiveAction::Task(id) => format!("task-{id}"),
-            LiveAction::Question(_) => "btn-answer".into(),
-            LiveAction::Session(id) => format!("btn-open-session-{id}"),
-            LiveAction::Review(_) => "btn-review-candidate".into(),
-            LiveAction::Ask(record, _) => format!("btn-ask-{}", record.id()),
-            LiveAction::Accept(_) => "btn-accept".into(),
-            LiveAction::Changes(_) => "btn-request-changes".into(),
-            LiveAction::Draft(..) => "plan-changes-input".into(),
-            LiveAction::SendChanges(_) => "btn-send-changes".into(),
-            LiveAction::CancelChanges(_) => "btn-cancel-changes".into(),
-            LiveAction::Diff(_) => "btn-diff".into(),
-            LiveAction::DiffFrom { from, .. } => format!("btn-diff-from-{from}"),
-            LiveAction::Resolve { .. } => "plan-decision-input".into(),
-            LiveAction::Document(_) => "btn-open-document".into(),
-            LiveAction::Overview(_) => "btn-close-document".into(),
-            LiveAction::Retry(_) => "btn-retry".into(),
-            LiveAction::Recover(_) => "btn-check-result".into(),
-        },
+    let Action::Live(live) = action;
+    match live {
+        LiveAction::Plan(id) => format!("plan-{id}"),
+        LiveAction::Member { member: id, .. } | LiveAction::Task(id) => format!("task-{id}"),
+        LiveAction::Question(_) => "btn-answer".into(),
+        LiveAction::Session(id) => format!("btn-open-session-{id}"),
+        LiveAction::Review(_) => "btn-review-candidate".into(),
+        LiveAction::Ask(record, _) => format!("btn-ask-{}", record.id()),
+        LiveAction::Accept(_) => "btn-accept".into(),
+        LiveAction::Changes(_) => "btn-request-changes".into(),
+        LiveAction::Draft(..) => "plan-changes-input".into(),
+        LiveAction::SendChanges(_) => "btn-send-changes".into(),
+        LiveAction::CancelChanges(_) => "btn-cancel-changes".into(),
+        LiveAction::Diff(_) => "btn-diff".into(),
+        LiveAction::DiffFrom { from, .. } => format!("btn-diff-from-{from}"),
+        LiveAction::Resolve { .. } => "plan-decision-input".into(),
+        LiveAction::Document(_) => "btn-open-document".into(),
+        LiveAction::Overview(_) => "btn-close-document".into(),
+        LiveAction::Retry(_) => "btn-retry".into(),
+        LiveAction::Recover(_) => "btn-check-result".into(),
     }
 }
 
@@ -252,9 +208,7 @@ fn command(app: AppState, button: &plans::Button, wide: bool) -> AnyElement {
     };
     let chat = matches!(
         action,
-        Action::Ask(_)
-            | Action::OpenSession(_)
-            | Action::Live(LiveAction::Ask(..) | LiveAction::Session(_))
+        Action::Live(LiveAction::Ask(..) | LiveAction::Session(_))
     );
     button_with(
         app,
@@ -477,13 +431,8 @@ fn plan_row(app: AppState, row: &PlanRow, revealed: Stored<Option<Id>>) -> AnyEl
             terminal_cells(app, row),
         ),
     };
-    // A served plan's row carries its commands in its context menu (RC-03); the fixture's rows
-    // are local demo presses with no daemon commands.
-    let drawn = if matches!(row.action, Action::Live(_)) {
-        verbs::row_menu(app, row.id.clone(), drawn)
-    } else {
-        drawn
-    };
+    // A plan's row carries its commands in its context menu (RC-03).
+    let drawn = verbs::row_menu(app, row.id.clone(), drawn);
     if selected {
         revealing(row.id.clone(), revealed, drawn)
     } else {
@@ -492,19 +441,22 @@ fn plan_row(app: AppState, row: &PlanRow, revealed: Stored<Option<Id>>) -> AnyEl
 }
 
 /// The selected row, scrolled into the list's view when the selection has just moved to it, so
-/// a key press never leaves it off screen; a row already in view stays put.
+/// a key press never leaves it off screen; a row already in view stays put. The plan counts as
+/// revealed only once the scroll has run: a rebuild of the rows before then (the selected plan's
+/// detail arriving, the feed's clock) drops the pending scroll with the row it was for, and the
+/// rebuilt row asks again.
 fn revealing(id: Id, revealed: Stored<Option<Id>>, row: AnyElement) -> AnyElement {
-    let before = revealed.replace(Some(id.clone()));
     let handle = element_ref();
-    if before.as_ref() != Some(&id) {
+    if revealed.with(|shown| shown.as_ref() != Some(&id)) {
         after_answer(move || {
+            revealed.replace(Some(id));
             handle.reveal(RevealOptions::default().vertical(ScrollAlignment::Nearest));
         });
     }
     view().element_ref(&handle).child(row).into_element()
 }
 
-/// The title line of a row: the title cut to fit and the synthetic tag after it.
+/// The title line of a row: the title cut to fit and its illustrative tag after it.
 fn title_line(app: AppState, row: &PlanRow, size: f32, weight: FontWeight) -> AnyElement {
     let words = text(row.title.clone())
         .flex_shrink(1.0)
@@ -739,14 +691,6 @@ fn terminal_cells(app: AppState, row: &PlanRow) -> Vec<AnyElement> {
             .into_element()
     }));
     cells
-}
-
-/// The colour of words in a state hue; neutral words stay in the quiet ink.
-fn status_ink(hue: Hue) -> AdaptiveColor {
-    match hue {
-        Hue::Neutral => color(Token::Ink3),
-        _ => hue_ink(hue),
-    }
 }
 
 #[cfg(test)]

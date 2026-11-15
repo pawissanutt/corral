@@ -1,9 +1,7 @@
-//! The lower panels of the dock: what changed since this device's last visit, the owner's holds,
-//! the selected task's terminal tail with the running agents' tiles, and the plan graph. Also
-//! the terminal tail itself (`.term`), which the Session inspector and the phone's task page
-//! show too. In the Daemon state they show corrald's changes past this device's seen cursor,
-//! the board's held and parked tasks, the selected task's captured log tail with the running
-//! agents' tiles, and the selected task's real plan.
+//! The lower panels of the dock: what changed since this device's last visit past its seen
+//! cursor, the board's held and parked tasks, the selected task's captured log tail with the
+//! running agents' tiles, and the selected task's plan graph. Also the terminal tail itself
+//! (`.term`), which the Session inspector and the phone's task page show too.
 
 use nsh_core::prelude::*;
 
@@ -18,7 +16,7 @@ use crate::ui::term::{blank, cells};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::feed;
-use super::parts::{by_data, press, press_id, quiet};
+use super::parts::{press, press_id, quiet};
 
 const RING: f32 = 2.0;
 const CURSOR_BLINK_MS: f32 = 1100.0;
@@ -59,9 +57,9 @@ fn tag(app: AppState, tail: &Tail) -> AnyElement {
 }
 
 /// A terminal tail in the mock's terminal look: its pane, runtime and live or capture tag over
-/// the lines, with the fixture's illustrative tag at the trailing edge; the lines mono on the
-/// dark terminal ground, the cursor blinking after a live stream. A terminal shows the lines in
-/// its own cells. With a `test_id`, the lines are pressable and open the session.
+/// the lines, with any illustration tag at the trailing edge; the lines mono on the dark
+/// terminal ground, the cursor blinking after a live stream. A terminal shows the lines in its
+/// own cells. With a `test_id`, the lines are pressable and open the session.
 pub(super) fn tail(app: AppState, tail: &Tail, test_id: Option<String>) -> AnyElement {
     let form = app.form;
     let terminal = form == Form::Terminal;
@@ -159,31 +157,6 @@ fn live_frame(app: AppState, selected: AnyElement, tiles: Vec<AnyElement>) -> An
 /// The Live panel: the selected task's tail, then a tile for each running agent (PM, workers,
 /// gates), each opening its session.
 pub(super) fn live(app: AppState) -> AnyElement {
-    by_data(app, move || fixture_live(app), move || daemon_live(app))
-}
-
-fn fixture_live(app: AppState) -> AnyElement {
-    let live = computed(move || {
-        let env = app.env();
-        app.work.with(|state| work::live(state, env))
-    });
-    dynamic(move || {
-        live.with(|live| {
-            let tiles = live
-                .tiles
-                .iter()
-                .map(|tile| tile_view(app, tile))
-                .collect::<Vec<_>>();
-            live_frame(
-                app,
-                tail(app, &live.selected, Some("btn-live-session".into())),
-                tiles,
-            )
-        })
-    })
-}
-
-fn daemon_live(app: AppState) -> AnyElement {
     let form = app.form;
     let live = computed(move || {
         let selection = app.selection();
@@ -351,31 +324,9 @@ fn rows_frame(app: AppState, rows: Vec<AnyElement>) -> AnyElement {
         .into_element()
 }
 
-/// "Since your last visit": the feed up to the last-visit marker, newest first; each event opens
-/// its task.
+/// "Since your last visit": the changes past this device's seen cursor, newest first; each
+/// event opens its task.
 pub(super) fn since(app: AppState) -> AnyElement {
-    by_data(app, move || fixture_since(app), move || daemon_since(app))
-}
-
-fn fixture_since(app: AppState) -> AnyElement {
-    let rows = computed(move || {
-        let env = app.env();
-        app.work.with(|state| work::feed(state, env))
-    });
-    dynamic(move || {
-        rows.with(|rows| {
-            rows_frame(
-                app,
-                rows.iter()
-                    .enumerate()
-                    .map(|(index, row)| feed::row(app, row, format!("since-{index}")))
-                    .collect(),
-            )
-        })
-    })
-}
-
-fn daemon_since(app: AppState) -> AnyElement {
     let since = computed(move || app.feed.with(work::daemon_since));
     dynamic(move || {
         since.with(|since| {
@@ -395,40 +346,28 @@ fn daemon_since(app: AppState) -> AnyElement {
     })
 }
 
-/// "Parked": the owner's dispatch holds; in the Daemon state the board's held and parked tasks.
+/// "Parked": the board's held and parked tasks.
 pub(super) fn parked(app: AppState) -> AnyElement {
-    by_data(
-        app,
-        move || {
-            let rows = computed(move || {
-                let env = app.env();
-                app.work.with(|state| work::holds(state, env))
-            });
-            dynamic(move || rows.with(|rows| rows_view(app, rows)))
-        },
-        move || {
-            dynamic(move || {
-                app.feed.with(|feed| {
-                    if let Some(line) = feed.device.board_notice() {
-                        return quiet(app, line);
-                    }
-                    if !feed.board.complete {
-                        // Nothing to say until the first board arrives or the link fails.
-                        return if feed.link == Link::Down {
-                            quiet(app, work::NO_BOARD)
-                        } else {
-                            view().into_element()
-                        };
-                    }
-                    let rows = work::daemon_holds(feed);
-                    if rows.is_empty() {
-                        return quiet(app, work::NOTHING_HELD);
-                    }
-                    rows_view(app, &rows)
-                })
-            })
-        },
-    )
+    dynamic(move || {
+        app.feed.with(|feed| {
+            if let Some(line) = feed.device.board_notice() {
+                return quiet(app, line);
+            }
+            if !feed.board.complete {
+                // Nothing to say until the first board arrives or the link fails.
+                return if feed.link == Link::Down {
+                    quiet(app, work::NO_BOARD)
+                } else {
+                    view().into_element()
+                };
+            }
+            let rows = work::daemon_holds(feed);
+            if rows.is_empty() {
+                return quiet(app, work::NOTHING_HELD);
+            }
+            rows_view(app, &rows)
+        })
+    })
 }
 
 fn rows_view(app: AppState, rows: &[work::HoldRow]) -> AnyElement {
@@ -472,32 +411,6 @@ fn graph_frame(app: AppState) -> View {
 /// The plan graph: the selected task's plan with the task highlighted, from the Plans screen;
 /// its heading opens the plan. A task in no plan says so.
 pub(super) fn graph(app: AppState) -> AnyElement {
-    by_data(app, move || fixture_graph(app), move || daemon_graph(app))
-}
-
-fn fixture_graph(app: AppState) -> AnyElement {
-    let context = computed(move || {
-        let env = app.env();
-        app.work.with(|state| work::plan_context(state, env))
-    });
-    dynamic(move || {
-        context.with(|context| match context.plan {
-            Some(plan) => graph_frame(app)
-                .child(graph_heading(
-                    app,
-                    context.heading.clone(),
-                    context.action.clone(),
-                ))
-                .child(crate::screens::plans::graph(app, plan, context.member))
-                .into_element(),
-            None => graph_frame(app)
-                .children(context.empty.map(|empty| dim(app, empty)))
-                .into_element(),
-        })
-    })
-}
-
-fn daemon_graph(app: AppState) -> AnyElement {
     let form = app.form;
     let context = computed(move || {
         let selection = app.selection();

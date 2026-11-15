@@ -17,9 +17,8 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 /// The thread: its messages (who, time, device; the text), the reply field with Ask, then the
-/// follow-up's state or the fixture's illustrative tag. A served reply field is bound to the
-/// question's follow-up draft and takes focus when "Ask the asker" is pressed; the fixture's
-/// keeps no state.
+/// follow-up's state. The reply field is bound to the question's follow-up draft and takes
+/// focus when "Ask the asker" is pressed.
 pub(super) fn thread(app: AppState, part: ThreadView) -> AnyElement {
     let form = app.form;
     let send = &part.send;
@@ -42,14 +41,10 @@ pub(super) fn thread(app: AppState, part: ThreadView) -> AnyElement {
             let read = key.clone();
             field
                 .value(move || {
-                    if app.daemon() {
-                        app.feed.with(|feed| {
-                            app.inbox
-                                .with(|state| crate::model::inbox::reply_value(state, feed, &read))
-                        })
-                    } else {
-                        String::new()
-                    }
+                    app.feed.with(|feed| {
+                        app.inbox
+                            .with(|state| crate::model::inbox::reply_value(state, feed, &read))
+                    })
                 })
                 .on_change(move |typed: &str| {
                     act(app, Action::Reply(key.clone(), typed.to_owned()))

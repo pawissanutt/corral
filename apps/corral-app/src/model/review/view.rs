@@ -1,4 +1,4 @@
-//! Typed content for Review renderers, shared by the fixture replay and the served candidate.
+//! Typed content for feed-backed Review renderers.
 //! No widgets, dimensions or styling APIs live here.
 
 use crate::model::board::Mark;
@@ -7,7 +7,6 @@ use crate::model::hue::Hue;
 use crate::model::nav::Form;
 use crate::model::text::{Rich, span};
 
-use super::data::Screenshot;
 use super::diff::{Anchor, split_rows, unified_rows};
 use super::{Action, Compose, Layout, State, Tab};
 
@@ -239,7 +238,7 @@ pub struct FileView {
     pub path: String,
     /// Monospace path followed by coloured added and deleted counts.
     pub heading: Rich,
-    /// `lines illustrative` only for the fixture's fabricated lines.
+    /// Optional patch-source disclosure.
     pub illustrative: Option<&'static str>,
     /// Ask about this file or hunk.
     pub ask: Option<Button>,
@@ -285,19 +284,6 @@ pub struct ReportView {
     pub acceptance: Vec<AcceptanceView>,
     /// Source label and provenance.
     pub source: Rich,
-}
-
-/// Fixture terminal screenshot illustration and its artifact caption.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScreenshotView {
-    /// Original text and description, including illustrative provenance.
-    pub evidence: &'static Screenshot,
-    /// Preformatted terminal text with the source's bold and success runs.
-    pub terminal: Rich,
-    /// Artifact path and the real-title/illustrative-content explanation.
-    pub caption: Rich,
-    /// Source shows a cursor after the final prompt.
-    pub cursor: bool,
 }
 
 /// One canonical artifact record and, once opened, its contents from corrald's catalog.
@@ -354,8 +340,6 @@ pub struct LogView {
 pub enum Body {
     Diff(DiffView),
     Report(ReportView),
-    /// The fixture's terminal capture.
-    Screenshot(ScreenshotView),
     /// The served candidate's artifact records.
     Artifacts(ArtifactsView),
     Log {
@@ -418,7 +402,7 @@ pub struct PageView {
     /// Reading the last known state while offline, down or revalidating.
     pub stale: bool,
     pub conn: Conn,
-    /// Candidate groups; empty on the fixture phone page.
+    /// Candidate groups in source order.
     pub candidates: Vec<CandidateGroup>,
     pub candidate_note: Option<String>,
     /// The selected candidate, absent when there is none.
@@ -481,7 +465,7 @@ pub(super) fn hunk_content(
     }
 }
 
-/// One verdict row's presentation, shared by fixture and served verdicts.
+/// One recorded verdict row's presentation.
 pub(super) fn verdict_view(
     phone: bool,
     who: &str,

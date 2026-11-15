@@ -1,10 +1,8 @@
-//! Dependency graph geometry from PLANGRAPH. The compact fallback has rows, not edges. The
-//! members come from either source as a `GraphInput`: the fixture's tasks (`fixture_graph`) or
-//! a plan detail served by corrald (`live::graph_input`).
+//! Dependency graph geometry for feed-backed plan members.
 
-use super::{Action, Plan};
+use super::Action;
 use crate::model::Id;
-use crate::model::board::{Actor, Rail, task};
+use crate::model::board::Rail;
 use crate::model::hue::Hue;
 
 /// One coordinate in mockup graph units.
@@ -135,61 +133,6 @@ pub struct GraphMember {
 pub struct GraphInput {
     pub members: Vec<GraphMember>,
     pub edges: Vec<(Id, Id)>,
-}
-
-/// The fixture plan's members from the shared board snapshot.
-pub fn fixture_graph(p: &Plan) -> GraphInput {
-    let layer_of = |id: &str| {
-        p.layers
-            .iter()
-            .position(|layer| layer.contains(&id))
-            .unwrap_or(0)
-    };
-    let members = p
-        .members
-        .iter()
-        .map(|&id| {
-            let t = task(id);
-            let needs_you = t.actor == Actor::You;
-            GraphMember {
-                id: Id::from(id),
-                title: t.title.into(),
-                now: t.now.into(),
-                rail: t.rail,
-                hue: t.actor.hue(),
-                now_hue: if needs_you {
-                    Hue::You
-                } else if t.now.contains("stale") {
-                    Hue::Held
-                } else {
-                    Hue::Neutral
-                },
-                needs_you,
-                layer: layer_of(id),
-                select: if needs_you {
-                    Action::Question
-                } else {
-                    Action::SelectMember(id)
-                },
-                open: if needs_you {
-                    Action::Question
-                } else {
-                    Action::OpenTask(id)
-                },
-            }
-        })
-        .collect();
-    let edges = p
-        .members
-        .iter()
-        .flat_map(|&id| {
-            task(id)
-                .needs
-                .iter()
-                .map(move |(dep, _)| (Id::from(*dep), Id::from(id)))
-        })
-        .collect();
-    GraphInput { members, edges }
 }
 
 /// Port PLANGRAPH's fit calculation, card positions, dependency curves and vertical fallback.
@@ -360,19 +303,36 @@ pub fn layout(input: &GraphInput, selected: Option<&str>, width: f32, phone: boo
 
 #[cfg(test)]
 mod tests {
-    use super::{fixture_graph, layout};
-    use crate::model::plans::plan;
+    use super::{GraphInput, GraphMember, layout};
+    use crate::model::Id;
+    use crate::model::board::Mark;
+    use crate::model::hue::Hue;
+    use crate::model::plans::{Action, LiveAction};
 
     #[test]
     fn insufficient_width_uses_vertical_layers() {
-        let p = plan("T-870");
-        let members = fixture_graph(p);
-        let wide = layout(&members, Some("T-868"), 384.0, false);
-        let narrow = layout(&members, Some("T-868"), 383.0, false);
+        let member = |id: &str, layer| GraphMember {
+            id: Id::from(id),
+            title: id.into(),
+            now: String::new(),
+            rail: [Mark::Next; 4],
+            hue: Hue::Neutral,
+            now_hue: Hue::Neutral,
+            needs_you: false,
+            layer,
+            select: Action::Live(LiveAction::Task(Id::from(id))),
+            open: Action::Live(LiveAction::Task(Id::from(id))),
+        };
+        let members = GraphInput {
+            members: vec![member("T-1", 0), member("T-2", 1)],
+            edges: vec![(Id::from("T-1"), Id::from("T-2"))],
+        };
+        let wide = layout(&members, Some("T-1"), 384.0, false);
+        let narrow = layout(&members, Some("T-1"), 383.0, false);
         assert!(wide.fits);
         assert!(!narrow.fits);
         assert!(narrow.edges.is_empty());
-        assert_eq!(narrow.nodes.len(), p.members.len());
+        assert_eq!(narrow.nodes.len(), members.members.len());
         assert!(narrow.nodes.windows(2).all(|nodes| nodes[0].y < nodes[1].y));
     }
 }

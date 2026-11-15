@@ -19,17 +19,21 @@ const DRAFT_PAUSE: Duration = Duration::from_millis(800);
 /// the accepted message's other updates never re-run the restore, and a draft whose words were
 /// already sent is never brought back. A composer that opens empty reports nothing until its
 /// draft changes: its empty first value must not erase a saved draft the session has yet to
-/// bring back.
+/// bring back. Restoring, the paused write and the final write all go to the source the
+/// composer mounted on, so words typed in the sample preview never reach the daemon's outbox
+/// after the data source changes, nor the other way round.
 pub(super) fn keep_draft(app: AppState, scope: Id, draft: Signal<String>) {
+    let scoped = app.scope();
     let watched = scope.clone();
     let saved = computed(move || {
-        app.feed
+        scoped
+            .feed
             .with(|feed| feed.drafts.get(watched.as_str()).cloned())
     });
     let restore = scope.clone();
     effect(move || {
         let saved = saved.get();
-        let handed = app
+        let handed = scoped
             .assistant
             .with_untracked(|state| state.live.handed.get(restore.as_str()).cloned());
         if let Some(sent) = handed {
@@ -37,7 +41,7 @@ pub(super) fn keep_draft(app: AppState, scope: Id, draft: Signal<String>) {
                 return;
             }
             untracked(|| {
-                app.assistant.update(|state| {
+                scoped.assistant.update(|state| {
                     state.already_sent(restore.as_str(), saved.as_deref());
                 });
             });
@@ -68,7 +72,7 @@ pub(super) fn keep_draft(app: AppState, scope: Id, draft: Signal<String>) {
             let scope = scope.clone();
             let task = set_timeout(DRAFT_PAUSE, move || {
                 if let Some(text) = unsaved.borrow_mut().take() {
-                    keep(app, &scope, text);
+                    keep(scoped, &scope, text);
                 }
             });
             let _ = timer.replace(Some(task));
@@ -77,7 +81,7 @@ pub(super) fn keep_draft(app: AppState, scope: Id, draft: Signal<String>) {
     // Leaving ends the timer with the composer; what it would have written goes now.
     cleanup(move || {
         if let Some(text) = unsaved.borrow_mut().take() {
-            keep(app, &scope, text);
+            keep(scoped, &scope, text);
         }
     });
 }

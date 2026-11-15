@@ -1,13 +1,10 @@
 //! Typed who-acts-next rows, including the phone-specific collapsed projection.
 
-use crate::model::board::{TaskLine, task};
-use crate::model::effect::{DataMode, Env};
+use crate::model::board::TaskLine;
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
 
-use super::{
-    Action, Button, ButtonKind, Extra, ExtraKind, GROUPS, GroupKey, ParkedSummary, Press, State,
-};
+use super::{Button, GroupKey, Press};
 
 /// A board task row: the facts it draws, and how it reacts to selection and presses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,49 +17,13 @@ pub struct TaskRow {
     pub action: Press,
 }
 
-/// A complete non-task row accompanying T-868.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExtraRow {
-    /// Original data, including full id and illustrative flag.
-    pub extra: Extra,
-    /// Display id, with `PM/` removed.
-    pub display_id: &'static str,
-    /// `plan` or `PM ask`; hidden when the desktop question is no longer open.
-    pub kind_label: &'static str,
-    /// Plan notes are green only while the question is open, matching the desktop branch.
-    pub note_hue: Hue,
-    /// `10h` for the plan, `12m` for the PM question; blank in the answered desktop branch.
-    pub age: &'static str,
-    /// Whether the row carries a changed-since-visit triangle.
-    pub changed: bool,
-    /// Open a plan or show the sample notice.
-    pub action: Action,
-}
-
-/// A parked aggregate with its model-resolved wording.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParkedRow {
-    /// Counts, project split and explanatory note.
-    pub summary: ParkedSummary,
-    /// Main row wording: split alone on desktop, split plus held attribution on phone.
-    pub title: String,
-    /// Desktop now-phrase; empty on phone where it is part of the title.
-    pub now: &'static str,
-    /// The mockup's explanatory toast.
-    pub action: Action,
-}
-
 /// The rows a list renderer walks, in exactly their visible order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Row {
     /// A normal board task.
     Task(TaskRow),
-    /// A plan accept or sample PM ask.
-    Extra(ExtraRow),
     /// The collapsed queued-task expansion line.
     More(Button),
-    /// The aggregate owner-held block.
-    Parked(ParkedRow),
 }
 
 /// A heading and the list rows beneath it.
@@ -100,11 +61,14 @@ pub struct GroupedList {
 }
 
 impl GroupedList {
+    /// Accessible list label and desktop dock tab title.
+    pub const LABEL: &'static str = "Who acts next";
+
     /// The list's frame for a form, with no rows yet.
     pub(super) fn new(form: Form) -> GroupedList {
         let phone = form == Form::Phone;
         GroupedList {
-            label: "Who acts next",
+            label: Self::LABEL,
             columns: if phone {
                 &[]
             } else {
@@ -126,219 +90,31 @@ impl GroupedList {
     }
 }
 
-/// Whether the question is open according to the available environment projection.
-/// An app with an answered/queued inbox state supplies that state through the explicit builder.
-pub fn question_open(env: Env) -> bool {
-    !matches!(env.mode, DataMode::Empty | DataMode::Elsewhere)
-}
-
-/// Selectable visible task ids, excluding extra plan/PM rows and collapsed summaries.
-/// Phone queues expose four ids while desktop/terminal expose eight.
-pub fn visible_task_ids(env: Env, question_is_open: bool) -> Vec<&'static str> {
-    selectable_tasks(env, question_is_open).collect()
-}
-
-/// Iterate selectable rows without allocating during keyboard navigation.
-
-pub(super) fn selectable_tasks(
-    env: Env,
-    question_is_open: bool,
-) -> impl Iterator<Item = &'static str> {
-    let phone = env.form == Form::Phone;
-    GROUPS.iter().flat_map(move |group| {
-        let limit = if phone && group.key == GroupKey::Queued {
-            4
-        } else {
-            group.ids.len()
-        };
-        group.ids.iter().take(limit).copied().filter(move |_| {
-            env.mode != DataMode::Loading
-                && (group.key != GroupKey::You
-                    || phone
-                    || question_is_open && env.mode != DataMode::Empty)
-        })
-    })
-}
-
-/// Build the desktop/terminal or phone list using only the environment's question projection.
-pub fn grouped_list(state: &State, env: Env) -> GroupedList {
-    grouped_list_with_question(state, env, question_open(env))
-}
-
-/// Build the list with the inbox's question-open projection supplied by the app.
-/// The phone deliberately retains its T-868 and plan rows even in Empty/Elsewhere modes,
-/// as the source does. Desktop hides T-868 when the question is no longer open.
-pub fn grouped_list_with_question(state: &State, env: Env, question_is_open: bool) -> GroupedList {
-    let phone = env.form == Form::Phone;
-    if env.mode == DataMode::Loading {
-        return GroupedList::loading(env.form);
-    }
-    let mut view = GroupedList::new(env.form);
-    for group in GROUPS {
-        if !phone && env.mode == DataMode::Empty && group.key == GroupKey::You {
-            continue;
-        }
-        let mut rows = Vec::new();
-        if group.key == GroupKey::You {
-            if phone || question_is_open {
-                rows.push(Row::Task(task_row("T-868", state, phone, true)));
-            }
-            for extra in group
-                .extra
-                .iter()
-                .filter(|extra| !phone || extra.kind == ExtraKind::Plan)
-            {
-                let active = phone || question_is_open;
-                rows.push(Row::Extra(ExtraRow {
-                    extra: *extra,
-                    display_id: extra.id.strip_prefix("PM/").unwrap_or(extra.id),
-                    kind_label: if !active {
-                        ""
-                    } else if extra.kind == ExtraKind::Plan {
-                        "plan"
-                    } else {
-                        "PM ask"
-                    },
-                    note_hue: if active && extra.kind == ExtraKind::Plan {
-                        Hue::Ok
-                    } else {
-                        Hue::Neutral
-                    },
-                    age: if !active {
-                        ""
-                    } else if extra.kind == ExtraKind::Plan {
-                        "10h"
-                    } else {
-                        "12m"
-                    },
-                    changed: !phone && active && extra.kind == ExtraKind::Plan,
-                    action: if extra.kind == ExtraKind::Plan || !active {
-                        Action::OpenPlan(extra.id)
-                    } else {
-                        Action::SampleQuestion
-                    },
-                }));
-            }
-        } else {
-            let limit = if phone && group.key == GroupKey::Queued {
-                4
-            } else {
-                group.ids.len()
-            };
-            for id in group.ids.iter().take(limit) {
-                rows.push(Row::Task(task_row(id, state, phone, false)));
-            }
-        }
-        if group.more != 0 {
-            rows.push(Row::More(Button::new(
-                if phone {
-                    "+ 19 more queued · after a dependency or capacity"
-                } else {
-                    "+ 15 more queued · capacity"
-                },
-                Action::MoreQueued,
-                ButtonKind::Quiet,
-            )));
-        }
-        if let Some(summary) = group.parked {
-            rows.push(Row::Parked(ParkedRow {
-                summary,
-                title: if phone {
-                    format!("{} · held by you", summary.split)
-                } else {
-                    summary.split.into()
-                },
-                now: if phone {
-                    ""
-                } else {
-                    "held by you · not counted"
-                },
-                action: Action::ParkedSummary,
-            }));
-        }
-        view.groups.push(GroupView {
-            key: group.key,
-            label: group.label,
-            count: match group.key {
-                GroupKey::Queued => 23,
-                GroupKey::Parked => 32,
-                _ => (group.ids.len() + group.extra.len()) as u32,
-            },
-            hue: group.key.hue(),
-            detail: if !phone && group.key == GroupKey::Corral {
-                Some("gating · reviewing · landing")
-            } else {
-                None
-            },
-            rows,
-        });
-    }
-    view
-}
-
-fn task_row(id: &'static str, state: &State, phone: bool, question: bool) -> TaskRow {
-    TaskRow {
-        line: TaskLine::fixture(&task(id)),
-        selected: !phone && state.sel == id,
-        action: Press::Work(if phone && question {
-            Action::OpenQuestion
-        } else if phone {
-            Action::OpenTask(id)
-        } else {
-            Action::Select(id)
-        }),
-    }
-}
-
-/// A summary chip above the phone Now list.
+/// One recorded count in the phone summary strip.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SummaryChip {
-    /// Complete chip wording.
     pub label: String,
-    /// State hue, neutral unless the chip needs the owner.
     pub hue: Hue,
-    /// Number carried by the label.
+    /// Number carried by the label, supplied by the canonical feed.
     pub count: u32,
 }
 
 impl SummaryChip {
-    pub fn new(label: impl Into<String>, hue: Hue, count: u32) -> SummaryChip {
-        SummaryChip {
+    pub fn new(label: impl Into<String>, hue: Hue, count: u32) -> Self {
+        Self {
             label: label.into(),
-            hue,
+            hue: if count == 0 { Hue::Neutral } else { hue },
             count,
         }
     }
 }
 
-/// Phone Now content: a tappable changes summary followed by grouped two-line rows.
+/// The phone Now page projected from the shared feed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhoneNow {
-    /// Large navigation title.
     pub title: &'static str,
-    /// Summary chips in their source order.
     pub chips: Vec<SummaryChip>,
-    /// Pressing anywhere in the summary runs this; absent where the summary opens nothing.
-    pub summary_action: Option<Action>,
-    /// Groups with phone-specific omissions and +19 queued summary.
+    pub summary_action: Option<super::Action>,
     pub list: GroupedList,
-    /// Connection/stale projection shared with the workspace.
     pub status: super::Status,
-}
-
-/// Build the phone Now tab, independent of the caller's current presentation form.
-pub fn phone_now(state: &State, mut env: Env) -> PhoneNow {
-    env.form = Form::Phone;
-    PhoneNow {
-        title: "Now",
-        chips: vec![
-            SummaryChip::new("▲ 12 since 18:40", Hue::Neutral, 12),
-            SummaryChip::new("3 need you", Hue::You, 3),
-            SummaryChip::new("5 moving", Hue::Neutral, 5),
-            SummaryChip::new("23 queued", Hue::Neutral, 23),
-        ],
-        summary_action: Some(Action::Go(crate::model::nav::Destination::Changes)),
-        list: grouped_list(state, env),
-        status: super::status(env),
-    }
 }

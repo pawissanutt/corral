@@ -55,10 +55,15 @@ impl AppState {
             ),
         };
         let app = *self;
+        let source_revision = self.source_revision.get_untracked();
         self.root.run(|| {
             // Owned by the root: closing Ask while the picker is up keeps what is picked.
             let _ = spawn(async move {
                 let files = answer.await;
+                if app.source_revision.get_untracked() != source_revision {
+                    app.toast("Not attached: the data source changed while the picker was open.");
+                    return;
+                }
                 app.stage_picked(pick, files);
             });
         });
@@ -107,7 +112,9 @@ impl AppState {
                 removed = Some(staged.remove(at));
             }
         });
-        if let Some(Staged::Upload { upload, .. }) = removed {
+        if let Some(Staged::Upload { upload, .. }) = removed
+            && !self.fixture()
+        {
             requests::attach_discard(upload.to_string());
         }
     }
@@ -123,7 +130,7 @@ impl AppState {
 
     /// Why an upload cannot start now, if it cannot.
     fn upload_refusal(&self) -> Option<String> {
-        if !untracked(|| self.daemon()) {
+        if self.fixture() {
             return Some(
                 "The fixture preview attaches nothing; connect to corrald to attach.".into(),
             );
@@ -175,6 +182,11 @@ impl AppState {
                     continue;
                 }
             };
+            // A system picker can return after the user selected the isolated preview.
+            if let Some(why) = self.upload_refusal() {
+                refusals.push(why);
+                break;
+            }
             let upload = requests::new_id();
             let handed = requests::attach(requests::AttachRequest {
                 upload: upload.clone(),

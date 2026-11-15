@@ -1,4 +1,4 @@
-//! Handover descriptors shared by fixture and served question builders.
+//! Shared descriptors for feed-backed question handovers.
 use super::{Action, QuestionState, WaitKind};
 use crate::model::Id;
 use crate::model::board::LineKind;
@@ -94,52 +94,6 @@ pub struct Situation {
     pub notice: Option<Notice>,
 }
 
-/// A card in the miniature plan graph, in source SVG units.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MiniNode {
-    /// Task id displayed in the card.
-    pub id: &'static str,
-    /// Card subtitle.
-    pub subtitle: &'static str,
-    /// Upper-left position in source units.
-    pub position: (f32, f32),
-    /// Card dimensions in source units.
-    pub size: (f32, f32),
-    /// State colour of the node.
-    pub hue: Hue,
-    /// Whether the source dims the queued node.
-    pub dim: bool,
-}
-
-/// A miniature dependency edge, preserving the source's line or cubic geometry.
-#[derive(Debug, Clone, PartialEq)]
-pub enum MiniEdge {
-    /// Horizontal segment with its endpoints.
-    Line { from: (f32, f32), to: (f32, f32) },
-    /// Cubic segment with two controls and endpoints.
-    Cubic {
-        from: (f32, f32),
-        control1: (f32, f32),
-        control2: (f32, f32),
-        to: (f32, f32),
-    },
-}
-
-/// The position-in-plan graph, with its accessibility name and caption.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MiniGraph {
-    /// Source view-box width and height.
-    pub size: (f32, f32),
-    /// Full textual alternative.
-    pub label: &'static str,
-    /// Nodes in source order.
-    pub nodes: Vec<MiniNode>,
-    /// Dependencies in source order.
-    pub edges: Vec<MiniEdge>,
-    /// Plan, layer, member and final-accept line.
-    pub caption: &'static str,
-}
-
 /// B: lazy task detail or the task's goal and position in the plan.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Background {
@@ -156,8 +110,6 @@ pub enum Background {
         goal: Rich,
         /// Plan, governing revision, run and step metadata.
         plan_line: Rich,
-        /// Source miniature graph, never inferred by the UI; absent when none was served.
-        graph: Option<MiniGraph>,
     },
     /// Canonical plan members, laid out for the actual form with the asking task selected.
     Plan {
@@ -201,7 +153,7 @@ pub struct DiffLine {
     pub text: String,
 }
 
-/// The selected evidence contents, including file titles and real/illustrative labels.
+/// The selected evidence contents and their source attribution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvidenceBody {
     /// A patch hunk and its explanation.
@@ -225,19 +177,6 @@ pub enum EvidenceBody {
         lines: Vec<Rich>,
         /// Truncation or provenance line under the box.
         note: Option<Rich>,
-    },
-    /// Rendered illustrative terminal screenshot.
-    Shot {
-        /// Real artifact title and rendered suffix.
-        file: &'static str,
-        /// Explicit illustrative label.
-        attribution: &'static str,
-        /// Styled terminal lines, preserving blank lines.
-        lines: Vec<Rich>,
-        /// Whether the terminal ends with a cursor after the final prompt.
-        cursor: bool,
-        /// Caption beneath the screenshot.
-        note: &'static str,
     },
     /// Canonical raster artifact, loaded only through the daemon detail reader.
     Image {
@@ -315,7 +254,7 @@ pub struct Recommendation {
     pub draft_mark: &'static str,
     /// Alternate-answer placeholder.
     pub draft_placeholder: &'static str,
-    /// The live question whose alternate answer the field edits; None in the fixture.
+    /// The question whose alternate answer the field edits, absent in a placeholder.
     pub draft_key: Option<Id>,
     /// Bold lead-in and complete recommendation reason, when the asker gave one.
     pub reason: Option<Rich>,
@@ -347,13 +286,13 @@ pub struct ThreadView {
     pub reply_placeholder: String,
     /// Textarea accessibility name.
     pub reply_label: &'static str,
-    /// The live question whose follow-up the field edits; None in the fixture.
+    /// The question whose follow-up the field edits, absent in a placeholder.
     pub reply_key: Option<Id>,
     /// Whether the reply field accepts typing.
     pub reply_enabled: bool,
     /// Send control.
     pub send: Button,
-    /// Illustrative attribution beneath the reply, fixture only.
+    /// Optional source attribution beneath the reply.
     pub attribution: Option<&'static str>,
     /// The follow-up's pending, refused or unknown state.
     pub status: Option<Notice>,

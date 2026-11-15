@@ -1,184 +1,102 @@
-# Next increment: enrolled native and browser connections
+# App: current state and remaining work
 
-Status: connection prerequisite implemented and verified on private native-terminal and Chromium surfaces, then deployed to the owner's local workspace under separate rollout authorization; see [verification receipt](#verification-receipt) and [live rollout](#live-rollout-follow-up). This document retains the implementation contract and acceptance criteria. It does not authorize live task/question mutations. Follows [CONNECTION-CONTRACT.md](CONNECTION-CONTRACT.md); the earlier [transport experiment](TRANSPORT-PROOF.md) was feasibility evidence, not the shipped app.
+Status: 2026-11-15. This replaces the completed connection-only increment.
+It is not a Run contract or permission to install services or act on owner data.
+Setup and current limits: [app guide](../../apps/corral-app/README.md).
+Security/wire boundary: [connection contract](CONNECTION-CONTRACT.md).
 
-## Owner-observable result
+## Implemented
 
-The actual NSH app connects to a private workspace daemon from its native and web builds, using persistent enrolled identities rather than disposable bootstrap keys. Both render live health and Now. A restart preserves enrolment; reconnect restores subscriptions; revocation closes the session and prevents automatic reconnection. Neither app executes task/question mutations in this increment; trusted native device administration is explicitly supported.
+- Enrolled native Unix and paired Noise WebSocket clients share typed reads and
+  authorized actions across Inbox, Now, Changes, Plans, Agents, Review, Timeline,
+  Usage, Settings and Ask. The app-local client depends on `corral-protocol`;
+  no separate `corral-client` extraction is required.
+- Browser and native have the same per-device authority. Any admin device pairs,
+  revokes and edits authority; self-raise is refused. Admin grants and Confirm/Admin
+  commands require a fresh matching preview and device-bound proof. The check is
+  the owner's tap plus daemon validation, not a biometric/PIN assertion.
+  Authority-change notifications invalidate pending confirmations.
+- Worker/PM questions include context, evidence, follow-ups and canonical revision
+  checks. Shared action tables expose record commands through menus, inspector,
+  phone surfaces and palette. Review is unified below about 1100 pt content width.
+- Ask is one assistant/PM chat composer. Daemon-hosted assistants stream replies;
+  messages keep their IDs through recovery. Optional `assistant.summary_profile`
+  selects the quick-thread summary model at the next host start; paid-API summary
+  profiles are refused for lack of independent spending authority.
+- Acknowledged local transactions precede send acceptance/draft retirement and
+  command submission. Per-device/store outboxes support visible cancellable queued
+  messages; credential-checked offline boot restores complete last-known snapshots
+  as stale. Revision/CAS handling protects concurrent instances. Other actions
+  refuse offline.
+- Disconnected destinations offer Connect/Preview, Settings retains This device
+  preferences, and sample preview is explicit and never restored on restart.
+  Missing facts and disconnected state never become sample facts.
+- Direct LAN/Tailscale binding is opt-in. Remote browsers require an HTTPS app,
+  exact Origin allowlist and `daemon.web_endpoint` behind operator TLS/Tailscale
+  Serve; no embedded TLS is supplied. Browser Web Push is opt-in, content-free
+  and depends on configured VAPID credentials/vendor push services.
+- `stream.terminal.v1` supplies acknowledged, bounded pane-terminal replacement
+  windows with scrollback and coalescing. Session Send/Cancel are Act-class; raw
+  Keys are Admin plus fresh proof. Daemon-hosted assistants have no raw terminal.
+- Native desktop global Ask shortcut, close-to-hide and tray recovery/Quit are
+  implemented. `corral ask` submits assistant/PM messages from the local CLI.
+- Usage/Timeline/burn-up return bounded partial results with completeness, not
+  fabricated totals. Quota facts remain explicitly unknown without a source.
 
-This completes the production connection prerequisite only. Phase 2a is not complete until the subsequent worker/PM question journey works on desktop and web. Keep the existing UI, all destinations and phone layouts; do not redesign the app or retire classic.
+## Remaining next steps
 
-## Fixed decisions
+### Hosted infrastructure: relay and native push — blocked
 
-- Loopback only. Network listening is explicit and off by default; no LAN, relay or phone packaging. Service installation requires separate owner authorization; the local rollout below records that approved exception.
-- Native local enrolment uses the trusted Unix peer-UID boundary. Browser enrolment uses the architecture's single-use pairing token, Noise IKpsk2 and matching SAS confirmed on the trusted local surface. A browser cannot approve its own pending enrolment.
-- Subsequent browser sessions use pinned Noise IK. No long-lived secrets in URLs, public bootstrap JSON, unwrapped localStorage or source files. The owner-approved local pairing link carries only the short-lived single-use code in a fragment, cleared before pairing; explicit Pair and trusted-side confirmation remain required. The proof's key provisioning must not be copied.
-- Keep the existing CLI executable/build admission checks and fallback semantics. App protocol versions and capabilities are independent of executable identity; a claimed `kind = app` never establishes authentication.
-- App sessions expose only the explicit board/health read allowlist. Refuse commands, nudges, daemon administration, opaque executable-bound reads, host file access and runtime control before service dispatch. Add answer/follow-up permission only in the next increment.
-- Reuse the board projector, topic paging/ACKs, health facts, frame limits and existing operation/store boundaries. No second board derivation, store writer or proxy subprocess per client.
+Relay rendezvous/multiplexing, ticket/identity registration, independently hosted
+TLS/dead-man service and native APNs/FCM publisher credentials/tokens are absent.
+Direct reach and browser Web Push do not implement these components. A stopped
+daemon cannot announce its own absence. Infrastructure ownership/deployment and
+native publisher provisioning must precede an end-to-end relay/native-push claim;
+see [architecture §9](ARCHITECTURE.md#9-relay-and-push).
 
-## Work packages and ownership
+### Inbound OS share targets — blocked by NSH 0.5.0
 
-New module/type names below are proposed, not existing APIs. Before editing exported symbols, inspect LSP references and update every affected caller. Follow the 800-SLOC limit with sibling tests. Freeze the small cross-package interfaces in package 1; packages 2 and 3 can then proceed independently. One integration owner owns protocol/schema edits and final verification.
+The packaged host exposes no inbound text/link/file share payload API:
 
-### 1. Wire/session interface and identity records
+- Android routes notification/URL intents and rejects non-`ACTION_VIEW` payloads:
+  [`AppActivity.java`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-platform-android/java/com/longbridge/nsh/AppActivity.java#L21-L53),
+  [`NshView.java`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-platform-android/java/com/longbridge/nsh/NshView.java#L610-L613).
+- iOS receives URL contexts, not share-extension payloads:
+  [`app.rs`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-platform-ios/src/app.rs#L148-L164).
+- Web packaging emits a fixed manifest without `share_target`, with no supported
+  manifest override:
+  [`web.rs`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-cli/src/web.rs#L1260-L1287),
+  [`WebConfig`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-cli/src/package.rs#L532-L556).
 
-**Targets:** `crates/corral-protocol/src/`, its checked-in schema, `crates/corral-core/src/records/`, `daemon_cfg.rs`, and existing store/attribution APIs as required.
+This needs upstream host/packaging support before receiver integration. The preview
+share sheet is only an illustration; paste, file picking and Ask attachments work
+without pretending to register an OS target.
 
-- Specify typed enrolment, pending pairing, confirmation, device list/revoke and authenticated-session results, including expiry, device identity and permitted capabilities. Define errors and protocol-major/minor rules; do not turn release strings into authentication.
-- Store public device identity, platform, enrolment/revocation timestamps and capabilities in a bounded record family using the existing atomic store operations. Keep daemon private identity outside the workspace in the owner state directory, with restrictive directory/file permissions and atomic creation.
-- Define a server-owned session context: authenticated principal/device, transport, negotiated facilities and a read-only method policy. Do not take actor, environment or authority from app command fields.
-- Freeze how a native app establishes its enrolled context on the existing Unix session before granting app-specific methods. Peer-UID verification remains mandatory; this is not protection from a hostile same-user process.
-- Define byte/frame inputs and outputs for the client core and the transport adapter; preserve the existing Unix protocol for CLI/classic clients.
+### Supported-host and real-device verification — outstanding
 
-**Acceptance:** an enrolled and revoked identity round-trips through the canonical record path; expiry and invalid state transitions fail closed; schema is generated from Rust types. No private key enters store exports or the repository. Existing Unix clients need no change to keep operating.
+The earlier private terminal/packaged-Chromium smoke established pairing, identity
+restart, board/Settings reads, revocation and reconnect refusal, not the later
+audit changes or a full release gate. No current claim of desktop/physical-phone,
+remote TLS or vendor push delivery follows from it.
 
-### 2. Daemon enrolment and authenticated loopback endpoint
+On private fixtures, the integration owner must run the root and app checks
+separately and serially, then exercise:
 
-**Targets:** `crates/corral-daemon/src/{lib,server,state,topics}.rs`, new focused identity/pairing/transport modules, `crates/corral/src/daemon_cmd.rs` and CLI wiring for trusted device administration.
+- Actual `nsh run --target tui` at 80×24 and 120×36; navigation/focus, stacked
+  lists, sidebar toggle, Ask, confirmation and live terminal lifecycle.
+- Real desktop hardware/backend: shortcut registration/refusal, hidden-window
+  recovery, tray Quit and single-instance behavior. This host lacks GTK 4;
+  do not attempt its forbidden desktop/Linux/GPUI builds.
+- Physical phone/browser and native packaging on supported hosts: pairing QR,
+  portrait/landscape, keyboard/safe areas, question/plan/review actions, authority
+  grants/revocation and reconnect. Phone layout is already in scope.
+- Remote HTTPS/WSS through the intended proxy/Tailscale path, exact Origins,
+  credential persistence, revocation and configured browser push delivery.
+- Offline restart/stale snapshot, failed persistence retaining words, queued
+  cancellation/delivery races and two-tab updates against private data.
 
-- Add explicitly configured numeric-loopback WebSocket listening and exact Origin allowlisting. Share authenticated RPC/topic dispatch with Unix rather than forwarding raw network input to the unrestricted Unix socket.
-- Implement the complete browser pairing lifecycle: short-lived single-use token, pending claim, handshake-derived SAS, trusted-side confirmation, durable enrolment and cancellation/expiry. Burn a token on claim; never treat receipt of a claim as approval.
-- Authenticate ordinary Noise IK sessions against the live device registry before accepting hello or any application payload. Enforce frame bounds, handshake/I/O deadlines, concurrency limits, rekey/lifetime and orderly shutdown independently of sync pacing.
-- Refuse missing/null/unapproved Origins before upgrade, handshake payloads, text/oversized frames, invalid authentication, tampering and replay. No plaintext fallback.
-- Implement local device list/revoke through the existing owner-entry/service conventions. Revocation must prevent new sessions and close existing ones without waiting for a sync pass. Never emit credentials into logs.
-- Preserve the current CLI `client_mismatch` checks; do not reinterpret an app-supplied principal as trusted. Keep app command dispatch disabled explicitly, even if the daemon advertises `cmd.v1` to other clients.
-
-**Acceptance:** pairing requires the trusted confirmation; expired/reused tokens and simultaneous claims cannot enrol a second device. Unknown/revoked keys get no application data; revocation terminates a live subscription. A paired app can obtain health/board only. CLI identity mismatch remains refused.
-
-### 3. Shared client session and secure persistence
-
-**Targets:** existing `apps/corral-app/src/client/`, `src/model/daemon.rs`, app manifests and new focused browser/key-store glue. Extract a pure `crates/corral-client` only as the native/browser shared session implementation, not as a speculative general framework.
-
-- Move shared hello, protocol/capability handling, snapshot accumulation, cursor/epoch reset, pending-request deadlines and reconnect decisions out of the Unix-only implementation. Keep model/view logic free of I/O and NSH dependencies.
-- Build the shared core on the root MSRV and wasm target; app glue remains on its pinned Rust 1.97 toolchain. Browser entropy is WebCrypto-backed with no insecure fallback; use the proven Snow feature selection rather than its incompatible default platform-entropy path.
-- Native glue keeps bounded blocking socket work off the UI thread. Browser glue uses `web-sys::WebSocket`, preserves binary message boundaries and updates NSH signals through the supported task lifecycle. Cancel/drop must close the transport and release callbacks.
-- Persist native credentials in the supported platform key store; if the documented 0600-file fallback is used, show that fact and enforce restrictive creation/containment rules. Browser persistence wraps the device private key with a non-extractable WebCrypto key in IndexedDB. Missing, corrupt or unavailable secure storage must be actionable, not silently downgraded to plain Storage.
-- Keep framing generic enough for CONTROL/DATA/CREDIT without enabling unsupported streams or opaque `read.v1` documents. No new command API is exposed to the UI in this increment.
-
-**Acceptance:** both adapters feed the same model with complete snapshots, not partial pages. Reconnect after daemon restart/epoch change replaces the old board correctly. Key identity survives an app reload/restart; a changed daemon pin or corrupt credential refuses visibly rather than auto-pairing.
-
-### 4. Wire the actual NSH connection surfaces
-
-**Targets:** `apps/corral-app/src/state.rs`, Settings connection/device models and screens, health/Now routing and shell entry points as required. Preserve the established components and idiom-specific layouts.
-
-- Provide trusted native enrolment and browser pairing input/confirmation state using existing Settings/Connection surfaces. Display the pinned workspace/device and direct-loopback reach path without exposing secret material.
-- Offer daemon data on web only when the authenticated browser adapter exists. Preserve Fixture and Disconnected as explicit alternatives; a failed connection must never display fixtures as live data.
-- Show connecting, paired, stale, revoked, storage-failure and pin-mismatch states. Preserve the last board marked stale on loss; distinguish link state from daemon loop health. Pending pairing confers no access.
-- Keep Inbox, Ask and all unserved destinations explicitly unavailable. The work is connection integration, not turning local fixture reducers into apparent daemon actions.
-
-**Acceptance:** actual native and browser app instances show the same private fixture board and truthful connection facts. Reload/restart preserves enrolment. Revoke from the trusted surface: both the visible state and reconnection behavior reflect it. Keyboard/mouse entry points and phone layout remain usable; the sidebar stays available/collapsible at narrow widths.
-
-## Verification, not evidence volume
-
-Use the lowest layer for each named defect. Do not reproduce the same boundary in several expensive journeys.
-
-- Registry/pairing: deterministic unit/service checks for token expiry/reuse, confirmation race, revocation and invalid transitions; tiny fixtures, explicit clock inputs, no sleeps or owner store.
-- Protocol/admission: targeted checks for unknown protocol major, forbidden app method and preserved CLI build mismatch. Exercise bounded framing and authentication failures at the transport boundary.
-- Shared client: reuse/migrate existing paging/reset coverage, adding only missing consumer-visible reconnect or persistence failures. No source-text, forwarding or wording tests.
-- One end-to-end connection journey: private daemon/store/runtime environment, native app and real Chromium NSH web build, enrol → complete board → reload/restart → epoch replacement → revoke → reconnect refusal. Do not answer a live owner question or use the live Herdr server.
-- Run root crate checks and app checks separately and serially. Start with changed-file diagnostics and the cheapest relevant tests. The repo's daemon/protocol gate does not build the app. Use the named Corral gate only if this plan is converted into a Run contract that requires it.
-- On this host, native runtime proof uses the terminal target; GTK desktop builds are forbidden. A supported-host desktop smoke remains an explicit requirement before claiming the desktop/browser Phase 2a milestone. Browser proof must run the actual NSH app, not the disposable standalone experiment again.
-- Security changes need an evidence-backed review of identity establishment, Origin handling, key storage, pairing confirmation and revocation before enabling the listener outside a private fixture. No intentional host load generation.
-
-## Completion and subsequent work
-
-This increment is done only when packages 1–4 work together; a listener, a paired key without an app, or another standalone crypto demo is insufficient. Update the app guide and current-state guidance to match shipped behavior and attach the actual native/browser receipts. Do not install or enable the owner's listener/service without a separate rollout instruction.
-
-Next, implement bounded Inbox/question-context readers, canonical worker/PM questions and follow-ups, then expose only their authorized answer operations through the existing command executor. Validate one winner across devices and uncertain-result recovery. Preserve the distinction between board change sequence, owner task revision and question revision. Ask remains Phase 2b as a complete chat flow; runtime migration, relay/push and classic retirement remain later work.
-
-## Verification receipt
-
-Observed on 2026-11-14, using a disposable two-task workspace, a fresh plugin-free
-herdr server and private daemon/state directories. No owner daemon or live herdr
-session was used or configured.
-
-- Root: protocol 7 tests, targeted daemon configuration 1 test, daemon 28 tests,
-  `cargo check -p corral`, and the specified five-package all-target Clippy command
-  with `-D warnings` passed.
-- App: `cargo test` passed 63 tests; the actual library built for
-  `wasm32-unknown-unknown`. The revoked-link regression was observed red then green:
-  revocation must clear the board **and** mark the link down.
-- Real `nsh run --target tui`: enrolled through Connection, loaded both fixture tasks,
-  saved the device-id file with mode `0600`, and loaded the board again after restart
-  without another enrolment. `--port 8791` kept its dev session separate from web 8790.
-- Real Chromium app: paired through the native Devices panel with matching SAS;
-  opened live data and rendered both tasks; reload restored the board without pairing.
-  IndexedDB inspection showed AES-GCM, a non-extractable key and a 12-byte IV.
-- Forgot the browser and paired again through `corral device pair`; the CLI displayed
-  the same SAS and accepted `y`. `device list` showed the native and both web records.
-- CLI revocation removed the browser's board and showed the revoked notice. Instrumented
-  real WebSocket construction observed zero reconnect attempts for more than two minutes.
-  Native revocation and revoked attach both showed the notice; the native health/link
-  state was also verified down after the regression fix.
-- The integrated daemon test covered reused pairing rejection, both board rows,
-  forbidden command/nudge/read/stop requests, live revoke, unknown-key reconnect
-  refusal and identity-file permissions. A real unexpected-Origin upgrade returned 403.
-- Browser surfaces were inspected at 1280×900 and 390×844, including the revoked
-  Connection recovery control. The Settings mechanical detector reported no findings.
-
-The private foreground daemon truthfully reported degraded (`unsupervised`, PM absent);
-this was not presented as healthy. GTK/native-window backends remain unverified on this
-host, and the worker/PM question milestone remains unimplemented.
-
-## Live-rollout follow-up
-
-The owner subsequently authorized merging to `main`, installing the updated daemon
-and setting up the real workspace. Before enabling that listener, targeted security
-review found no server transport/allowlist blockers and identified client correctness
-issues: a rejected pinned handshake retried indefinitely, concurrent native credential
-mutations could lose another workspace's mapping, and non-canonical loopback binds
-could not be represented by the port-only pairing format.
-
-The fixes make failed pinned handshakes terminal and actionable, serialize private
-credential-map mutations with a retained interprocess lock, and restrict app listening
-to `127.0.0.1`. The owner selected local-only clickable pairing links rather than LAN
-access. Those links carry the short-lived code in a URL fragment, clear it from the
-address bar, prefill Connection, and never bypass explicit Pair or matching-code
-confirmation. Native device IDs and long-lived browser secrets remain out of URLs.
-
-### Installed local setup — 2026-11-14
-
-Merged to local `main` as `dee4aeff`, with pairing-link and credential fixes in
-`19e40342` and test cleanup in `5e950e07`. Installed the release candidate, preserved
-the prior executable under `~/.local/state/corral/app-rollout/`, and restarted the
-existing workspace daemon service without changing its herdr socket binding.
-
-- Workspace: `/home/pawis/miti-workspace`.
-- Daemon: `corrald@st-102a13cc075bda04.service`; app listener `127.0.0.1:7841`.
-- Web: <http://127.0.0.1:8790/>; `corral-app-web` starts the enabled
-  `corral-app-web.service`. It serves the packaged site from `.nsh/out/Corral`
-  with a loopback-only static server, not NSH's externally bound dev server.
-- TUI: `corral-app-tui` resolves this workspace's daemon socket and runs
-  `nsh run --target tui --port 8791` from the app directory.
-- Both convenience launchers are installed in `~/.local/bin` on this workstation;
-  they are not shipped repository commands. Repackage with `nsh package --target web`
-  from `apps/corral-app` after changing web source.
-- A different browser/profile needs its own enrolment: run
-  `corral --root /home/pawis/miti-workspace device pair`, open the printed local
-  link, choose Pair, and confirm matching codes in the terminal. Use the same
-  `127.0.0.1:8790` origin to retain the browser's saved identity.
-
-Observed rollout proof:
-
-- Root targeted configuration/protocol/daemon tests, all-target Clippy for the five
-  affected root packages, and the release build passed. App tests, wasm library
-  build and `nsh package --target web` passed.
-- Native `ubuntu-main` and browser `ubuntu-main web` enrolled against the real
-  workspace. Both rendered 78 queued and 95 held rows, matching `corral list --view`.
-  Native process restart and browser reload restored the board without enrolment.
-- The browser link cleared its fragment and prefilled Connection without claiming;
-  only explicit Pair advanced the trusted CLI to matching-code confirmation.
-  A 390px viewport startup with an existing saved device also cleared the fragment
-  and routed to Connection without replacing that device.
-- Native credential and retained lock files were both owner-owned mode `0600`.
-  Both TCP listeners were bound only to `127.0.0.1`; the web service was enabled
-  and active. Final daemon health was healthy, herdr-tui ok, PM live.
-- The daemon initially reported the recorded PM host dead after rollout.
-  `corral pm relaunch --reason app_rollout_recovery --json` recovered its recorded
-  conversation; no fresh PM conversation or task/question test mutation was used.
-- Left the actual browser paired on live Now and stopped only the two native
-  verification sessions. The persistent daemon and web service remain running.
-
-This rollout does not expand the app's read-only scope: Inbox/question operations,
-Ask/chat and the unserved destinations remain unavailable on live data.
+Do not repeat the transport feasibility experiment or re-plan completed readers,
+chat and command routing. Keep classic `corral-tui` until actionable parity and
+supported-device verification justify retirement. Runtime migration and
+multi-machine execution remain separate architecture work, not prerequisites for
+documenting the app's current capabilities.

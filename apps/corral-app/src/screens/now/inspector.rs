@@ -1,9 +1,7 @@
-//! The inspector for the selected task (`.insp`): its Story (goal, the run, gate, review, land
-//! stepper, steps, who moves next, needs and unblocks with their marks, cost, actions), the
-//! Evidence list, and the Session hand-off with its terminal tail. In the Daemon state the same
-//! header, stepper and key/value parts carry corrald's task detail: its body, progress, needs,
-//! holds, run and plan position, the legal task commands and this device's last command's
-//! outcome, the artifacts and the captured log tail, each with its detail's loading, stale or
+//! The inspector for the selected task (`.insp`): its Story (header, stepper and key/value parts
+//! from the task detail: its body, progress, needs, holds, run and plan position, the legal task
+//! commands and this device's last command's outcome), the Evidence list of its artifacts, and
+//! the Session hand-off with the captured log tail, each with its detail's loading, stale or
 //! failed state.
 
 use nsh_core::prelude::*;
@@ -12,11 +10,11 @@ use crate::model::board::Mark;
 use crate::model::text::span;
 use crate::model::work::{
     self, Dependency, DetailNote, Fact, Inspector, LiveEvidence, LiveSession, LiveStory, NowTab,
-    OwnerNext, Press, Stage, Story,
+    Press, Stage,
 };
 use crate::model::{Form, Hue};
 use crate::state::AppState;
-use crate::ui::kit::chip::{chip, illus};
+use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::{hue_ink, mark};
 use crate::ui::kit::notice::loading;
 use crate::ui::kit::table::{kv, steps};
@@ -34,8 +32,7 @@ const TARGET: f32 = 44.0;
 pub(super) const FOLLOW: &str = "inspector";
 
 /// The inspector for `tab`, or for the model's selected tab when `None`. The model decides what
-/// shows: the loading placeholders, or the tab's content for the selected task, from the
-/// fixtures or the daemon's feed.
+/// shows: the loading placeholders, or the tab's content for the selected task.
 pub(super) fn panel(app: AppState, tab: Option<NowTab>) -> AnyElement {
     let form = app.form;
     let inspector = computed(move || {
@@ -43,13 +40,9 @@ pub(super) fn panel(app: AppState, tab: Option<NowTab>) -> AnyElement {
         if let Some(tab) = tab {
             state.now_tab = tab;
         }
-        if app.daemon() {
-            let selection = app.selection();
-            return app
-                .feed
-                .with(|feed| work::daemon_inspector(&state, feed, &selection, form));
-        }
-        work::inspector(&state, app.env())
+        let selection = app.selection();
+        app.feed
+            .with(|feed| work::daemon_inspector(&state, feed, &selection, form))
     });
     dynamic(move || inspector.with(|inspector| content(app, inspector)))
 }
@@ -67,7 +60,7 @@ fn padded(app: AppState, child: AnyElement) -> AnyElement {
 }
 
 /// The inspector's body for `inspector`, padded as `.insp` is; the phone's task page shows it
-/// too in the Daemon state.
+/// too.
 pub(super) fn content(app: AppState, inspector: &Inspector) -> AnyElement {
     let body = match inspector {
         Inspector::Loading => loading(
@@ -79,41 +72,6 @@ pub(super) fn content(app: AppState, inspector: &Inspector) -> AnyElement {
         Inspector::LiveStory(story) => live_story(app, story),
         Inspector::LiveEvidence(evidence) => live_evidence(app, evidence),
         Inspector::LiveSession(session) => live_session(app, session),
-        Inspector::Story(story) => self::story(app, story),
-        Inspector::Evidence(evidence) => view()
-            .child(h3(app, evidence.title.clone(), None))
-            .child(steps(
-                app,
-                evidence
-                    .artifacts
-                    .iter()
-                    .map(|artifact| {
-                        (
-                            artifact.mark,
-                            Hue::Neutral,
-                            plain(app, artifact.label).into_element(),
-                        )
-                    })
-                    .collect(),
-            ))
-            .child(
-                view()
-                    .flex_row()
-                    .pt(px(10.0))
-                    .child(illus(app, evidence.illustrative)),
-            )
-            .into_element(),
-        Inspector::Session(session) => view()
-            .gap(px(gap(app)))
-            .child(dim(app, session.description))
-            .child(view().flex_row().child(model_button(
-                app,
-                &session.open,
-                "btn-session-open".into(),
-                false,
-            )))
-            .child(tail(app, &session.tail, None))
-            .into_element(),
     };
     padded(app, body)
 }
@@ -124,59 +82,6 @@ fn gap(app: AppState) -> f32 {
     } else {
         12.0
     }
-}
-
-/// The story of the selected task, as the inspector and the phone's task page show it. The
-/// desktop's action row is the model's (the phone page lays its own under the story).
-pub(super) fn story(app: AppState, story: &Story) -> AnyElement {
-    let form = app.form;
-    let mut out: Vec<AnyElement> = vec![
-        head(
-            app,
-            story.id,
-            None,
-            story.plan_label.clone().zip(story.plan_action.clone()),
-            story.changed.map(str::to_owned),
-        ),
-        title(app, story.title),
-    ];
-    let goal = if story.facts.is_empty() {
-        &story.summary
-    } else {
-        &story.facts
-    };
-    if !goal.is_empty() {
-        let note = story.machine_note.filter(|_| !story.facts.is_empty());
-        out.push(paragraph(app, with_note(app, rich_small(app, goal), note)));
-    }
-    if let Some(stages) = &story.stages {
-        out.push(stepper(app, stages));
-    }
-    if let Some(progress) = &story.progress {
-        out.push(h3(app, progress.label, Some(progress.figure.clone())));
-        out.push(steps(
-            app,
-            story
-                .steps
-                .iter()
-                .map(|&(state, step)| {
-                    let words = plain(app, step)
-                        .when(state == Mark::Next, |t| t.text_color(color(Token::Ink3)));
-                    (state, Hue::Neutral, words.into_element())
-                })
-                .collect(),
-        ));
-    }
-    out.push(
-        view()
-            .pt(px(if form == Form::Terminal { 0.0 } else { 14.0 }))
-            .child(kv(app, facts(app, story)))
-            .into_element(),
-    );
-    if !story.actions.is_empty() {
-        out.push(actions(app, &story.actions));
-    }
-    view().children(out).into_element()
 }
 
 /// The model's action row under a story: each button by what it does, then why each command
@@ -197,32 +102,6 @@ fn actions(app: AppState, buttons: &[work::Button]) -> AnyElement {
             ),
         )
         .children(reasons(app, buttons))
-        .into_element()
-}
-
-/// `paragraph`, then the model's illustrative note after a separator, italic and quiet, so it
-/// never reads as part of the recorded facts.
-fn with_note(app: AppState, paragraph: AnyElement, note: Option<&'static str>) -> AnyElement {
-    let Some(note) = note else {
-        return paragraph;
-    };
-    let words = text(format!("· {note}"))
-        .italic()
-        .number_of_lines(1u32)
-        .flex_shrink_0()
-        .text_color(color(Token::Ink3));
-    let words = if app.form == Form::Terminal {
-        words
-    } else {
-        words.font_family(FONT_TEXT).text_size(px(12.0))
-    };
-    view()
-        .flex_row()
-        .flex_wrap()
-        .items_baseline()
-        .gap_x(px(if app.form == Form::Terminal { 8.0 } else { 6.0 }))
-        .child(paragraph)
-        .child(words)
         .into_element()
 }
 
@@ -251,8 +130,8 @@ fn note(app: AppState, note: &DetailNote) -> AnyElement {
         .into_element()
 }
 
-/// The selected daemon task's story: the same header, title, stepper and facts as the
-/// fixture's, from the board row and corrald's task detail.
+/// The selected task's story: the header, title, stepper and facts from the board row and the
+/// task detail.
 fn live_story(app: AppState, story: &LiveStory) -> AnyElement {
     let mut out: Vec<AnyElement> = vec![
         head(
@@ -538,45 +417,6 @@ fn stepper(app: AppState, stages: &[Stage; 4]) -> AnyElement {
         .pb(px(if form == Form::Terminal { 0.0 } else { 16.0 }))
         .children(columns.collect::<Vec<_>>())
         .into_element()
-}
-
-/// The label-value facts: detailed stories Next, You, Needs, Unblocks, Cost; a queued task's
-/// Waits on, Unblocks, You.
-fn facts(app: AppState, story: &Story) -> Vec<(String, AnyElement)> {
-    let needs = if story.needs.is_empty() {
-        story.needs_fallback.map_or_else(
-            || ids(app, &[]),
-            |fallback| plain(app, fallback).into_element(),
-        )
-    } else {
-        ids(app, &story.needs)
-    };
-    let unblocks = if story.unblocks.is_empty() {
-        plain(app, story.unblocks_fallback).into_element()
-    } else {
-        ids(app, &story.unblocks)
-    };
-    let owner = match &story.owner {
-        OwnerNext::Answer(button) => view()
-            .flex_row()
-            .child(model_button(app, button, "btn-answer".into(), false))
-            .into_element(),
-        OwnerNext::Nothing { label, hue } => rich(app, &vec![span(*label).hue(*hue)]),
-    };
-    if story.stages.is_none() {
-        return vec![
-            (story.needs_label.into(), needs),
-            (story.unblocks_label.into(), unblocks),
-            (story.owner_label.into(), owner),
-        ];
-    }
-    vec![
-        (story.next_label.into(), rich(app, &story.next)),
-        (story.owner_label.into(), owner),
-        (story.needs_label.into(), needs),
-        (story.unblocks_label.into(), unblocks),
-        (story.cost_label.into(), rich(app, &story.cost)),
-    ]
 }
 
 /// Task ids with their marks where the model shows them; pressing an id opens that task.

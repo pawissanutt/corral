@@ -182,8 +182,7 @@ pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement
 }
 
 /// One hold, in the feed's columns: when the hold began, its mark, the id, the title with its
-/// attribution dimmed after it. A daemon hold opens its task; the fixture's are not pressable,
-/// as in the mock.
+/// attribution dimmed after it. A hold with an action opens its task.
 pub(crate) fn hold(app: AppState, held: &HoldRow) -> AnyElement {
     let form = app.form;
     let label = format!("{} {} {}", held.since, held.id, held.title);

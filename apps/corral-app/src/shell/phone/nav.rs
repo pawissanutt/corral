@@ -21,7 +21,7 @@ const SLIDE: Duration = Duration::from_millis(450);
 /// One page of a tab's stack above its root.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum Entry {
-    /// A page the model knows (`NavState::pages`): a fixture page or a live record.
+    /// A page the model knows (`NavState::pages`): a live record.
     Page(Route),
     /// A destination opened from the More list.
     Destination(Destination),
@@ -191,7 +191,7 @@ impl Nav {
         self.stack.set(vec![Entry::Destination(row.destination)]);
         let action = row.action;
         self.app
-            .act(self.app.work, move |state, env| state.act(action, env));
+            .act(self.app.work, move |state, _| state.act(action));
     }
 
     /// Leaves the page at `depth` and those above it (the header's back, the swipe, Android's

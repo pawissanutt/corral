@@ -9,9 +9,9 @@ use nsh_core::prelude::*;
 
 use crate::{
     model::{
-        DataState, Destination, Live, Overlay, Page, SettingsSection, Workspace,
+        DataState, Destination, Live, Overlay, SettingsSection, Workspace,
         assistant::COMPOSER_KEYS,
-        commands::{destination_key, key_legend, key_legend_live},
+        commands::{destination_key, key_legend_live},
         nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, SIDEBAR_LABEL, THIS_DEVICE},
     },
     screens,
@@ -476,14 +476,7 @@ fn fits() -> impl Iterator<Item = Fit> {
 /// the line gives the composer's own keys and Go to, the one chord that still reaches past it.
 /// Otherwise the keys of the page in view (when the model gives it any and the destination is
 /// served), the destinations, then Ask and Go to.
-fn line(
-    destination: Destination,
-    page: Option<Page>,
-    live: Option<Live>,
-    data: DataState,
-    served: bool,
-    typing: bool,
-) -> Line {
+fn line(destination: Destination, live: Option<Live>, served: bool, typing: bool) -> Line {
     let go_to = Entry::new(PALETTE_CHORD, PALETTE_LABEL, KEEP_GO_TO);
     if typing {
         return Line {
@@ -496,10 +489,10 @@ fn line(
             sidebar: None,
         };
     }
-    let legend = match (served, data) {
-        (false, _) => Vec::new(),
-        (true, DataState::Daemon) => key_legend_live(destination, live.as_ref()),
-        (true, _) => key_legend(destination, page),
+    let legend = if served {
+        key_legend_live(destination, live.as_ref())
+    } else {
+        Vec::new()
     };
     Line {
         own: legend
@@ -574,24 +567,14 @@ impl Line {
 /// When the grid is short of room the names give way one by one, then whole groups, as
 /// [`fits`] orders them; a key's cap is never cut.
 fn key_line(app: AppState, typing: Memo<bool>) -> AnyElement {
-    let route = computed(move || {
-        (
-            app.destination(),
-            app.page(),
-            app.live_page(),
-            app.data.get(),
-        )
-    });
+    let route = computed(move || (app.destination(), app.live_page(), app.data.get()));
     dynamic(move || {
         let room = term::columns();
-        let (destination, page, live, data) = route.get();
+        let (destination, live, data) = route.get();
         // An unserved destination answers no keys of its own; disconnected, none is served.
-        let served = match data {
-            DataState::Fixture => true,
-            DataState::Daemon => app.available(destination) == crate::model::Availability::Ready,
-            DataState::Disconnected => false,
-        };
-        let line = line(destination, page, live, data, served, typing.get());
+        let served = data != DataState::Disconnected
+            && app.available(destination) == crate::model::Availability::Ready;
+        let line = line(destination, live, served, typing.get());
         let (fit, count) = line.layout(room);
         let mut row = view()
             .h(term::rows(1.0))
@@ -636,11 +619,14 @@ mod tests {
             (Destination::Plans, None),
             (Destination::Review, None),
             (Destination::Settings, None),
-            (Destination::Inbox, Some(Page::Question)),
+            (
+                Destination::Inbox,
+                Some(Live::Question(crate::model::Id::new("T-868/R1/Q1"))),
+            ),
         ];
-        for (destination, page) in views {
+        for (destination, live) in views {
             for typing in [false, true] {
-                let line = line(destination, page, None, DataState::Fixture, true, typing);
+                let line = line(destination, live.clone(), true, typing);
                 for room in 20..=240 {
                     let (fit, count) = line.layout(room);
                     assert!(

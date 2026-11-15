@@ -51,7 +51,9 @@ pub(super) enum Event {
         method: String,
         params: Value,
     },
+    #[cfg(not(target_arch = "wasm32"))]
     Idle,
+    #[cfg(not(target_arch = "wasm32"))]
     Closed(String),
 }
 

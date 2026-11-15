@@ -28,8 +28,8 @@ const TARGET: f32 = 44.0;
 const MENU_MIN: f32 = 220.0;
 const MENU_MAX: f32 = 340.0;
 
-/// The record a list row's press is about: a daemon task's select or open. Fixture rows (local
-/// demo actions) carry no daemon commands, so they get no menu.
+/// The record a list row's press is about: a task's select or open. Local presses (a tab, a
+/// group's rows) carry no commands, so they get no menu.
 pub(crate) fn row_record(action: &Press) -> Option<Record> {
     match action {
         Press::Select(id) | Press::Open(Live::Task(id)) => Some(Record::Task(id.clone())),
@@ -599,10 +599,10 @@ mod tests {
     use super::*;
     use crate::model::Id;
 
-    /// RC-03: a daemon task's row, selected in place or opened on the phone, offers its commands;
-    /// a fixture row (a local demo action) offers none.
+    /// RC-03: a task's row, selected in place or opened on the phone, offers its commands; a
+    /// local press offers none.
     #[test]
-    fn daemon_task_rows_carry_their_command_menu_and_fixture_rows_none() {
+    fn task_rows_carry_their_command_menu_and_local_presses_none() {
         let id = Id::new("T-141");
         assert_eq!(
             row_record(&Press::Select(id.clone())),
@@ -612,9 +612,6 @@ mod tests {
             row_record(&Press::Open(Live::Task(id.clone()))),
             Some(Record::Task(id))
         );
-        assert_eq!(
-            row_record(&Press::Work(work::Action::Select("T-890"))),
-            None
-        );
+        assert_eq!(row_record(&Press::Work(work::Action::Back)), None);
     }
 }

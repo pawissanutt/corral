@@ -1,6 +1,4 @@
-//! Content descriptors for the list, review document, trackers and phone plan pages. The
-//! fixture preview (`fixture.rs`) and corrald's plans (`live.rs`) both build these, so the
-//! screens walk one shape whichever source is shown.
+//! Content descriptors for feed-backed plan lists, documents, trackers and phone pages.
 
 use super::{Action, GraphInput, Story};
 use crate::model::Id;
@@ -109,7 +107,7 @@ pub struct PlanRow {
     pub progress: Option<String>,
     /// Neutral selection emphasis.
     pub selected: bool,
-    /// Synthetic marker, absent for real plans and phone scale rows.
+    /// Optional source disclosure.
     pub illustrative: Option<&'static str>,
     /// Desktop selection or phone navigation action.
     pub action: Action,
@@ -120,11 +118,11 @@ pub struct PlanRow {
 pub struct ListSection {
     /// Group heading.
     pub label: &'static str,
-    /// Section count, absent for the phone's Scale test.
+    /// Section count when known.
     pub count: Option<u32>,
     /// Heading state colour.
     pub hue: Hue,
-    /// Phone Scale test's synthetic badge.
+    /// Optional section-source disclosure.
     pub illustrative: Option<&'static str>,
     /// Ordered plan rows.
     pub rows: Vec<PlanRow>,
@@ -173,7 +171,7 @@ pub struct PipelineStage {
 /// A detail header, resolved for the current idiom.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
-    /// Canonical served plan or tracker id for record actions; absent in fixture preview.
+    /// Canonical plan or tracker identity for record actions, when available.
     pub plan: Option<Id>,
     /// Status chips, in source order.
     pub chips: Vec<Chip>,
@@ -359,8 +357,7 @@ pub struct PlanningView {
 /// An approved plan: its identity, and the state of publication under it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApprovedView {
-    /// The plan's state, id and revision and title, carrying any stale-copy notice; absent in
-    /// the fixture preview, whose list row beside it names the plan.
+    /// The plan's state, identity, revision and title, with any stale-copy notice.
     pub header: Option<Header>,
     /// Desktop and phone use different empty-state headings.
     pub heading: String,
@@ -427,76 +424,6 @@ pub struct NoticeView {
     pub action: Option<Button>,
 }
 
-/// An expanded synthetic member that moves or needs attention.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScaleLine {
-    /// Synthetic task id.
-    pub id: &'static str,
-    /// Deterministically generated name.
-    pub name: String,
-    /// Actor/state dot hue.
-    pub hue: Hue,
-    /// Needs you, held budget, or gating phrase.
-    pub status: &'static str,
-    /// Status text hue (moving is dim/neutral).
-    pub status_hue: Hue,
-}
-
-/// A synthetic layer strip with limited expanded active members.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScaleLayerView {
-    /// Zero-based layer number.
-    pub index: usize,
-    /// Layer heading.
-    pub label: String,
-    /// Every member square in id order, including collapsed landed and waiting members.
-    pub squares: Vec<MemberSquare>,
-    /// Counts phrase with prior-layer dependency already resolved.
-    pub summary: String,
-    /// Landed count.
-    pub landed: usize,
-    /// Moving or needs-you count, including held members.
-    pub moving: usize,
-    /// Waiting count.
-    pub waiting: usize,
-    /// At most four lines on desktop and three on phone.
-    pub shown: Vec<ScaleLine>,
-    /// Remaining expanded members, not remaining total members.
-    pub hidden: usize,
-    /// “+N more in this layer”, absent when all active lines are shown.
-    pub more: Option<String>,
-}
-
-/// One scale legend item, keeping the two neutral strip treatments distinguishable.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LegendEntry {
-    /// Visible legend label.
-    pub label: &'static str,
-    /// Square treatment independent of the label.
-    pub state: SquareState,
-    /// State hue.
-    pub hue: Hue,
-}
-
-/// Synthetic 64-member tracker, represented as strips on all forms.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScaleView {
-    /// Executing header with the explicit synthetic marker.
-    pub header: Header,
-    /// Total member count.
-    pub total: usize,
-    /// Landed member count.
-    pub landed: usize,
-    /// Four plan stages with computed landed/total.
-    pub pipeline: Vec<PipelineStage>,
-    /// Explanation of strip collapse and square order.
-    pub explanation: &'static str,
-    /// All six layers.
-    pub layers: Vec<ScaleLayerView>,
-    /// Legend labels, strip states and hues in source order.
-    pub legend: Vec<LegendEntry>,
-}
-
 /// Selected detail variant, ready for a renderer to walk.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Detail {
@@ -512,8 +439,6 @@ pub enum Detail {
     Document(DocumentView),
     /// The diff between two revisions.
     Diff(DiffView),
-    /// Explicitly synthetic 64-member tracker (fixture preview only).
-    Scale(ScaleView),
     /// corrald has not delivered the plan yet.
     Loading,
     /// No plan, an unserved plan, or a failed request.

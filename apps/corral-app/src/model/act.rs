@@ -7,7 +7,7 @@ use corral_protocol::cmd::{self, Command};
 use corral_protocol::rpc::ErrorCode;
 
 use crate::model::daemon::{CommandStatus, Feed};
-use crate::model::id::Id;
+use crate::model::id::{Id, IdSupply};
 use crate::model::live::Live;
 
 /// A device authority a command or message needs (`AppSession.authority`).
@@ -57,9 +57,9 @@ pub struct Act {
 }
 
 impl Act {
-    /// A new intended command with a fresh identity.
-    pub fn new(title: impl Into<String>, command: Command) -> Act {
-        Act::with_key(Id::from(crate::client::requests::new_id()), title, command)
+    /// A new intended command, allocated from the reducer's injected identity state.
+    pub fn new(ids: &mut IdSupply, title: impl Into<String>, command: Command) -> Act {
+        Act::with_key(ids.next_id(), title, command)
     }
 
     /// The command under an identity the caller already holds.
@@ -417,6 +417,32 @@ mod tests {
             }),
             entry: None,
         }
+    }
+
+    #[test]
+    fn uncertain_reducer_retries_keep_the_injected_command_identity() {
+        use crate::model::assistant::{Action, State};
+        use crate::model::effect::Effect;
+
+        let mut state = State {
+            ids: IdSupply::new("launch-c"),
+            ..State::default()
+        };
+        let mut feed = Feed::default();
+        let action = Action::FileEntry("entry-1".into());
+        let effects = state.act_live(action.clone(), &feed);
+        let key = match effects.as_slice() {
+            [Effect::Act(act)] => act.key.clone(),
+            other => panic!("expected one command, got {other:?}"),
+        };
+        let mut command = refused("disconnected");
+        command.status = CommandStatus::Unknown;
+        feed.commands.insert(key.clone(), command);
+        let ids_after_intent = state.ids.clone();
+        let retry = state.act_live(action, &feed);
+        assert!(matches!(retry.as_slice(), [Effect::Recover(same)] if *same == key));
+        assert_eq!(state.ids, ids_after_intent);
+        assert_eq!(status(&feed, &key), Some(ActStatus::Unknown));
     }
 
     #[test]

@@ -35,15 +35,16 @@ struct Head {
     close_label: &'static str,
 }
 
-/// The model's drawer head, tracked: it follows the assistant's state and the connection, never
-/// the draft. With the daemon it is the served quick thread's.
+/// The model's drawer head, tracked: it follows the feed's quick thread and the connection, never
+/// the draft.
 fn head(app: AppState) -> Memo<Head> {
     computed(move || {
         let env = app.env();
         let drawer = match app.data.get() {
-            DataState::Daemon => app.feed.with(|feed| assistant::live_drawer(feed, env)),
             DataState::Disconnected => assistant::unconnected_drawer(),
-            DataState::Fixture => app.assistant.with(|state| assistant::drawer(state, env)),
+            DataState::Daemon | DataState::Fixture => {
+                app.feed.with(|feed| assistant::live_drawer(feed, env))
+            }
         };
         Head {
             label: drawer.label,
@@ -56,14 +57,13 @@ fn head(app: AppState) -> Memo<Head> {
     })
 }
 
-/// The quick thread of the current source; with the daemon it is subscribed and its host warmed
-/// while Ask is open, so the first answer does not wait for it.
+/// The quick thread, subscribed and its host warmed while Ask is open, so the first answer does
+/// not wait for it.
 fn quick(app: AppState) -> ThreadRef {
-    let daemon = untracked(|| app.daemon());
-    if daemon {
+    if untracked(|| app.data.get()) != DataState::Disconnected {
         open_scope(app, Id::from(QUICK), true);
     }
-    ThreadRef::quick(daemon)
+    ThreadRef::quick()
 }
 
 /// The test id of a head button.

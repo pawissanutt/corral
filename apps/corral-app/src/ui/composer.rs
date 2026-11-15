@@ -16,7 +16,7 @@ use nsh_core::prelude::*;
 use crate::model::assistant::{self, Composer, KeyHint, ModelList, ThreadRef};
 use crate::model::hue::Hue;
 use crate::model::text::Rich;
-use crate::model::{Form, Overlay};
+use crate::model::{AskTarget, Form, Overlay};
 use crate::state::AppState;
 use crate::ui::ask::{act, chip_row, drawer, foot_controls, models, tray};
 use crate::ui::atoms::{control_height, key_hint};
@@ -72,7 +72,7 @@ pub fn composer(app: AppState) -> AnyElement {
     field(
         app,
         Host {
-            thread: ThreadRef::quick(untracked(|| app.daemon())),
+            thread: ThreadRef::quick(),
             list,
             docked: false,
         },
@@ -121,62 +121,51 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
         docked,
     } = host;
     let named = !thread.is_quick();
-    // Ask and the quick thread's docked composer share the app's draft; a served session's
-    // composer keeps its own, owned by the root so its words outlive the composer, and a
-    // fixture session's dies with it. Words typed for one thread are never saved under another.
-    let draft = match (&thread, named) {
-        (ThreadRef::Live(scope), true) => pending::named_draft(app, scope),
-        (_, true) => signal(String::new()),
-        _ => app.ask_draft,
+    // Ask and the quick thread's docked composer share the app's draft; a named session's
+    // composer keeps its own, owned by the root so its words outlive the composer. Words typed
+    // for one thread are never saved under another.
+    let ThreadRef::Live(scope) = &thread;
+    let draft = if named {
+        pending::named_draft(app, scope)
+    } else {
+        app.ask_draft
     };
     let source = thread.clone();
     let built = computed(move || {
         let env = app.env();
         let target = app.ask_target.get();
-        match &source {
-            ThreadRef::Fixture(id) => {
-                let session = named.then_some(*id);
-                draft.with(|text| {
-                    app.assistant
-                        .with(|state| assistant::composer(state, target, text, session, env))
-                })
-            }
-            ThreadRef::Live(scope) => {
-                // Offline there is no session to refuse with: the message queues on the device.
-                let can_send = app.may_message();
-                let context = app.ask_context.get();
-                draft.with(|text| {
-                    app.ask_staged.with(|staged| {
-                        app.feed.with(|feed| {
-                            app.assistant.with(|state| {
-                                assistant::live_composer(
-                                    state,
-                                    feed,
-                                    assistant::Draft {
-                                        scope: scope.as_str(),
-                                        target,
-                                        text,
-                                        context: context.as_ref(),
-                                        can_send,
-                                        staged,
-                                    },
-                                    env,
-                                )
-                            })
-                        })
+        let ThreadRef::Live(scope) = &source;
+        // Offline there is no session to refuse with: the message queues on the device.
+        let can_send = app.may_message();
+        let context = app.ask_context.get();
+        draft.with(|text| {
+            app.ask_staged.with(|staged| {
+                app.feed.with(|feed| {
+                    app.assistant.with(|state| {
+                        assistant::live_composer(
+                            state,
+                            feed,
+                            assistant::Draft {
+                                scope: scope.as_str(),
+                                target,
+                                text,
+                                context: context.as_ref(),
+                                can_send,
+                                staged,
+                            },
+                            env,
+                        )
                     })
                 })
-            }
-        }
+            })
+        })
     });
     let entry = element_ref();
     let row = element_ref();
     if !docked {
         focus_on_open(app, entry);
     }
-    if let ThreadRef::Live(scope) = &thread {
-        keep_draft(app, scope.clone(), draft);
-    }
+    keep_draft(app, scope.clone(), draft);
     if form != Form::Phone && !named {
         bind_target_key(app);
     }
@@ -251,16 +240,12 @@ fn bind_target_key(app: AppState) {
         ..KeyOptions::default()
     };
     on_key_with("mod+shift+p", anywhere, move |_| {
-        let target = app.ask_target.get_untracked();
-        let mut next = None;
-        app.act(app.assistant, |state, env| {
-            let outcome = state.key(assistant::Key::ToggleTarget, "", target, None, env);
-            next = outcome.target;
-            outcome.effects
+        app.ask_target.update(|target| {
+            *target = match *target {
+                AskTarget::Pm => AskTarget::Assistant,
+                AskTarget::Assistant => AskTarget::Pm,
+            };
         });
-        if let Some(next) = next {
-            app.ask_target.set(next);
-        }
     });
 }
 
@@ -553,8 +538,7 @@ fn entry_field(app: AppState, built: Memo<Composer>, entry: ElementRef, to: To) 
         .on_submit(move |_: &str| {
             // Enter does what Send does: a served thread that takes no message (ended, ending,
             // over the limit, uploads not ready) sends nothing; the status line says why.
-            let live = matches!(to.thread, ThreadRef::Live(_));
-            if !live || built.with_untracked(|c| c.send.enabled) {
+            if built.with_untracked(|c| c.send.enabled) {
                 send(app, &to);
             }
         })

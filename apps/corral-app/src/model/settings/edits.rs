@@ -149,7 +149,7 @@ impl State {
             .edits
             .adding
             .as_ref()
-            .and_then(|form| form.act(settings))
+            .and_then(|form| form.act(&mut self.ids, settings))
         {
             Some(act) => self.track(ADD_PROFILE.into(), act),
             None => Vec::new(),
@@ -168,7 +168,8 @@ impl State {
         if let Some(key) = self.unsettled(feed, &slot) {
             return vec![Effect::Recover(key)];
         }
-        self.track(slot, profiles::remove_act(settings, profile))
+        let act = profiles::remove_act(&mut self.ids, settings, profile);
+        self.track(slot, act)
     }
 
     /// Ask this device to confirm a device change.
@@ -232,7 +233,7 @@ impl State {
         let Some(pending) = self.edits.confirming.take() else {
             return Vec::new();
         };
-        let key = Id::from(crate::client::requests::new_id());
+        let key = self.ids.next_id();
         self.edits
             .acts
             .insert(device_slot(pending.device()), key.clone());
@@ -286,12 +287,14 @@ impl State {
         settings: &SettingsSnapshot,
         profile: Option<&str>,
     ) -> Vec<Effect> {
-        self.track(SUMMARY.into(), super::live::summary_set(settings, profile))
+        let act = super::live::summary_set(&mut self.ids, settings, profile);
+        self.track(SUMMARY.into(), act)
     }
 
     /// Make `profile` the assistant profile, guarded by the configuration it was read from.
     pub fn use_profile(&mut self, settings: &SettingsSnapshot, profile: &str) -> Vec<Effect> {
         let act = config_set(
+            &mut self.ids,
             settings,
             format!("Use {profile} for assistants"),
             "assistant.agent".into(),
@@ -329,6 +332,7 @@ impl State {
             return Vec::new();
         }
         let act = config_set(
+            &mut self.ids,
             settings,
             format!("Set {profile}'s model to {model}"),
             format!("profiles.{profile}.model"),
@@ -339,7 +343,8 @@ impl State {
 
     /// Change the operating mode (confirmed against corrald's preview).
     pub fn change_mode(&mut self, verb: ModeVerb) -> Vec<Effect> {
-        self.track(format!("mode-{}", verb.slug()), verb.act())
+        let act = verb.act(&mut self.ids);
+        self.track(format!("mode-{}", verb.slug()), act)
     }
 
     pub fn open_grant(&mut self, open: bool) -> Vec<Effect> {
@@ -365,7 +370,7 @@ impl State {
 
     /// Preview and confirm the written grant; the form stays as written until it settles.
     pub fn submit_grant(&mut self) -> Vec<Effect> {
-        match self.edits.grant.act() {
+        match self.edits.grant.act(&mut self.ids) {
             Some(act) => self.track("grant".into(), act),
             None => Vec::new(),
         }

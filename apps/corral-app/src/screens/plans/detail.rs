@@ -34,7 +34,6 @@ enum Kind {
     Approved(ApprovedView),
     Document(Box<DocumentView>),
     Diff(Box<DiffView>),
-    Scale,
     Loading,
     Notice(NoticeView),
     Planning(Box<PlanningView>),
@@ -77,30 +76,25 @@ fn kind_of(detail: &Detail) -> Kind {
             diff.decide = diff.decide.map(|_| blank_decide());
             Kind::Diff(Box::new(diff))
         }
-        Detail::Scale(_) => Kind::Scale,
         Detail::Loading => Kind::Loading,
         Detail::Notice(view) => Kind::Notice(view.clone()),
         Detail::Planning(view) => Kind::Planning(Box::new(view.clone())),
     }
 }
 
-/// The tracked detail of the shown plan, and which variant it is. `plan` names a served plan
-/// (the phone page's); otherwise the root selection, or the fixture's, is shown.
+/// The tracked detail of the shown plan, and which variant it is. `plan` names the plan (the
+/// phone page's); otherwise the root selection, or the first plan listed, is shown.
 fn memos(app: AppState, plan: Option<Id>) -> (Memo<Detail>, Memo<Kind>) {
     let detail = computed(move || {
         let env = app.env();
-        if app.daemon() {
-            let shown = plan.clone().or_else(|| {
-                let selection = app.selection();
-                app.feed.with(|feed| plans::current_plan(&selection, feed))
-            });
-            app.plans.with(|state| {
-                app.feed
-                    .with(|feed| plans::live_detail(state, shown.as_ref(), feed, env))
-            })
-        } else {
-            app.plans.with(|state| plans::detail(state, env))
-        }
+        let shown = plan.clone().or_else(|| {
+            let selection = app.selection();
+            app.feed.with(|feed| plans::current_plan(&selection, feed))
+        });
+        app.plans.with(|state| {
+            app.feed
+                .with(|feed| plans::live_detail(state, shown.as_ref(), feed, env))
+        })
     });
     let kind = computed(move || detail.with(kind_of));
     (detail, kind)
@@ -108,7 +102,7 @@ fn memos(app: AppState, plan: Option<Id>) -> (Memo<Detail>, Memo<Kind>) {
 
 /// The detail column on desktop and in a terminal: the review with its pinned decide bar, the
 /// tracker beside its member story, the approved plan's empty state, the document, the diff,
-/// the 64-member strips, or what stands in for a plan not yet received.
+/// or what stands in for a plan not yet received.
 pub(super) fn pane(app: AppState) -> AnyElement {
     let (detail, kind) = memos(app, None);
     view()
@@ -133,7 +127,6 @@ pub(super) fn pane(app: AppState) -> AnyElement {
             Kind::Executing(_) => tracker::executing_pane(app, detail),
             Kind::Approved(_) => scroll_pane(app, "plan-detail", approved(app, detail)),
             Kind::Document(_) => scroll_pane(app, "plan-detail", document_page(app, detail)),
-            Kind::Scale => scroll_pane(app, "plan-detail", tracker::scale(app, detail)),
             Kind::Loading => scroll_pane(app, "plan-detail", loading(app)),
             Kind::Notice(_) => scroll_pane(app, "plan-detail", notice_view(app, detail)),
             Kind::Planning(_) => scroll_pane(app, "plan-detail", planning(app, detail)),
@@ -152,7 +145,6 @@ pub(super) fn phone_body(app: AppState, plan: Option<Id>) -> AnyElement {
             Kind::Approved(_) => approved(app, detail),
             Kind::Document(_) => document_page(app, detail),
             Kind::Diff(_) => diff_content(app, detail),
-            Kind::Scale => tracker::scale(app, detail),
             Kind::Loading => loading(app),
             Kind::Notice(_) => notice_view(app, detail),
             Kind::Planning(_) => planning(app, detail),

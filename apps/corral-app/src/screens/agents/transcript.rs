@@ -24,7 +24,6 @@ use crate::model::hue::Hue;
 use crate::model::text::{Rich, span};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
-use crate::ui::kit::chip::illus;
 use crate::ui::kit::marks::{dot, hue_fill, hue_ink};
 use crate::ui::kit::notice::{empty, error, loading, notice};
 use crate::ui::kit::text::{dim, plain, rich};
@@ -122,12 +121,10 @@ fn fill(app: AppState, fill: &Fill) -> Option<AnyElement> {
     }
 }
 
-/// The note under the messages: the fixture's illustrative tag, or a quiet sentence.
+/// The note under the messages: a quiet sentence.
 fn disclaimer(app: AppState, note: &Option<Note>) -> Option<AnyElement> {
-    Some(match note.as_ref()? {
-        Note::Illustrative(words) => illus(app, *words),
-        Note::Plain(words) => dim(app, words.clone()).into_element(),
-    })
+    let Note::Plain(words) = note.as_ref()?;
+    Some(dim(app, words.clone()).into_element())
 }
 
 /// The transcript: a stale notice when its source is unreachable, the control for earlier

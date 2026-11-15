@@ -392,7 +392,6 @@ pub fn burnup_series(burnup: &WireBurnup, now: u64, feed: &Feed) -> Option<Burnu
         points: series,
         first: day,
         last: "today".into(),
-        disclosure: None,
         completeness: completeness_label(&burnup.completeness),
     })
 }

@@ -1,10 +1,10 @@
 # Corral interaction surface redesign: requirements
 
 Status: owner-answered requirements, 2026-11-11; assistant round added 2026-11-12 (D12 to D24,
-R24 to R35) and revised the same day: Ask and Idea are one chat, not two modes; the assistant
-lives in Agents and is never stopped for being idle; the composer has a model selector. Not a
-task contract; grants no authority.
-Companions: `ARCHITECTURE.md` (design), `mockup/` (interactive mock).
+R24 to R35). D17 corrected by the owner on 2026-11-15: browser and native have the same
+authority. Ask and Idea are one chat; assistants live in Agents and are never idle-stopped.
+This is not an implementation/verification inventory or task contract; it grants no authority.
+Companions: `README.md` (current state), `ARCHITECTURE.md` (historical design), `mockup/` (visual reference).
 Predecessor: `~/corral-board-opus/` (terminal-only board proposal; its model carries over, its
 ratatui build does not).
 
@@ -43,14 +43,14 @@ The owner's verdict on a better TUI: not enough. Every driver below was confirme
 | D14 | Assistant authority | Same as the pane assistant today: read, file, and owner actions on a clear instruction. Confirm-class and high-risk actions need confirmation on the device. |
 | D15 | Entry points | In the app (one key or tap from anywhere); "Ask about this" on any item; a desktop global hotkey that works with the main window closed; the phone share sheet; `corral ask` in a terminal. Not now: home-screen widget, lock-screen shortcut, voice. |
 | D16 | Conversation | One rolling quick thread per workspace, shared by all devices, compacted automatically. "New session" starts a separate one for bigger work such as co-work. |
-| D17 | Devices that may instruct | From pairing: desktop, phone and terminal may instruct the assistant to act; web clients may ask and file only, until the owner turns acting on for that device. |
-| D18 | Instructions that need a tap | From a device, `approve` (land), `plan_accept`, `revert` and `finish` wait for a confirmation on the device. `dispatch`, `queue`, `park` and verdicts run on the owner's word. |
+| D17 | Devices that may instruct | Browser and native have the SAME authority, gated by each device's `reply`, `act`, `assistant`, `assistant_act`, `admin` flags. Any admin device pairs/revokes and edits authority; admin grants require device-bound proof, self-raise is refused, and active sessions receive authority-change notifications. |
+| D18 | Instructions that need a tap | Land/approve, plan acceptance, revert and finish require device confirmation; dispatch, queue, park and verdicts run on the owner's word. Implemented command classes are canonical in `corral-protocol/src/cmd/mod.rs::Command::app_class`: Confirm also includes session termination and permission revoke; Admin includes config, mode changes and raw keys. Confirm/Admin require a fresh matching daemon preview and device-bound proof, not an asserted biometric check. |
 | D19 | Where the assistant lives | Asking is a chat to an agent, so there is no Assistant destination: assistant sessions are listed in Agents, the quick thread first. Phone tab bar: Inbox, Now, Agents, Plans, More. Ask stays one tap away from every screen without owning a tab. |
 | D20 | Host lifetime | The assistant is not stopped for being idle. It runs until its work is done or it stops on its own. |
 | D21 | Who filed it | An idea filed by an assistant is marked as assistant-filed on both paths: from the app and from an assistant opened in a pane. |
 | D22 | Model | The quick thread uses the assistant profile for now. The composer has a quick model selector over a configurable list of models; switching keeps the conversation. |
-| D23 | Thread roll | When the quick thread rolls over, one model call writes the summary. That call may use its own cheaper profile; `gpt-6-luna` is the candidate. |
-| D24 | Write grants from a phone | Standing write grants (one hour, this session) can be given from a phone, with user presence. |
+| D23 | Thread roll | One summary call may use optional `assistant.summary_profile`; unset uses the session model. Implemented selection applies at the next assistant-host start. Paid-API summary profiles are refused without separate spending authority. |
+| D24 | Write grants from a phone | Standing write grants (one hour, this session) can be given from a phone with a fresh device confirmation; the implemented check is the owner's tap plus daemon-validated device-bound proof, not Face ID/PIN. |
 
 ## 3. Functional requirements
 

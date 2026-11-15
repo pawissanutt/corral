@@ -1,7 +1,6 @@
 //! Assessment: the evidence tabs and the selected artifact (a diff hunk with line numbers, a
-//! file excerpt, a log tail, a screenshot or other image corrald stores, the fixture's rendered
-//! screenshot, or why a reference could not be resolved), and their loading, empty and error
-//! looks.
+//! file excerpt, a log tail, a screenshot or other image corrald stores, or why a reference could
+//! not be resolved), and their loading, empty and error looks.
 
 use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
@@ -160,23 +159,8 @@ fn artifact(app: AppState, body: EvidenceBody) -> AnyElement {
             note,
         } => view()
             .child(file_line(app, file, attribution))
-            .child(terminal_box(app, &lines, false, None))
+            .child(terminal_box(app, &lines))
             .children(note.map(note_line))
-            .into_element(),
-        EvidenceBody::Shot {
-            file,
-            attribution,
-            lines,
-            cursor,
-            note,
-        } => view()
-            .child(file_line(app, file.into(), Some(attribution)))
-            .child(terminal_box(app, &lines, cursor, Some(420.0)))
-            .child(
-                view()
-                    .mt(px(6.0))
-                    .child(words(app, note, note_size, Token::Ink3)),
-            )
             .into_element(),
         EvidenceBody::Unresolved { file, reason } => view()
             .child(file_line(app, file, None))
@@ -214,7 +198,7 @@ fn image_body(app: AppState, file: String, preview: Readback, note_size: f32) ->
         Readback::Text { text, truncated } => {
             let lines: Vec<Rich> = text.lines().map(|line| vec![span(line)]).collect();
             view()
-                .child(terminal_box(app, &lines, false, None))
+                .child(terminal_box(app, &lines))
                 .children(truncated.then(|| cut_note(app, note_size)))
                 .into_element()
         }
@@ -428,9 +412,8 @@ fn terminal_line(app: AppState, line: DiffLine) -> AnyElement {
 
 /// The terminal look of an artifact (`.term`): mono lines on the shell's dark ground in both
 /// appearances, its ink, faint runs in its second ink, a passing line in the ok colour of the
-/// dark appearance. `width` fixes the box (the screenshot's 420 pt); `cursor` ends the last line
-/// with a block. A terminal shows the lines as they are, in its own colours.
-fn terminal_box(app: AppState, lines: &[Rich], cursor: bool, width: Option<f32>) -> AnyElement {
+/// dark appearance. A terminal shows the lines as they are, in its own colours.
+fn terminal_box(app: AppState, lines: &[Rich]) -> AnyElement {
     let form = app.form;
     if form == Form::Terminal {
         return view()
@@ -444,47 +427,26 @@ fn terminal_box(app: AppState, lines: &[Rich], cursor: bool, width: Option<f32>)
             .into_element();
     }
     let phone = form == Form::Phone;
-    let screenshot = width.is_some();
-    let size = match (screenshot, phone) {
-        (true, _) => 10.5,
-        (false, true) => 11.0,
-        (false, false) => 11.5,
-    };
+    let size = if phone { 11.0 } else { 11.5 };
     let line_height = (size * 1.55_f32).round();
-    let last = lines.len().saturating_sub(1);
-    let rows = lines.iter().enumerate().map(|(at, line)| {
-        let row = view()
+    let rows = lines.iter().map(|line| {
+        view()
             .flex_row()
             .items_center()
             .min_h(px(line_height))
-            .child(shell_line(line, size, line_height));
-        if cursor && at == last {
-            row.child(
-                view()
-                    .w(px(7.0))
-                    .h(px(13.0))
-                    .bg(color(Token::ShellInk))
-                    .accessibility_elements_hidden(true),
-            )
+            .child(shell_line(line, size, line_height))
             .into_element()
-        } else {
-            row.into_element()
-        }
     });
     // A log line is never cut either: the lines scroll sideways together.
     let content = scroll()
         .horizontal()
         .child(view().flex_shrink_0().children(rows.collect::<Vec<_>>()));
-    let framed = view()
+    let box_height = if phone { BOX_PHONE } else { BOX_DESKTOP };
+    view()
         .px(px(12.0))
         .py(px(10.0))
         .rounded(px(6.0))
         .bg(color(Token::Shell))
-        .when_some(width.filter(|_| !phone), |v, width| {
-            v.w(px(width)).max_w(relative(1.0))
-        });
-    let box_height = if phone { BOX_PHONE } else { BOX_DESKTOP };
-    framed
         .child(scroll().max_h(px(box_height - 20.0)).child(content))
         .into_element()
 }

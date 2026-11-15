@@ -1,6 +1,6 @@
-//! The live bridge: live navigation, capability and authority gates, typed command dispatch
-//! with fresh confirmation, detail requests and assistant calls. Every call goes through the
-//! shared client; nothing runs locally and nothing falls back to fixture data.
+//! The canonical feed bridge: shared live navigation, authority gates and reducer effects.
+//! The selected driver either sends typed requests to corrald or applies an isolated synthetic
+//! preview locally; a preview intent never enters the real client's queue.
 
 use corral_protocol::app::{ActSubmit, ConfirmProof, PREVIEW_TTL_SECS};
 use corral_protocol::assistant::{AssistantSend, ContextRef};
@@ -23,7 +23,7 @@ const RECOVER_WAIT_MS: u32 = 5_000;
 
 const NO_SESSION: &str = "Refused: no app session with corrald yet. Nothing was sent.";
 const NO_LINK: &str = "Refused: needs a live connection to corrald. Nothing was queued.";
-const PREVIEW_ONLY: &str = "The fixture preview sends corrald nothing.";
+const NO_SOURCE: &str = "Not connected. Choose Preview explicitly to use sample data.";
 
 /// Where a watched command stands between this device and its receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +98,9 @@ impl AppState {
     /// Enqueues an intent for client admission, not an ownership transfer. The composer
     /// retains its words and attachments until the matching persisted acceptance arrives.
     pub fn send_message(&self, message: AssistantSend) -> bool {
+        if self.fixture() {
+            return self.preview_send(message);
+        }
         if let Some(refusal) = self.assistant_refusal() {
             self.toast(refusal);
             return false;
@@ -159,12 +162,13 @@ impl AppState {
     /// Runs a domain reducer with the live feed and selection, then its effects.
     pub fn reduce<S: Clone + 'static>(
         &self,
-        state: Signal<S>,
+        state: impl Into<super::source::StateHandle<S>>,
         reduce: impl FnOnce(&mut S, &Feed, &Selection, Env) -> Vec<Effect>,
     ) {
         let env = untracked(|| self.env());
         let selection = self.nav.with_untracked(|nav| nav.selection.clone());
         let mut effects = Vec::new();
+        let state = state.into();
         self.feed.with_untracked(|feed| {
             state.update(|state| effects = reduce(state, feed, &selection, env));
         });
@@ -176,7 +180,7 @@ impl AppState {
     /// under an identity corrald already knows.
     pub fn dispatch(&self, act: Act) {
         if !untracked(|| self.daemon()) {
-            self.toast(PREVIEW_ONLY);
+            self.toast(NO_SOURCE);
             return;
         }
         if let Some(refusal) = self.refusal(act.authority(), true) {
@@ -211,7 +215,11 @@ impl AppState {
         if confirm {
             self.preview(subject);
         } else if let Confirmable::Act(act) = &subject {
-            submit(act, None);
+            if self.fixture() {
+                self.simulate(act);
+            } else {
+                submit(act, None);
+            }
         }
     }
 
@@ -238,6 +246,10 @@ impl AppState {
 
     /// Asks corrald for the outcome of this exact command, never resubmitting it.
     pub fn recover(&self, key: &Id) {
+        if self.fixture() {
+            self.run_preview(Effect::Recover(key.clone()));
+            return;
+        }
         requests::act_result(CmdResultQuery {
             cmd_id: key.to_string(),
             wait_ms: RECOVER_WAIT_MS,
@@ -247,6 +259,15 @@ impl AppState {
 
     /// Requests the detail when it is absent, stale or failed; idempotent while it loads.
     pub fn load(&self, target: DetailRef) {
+        if self.fixture() {
+            if self
+                .feed
+                .with_untracked(|feed| feed.detail(&target).is_none())
+            {
+                self.preview_detail(target);
+            }
+            return;
+        }
         let wanted = self.feed.with_untracked(|feed| match feed.detail(&target) {
             None => Some(None),
             Some(cache) if cache.loading => None,
@@ -264,6 +285,10 @@ impl AppState {
 
     /// Revalidates the detail with its etag, unless a request is already loading.
     pub fn refresh(&self, target: DetailRef) {
+        if self.fixture() {
+            self.preview_detail(target);
+            return;
+        }
         let wanted = self.feed.with_untracked(|feed| match feed.detail(&target) {
             Some(cache) if cache.loading => None,
             cache => Some(cache.and_then(etag)),
@@ -279,6 +304,9 @@ impl AppState {
 
     /// Pins a mounted/selected detail against aggregate cache eviction.
     pub fn watch_detail(&self, target: DetailRef, open: bool) {
+        if self.fixture() {
+            return;
+        }
         _ = requests::send(requests::ClientRequest::DetailWatch { target, open });
     }
 
@@ -289,6 +317,9 @@ impl AppState {
 
     /// Acquires or releases the raw terminal subscription for a mounted session view.
     pub fn terminal(&self, session: String, open: bool) {
+        if self.fixture() {
+            return;
+        }
         _ = requests::terminal(session, open);
     }
 
@@ -315,6 +346,23 @@ impl AppState {
 
     /// Applies one live effect.
     pub(super) fn run_live(&self, effect: Effect) {
+        if self.fixture()
+            && !matches!(
+                &effect,
+                Effect::OpenLive(_)
+                    | Effect::Select(_)
+                    | Effect::AskAbout { .. }
+                    | Effect::VerbMenu(_)
+                    | Effect::Unattach(_)
+                    | Effect::Act(_)
+                    | Effect::Device(_)
+                    | Effect::Prompt { .. }
+                    | Effect::Send(_)
+            )
+        {
+            self.run_preview(effect);
+            return;
+        }
         match effect {
             Effect::OpenLive(live) => self.open_live(live),
             Effect::Select(live) => self.select(live),
@@ -476,6 +524,16 @@ impl AppState {
         };
         self.watching
             .update(|watching| _ = watching.insert(subject.key(), (subject.clone(), stage)));
+        if self.fixture() && !confirm {
+            if let Confirmable::Prompt { answer, title } = subject {
+                self.run_preview(Effect::Prompt {
+                    answer,
+                    title,
+                    confirm: false,
+                });
+            }
+            return;
+        }
         match subject {
             subject if confirm => self.preview(subject),
             Confirmable::Prompt { answer, .. } => _ = requests::prompt_answer(answer),

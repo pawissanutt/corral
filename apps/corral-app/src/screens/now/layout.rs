@@ -59,11 +59,10 @@ pub(super) fn wanted(state: &State) -> [&'static str; 3] {
     ]
 }
 
-/// What displaying a panel tells the model: its tab, or the Goals notice (the mock's Goals tab
-/// is a control whose press explains the filter). The list itself carries no tab state.
+/// What displaying a panel tells the model: its tab. The list and the Goals filter carry no tab
+/// state.
 pub(super) fn panel_action(key: &str) -> Option<Action> {
     Some(match key {
-        GOALS => Action::Goals,
         STORY => Action::NowTab(NowTab::Story),
         EVIDENCE => Action::NowTab(NowTab::Evidence),
         SESSION => Action::NowTab(NowTab::Session),

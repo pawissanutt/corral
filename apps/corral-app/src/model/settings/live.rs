@@ -10,6 +10,7 @@ use crate::model::Act;
 use crate::model::daemon::{self, Feed, Link, RuntimeLevel};
 use crate::model::devices::{BrowserPairing, DeviceLink, DeviceRow, Registry};
 use crate::model::hue::Hue;
+use crate::model::id::IdSupply;
 use crate::model::nav::SettingsSection;
 
 /// Why this session cannot change owner-only settings, when it cannot.
@@ -272,8 +273,15 @@ pub fn grant_on(settings: &SettingsSnapshot, key: &str) -> bool {
 
 /// A hash-guarded canonical configuration edit: corrald refuses it if the configuration changed
 /// since `settings` was read.
-pub fn config_set(settings: &SettingsSnapshot, title: String, key: String, value: String) -> Act {
+pub fn config_set(
+    ids: &mut IdSupply,
+    settings: &SettingsSnapshot,
+    title: String,
+    key: String,
+    value: String,
+) -> Act {
     Act::new(
+        ids,
         title,
         Command::Config(ConfigCommand::Set {
             key,
@@ -363,12 +371,13 @@ pub fn summary_choices(settings: &SettingsSnapshot) -> Vec<SummaryChoice> {
 
 /// The hash-guarded edit that makes `profile` the summary writer, or with None returns the
 /// summary to each thread's own model (corrald unsets the field on an empty value).
-pub fn summary_set(settings: &SettingsSnapshot, profile: Option<&str>) -> Act {
+pub fn summary_set(ids: &mut IdSupply, settings: &SettingsSnapshot, profile: Option<&str>) -> Act {
     let title = match profile {
         Some(profile) => format!("Write rollover summaries with {profile}"),
         None => "Write rollover summaries with each thread's own model".into(),
     };
     config_set(
+        ids,
         settings,
         title,
         "assistant.summary_profile".into(),

@@ -1,7 +1,7 @@
-//! Settings sections of a daemon session that read the canonical settings snapshot or say what
-//! this device can do: Machines and Notifications; and the parts every live section shares
-//! (the snapshot's loading/stale/unreachable/failed state, the admin refusal, a facts table and
-//! a command's truthful status line).
+//! Settings sections of a served feed (corrald's, or the synthetic preview's) that read the
+//! canonical settings snapshot or say what this device can do: Machines and Notifications;
+//! and the parts every live section shares (the snapshot's loading/stale/unreachable/failed
+//! state, the admin refusal, a facts table and a command's truthful status line).
 
 use corral_protocol::rows::SettingsSnapshot;
 use nsh_core::prelude::*;

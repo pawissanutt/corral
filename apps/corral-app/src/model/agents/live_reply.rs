@@ -160,6 +160,7 @@ impl State {
             Policy::FollowUp
         };
         let act = Act::new(
+            &mut self.ids,
             format!("Message {}", shown_id(row)),
             Command::Session(SessionCommand::Send {
                 id: row.id.clone(),

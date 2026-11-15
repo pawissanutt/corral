@@ -2,7 +2,7 @@ use corral_protocol::detail::{DetailBody, DetailRef, PlanDetail};
 use corral_protocol::rows::{PlanRole, PlanRow, PlanState};
 
 use crate::model::daemon::{DetailCache, Feed, detail_key};
-use crate::model::effect::{Conn, DataMode, Env};
+use crate::model::effect::{Conn, Env};
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
 use crate::model::plans::{Detail, State, live_detail, live_list};
@@ -12,7 +12,6 @@ use crate::model::{Id, Selection};
 fn planning_states_never_become_owner_acceptance_sections_or_details() {
     let env = Env {
         conn: Conn::Healthy,
-        mode: DataMode::Live,
         form: Form::Desktop,
     };
     let mut feed = Feed::default();

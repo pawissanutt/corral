@@ -8,11 +8,11 @@ use nsh_core::prelude::*;
 
 use crate::model::Authority;
 use crate::model::assistant::{
-    Action, AssistantMessage, Body, LABELS, Mode, OwnerMessage, PmMessage, PmReply, QueueNote,
-    RollDivider, ThreadItem, ThreadRef, ToolRow, WaitingBlock, live_items, thread,
+    AssistantMessage, Body, LABELS, OwnerMessage, PmMessage, PmReply, QueueNote, RollDivider,
+    ThreadItem, ThreadRef, ToolRow, WaitingBlock, live_items,
 };
 use crate::model::board::Mark;
-use crate::model::{Form, Hue, Rich};
+use crate::model::{Form, Hue, Id, Rich};
 use crate::state::AppState;
 use crate::ui::kit::button::ButtonKind;
 use crate::ui::kit::chip::{chip, illus};
@@ -40,35 +40,24 @@ const HIGHLIGHT: Duration = Duration::from_millis(2400);
 /// The transcript of `source`: a scroll view filling its container, rows `inset` points in on
 /// either side (desktop page 24, drawer 16; phone 14). It opens at its end and follows each new
 /// message and each streamed step; opened from an Inbox prompt, it opens at that prompt instead
-/// and marks it. The fixture builds its preview thread; with the daemon it is the served
-/// thread, its streamed turn and this device's unsent messages.
+/// and marks it. It is the served thread, its streamed turn and this device's unsent messages.
 pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
     let form = app.form;
     let scroller = element_ref();
     let anchor = element_ref();
     let tools_open = signal(None::<String>);
-    if matches!(source, ThreadRef::Fixture(_)) {
-        super::drive_stream(app);
-    }
-    let followed = source.clone();
-    let region = format!("thread-{}-items", source.as_str());
+    let ThreadRef::Live(scope) = source;
+    let region = format!("thread-{}-items", scope.as_str());
+    let followed = scope.clone();
     // Built through a memo and drawn as keyed rows, so a clock tick redraws nothing and a
     // streamed step or a new message redraws only its own row: a field being typed in a card
     // keeps its text and focus.
     let items = computed(move || {
-        let items = match &source {
-            ThreadRef::Fixture(id) => {
-                let env = app.env();
-                app.assistant.with(|state| thread(state, id, env))
-            }
-            ThreadRef::Live(scope) => {
-                let can_send = app.can(Authority::Assistant);
-                app.feed.with(|feed| {
-                    app.assistant
-                        .with(|state| live_items(state, feed, scope.as_str(), can_send))
-                })
-            }
-        };
+        let can_send = app.can(Authority::Assistant);
+        let items = app.feed.with(|feed| {
+            app.assistant
+                .with(|state| live_items(state, feed, scope.as_str(), can_send))
+        });
         items.into_iter().enumerate().collect::<Vec<_>>()
     });
     let anchored = computed(move || {
@@ -78,7 +67,7 @@ pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
         })
     });
     follow(app, followed, scroller, anchored);
-    reveal(app, anchor, anchored);
+    reveal(app.scope(), anchor, anchored);
     let content = each(
         move || items.get(),
         |(at, item): &(usize, ThreadItem)| (*at, std::mem::discriminant(item)),
@@ -120,28 +109,17 @@ pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
 /// Scrolls to the end once mounted (after the commit that mounts it), then again, animated, when
 /// the thread gains a message or the streamed answer grows; not while a prompt opened from Inbox
 /// is marked, which `reveal` brings into view instead.
-fn follow(app: AppState, source: ThreadRef, scroller: ElementRef, anchored: Memo<bool>) {
+fn follow(app: AppState, scope: Id, scroller: ElementRef, anchored: Memo<bool>) {
     let seen = stored(None::<(usize, usize)>);
     effect(move || {
-        let now = match &source {
-            ThreadRef::Fixture(id) => app.assistant.with(|state| {
-                let sent = state.sent.iter().filter(|m| m.thread == *id).count();
-                let stream = if state.mode == Mode::Answering {
-                    state.stream.to_bits() as usize
-                } else {
-                    0
-                };
-                (sent, stream)
-            }),
-            ThreadRef::Live(scope) => app.feed.with(|feed| {
-                let thread = feed.threads.get(scope.as_str());
-                let entries = thread.map_or(0, |thread| thread.entries.len());
-                let streamed = thread
-                    .and_then(|thread| thread.live.as_ref())
-                    .map_or(0, |live| live.text.len());
-                (entries + feed.commands.len(), streamed)
-            }),
-        };
+        let now = app.feed.with(|feed| {
+            let thread = feed.threads.get(scope.as_str());
+            let entries = thread.map_or(0, |thread| thread.entries.len());
+            let streamed = thread
+                .and_then(|thread| thread.live.as_ref())
+                .map_or(0, |live| live.text.len());
+            (entries + feed.commands.len(), streamed)
+        });
         let before = seen.replace(Some(now));
         if before != Some(now) && !anchored.get_untracked() {
             let animated = before.is_some();
@@ -152,8 +130,9 @@ fn follow(app: AppState, source: ThreadRef, scroller: ElementRef, anchored: Memo
 
 /// Brings the prompt the owner opened from Inbox to the top of the transcript once it is in the
 /// thread (a served thread may load after the page opens), then has the model drop the anchor
-/// once its mark has played, so the next visit opens at the newest message again.
-fn reveal(app: AppState, anchor: ElementRef, anchored: Memo<bool>) {
+/// once its mark has played, so the next visit opens at the newest message again. `scoped` is
+/// the mount-pinned app, so the delayed clear reaches the source whose anchor was shown.
+fn reveal(scoped: AppState, anchor: ElementRef, anchored: Memo<bool>) {
     let shown = stored(false);
     effect(move || {
         if !anchored.get() {
@@ -171,7 +150,7 @@ fn reveal(app: AppState, anchor: ElementRef, anchored: Memo<bool>) {
             );
         });
         set_timeout(HIGHLIGHT, move || {
-            app.reduce(app.assistant, |state, _, _, _| {
+            scoped.reduce(scoped.assistant, |state, _, _, _| {
                 state.clear_anchor();
                 Vec::new()
             });
@@ -466,11 +445,9 @@ fn body_view(app: AppState, block: &Body) -> AnyElement {
         Body::Ordered(items) => ordered(app, items),
         Body::Action(card) => cards::action(app, card),
         Body::AskUser(card) => cards::ask_user(app, card),
-        Body::Merged(card) => cards::merged(app, card),
         Body::Permission(card) => cards::permission(app, card),
         Body::Filed(card) => cards::filed(app, card),
         Body::Starting { state, text: said } => cards::starting(app, state, said),
-        Body::Illustrative(label) => illus(app, *label),
     }
 }
 
@@ -650,8 +627,7 @@ fn tool_mono(app: AppState, content: String, size: f32, ink: Token) -> Text {
     }
 }
 
-/// `Rests on` and the records the answer cites, ` · ` apart (`.rests`): a record opens its page,
-/// the fixture's search shows its outcome.
+/// `Rests on` and the records the answer cites, ` · ` apart (`.rests`): a record opens its page.
 fn sources(app: AppState, label: &'static str, message_data: &AssistantMessage) -> AnyElement {
     let size = note_size(app.form);
     let mut parts = vec![words(app, label, size, Token::Ink3).into_element()];
@@ -789,13 +765,9 @@ fn waiting(app: AppState, block: &WaitingBlock) -> AnyElement {
         .children(runs);
     let buttons = view().flex_row().flex_wrap().items_center().children(
         block.buttons.iter().enumerate().flat_map(|(at, button)| {
-            let kind = if matches!(button.action, Action::SetMode(_)) {
-                ButtonKind::Ghost
-            } else {
-                ButtonKind::Quiet
-            };
             let gap = (form == Form::Terminal && at > 0).then(|| term::space(2.0));
-            gap.into_iter().chain([model_button(app, button, kind)])
+            gap.into_iter()
+                .chain([model_button(app, button, ButtonKind::Quiet)])
         }),
     );
     let lifetime = words(app, block.lifetime, meta_size(form), Token::Ink3);

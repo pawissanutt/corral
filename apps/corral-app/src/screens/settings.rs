@@ -1,12 +1,11 @@
 //! Settings. Desktop and terminal: the section selected in the navigation (the sidebar lists
 //! the sections), in a scrolling body. Phone: the root list of sections, and each section as a
-//! pushed page. The fixture preview draws the mockup's sections; a daemon session draws each
-//! section from corrald (`live_*`) with the owner edits this device's authority allows. Without
-//! a connection, Connection says how to connect, General keeps this device's preferences, and
-//! every other section says why it waits and leads to Connection.
+//! pushed page. A served feed — corrald's, or the explicitly chosen synthetic preview — draws
+//! each section from its settings (`live_*`) with the owner edits this device's authority
+//! allows. Without a connection, Connection says how to connect, General keeps this device's
+//! preferences, and every other section says why it waits and leads to Connection.
 
 mod connection;
-mod devices;
 mod enrolment;
 mod general;
 mod guide;
@@ -17,22 +16,24 @@ mod live_sections;
 mod live_summary;
 mod parts;
 mod qr;
-mod sections;
 
 use nsh_core::prelude::*;
 
+use crate::model::settings::live;
 use crate::model::{DataState, Destination, Form, SettingsSection};
 use crate::screens::PhonePage;
 use crate::state::AppState;
-use crate::ui::kit::page::body;
-use crate::ui::tokens::{Token, color};
+use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::page::{body, pane};
+use crate::ui::kit::rows::list_row;
+use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 /// The Settings destination. Desktop and terminal: the selected section, drawn again when the
 /// selection changes, scrolling inside itself. Phone: the root list of sections; a row opens
-/// its section through the model (`app.go_settings`).
+/// its section (`app.go_settings`).
 pub fn screen(app: AppState) -> AnyElement {
     if app.form == Form::Phone {
-        return sections::root(app);
+        return root(app);
     }
     let section = computed(move || app.nav.with(|nav| nav.settings));
     view()
@@ -43,7 +44,7 @@ pub fn screen(app: AppState) -> AnyElement {
         .bg(color(Token::Bg))
         .child(dynamic(move || {
             let section = section.get();
-            untracked(move || body(app, "settings-body", page(app, section)))
+            untracked(move || body(app, "settings-body", page(app, section, app.data.get())))
         }))
         .into_element()
 }
@@ -55,10 +56,7 @@ pub fn section_phone(app: AppState, section: SettingsSection) -> PhonePage {
     let data = computed(move || app.data.get());
     let body = dynamic(move || {
         let data = data.get();
-        untracked(move || match section {
-            SettingsSection::Devices if data == DataState::Fixture => devices::phone(app),
-            other => page(app, other),
-        })
+        untracked(move || page(app, section, data))
     })
     .into_element();
     PhonePage {
@@ -71,23 +69,18 @@ pub fn section_phone(app: AppState, section: SettingsSection) -> PhonePage {
     }
 }
 
-/// The section's content on the current form.
-fn page(app: AppState, section: SettingsSection) -> AnyElement {
-    let data = untracked(|| app.data.get());
-    match (data, section) {
-        (_, SettingsSection::Connection) => connection::page(app),
-        (_, SettingsSection::General) => general::page(app),
-        (DataState::Disconnected, other) => waiting(app, other),
-        (DataState::Daemon, SettingsSection::Devices) => live_devices::page(app),
-        (DataState::Daemon, SettingsSection::Machines) => live_sections::machines(app),
-        (DataState::Daemon, SettingsSection::Notifications) => live_sections::notifications(app),
-        (DataState::Daemon, SettingsSection::Assistant) => live_assistant::page(app),
-        (DataState::Daemon, SettingsSection::Autopilot) => live_autopilot::page(app),
-        (DataState::Fixture, SettingsSection::Devices) => devices::page(app),
-        (DataState::Fixture, SettingsSection::Machines) => sections::machines(app),
-        (DataState::Fixture, SettingsSection::Notifications) => sections::notifications(app),
-        (DataState::Fixture, SettingsSection::Assistant) => sections::assistant(app),
-        (DataState::Fixture, SettingsSection::Autopilot) => sections::autopilot(app),
+/// The section's content on the current form: Connection and General in every data state,
+/// the rest from the served feed or waiting for one.
+fn page(app: AppState, section: SettingsSection, data: DataState) -> AnyElement {
+    match section {
+        SettingsSection::Connection => connection::page(app),
+        SettingsSection::General => general::page(app),
+        other if data == DataState::Disconnected => waiting(app, other),
+        SettingsSection::Devices => live_devices::page(app),
+        SettingsSection::Machines => live_sections::machines(app),
+        SettingsSection::Notifications => live_sections::notifications(app),
+        SettingsSection::Assistant => live_assistant::page(app),
+        SettingsSection::Autopilot => live_autopilot::page(app),
     }
 }
 
@@ -99,5 +92,65 @@ fn waiting(app: AppState, section: SettingsSection) -> AnyElement {
         section.label(),
         12.0,
         vec![crate::screens::unavailable_body(app, Destination::Settings)],
+    )
+}
+
+/// The phone's Settings root: one row per section with what the served feed says of it (or
+/// what waits for a connection) and a chevron; a row opens its section. It scrolls itself,
+/// the Ask clearance under it.
+fn root(app: AppState) -> AnyElement {
+    let rows = SettingsSection::ALL
+        .into_iter()
+        .map(|section| {
+            let subtitle = move || {
+                if !app.daemon() {
+                    return app
+                        .feed
+                        .with(|feed| live::disconnected_subtitle(feed, section).to_owned());
+                }
+                if section == SettingsSection::Connection
+                    && let Some(reach) = app.snapshot().health.reach
+                {
+                    return reach.into_owned();
+                }
+                app.feed.with(|feed| live::phone_subtitle(feed, section))
+            };
+            let words = view()
+                .flex_1()
+                .min_w(px(0.0))
+                .gap(px(2.0))
+                .child(
+                    text(section.label())
+                        .font_family(FONT_TEXT)
+                        .text_size(px(16.0))
+                        .text_color(color(Token::Ink)),
+                )
+                .child(
+                    text(subtitle)
+                        .font_family(FONT_TEXT)
+                        .text_size(px(13.0))
+                        .line_height(px(18.0))
+                        .text_color(color(Token::Ink3)),
+                )
+                .into_element();
+            list_row(
+                app,
+                section.label(),
+                format!("settings-{}", section.slug()),
+                || false,
+                move || app.go_settings(section),
+                vec![words, icon(Icon::Chevron, 16.0, color(Token::Ink3))],
+            )
+        })
+        .collect::<Vec<_>>();
+    pane(
+        app,
+        "settings-root",
+        view()
+            .mt(px(8.0))
+            .border_t_1()
+            .border_t_color(color(Token::Rule))
+            .children(rows)
+            .into_element(),
     )
 }

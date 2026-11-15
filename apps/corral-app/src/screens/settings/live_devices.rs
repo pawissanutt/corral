@@ -180,7 +180,7 @@ fn pairing(app: AppState, v: &devices::LiveDevices) -> AnyElement {
                     if app.form == Form::Phone {
                         260.0
                     } else {
-                        super::devices::QR_SIDE
+                        super::qr::SIDE
                     },
                     "QR Code of the pairing link; scan it with the new device's camera".into(),
                 )

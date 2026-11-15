@@ -1,6 +1,6 @@
-//! Live device enrolment and browser pairing, kept separate from the connection fixtures. Every
-//! operation runs through the settings reducer (`State::device`) as an `Effect::Device`, so the
-//! app gates it on the link and authority and says when it refuses.
+//! Device enrolment and browser pairing. Every operation runs through the settings reducer
+//! (`State::device`) as an `Effect::Device`, so the app gates it on the link and authority and
+//! says when it refuses.
 
 use nsh_core::AutoFill;
 use nsh_core::element::{color as for_appearance, input};

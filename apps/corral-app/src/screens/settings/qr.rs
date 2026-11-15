@@ -11,6 +11,8 @@ use crate::ui::tokens::{Token, color};
 
 /// The tile's padding around the modules on a screen.
 const PAD: f32 = 12.0;
+/// The tile's side on a desktop or in a terminal (`.qr`: 210 pt).
+pub(super) const SIDE: f32 = 210.0;
 
 /// `rows` (dark modules true, any quiet zone included) in a tile `side` points wide, read to
 /// assistive technology as `label`.

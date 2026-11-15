@@ -1,14 +1,13 @@
 //! Review: the candidate list, the selected candidate with its SHA-bound verdicts, the evidence
 //! tabs and the pinned decide bar. Every word, count and branch comes from `model::review`; this
 //! module lays the model's page out for each form and sends each control's action back through
-//! its reducer: the fixture replay's `apply`, or the served candidate's `apply_live`.
+//! the feed-backed reducer (`apply_live`).
 //!
 //! Desktop is the mockup's two columns (the 300 pt candidate list, the detail beside it); the
 //! detail measures its own width and asks the model for that width, so the diff falls back to
-//! unified rows when side by side does not fit. Phone: the served candidates are a list whose
-//! rows push one candidate's page; that page (and the fixture replay) scrolls with the decide
-//! bar pinned in place of the tab bar. Terminal is the desktop's columns in Cells, the diff
-//! always unified.
+//! unified rows when side by side does not fit. Phone: the candidates are a list whose rows push
+//! one candidate's page; that page scrolls with the decide bar pinned in place of the tab bar.
+//! Terminal is the desktop's columns in Cells, the diff always unified.
 
 mod compose;
 mod decide;
@@ -54,66 +53,40 @@ const MONO_SCALE: f32 = 0.93;
 /// Width handed to the model where width plays no part (tabs, decide bar, stale state).
 const ANY_WIDTH: f32 = f32::INFINITY;
 
-/// Which Review the page shows: the fixture replay, or the served candidate (on a phone page,
-/// the one it was pushed for).
-#[derive(Clone, PartialEq)]
-enum Source {
-    Fixture,
-    Live(Option<Id>),
-}
-
-/// What every piece of one Review page shares: the app, its source and the unsent drafts of
-/// its composers, which outlive the evidence being rebuilt by a refresh.
+/// What every piece of one Review page shares: the app, the candidate a phone page was pushed
+/// for (else the selected one), and the unsent drafts of its composers, which outlive the
+/// evidence being rebuilt by a refresh.
 #[derive(Clone)]
 struct Ctx {
     app: AppState,
-    source: Source,
+    focus: Option<Id>,
     drafts: Signal<BTreeMap<String, String>>,
 }
 
 impl Ctx {
-    fn new(app: AppState, source: Source) -> Ctx {
+    fn new(app: AppState, focus: Option<Id>) -> Ctx {
         Ctx {
             app,
-            source,
+            focus,
             drafts: signal(BTreeMap::new()),
         }
-    }
-
-    fn live(&self) -> bool {
-        matches!(self.source, Source::Live(_))
     }
 }
 
 /// The Review destination on every form. Desktop and terminal fill the content container and
-/// scroll inside themselves. On a phone the fixture shows its replay body (the phone shell takes
-/// [`page_phone`] to pin its bar) and the served Review lists its candidates.
+/// scroll inside themselves; a phone lists the candidates, each pushing its page.
 pub fn screen(app: AppState) -> AnyElement {
-    let source = if untracked(|| app.daemon()) {
-        Source::Live(None)
-    } else {
-        Source::Fixture
-    };
-    let cx = Ctx::new(app, source);
-    match (app.form, cx.live()) {
-        (Form::Desktop | Form::Terminal, _) => columns_screen(cx),
-        (Form::Phone, true) => phone_list(cx),
-        (Form::Phone, false) => phone_body(cx),
+    let cx = Ctx::new(app, None);
+    match app.form {
+        Form::Desktop | Form::Terminal => columns_screen(cx),
+        Form::Phone => phone_list(cx),
     }
 }
 
-/// The fixture replay pushed on the phone: the scrolling body and the decide bar in place of
-/// the tab bar.
-pub fn page_phone(app: AppState) -> PhonePage {
-    phone_page(Ctx::new(app, Source::Fixture))
-}
-
-/// A served candidate pushed on the phone, by its task id.
+/// A candidate pushed on the phone, by its task id: the scrolling body and the decide bar in
+/// place of the tab bar.
 pub fn live_review_phone(app: AppState, task: Id) -> PhonePage {
-    phone_page(Ctx::new(app, Source::Live(Some(task))))
-}
-
-fn phone_page(cx: Ctx) -> PhonePage {
+    let cx = Ctx::new(app, Some(task));
     let title = untracked(|| page_view(&cx, 0.0).title);
     PhonePage {
         title,
@@ -129,27 +102,17 @@ fn phone_page(cx: Ctx) -> PhonePage {
 fn page_view(cx: &Ctx, width: f32) -> PageView {
     let app = cx.app;
     let env = app.env();
-    match &cx.source {
-        Source::Fixture => app.review.with(|state| match app.form {
-            Form::Phone => review::phone(state, env),
-            Form::Desktop | Form::Terminal => review::page_for_width(state, env, width),
-        }),
-        Source::Live(focus) => {
-            let selection = app.selection();
-            app.feed.with(|feed| {
-                app.review.with(|state| {
-                    review::live_page(state, feed, &selection, focus.as_ref(), env, width)
-                })
-            })
-        }
-    }
+    let selection = app.selection();
+    app.feed.with(|feed| {
+        app.review
+            .with(|state| review::live_page(state, feed, &selection, cx.focus.as_ref(), env, width))
+    })
 }
 
-/// Runs a model action through the source's reducer and the app's effects. Restoring an unsent
-/// note puts its text back into the composer's draft first.
+/// Runs a model action through the feed-backed reducer and the app's effects. Restoring an
+/// unsent note puts its text back into the composer's draft first.
 fn act(cx: &Ctx, action: Action) -> impl Fn() + 'static {
     let app = cx.app;
-    let live = cx.live();
     let drafts = cx.drafts;
     move || {
         if let Action::Restore { draft, text, .. } = &action {
@@ -158,13 +121,9 @@ fn act(cx: &Ctx, action: Action) -> impl Fn() + 'static {
             });
         }
         let action = action.clone();
-        if live {
-            app.reduce(app.review, move |state, feed, selection, env| {
-                state.apply_live(action, feed, selection, env)
-            });
-        } else {
-            app.act(app.review, move |state, env| state.apply(action, env));
-        }
+        app.reduce(app.review, move |state, feed, selection, env| {
+            state.apply_live(action, feed, selection, env)
+        });
     }
 }
 
@@ -172,11 +131,10 @@ fn act(cx: &Ctx, action: Action) -> impl Fn() + 'static {
 /// revalidated when its board row changes, the link comes back, or a command sent from here
 /// settles. Every fetch carries the cached etag, so an unchanged detail costs one small reply.
 /// While shown, the candidate's task detail (whose owner revision its commands are bound to)
-/// stays loaded, and both details stay pinned in the client's cache.
+/// stays loaded, and both details stay pinned in the client's cache, through the source the
+/// page mounted on.
 fn keep_current(cx: &Ctx) {
-    let Source::Live(focus) = cx.source.clone() else {
-        return;
-    };
+    let focus = cx.focus.clone();
     let app = cx.app;
     let key = {
         let focus = focus.clone();
@@ -211,12 +169,12 @@ fn keep_current(cx: &Ctx) {
     });
     keep_loaded(app, task);
     pin_review(
-        app,
+        untracked(|| app.scope()),
         computed(move || task.with(|task| task.as_ref().map(|(id, ..)| id.clone()))),
     );
 }
 
-/// The served candidate this page shows: the one it was pushed for, or the selected one.
+/// The candidate this page shows: the one it was pushed for, or the selected one.
 fn shown_task<'a>(feed: &'a Feed, selection: &Selection, focus: Option<&Id>) -> Option<&'a Task> {
     match focus {
         Some(id) => feed.board.task(id),
@@ -255,11 +213,9 @@ fn pin_review(app: AppState, shown: Memo<Option<Id>>) {
 }
 
 /// The shown candidate's verbs (a candidate-bound verdict among them) under its verdicts, from
-/// the model's table; the fixture replay has none.
+/// the model's table.
 fn verb_row(cx: &Ctx) -> AnyElement {
-    let Source::Live(focus) = cx.source.clone() else {
-        return view().into_element();
-    };
+    let focus = cx.focus.clone();
     let app = cx.app;
     let verbs = computed(move || {
         let selection = app.selection();
@@ -583,9 +539,8 @@ fn evidence(cx: &Ctx, body: &Body) -> AnyElement {
     match body {
         Body::Diff(view) => diff::diff(cx, view),
         Body::Report(report) => evidence::report(cx.app, report),
-        Body::Screenshot(shot) => evidence::screenshot(cx.app, shot),
         Body::Artifacts(list) => evidence::artifacts(cx, list),
-        Body::Log { lines, note } => evidence::log(cx.app, lines, note, !cx.live()),
+        Body::Log { lines, note } => evidence::log(cx.app, lines, note),
         Body::Notice(line) => dim(cx.app, line.clone()).into_element(),
     }
 }
@@ -600,8 +555,7 @@ fn command(cx: &Ctx, button: &review::Button) -> AnyElement {
         ButtonStyle::Quiet => ButtonKind::Quiet,
     };
     let options = ButtonOptions {
-        icon: matches!(button.action, Action::AskHunk | Action::AskAbout { .. })
-            .then_some(Icon::Ask),
+        icon: matches!(button.action, Action::AskAbout { .. }).then_some(Icon::Ask),
         disabled: !button.enabled,
         wide: app.form == Form::Phone && button.style == ButtonStyle::Primary,
         danger: button.action == Action::Discard,
@@ -622,12 +576,9 @@ fn button_id(action: &Action) -> String {
     match action {
         Action::Approve => "btn-approve".to_owned(),
         Action::RequestChanges => "btn-request-changes".to_owned(),
-        Action::AskHunk => "btn-ask-hunk".to_owned(),
         Action::AskAbout { path, .. } => format!("btn-ask-{}", slug(path)),
-        Action::ExpandFile(path) => format!("btn-expand-{}", slug(path)),
         Action::Expand(path) => format!("btn-expand-{}", slug(path)),
         Action::Collapse(path) => format!("btn-collapse-{}", slug(path)),
-        Action::Select(id) => format!("task-{id}"),
         Action::Pick(id) => format!("task-{id}"),
         Action::Tab(_) | Action::Layout(_) => "seg-review".to_owned(),
         Action::Annotate { at, .. } => format!("btn-annotate-{}-{}", slug(&at.path), at.line),

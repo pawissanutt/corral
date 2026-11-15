@@ -14,10 +14,10 @@ pub mod commands;
 pub mod daemon;
 /// Device enrolment, browser pairing and their settings views.
 pub mod devices;
+/// Honest shell snapshot without a daemon or an explicitly chosen preview.
+pub mod disconnected;
 /// Reducer effects and environment switches.
 pub mod effect;
-/// Fixture snapshots for the shell.
-pub mod fixture;
 /// Snapshot and health types.
 pub mod health;
 /// Semantic state colours.
@@ -32,6 +32,8 @@ pub mod live;
 pub mod nav;
 /// Plans and dependency graphs.
 pub mod plans;
+/// Explicit sample data served through the canonical daemon model.
+pub mod preview;
 /// Independent review and candidate evidence.
 pub mod review;
 /// A watched session's open turn and continued transcript items.
@@ -48,8 +50,7 @@ pub mod usage;
 pub mod work;
 
 pub use act::{Act, ActStatus, Authority};
-pub use effect::{Conn, DataMode, Effect, Env, Page, Risk};
-pub use fixture::snapshot;
+pub use effect::{Conn, Effect, Env};
 pub use health::{
     Availability, DataState, Health, Segment, Snapshot, Tone, Workspace, compact_segments,
 };
@@ -60,4 +61,4 @@ pub use nav::{
     AskTarget, Destination, Form, NavState, Overlay, PhoneTab, SettingsSection, SidebarPref,
     ThemeChoice,
 };
-pub use text::{Rich, Span, flat, live_task_link, span, task_link};
+pub use text::{Rich, Span, flat, live_task_link, span};

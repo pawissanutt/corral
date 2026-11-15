@@ -1,14 +1,5 @@
-//! Plans content for all forms, from two sources. The fixture preview (`fixture.rs`) keeps the
-//! mockup's six plans and the synthetic S-900 tracker; daemon mode (`live*.rs`) builds the same
-//! descriptors from corrald's plan rows, plan details, revision diffs and board. `list` and
-//! `live_list` supply grouped rows; `detail` and `live_detail` the selected planning lifecycle,
-//! review, tracker, approved state, document or diff. Phone uses `phone_page`/`live_phone_page`.
-//! `layout` resolves graph geometry, including compact vertical-layer rows. Screens dispatch
-//! each descriptor's `Action` to `State::reduce` (fixture) or `State::reduce_live` (daemon); the
-//! app executes the returned effects. This module imports no UI runtime.
+//! Pure plan state, canonical actions and feed-backed presentation for every form.
 
-mod data;
-mod fixture;
 mod graph;
 mod live;
 mod live_doc;
@@ -18,22 +9,15 @@ mod planning;
 mod story;
 mod view;
 
-pub use data::{
-    DOCUMENT, Document, PLANS, Plan, PlanState, Proposal, Review, SCALE, SCALE_LAYERS, ScaleMember,
-    ScaleState, plan,
-};
-pub use fixture::{detail, landed, list, phone_page, scale};
-pub use graph::{
-    CardGeometry, Edge, Graph, GraphInput, GraphMember, Layer, Node, Point, fixture_graph, layout,
-};
+pub use graph::{CardGeometry, Edge, Graph, GraphInput, GraphMember, Layer, Node, Point, layout};
 pub use live::{current_plan, graph_input, live_detail, live_list, live_phone_page, plan_detail};
-pub use story::{Story, StoryField, StoryStage, story};
+pub use story::{Story, StoryField, StoryStage};
 pub use view::{
     ApprovedView, AwaitingView, Blocker, Button, ButtonKind, Chip, Compose, Decide, DecideNote,
     DecisionRow, Detail, DiffLine, DiffLineKind, DiffView, DocumentSection, DocumentView,
-    ExecutingView, Header, LegendEntry, ListNotice, ListSection, MemberSquare, NoticeView,
-    PhonePage, PipelineStage, PlanList, PlanRow, PlanningView, ProposedRow, ReviewRow,
-    ScaleLayerView, ScaleLine, ScaleView, SectionBody, SquareState,
+    ExecutingView, Header, ListNotice, ListSection, MemberSquare, NoticeView, PhonePage,
+    PipelineStage, PlanList, PlanRow, PlanningView, ProposedRow, ReviewRow, SectionBody,
+    SquareState,
 };
 
 use corral_protocol::cmd::Command;
@@ -41,38 +25,19 @@ use corral_protocol::cmd::plan::PlanCommand;
 use corral_protocol::detail::{DetailGet, DetailRef};
 
 use crate::model::act::{self, Act};
-use crate::model::board::{Actor, task};
 use crate::model::daemon::Feed;
-use crate::model::effect::{Effect, Env, Page, Risk};
-use crate::model::nav::{Destination, Form};
+use crate::model::effect::{Effect, Env};
+use crate::model::nav::Form;
 use crate::model::{Id, Live, Selection};
 /// Captions shared by all form-specific loading notices.
 pub const LIST_LOADING: &str = "Loading plans…";
 pub const DETAIL_LOADING: &str = "Loading the plan…";
 
-/// The fixture's Plans selection and synthetic-tracker toggle, and the daemon-mode sub-state.
-/// The selected live plan itself is the root's `Selection.plan`.
-#[derive(Debug, Clone, PartialEq)]
+/// Plan-local interaction state; the selected plan belongs to the root selection.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct State {
-    /// Selected fixture plan, retained while the scale tracker is open.
-    pub plan: &'static str,
-    /// Whether the synthetic S-900 tracker replaces fixture plan detail.
-    pub scale: bool,
-    /// Selected fixture member; each tracker falls back to its first member if absent here.
-    pub member: &'static str,
-    /// Member, lens, request-changes note and sent commands for corrald's plans.
+    pub ids: crate::model::id::IdSupply,
     pub live: LiveState,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            plan: "T-870",
-            scale: false,
-            member: "T-868",
-            live: LiveState::default(),
-        }
-    }
 }
 
 /// What the detail of one served plan shows instead of its overview.
@@ -163,31 +128,6 @@ impl LiveState {
 /// Every press target exposed by Plans, including the selected-member story.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Select a fixture plan or S-900 in the desktop list.
-    SelectPlan(&'static str),
-    /// Select a fixture plan and push its phone detail page.
-    PhonePlan(&'static str),
-    /// Select a fixture graph member; phone also pushes its task.
-    SelectMember(&'static str),
-    /// Fixture compact graph rows open a task directly on every form.
-    OpenTask(&'static str),
-    /// A needs-you fixture member opens its question rather than its task.
-    Question,
-    /// Fixture acceptance with a fresh confirmation.
-    Accept,
-    /// The fixture's request-changes receipt.
-    RequestChanges,
-    /// The fixture's revision-diff receipt.
-    Diff,
-    /// The fixture's document-opening receipt.
-    OpenDocument,
-    /// Open fixture Ask with the plan or member context chip.
-    Ask(&'static str),
-    /// Open the fixture member's session.
-    OpenSession(&'static str),
-    /// Navigate to the fixture Review.
-    ReviewCandidate,
-    /// Any press on corrald's plans.
     Live(LiveAction),
 }
 
@@ -238,73 +178,10 @@ pub enum LiveAction {
     Recover(Id),
 }
 
-/// The Plans letter commands, bound wherever the focus is outside a text field: `J`/`K`
-/// (Shift+J/K) cycle the selected plan's members, `x` opens the fixture's scale tracker. j/k
-/// and the arrows are `commands::list_keys`, bound only while the list has the focus.
-pub const KEYS: &[&str] = &["x", "J", "K"];
+/// Member cycling keys; list movement is bound only while the list has focus.
+pub const KEYS: &[&str] = &["J", "K"];
 
 impl State {
-    /// Select S-900 without changing the fixture selection, or leave scale for a fixture plan.
-    pub fn open(&mut self, id: &'static str) {
-        self.scale = id == "S-900";
-        if !self.scale {
-            self.plan = id;
-        }
-    }
-
-    /// Select a member, opening needs-you questions on every form and tasks on phone.
-    pub fn select_member(&mut self, id: &'static str, env: Env) -> Vec<Effect> {
-        self.member = id;
-        if task(id).actor == Actor::You {
-            vec![Effect::Open(Page::Question)]
-        } else if env.form == Form::Phone {
-            vec![Effect::Open(Page::Task(id))]
-        } else {
-            vec![]
-        }
-    }
-
-    /// Apply one fixture press target; offline acceptance never opens a confirmation.
-    pub fn reduce(&mut self, action: Action, env: Env) -> Vec<Effect> {
-        match action {
-            Action::SelectPlan(id) => {
-                self.open(id);
-                vec![]
-            }
-            Action::PhonePlan(id) => {
-                self.open(id);
-                vec![Effect::Open(Page::Plan(id))]
-            }
-            Action::SelectMember(id) => self.select_member(id, env),
-            Action::OpenTask(id) => vec![Effect::Open(if task(id).actor == Actor::You {
-                Page::Question
-            } else {
-                Page::Task(id)
-            })],
-            Action::Question => vec![Effect::Open(Page::Question)],
-            Action::Accept if env.conn.refuses() => vec![],
-            Action::Accept => vec![Effect::Confirm(Risk::AcceptPlan, None)],
-            Action::RequestChanges => vec![Effect::Toast(
-                if env.form == Form::Phone {
-                    "Request changes"
-                } else {
-                    "Request changes: comment box opened"
-                }
-                .into(),
-            )],
-            Action::Diff => vec![Effect::Toast("Diff P1 → P2 opened".into())],
-            Action::OpenDocument => vec![Effect::Toast("Opened plan document".into())],
-            Action::Ask(id) => vec![Effect::Ask {
-                chip: Some(id),
-                text: None,
-            }],
-            Action::OpenSession(id) => vec![Effect::Open(Page::Session(id))],
-            Action::ReviewCandidate => vec![Effect::Go(Destination::Review)],
-            // Served presses reach `reduce_live`; the preview never runs them.
-            Action::Live(_) => vec![],
-        }
-    }
-
     /// Apply one press on corrald's plans. Commands leave as typed `Act`s carrying the plan's
     /// own revision; the root previews, confirms and submits them.
     pub fn reduce_live(&mut self, action: LiveAction, feed: &Feed, env: Env) -> Vec<Effect> {
@@ -335,6 +212,7 @@ impl State {
                 let notes =
                     plan_detail(feed, &id).and_then(|detail| live_doc::notes(live, &id, detail));
                 let act = Act::new(
+                    &mut self.ids,
                     format!("Accept plan {id} {revision}"),
                     Command::Plan(PlanCommand::Accept {
                         id: id.to_string(),
@@ -399,6 +277,7 @@ impl State {
                     return vec![];
                 };
                 let act = Act::new(
+                    &mut self.ids,
                     format!("Request changes on plan {id} {revision}"),
                     Command::Plan(PlanCommand::RequestChanges {
                         id: id.to_string(),
@@ -481,33 +360,7 @@ impl State {
         }
     }
 
-    /// Port of `SCREENS.plans.keys`. Member cycling changes selection only, never navigation.
-    pub fn key(&mut self, key: &str, _page: Option<Page>, _env: Env) -> Option<Vec<Effect>> {
-        let index = PLANS.iter().position(|p| p.id == self.plan);
-        match key {
-            "j" | "down" => {
-                let next = index.map_or(0, |i| (i + 1).min(PLANS.len() - 1));
-                self.open(PLANS[next].id);
-            }
-            "k" | "up" => {
-                let next = index.unwrap_or(0).saturating_sub(1);
-                self.open(PLANS[next].id);
-            }
-            "x" => self.scale = !self.scale,
-            "J" | "K" => {
-                let members = plan(self.plan).members;
-                if !members.is_empty() {
-                    let index = members.iter().position(|id| *id == self.member);
-                    self.member = members[cycle(key, index, members.len())];
-                }
-            }
-            _ => return None,
-        }
-        Some(vec![])
-    }
-
-    /// The same keys over corrald's plans: j/k move the selection through the list order, J/K
-    /// cycle the selected plan's members. The synthetic tracker (`x`) is fixture-only.
+    /// Move through feed-backed plans or cycle the selected plan's members.
     pub fn key_live(
         &mut self,
         key: &str,
@@ -586,20 +439,5 @@ fn cycle(key: &str, index: Option<usize>, len: usize) -> usize {
         ("J", None) => 0,
         (_, Some(i)) => (i + len - 1) % len,
         (_, None) => (len + len - 2) % len,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::State;
-
-    #[test]
-    fn opening_real_plan_leaves_scale_tracker() {
-        let mut state = State::default();
-        state.open("S-900");
-        assert!(state.scale);
-        state.open("T-870");
-        assert!(!state.scale);
-        assert_eq!(state.plan, "T-870");
     }
 }

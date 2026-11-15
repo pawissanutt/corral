@@ -1,10 +1,8 @@
-//! Usage views for the desktop table, stacked phone blocks and terminal lines. The fixture
-//! preview projects the mockup's illustrative providers (`data`); a daemon session projects
-//! corral's recorded usage rows, series and session costs (`live`). Usage is visibility only.
+//! Feed-backed usage views for desktop tables, phone blocks and terminal lines.
+//! Usage is visibility only.
 
 mod completeness;
 mod daily;
-mod data;
 mod live;
 mod quota;
 mod totals;
@@ -354,126 +352,6 @@ pub struct Page {
     pub phone_disclaimer: &'static str,
     /// Deduplicated live read errors; render once above the content.
     pub notices: Vec<String>,
-}
-
-/// Profile table column labels in the preview.
-const PROFILE_HEADERS: [&str; 6] = [
-    "Provider",
-    "Profile",
-    "Window",
-    "Share · 80% marker",
-    "Today",
-    "Headroom",
-];
-const DESKTOP_DISCLAIMER: &str = "All numbers illustrative. Connection names follow real usage records (openai-subscription); bands mark 70% and 90% of the provider window.";
-const PHONE_DISCLAIMER: &str = "All numbers illustrative.";
-
-/// The fixture preview's page; the illustrative figures do not change with the period.
-pub fn fixture_page() -> Page {
-    let fixture_money = |value: f32| money(f64::from(value));
-    let providers = data::PROVIDERS
-        .iter()
-        .map(|p| {
-            let weekly = p
-                .weekly
-                .map(|w| format!(" · weekly cap {}%", percent(w)))
-                .unwrap_or_default();
-            ProviderView {
-                id: p.id.to_owned(),
-                label: p.label.to_owned(),
-                window: p.window.to_owned(),
-                big: format!("{}%", percent(p.used)),
-                big_note: None,
-                big_label: USED_LABEL,
-                used: Some(p.used),
-                headroom: format!("{}% headroom", percent(1.0 - p.used)),
-                level: level(p.used),
-                resets: format!(
-                    "resets {} {}",
-                    if p.resets.contains(':') { "at" } else { "in" },
-                    p.resets
-                ),
-                phone_resets: format!("resets {}", p.resets),
-                costs: format!(
-                    "today {} · 7 days {}{}",
-                    fixture_money(p.today),
-                    fixture_money(p.week),
-                    weekly
-                ),
-                chart: Some(Chart {
-                    series: p.series.to_vec(),
-                    ticks: data::HOURS.iter().map(|&h| h.to_owned()).collect(),
-                    label: format!(
-                        "{} window use today, {} percent now",
-                        p.label,
-                        percent(p.used)
-                    ),
-                }),
-                chart_missing: None,
-                profiles: p
-                    .profiles
-                    .iter()
-                    .map(|profile| PhoneProfile {
-                        name: profile.name.to_owned(),
-                        detail: format!(
-                            "{}% · {}",
-                            percent(profile.used),
-                            fixture_money(profile.today)
-                        ),
-                    })
-                    .collect(),
-                quotas: Vec::new(),
-            }
-        })
-        .collect();
-    let profiles = data::PROVIDERS
-        .iter()
-        .flat_map(|p| {
-            p.profiles
-                .iter()
-                .enumerate()
-                .map(move |(i, profile)| ProfileRow {
-                    provider: if i == 0 { p.label } else { "" }.to_owned(),
-                    profile: profile.name.to_owned(),
-                    window: format!("{}%", percent(profile.used)),
-                    share_percent: Some(percent(profile.used)),
-                    level: level(p.used),
-                    today: fixture_money(profile.today),
-                    today_note: None,
-                    headroom: if i == 0 {
-                        format!("{}%", percent(1.0 - p.used))
-                    } else {
-                        String::new()
-                    },
-                })
-        })
-        .collect();
-    Page {
-        providers,
-        providers_empty: None,
-        profile_headers: PROFILE_HEADERS,
-        profiles,
-        costs: Costs {
-            title: "Cost per day · 7 days".into(),
-            legend: data::COST_LEGEND.iter().map(|&l| l.to_owned()).collect(),
-            bars: data::WEEK
-                .iter()
-                .map(|&(day, values)| CostBar {
-                    day: day.to_owned(),
-                    values,
-                    total_label: format!("${}", values.iter().sum::<u32>()),
-                    total_note: None,
-                })
-                .collect(),
-            empty: None,
-            note: None,
-        },
-        sessions: None,
-        sessions_note: None,
-        disclaimer: DESKTOP_DISCLAIMER,
-        notices: Vec::new(),
-        phone_disclaimer: PHONE_DISCLAIMER,
-    }
 }
 
 #[cfg(test)]

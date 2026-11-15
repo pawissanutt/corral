@@ -13,7 +13,7 @@ use crate::model::text::{Rich, span};
 /// The source state represented by a snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataState {
-    /// Static fixture data.
+    /// Explicit synthetic feed, using the same models and local-only simulated commands.
     Fixture,
     /// Live data from the configured daemon.
     Daemon,
@@ -190,7 +190,7 @@ impl Snapshot {
             DataState::Daemon => {
                 format!("Connecting to corrald for {}…", destination.label()).into()
             }
-            DataState::Fixture => "Not built yet. This build is the app shell.".into(),
+            DataState::Fixture => "Preview · this sample feed does not supply that record.".into(),
             DataState::Disconnected => "No connection to corrald.".into(),
         }
     }
@@ -373,7 +373,7 @@ pub fn connection_banner(conn: Conn, form: Form) -> Option<ConnectionBanner> {
 
 /// The live reducer environment, independent of persisted demo switches.
 pub fn daemon_env(feed: &Feed, form: Form) -> crate::model::effect::Env {
-    use crate::model::effect::{DataMode, Env};
+    use crate::model::effect::Env;
     let conn = if !feed.ready() {
         Conn::Down
     } else {
@@ -383,11 +383,7 @@ pub fn daemon_env(feed: &Feed, form: Form) -> crate::model::effect::Env {
             _ => Conn::Down,
         }
     };
-    Env {
-        conn,
-        mode: DataMode::Live,
-        form,
-    }
+    Env { conn, form }
 }
 
 /// Projects the last daemon reading without borrowing session-owned strings.

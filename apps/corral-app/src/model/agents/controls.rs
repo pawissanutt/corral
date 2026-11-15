@@ -16,9 +16,8 @@ use crate::model::effect::{Effect, Env};
 use crate::model::hue::Hue;
 use crate::model::{Id, Live};
 
-use super::fixture::effective_id;
 use super::live::{shown_id, stale};
-use super::{Action, AgentStatus, State};
+use super::{Action, State};
 
 /// Refusals that only say the control does not apply now (the session is not paused, nothing
 /// is running): the control is left out rather than shown refused.
@@ -457,47 +456,6 @@ fn ask(state: &State, id: &Id, row: &AgentRow) -> Option<Ask> {
     })
 }
 
-/// The fixture session's bar: Cancel, Pause or Resume and Terminate, pressing only changes this
-/// preview.
-pub(super) fn fixture_bar(state: &State, id: &'static str) -> Bar {
-    use ControlKind::{Cancel, Pause, Resume, Stop};
-    let paused = state.paused.contains(id);
-    let kinds = if paused {
-        [Resume, Cancel, Stop]
-    } else {
-        [Cancel, Pause, Stop]
-    };
-    Bar {
-        state: Some(if paused {
-            AgentStatus::Paused.chip()
-        } else {
-            AgentStatus::Working.chip()
-        }),
-        lead: paused.then(|| "Paused in this preview only; nothing was sent to corrald.".into()),
-        controls: kinds
-            .into_iter()
-            .map(|kind| Control {
-                kind,
-                label: kind.label().into(),
-                test_id: kind.test_id(),
-                action: Action::Control(kind),
-                enabled: true,
-                weight: match kind {
-                    Stop => Weight::Danger,
-                    Resume => Weight::Primary,
-                    _ => Weight::Secondary,
-                },
-                key: (kind == Cancel).then_some("Esc"),
-            })
-            .collect(),
-        notes: Vec::new(),
-        outcome: None,
-        recover: None,
-        esc: Some(Action::Control(Cancel)),
-        ask: None,
-    }
-}
-
 /// Launch PM on the wall: offered while corrald lists the PM row ended with `relaunch` offered,
 /// or lists no PM row at all, over a current agents list.
 pub(super) fn launch(state: &State, feed: &daemon::Feed, env: Env) -> Option<Launch> {
@@ -566,7 +524,7 @@ impl State {
                         session,
                         Sent {
                             kind,
-                            key: Id::from(crate::client::requests::new_id()),
+                            key: self.ids.next_id(),
                             channel: Channel::Stop { turn },
                         },
                     );
@@ -631,7 +589,8 @@ impl State {
             ),
             ControlKind::TakeOver => return Vec::new(),
         };
-        let act = Act::new(title, Command::Session(command)).about(Live::Session(session.clone()));
+        let act = Act::new(&mut self.ids, title, Command::Session(command))
+            .about(Live::Session(session.clone()));
         self.sent.insert(
             session,
             Sent {
@@ -666,7 +625,7 @@ impl State {
     }
 
     fn op(&mut self, session: Id, kind: ControlKind, op: AssistantSessionOp) -> Vec<Effect> {
-        let key = Id::from(crate::client::requests::new_id());
+        let key = self.ids.next_id();
         self.sent.insert(
             session,
             Sent {
@@ -728,35 +687,10 @@ impl State {
             Some(_) => return Vec::new(),
             None => SessionCommand::PmOpen { json: false },
         };
-        let act =
-            Act::new("Launch PM", Command::Session(command)).about(Live::Session(Id::from("pm")));
+        let act = Act::new(&mut self.ids, "Launch PM", Command::Session(command))
+            .about(Live::Session(Id::from("pm")));
         self.launch = Some(act.key.clone());
         vec![Effect::Act(act)]
-    }
-
-    /// A control pressed in the fixture preview: Pause and Resume change only this preview,
-    /// the rest say what they would do; nothing reaches corrald.
-    pub(super) fn fixture_control(&mut self, kind: ControlKind) -> Vec<Effect> {
-        let id = effective_id(self.session);
-        let words = match kind {
-            ControlKind::Pause => {
-                self.paused.insert(id);
-                "Paused in this preview only. With corrald, Pause cancels the turn and holds \
-                 automated input until Resume. Nothing was sent."
-            }
-            ControlKind::Resume => {
-                self.paused.remove(id);
-                "Resumed in this preview only. Nothing was sent."
-            }
-            ControlKind::Cancel => {
-                "Preview: Cancel stops the current turn, as Esc does in the terminal. Nothing was sent."
-            }
-            ControlKind::Stop => {
-                "Preview: Terminate first shows corrald's exact effects to confirm. Nothing was sent."
-            }
-            ControlKind::Relaunch | ControlKind::TakeOver => "Preview: nothing was sent.",
-        };
-        vec![Effect::Toast(words.into())]
     }
 }
 

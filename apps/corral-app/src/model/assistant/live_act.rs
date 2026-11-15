@@ -20,7 +20,7 @@ use super::{Action, State, live};
 use crate::model::act::{self, Act, ActStatus};
 use crate::model::daemon::Feed;
 use crate::model::effect::{Effect, Env};
-use crate::model::id::Id;
+use crate::model::id::{Id, IdSupply};
 use crate::model::live::Live;
 use crate::model::nav::{AskTarget, Form};
 
@@ -370,7 +370,7 @@ impl State {
                 self.model_menu = false;
                 vec![Effect::CloseAsk]
             }
-            Action::OpenQuickThread | Action::HotkeyOpen => {
+            Action::OpenQuickThread => {
                 self.clear_anchor();
                 vec![
                     Effect::CloseAsk,
@@ -389,7 +389,6 @@ impl State {
                 self.anchor = Some((super::ThreadRef::Live(scope.clone()), key));
                 vec![Effect::CloseAsk, Effect::OpenLive(Live::Thread(scope))]
             }
-            Action::OpenPrompt { .. } => Vec::new(),
             Action::PickProfile { thread, profile } => self.pick(thread, profile, feed),
             Action::Stop { session, turn } => {
                 self.live.stopping.insert(session.clone(), turn);
@@ -404,7 +403,7 @@ impl State {
                 if self.live.new_session.is_some() {
                     return Vec::new();
                 }
-                let key = Id::from(crate::client::requests::new_id());
+                let key = self.ids.next_id();
                 self.live.new_session = Some(key.clone());
                 self.live.new_session_failed = None;
                 vec![Effect::Session {
@@ -415,22 +414,25 @@ impl State {
                     },
                 }]
             }
-            Action::FileEntry(entry) => self.once(subject("file", &entry), feed, || {
+            Action::FileEntry(entry) => self.once(subject("file", &entry), feed, |ids| {
                 Act::new(
+                    ids,
                     "File as idea, as written",
                     Command::Message(MessageCommand::FileAsIdea { entry }),
                 )
             }),
-            Action::WithdrawEntry(entry) => self.once(subject("withdraw", &entry), feed, || {
+            Action::WithdrawEntry(entry) => self.once(subject("withdraw", &entry), feed, |ids| {
                 Act::new(
+                    ids,
                     "Withdraw message",
                     Command::Message(MessageCommand::Withdraw { entry }),
                 )
             }),
             Action::WithdrawPm { id, revision } => {
                 let title = format!("Withdraw PM item {id}");
-                self.once(subject("withdraw", &id), feed, || {
+                self.once(subject("withdraw", &id), feed, |ids| {
                     Act::new(
+                        ids,
                         title,
                         Command::Pm(PmCommand::InboxWithdraw {
                             id,
@@ -449,8 +451,9 @@ impl State {
             } => self.answer(key, rev, choice, confirm, feed),
             Action::Choose { key, rev, option } => {
                 let title = format!("Answer {key}: {option}");
-                self.once(subject("answer", &key), feed, || {
+                self.once(subject("answer", &key), feed, |ids| {
                     Act::new(
+                        ids,
                         title,
                         Command::Question(QuestionCommand::Answer {
                             key: key.clone(),
@@ -511,25 +514,8 @@ impl State {
             Action::OpenAttachment { entry, id } => self.open_attachment(entry, id, feed),
             // Picking happens at the app root, inside the press, so a browser lets it open.
             Action::Attach(_) | Action::AttachLink => Vec::new(),
-            // Fixture-only controls never reach daemon content; Unchip clears the root context
-            // in the composer, and Send goes through `send_live`.
-            Action::OpenAsk(_)
-            | Action::PickModel(_)
-            | Action::Unchip
-            | Action::OpenThread(_)
-            | Action::Send
-            | Action::SendToThread(_)
-            | Action::SetMode(_)
-            | Action::FileNow
-            | Action::Withdraw
-            | Action::Edit(_)
-            | Action::Share(_)
-            | Action::Hotkey(_)
-            | Action::Toast(_)
-            | Action::Merge(_)
-            | Action::Confirm(..)
-            | Action::Open(_)
-            | Action::Grant(_) => Vec::new(),
+            // Unchip clears the app-owned context; Send goes through `send_live`.
+            Action::Unchip | Action::Send => Vec::new(),
         }
     }
 
@@ -538,7 +524,7 @@ impl State {
         if live::profile(self, feed, &thread).as_deref() == Some(profile.as_str()) {
             return Vec::new();
         }
-        let key = Id::from(crate::client::requests::new_id());
+        let key = self.ids.next_id();
         self.live.picks.insert(
             thread.clone(),
             Pick {
@@ -564,7 +550,7 @@ impl State {
         if session == QUICK || live::ended(feed, &session) || waiting {
             return Vec::new();
         }
-        let key = Id::from(crate::client::requests::new_id());
+        let key = self.ids.next_id();
         self.live.ends.insert(
             session.clone(),
             Ending {
@@ -590,12 +576,12 @@ impl State {
         if let Some(effects) = self.held(&remembered, feed) {
             return effects;
         }
-        let cmd_id = crate::client::requests::new_id();
-        self.live.acts.insert(remembered, Id::from(cmd_id.as_str()));
+        let cmd_id = self.ids.next_id();
+        self.live.acts.insert(remembered, cmd_id.clone());
         vec![Effect::Prompt {
             title: format!("{} · {key}", live::choice_label(choice)),
             answer: PromptAnswer {
-                cmd_id,
+                cmd_id: cmd_id.to_string(),
                 key,
                 rev,
                 choice,
@@ -726,8 +712,8 @@ impl State {
             revision,
         };
         let about = Live::Task(Id::from(task.as_str()));
-        self.once(subject(kind, &task), feed, move || {
-            let act = Act::new(title, Command::Task(command))
+        self.once(subject(kind, &task), feed, move |ids| {
+            let act = Act::new(ids, title, Command::Task(command))
                 .expect(expect)
                 .about(about);
             if confirm { act.confirmed() } else { act }
@@ -740,12 +726,12 @@ impl State {
         &mut self,
         remembered: String,
         feed: &Feed,
-        make: impl FnOnce() -> Act,
+        make: impl FnOnce(&mut IdSupply) -> Act,
     ) -> Vec<Effect> {
         if let Some(effects) = self.held(&remembered, feed) {
             return effects;
         }
-        let act = make();
+        let act = make(&mut self.ids);
         self.live.acts.insert(remembered, act.key.clone());
         vec![Effect::Act(act)]
     }

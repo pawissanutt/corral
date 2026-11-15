@@ -32,9 +32,8 @@ const PM_GLYPH: char = '━';
 const GUIDE_GLYPH: char = '┊';
 
 /// The glyph a kind of segment fills its Cells with: a heavy line for run, double for gate, a
-/// dashed heavy line for review, squares for land, a faint dash for idle, crosses for a stall,
-/// `╱` for waiting, a shade for a stale verdict, a heavier shade for awaiting
-/// acceptance and a faint dotted line where corral recorded no times.
+/// dashed heavy line for review, squares for land, a faint dash for idle, `╱` for waiting, a
+/// shade for awaiting acceptance and a faint dotted line where corral recorded no times.
 pub fn glyph(kind: Kind) -> char {
     match kind {
         Kind::Run => '━',
@@ -42,9 +41,7 @@ pub fn glyph(kind: Kind) -> char {
         Kind::Review => '╍',
         Kind::Land => '■',
         Kind::Idle => '╌',
-        Kind::Stall => '╳',
         Kind::Ask => '╱',
-        Kind::Stale => '░',
         Kind::Held => '▒',
         Kind::Unavailable => '┄',
     }

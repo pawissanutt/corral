@@ -8,7 +8,9 @@ mod confirmation;
 mod devices;
 mod keys;
 mod live;
+mod preview;
 mod sidebar;
+mod source;
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -20,16 +22,14 @@ use nsh_core::storage::Storage;
 use crate::model::act::{Confirmable, Confirmation};
 use crate::model::commands::Action;
 use crate::model::{
-    AskTarget, Conn, DataMode, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay,
-    Page, Risk, SettingsSection, SidebarPref, Snapshot, ThemeChoice, agents, assistant, commands,
-    daemon, inbox, plans, review, settings, timeline, usage, work,
+    AskTarget, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay,
+    SettingsSection, SidebarPref, Snapshot, ThemeChoice, agents, assistant, daemon, inbox, plans,
+    review, settings, timeline, usage, work,
 };
 
 const DESTINATION_KEY: &str = "corral.destination";
 const SETTINGS_KEY: &str = "corral.settings";
 const THEME_KEY: &str = "corral.theme";
-const CONN_KEY: &str = "corral.conn";
-const MODE_KEY: &str = "corral.mode";
 const NOW_LAYOUT_KEY: &str = "corral.now.layout";
 const SIDEBAR_KEY: &str = "corral.sidebar";
 
@@ -39,30 +39,28 @@ pub struct AppState {
     pub form: Form,
     pub nav: Signal<NavState>,
     pub data: Signal<DataState>,
-    pub feed: Signal<daemon::Feed>,
+    pub feed: source::FeedSource,
     pub theme: Signal<ThemeChoice>,
+    /// The transport writes here even while the explicitly selected synthetic feed is shown.
+    daemon_feed: Signal<daemon::Feed>,
+    /// Invalidates a system picker opened before a data-source change.
+    source_revision: Signal<u64>,
     pub ask_target: Signal<AskTarget>,
     pub ask_draft: Signal<String>,
     /// Grows by one each time Ask opens, so the composer focuses its field.
     pub ask_focus: Signal<u32>,
     /// Grows by one when the Now dock layout returns to its default.
     pub now_reset: Signal<u32>,
-    /// Persisted connection demo switch, independent of fixture transport.
-    pub conn: Signal<Conn>,
-    /// Persisted loading, empty, error and answered-elsewhere switch.
-    pub mode: Signal<DataMode>,
-    pub inbox: Signal<inbox::State>,
-    pub work: Signal<work::State>,
-    pub plans: Signal<plans::State>,
+    pub inbox: source::StateSource<inbox::State>,
+    pub work: source::StateSource<work::State>,
+    pub plans: source::StateSource<plans::State>,
     pub timeline: Signal<timeline::State>,
     pub usage: Signal<usage::State>,
-    pub agents: Signal<agents::State>,
-    pub review: Signal<review::State>,
-    pub settings: Signal<settings::State>,
-    pub assistant: Signal<assistant::State>,
-    /// Fresh confirmation of a fixture preview command, with an optional device or idea name.
-    pub confirm: Signal<Option<(Risk, Option<String>)>>,
-    /// Fresh confirmation of a live command, waiting for corrald's preview and this device.
+    pub agents: source::StateSource<agents::State>,
+    pub review: source::StateSource<review::State>,
+    pub settings: source::StateSource<settings::State>,
+    pub assistant: source::StateSource<assistant::State>,
+    /// Fresh device confirmation shared by the daemon and the synthetic preview.
     pub confirmation: Signal<Option<Confirmation>>,
     /// The real context "Ask about this" attached to the composer; cleared when Ask closes.
     pub ask_context: Signal<Option<ContextRef>>,
@@ -124,11 +122,23 @@ impl AppState {
             pairing_link,
         );
         let open_pairing = nav.section_opens > 0;
+        let identity = crate::client::requests::new_id();
+        let namespace = identity
+            .strip_prefix("app-")
+            .unwrap_or(&identity)
+            .split('-')
+            .next()
+            .unwrap_or("app");
+        let data = signal(data);
+        let daemon_feed = signal(feed);
+        let preview_feed = signal(daemon::Feed::default());
         let app = AppState {
             form,
             nav: signal(nav),
-            data: signal(data),
-            feed: signal(feed),
+            data,
+            feed: source::FeedSource::new(data, daemon_feed, preview_feed),
+            daemon_feed,
+            source_revision: signal(0),
             theme: signal(
                 preference(THEME_KEY, ThemeChoice::from_slug).unwrap_or(ThemeChoice::System),
             ),
@@ -137,17 +147,85 @@ impl AppState {
             ask_draft: signal(String::new()),
             ask_focus: signal(0),
             now_reset: signal(0),
-            conn: signal(preference(CONN_KEY, Conn::from_slug).unwrap_or_default()),
-            mode: signal(preference(MODE_KEY, DataMode::from_slug).unwrap_or_default()),
-            inbox: signal(inbox::State::default()),
-            work: signal(work::State::default()),
-            plans: signal(plans::State::default()),
+            inbox: source::StateSource::new(
+                data,
+                inbox::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-id")),
+                    ..Default::default()
+                },
+                inbox::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-if")),
+                    ..Default::default()
+                },
+            ),
+            work: source::StateSource::new(
+                data,
+                work::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-wd")),
+                    ..Default::default()
+                },
+                work::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-wf")),
+                    ..Default::default()
+                },
+            ),
+            plans: source::StateSource::new(
+                data,
+                plans::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-pd")),
+                    ..Default::default()
+                },
+                plans::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-pf")),
+                    ..Default::default()
+                },
+            ),
             timeline: signal(timeline::State::default()),
             usage: signal(usage::State::default()),
-            agents: signal(agents::State::default()),
-            review: signal(review::State::default()),
-            settings: signal(settings::State::default()),
-            assistant: signal(assistant::State::default()),
+            agents: source::StateSource::new(
+                data,
+                agents::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-ad")),
+                    ..Default::default()
+                },
+                agents::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-af")),
+                    ..Default::default()
+                },
+            ),
+            review: source::StateSource::new(
+                data,
+                review::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-rd")),
+                    ..Default::default()
+                },
+                review::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-rf")),
+                    ..Default::default()
+                },
+            ),
+            settings: source::StateSource::new(
+                data,
+                settings::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-sd")),
+                    ..Default::default()
+                },
+                settings::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-sf")),
+                    ..Default::default()
+                },
+            ),
+            assistant: source::StateSource::new(
+                data,
+                assistant::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-cd")),
+                    ..Default::default()
+                },
+                assistant::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-cf")),
+                    ..Default::default()
+                },
+            ),
             confirmation: signal(None),
             ask_context: signal(None),
             ask_staged: signal(Vec::new()),
@@ -159,7 +237,6 @@ impl AppState {
             confirmation_revision: signal(0),
             device_ops: signal(BTreeMap::new()),
             sessions: signal(BTreeMap::new()),
-            confirm: signal(None),
             toast: signal_with(None, SignalEquals::Never),
             hotkey: signal(false),
             share: signal(false),
@@ -169,7 +246,6 @@ impl AppState {
             list_keys: element_ref(),
             key_focus: signal(keys::KeyFocus::default()),
         };
-        crate::client::start(app.feed);
         app.follow_browser_pairing();
         if open_pairing {
             // Phone sections are pushed by a navigation intent after the shell starts.
@@ -178,6 +254,8 @@ impl AppState {
             });
         }
         app.persist();
+        app.follow_source();
+        crate::client::start(app.daemon_feed);
         app.install_toast_timer();
         app.watch_receipts();
         app.follow_sidebar();
@@ -191,62 +269,46 @@ impl AppState {
         app
     }
 
-    /// Tracked environment for any domain's reducer or view builder. The preview's demo
-    /// connection and data-mode switches apply only to the fixture preview.
+    /// Tracked environment derived from the selected feed.
     pub fn env(&self) -> Env {
         match self.data.get() {
-            DataState::Daemon => self
+            DataState::Daemon | DataState::Fixture => self
                 .feed
                 .with(|feed| crate::model::health::daemon_env(feed, self.form)),
-            DataState::Fixture => Env {
-                conn: self.conn.get(),
-                mode: self.mode.get(),
-                form: self.form,
-            },
-            // Nothing is served without a connection; actions refuse rather than queue.
             DataState::Disconnected => Env {
                 conn: Conn::Down,
-                mode: DataMode::Live,
                 form: self.form,
             },
         }
     }
 
-    /// Tracked: the current source is the daemon rather than the mockup.
+    /// Tracked: this source uses the shared daemon model and screen path.
     pub fn daemon(&self) -> bool {
-        self.data.get() == DataState::Daemon
+        self.data.get() != DataState::Disconnected
     }
-
     fn env_untracked(&self) -> Env {
         untracked(|| self.env())
     }
 
-    /// Tracked shell snapshot, with the current Inbox reducer's needs-you count.
+    /// Tracked shell snapshot, derived from the same feed as every screen.
     pub fn snapshot(&self) -> Snapshot {
-        if self.daemon() {
-            return self
-                .feed
-                .with(|feed| crate::model::health::daemon_snapshot(feed, self.form));
+        if self.data.get() == DataState::Disconnected {
+            return crate::model::disconnected::snapshot();
         }
-        let env = self.env();
-        let mut snapshot = crate::model::snapshot(self.data.get(), env.conn, self.form);
-        if snapshot.connected() {
-            snapshot.set_count(
-                Destination::Inbox,
-                self.inbox.with(|state| inbox::needs_you_count(state, env)),
-            );
+        let mut snapshot = self
+            .feed
+            .with(|feed| crate::model::health::daemon_snapshot(feed, self.form));
+        if self.data.get() == DataState::Fixture {
+            snapshot.state = DataState::Fixture;
+            snapshot.health.source = Some("Preview · fixture sample data · local only".into());
+            snapshot.health.reach = Some("synthetic feed · nothing sent".into());
+            snapshot.health.e2e = false;
         }
         snapshot
     }
-
     /// Tracked current destination, including the owner of the top page.
     pub fn destination(&self) -> Destination {
         self.nav.with(|nav| nav.destination)
-    }
-
-    /// Tracked top page, absent when a task or plan is selected in place.
-    pub fn page(&self) -> Option<Page> {
-        self.nav.with(NavState::page)
     }
 
     /// Tracked overlay visibility.
@@ -262,21 +324,6 @@ impl AppState {
     /// Opens a Settings section and clears all pushed pages.
     pub fn go_settings(&self, section: SettingsSection) {
         self.change(|nav| nav.go_settings(section));
-    }
-
-    /// Updates the owning domain before selecting or pushing its page.
-    pub fn open(&self, page: Page) {
-        match page {
-            Page::Task(id) => self.work.update(|state| state.select(id)),
-            Page::Plan(id) => self.plans.update(|state| state.open(id)),
-            Page::Session(id) => self.agents.update(|state| state.open(id)),
-            Page::Thread(id) => {
-                self.assistant.update(|state| state.open_thread(id));
-                self.close(Overlay::Ask);
-            }
-            Page::Question => {}
-        }
-        self.change(|nav| nav.open_page(page, self.form));
     }
 
     /// Returns to the page beneath this one, or its owning destination.
@@ -325,12 +372,6 @@ impl AppState {
         self.open_ask();
     }
 
-    /// Attaches the optional context chip before opening Ask.
-    pub fn open_ask_about(&self, chip: Option<&'static str>) {
-        self.assistant.update(|state| state.attach(chip));
-        self.open_ask();
-    }
-
     /// Opens or raises the palette above other overlays.
     pub fn open_palette(&self) {
         self.change(|nav| nav.open(Overlay::Palette));
@@ -340,7 +381,6 @@ impl AppState {
     pub fn close(&self, overlay: Overlay) {
         self.change(|nav| nav.close(overlay));
         if overlay == Overlay::Ask {
-            self.assistant.update(|state| state.attach(None));
             self.ask_context.set(None);
             self.close_attach_field();
         }
@@ -349,7 +389,7 @@ impl AppState {
     /// Escape priority: confirmation, model list, newest overlay, the narrow sidebar's labels,
     /// then top page.
     pub fn close_newest(&self) {
-        if self.confirm.get_untracked().is_some() || self.confirmation.get_untracked().is_some() {
+        if self.confirmation.get_untracked().is_some() {
             self.confirm_no();
             return;
         }
@@ -380,27 +420,56 @@ impl AppState {
         self.theme.set(choice);
     }
 
-    /// Changes the source without carrying the fixture preview's dialogs and demos out of it.
+    /// Selects the transport or an isolated, explicitly chosen synthetic feed.
     pub fn set_data(&self, state: DataState) {
-        if state != DataState::Fixture {
+        if state == self.data.get_untracked() {
+            return;
+        }
+        // Dispose old-source views before draft observers see the new source's empty composer.
+        batch(|| {
+            self.source_revision
+                .update(|revision| *revision = revision.wrapping_add(1));
             self.close(Overlay::Ask);
-            self.confirm.set(None);
             self.hotkey.set(false);
             self.share.set(false);
             self.lock.set(false);
-        }
-        // A live confirmation never outlives its source.
-        self.invalidate_confirmations();
-        self.data.set(state);
+            self.invalidate_confirmations();
+            let uploads = self.ask_staged.with_untracked(|staged| {
+                staged
+                    .iter()
+                    .filter_map(|item| match item {
+                        assistant::Staged::Upload { upload, .. } => Some(upload.clone()),
+                        assistant::Staged::Link { .. } => None,
+                    })
+                    .collect::<Vec<_>>()
+            });
+            for upload in uploads {
+                self.unattach(&upload);
+            }
+            self.ask_staged.set(Vec::new());
+            self.ask_draft.set(String::new());
+            self.ask_context.set(None);
+            self.change(|nav| {
+                nav.pages.clear();
+                nav.selection = Default::default();
+            });
+            if state == DataState::Fixture {
+                let local = jiff::Zoned::now();
+                self.feed.preview.set(crate::model::preview::feed(
+                    local.timestamp().as_second().max(0) as u64,
+                    local.date().to_string(),
+                    local.strftime("%H:%M").to_string(),
+                    Some(local.time_zone().clone()),
+                ));
+            }
+            self.data.set(state);
+        });
     }
 
-    /// A browser that finishes pairing shows its live session at once, from whichever source
-    /// it paired: the stored identity is what a reload resumes anyway. A browser whose stored
-    /// pairing turns out to be gone (the client clears its marker) is unpaired, so it returns to
-    /// Connection's pairing form instead of waiting on a session that cannot start.
+    /// Only an actual pairing transition may take a disconnected browser live.
     fn follow_browser_pairing(self) {
         let paired = computed(move || {
-            self.feed.with(|feed| {
+            self.daemon_feed.with(|feed| {
                 matches!(
                     feed.browser_pairing,
                     crate::model::devices::BrowserPairing::Paired { .. }
@@ -408,19 +477,17 @@ impl AppState {
             })
         });
         let failed = computed(move || {
-            self.feed
+            self.daemon_feed
                 .with(|feed| matches!(feed.device, crate::model::devices::DeviceLink::Failed(_)))
         });
-        // Each transition follows only its own change, so an explicit later choice of source
-        // is never overridden by the other.
         effect(move || {
-            if paired.get() && !untracked(|| self.daemon()) {
+            if paired.get() && self.data.get_untracked() == DataState::Disconnected {
                 untracked(|| self.set_data(DataState::Daemon));
             }
         });
         effect(move || {
             if failed.get()
-                && untracked(|| self.daemon())
+                && self.data.get_untracked() == DataState::Daemon
                 && crate::client::pairing_supported()
                 && !crate::client::configured()
             {
@@ -435,7 +502,7 @@ impl AppState {
     /// A restored namespace remains daemon data after link loss clears its live session.
     /// Observe only cache identity transitions so an explicit fixture choice stays explicit.
     fn follow_cached_feed(self) {
-        let cached = computed(move || self.feed.with(cached_namespace));
+        let cached = computed(move || self.daemon_feed.with(cached_namespace));
         effect(move || {
             if cached.get() && self.data.get_untracked() == DataState::Disconnected {
                 untracked(|| self.set_data(DataState::Daemon));
@@ -454,82 +521,39 @@ impl AppState {
         self.toast.set(Some(text.into()));
     }
 
-    /// Opens the fixture preview's fresh confirmation; corrald commands go through `dispatch`.
-    pub fn confirm(&self, risk: Risk, name: Option<String>) {
-        if untracked(|| self.daemon()) {
-            // A fixture reducer's sample command has no live target.
-            self.toast("The fixture preview's sample command is not sent to corrald.");
-            return;
-        }
-        if self.env_untracked().conn.refuses() {
-            self.toast("Refused: needs a live connection. Nothing was queued.");
-            return;
-        }
-        self.confirm.set(Some((risk, name)));
-    }
-
-    /// Confirms what the sheet shows: a live command with corrald's fresh preview proof, or
-    /// the fixture preview's sample with its receipt.
+    /// Confirms the exact command shown by the shared device confirmation sheet.
     pub fn confirm_yes(&self) {
-        if self.confirmation.get_untracked().is_some() {
-            self.confirm_live();
-            return;
-        }
-        let Some((risk, name)) = self.confirm.get_untracked() else {
-            return;
-        };
-        self.confirm.set(None);
-        let name = name
-            .filter(|name| !name.is_empty())
-            .map(|name| format!(" · {name}"))
-            .unwrap_or_default();
-        self.toast(format!(
-            "{}{name} · actor=owner via=app:{}",
-            commands::risk(risk).ok,
-            self.env_untracked().device()
-        ));
+        self.confirm_live();
     }
 
-    /// Cancels the confirmation without sending or applying anything.
+    /// Cancels without applying or sending anything.
     pub fn confirm_no(&self) {
-        self.confirm.set(None);
         self.cancel_live();
     }
 
-    /// Applies every reducer effect in source order.
+    /// Applies reducer effects in source order through the selected feed's driver.
     pub fn run(&self, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
                 Effect::Toast(text) => self.toast(text),
                 Effect::Go(destination) => self.go(destination),
                 Effect::GoSettings(section) => self.go_settings(section),
-                Effect::Open(page) => self.open(page),
                 Effect::Back => self.back(),
-                Effect::Confirm(risk, name) => self.confirm(risk, name),
-                Effect::Ask { chip, text } => {
-                    self.assistant.update(|state| state.attach(chip));
-                    if let Some(text) = text {
-                        self.ask_draft.set(text);
-                    }
-                    self.open_ask();
-                }
                 Effect::CloseAsk => self.close(Overlay::Ask),
-                Effect::SetConn(conn) => self.conn.set(conn),
-                live => self.run_live(live),
+                other => self.run_live(other),
             }
         }
     }
 
-    /// Runs a domain reducer on its state, then the effects it returns: what every button,
-    /// row and option of a screen calls.
+    /// Runs a local state reducer and dispatches its effects.
     pub fn act<S: Clone + 'static>(
         &self,
-        state: Signal<S>,
+        state: impl Into<source::StateHandle<S>>,
         reduce: impl FnOnce(&mut S, Env) -> Vec<Effect>,
     ) {
         let env = self.env_untracked();
         let mut effects = Vec::new();
-        state.update(|state| effects = reduce(state, env));
+        state.into().update(|state| effects = reduce(state, env));
         self.run(effects);
     }
 
@@ -539,7 +563,6 @@ impl AppState {
         match action {
             Action::Go(destination) => self.go(destination),
             Action::Settings(section) => self.go_settings(section),
-            Action::Open(page) => self.open(page),
             Action::OpenLive(live) => self.open_live(live),
             Action::Ask(text) => match text {
                 Some(text) => self.open_ask_with(&text),
@@ -549,9 +572,6 @@ impl AppState {
             Action::Theme(theme) => self.set_theme(theme),
             Action::Data(data) => self.set_data(data),
             Action::ResetNow => self.reset_now_layout(),
-            Action::Connection(conn) => self.conn.set(conn),
-            Action::Mode(mode) => self.mode.set(mode),
-            Action::Assistant(mode) => self.assistant.update(|state| state.set_mode(mode)),
             Action::Hotkey => self.hotkey.set(true),
             Action::Share => {
                 self.lock.set(false);
@@ -562,8 +582,8 @@ impl AppState {
                 self.share.set(false);
                 self.lock.set(true);
             }
-            Action::Work(press) => self.act(self.work, |state, env| {
-                state.press(press, &self.feed.get_untracked(), env)
+            Action::Work(press) => self.reduce(self.work, |state, feed, _, env| {
+                state.press(press, feed, env)
             }),
         }
     }
@@ -602,33 +622,22 @@ impl AppState {
             set_color_scheme(appearance(choice));
             remember(THEME_KEY, choice.slug());
         });
-        effect(move || remember(CONN_KEY, self.conn.get().slug()));
-        effect(move || remember(MODE_KEY, self.mode.get().slug()));
         effect(move || remember(SIDEBAR_KEY, self.sidebar.get().slug()));
     }
 
-    /// The fixture session's transcript/terminal switch, or the live selected session's.
+    /// Switches the selected session between its shared transcript and terminal views.
     fn toggle_session(&self) {
-        match self.data.get_untracked() {
-            DataState::Daemon => {
-                let selected = self.nav.with_untracked(|nav| nav.selection.session.clone());
-                let Some(session) = selected else {
-                    return;
-                };
-                self.agents.update(|state| state.toggle_live_view());
-                let live = crate::model::Live::Session(session);
-                if self.nav.with_untracked(|nav| nav.live() != Some(&live)) {
-                    self.open_live(live);
-                }
-                return;
-            }
-            DataState::Disconnected => return,
-            DataState::Fixture => {}
+        if !untracked(|| self.daemon()) {
+            return;
         }
-        self.agents.update(|state| state.toggle_view());
-        let session = self.agents.with_untracked(|state| state.session);
-        if self.page() != Some(Page::Session(session)) {
-            self.open(Page::Session(session));
+        let selected = self.nav.with_untracked(|nav| nav.selection.session.clone());
+        let Some(session) = selected else {
+            return;
+        };
+        self.agents.update(|state| state.toggle_live_view());
+        let live = crate::model::Live::Session(session);
+        if self.nav.with_untracked(|nav| nav.live() != Some(&live)) {
+            self.open_live(live);
         }
     }
 }

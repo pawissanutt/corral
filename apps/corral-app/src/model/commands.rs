@@ -6,15 +6,12 @@ mod keys;
 #[cfg(test)]
 mod tests;
 
-pub use keys::{key_legend, key_legend_live, list_keys, list_keys_live};
+pub use keys::{key_legend_live, list_keys_live};
 
 use corral_protocol::rows::PlanState;
 
 use crate::model::daemon::Feed;
-use crate::model::{
-    Conn, DataMode, DataState, Destination, Env, Form, Live, Page, Rich, Risk, SettingsSection,
-    ThemeChoice, assistant, span,
-};
+use crate::model::{DataState, Destination, Form, Live, Rich, SettingsSection, ThemeChoice, span};
 
 /// Search field placeholder shared by every palette form.
 pub const PALETTE_PLACEHOLDER: &str = "Go to, open a task id, answer, accept…";
@@ -33,8 +30,7 @@ pub const fn palette_hints(query_empty: bool) -> [(&'static str, &'static str); 
 const LIVE_IDLE: usize = 8;
 const LIVE_MATCHED: usize = 40;
 
-/// Empty-search guidance, preserving the example task id's mono emphasis. The example is the
-/// fixture's in the preview and a real task id in daemon mode, or none when there is none.
+/// Empty-search guidance for a served record in either feed, or none when no records exist.
 pub fn palette_empty(query: &str, example: Option<&str>) -> Rich {
     let mut rich = vec![span(format!("No command or task matches “{query}”."))];
     if let Some(example) = example {
@@ -50,8 +46,9 @@ pub fn palette_empty(query: &str, example: Option<&str>) -> Rich {
 /// The example task id of the empty-search guidance.
 pub fn palette_example(data: DataState, feed: &Feed) -> Option<String> {
     match data {
-        DataState::Fixture => Some("T-894".into()),
-        DataState::Daemon => feed.board.tasks().first().map(|task| task.id.to_string()),
+        DataState::Fixture | DataState::Daemon => {
+            feed.board.tasks().first().map(|task| task.id.to_string())
+        }
         DataState::Disconnected => None,
     }
 }
@@ -71,25 +68,6 @@ pub const CONFIRM_CANCEL: &str = "Cancel";
 /// and only while the preview still matches.
 pub const CONFIRM_CHECK: &str = "Tapping Confirm is the check. corrald accepts it only from this \
      paired device, and only while the preview above still matches.";
-
-/// Phone confirmation is generic; other forms name the command's first verb.
-pub fn confirm_label(command: Risk, form: Form) -> String {
-    if form == Form::Phone {
-        "Confirm".into()
-    } else {
-        format!("Confirm {}", confirm_word(command))
-    }
-}
-
-/// The exact lower-case word required by the terminal's typed confirmation.
-pub fn confirm_word(command: Risk) -> String {
-    risk(command)
-        .title
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_lowercase()
-}
 
 /// A live command's confirming button: generic on phone, else its title's first verb.
 pub fn act_confirm_label(title: &str, form: Form) -> String {
@@ -116,8 +94,6 @@ pub enum Action {
     Go(Destination),
     /// Open a Settings section directly.
     Settings(SettingsSection),
-    /// Select or push a fixture page.
-    Open(Page),
     /// Select or push a live record.
     OpenLive(Live),
     /// Run the same record action offered in the inspector and row menu.
@@ -128,16 +104,10 @@ pub enum Action {
     ToggleSession,
     /// Change the persisted appearance.
     Theme(ThemeChoice),
-    /// Change the original fixture transport switch.
+    /// Select live transport, explicit preview, or disconnected data.
     Data(DataState),
     /// Restore the user's Now dock arrangement.
     ResetNow,
-    /// Change the persisted connection demo switch.
-    Connection(Conn),
-    /// Change the persisted data demo switch.
-    Mode(DataMode),
-    /// Change the assistant's demo lifecycle state.
-    Assistant(assistant::Mode),
     /// Show the global hotkey demo window.
     Hotkey,
     /// Show the phone share-sheet demo.
@@ -180,10 +150,8 @@ fn row(
     }
 }
 
-/// All palette commands, including an always-visible Ask row for non-navigation free text.
-/// Daemon mode lists only what corrald actually served; the fixture preview keeps its examples
-/// and Demo switches; without a connection there are no records, Ask or Demo switches, only
-/// navigation, settings and the explicit data choice.
+/// Commands use the selected canonical feed for records and actions. Only the explicitly
+/// selected preview offers mounted Demo illustrations; disconnected has no sample records.
 pub fn commands(
     query: &str,
     socket_configured: bool,
@@ -193,7 +161,7 @@ pub fn commands(
     form: Form,
 ) -> Vec<Command> {
     let query = query.trim();
-    let live = data == DataState::Daemon;
+    let live = data != DataState::Disconnected;
     let preview = data == DataState::Fixture;
     let ask = preview || (live && feed.capable(corral_protocol::app::ASSISTANT_V1));
     let mut rows = Vec::new();
@@ -203,8 +171,6 @@ pub fn commands(
     if live {
         live_needs_you(&mut rows, feed, query);
         live_verbs(&mut rows, feed, record);
-    } else if preview {
-        rows.extend(fixture_needs_you());
     }
     rows.extend(Destination::ALL.into_iter().map(|destination| {
         row(
@@ -217,8 +183,6 @@ pub fn commands(
     }));
     if live {
         live_open(&mut rows, feed, query);
-    } else if preview {
-        rows.extend(fixture_open());
     }
     rows.push(pair_row(data));
     if preview {
@@ -281,8 +245,9 @@ pub fn commands(
         Action::ResetNow,
     ));
     if preview {
-        rows.extend(demo_rows().into_iter().filter(|row| {
-            form == Form::Phone || !matches!(row.action, Action::Share | Action::Lock)
+        rows.extend(demo_rows().into_iter().filter(|row| match form {
+            Form::Phone => matches!(row.action, Action::Share | Action::Lock),
+            Form::Desktop | Form::Terminal => matches!(row.action, Action::Hotkey),
         }));
     }
     rows
@@ -473,142 +438,31 @@ fn live_open(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
     );
 }
 
-fn fixture_needs_you() -> [Command; 2] {
-    [
-        row(
-            "question",
-            "Needs you",
-            "Answer T-868/R1/Q1 · restore policy",
-            None,
-            Action::Open(Page::Question),
-        ),
-        row(
-            "plan:T-885",
-            "Needs you",
-            "Review plan T-885 P2 · accept or request changes",
-            None,
-            Action::Open(Page::Plan("T-885")),
-        ),
-    ]
-}
-
-fn fixture_open() -> [Command; 5] {
-    [
-        row(
-            "task:T-890",
-            "Open",
-            "T-890 pm-bounded-read-contract",
-            None,
-            Action::Open(Page::Task("T-890")),
-        ),
-        row(
-            "task:T-894",
-            "Open",
-            "T-894 api-connections",
-            None,
-            Action::Open(Page::Task("T-894")),
-        ),
-        row(
-            "session:T-871",
-            "Open",
-            "T-871 annotation-service · session",
-            None,
-            Action::Open(Page::Session("T-871")),
-        ),
-        row(
-            "session:T-868",
-            "Open",
-            "T-868 host-queue-ledger · session",
-            None,
-            Action::Open(Page::Session("T-868")),
-        ),
-        row(
-            "plan:T-870",
-            "Open",
-            "Plan T-870 Pi input queue lifecycle",
-            None,
-            Action::Open(Page::Plan("T-870")),
-        ),
-    ]
-}
-
-/// The preview's Demo switches; never offered against a daemon.
+/// Illustrations offered only where their UI is mounted.
 fn demo_rows() -> Vec<Command> {
-    let mut rows: Vec<Command> = Conn::ALL
-        .into_iter()
-        .map(|conn| {
-            row(
-                format!("conn:{}", conn.slug()),
-                "Demo",
-                format!(
-                    "Connection: {}",
-                    match conn {
-                        Conn::Healthy => "healthy · direct",
-                        Conn::Degraded => "degraded",
-                        Conn::Down => "daemon down",
-                        Conn::Relay => "relay · e2e",
-                        Conn::Offline => "offline · last sync",
-                    }
-                ),
-                None,
-                Action::Connection(conn),
-            )
-        })
-        .collect();
-    rows.extend(DataMode::ALL.into_iter().map(|mode| {
-        row(
-            format!("mode:{}", mode.slug()),
-            "Demo",
-            format!(
-                "Data: {}",
-                if mode == DataMode::Elsewhere {
-                    "answered elsewhere"
-                } else {
-                    mode.slug()
-                }
-            ),
-            None,
-            Action::Mode(mode),
-        )
-    }));
-    rows.extend(
-        assistant::Mode::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(index, mode)| {
-                row(
-                    format!("assistant:{index}"),
-                    "Demo",
-                    format!("Assistant: {}", mode.label()),
-                    None,
-                    Action::Assistant(mode),
-                )
-            }),
-    );
-    rows.extend([
+    vec![
         row(
             "demo-hotkey",
             "Demo",
-            "Show hotkey window",
+            "Show hotkey window · demo",
             None,
             Action::Hotkey,
         ),
         row(
             "demo-share",
             "Demo",
-            "Show share sheet",
+            "Show share sheet · demo",
             None,
             Action::Share,
         ),
         row(
             "demo-lock",
             "Demo",
-            "Show lock-screen push",
+            "Show lock-screen push · demo",
             None,
             Action::Lock,
         ),
-    ]);
-    rows
+    ]
 }
 
 /// Commands matching group plus label, case-insensitively. The free-text Ask row always
@@ -677,89 +531,5 @@ pub fn shortcut(id: &str) -> Option<&'static str> {
             .strip_prefix("go:")
             .and_then(Destination::from_slug)
             .and_then(destination_key),
-    }
-}
-
-/// A fresh-confirmation sheet's exact command, effects and success receipt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RiskInfo {
-    /// The dialog title before an optional target name.
-    pub title: &'static str,
-    /// The daemon command whose effect is previewed.
-    pub command: &'static str,
-    /// The three exact consequences, in display order.
-    pub effects: [&'static str; 3],
-    /// The success toast before target and attribution.
-    pub ok: &'static str,
-}
-
-impl RiskInfo {
-    /// Exact command and device attribution under the three effect lines.
-    pub fn preview(self, name: Option<&str>, env: Env) -> String {
-        let name = name
-            .filter(|name| !name.is_empty())
-            .map(|name| format!(" {name}"))
-            .unwrap_or_default();
-        format!(
-            "{}{name} · actor=owner · via=app:{} · challenge expires in 60 s",
-            self.command,
-            env.device()
-        )
-    }
-}
-
-/// The complete RISK table, shared by the confirmation UI and success receipts.
-pub const fn risk(risk: Risk) -> RiskInfo {
-    match risk {
-        Risk::AcceptPlan => RiskInfo {
-            title: "Accept plan T-885 P2",
-            command: "corral plan accept T-885 --rev P2",
-            effects: [
-                "Publishes 3 member tasks to main as tracker T-893",
-                "Autopilot may admit pm-bounded-read-contract next",
-                "Gates, independent review and landing checks unchanged",
-            ],
-            ok: "Accepted T-885 P2 · 3 members published as T-893",
-        },
-        Risk::ApproveReview => RiskInfo {
-            title: "Approve candidate 85b45e1e",
-            command: "corral review approve T-868 --sha 85b45e1e",
-            effects: [
-                "Owner verdict on T-868 R1 at 85b45e1e only",
-                "Landing proceeds to main after the land check",
-                "A newer candidate would make this verdict stale",
-            ],
-            ok: "Approved 85b45e1e · landing proceeds",
-        },
-        Risk::Revoke => RiskInfo {
-            title: "Revoke device",
-            command: "corral device revoke",
-            effects: [
-                "Retires this device's keys now",
-                "Closes its open sessions and relay route",
-                "Its past actions keep their via= attribution",
-            ],
-            ok: "Revoked · keys retired, sessions closed",
-        },
-        Risk::ModePause => RiskInfo {
-            title: "Confirm corral mode pause",
-            command: "corral mode pause",
-            effects: [
-                "Autopilot admits no new work after the running gates finish",
-                "Running gates, reviews and landings settle normally",
-                "Cites owner input A-7/g2/i19: \"Pause autopilot for tonight once the running gates finish.\"",
-            ],
-            ok: "corral mode pause executed · receipt in the quick thread",
-        },
-        Risk::Discard => RiskInfo {
-            title: "Discard",
-            command: "corral discard",
-            effects: [
-                "Drops the Idea the assistant filed from your message",
-                "Your words stay in the quick thread",
-                "Nothing else on the board changes",
-            ],
-            ok: "Discarded · receipt in the quick thread",
-        },
     }
 }

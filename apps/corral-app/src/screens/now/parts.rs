@@ -1,37 +1,28 @@
-//! Pieces every Now, task and Changes view shares: running a work action or press, the inbox's
-//! question projection, the model's buttons in the kit's look, the stale board's dimming, the
-//! choice between the fixture's and the daemon's content, and keeping the selected task's
-//! detail loaded.
+//! Pieces every Now, task and Changes view shares: running a work action or press, the model's
+//! buttons in the kit's look, the stale board's dimming, and keeping the selected task's detail
+//! loaded.
 
 use nsh_core::prelude::*;
 
-use crate::model::inbox::QuestionState;
 use crate::model::work::{self, Action, Button, Press};
-use crate::model::{Env, Form, Live};
+use crate::model::{Form, Live};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::text::dim;
 use crate::ui::term::cells;
 
-/// Runs a fixture or form-independent work action and the effects it returns.
+/// Runs a local work action (a tab, a filter, a group's rows) and the effects it returns.
 pub(crate) fn act(app: AppState, action: Action) {
-    app.act(app.work, move |state, env| state.act(action, env));
+    app.act(app.work, move |state, _| state.act(action));
 }
 
-/// Runs any press: fixture actions through the work reducer, live presses into root effects
-/// against the daemon's feed.
+/// Runs any press: local actions through the work reducer, record presses into root effects
+/// against the feed.
 pub(crate) fn press(app: AppState, press: Press) {
     app.reduce(app.work, move |state, feed, _selection, env| {
         state.press(press, feed, env)
     });
-}
-
-/// Whether question T-868/R1/Q1 is still open, as the inbox's state says (tracked): the work
-/// builders take it for their question-projected rows.
-pub(crate) fn question_open(app: AppState, env: Env) -> bool {
-    app.inbox
-        .with(|state| state.question_state(env) == QuestionState::Open)
 }
 
 fn kind(kind: work::ButtonKind) -> ButtonKind {
@@ -44,11 +35,7 @@ fn kind(kind: work::ButtonKind) -> ButtonKind {
 
 /// The leading icon the mock gives a control: the speech bubble on session buttons.
 fn glyph(action: Option<&Press>) -> Option<Icon> {
-    matches!(
-        action,
-        Some(Press::Work(Action::OpenSession(_)) | Press::Open(Live::Session(_)))
-    )
-    .then_some(Icon::Ask)
+    matches!(action, Some(Press::Open(Live::Session(_)))).then_some(Icon::Ask)
 }
 
 /// A model button in the kit's look: its label, weight and enabled state, pressing it runs its
@@ -86,23 +73,11 @@ pub(crate) fn pressable(app: AppState, button: &Button, wide: bool) -> AnyElemen
     model_button(app, button, id, wide)
 }
 
-/// The test id of a fixture control by what it does.
+/// The test id of a local control by what it does.
 pub(crate) fn action_id(action: Action) -> String {
     match action {
-        Action::Select(id) | Action::OpenTask(id) => format!("task-{id}"),
-        Action::OpenPlan(id) => format!("plan-{id}"),
-        Action::OpenSession(_) => "btn-open-session".into(),
-        Action::AskAbout(_) => "btn-ask-about".into(),
-        Action::OpenQuestion => "btn-answer".into(),
         Action::Go(destination) => format!("btn-{}", destination.slug()),
         Action::Back => "btn-back".into(),
-        Action::Goals => "btn-goals".into(),
-        Action::MoreQueued => "btn-more-queued".into(),
-        Action::ParkedSummary => "btn-parked".into(),
-        Action::SampleQuestion => "inbox-pm".into(),
-        Action::MarkSeen => "btn-mark-seen".into(),
-        Action::Connection => "btn-connection".into(),
-        Action::RestartDaemon => "btn-restart-daemon".into(),
         Action::ShowAll(group) => format!("btn-more-{}", group.key()),
         Action::NowTab(tab) => format!("seg-inspector-{}", super::layout::inspector_panel(tab)),
         Action::CtxTab(tab) => format!("seg-context-{}", super::layout::context_panel(tab)),
@@ -136,32 +111,13 @@ pub(crate) fn press_id(press: &Press) -> String {
 
 /// Whether the board is a stale snapshot (daemon down or offline), tracked.
 pub(crate) fn stale(app: AppState) -> Memo<bool> {
-    computed(move || {
-        if app.daemon() {
-            app.feed.with(|feed| work::daemon_status(feed).dimmed)
-        } else {
-            work::status(app.env()).dimmed
-        }
-    })
+    computed(move || app.feed.with(|feed| work::daemon_status(feed).dimmed))
 }
 
 /// The mock's `.stalefx`: a stale board is desaturated and a step fainter, so it reads as the
 /// last known state rather than live.
 pub(crate) fn dim_when<S: Styled>(s: S, stale: Memo<bool>) -> S {
     s.style_when(move || stale.get(), |s| s.saturate(0.35).opacity(0.78))
-}
-
-/// `fixture()` in the Fixture state, `daemon()` in the Daemon state, built again when the data
-/// state changes. Each builder tracks what it reads itself.
-pub(crate) fn by_data(
-    app: AppState,
-    fixture: impl Fn() -> AnyElement + 'static,
-    daemon: impl Fn() -> AnyElement + 'static,
-) -> AnyElement {
-    dynamic(move || {
-        let served = app.daemon();
-        untracked(|| if served { daemon() } else { fixture() })
-    })
 }
 
 /// One quiet line where a panel has nothing to show: what the daemon does not serve, why there
@@ -182,8 +138,10 @@ pub(crate) type Wanted = Option<(crate::model::Id, u64, bool)>;
 
 /// Keeps a task's detail loaded while `target` names it: requests it when absent or stale,
 /// revalidates it when the board row's revision moves, and pins it in the client's cache while
-/// it is shown, letting go when the target changes or the view goes.
+/// it is shown, letting go when the target changes or the view goes. Requests and pins go to
+/// the source the view mounted on (`AppState::scope`).
 pub(crate) fn keep_loaded(app: AppState, target: Memo<Wanted>) {
+    let app = untracked(|| app.scope());
     let seen = stored(None::<(crate::model::Id, u64)>);
     let pinned = stored(None::<crate::model::Id>);
     effect(move || {
@@ -234,13 +192,10 @@ pub(crate) fn wanted(
     Some((task.id.clone(), task.rev, needed))
 }
 
-/// The selected daemon task to keep loaded, tracked; `None` outside the Daemon state.
+/// The selected task to keep loaded, tracked.
 pub(crate) fn selected_task(app: AppState) -> Memo<Wanted> {
     let form = app.form;
     computed(move || {
-        if !app.daemon() {
-            return None;
-        }
         let selection = app.selection();
         app.feed.with(|feed| {
             app.work.with(|state| {

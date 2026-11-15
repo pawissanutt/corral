@@ -1,6 +1,6 @@
 //! The typed cards an assistant reply carries: the owner action and its receipt, the ask_user
-//! choice, the merge, the permission prompt, the filed Idea (with its edit and merge states),
-//! the Idea saved as written, and the host starting.
+//! choice, the permission prompt, the filed Idea (with its edit and merge states), the Idea saved
+//! as written, and the host starting.
 
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
@@ -8,7 +8,7 @@ use nsh_core::prelude::*;
 use crate::model::Form;
 use crate::model::assistant::{
     Action, ActionCard, ActionOutcome, AskUserCard, Button, Chip, DiffLine, Editing, FILED_LABELS,
-    FiledCard, LABELS, MergeInput, MergedCard, PermissionCard, SavedCard, TextReply,
+    FiledCard, LABELS, MergeInput, PermissionCard, SavedCard, TextReply,
 };
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
@@ -260,7 +260,7 @@ pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
 fn text_reply(app: AppState, reply: &TextReply) -> AnyElement {
     let typed = signal(reply.value.clone());
     let submit = reply.send.enabled.then(|| reply.send.action.clone());
-    let entry = field(app, reply.value.clone(), reply.label, Some(typed), submit);
+    let entry = field(app, reply.value.clone(), reply.label, typed, submit);
     view()
         .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
         .child(entry)
@@ -287,34 +287,6 @@ fn asks_head(app: AppState, heading: &str, state: Option<&Chip>) -> AnyElement {
         parts.push(chip(app, state.label.clone(), state.hue));
     }
     row(app, parts, 6.0).into_element()
-}
-
-/// The merge (`.filed`): the result chip and the task it went to, the owner's words quoted as
-/// appended, and the attribution saying nothing new was filed.
-pub fn merged(app: AppState, card: &MergedCard) -> AnyElement {
-    let form = app.form;
-    let head = row(
-        app,
-        vec![
-            chip(app, card.chip.label.clone(), card.chip.hue),
-            view()
-                .flex_1()
-                .min_w(px(0.0))
-                .child(rich_small(app, &card.destination))
-                .into_element(),
-        ],
-        8.0,
-    );
-    frame(
-        app,
-        Edge::Plain,
-        true,
-        vec![
-            head.into_element(),
-            quote(app, card.quote_label, card.words),
-            words(app, card.attribution, meta_size(form), Token::Ink3).into_element(),
-        ],
-    )
 }
 
 /// The write permission (`.permcard`): who asks, its state, the file, the preview lines, the
@@ -466,36 +438,15 @@ pub fn filed(app: AppState, card: &FiledCard) -> AnyElement {
         Editing::No => words(app, idea.title.clone(), value_size, Token::Ink)
             .font_weight(FontWeight::BOLD)
             .into_element(),
-        Editing::Fixture => field(app, idea.title.clone(), FILED_LABELS.title, None, None),
         Editing::Title => field(
             app,
             idea.title.clone(),
             FILED_LABELS.title,
-            Some(title_text),
+            title_text,
             None,
         ),
     };
-    let project = if card.editing == Editing::Fixture {
-        let pick = format!("{} ▾", card.project);
-        let pick = words(app, pick, note_size(form), Token::Ink2);
-        if form == Form::Terminal {
-            pick.into_element()
-        } else {
-            view()
-                .flex_row()
-                .self_start()
-                .items_center()
-                .h(px(26.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
-                .border_1()
-                .border_color(color(Token::Rule2))
-                .child(pick)
-                .into_element()
-        }
-    } else {
-        words(app, card.project.clone(), value_size, Token::Ink).into_element()
-    };
+    let project = words(app, card.project.clone(), value_size, Token::Ink).into_element();
     let mut labels = idea
         .labels
         .iter()
@@ -507,11 +458,7 @@ pub fn filed(app: AppState, card: &FiledCard) -> AnyElement {
     let criteria = view()
         .gap(px(if form == Form::Terminal { 0.0 } else { 3.0 }))
         .children(idea.criteria.iter().enumerate().map(|(at, criterion)| {
-            let entry = if card.editing == Editing::Fixture {
-                field(app, criterion.clone(), FILED_LABELS.criteria, None, None)
-            } else {
-                words(app, criterion.clone(), value_size, Token::Ink).into_element()
-            };
+            let entry = words(app, criterion.clone(), value_size, Token::Ink).into_element();
             view()
                 .flex_row()
                 .items_start()
@@ -640,7 +587,7 @@ fn with_text(action: &Action, text: String) -> Action {
 /// The merge destination (`.einput`) and Merge and Cancel; Merge sends the typed task id.
 fn merge_field(app: AppState, merge: &MergeInput, into: Signal<String>) -> AnyElement {
     let form = app.form;
-    let entry = field(app, String::new(), "Merge into task id", Some(into), None);
+    let entry = field(app, String::new(), "Merge into task id", into, None);
     view()
         .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
         .child(label_value(app, "Merge into", entry))
@@ -648,15 +595,14 @@ fn merge_field(app: AppState, merge: &MergeInput, into: Signal<String>) -> AnyEl
         .into_element()
 }
 
-/// An editable field of a card (`.einput`): words on the sunken ground in the focus line. The
-/// fixture's fields keep their text until Save or Cancel leaves the edit state; a live field
+/// An editable field of a card (`.einput`): words on the sunken ground in the focus line. It
 /// writes what is typed into `bound`, which the command reads when sent, and Enter sends
 /// `submit` with the typed words when one is given.
 fn field(
     app: AppState,
     value: String,
     label: &'static str,
-    bound: Option<Signal<String>>,
+    bound: Signal<String>,
     submit: Option<Action>,
 ) -> AnyElement {
     let form = app.form;
@@ -670,11 +616,8 @@ fn field(
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(color(Token::Ink))
         .caret_color(move || for_appearance(color(Token::Ink)))
-        .selection_color(move || for_appearance(color(Token::Sel)));
-    let entry = match bound {
-        Some(bound) => entry.on_change(move |text: &str| bound.set(text.to_owned())),
-        None => entry,
-    };
+        .selection_color(move || for_appearance(color(Token::Sel)))
+        .on_change(move |text: &str| bound.set(text.to_owned()));
     let entry = match submit {
         Some(action) => {
             entry.on_submit(move |typed: &str| act(app, with_text(&action, typed.to_owned())))

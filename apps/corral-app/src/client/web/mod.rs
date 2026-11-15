@@ -707,7 +707,6 @@ impl Driver {
                     self.revoke_local().await;
                     return Ok(Action::Stop);
                 }
-                Event::Closed(problem) => return Err(Failure::Retry(problem)),
                 _ => {}
             }
         }

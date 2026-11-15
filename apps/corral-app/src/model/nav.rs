@@ -1,6 +1,5 @@
 //! Destinations, pages and overlays shared by every shell.
 
-use crate::model::effect::Page;
 use crate::model::live::{Live, Route, Selection};
 
 /// Desktop sidebar prompt for the Ask composer.
@@ -28,39 +27,6 @@ pub const ASK_BUTTON: &str = "Ask";
 pub const ASK_BUTTON_LABEL: &str = "Ask (opens the composer)";
 /// Accessible label of the phone large-title palette search button.
 pub const SEARCH_LABEL: &str = "Search";
-
-/// The lock-screen push demo the phone shows while `AppState::lock` is set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LockScreen {
-    /// Calendar line above the lock-screen clock.
-    pub date: &'static str,
-    /// Lock-screen clock.
-    pub time: &'static str,
-    /// Notification's uppercase app identity.
-    pub app: &'static str,
-    /// Notification recency label.
-    pub when: &'static str,
-    /// Bold needs-you notification title.
-    pub title: &'static str,
-    /// The worker's question and recommendation.
-    pub body: &'static str,
-    /// Privacy explanation below the notification.
-    pub footnote: &'static str,
-    /// Page opened by pressing the notification.
-    pub opens: Page,
-}
-
-/// The encrypted question push demonstrated on the phone lock screen.
-pub const LOCK_SCREEN: LockScreen = LockScreen {
-    date: "Saturday 7 November",
-    time: "22:12",
-    app: "CORRAL",
-    when: "now",
-    title: "Needs you · T-868 host-queue-ledger",
-    body: "Restore policy: pane-origin input only, or all origins? Worker recommends option 1.",
-    footnote: "Push text is generated on this phone from an encrypted payload; the relay only sends a wake.",
-    opens: Page::Question,
-};
 
 /// A top-level destination in the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -484,13 +450,6 @@ impl NavState {
         self.section_opens = self.section_opens.wrapping_add(1);
         self.go(Destination::Settings);
     }
-    /// Opens a fixture page under its owner without duplicating the top page; tasks and plans
-    /// select in place off phone.
-    pub fn open_page(&mut self, page: Page, form: Form) {
-        let push = form == Form::Phone
-            || matches!(page, Page::Question | Page::Session(_) | Page::Thread(_));
-        self.open_route(Route::Page(page), push);
-    }
     /// Selects a live record, then pushes its page where the form stacks it; tasks, plans and
     /// reviews select in place off phone.
     pub fn open_live(&mut self, live: Live, form: Form) {
@@ -516,13 +475,6 @@ impl NavState {
         };
         self.destination = self.pages.last().unwrap_or(&route).owner();
         true
-    }
-    /// The fixture page currently above the destination; None under a live page.
-    pub fn page(&self) -> Option<Page> {
-        match self.pages.last() {
-            Some(Route::Page(page)) => Some(*page),
-            _ => None,
-        }
     }
     /// The live record whose page is currently above the destination.
     pub fn live(&self) -> Option<&Live> {
@@ -598,65 +550,6 @@ mod tests {
         assert_eq!(nav.close_newest(), Some(Overlay::Palette));
         assert_eq!(nav.close_newest(), None);
     }
-    #[test]
-    fn task_and_plan_pages_only_stack_on_phone() {
-        for form in [Form::Desktop, Form::Terminal, Form::Phone] {
-            let mut nav = NavState::new(form);
-            nav.open_page(Page::Task("T-890"), form);
-            assert_eq!(nav.destination, Destination::Now);
-            assert_eq!(
-                nav.page(),
-                (form == Form::Phone).then_some(Page::Task("T-890"))
-            );
-            nav.open_page(Page::Plan("T-870"), form);
-            assert_eq!(nav.destination, Destination::Plans);
-            assert_eq!(nav.pages.len(), if form == Form::Phone { 2 } else { 0 });
-            if form == Form::Phone {
-                assert!(nav.back());
-                assert_eq!(nav.page(), Some(Page::Task("T-890")));
-                assert_eq!(nav.destination, Destination::Now);
-            }
-            nav.go(Destination::Inbox);
-            assert!(nav.pages.is_empty());
-            assert!(!nav.back());
-        }
-    }
-    #[test]
-    fn focus_pages_stack_and_return_to_their_owner_on_every_form() {
-        for form in [Form::Desktop, Form::Terminal, Form::Phone] {
-            for page in [Page::Question, Page::Session("T-868"), Page::Thread("A-7")] {
-                let mut nav = NavState::new(form);
-                nav.open_page(page, form);
-                let above = if page == Page::Question {
-                    Page::Session("T-868")
-                } else {
-                    Page::Question
-                };
-                nav.open_page(above, form);
-                assert_eq!(nav.pages, [Route::Page(page), Route::Page(above)]);
-                assert!(nav.back());
-                assert_eq!(nav.page(), Some(page));
-                assert!(nav.back());
-                assert_eq!(nav.page(), None);
-                assert_eq!(nav.destination, page.owner());
-            }
-        }
-    }
-
-    #[test]
-    fn sending_from_phone_thread_does_not_duplicate_its_page() {
-        let mut nav = NavState::new(Form::Phone);
-        let session = Page::Session("T-868");
-        let thread = Page::Thread("A-7");
-        nav.open_page(session, Form::Phone);
-        nav.open_page(thread, Form::Phone);
-        nav.destination = Destination::Inbox;
-        nav.open_page(thread, Form::Phone);
-        assert_eq!(nav.pages, [Route::Page(session), Route::Page(thread)]);
-        assert_eq!(nav.destination, Destination::Agents);
-        assert!(nav.back());
-        assert_eq!(nav.page(), Some(session));
-    }
 
     #[test]
     fn live_records_select_everywhere_and_push_only_where_the_form_stacks_them() {
@@ -672,7 +565,6 @@ mod tests {
             nav.open_live(question.clone(), form);
             nav.open_live(question.clone(), form);
             assert_eq!(nav.live(), Some(&question));
-            assert_eq!(nav.page(), None);
             assert_eq!(nav.pages.len(), if form == Form::Phone { 2 } else { 1 });
             assert!(nav.back());
             assert_eq!(nav.selection.question.as_deref(), Some("T-9/R1/Q1"));

@@ -1,36 +1,29 @@
 //! The typed actions content carries, and the composer keys, so renderers never infer behavior
-//! from labels. Fixture actions name static fixture ids; the daemon actions carry owned ids and
-//! revisions straight from the served thread.
+//! from labels. Actions carry owned identities and revisions from the shared feed.
 
 use corral_protocol::assistant::PromptChoice;
 
-use super::{Grant, HotkeyState, Mode, PickKind, ShareStep};
-use crate::model::effect::{Effect, Page, Risk};
+use super::PickKind;
+use crate::model::effect::Effect;
 use crate::model::id::Id;
 use crate::model::live::Live;
 use crate::model::nav::AskTarget;
 
-/// The thread a view shows: a fixture session, or a served scope ("quick" or A-n).
+/// The served thread scope a view shows ("quick" or A-n).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThreadRef {
-    Fixture(&'static str),
     Live(Id),
 }
 
 impl ThreadRef {
     /// The quick thread of the current source.
-    pub fn quick(daemon: bool) -> ThreadRef {
-        if daemon {
-            ThreadRef::Live(Id::from(super::QUICK))
-        } else {
-            ThreadRef::Fixture(super::QUICK_THREAD)
-        }
+    pub fn quick() -> ThreadRef {
+        ThreadRef::Live(Id::from(super::QUICK))
     }
 
     /// The shared quick thread rather than a named session.
     pub fn is_quick(&self) -> bool {
         match self {
-            ThreadRef::Fixture(id) => *id == super::QUICK_THREAD,
             ThreadRef::Live(id) => id.as_str() == super::QUICK,
         }
     }
@@ -38,7 +31,6 @@ impl ThreadRef {
     /// The id test ids and region names use.
     pub fn as_str(&self) -> &str {
         match self {
-            ThreadRef::Fixture(id) => id,
             ThreadRef::Live(id) => id.as_str(),
         }
     }
@@ -71,50 +63,18 @@ pub struct KeyOutcome {
 /// Commands attached to content; the renderer need not infer behavior from button labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Open Ask with optional replacement context.
-    OpenAsk(Option<&'static str>),
     /// Toggle model list visibility.
     ToggleModelMenu,
-    /// Select a configured fixture profile.
-    PickModel(&'static str),
     /// Remove bounded context.
     Unchip,
     /// Close Ask and clear its chip/list.
     CloseAsk,
     /// Open the quick thread in Agents.
     OpenQuickThread,
-    /// Open another fixture assistant session.
-    OpenThread(&'static str),
     /// Open a thread at the Inbox decision rather than its newest message.
     OpenPrompt { thread: ThreadRef, key: String },
     /// Submit the app's draft to its selected target.
     Send,
-    /// Submit a named fixture session's own composer without affecting the quick-thread target.
-    SendToThread(&'static str),
-    /// Change the studio host state; Answering resumes streaming.
-    SetMode(Mode),
-    /// File pending fixture messages without a model.
-    FileNow,
-    /// Withdraw pending fixture messages.
-    Withdraw,
-    /// Enter or leave fixture filed-field editing.
-    Edit(Option<&'static str>),
-    /// Set or close the share sheet step.
-    Share(Option<ShareStep>),
-    /// Set global-hotkey content.
-    Hotkey(HotkeyState),
-    /// Open the main window's quick thread.
-    HotkeyOpen,
-    /// Show an illustrative outcome.
-    Toast(&'static str),
-    /// Prompt for a fixture merge destination.
-    Merge(&'static str),
-    /// Ask the app for fresh fixture device confirmation.
-    Confirm(Risk, Option<&'static str>),
-    /// Open a linked fixture record.
-    Open(Page),
-    /// Answer the fixture write-permission prompt.
-    Grant(Grant),
     /// Daemon: open a live record (an assistant thread, or a task, plan or question an answer
     /// rests on).
     OpenLive(Live),

@@ -232,8 +232,9 @@ impl State {
         }
         let words = words.to_owned();
         let title = format!("Answer {key}");
-        let effects = self.once(subject("answer", &key), feed, || {
+        let effects = self.once(subject("answer", &key), feed, |ids| {
             Act::new(
+                ids,
                 title,
                 Command::Question(QuestionCommand::Answer {
                     key: key.clone(),

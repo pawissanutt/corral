@@ -4,7 +4,7 @@
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
-use crate::model::review::{Action, Compose, Composer, StatusLine};
+use crate::model::review::{Action, Composer, StatusLine};
 use crate::model::{Form, Hue};
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -75,7 +75,7 @@ pub(super) fn composer(cx: &Ctx, composer: &Composer) -> AnyElement {
                 },
             )();
             let sent = cx.app.review.with_untracked(|state| state.sent.len()) > before;
-            if sent && target != Compose::Fixture {
+            if sent {
                 drafts.update(|all| {
                     all.remove(&key);
                 });

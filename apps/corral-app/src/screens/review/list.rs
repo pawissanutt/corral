@@ -210,11 +210,7 @@ fn candidate_row(cx: &Ctx, row: &CandidateRow) -> AnyElement {
             )
             .into_element(),
     };
-    // A served candidate's row carries its commands: its context menu on desktop and terminal,
-    // the action sheet a held finger opens on the phone.
-    if cx.live() {
-        with_menu(app, Record::Review(Id::new(&row.task)), shown)
-    } else {
-        shown
-    }
+    // A candidate's row carries its commands: its context menu on desktop and terminal, the
+    // action sheet a held finger opens on the phone.
+    with_menu(app, Record::Review(Id::new(&row.task)), shown)
 }

@@ -138,7 +138,6 @@ impl Thread<'_> {
             anchored: self.state.anchor.as_ref().is_some_and(|(scope, key)| {
                 let matches_scope = match scope {
                     super::ThreadRef::Live(scope) => scope.as_str() == self.scope,
-                    super::ThreadRef::Fixture(_) => false,
                 };
                 matches_scope
                     && entry.card.as_ref().is_some_and(|card| match card {

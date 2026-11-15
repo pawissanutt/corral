@@ -1,24 +1,23 @@
 //! Settings › General in every data state: this device's own preferences first (theme, the
 //! sidebar on desktop and terminal, the Now layout, and where its data comes from), which need
-//! no connection; then the workspace as corrald reports it, the preview's owner-only note, or
-//! what waits for a connection.
+//! no connection; then the workspace as the served feed reports it, or what waits for a
+//! connection.
 
 use nsh_core::prelude::*;
 
 use super::live_sections::{facts, snapshot_parts};
-use super::parts::{button_row, cell, first_heading, frame, read, space};
-use crate::model::settings::{self, connect, live};
-use crate::model::{DataState, Destination, Form};
+use super::parts::{button_row, cell, first_heading, frame, space};
+use crate::model::settings::{connect, live};
+use crate::model::{Destination, Form};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with, seg};
-use crate::ui::kit::text::{h3, rich_small};
+use crate::ui::kit::text::h3;
 use crate::ui::term;
 use crate::ui::tokens::Token;
 
 pub fn page(app: AppState) -> AnyElement {
-    let data = untracked(|| app.data.get());
-    let workspace = match data {
-        DataState::Daemon => snapshot_parts(app, |app, settings, _| {
+    let workspace = if untracked(|| app.daemon()) {
+        snapshot_parts(app, |app, settings, _| {
             let rows = app
                 .feed
                 .with_untracked(|feed| live::general_facts(feed, settings));
@@ -36,12 +35,9 @@ pub fn page(app: AppState) -> AnyElement {
                 )
                 .into_element(),
             ]
-        }),
-        DataState::Fixture => {
-            let v = untracked(|| read(app, settings::general));
-            rich_small(app, &v.description)
-        }
-        DataState::Disconnected => crate::screens::unavailable_body(app, Destination::Settings),
+        })
+    } else {
+        crate::screens::unavailable_body(app, Destination::Settings)
     };
     frame(
         app,

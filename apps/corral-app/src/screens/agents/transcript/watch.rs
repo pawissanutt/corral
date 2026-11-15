@@ -1,8 +1,8 @@
 //! What a daemon session page keeps going while it is open: one watcher of the session's live
-//! turn (released when the page closes or shows another session, as the thread scope is), a
-//! re-read of the recorded transcript each time the host says it fell behind (not while the
-//! owner reads an earlier page), and the fetch of the complete words behind every preview on
-//! the shown page.
+//! turn (released when the page closes or shows another session, as the thread scope is, through
+//! the source it was opened on), a re-read of the recorded transcript each time the host says it
+//! fell behind (not while the owner reads an earlier page), and the fetch of the complete words
+//! behind every preview on the shown page.
 
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
@@ -14,10 +14,11 @@ use crate::state::AppState;
 use super::super::run;
 
 pub fn watch(app: AppState, id: Id) {
+    let scoped = app.scope();
     let session = id.clone();
     untracked(|| {
         run(
-            app,
+            scoped,
             Action::Watch {
                 session: session.clone(),
                 on: true,
@@ -25,7 +26,7 @@ pub fn watch(app: AppState, id: Id) {
         );
     });
     cleanup(move || {
-        run(app, Action::Watch { session, on: false });
+        run(scoped, Action::Watch { session, on: false });
     });
     let reread = computed({
         let id = id.clone();

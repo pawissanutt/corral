@@ -75,9 +75,5 @@ pub(super) fn background(detail: &QuestionDetail, feed: &Feed) -> Background {
             note: "No task or plan is recorded for this question.",
         };
     }
-    Background::Ready {
-        goal,
-        plan_line,
-        graph: None,
-    }
+    Background::Ready { goal, plan_line }
 }

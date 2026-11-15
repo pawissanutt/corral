@@ -387,9 +387,6 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
     let section = app.nav.with(|nav| nav.settings);
     let theme = app.theme.get();
     let data = app.data.get();
-    let env = app.env();
-    let conn = env.conn;
-    let mode = env.mode;
     let record = palette_record(app);
     let rows = app.feed.with(|feed| {
         palette_model::filtered(
@@ -408,8 +405,6 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
                 Action::Settings(item) => here == Destination::Settings && item == section,
                 Action::Theme(item) => item == theme,
                 Action::Data(item) => item == data,
-                Action::Connection(item) => item == conn,
-                Action::Mode(item) => item == mode,
                 _ => false,
             };
             // Keep group matches and always-Ask rows through Command's second, label-only filter.

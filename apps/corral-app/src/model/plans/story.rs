@@ -1,9 +1,8 @@
-//! The selected member's Story inspector. `story` resolves the fixture's member from the shared
-//! board snapshot; `live_story.rs` builds the same inspector from corrald's board and plan.
+//! Shared selected-member Story descriptors and rich-text helpers.
 
-use super::{Action, Button, ButtonKind, Chip};
+use super::{Button, Chip};
 use crate::model::Id;
-use crate::model::board::{Actor, LAST_VISIT, Mark, STAGES, money, task};
+use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::text::{Rich, span};
 
@@ -76,186 +75,10 @@ pub(super) fn ids<S: AsRef<str>>(ids: &[S], separator: &str) -> Rich {
     rich
 }
 
-fn needs(id: &'static str) -> Rich {
-    let mut rich = Vec::new();
-    for (i, (id, mark)) in task(id).needs.iter().enumerate() {
-        if i > 0 {
-            rich.push(span(" · "));
-        }
-        rich.push(span(*id).mono());
-        rich.push(span(format!(" {}", mark.glyph())));
-    }
-    rich
-}
-
 pub(super) fn field(label: &'static str, value: Rich) -> StoryField {
     StoryField {
         label,
         value,
         button: None,
     }
-}
-
-/// Build the desktop selected-member Story inspector without importing the Work domain.
-pub fn story(id: &'static str) -> Story {
-    let t = task(id);
-    let simple = t.steps.is_empty();
-    let mut view = Story {
-        id: Id::from(id),
-        title: t.title.into(),
-        plan: if simple {
-            None
-        } else {
-            t.plan.map(|id| format!("· plan {id}"))
-        },
-        changed: if !simple && t.changed {
-            Some(Chip {
-                label: format!("▲ changed since {LAST_VISIT}"),
-                hue: Hue::Neutral,
-            })
-        } else {
-            None
-        },
-        context: vec![],
-        context_note: None,
-        stages: vec![],
-        progress: None,
-        progress_count: None,
-        steps: t
-            .steps
-            .iter()
-            .map(|&(mark, words)| (mark, words.to_owned()))
-            .collect(),
-        fields: vec![],
-        buttons: vec![],
-    };
-    if simple {
-        view.context = vec![span(format!(
-            "{}{}",
-            t.plan.map_or(String::new(), |id| format!("Plan {id} · ")),
-            t.now
-        ))];
-        let wait = if t.needs.is_empty() {
-            vec![span("capacity")]
-        } else {
-            needs(id)
-        };
-        view.fields = vec![
-            field("Waits on", wait),
-            field("Unblocks", ids(t.unblocks, " ")),
-            field("You", vec![span("nothing needed").hue(Hue::Ok)]),
-        ];
-        return view;
-    }
-    if let Some(machine) = t.machine {
-        view.context = vec![span(format!(
-            "{} · on {machine} · started {}",
-            t.agent.unwrap_or(""),
-            t.started.unwrap_or("")
-        ))];
-        view.context_note = Some("machine name illustrative");
-    }
-    let sha = match id {
-        "T-890" => "1751bd2",
-        "T-894" => "6b36916",
-        "T-867" => "5949a4b",
-        "T-852" => "af7a6dc",
-        _ => "after run",
-    };
-    let is_you = t.actor == Actor::You;
-    view.stages = STAGES
-        .into_iter()
-        .enumerate()
-        .map(|(i, label)| {
-            let mark = t.rail[i];
-            StoryStage {
-                label,
-                mark,
-                status: if is_you && i == 0 {
-                    "waits on you"
-                } else {
-                    match mark {
-                        Mark::Done => "done",
-                        Mark::Active => "now",
-                        Mark::Fail => "failed",
-                        Mark::Stale => "stale",
-                        Mark::Next => "next",
-                        Mark::Na => "n/a",
-                    }
-                },
-                sub: match i {
-                    0 => format!("{} · {}", t.run.unwrap_or("R1"), t.agent.unwrap_or("")),
-                    1 => sha.into(),
-                    2 => "after gate".into(),
-                    _ => "main".into(),
-                },
-                hue: if mark == Mark::Active {
-                    if i == 0 {
-                        if is_you { Hue::You } else { Hue::Worker }
-                    } else {
-                        Hue::Corral
-                    }
-                } else if mark == Mark::Stale {
-                    Hue::Held
-                } else if mark == Mark::Fail {
-                    Hue::Fail
-                } else {
-                    Hue::Neutral
-                },
-            }
-        })
-        .collect();
-    view.progress = Some("Progress");
-    view.progress_count = Some(format!(
-        "{}/{}",
-        t.steps
-            .iter()
-            .filter(|(mark, _)| *mark == Mark::Done)
-            .count(),
-        t.steps.len()
-    ));
-    let next = t.next.map_or_else(Vec::new, |(who, what)| {
-        vec![span(who).bold(), span(format!(" · {what}"))]
-    });
-    let mut you = field(
-        "You",
-        if is_you {
-            vec![]
-        } else {
-            vec![span("nothing needed").hue(Hue::Ok)]
-        },
-    );
-    if is_you {
-        you.button = Some(Button {
-            kind: ButtonKind::Standard,
-            ..Button::new("Answer T-868/R1/Q1", Action::Question)
-        });
-    }
-    let mut cost = vec![
-        span(if t.cost.is_some() {
-            money(t.cost)
-        } else {
-            "−".into()
-        }),
-        span(format!(" · {}", t.agent.unwrap_or(""))),
-    ];
-    if t.hot() {
-        cost.push(span(" · over the $20 warning").hue(Hue::Held));
-    }
-    view.fields = vec![
-        field("Next", next),
-        you,
-        field("Needs", needs(id)),
-        field("Unblocks", ids(t.unblocks, " ")),
-        field("Cost", cost),
-    ];
-    view.buttons = vec![
-        Button::new("Open session", Action::OpenSession(id)),
-        Button::new("Ask about this", Action::Ask(id)),
-        Button {
-            kind: ButtonKind::Quiet,
-            ..Button::new("Review candidate", Action::ReviewCandidate)
-        },
-    ];
-    view
 }

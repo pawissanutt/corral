@@ -13,16 +13,30 @@ Imported from `/home/pawis/corral-app-design/` into branch `app-daemon-integrati
 - [ARCHITECTURE.md](ARCHITECTURE.md): proposed target architecture, historical source citations, and dated implementation notes. Section 11 records later deviations; section 14 defines delivery phases. Proposed types and paths are not proof they exist.
 - [PRODUCT.md](PRODUCT.md): inferred product context for the original static mockup, not an additional owner interview or override of the requirements.
 - [mockup/DESIGN.md](mockup/DESIGN.md) and [mockup/index.html](mockup/index.html): visual/interaction reference and its runnable static implementation. The mockup's illustrative data and simulated actions are not daemon capabilities. Open `mockup/index.html` locally; its scripts, styles and fonts are included.
+- [NEXT-STEP.md](NEXT-STEP.md): current implementation summary, hosted-infrastructure/share-target blockers and outstanding real-device verification.
 
-The imported files are preserved verbatim. Originals remain in the external directory. The old architecture backup, Impeccable metadata and screenshot captures were not imported. Screenshot inventories in the design document describe the original directory; use the runnable mockup as visual truth, especially for the later model-selector changes.
+The imported proposal remains historical; later owner corrections and implementation notes are maintained here. Originals remain in the external directory. The old architecture backup, Impeccable metadata and screenshot captures were not imported. Screenshot inventories describe the original directory; the runnable mockup is a visual reference, not a capability inventory. App theme corrections are mirrored into its CSS.
 
 Corral's current [daemon guide](../guide/daemon.md), [daemon-first implementation record](../records/daemon-first.md), app [README](../../apps/corral-app/README.md), repo guidance and source describe shipped behavior. They take precedence over historical claims that a component is built or missing; owner requirements still govern the product target. Keep future integration decisions here in the repository rather than relying on edits to the external copy.
 
 ## Implementation status
 
-The app remains a separate Cargo workspace and uses an app-local client on `corral-protocol`, not a standalone `corral-client` crate. Native enrolled Unix and paired loopback Noise WebSocket sessions use the same typed app services. Device authority and negotiated capabilities govern actions; disconnected or unsupported data is never replaced with fixture facts. Fixture preview is explicit.
+The app remains a separate Cargo workspace and uses an app-local client on `corral-protocol`,
+not a standalone `corral-client` crate. Enrolled native Unix and paired Noise WebSocket
+clients share typed services and the same per-device authority model. Any admin device can
+pair/revoke; self-raise is refused, admin grants need device-bound proof, and authority
+changes notify active sessions. Confirm/Admin commands require a matching daemon preview
+and tap/proof, not biometric confirmation. Unsupported/disconnected data never becomes
+fixture facts. Preview uses the same screens with sample data, is explicit and is not
+restored on restart. Disconnected screens offer Connect/Preview; local preferences remain
+in Settings › General › This device.
 
-The daemon hosts assistant sessions; Ask also targets the PM inbox. Settings exposes configured profiles and the assistant model selection, while provider availability and quotas remain reported only where known. The app guide documents attachments, reconnect and result recovery.
+The daemon hosts assistant sessions; Ask is one assistant/PM chat composer. Settings
+supports model selection and optional `assistant.summary_profile` for quick-thread
+compaction, effective at the next assistant-host start. Paid-API summary profiles are
+refused without separate spending authority. Acknowledged transactional outboxes preserve
+drafts/messages across restarts and concurrent tabs. Saved credentials permit offline boot
+from complete last-known Board/Inbox/Plans/Health snapshots marked stale, not live.
 
 Timeline reads use indexed half-open timestamp windows (including owner/PM points),
 overlapping recorded sessions, and predecessor phase state. Completed historical
@@ -31,12 +45,30 @@ recorded start and session attribution; events at the exclusive upper bound are 
 applied, so an unclosed phase is open as of that bound, not ended at the reader's clock.
 Needs-me context includes decision receipts since the last unconditional close:
 one answered decision does not imply that every pending decision was answered.
-The existing task/window/context safety budgets still fail explicitly for genuinely
-oversized selections. Burnup remains cumulative over real task creation and landing
-events; a Timeline date range does not narrow its totals.
+Usage, daily costs, Timeline and burn-up return bounded partial results with completeness,
+coverage and unpriced-data notes rather than discarding an entire oversized read. Provider
+failures remain explicit; unavailable quota limits, usage, windows and headroom stay unknown.
+Burn-up scopes cover workspace, project and plan and remain cumulative over real task
+creation/landing events; the Timeline date range does not narrow their totals.
 
 Private smoke has launched the native terminal and paired packaged Chromium against a private daemon, with matching trusted-side pairing codes and a live seven-task board and connected Settings. It does not establish the full browser journeys or root gate. GTK desktop and a physical phone have not been built or tested on this host; phone web layout remains in scope.
 
-The architecture's section 1 and its phases are historical proposals, not a current inventory. Its proposed alternate rollover summary profile is not a canonical supported setting. Do not plan the already implemented daemon and command router again from scratch.
+Shared record action tables serve inspector, menus, palette and phone surfaces, with
+authority/revision checks and same-ID result recovery. Review defaults to Unified below
+about 1100 pt content width. Pane sessions expose acknowledged bounded live terminal
+windows (`stream.terminal.v1`); raw keys need Admin and fresh proof, and daemon-hosted
+assistants have no raw terminal.
 
-Keep runtime migration, remote phone reach, relay/push and classic-UI retirement in their later phases. Phone layouts remain part of the UI contract; later phone packaging is not permission to create a desktop-only product. Keep the sidebar collapsible and available at narrow widths. Retire classic only after actionable parity, not after a successful board connection.
+Opt-in direct LAN/Tailscale binding and browser Web Push are implemented. Remote browsers
+need an HTTPS app and operator TLS/WSS (`daemon.web_endpoint`); there is no embedded TLS.
+Relay/native push remain blocked on independently hosted infrastructure and publisher
+provisioning. Inbound OS share targets are blocked by NSH 0.5.0; the app guide links the
+host/packaging evidence. Native desktop global Ask shortcut and tray are implemented,
+but unverified on this host.
+
+The architecture's “Current state” and phases are historical proposals, not a current
+inventory. Do not plan the implemented daemon, readers, chat and command router again.
+Runtime migration and classic-UI retirement remain separate work. Phone layouts are
+already part of the UI contract; later packaging is not permission for desktop-only UI.
+Keep the sidebar available/collapsible and automatically folded at narrow widths.
+Retire classic only after actionable parity and supported-device verification.

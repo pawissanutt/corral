@@ -27,32 +27,46 @@ impl AppState {
     /// Enrol and browser Pair can establish a session; administrative operations require an
     /// online admin session. Forget is local and returns to Disconnected after client admission.
     pub fn device(&self, op: DeviceOp) {
+        if self.fixture() {
+            if let DeviceOp::SetAuthority { key, title, change } = &op
+                && change.authority.admin
+            {
+                let subject = Confirmable::DeviceAuthority {
+                    key: key.clone(),
+                    title: title.clone(),
+                    change: change.clone(),
+                };
+                self.watching.update(|watching| {
+                    watching.insert(subject.key(), (subject.clone(), Watch::Confirming));
+                });
+                self.preview(subject);
+            } else {
+                self.run_preview(crate::model::Effect::Device(op));
+            }
+            return;
+        }
         let keyed = match &op {
             DeviceOp::Revoke { key, device } => Some((key.clone(), format!("Revoke {device}"))),
             DeviceOp::SetAuthority { key, title, .. } => Some((key.clone(), title.clone())),
             _ => None,
         };
-        let refusal = if self.data.get_untracked() == DataState::Fixture {
-            Some("The fixture preview sends corrald nothing.")
-        } else {
-            self.feed.with_untracked(|feed| match &op {
-                DeviceOp::Forget => None,
-                DeviceOp::Enrol { .. } if !crate::client::pairing_supported() => (!feed
-                    .transport_ready)
-                    .then_some("Refused: connect to corrald before enrolling this device."),
-                DeviceOp::Enrol { .. } => Some("Use browser pairing to enrol this browser."),
-                DeviceOp::Pair { .. } if crate::client::pairing_supported() => None,
-                DeviceOp::Pair { .. } => Some("Browser pairing is only available in a browser."),
-                DeviceOp::PushSubscribe { .. } | DeviceOp::PushUnsubscribe => {
-                    if !crate::client::push_supported() {
-                        Some("Push notifications are not supported in this client.")
-                    } else {
-                        session_refusal(feed)
-                    }
+        let refusal = self.feed.with_untracked(|feed| match &op {
+            DeviceOp::Forget => None,
+            DeviceOp::Enrol { .. } if !crate::client::pairing_supported() => (!feed
+                .transport_ready)
+                .then_some("Refused: connect to corrald before enrolling this device."),
+            DeviceOp::Enrol { .. } => Some("Use browser pairing to enrol this browser."),
+            DeviceOp::Pair { .. } if crate::client::pairing_supported() => None,
+            DeviceOp::Pair { .. } => Some("Browser pairing is only available in a browser."),
+            DeviceOp::PushSubscribe { .. } | DeviceOp::PushUnsubscribe => {
+                if !crate::client::push_supported() {
+                    Some("Push notifications are not supported in this client.")
+                } else {
+                    session_refusal(feed)
                 }
-                _ => admin_refusal(feed),
-            })
-        };
+            }
+            _ => admin_refusal(feed),
+        });
         if let Some(why) = refusal {
             if let Some((key, title)) = keyed {
                 self.device_failed(key, title, why);
@@ -135,11 +149,42 @@ impl AppState {
     }
 
     fn send_device(&self, key: Id, title: String, build: impl FnOnce(String) -> ClientRequest) {
+        if self.fixture() {
+            self.device_failed(key, title, "Preview does not send device requests.");
+            return;
+        }
         let correlation = requests::new_id();
         if requests::send(build(correlation.clone())) {
             self.track_device(key, title, correlation);
         } else {
             self.device_failed(key, title, NO_DRIVER);
+        }
+    }
+
+    pub(super) fn track_preview_device(&self, op: &DeviceOp) {
+        let (key, title) = match op {
+            DeviceOp::Revoke { key, device } => (key, format!("Revoke {device}")),
+            DeviceOp::SetAuthority { key, title, .. } => (key, title.clone()),
+            _ => return,
+        };
+        let outcome = self
+            .feed
+            .with_untracked(|feed| feed.operations.get(key).map(operation_status));
+        self.watching.update(|watching| {
+            watching.remove(key);
+        });
+        self.device_ops.update(|ops| {
+            ops.insert(
+                key.clone(),
+                DeviceOperation {
+                    correlation: Some(key.clone()),
+                    title: title.clone(),
+                    outcome: outcome.clone(),
+                },
+            );
+        });
+        if let Some(outcome) = outcome {
+            self.toast(format!("Preview · {title} · {}", outcome.line()));
         }
     }
 

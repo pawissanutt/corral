@@ -2,8 +2,7 @@
 //!
 //! The assistant module supplies the quick thread before the agent tiles, and the sessions and
 //! Filed from chat blocks after them, on both desktop and phone. The presentation types here are
-//! owned so the same screens draw the fixture preview (`fixture`) and the daemon's agent rows and
-//! session pages (`live`, `live_session`).
+//! owned so every data source uses the same feed-backed wall and session pages.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,15 +10,13 @@ use corral_protocol::detail::{DetailGet, DetailRef};
 
 use crate::model::board::{Mark, Rail};
 use crate::model::daemon;
-use crate::model::effect::{Effect, Env, Page};
+use crate::model::effect::{Effect, Env};
 use crate::model::hue::Hue;
-use crate::model::nav::{Destination, Form};
+use crate::model::nav::Destination;
 use crate::model::text::{Rich, span};
 use crate::model::{ActStatus, Id, Live, Selection, act};
 
 mod controls;
-mod data;
-mod fixture;
 mod items;
 mod keys;
 mod live;
@@ -34,8 +31,6 @@ mod replay_tool;
 pub mod screen;
 
 pub use controls::{Ask, Bar, Control, ControlKind, Launch, Weight, op_status};
-pub use data::AGENTS;
-pub use fixture::{session, wall};
 pub use items::{Card, Divider, Footer, Marker, More, Picture, Prose, Section, Thinking};
 pub use keys::{KeyBar, KeyButton, KeyPress, Keys, Settled};
 pub use live::wall as live_wall;
@@ -104,24 +99,6 @@ impl Feed {
     }
 }
 
-/// One fixture agent on the workstation, including its complete illustrative tail.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Agent {
-    pub id: &'static str,
-    pub role: &'static str,
-    pub task: Option<&'static str>,
-    pub title: &'static str,
-    pub profile: &'static str,
-    pub runtime: &'static str,
-    pub pane: &'static str,
-    pub state: AgentStatus,
-    pub doing: &'static str,
-    pub since: &'static str,
-    pub machine: &'static str,
-    pub tail: &'static [&'static str],
-    pub feed: Feed,
-}
-
 /// The selected session surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum View {
@@ -136,17 +113,11 @@ pub enum Mode {
     Wall,
     List,
 }
-/// Session and wall selection, retained across navigation. The fixture session id is the
-/// preview's; daemon sessions are selected by the root `Selection`.
+/// Session and wall interaction state; root selection owns the session identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State {
-    pub session: &'static str,
-    /// The fixture preview's Transcript | Terminal choice; it opens on the transcript, as the
-    /// mockup does.
-    pub view: View,
-    /// The owner's Transcript | Terminal choice for daemon sessions; it opens on the pane's
-    /// live screen. Kept apart from `view` because the root's switch key toggles without
-    /// knowing the source, and each source has its own first view.
+    pub ids: crate::model::id::IdSupply,
+    /// The selected session's transcript or terminal view.
     pub live_view: View,
     pub mode: Mode,
     /// Transcript rows the owner opened, by stable item key (a tool's call id). A thinking
@@ -165,16 +136,13 @@ pub struct State {
     pub asking: Option<(Id, ControlKind)>,
     /// The latest Launch PM command from the wall.
     pub launch: Option<Id>,
-    /// Fixture sessions paused in the preview; nothing is sent.
-    pub paused: BTreeSet<&'static str>,
     /// Each daemon session's gathered keys and latest keys command.
     pub keys: BTreeMap<Id, keys::Latest>,
 }
 impl Default for State {
     fn default() -> Self {
         Self {
-            session: "T-868",
-            view: View::Transcript,
+            ids: Default::default(),
             live_view: View::Transcript,
             mode: Mode::Wall,
             expanded: BTreeSet::new(),
@@ -183,52 +151,15 @@ impl Default for State {
             sent: BTreeMap::new(),
             asking: None,
             launch: None,
-            paused: BTreeSet::new(),
             keys: BTreeMap::new(),
         }
     }
 }
 impl State {
-    /// Select a fixture session without resetting its transcript/terminal choice.
-    pub fn open(&mut self, id: &'static str) {
-        self.session = id;
-    }
-    /// Toggle transcript and terminal.
-    pub fn toggle_view(&mut self) {
-        self.view = flip(self.view);
-    }
     /// Toggle a daemon session's transcript and terminal.
     pub fn toggle_live_view(&mut self) {
         self.live_view = flip(self.live_view);
     }
-    /// Handle an action in the fixture preview.
-    pub fn act(&mut self, action: Action, env: Env) -> Vec<Effect> {
-        match action {
-            Action::Open(id) => {
-                self.open(id);
-                vec![Effect::Open(Page::Session(id))]
-            }
-            Action::Question => vec![Effect::Open(Page::Question)],
-            Action::Tool => vec![Effect::Toast("Tool call expanded".into())],
-            Action::Send(_) | Action::Steer(_) => {
-                let id = fixture::effective_id(self.session);
-                let text = if env.form == Form::Phone {
-                    "Sent · via=app:pawis-iphone".to_string()
-                } else {
-                    format!("Sent to {id} via corral send · actor=owner via=app:pawis-desktop")
-                };
-                vec![Effect::Toast(text)]
-            }
-            Action::Key(key) => keys::fixture(key),
-            Action::Control(kind) => self.fixture_control(kind),
-            Action::ConfirmControl | Action::DismissControl => {
-                self.asking = None;
-                vec![]
-            }
-            other => self.shared(other),
-        }
-    }
-
     /// Handle an action on daemon data. Every command goes through the root's typed `Act`
     /// path; nothing is simulated locally.
     pub fn act_live(
@@ -314,29 +245,11 @@ impl State {
                 self.toggle_live_view();
                 vec![]
             }
-            Action::Open(_) | Action::Question | Action::Tool => vec![],
-            other => self.shared(other),
-        }
-    }
-
-    /// Navigation and the wall setting both sources share, and the fixture's view switches
-    /// (a daemon session's are handled in `act_live`).
-    fn shared(&mut self, action: Action) -> Vec<Effect> {
-        match action {
             Action::Back => vec![Effect::Go(Destination::Agents)],
-            Action::SetView(view) => {
-                self.view = view;
-                vec![]
-            }
             Action::SetMode(mode) => {
                 self.mode = mode;
                 vec![]
             }
-            Action::ToggleView => {
-                self.toggle_view();
-                vec![]
-            }
-            _ => vec![],
         }
     }
 }
@@ -406,22 +319,13 @@ fn reread(feed: &daemon::Feed, target: DetailRef) -> Effect {
     })
 }
 
-/// Actions attached to tiles, controls, tool calls and the reply box. The first group belongs to
-/// the fixture preview; the second carries daemon ids.
+/// Actions attached to tiles, controls, tool calls and the reply box.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Fixture: open a fixture session.
-    Open(&'static str),
-    /// Fixture: open the fixture handover.
-    Question,
     Back,
     SetView(View),
     SetMode(Mode),
-    /// Fixture: a terminal key on the phone (the preview sends nothing).
-    Key(&'static str),
     ToggleView,
-    /// Fixture: a tool call row.
-    Tool,
     /// Send the reply field's words; a working session takes them after its current turn.
     Send(String),
     /// Send the reply field's words to a working session now, interrupting what it does.
@@ -505,7 +409,6 @@ fn tail_line(text: &str) -> Line {
 /// Words that say where data stands: the fixture's illustrative tag, or a plain note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Note {
-    Illustrative(&'static str),
     Plain(String),
 }
 
@@ -729,8 +632,6 @@ pub struct Terminal {
     pub styled: Vec<screen::Row>,
     /// What the empty surface says instead of lines (no capture yet, none recorded).
     pub empty: Option<String>,
-    /// Fixture: the phone's terminal keys, which send nothing.
-    pub phone_keys: Vec<&'static str>,
     /// The keys bar under a daemon pane's screen, or why it has none worth saying.
     pub keys: Option<Keys>,
     /// Revalidate the capture.
@@ -768,18 +669,12 @@ pub struct Session {
 #[cfg(test)]
 mod tests {
     use super::{State, View};
+
     #[test]
     fn toggling_twice_does_not_leave_terminal_selected() {
         let mut state = State::default();
-        state.toggle_view();
-        state.toggle_view();
-        assert_eq!(state.view, View::Transcript);
-    }
-    #[test]
-    fn opening_another_session_does_not_reset_view() {
-        let mut state = State::default();
-        state.toggle_view();
-        state.open("T-854");
-        assert_eq!(state.view, View::Terminal);
+        state.toggle_live_view();
+        state.toggle_live_view();
+        assert_eq!(state.live_view, View::Transcript);
     }
 }
