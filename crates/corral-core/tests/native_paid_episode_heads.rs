@@ -44,13 +44,16 @@ fn paid_episode_survives_native_head_append_and_store_reload() {
             .paid_episode,
         None
     );
-    state.generations.push(serde_json::from_value(json!({
-        "n":1, "bind_nonce_sha256":"00", "pane":"fixture", "created":"2026-11-01T00:00:00Z",
-        "connection":owner.binding,
-        "bound":{"host_cap_sha256":"00", "ctl_cap_sha256":"00", "endpoint":"/fixture.sock",
-            "session_id":"fixture", "session_file":"/fixture.jsonl", "pid":1,
-            "start_time":"fixture", "request_id":"hello", "at":"2026-11-01T00:00:00Z"}
-    })).unwrap());
+    state.generations.push(
+        serde_json::from_value(json!({
+            "n":1, "bind_nonce_sha256":"00", "pane":"fixture", "created":"2026-11-01T00:00:00Z",
+            "connection":owner.binding,
+            "bound":{"host_cap_sha256":"00", "ctl_cap_sha256":"00", "endpoint":"/fixture.sock",
+                "session_id":"fixture", "session_file":"/fixture.jsonl", "pid":1,
+                "start_time":"fixture", "request_id":"hello", "at":"2026-11-01T00:00:00Z"}
+        }))
+        .unwrap(),
+    );
     store
         .update(&task.id, |task| {
             task.runs.push(serde_json::from_value(json!({
