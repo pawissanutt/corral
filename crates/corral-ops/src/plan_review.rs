@@ -132,14 +132,26 @@ pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
         return Ok(false);
     };
     preparation.check(task.plans.last().context("prepared plan disappeared")?)?;
-    if !crate::plan_dispatch::continuation::resume_allowed(
-        ctx,
-        &corral_core::agent::ContainerRef::PlanReviewer {
-            task: task.id.clone(),
-            plan: preparation.plan.clone(),
-            review: preparation.review.id.clone(),
-        },
-    )? {
+    let paid = crate::plan_dispatch::continuation::role_enabled(
+        &ctx.store.config,
+        &preparation.review.reviewer,
+        corral_core::agent::AgentRole::PlanReviewer,
+    ) || task
+        .plans
+        .last()
+        .and_then(|plan| plan.reviews.last())
+        .and_then(|review| review.agent_host.as_deref())
+        .is_some_and(crate::plan_dispatch::continuation::paid_bound);
+    if paid
+        && !crate::plan_dispatch::continuation::resume_allowed(
+            ctx,
+            &corral_core::agent::ContainerRef::PlanReviewer {
+                task: task.id.clone(),
+                plan: preparation.plan.clone(),
+                review: preparation.review.id.clone(),
+            },
+        )?
+    {
         return Ok(true);
     }
     if crate::operating::is_automatic(&preparation.authorization) {

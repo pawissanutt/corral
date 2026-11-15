@@ -543,3 +543,86 @@ fn hello(fx: &ts::Fx, host: &ts::Host, container: &ContainerRef) {
         "hello",
     ));
 }
+
+#[test]
+fn planning_sweep_reads_only_keyed_evidence_after_role_opt_in() {
+    use crate::plan_dispatch::continuation::{due, enabled};
+    use corral_core::work::{Counter, HotScope, snapshot};
+
+    let (mut fx, id, _, source) = fixture();
+    let head = fx.ctx.store.head(&id).unwrap();
+    {
+        let _hot = HotScope::enter();
+        let before = snapshot();
+        assert!(enabled(&fx.ctx.store.config));
+        assert!(!due(&fx.ctx, &head).unwrap());
+        assert_eq!(snapshot(), before);
+    }
+    quota(&fx, &source);
+    let head = fx.ctx.store.head(&id).unwrap();
+    {
+        let _hot = HotScope::enter();
+        let before = snapshot();
+        assert!(due(&fx.ctx, &head).unwrap());
+        let after = snapshot();
+        assert_eq!(
+            after.total(Counter::NestedRowDecodes) - before.total(Counter::NestedRowDecodes),
+            2
+        );
+        assert_eq!(after.full_task_hydrations(), before.full_task_hydrations());
+        assert_eq!(
+            after.total(Counter::RecordDecodes),
+            before.total(Counter::RecordDecodes)
+        );
+        assert_eq!(
+            after.total(Counter::TaskHeadDecodes),
+            before.total(Counter::TaskHeadDecodes)
+        );
+    }
+    continuation::with_state(&fx.ctx, &source, |state| {
+        state.turns[0].provider_failure.as_mut().unwrap().category =
+            corral_core::FailureCategory::Transient;
+        Ok(())
+    })
+    .unwrap();
+    let head = fx.ctx.store.head(&id).unwrap();
+    for paid in [true, false] {
+        if !paid {
+            fx.ctx
+                .store
+                .config
+                .profiles
+                .get_mut("pi")
+                .unwrap()
+                .metadata
+                .as_mut()
+                .unwrap()
+                .fallback
+                .as_mut()
+                .unwrap()
+                .paid_roles
+                .clear();
+        }
+        let _hot = HotScope::enter();
+        let before = snapshot();
+        assert!(!(enabled(&fx.ctx.store.config) && due(&fx.ctx, &head).unwrap()));
+        let after = snapshot();
+        if paid {
+            assert_eq!(
+                after.total(Counter::NestedRowDecodes) - before.total(Counter::NestedRowDecodes),
+                2
+            );
+            assert_eq!(after.full_task_hydrations(), before.full_task_hydrations());
+            assert_eq!(
+                after.total(Counter::RecordDecodes),
+                before.total(Counter::RecordDecodes)
+            );
+            assert_eq!(
+                after.total(Counter::TaskHeadDecodes),
+                before.total(Counter::TaskHeadDecodes)
+            );
+        } else {
+            assert_eq!(after, before);
+        }
+    }
+}

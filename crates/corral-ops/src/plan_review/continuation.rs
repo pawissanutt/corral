@@ -191,7 +191,11 @@ pub(crate) fn close_pending(ctx: &Ctx, task: &mut Task) -> Result<()> {
         for r in 0..task.plans[p].reviews.len() {
             let plan = &task.plans[p];
             let review = &plan.reviews[r];
-            if review.agent_host.is_some() {
+            if review
+                .agent_host
+                .as_deref()
+                .is_some_and(crate::plan_dispatch::continuation::paid_bound)
+            {
                 let container = ContainerRef::PlanReviewer {
                     task: task.id.clone(),
                     plan: plan.id.clone(),
