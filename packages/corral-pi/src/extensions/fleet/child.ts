@@ -6,7 +6,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { BuildContext, ChildQuestion, ChildSpec, ChildUsage } from "../../build/types.ts";
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
-import { closeResidentSession } from "../../claude/resident.ts";
+import { closeResidentSession, residentLifecycle } from "../../claude/resident.ts";
 import { classifyBuildWrite } from "../../roles/build/guard.ts";
 import type { HelperEvent } from "../subagent/inspection.ts";
 import { observeHelperEvent } from "../subagent/session.ts";
@@ -228,7 +228,6 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
       const model = options.models.getModel(choice.provider, choice.model);
       if (!model) throw new Error(`model_unavailable: ${choice.provider}/${choice.model}`);
       await session!.setModel(model);
-      closeResidentSession(session!.sessionId);
       session!.setThinkingLevel(thinking(choice.effort));
     };
     const { promise: ready, resolve: readyResolve, reject: readyReject } = Promise.withResolvers<void>();
@@ -243,6 +242,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         if (!model) throw new Error(`model_unavailable: ${initialModel.provider}/${initialModel.model}`);
         const level = thinking(initialModel.effort);
         const extension = (pi: ExtensionAPI) => {
+          residentLifecycle(pi);
           for (const tool of options.localTools) if (allowed.has(tool.name) && tool.name !== "ask_owner") pi.registerTool(tool);
           pi.registerTool({ name: "ask_owner", label: "Ask the owner", description: "Ask the owner one blocking question with two to four concrete options.",
             parameters: Type.Object({ question: Type.String({ minLength: 1 }), options: Type.Array(Type.Object({ label: Type.String({ minLength: 1 }), detail: Type.Optional(Type.String()) }), { minItems: 2, maxItems: 4 }) }),

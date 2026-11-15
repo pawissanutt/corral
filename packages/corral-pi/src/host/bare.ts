@@ -20,6 +20,7 @@ import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
 import { restrictProvider } from "./session.ts";
 import { providerCapabilities, providerTransport, type ProviderAvailability } from "./capabilities.ts";
 import { createModelCatalog } from "./catalog.ts";
+import { residentLifecycle } from "../claude/resident.ts";
 
 /** Pi 1.3.0's own default model of each provider (`defaultModelPerProvider`, not exported). */
 export const BARE_DEFAULT_MODEL: Readonly<Record<Exclude<ProviderId, "llama.cpp" | "openai">, string>> = {
@@ -123,7 +124,7 @@ export async function openBare(options: BareOptions, loadSdk: () => Promise<type
   const factory: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
     const services = await sdk.createAgentSessionServices({
       cwd, agentDir, modelRuntime: models, settingsManager: sdk.SettingsManager.inMemory(restrictedSettings()),
-      resourceLoaderOptions: resourceLoaderOptions([]),
+      resourceLoaderOptions: resourceLoaderOptions([residentLifecycle]),
     });
     const result = await sdk.createAgentSessionFromServices({
       services, sessionManager, model, tools,

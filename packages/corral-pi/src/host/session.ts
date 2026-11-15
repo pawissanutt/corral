@@ -30,7 +30,7 @@ import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.
 import type { AuthContext } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
-import { closeResidentSession } from "../claude/resident.ts";
+import { closeResidentSession, residentLifecycle } from "../claude/resident.ts";
 import type { QuestionUpdate, SubmitInput, SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
 import { scratchRoots, writeSettings } from "../roles/assistant/paths.ts";
@@ -1117,6 +1117,7 @@ export class HostSession {
   }
 
   private async extension(api: ExtensionAPI): Promise<void> {
+    residentLifecycle(api);
     await this.planning?.refresh(); // reload never resets authority to ordinary
     const policy = this.planning;
     const pi = policy ? new Proxy(api, { get: (target, property, receiver) => {
@@ -1126,9 +1127,6 @@ export class HostSession {
     this.dialogPi = pi;
     registerCacheStats(pi);
     pi.on("model_select", event => {
-      // This is emitted only after selection commits, including switches away from Claude.
-      // Connection rebinding replaces the host and closes its resident through shutdown.
-      closeResidentSession(this.sessionId());
       this.modelChanged(`${event.model.provider}/${event.model.id}`,
         this.session.thinkingLevel, event.source !== "restore");
     });
@@ -1374,7 +1372,6 @@ export class HostSession {
     // a home or repository skill can never replace the role's packaged one (corral-worker).
     pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
     pi.on("session_shutdown", async (event) => {
-      closeResidentSession(this.sessionId());
       this.shadow?.cancel();
       // InteractiveMode exits the process after runtime disposal; main's finally never runs.
       // Await the release here, but keep reporting through extension reloads.

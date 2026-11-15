@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
-import { closeResidentSession } from "../../claude/resident.ts";
+import { closeResidentSession, residentLifecycle } from "../../claude/resident.ts";
 import { executionRefusal, exploreLoadout } from "../../roles/common/execution.ts";
 import type { AuxiliaryResult, Invocation } from "./runtime.ts";
 import { HELPER_TEXT_LIMIT, type HelperEvent } from "./inspection.ts";
@@ -164,6 +164,7 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
   const thinkingLevel = invocation.kind === "explore"
     ? researchBudget(invocation.research ?? {}, invocation.maxTurns).thinkingLevel : "off";
   const extension = (pi: ExtensionAPI) => {
+    residentLifecycle(pi);
     for (const tool of options.localTools.filter((tool) => allowed.has(tool.name))) pi.registerTool(tool);
     if (snapshots) pi.registerTool(snapshots.tool);
     pi.on("tool_call", (event) => {

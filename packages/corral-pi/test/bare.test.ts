@@ -4,12 +4,14 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BARE_DEFAULT_MODEL, BareArgsInvalid, openBare, parseBareArgs } from "../src/host/bare.ts";
+import { BARE_DEFAULT_MODEL, BareArgsInvalid, type BareSession, openBare, parseBareArgs } from "../src/host/bare.ts";
 import { UPSTREAM_TOOLS } from "../src/roles/types.ts";
 import { setBundle } from "../src/host/bundle.ts";
 import fixtureAuth from "./fixtures/auth/index.ts";
 import type { AuthContext } from "../src/auth/types.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "./support/fixture-install.ts";
+import { residentSessions } from "../src/claude/resident.ts";
+import { fakeSdk, resetSdkFixture, textReply } from "./support/claude-sdk-fixture.ts";
 
 const originalFetch = globalThis.fetch;
 let assets: FixtureInstall;
@@ -68,6 +70,25 @@ export default {
 };
 `;
 
+function residentSdkFixture() {
+  const previous = { CORRAL_CLAUDE_RESIDENT: process.env.CORRAL_CLAUDE_RESIDENT,
+    CORRAL_CLAUDE_CACHE_TTL: process.env.CORRAL_CLAUDE_CACHE_TTL };
+  process.env.CORRAL_CLAUDE_RESIDENT = "1";
+  process.env.CORRAL_CLAUDE_CACHE_TTL = "1h";
+  const run = fakeSdk(async function* (_options, control) {
+    for (const event of textReply("bare reply")) {
+      yield event.type === "result" ? { ...event, user_message_uuid: control.message.uuid } : event;
+    }
+  });
+  return { run, reset() {
+    resetSdkFixture();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  } };
+}
+
 test("bare Anthropic runs through the bound host's Claude Agent SDK lane with only the refresh endpoint open", async () => {
   const install = buildFixtureInstall({ overlays: false });
   try {
@@ -78,6 +99,39 @@ test("bare Anthropic runs through the bound host's Claude Agent SDK lane with on
     await expect(globalThis.fetch("https://api.anthropic.com/v1/messages", { method: "POST" })).rejects.toThrow("network_refused");
   } finally {
     install.cleanup();
+  }
+}, 60_000);
+
+test("bare session replacement and shutdown close each session's Claude resident", async () => {
+  const install = buildFixtureInstall({ overlays: false });
+  const fixture = residentSdkFixture();
+  let bare: BareSession | undefined;
+  try {
+    writeFileSync(join(install.dir, "src/auth/index.ts"), ANTHROPIC_AUTH);
+    const options = parseBareArgs(["--cwd", cwd, "--provider", "anthropic"], install.dir,
+      { XDG_DATA_HOME: join(work, "data-bare-resident") });
+    bare = await openBare(options, () => import("@earendil-works/pi-coding-agent"));
+    const first = bare.runtime.session;
+    await first.bindExtensions({ mode: "print" });
+    await first.prompt("Reply once.");
+    expect(first.getLastAssistantText()).toBe("bare reply");
+    expect(residentSessions.size).toBe(1);
+    expect(fixture.run.closeCalls).toEqual([0]);
+    await bare.runtime.newSession();
+    expect(bare.runtime.session.sessionId).not.toBe(first.sessionId);
+    expect(residentSessions.size).toBe(0);
+    expect(fixture.run.closeCalls).toEqual([1]);
+    await bare.runtime.session.bindExtensions({ mode: "print" });
+    await bare.runtime.session.prompt("Reply in the replacement session.");
+    expect(residentSessions.size).toBe(1);
+    expect(fixture.run.closeCalls).toEqual([1, 0]);
+    await bare.runtime.dispose();
+    bare = undefined;
+    expect(residentSessions.size).toBe(0);
+    expect(fixture.run.closeCalls).toEqual([1, 1]);
+  } finally {
+    try { await bare?.runtime.dispose(); }
+    finally { fixture.reset(); install.cleanup(); }
   }
 }, 60_000);
 
@@ -97,7 +151,7 @@ test("a compiled installation's bare mode uses the bundled auth: its directory h
   }
 }, 60_000);
 
-test("bare model selection switches from OpenAI to Claude and back in the same session", async () => {
+test("bare model selection closes the Claude resident when switching back to OpenAI", async () => {
   // Given both provider logins, without contacting either provider.
   setBundle({ auth: {
     ...fixtureAuth, providers: ["openai-codex", "anthropic"],
@@ -115,14 +169,17 @@ test("bare model selection switches from OpenAI to Claude and back in the same s
       };
     },
   } });
+  const fixture = residentSdkFixture();
+  let bare: BareSession | undefined;
   try {
     const options = parseBareArgs(["--cwd", cwd], assets.dir, { XDG_DATA_HOME: join(work, "data-switch") });
     mkdirSync(options.dataRoot, { recursive: true });
     writeFileSync(join(options.dataRoot, "models.json"), JSON.stringify({
       providers: { anthropic: { models: [{ id: "configured-future-claude" }] } },
     }));
-    const bare = await openBare(options, () => import("@earendil-works/pi-coding-agent"));
+    bare = await openBare(options, () => import("@earendil-works/pi-coding-agent"));
     const session = bare.runtime.session;
+    await session.bindExtensions({ mode: "print" });
     // When the real runtime refreshes the picker and selects Claude.
     await session.modelRuntime.refresh({ allowNetwork: false });
     const available = await session.modelRuntime.getAvailable();
@@ -132,12 +189,18 @@ test("bare model selection switches from OpenAI to Claude and back in the same s
     await session.setModel(claude);
     // Then the selected provider changes in place, without replacing the session.
     expect(session.model?.provider).toBe("anthropic");
+    await session.prompt("Reply before switching providers.");
+    expect(session.getLastAssistantText()).toBe("bare reply");
+    expect(fixture.run.closeCalls).toEqual([0]);
     await session.setModel(openai);
     expect(session.model?.provider).toBe("openai-codex");
     expect(session.modelRuntime.getProvider("anthropic")?.auth.apiKey).toBeUndefined();
+    expect(fixture.run.closeCalls).toEqual([1]);
+    expect(residentSessions.size).toBe(0);
     expect(bare.network.ledger().allowed).toBe(0);
   } finally {
-    setBundle(undefined);
+    try { await bare?.runtime.dispose(); }
+    finally { fixture.reset(); setBundle(undefined); }
   }
 }, 60_000);
 
