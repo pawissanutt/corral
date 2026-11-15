@@ -163,7 +163,14 @@ pub(crate) fn plan_reviewer(
             }
         }
     } else {
-        if let Some(plan) = task.plans.last()
+        let paid = task
+            .plans
+            .last()
+            .and_then(|plan| plan.reviews.last())
+            .and_then(|review| review.agent_host.as_deref())
+            .is_some_and(crate::plan_dispatch::continuation::paid_bound);
+        if paid
+            && let Some(plan) = task.plans.last()
             && let Some(review) = plan.reviews.last()
             && crate::plan_review::has_prepared(ctx, &task.id, &plan.id)?
             && !crate::plan_dispatch::continuation::resume_allowed(
@@ -177,11 +184,13 @@ pub(crate) fn plan_reviewer(
         {
             bail!("SuccessorAmbiguous: paid plan reviewer cannot relaunch");
         }
-        if let Some(id) = super::continuation::prepared_candidate(
-            &ctx.store,
-            &task.id,
-            corral_core::agent::AgentRole::PlanReviewer,
-        )? {
+        if paid
+            && let Some(id) = super::continuation::prepared_candidate(
+                &ctx.store,
+                &task.id,
+                corral_core::agent::AgentRole::PlanReviewer,
+            )?
+        {
             let candidate = config.execution_candidate(&resolved.profile, &id)?;
             let selected = config.resolve_candidate(&resolved.profile, candidate)?;
             let planner = corral_core::plan_policy::planner(task)?

@@ -54,6 +54,7 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let _span = corral_core::timing::span("sync.availability_advance_all");
     let mut changes = Vec::new();
     let mut panes: Option<HashMap<String, PaneInfo>> = None;
+    let planning_enabled = crate::plan_dispatch::continuation::enabled(&ctx.store.config);
     for head in ctx
         .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?
@@ -62,15 +63,26 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             continue;
         }
         let task = head.to_shell_task()?;
+        let planning_due = planning_enabled && crate::plan_dispatch::continuation::due(ctx, &head)?;
+        if !planning_due {
+            let Some(subject) = continuation(&task) else {
+                continue;
+            };
+            if selected(ctx, &task.id, subject.run, &subject.episode)?.is_none() {
+                continue;
+            }
+        }
         // The stall driver and owner replies share this claim: the recheck and the
         // replacement cannot interleave with a retry prompt or a reply.
         let Some(_delivery) = ctx.store.try_lock(&format!("delivery-{}", task.id))? else {
             continue;
         };
         let task = ctx.store.get(&task.id)?;
-        changes.extend(crate::plan_dispatch::continuation::advance_all(
-            ctx, &task, now,
-        )?);
+        if planning_due {
+            changes.extend(crate::plan_dispatch::continuation::advance_all(
+                ctx, &task, now,
+            )?);
+        }
         let Some(subject) = continuation(&task) else {
             continue;
         };
