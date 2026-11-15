@@ -110,8 +110,11 @@ is one bounded window of its transcript: `older` is the cursor of the window bef
 and stays valid after later writes, and the reply never has a continuation.
 
 A terminal detail of a running session with a pane is the pane's visible screen, read
-from herdr when the app asks for it (`herdr pane read --source visible`): plain text
-rows, at most 200, marked `live`. The app asks about once per second while the terminal
+from herdr when the app asks for it (`herdr pane read --source visible --format ansi`):
+plain text rows, at most 200, marked `live`. The reply also carries parallel styled runs
+(colours, bold, dim, italic, underline, strike and inverse); the client owns the palette
+and default colours, and an over-budget screen falls back to plain lines. The app asks
+about once per second while the terminal
 is on screen, and an unchanged screen answers not-modified. Nothing is read while no
 one looks, topic reads never probe a pane, and a pane recorded for another herdr
 server is refused. The view is read-only: no keys are sent. A gate's terminal detail

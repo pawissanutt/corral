@@ -22,6 +22,7 @@ mod data;
 mod fixture;
 mod live;
 mod live_session;
+pub mod screen;
 
 pub use data::AGENTS;
 pub use fixture::{session, wall};
@@ -612,6 +613,9 @@ pub struct Terminal {
     /// The lines are the pane's screen rows as read: drawn as received, one row each, never
     /// wrapped or recoloured, so frames and status bars line up as in the pane.
     pub verbatim: bool,
+    /// The same screen rows with the pane's colours and styles, when the screen carried them;
+    /// empty otherwise, and then `lines` are drawn.
+    pub styled: Vec<screen::Row>,
     /// What the empty surface says instead of lines (no capture yet, none recorded).
     pub empty: Option<String>,
     /// Fixture: the phone's terminal keys. Daemon captures take no keys.

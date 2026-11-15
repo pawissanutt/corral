@@ -15,7 +15,7 @@ use crate::model::Form;
 use crate::state::AppState;
 use crate::ui::tokens::{Token, color};
 
-/// The app's UI set (`nsh.json` `"rust"`): its root component and the files of `assets/`, whose two
+/// The app's UI set (`nsh.json` `"rust"`): its root component and the files of `assets/`, whose
 /// fonts the engine registers before the first render.
 #[native_module("corral/native")]
 fn native(registry: &mut Registry) {

@@ -20,7 +20,7 @@ use super::live::{clock, role_label, shown_id, stale, unix, usage};
 use super::{
     Action, FactValue, Feed, Fill, Line, LineClass, Message, MessageItem, QuestionCard, Reply,
     ReplyMode, Run, RunFact, Session, State, Terminal, Tool, Transcript, View, line, reply_busy,
-    tail_line,
+    screen, tail_line,
 };
 
 /// Output lines an expanded tool call shows; the rest are counted, not drawn.
@@ -393,6 +393,10 @@ fn terminal(
             .unwrap_or_default(),
         cursor: false,
         verbatim: live,
+        styled: capture
+            .filter(|capture| capture.live)
+            .map(|capture| screen::rows(&capture.rows))
+            .unwrap_or_default(),
         empty,
         phone_keys: Vec::new(),
         refresh: Some(Action::Refresh(DetailRef::Terminal { id: row.id.clone() })),
@@ -721,6 +725,7 @@ mod tests {
                     lines: rows.clone(),
                     captured_at: "2026-11-14T10:00:00Z".into(),
                     live: true,
+                    rows: Vec::new(),
                 })),
             },
         );
@@ -745,5 +750,6 @@ mod tests {
                 .all(|line| line.class == LineClass::Plain)
         );
         assert!(terminal.verbatim);
+        assert!(terminal.styled.is_empty());
     }
 }

@@ -4,6 +4,7 @@
 //! press to the model's reducer.
 
 mod console;
+mod grid;
 mod session;
 mod transcript;
 mod wall;

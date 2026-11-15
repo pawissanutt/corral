@@ -9755,6 +9755,79 @@
         ],
         "type": "object"
       },
+      "TerminalColor": {
+        "anyOf": [
+          {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          }
+        ],
+        "description": "A terminal colour: an index into the 256-colour palette (0-15 are the client's theme\ncolours), or a 24-bit `[red, green, blue]`."
+      },
+      "TerminalRun": {
+        "description": "Consecutive cells of one terminal row that share a style. An absent colour is the terminal's\ndefault for that ground; the client owns the defaults and the indexed palette.",
+        "properties": {
+          "bg": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TerminalColor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bold": {
+            "type": "boolean"
+          },
+          "dim": {
+            "type": "boolean"
+          },
+          "fg": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TerminalColor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inverse": {
+            "description": "Foreground and background swapped (SGR 7), resolved by the client against its defaults.",
+            "type": "boolean"
+          },
+          "italic": {
+            "type": "boolean"
+          },
+          "strike": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          },
+          "underline": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
       "TerminalSnapshot": {
         "properties": {
           "captured_at": {
@@ -9769,6 +9842,16 @@
           },
           "live": {
             "type": "boolean"
+          },
+          "rows": {
+            "description": "The same lines as styled runs, one row per line, when the source carries styling (a live\npane's screen); empty otherwise. A row's run texts concatenate to its line.",
+            "items": {
+              "items": {
+                "$ref": "#/components/schemas/TerminalRun"
+              },
+              "type": "array"
+            },
+            "type": "array"
           }
         },
         "required": [
