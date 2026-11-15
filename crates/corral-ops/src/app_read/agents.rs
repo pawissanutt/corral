@@ -1,24 +1,31 @@
 //! Read-only agent projections, including canonical usage from bound assistant transcripts.
-//! No reader probes panes, starts hosts, or accepts a caller-supplied filesystem path.
+//! Topic reads never probe panes; explicit terminal details read one visible screen through herdr.
+//! No reader starts hosts or accepts a caller-supplied filesystem path.
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use corral_core::agent::{AgentGeneration, ContainerRef, HostHealth, pm_state};
 use corral_core::backend::HeadQuery;
 use corral_core::{AgentHostHead, GateResult, RunHead, TaskHead, UsageTotals};
 use corral_protocol::assistant::{EntryCard, EntryKind};
 use corral_protocol::detail::DetailBody;
-use corral_protocol::detail::session::{SessionItem, SessionMessage, SessionPage};
+use corral_protocol::detail::session::{
+    SessionItem, SessionMessage, SessionPage, TerminalSnapshot,
+};
 use corral_protocol::rows::{
     AgentRow, AgentStatus, AssistantLocation, AssistantRow, AssistantState,
 };
+use jiff::Timestamp;
 
-use super::{revision, short};
+use super::{now, revision, short};
 use crate::Ctx;
 
 #[path = "agent_transcript.rs"]
 mod transcript;
+
+/// Terminal tasks read per status when looking for sessions that ended recently.
+const RECENT_TERMINAL: u32 = 64;
 
 struct Source {
     row: AgentRow,
@@ -26,6 +33,10 @@ struct Source {
     transcript: Option<PathBuf>,
     replyable: bool,
     gate: Option<(String, String)>,
+    /// Assistant panes have provenance outside the task ownership summary.
+    assistant_socket: Option<PathBuf>,
+    /// When an ended session ended; `None` while it has not.
+    ended: Option<Timestamp>,
 }
 
 fn blank(id: String, role: &str, title: &str) -> AgentRow {
@@ -126,6 +137,8 @@ fn source(
         transcript: bound.map(|bound| bound.session_file).or(fallback),
         replyable,
         gate: None,
+        assistant_socket: None,
+        ended: None,
     }
 }
 
@@ -193,6 +206,7 @@ fn run_source(head: &TaskHead, parent: &RunHead, run: &RunHead, reviewer: bool) 
     if selected.provider_id.is_none() {
         selected.provider_id = run.session.as_ref().and_then(|s| s.id.clone());
     }
+    selected.ended = ended.then(|| run.ended.unwrap_or(head.updated));
     Ok(selected)
 }
 
@@ -220,11 +234,13 @@ fn task_sources(head: &TaskHead, output: &mut Vec<Source>) -> Result<()> {
             );
             row.since = Some(gate.at.to_string());
             output.push(Source {
+                ended: (row.status == AgentStatus::Ended).then_some(gate.at),
                 row,
                 provider_id: None,
                 transcript: None,
                 replyable: false,
                 gate: Some((head.id.clone(), run.id.clone())),
+                assistant_socket: None,
             });
         }
     }
@@ -260,7 +276,9 @@ fn task_sources(head: &TaskHead, output: &mut Vec<Source>) -> Result<()> {
             && run.ended.is_none()
             && run.pending_reply.is_none()
             && row.pane.is_some();
-        output.push(source(row, generation, None, replyable));
+        let mut planner = source(row, generation, None, replyable);
+        planner.ended = run.ended;
+        output.push(planner);
     }
     if let Some(plan) = head.last_plan.as_deref()
         && let Some(review) = &plan.current_review
@@ -288,12 +306,14 @@ fn task_sources(head: &TaskHead, output: &mut Vec<Source>) -> Result<()> {
             plan: plan.id.clone(),
             review: review.id.clone(),
         };
-        output.push(source(
+        let mut reviewer = source(
             row,
             native(head, &container, review.agent_host.as_deref())?,
             None,
             false,
-        ));
+        );
+        reviewer.ended = ended.then_some(review.at);
+        output.push(reviewer);
     }
     Ok(())
 }
@@ -316,15 +336,30 @@ fn pm_source(ctx: &Ctx) -> Result<Option<Source>> {
     Ok(Some(source(row, generation, None, false)))
 }
 
-fn task_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
-    // Both are maintained head indexes; terminal tasks are included only while cleanup owns a pane.
+/// Sessions that ended before this are off the Agents list (`[ui] agents_ended_window`).
+fn ended_cutoff(ctx: &Ctx) -> Timestamp {
+    corral_core::clock::now()
+        .checked_sub(ctx.store.config.ui.agents_ended_window())
+        .unwrap_or(Timestamp::MIN)
+}
+
+/// Open tasks, and the newest tasks that reached a terminal status since `cutoff`: the heads
+/// whose containers can be running or recently ended. Both are maintained head indexes. The
+/// cleanup ledger is not consulted: a pane still owed cleanup says nothing about its session.
+fn task_heads(ctx: &Ctx, cutoff: Timestamp) -> Result<Vec<TaskHead>> {
     let mut heads = BTreeMap::new();
-    for query in [
-        HeadQuery::Open { project: None },
-        HeadQuery::UnreleasedPanes,
-    ] {
-        for head in ctx.store.heads(&query)? {
-            heads.entry(head.id.clone()).or_insert(head);
+    for head in ctx.store.heads(&HeadQuery::Open { project: None })? {
+        heads.insert(head.id.clone(), head);
+    }
+    for status in ["done", "dropped"] {
+        let recent = ctx.store.heads_page(
+            &HeadQuery::RecentByStatus {
+                status: status.into(),
+            },
+            RECENT_TERMINAL,
+        )?;
+        for head in recent.into_iter().filter(|head| head.updated >= cutoff) {
+            heads.insert(head.id.clone(), head);
         }
     }
     Ok(heads.into_values().collect())
@@ -361,7 +396,10 @@ fn assistant_source(ctx: &Ctx, assistant: AssistantRow, tokens: Option<u64>) -> 
     if assistant.live_in == AssistantLocation::Daemon {
         row.pane = None;
     }
-    Ok(source(row, generation, None, false))
+    let mut selected = source(row, generation, None, false);
+    selected.assistant_socket = container.herdr_socket;
+    selected.ended = session.ended;
+    Ok(selected)
 }
 
 /// The canonical runtime owns assistant state; this read never warms or starts it.
@@ -369,21 +407,41 @@ pub fn assistant_rows(ctx: &Ctx) -> Result<Vec<AssistantRow>> {
     crate::agent::app_runtime::sessions(ctx)
 }
 
-/// Current actual containers, not a pane inventory or a synthetic list of profiles.
+/// The sessions running now and those that ended within `[ui] agents_ended_window`, each with
+/// the last lines of its recorded output. Not a pane inventory, a synthetic list of profiles
+/// or a history: an older session is read by id through its task.
 pub fn agents_rows(ctx: &Ctx) -> Result<Vec<AgentRow>> {
+    let cutoff = ended_cutoff(ctx);
     let mut sources = Vec::new();
-    for head in task_heads(ctx)? {
+    for head in task_heads(ctx, cutoff)? {
         task_sources(&head, &mut sources)?;
     }
     if let Some(pm) = pm_source(ctx)? {
         sources.push(pm);
     }
-    for (assistant, tokens) in crate::agent::app_runtime::sessions_with_usage(ctx)? {
+    let listed = |state: AssistantState, ended: Option<Timestamp>| match state {
+        AssistantState::Ended => ended.is_some_and(|at| at >= cutoff),
+        // A resumable session with no host runs nowhere; the assistant feed lists it.
+        AssistantState::Cold => false,
+        _ => true,
+    };
+    for (assistant, tokens) in crate::agent::app_runtime::sessions_with_usage(ctx, listed)? {
         sources.push(assistant_source(ctx, assistant, tokens)?);
     }
     sources
         .into_iter()
+        .filter(|source| {
+            source.row.status != AgentStatus::Ended || source.ended.is_some_and(|at| at >= cutoff)
+        })
         .map(|mut source| {
+            // A tail that cannot be read leaves the row without one; its other facts stand.
+            source.row.tail = match (&source.transcript, &source.gate) {
+                (Some(path), _) => transcript::tail(path).unwrap_or_default(),
+                (None, Some((task, run))) if source.row.status == AgentStatus::Gating => {
+                    transcript::gate_tail(ctx, task, run).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            };
             source.row.rev = revision(&source.row)?;
             Ok(source.row)
         })
@@ -399,12 +457,14 @@ fn resolve(ctx: &Ctx, id: &str) -> Result<Source> {
         return pm_source(ctx)?.context("PM session not found");
     }
     if id.starts_with("A-") || id == "quick" {
-        let (assistant, tokens) = crate::agent::app_runtime::sessions_with_usage(ctx)?
-            .into_iter()
-            .find(|(row, _)| {
-                row.id == id
-                    || (id == "quick" && row.kind == corral_protocol::rows::AssistantKind::Quick)
-            })
+        let session = if id == "quick" {
+            ctx.store
+                .app_thread_scope("quick")?
+                .context("assistant session not found")?
+        } else {
+            id.to_owned()
+        };
+        let (assistant, tokens) = crate::agent::app_runtime::row_with_usage(ctx, &session)
             .context("assistant session not found")?;
         return assistant_source(ctx, assistant, tokens);
     }
@@ -414,7 +474,7 @@ fn resolve(ctx: &Ctx, id: &str) -> Result<Source> {
         task_sources(&head, &mut sources)?;
     } else {
         // Board links may contain the provider's recorded session id, not the container key.
-        for head in task_heads(ctx)? {
+        for head in task_heads(ctx, ended_cutoff(ctx))? {
             task_sources(&head, &mut sources)?;
         }
         if let Some(pm) = pm_source(ctx)? {
@@ -468,13 +528,10 @@ fn entry_message(entry: corral_protocol::assistant::ThreadEntry) -> SessionMessa
     }
 }
 
-/// `page` is a domain cursor: `thread:<before>` or `transcript:<byte offset>`.
+/// `page` is a domain cursor: `thread:<before>` or `transcript:<byte offset>`. The page's
+/// `older` is the cursor of the window before it, when there is one.
 /// Canonical assistants reply through assistant.send, never task.reply or terminal input.
-pub(super) fn session(
-    ctx: &Ctx,
-    id: &str,
-    page: Option<&str>,
-) -> Result<(DetailBody, Option<String>)> {
+pub(super) fn session(ctx: &Ctx, id: &str, page: Option<&str>) -> Result<SessionPage> {
     let selected = resolve(ctx, id)?;
     let row = selected.row;
     let (messages, older) = if row.role == "assistant" && ctx.store.app_thread_head(&row.id).is_ok()
@@ -517,33 +574,81 @@ pub(super) fn session(
             .into(),
         )
     };
-    Ok((
-        DetailBody::Session(SessionPage {
-            id: row.id,
-            role: row.role,
-            task: row.task,
-            run: row.run,
-            machine: row.machine,
-            messages,
-            older: older.clone(),
-            replyable: selected.replyable,
-            reply_refusal: refusal,
-        }),
+    Ok(SessionPage {
+        id: row.id,
+        role: row.role,
+        task: row.task,
+        run: row.run,
+        machine: row.machine,
+        messages,
         older,
-    ))
+        replyable: selected.replyable,
+        reply_refusal: refusal,
+    })
 }
 
-/// Only recorded output can be served without asking a runtime for its terminal contents.
+/// Gate captures remain recorded; other terminals require explicit, owning-server reads.
 pub(super) fn terminal(ctx: &Ctx, id: &str) -> Result<DetailBody> {
     let selected = resolve(ctx, id)?;
-    let Some((task, run)) = selected.gate else {
-        bail!(
-            "terminal_snapshot_unavailable: no recorded terminal capture; use session transcript"
-        );
+    if let Some((task, run)) = selected.gate {
+        return Ok(DetailBody::Terminal(transcript::gate_snapshot(
+            ctx, &task, &run,
+        )?));
+    }
+    ensure!(
+        selected.ended.is_none() && selected.row.status != AgentStatus::Ended,
+        "terminal_snapshot_unavailable: session has ended"
+    );
+    let pane = selected
+        .row
+        .pane
+        .as_deref()
+        .context("terminal_snapshot_unavailable: session has no pane")?;
+    let owned = if selected.row.role != "assistant"
+        && let Some(task) = selected.row.task.as_deref()
+    {
+        let head = ctx
+            .store
+            .head(task)
+            .context("reading terminal session owner")?;
+        crate::session_scope::owns_head(ctx, &head).context("checking terminal pane ownership")?
+    } else {
+        let owns_store = crate::session_scope::owns_inventory(ctx)
+            .context("checking terminal store ownership")?;
+        if selected.row.role == "assistant" {
+            let view = ctx
+                .store
+                .session_view()
+                .context("reading terminal ownership evidence")?;
+            let actual = ctx
+                .herdr
+                .socket_path()
+                .context("locating terminal herdr server")?;
+            owns_store
+                && selected
+                    .assistant_socket
+                    .as_ref()
+                    .or(view.binding.as_ref().map(|binding| &binding.socket))
+                    == Some(&actual)
+        } else {
+            // PM panes have no per-pane socket; sync's store ownership is their evidence.
+            owns_store
+        }
     };
-    Ok(DetailBody::Terminal(transcript::gate_snapshot(
-        ctx, &task, &run,
-    )?))
+    ensure!(
+        owned,
+        "terminal_snapshot_unavailable: pane ownership is unknown or belongs to another herdr server"
+    );
+    let screen = ctx
+        .herdr
+        .pane_screen(pane)
+        .context("reading live terminal screen")?
+        .with_context(|| format!("not_found: terminal pane {pane} is gone"))?;
+    Ok(DetailBody::Terminal(TerminalSnapshot {
+        lines: transcript::screen(&screen),
+        captured_at: now(),
+        live: true,
+    }))
 }
 
 /// Global summaries remain readable without a live assistant or loaded threads.

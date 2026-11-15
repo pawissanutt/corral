@@ -124,7 +124,13 @@ pub enum Mode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State {
     pub session: &'static str,
+    /// The fixture preview's Transcript | Terminal choice; it opens on the transcript, as the
+    /// mockup does.
     pub view: View,
+    /// The owner's Transcript | Terminal choice for daemon sessions; it opens on the pane's
+    /// live screen. Kept apart from `view` because the root's switch key toggles without
+    /// knowing the source, and each source has its own first view.
+    pub live_view: View,
     pub mode: Mode,
     /// Expanded tool calls of daemon transcripts, by `Tool::key`.
     pub expanded: BTreeSet<String>,
@@ -140,6 +146,7 @@ impl Default for State {
         Self {
             session: "T-868",
             view: View::Transcript,
+            live_view: View::Terminal,
             mode: Mode::Wall,
             expanded: BTreeSet::new(),
             replies: BTreeMap::new(),
@@ -154,10 +161,11 @@ impl State {
     }
     /// Toggle transcript and terminal.
     pub fn toggle_view(&mut self) {
-        self.view = match self.view {
-            View::Transcript => View::Terminal,
-            View::Terminal => View::Transcript,
-        };
+        self.view = flip(self.view);
+    }
+    /// Toggle a daemon session's transcript and terminal.
+    pub fn toggle_live_view(&mut self) {
+        self.live_view = flip(self.live_view);
     }
     /// Handle an action in the fixture preview.
     pub fn act(&mut self, action: Action, env: Env) -> Vec<Effect> {
@@ -233,12 +241,21 @@ impl State {
                 Some(session) => self.reply(session, text, feed),
                 None => vec![],
             },
+            Action::SetView(view) => {
+                self.live_view = view;
+                vec![]
+            }
+            Action::ToggleView => {
+                self.toggle_live_view();
+                vec![]
+            }
             Action::Open(_) | Action::Question | Action::Tool => vec![],
             other => self.shared(other),
         }
     }
 
-    /// Navigation and view switches both sources share.
+    /// Navigation and the wall setting both sources share, and the fixture's view switches
+    /// (a daemon session's are handled in `act_live`).
     fn shared(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::Back => vec![Effect::Go(Destination::Agents)],
@@ -289,6 +306,13 @@ impl State {
         .about(Live::Session(session.clone()));
         self.replies.insert(session, act.key.clone());
         vec![Effect::Act(act)]
+    }
+}
+
+fn flip(view: View) -> View {
+    match view {
+        View::Transcript => View::Terminal,
+        View::Terminal => View::Transcript,
     }
 }
 
@@ -585,6 +609,9 @@ pub struct Terminal {
     pub input: String,
     pub lines: Vec<Line>,
     pub cursor: bool,
+    /// The lines are the pane's screen rows as read: drawn as received, one row each, never
+    /// wrapped or recoloured, so frames and status bars line up as in the pane.
+    pub verbatim: bool,
     /// What the empty surface says instead of lines (no capture yet, none recorded).
     pub empty: Option<String>,
     /// Fixture: the phone's terminal keys. Daemon captures take no keys.

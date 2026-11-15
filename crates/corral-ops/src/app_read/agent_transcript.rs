@@ -15,6 +15,10 @@ const WINDOW: u64 = 128 * 1024;
 const MESSAGES: usize = 32;
 const TEXT_BYTES: usize = 32 * 1024;
 const ARCHIVE_BYTES: u64 = 8 * 1024 * 1024;
+/// Lines a wall tile shows for what a session did last.
+const TAIL_LINES: usize = 4;
+const TAIL_BYTES: usize = 160;
+const LOG_TAIL_WINDOW: u64 = 4 * 1024;
 
 pub(super) fn cursor(page: Option<&str>, kind: &str) -> Result<Option<u64>> {
     page.map(|page| {
@@ -252,6 +256,173 @@ fn message(value: &Value) -> Option<SessionMessage> {
     })
 }
 
+/// The complete lines in the last `window` bytes of a recorded file.
+fn end_window(path: &Path, window: u64) -> Result<Vec<u8>> {
+    let mut file = open(path)?;
+    let len = file
+        .metadata()
+        .context("reading recorded output size")?
+        .len();
+    let start = len.saturating_sub(window);
+    file.seek(SeekFrom::Start(start))
+        .context("seeking recorded output tail")?;
+    let mut bytes = Vec::new();
+    file.take(len - start)
+        .read_to_end(&mut bytes)
+        .context("reading recorded output tail")?;
+    if start > 0 {
+        let first = bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(bytes.len(), |n| n + 1);
+        bytes.drain(..first);
+    }
+    Ok(bytes)
+}
+
+/// One display line: no terminal escape sequences or control characters, bounded, or nothing
+/// when blank.
+fn tail_line(text: &str) -> Option<String> {
+    let mut clean = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            // A CSI sequence runs to its final byte; any other escape is one more character.
+            if chars.next() == Some('[') {
+                chars.by_ref().find(|ch| ('@'..='~').contains(ch));
+            }
+        } else if !ch.is_control() {
+            clean.push(ch);
+        }
+    }
+    let clean = clean.trim();
+    (!clean.is_empty()).then(|| short(clean, TAIL_BYTES))
+}
+
+fn last_line(text: &str) -> Option<String> {
+    text.lines().rev().find_map(tail_line)
+}
+
+/// What a tool was called with, as one phrase: its command or path when it has one.
+fn tool_argument(block: &Value) -> Option<String> {
+    let input = block.get("arguments").or_else(|| block.get("input"))?;
+    let named = ["command", "path", "file_path", "pattern", "query", "url"]
+        .iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str));
+    match (named, input) {
+        (Some(text), _) => text.lines().find_map(tail_line),
+        (None, Value::String(text)) => text.lines().find_map(tail_line),
+        (None, Value::Null) => None,
+        (None, other) => tail_line(&other.to_string()),
+    }
+}
+
+/// The text of a tool result block, which is a string or a list of text parts.
+fn result_text(content: &Value) -> Option<String> {
+    match content {
+        Value::String(text) => last_line(text),
+        Value::Array(parts) => parts
+            .iter()
+            .rev()
+            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .find_map(last_line),
+        _ => None,
+    }
+}
+
+/// One recorded entry as tail lines, oldest first: what was said and each tool call. A tool's
+/// output is shown only when it failed; the call line already says what ran.
+fn entry_lines(value: &Value) -> Vec<String> {
+    let body = value.get("message").unwrap_or(value);
+    let role = body.get("role").and_then(Value::as_str).or_else(|| {
+        match value.get("type").and_then(Value::as_str) {
+            Some("user") => Some("user"),
+            Some("assistant") => Some("assistant"),
+            _ => None,
+        }
+    });
+    let Some(role) = role else {
+        return Vec::new();
+    };
+    let failed = body.get("isError").and_then(Value::as_bool) == Some(true);
+    // A prompt is read from its start; an answer or a failure from its end.
+    let said = |text: &str| match role {
+        "user" => text
+            .lines()
+            .find_map(tail_line)
+            .map(|line| short(&format!("> {line}"), TAIL_BYTES)),
+        "toolResult" if !failed => None,
+        _ => last_line(text),
+    };
+    match body.get("content") {
+        Some(Value::String(text)) => said(text).into_iter().collect(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(
+                |block| match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "text" | "input_text" | "output_text" => {
+                        said(block.get("text").and_then(Value::as_str)?)
+                    }
+                    "toolCall" | "tool_use" => {
+                        let name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
+                        let call = match tool_argument(block) {
+                            Some(argument) => format!("{name} {argument}"),
+                            None => name.to_owned(),
+                        };
+                        tail_line(&call)
+                    }
+                    "tool_result"
+                        if block.get("is_error").and_then(Value::as_bool) == Some(true) =>
+                    {
+                        result_text(block.get("content")?)
+                    }
+                    _ => None,
+                },
+            )
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// What a session did last, oldest line first. One bounded window is read from the end and
+/// only the entries the lines come from are decoded; an entry larger than the window, or one
+/// still being written, contributes nothing.
+pub(super) fn tail(path: &Path) -> Result<Vec<String>> {
+    let bytes = end_window(path, WINDOW)?;
+    let mut lines = Vec::new();
+    for entry in bytes
+        .split_inclusive(|b| *b == b'\n')
+        .rev()
+        .filter(|entry| entry.ends_with(b"\n"))
+    {
+        let Ok(value) = serde_json::from_slice::<Value>(entry) else {
+            continue;
+        };
+        lines.extend(entry_lines(&value).into_iter().rev());
+        if lines.len() >= TAIL_LINES {
+            break;
+        }
+    }
+    lines.truncate(TAIL_LINES);
+    lines.reverse();
+    Ok(lines)
+}
+
+/// The last lines a running gate wrote to its registered scratch log.
+pub(super) fn gate_tail(ctx: &Ctx, task: &str, run: &str) -> Result<Vec<String>> {
+    let path = crate::gate::gate_paths(ctx, task, run).log;
+    let bytes = end_window(&path, LOG_TAIL_WINDOW)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines: Vec<String> = text
+        .lines()
+        .rev()
+        .filter_map(tail_line)
+        .take(TAIL_LINES)
+        .collect();
+    lines.reverse();
+    Ok(lines)
+}
+
 fn lines(bytes: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(bytes);
     let mut lines = Vec::new();
@@ -276,6 +447,46 @@ fn lines(bytes: &[u8]) -> Vec<String> {
     }
     lines.reverse();
     lines
+}
+
+/// Preserve screen columns while bounding escaped rows below the CONTROL reply budget.
+pub(super) fn screen(text: &str) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut budget = 40 * 1024 - 2;
+    for row in text.rsplit('\n') {
+        let clean = if row.chars().any(char::is_control) {
+            std::borrow::Cow::Owned(
+                row.chars()
+                    .filter(|ch| !ch.is_control())
+                    .collect::<String>(),
+            )
+        } else {
+            std::borrow::Cow::Borrowed(row)
+        };
+        let mut row = short(clean.trim_end(), 2048);
+        row.truncate(row.trim_end().len());
+        if rows.is_empty() && row.is_empty() {
+            continue;
+        }
+        let cost = row
+            .chars()
+            .map(|ch| match ch {
+                '"' | '\\' => 2,
+                ch => ch.len_utf8(),
+            })
+            .sum::<usize>()
+            + 3;
+        if cost > budget {
+            break;
+        }
+        budget -= cost;
+        rows.push(row);
+        if rows.len() == 200 {
+            break;
+        }
+    }
+    rows.reverse();
+    rows
 }
 
 pub(super) fn gate_snapshot(ctx: &Ctx, task: &str, run: &str) -> Result<TerminalSnapshot> {
@@ -395,5 +606,41 @@ mod tests {
         let text = excerpt(&"é".repeat(100), 32);
         assert!(text.ends_with("[excerpt]"));
         assert!(text.len() <= 32);
+    }
+
+    #[test]
+    fn tail_is_the_latest_words_calls_and_failures_in_order() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("session.jsonl");
+        let entries = [
+            serde_json::json!({"message": {"role": "user", "content": "an earlier prompt"}}),
+            serde_json::json!({"message": {"role": "assistant", "content": [
+                {"type": "text", "text": "Checking.\n\nRunning the tests now."},
+                {"type": "toolCall", "name": "bash", "arguments": {"command": "cargo test -p x"}},
+            ]}}),
+            serde_json::json!({"message": {"role": "toolResult", "toolName": "bash", "content": [
+                {"type": "text", "text": "running 3 tests\n\u{1b}[32mtest result: ok. 3 passed\n\n"},
+            ]}}),
+            serde_json::json!({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Read", "input": {"file_path": "src/lib.rs"}},
+            ]}}),
+            serde_json::json!({"message": {"role": "toolResult", "isError": true, "content": [
+                {"type": "text", "text": "\u{1b}[31mENOENT: no such file\n"},
+            ]}}),
+        ];
+        let mut text: String = entries.iter().map(|entry| format!("{entry}\n")).collect();
+        // An entry still being written has no newline yet and is not shown.
+        text.push_str("{\"message\":{\"role\":\"assistant\",\"content\":\"half");
+        std::fs::write(&path, text)?;
+        assert_eq!(
+            tail(&path)?,
+            [
+                "Running the tests now.",
+                "bash cargo test -p x",
+                "Read src/lib.rs",
+                "ENOENT: no such file",
+            ]
+        );
+        Ok(())
     }
 }

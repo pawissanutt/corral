@@ -81,6 +81,8 @@ pub struct UiCfg {
     pub mouse: bool,
     pub done_window: String,
     pub done_max: usize,
+    /// How long an ended agent session stays in the app's Agents list.
+    pub agents_ended_window: String,
     pub columns: Vec<Status>,
     pub show_wip: bool,
     pub accent: Accent,
@@ -99,6 +101,7 @@ impl Default for UiCfg {
             mouse: true,
             done_window: "7d".into(),
             done_max: 10,
+            agents_ended_window: "1h".into(),
             columns: Status::COLUMNS.to_vec(),
             show_wip: true,
             accent: Accent::Cyan,
@@ -114,6 +117,10 @@ impl Default for UiCfg {
 impl UiCfg {
     pub fn done_window(&self) -> SignedDuration {
         parse_age(&self.done_window).unwrap_or(SignedDuration::from_hours(24 * 7))
+    }
+
+    pub fn agents_ended_window(&self) -> SignedDuration {
+        parse_age(&self.agents_ended_window).unwrap_or(SignedDuration::from_hours(1))
     }
 
     /// Physical character for a canonical board action.

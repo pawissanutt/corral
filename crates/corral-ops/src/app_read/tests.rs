@@ -223,19 +223,232 @@ fn assistant_feed_usage_reads_bound_transcripts_without_a_stored_snapshot() -> R
         let assistant = assistants.iter().find(|row| row.id == session.id).unwrap();
         assert_eq!(assistant.cost_usd, Some(0.0));
         assert_eq!(assistant.cost_basis, Some(CostBasis::Reported));
-        let agents = agents_rows(&ctx)?;
-        let agent = agents.iter().find(|row| row.id == session.id).unwrap();
-        assert_eq!(
-            agent.tokens,
-            Some(30),
-            "resumed generations must not duplicate usage"
-        );
-        assert_eq!(agent.cost_usd, Some(0.0));
-        assert_eq!(agent.cost_basis, Some(CostBasis::Reported));
-        let missing = agents.iter().find(|row| row.id == unknown.id).unwrap();
-        assert_eq!(missing.tokens, None);
-        assert_eq!(missing.cost_usd, None);
-        assert_eq!(missing.cost_basis, None);
+    }
+    // The agents feed lists ended sessions inside its window, with the same accounting.
+    ctx.store.end_assistant(&unknown.id)?;
+    let agents = agents_rows(&ctx)?;
+    let agent = agents.iter().find(|row| row.id == session.id).unwrap();
+    assert_eq!(
+        agent.tokens,
+        Some(30),
+        "resumed generations must not duplicate usage"
+    );
+    assert_eq!(agent.cost_usd, Some(0.0));
+    assert_eq!(agent.cost_basis, Some(CostBasis::Reported));
+    let missing = agents.iter().find(|row| row.id == unknown.id).unwrap();
+    assert_eq!(missing.tokens, None);
+    assert_eq!(missing.cost_usd, None);
+    assert_eq!(missing.cost_basis, None);
+    Ok(())
+}
+
+/// A task with one run `R1`; returns the run's session id on the agents feed.
+fn task_with_run(
+    store: &corral_core::Store,
+    status: corral_core::Status,
+    ended: Option<jiff::Timestamp>,
+    transcript: Option<&std::path::Path>,
+) -> Result<String> {
+    let mut task = store.create("fixture", None, status, "")?;
+    let started = corral_core::clock::now() - jiff::SignedDuration::from_hours(5);
+    task.runs.push(serde_json::from_value(serde_json::json!({
+        "id": "R1", "agent": "fixture", "worktree": "/unused", "branch": "fixture",
+        "base": "main", "base_sha": "fixture", "started": started, "ended": ended,
+        "session": transcript.map(|path| serde_json::json!({
+            "id": "sid", "policy": "reuse", "directory": "/unused", "harness": "pi",
+            "action": "new", "transcript": path,
+        })),
+    }))?);
+    store.fixture_put_task(&task)?;
+    Ok(format!("{}/run/R1", task.id))
+}
+
+#[test]
+fn agents_feed_lists_running_and_recently_ended_sessions_only() -> Result<()> {
+    use corral_core::{Status, Store};
+    use corral_protocol::rows::AgentStatus;
+
+    let tmp = tempfile::tempdir()?;
+    let store = Store::init(tmp.path())?;
+    let ago = |minutes| corral_core::clock::now() - jiff::SignedDuration::from_mins(minutes);
+    let running = task_with_run(&store, Status::Running, None, None)?;
+    let just_ended = task_with_run(&store, Status::Backlog, Some(ago(10)), None)?;
+    let landed = task_with_run(&store, Status::Done, Some(ago(10)), None)?;
+    let long_ended = task_with_run(&store, Status::Backlog, Some(ago(120)), None)?;
+    // A resumable assistant session with no host runs nowhere.
+    let cold = store.create_assistant("pi", None, None, None)?;
+    let mut ctx = crate::resources::FixedResourceProbe::ctx(store);
+    let status = |ctx: &Ctx, id: &str| -> Result<Option<AgentStatus>> {
+        let rows = agents_rows(ctx)?;
+        Ok(rows.iter().find(|row| row.id == id).map(|row| row.status))
+    };
+    assert_eq!(status(&ctx, &running)?, Some(AgentStatus::Working));
+    assert_eq!(status(&ctx, &just_ended)?, Some(AgentStatus::Ended));
+    assert_eq!(status(&ctx, &landed)?, Some(AgentStatus::Ended));
+    assert_eq!(status(&ctx, &long_ended)?, None);
+    assert_eq!(status(&ctx, &cold.id)?, None);
+
+    ctx.store.config.ui.agents_ended_window = "3h".into();
+    assert_eq!(status(&ctx, &long_ended)?, Some(AgentStatus::Ended));
+    Ok(())
+}
+
+#[test]
+fn a_session_page_is_one_window_whose_older_cursor_outlives_later_writes() -> Result<()> {
+    use corral_core::{Status, Store};
+
+    let tmp = tempfile::tempdir()?;
+    let store = Store::init(tmp.path())?;
+    let transcript = tmp.path().join("session.jsonl");
+    let mut text = String::new();
+    for index in 0..40 {
+        text.push_str(&serde_json::to_string(&serde_json::json!({
+            "message": { "role": "user", "content": format!("message-{index}") }
+        }))?);
+        text.push('\n');
+    }
+    std::fs::write(&transcript, text)?;
+    let id = task_with_run(&store, Status::Running, None, Some(&transcript))?;
+    let ctx = crate::resources::FixedResourceProbe::ctx(store);
+    let get =
+        |page: Option<String>| -> Result<(DetailReply, corral_protocol::detail::SessionPage)> {
+            let mut reply = read(
+                &ctx,
+                &DetailGet {
+                    target: DetailRef::Session { id: id.clone() },
+                    etag: None,
+                    page,
+                },
+            )?;
+            let Some(DetailBody::Session(page)) = reply.body.take() else {
+                panic!("expected a session page");
+            };
+            Ok((reply, page))
+        };
+    let (reply, latest) = get(None)?;
+    // A continuation would have the client fetch and assemble the whole transcript.
+    assert!(reply.next.is_none());
+    assert_eq!(latest.messages.len(), 32);
+
+    ctx.store
+        .create("a later write", None, Status::Backlog, "")?;
+    let (reply, older) = get(latest.older)?;
+    assert!(reply.next.is_none());
+    assert_eq!(older.messages.len(), 8);
+    assert!(older.older.is_none());
+    Ok(())
+}
+
+#[cfg(unix)]
+fn live_terminal_fixture() -> Result<(tempfile::TempDir, Ctx, String)> {
+    let tmp = tempfile::tempdir()?;
+    let store = corral_core::Store::init(tmp.path())?;
+    let id = task_with_run(&store, corral_core::Status::Running, None, None)?;
+    let bin = tmp.path().join("herdr");
+    crate::agent::test_support::write_executable(
+        &bin,
+        concat!(
+            "#!/bin/sh\n",
+            "[ \"$*\" = '--session terminal-fixture pane read pane-live --source visible --format text' ] || exit 70\n",
+            "dir=$(dirname \"$0\")\n",
+            "printf called > \"$dir/probed\"\n",
+            "cat \"$dir/screen\"\n",
+        ),
+    );
+    let herdr = corral_herdr::Herdr::with_bin(bin, Some("terminal-fixture".into()));
+    let mut task = store.get(id.split('/').next().unwrap())?;
+    task.runs[0].herdr = Some(corral_core::HerdrRef {
+        workspace_id: "workspace".into(),
+        pane_id: "pane-live".into(),
+        socket: Some(herdr.socket_path()?),
+    });
+    store.fixture_put_task(&task)?;
+    let mut ctx = crate::resources::FixedResourceProbe::ctx(store);
+    ctx.herdr = herdr;
+    Ok((tmp, ctx, id))
+}
+
+#[test]
+#[cfg(unix)]
+fn live_terminal_preserves_screen_columns_and_reuses_unchanged_etag() -> Result<()> {
+    let (tmp, ctx, id) = live_terminal_fixture()?;
+    std::fs::write(
+        tmp.path().join("screen"),
+        "  heading   \n  ┌─┐  \n\n  │ x │\u{7}   \n   \n\n",
+    )?;
+    let rows = agents_rows(&ctx)?;
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.id == id)
+            .unwrap()
+            .pane
+            .as_deref(),
+        Some("pane-live")
+    );
+    assert!(!tmp.path().join("probed").exists());
+    let mut request = DetailGet {
+        target: DetailRef::Terminal { id },
+        etag: None,
+        page: None,
+    };
+    let first = read(&ctx, &request)?;
+    let Some(DetailBody::Terminal(snapshot)) = &first.body else {
+        panic!("expected a terminal snapshot");
+    };
+    assert!(snapshot.live);
+    assert_eq!(snapshot.lines, ["  heading", "  ┌─┐", "", "  │ x │"]);
+    snapshot.captured_at.parse::<jiff::Timestamp>()?;
+    assert!(first.next.is_none());
+    request.etag = Some(first.etag.clone());
+    let unchanged = read(&ctx, &request)?;
+    assert_eq!(unchanged.etag, first.etag);
+    assert!(unchanged.body.is_none());
+
+    let large = (0..220)
+        .map(|n| format!("{n:03} {}é\n", "\"\\".repeat(1020)))
+        .collect::<String>();
+    std::fs::write(tmp.path().join("screen"), large)?;
+    let changed = read(&ctx, &request)?;
+    let Some(DetailBody::Terminal(snapshot)) = changed.body else {
+        panic!("expected a changed terminal snapshot");
+    };
+    assert_ne!(changed.etag, first.etag);
+    assert!(snapshot.lines.first().unwrap().starts_with("210 "));
+    assert!(snapshot.lines.last().unwrap().starts_with("219 "));
+    assert!(
+        snapshot
+            .lines
+            .iter()
+            .all(|row| row.len() <= 2048 && row.ends_with('é'))
+    );
+    assert!(serde_json::to_vec(&snapshot.lines)?.len() <= 40 * 1024);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn foreign_and_unowned_terminal_panes_are_refused_before_herdr_reads() -> Result<()> {
+    let (tmp, ctx, id) = live_terminal_fixture()?;
+    let mut task = ctx.store.get(id.split('/').next().unwrap())?;
+    let foreign = corral_herdr::Herdr::with_bin(
+        tmp.path().join("herdr"),
+        Some("foreign-terminal-fixture".into()),
+    )
+    .socket_path()?;
+    for socket in [Some(foreign), None] {
+        task.runs[0].herdr.as_mut().unwrap().socket = socket;
+        ctx.store.fixture_put_task(&task)?;
+        let error = read(
+            &ctx,
+            &DetailGet {
+                target: DetailRef::Terminal { id: id.clone() },
+                etag: None,
+                page: None,
+            },
+        )
+        .unwrap_err();
+        assert!(!error.to_string().starts_with("not_found"));
+        assert!(!tmp.path().join("probed").exists());
     }
     Ok(())
 }

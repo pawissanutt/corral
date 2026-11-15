@@ -83,37 +83,21 @@ pub(super) fn reply(
     Ok(reply)
 }
 
-pub(super) fn source_reply(
-    body: DetailBody,
-    next: Option<String>,
-    etag: String,
-    selector: String,
-    as_of: String,
-    seq: u64,
-) -> Result<DetailReply> {
-    let next = next
-        .map(|source| {
-            serde_json::to_string(&Cursor {
-                version: 1,
-                selector,
-                etag: etag.clone(),
-                offset: 0,
-                as_of: as_of.clone(),
-                source: Some(source),
-            })
-        })
-        .transpose()?;
-    let reply = DetailReply {
-        etag,
-        as_of,
-        seq,
-        next,
-        body: Some(body),
-    };
-    if json_len(&reply)? > APP_CONTROL_MAX - 2048 {
-        bail!("app detail page exceeds CONTROL budget");
-    }
-    Ok(reply)
+/// The cursor of another window of the same detail, read from `source` (a domain position).
+pub(super) fn source_token(
+    selector: &str,
+    etag: &str,
+    as_of: &str,
+    source: String,
+) -> Result<String> {
+    Ok(serde_json::to_string(&Cursor {
+        version: 1,
+        selector: selector.to_owned(),
+        etag: etag.to_owned(),
+        offset: 0,
+        as_of: as_of.to_owned(),
+        source: Some(source),
+    })?)
 }
 
 struct Group {

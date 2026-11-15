@@ -275,6 +275,17 @@ impl Herdr {
         }
     }
 
+    /// The pane's visible screen as plain text.
+    pub fn pane_screen(&self, pane_id: &str) -> Result<Option<String>> {
+        match self.raw(&[
+            "pane", "read", pane_id, "--source", "visible", "--format", "text",
+        ]) {
+            Ok(text) => Ok(Some(extract_read_text(&text))),
+            Err(error) if error_code(&error) == Some("pane_not_found") => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Focuses the pane's workspace, then the pane.
     pub fn pane_focus(&self, pane_id: &str) -> Result<()> {
         let pane = self.pane_get(pane_id)?.ok_or_else(|| {

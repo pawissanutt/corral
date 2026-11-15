@@ -16,8 +16,8 @@ mod runtime;
 pub use crate::agent::ops::owner_prompt::{Prompt, get as prompt_get, list as prompts};
 pub use actions::{ensure_filing_log, file_as_idea, withdraw};
 pub use input::FreshConfirmation;
-pub(crate) use projection::sessions_with_usage;
 pub use projection::{filings, live, sessions, thread};
+pub(crate) use projection::{row_with_usage, sessions_with_usage};
 pub use runtime::{Runtime, RuntimeUpdate, pump, shutdown, start, stop};
 
 pub fn resolve_scope(ctx: &Ctx, scope: &str) -> Result<Option<String>> {

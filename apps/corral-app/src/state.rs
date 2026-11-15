@@ -635,7 +635,7 @@ impl AppState {
                 let Some(session) = selected else {
                     return;
                 };
-                self.agents.update(|state| state.toggle_view());
+                self.agents.update(|state| state.toggle_live_view());
                 let live = crate::model::Live::Session(session);
                 if self.nav.with_untracked(|nav| nav.live() != Some(&live)) {
                     self.open_live(live);

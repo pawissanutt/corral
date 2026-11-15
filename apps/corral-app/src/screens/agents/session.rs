@@ -1,12 +1,14 @@
 //! The session page: its header and Transcript | Terminal switch, the transcript with its reply
 //! box beside the run (`.side-col`), or the terminal (`.termbar`, `.bigterm`); on the phone the
 //! segmented switch (`.pseg`), the docked reply or the terminal's keys. A session without a
-//! terminal (a daemon-hosted assistant has no pane) shows no switch and no terminal.
+//! terminal (a daemon-hosted assistant has no pane) shows no switch and no terminal. A daemon
+//! session's terminal is its pane's screen, kept current, with the reply under it (docked on the
+//! phone) so the owner answers without leaving it.
 
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
-use crate::model::agents::{Action, FactValue, Feed, Run, Session, View};
+use crate::model::agents::{Action, FactValue, Feed, Line, Run, Session, Terminal, View};
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::text::span;
@@ -23,12 +25,73 @@ use crate::ui::kit::text::h3;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
-use super::console::{self, BIG, PHONE};
+use super::console::{self, BIG, PHONE, PHONE_SCREEN, SCREEN};
 use super::run;
 use super::transcript::{line, phone_reply, reply, transcript};
 
 /// The run column's width (`minmax(0, 1fr) 280px`).
 const RUN_WIDTH: f32 = 280.0;
+
+/// What the terminal surface draws below its toolbar; a new screen redraws only this.
+#[derive(Clone, PartialEq)]
+struct Rows {
+    lines: Vec<Line>,
+    empty: Option<String>,
+    cursor: bool,
+    verbatim: bool,
+}
+
+impl Rows {
+    fn of(screen: &Terminal) -> Self {
+        Self {
+            lines: screen.lines.clone(),
+            empty: screen.empty.clone(),
+            cursor: screen.cursor,
+            verbatim: screen.verbatim,
+        }
+    }
+}
+
+/// The toolbar's words and control, apart from the rows: it is redrawn only when the read state
+/// changes, so its Refresh keeps the focus while the screen updates.
+#[derive(Clone, PartialEq)]
+struct Termbar {
+    feed: Feed,
+    heading: String,
+    status: String,
+    input: String,
+    refresh: Option<Action>,
+}
+
+fn rows_of(session: Memo<Session>) -> Memo<Option<Rows>> {
+    computed(move || session.with(|s| s.terminal.as_ref().map(Rows::of)))
+}
+
+fn termbar_of(session: Memo<Session>) -> Memo<Option<Termbar>> {
+    computed(move || {
+        session.with(|s| {
+            s.terminal.as_ref().map(|screen| Termbar {
+                feed: screen.feed,
+                heading: screen.heading.clone(),
+                status: screen.status.clone(),
+                input: screen.input.clone(),
+                refresh: screen.refresh.clone(),
+            })
+        })
+    })
+}
+
+/// Whether the terminal shows, and the notice over the page: what decides the page's layout.
+fn shape_of(session: Memo<Session>) -> Memo<(bool, Option<(Hue, String)>)> {
+    computed(move || {
+        session.with(|s| {
+            (
+                s.view == View::Terminal && s.terminal.is_some(),
+                s.notice.clone(),
+            )
+        })
+    })
+}
 
 /// The Transcript | Terminal switch, reading the open view.
 fn switch(app: AppState, session: Memo<Session>) -> AnyElement {
@@ -73,8 +136,12 @@ fn draft_for(app: AppState, session: Memo<Session>, id: Option<Id>) -> Signal<St
     draft
 }
 
-/// Desktop and terminal: the head, then any notice about the session, then the open view.
+/// Desktop and terminal: the head, then any notice about the session, then the open view. The
+/// terminal is built once while it shows and follows its parts, so a screen read every second
+/// neither moves the owner's scroll nor takes the reply field's focus; the transcript is drawn
+/// whole from the session, as before.
 pub fn page(app: AppState, session: Memo<Session>, id: Option<Id>) -> AnyElement {
+    let daemon = id.is_some();
     let draft = draft_for(app, session, id);
     // The head follows the open session and whether it has a terminal, not its view: the
     // switch keeps its focus.
@@ -86,28 +153,29 @@ pub fn page(app: AppState, session: Memo<Session>, id: Option<Id>) -> AnyElement
             session.with(|s| head(app, s, control))
         })
     });
+    let shape = shape_of(session);
     let content = dynamic(move || {
-        session.with(|s| {
-            let surface = match (s.view, &s.terminal) {
-                (View::Terminal, Some(_)) => terminal_view(app, s),
-                _ => transcript_view(app, s, draft),
-            };
-            match &s.notice {
-                Some((hue, words)) => view()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .flex_col()
-                    .child(
-                        view()
-                            .flex_none()
-                            .when(app.form != Form::Terminal, |n| n.px(px(18.0)).pt(px(10.0)))
-                            .child(notice(app, *hue, &vec![span(words.clone())], None)),
-                    )
-                    .child(surface)
-                    .into_element(),
-                None => surface,
-            }
-        })
+        let (terminal, note) = shape.get();
+        let surface = if terminal {
+            untracked(|| terminal_view(app, session, draft, daemon))
+        } else {
+            session.with(|s| transcript_view(app, s, draft))
+        };
+        match note {
+            Some((hue, words)) => view()
+                .flex_1()
+                .min_h(px(0.0))
+                .flex_col()
+                .child(
+                    view()
+                        .flex_none()
+                        .when(app.form != Form::Terminal, |n| n.px(px(18.0)).pt(px(10.0)))
+                        .child(notice(app, hue, &vec![span(words)], None)),
+                )
+                .child(surface)
+                .into_element(),
+            None => surface,
+        }
     });
     view()
         .size_full()
@@ -325,152 +393,294 @@ fn run_details(app: AppState, details: &Run) -> AnyElement {
         .into_element()
 }
 
-/// What the terminal surface shows: its lines, or why there are none.
-fn surface_lines(app: AppState, session: &Session, set: console::Set) -> AnyElement {
-    let Some(screen) = &session.terminal else {
+/// What the terminal surface shows inside its scroll, `sides` and `ends` in from its edges (a
+/// Cell aside in a real terminal): a pane's screen row for row, the classed lines, or why there
+/// are none.
+fn rows_view(
+    app: AppState,
+    rows: Option<&Rows>,
+    set: console::Set,
+    (sides, ends): (f32, f32),
+) -> AnyElement {
+    let Some(rows) = rows else {
         return view().into_element();
     };
-    match &screen.empty {
-        Some(words) if screen.lines.is_empty() => {
-            if app.form == Form::Terminal {
-                term::quiet(words.clone()).into_element()
+    let empty = rows.empty.clone().filter(|_| rows.lines.is_empty());
+    if app.form == Form::Terminal {
+        return match empty {
+            Some(words) => view()
+                .px(term::cells(1.0))
+                .child(term::quiet(words))
+                .into_element(),
+            None if rows.verbatim => console::cell_screen(&rows.lines),
+            None => view()
+                .px(term::cells(1.0))
+                .child(console::cell_lines(app, &rows.lines))
+                .into_element(),
+        };
+    }
+    let padded = |content: AnyElement| {
+        view()
+            .px(px(sides))
+            .py(px(ends))
+            .child(content)
+            .into_element()
+    };
+    match empty {
+        Some(words) => padded(console::empty(words, set)),
+        None if rows.verbatim => {
+            let screen = if app.form == Form::Phone {
+                PHONE_SCREEN
             } else {
-                console::empty(words.clone(), set)
-            }
+                SCREEN
+            };
+            console::screen_rows(&rows.lines, screen, (sides, ends))
         }
-        _ if app.form == Form::Terminal => console::cell_lines(app, &screen.lines),
-        _ => console::lines(&screen.lines, set, screen.cursor),
+        None => padded(console::lines(&rows.lines, set, rows.cursor)),
+    }
+}
+
+/// The pressable Refresh for a toolbar, when the terminal can be revalidated.
+fn refresh_control(app: AppState, bar: &Termbar) -> Option<AnyElement> {
+    bar.refresh
+        .clone()
+        .map(|action| console::refresh(move || run(app, action.clone())))
+}
+
+/// The real terminal's toolbar: its words quiet on one row, the read state held once the rows
+/// are not current, and the refresh control.
+fn cell_toolbar(app: AppState, bar: &Termbar) -> AnyElement {
+    view()
+        .flex_row()
+        .h(term::rows(1.0))
+        .px(term::cells(1.0))
+        .child(term::quiet(bar.heading.clone()))
+        .child(term::space(2.0))
+        .child(
+            term::quiet(bar.status.clone())
+                .flex_shrink(1.0)
+                .min_w(px(0.0))
+                .text_color(color(match bar.feed {
+                    Feed::Live => Token::Ink3,
+                    Feed::Snapshot => Token::Held,
+                })),
+        )
+        .child(view().flex_1().min_w(px(0.0)))
+        .child(
+            term::quiet(bar.input.clone())
+                .flex_shrink(1.0)
+                .min_w(px(0.0)),
+        )
+        .when_some(bar.refresh.clone(), |row, action| {
+            row.child(term::space(2.0)).child(button_with(
+                app,
+                "Refresh",
+                ButtonKind::Ghost,
+                ButtonOptions::default(),
+                "btn-refresh-capture",
+                move || run(app, action.clone()),
+            ))
+        })
+        .into_element()
+}
+
+/// The terminal surface's scroll. A daemon session's opens at its newest rows and keeps to
+/// them as the screen changes, unless the owner scrolled up; the fixture's stays as drawn.
+fn surface_scroll(rows: Memo<Option<Rows>>, follow: bool) -> Scroll {
+    let surface = scroll().test_id("session-terminal").flex_1().min_h(px(0.0));
+    if follow {
+        console::follow_end(surface, move || rows.with(|_| ()))
+    } else {
+        surface
     }
 }
 
 /// The terminal view. Desktop: the toolbar over the dark mono surface, scrolling, the cursor
-/// after the last line where the agent takes keys. Terminal: the toolbar's words quiet on one
-/// row with the refresh control, a rule, the lines.
-fn terminal_view(app: AppState, session: &Session) -> AnyElement {
-    let Some(screen) = &session.terminal else {
-        return view().into_element();
-    };
-    let refresh = screen.refresh.clone();
+/// after the last line where the agent takes keys, and for a daemon session the reply box under
+/// it. Terminal: the toolbar's words quiet on one row with the refresh control, a rule, the
+/// lines, then the reply.
+fn terminal_view(
+    app: AppState,
+    session: Memo<Session>,
+    draft: Signal<String>,
+    daemon: bool,
+) -> AnyElement {
+    let bar = termbar_of(session);
+    let rows = rows_of(session);
+    let answer = daemon.then(|| {
+        let current = computed(move || session.with(|s| s.reply.clone()));
+        dynamic(move || current.with(|shown| reply(app, shown, draft)))
+    });
+    let toolbar = dynamic(move || {
+        bar.with(|bar| match bar {
+            Some(bar) if app.form == Form::Terminal => cell_toolbar(app, bar),
+            Some(bar) => console::toolbar(
+                bar.feed,
+                &bar.heading,
+                &bar.status,
+                &bar.input,
+                refresh_control(app, bar),
+            ),
+            None => view().into_element(),
+        })
+    });
     if app.form == Form::Terminal {
         return view()
             .flex_1()
             .min_h(px(0.0))
-            .child(
-                view()
-                    .flex_row()
-                    .h(term::rows(1.0))
-                    .px(term::cells(1.0))
-                    .child(term::quiet(screen.heading.clone()))
-                    .child(term::space(2.0))
-                    .child(
-                        term::quiet(screen.status.clone())
-                            .flex_shrink(1.0)
-                            .min_w(px(0.0))
-                            .text_color(color(match screen.feed {
-                                Feed::Live => Token::Ink3,
-                                Feed::Snapshot => Token::Held,
-                            })),
-                    )
-                    .child(view().flex_1().min_w(px(0.0)))
-                    .child(
-                        term::quiet(screen.input.clone())
-                            .flex_shrink(1.0)
-                            .min_w(px(0.0)),
-                    )
-                    .when_some(refresh, |row, action| {
-                        row.child(term::space(2.0)).child(button_with(
-                            app,
-                            "Refresh",
-                            ButtonKind::Ghost,
-                            ButtonOptions::default(),
-                            "btn-refresh-capture",
-                            move || run(app, action.clone()),
-                        ))
-                    }),
-            )
+            .child(toolbar)
             .child(term::hrule())
-            .child(body(
-                app,
-                "session-terminal",
-                surface_lines(app, session, BIG),
-            ))
+            .child(surface_scroll(rows, daemon).child(dynamic(move || {
+                rows.with(|rows| rows_view(app, rows.as_ref(), BIG, (0.0, 0.0)))
+            })))
+            .children(answer)
             .into_element();
     }
     view()
         .flex_1()
         .min_h(px(0.0))
         .flex_col()
-        .child(console::toolbar(
-            screen,
-            refresh.map(|action| console::refresh(move || run(app, action.clone()))),
-        ))
+        .child(toolbar)
         .child(
-            scroll()
-                .test_id("session-terminal")
-                .flex_1()
-                .min_h(px(0.0))
+            surface_scroll(rows, daemon)
                 .bg(console::ground())
-                .child(
-                    view()
-                        .px(px(18.0))
-                        .py(px(14.0))
-                        .child(surface_lines(app, session, BIG)),
-                ),
+                .child(dynamic(move || {
+                    rows.with(|rows| rows_view(app, rows.as_ref(), BIG, (18.0, 14.0)))
+                })),
+        )
+        .children(answer)
+        .into_element()
+}
+
+/// A daemon session's phone body, which scrolls itself: the switch stays over the view, the
+/// transcript scrolls in its own region, and the terminal keeps to its newest rows.
+fn live_phone_body(app: AppState, session: Memo<Session>, switcher: AnyElement) -> AnyElement {
+    let shape = shape_of(session);
+    view()
+        .flex_1()
+        .min_h(px(0.0))
+        .child(view().flex_none().child(switcher))
+        .child(dynamic(move || {
+            let (terminal, note) = shape.get();
+            untracked(move || {
+                let surface = if terminal {
+                    phone_terminal(app, session)
+                } else {
+                    phone_transcript(app, session)
+                };
+                view()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .children(note.map(|(hue, words)| {
+                        view().flex_none().px(px(16.0)).pb(px(8.0)).child(notice(
+                            app,
+                            hue,
+                            &vec![span(words)],
+                            None,
+                        ))
+                    }))
+                    .child(surface)
+                    .into_element()
+            })
+        }))
+        .into_element()
+}
+
+/// A daemon session's transcript on the phone, in its own scroll that a changed row does not
+/// rebuild, so the place read is kept.
+fn phone_transcript(app: AppState, session: Memo<Session>) -> AnyElement {
+    let shown = computed(move || session.with(|s| s.transcript.clone()));
+    scroll()
+        .test_id("session-transcript")
+        .flex_1()
+        .min_h(px(0.0))
+        .child(dynamic(move || shown.with(|page| transcript(app, page))))
+        .into_element()
+}
+
+/// A daemon session's terminal on the phone: the read state and Refresh over the dark surface,
+/// the screen at its full width, panning sideways.
+fn phone_terminal(app: AppState, session: Memo<Session>) -> AnyElement {
+    let bar = termbar_of(session);
+    let rows = rows_of(session);
+    view()
+        .flex_1()
+        .min_h(px(0.0))
+        .child(dynamic(move || {
+            bar.with(|bar| match bar {
+                Some(bar) => {
+                    console::phone_toolbar(bar.feed, &bar.status, refresh_control(app, bar))
+                }
+                None => view().into_element(),
+            })
+        }))
+        .child(
+            surface_scroll(rows, true)
+                .bg(console::ground())
+                .child(dynamic(move || {
+                    rows.with(|rows| rows_view(app, rows.as_ref(), PHONE, (12.0, 12.0)))
+                })),
         )
         .into_element()
 }
 
 /// The phone's session page: the switch over the transcript or the terminal (when there is
-/// one), the reply docked as the bar (the terminal's keys, or its refresh, while it shows), the
-/// trailing control switching the view.
+/// one), the trailing control switching the view. The fixture docks the reply under the
+/// transcript and the terminal's keys under the terminal; a daemon session docks the reply under
+/// both, and its page scrolls itself so the terminal can keep to its newest rows.
 pub fn phone(app: AppState, session: Memo<Session>, id: Option<Id>) -> PhonePage {
+    let daemon = id.is_some();
     let draft = draft_for(app, session, id);
     let (title, back, toggle) = untracked(move || {
         session.with(|s| (s.phone_title.clone(), s.back_label, s.toggle.clone()))
     });
     let has_terminal = computed(move || session.with(|s| s.terminal.is_some()));
     let terminal = move || session.with(|s| s.view == View::Terminal && s.terminal.is_some());
-    let body = view()
-        .child(dynamic(move || {
-            if has_terminal.get() {
-                untracked(move || {
-                    view()
-                        .px(px(16.0))
-                        .pt(px(4.0))
-                        .pb(px(8.0))
-                        .child(switch(app, session))
-                        .into_element()
-                })
-            } else {
-                view().into_element()
-            }
-        }))
-        .child(dynamic(move || {
-            session.with(|s| {
-                let surface = match (s.view, &s.terminal) {
-                    (View::Terminal, Some(_)) => view()
-                        .min_h(px(520.0))
-                        .p(px(12.0))
-                        .bg(console::ground())
-                        .child(surface_lines(app, s, PHONE))
-                        .into_element(),
-                    _ => transcript(app, &s.transcript),
-                };
-                match &s.notice {
-                    Some((hue, words)) => view()
-                        .child(view().px(px(16.0)).pb(px(8.0)).child(notice(
-                            app,
-                            *hue,
-                            &vec![span(words.clone())],
-                            None,
-                        )))
-                        .child(surface)
-                        .into_element(),
-                    None => surface,
-                }
+    let switcher = dynamic(move || {
+        if has_terminal.get() {
+            untracked(move || {
+                view()
+                    .px(px(16.0))
+                    .pt(px(4.0))
+                    .pb(px(8.0))
+                    .child(switch(app, session))
+                    .into_element()
             })
-        }))
-        .into_element();
+        } else {
+            view().into_element()
+        }
+    });
+    let body = if daemon {
+        live_phone_body(app, session, switcher)
+    } else {
+        view()
+            .child(switcher)
+            .child(dynamic(move || {
+                session.with(|s| {
+                    let surface = match (s.view, &s.terminal) {
+                        (View::Terminal, Some(screen)) => view()
+                            .min_h(px(520.0))
+                            .bg(console::ground())
+                            .child(rows_view(app, Some(&Rows::of(screen)), PHONE, (12.0, 12.0)))
+                            .into_element(),
+                        _ => transcript(app, &s.transcript),
+                    };
+                    match &s.notice {
+                        Some((hue, words)) => view()
+                            .child(view().px(px(16.0)).pb(px(8.0)).child(notice(
+                                app,
+                                *hue,
+                                &vec![span(words.clone())],
+                                None,
+                            )))
+                            .child(surface)
+                            .into_element(),
+                        None => surface,
+                    }
+                })
+            }))
+            .into_element()
+    };
     let trailing = dynamic(move || {
         if !has_terminal.get() {
             return view().into_element();
@@ -502,45 +712,40 @@ pub fn phone(app: AppState, session: Memo<Session>, id: Option<Id>) -> PhonePage
             }))
             .into_element()
     });
-    let docked = dynamic(move || {
-        session.with(|s| match (&s.terminal, s.view) {
-            (Some(screen), View::Terminal) => {
-                let mut controls = screen
-                    .phone_keys
-                    .iter()
-                    .enumerate()
-                    .map(|(at, &key)| {
-                        button_with(
-                            app,
-                            key,
-                            ButtonKind::Ghost,
-                            ButtonOptions {
-                                wide: true,
-                                ..ButtonOptions::default()
-                            },
-                            format!("btn-key-{at}"),
-                            move || run(app, Action::Key(key)),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                if let Some(action) = screen.refresh.clone() {
-                    controls.push(button_with(
-                        app,
-                        "Refresh capture",
-                        ButtonKind::Ghost,
-                        ButtonOptions {
-                            wide: true,
-                            ..ButtonOptions::default()
-                        },
-                        "btn-refresh-capture",
-                        move || run(app, action.clone()),
-                    ));
-                }
-                bar(app, controls, None)
-            }
-            _ => bar(app, vec![phone_reply(app, &s.reply, draft)], None),
+    // The reply is redrawn only when it changes, not with each new screen, so a field being
+    // typed in keeps its focus.
+    let docked = if daemon {
+        let current = computed(move || session.with(|s| s.reply.clone()));
+        dynamic(move || current.with(|shown| bar(app, vec![phone_reply(app, shown, draft)], None)))
+    } else {
+        dynamic(move || {
+            session.with(|s| match (&s.terminal, s.view) {
+                (Some(screen), View::Terminal) => bar(
+                    app,
+                    screen
+                        .phone_keys
+                        .iter()
+                        .enumerate()
+                        .map(|(at, &key)| {
+                            button_with(
+                                app,
+                                key,
+                                ButtonKind::Ghost,
+                                ButtonOptions {
+                                    wide: true,
+                                    ..ButtonOptions::default()
+                                },
+                                format!("btn-key-{at}"),
+                                move || run(app, Action::Key(key)),
+                            )
+                        })
+                        .collect(),
+                    None,
+                ),
+                _ => bar(app, vec![phone_reply(app, &s.reply, draft)], None),
+            })
         })
-    });
+    };
     PhonePage {
         title,
         back,
@@ -548,6 +753,6 @@ pub fn phone(app: AppState, session: Memo<Session>, id: Option<Id>) -> PhonePage
         trailing: Some(trailing),
         bar: Some(docked),
         ask: false,
-        scroll: true,
+        scroll: !daemon,
     }
 }
