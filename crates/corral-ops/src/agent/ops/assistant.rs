@@ -166,12 +166,31 @@ pub(crate) fn session_project(ctx: &Ctx, id: &str) -> Result<String> {
     Ok(ctx.store.get_assistant(id)?.project.unwrap_or_default())
 }
 
+pub(crate) fn transcript(ctx: &Ctx, id: &str, fresh: bool) -> Result<Option<std::path::PathBuf>> {
+    if fresh {
+        Ok(None)
+    } else {
+        continued_session(ctx, id)
+    }
+}
+
 /// Opens a terminal or daemon generation, preserving focus, continuation and metering.
 pub(crate) fn prepare(
     ctx: &Ctx,
     id: &str,
     pane: Option<&str>,
     resolved: &ResolvedProfile,
+) -> Result<Prepared> {
+    launch_session(ctx, id, pane, resolved, false)
+}
+
+/// Opens the retained assistant with an explicitly fresh or resumed conversation.
+pub(crate) fn launch_session(
+    ctx: &Ctx,
+    id: &str,
+    pane: Option<&str>,
+    resolved: &ResolvedProfile,
+    fresh_session: bool,
 ) -> Result<Prepared> {
     let _lease = ctx.store.assistant_scratch_lease(id)?;
     let session = ctx.store.get_assistant(id)?;
@@ -202,7 +221,7 @@ pub(crate) fn prepare(
             }
         },
         adopt: true,
-        fresh_session: false,
+        fresh_session,
     };
     let target = BindTarget::Assistant { session: id.into() };
     let prepared = launch::prepare_bootstrap_host(ctx, &target, pane, &spec)?;
@@ -346,7 +365,6 @@ pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<
     }
     pane_known(ctx, pane)?;
     let container = ctx.store.get_assistant_container(id)?;
-    crate::assistant::workflow::boundary::require_resume(&ctx.store, id, &container)?;
     if host_alive(&container.state)? {
         let pid = bound_host(&container.state).map_or(0, |host| host.pid);
         return Err(refuse(
@@ -358,6 +376,10 @@ pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<
             ),
         ));
     }
+    if let Some(prepared) = crate::assistant::continuation::recover(ctx, id, pane)? {
+        return Ok((container.state.binding.generation, prepared));
+    }
+    crate::assistant::workflow::boundary::require_resume(&ctx.store, id, &container)?;
     let resolved = profile(ctx, Some(&session.profile), overrides)?;
     let fenced = container.state.binding.generation;
     let reference = ContainerRef::Assistant { session: id.into() };
@@ -533,6 +555,11 @@ pub fn end(ctx: &Ctx, id: &str) -> Result<(AssistantSession, Option<String>)> {
             ));
         }
     }
+    crate::availability::continuation::close(
+        ctx,
+        &ContainerRef::Assistant { session: id.into() },
+        "assistant ended",
+    )?;
     let session = ctx.store.end_assistant(id)?;
     if let Err(error) = crate::assistant::permissions::drain_permission_audit(&ctx.store, id) {
         let queued =
