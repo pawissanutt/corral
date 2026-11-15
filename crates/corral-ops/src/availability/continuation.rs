@@ -1,0 +1,769 @@
+//! Native role continuation authority. An intent is published with the financial fence;
+//! a bound host cannot spend until a separate atomic activation publishes Active.
+use super::checkpoint;
+use crate::Ctx;
+use anyhow::{Context, Result, bail, ensure};
+use corral_core::agent::{
+    AgentRole, AgentRunState, ContainerRef, GenerationFence, HostHealth, pm_state,
+};
+use corral_core::connection::ConnectionBinding;
+use corral_core::paid_episode::{PaidBinding, PaidEpisode, PaidLink, PaidPhase};
+use corral_core::records::RecordArea;
+use corral_core::{Store, agent};
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+pub(crate) const INTENTS: RecordArea<ContinuationIntent> = RecordArea::new("role-continuations");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub(crate) enum ContextSource {
+    /// The checkpoint manifest digest; the hello notice instead exposes the artifact
+    /// SHA-256 in context.digest so a host can verify the bytes at context.path.
+    Checkpoint {
+        digest: String,
+    },
+    FreshReadOnly {
+        reason: String,
+    },
+    ResumedSession,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum IntentPhase {
+    Prepared,
+    Active,
+    Paused,
+    Closed,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PauseReason {
+    PolicyNotApproved,
+    NoApprovedCandidate,
+    SwitchAlreadyUsed,
+    LegacyBinding,
+    MissingCheckpoint,
+    CheckpointInvalid,
+    SubjectChanged,
+    UncertainEffect,
+    EnteringEffect,
+    TerminalResult,
+    SuccessorAmbiguous,
+    IndependenceViolated,
+    AuthorityDenied,
+    UnsupportedHost,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SubjectRevision {
+    pub task: Option<String>,
+    pub spec_revision: Option<String>,
+    pub target: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ContinuationIntent {
+    pub version: u32,
+    pub role: AgentRole,
+    pub source: PaidBinding,
+    pub source_link: PaidLink,
+    pub successor: PaidBinding,
+    pub link: PaidLink,
+    pub context: ContextSource,
+    pub subject: SubjectRevision,
+    pub reason: String,
+    pub phase: IntentPhase,
+    pub pause: Option<PauseReason>,
+    pub created: Timestamp,
+    pub updated: Timestamp,
+}
+pub(crate) struct Transfer {
+    pub source: ContainerRef,
+    pub successor: ContainerRef,
+    pub target: ConnectionBinding,
+    pub context: ContextSource,
+    pub subject: SubjectRevision,
+    pub reason: String,
+}
+
+/// Full materialization preserves native budget projections written by head-keyed paths.
+/// Every writer opens a record unit; save_paid_episode selects CommitPaidEpisode for it.
+pub(crate) fn with_state<R>(
+    ctx: &Ctx,
+    container: &ContainerRef,
+    f: impl FnOnce(&mut AgentRunState) -> Result<R>,
+) -> Result<R> {
+    if let Some(task) = container.task() {
+        let mut result = None;
+        ctx.store.update(task, |task| {
+            result = Some(f(agent::container_state_mut(task, container)
+                .context("continuation container has no native state")?)?);
+            Ok(())
+        })?;
+        return result.context("continuation state update did not run");
+    }
+    if let Some(session) = container.assistant() {
+        return ctx
+            .store
+            .update_assistant_container(session, |a| f(&mut a.state));
+    }
+    // Include all families, notably turns, receipts, budget_requests and generations.
+    // paid_episode is a scalar on the PM head and is always materialized.
+    pm_state::update(&ctx.store, |pm| {
+        let pm = pm.as_mut().context("continuation PM state missing")?;
+        Ok((f(&mut pm.state)?, true))
+    })
+}
+
+fn state_for(store: &Store, container: &ContainerRef) -> Result<Option<AgentRunState>> {
+    if let Some(task) = container.task() {
+        return Ok(agent::container_state(&store.get(task)?, container).cloned());
+    }
+    if let Some(session) = container.assistant() {
+        return Ok(Some(store.get_assistant_container(session)?.state));
+    }
+    Ok(pm_state::load(store)?.map(|pm| pm.state))
+}
+fn key(container: &ContainerRef, generation: u32) -> Result<String> {
+    Ok(agent::paths::sha256_hex(&serde_json::to_vec(&(
+        container, generation,
+    ))?))
+}
+pub(crate) fn intent_for(
+    store: &Store,
+    successor: &ContainerRef,
+    generation: u32,
+) -> Result<Option<ContinuationIntent>> {
+    let intent = INTENTS.load(store, &key(successor, generation)?)?;
+    if let Some(intent) = &intent {
+        ensure!(
+            intent.version == 1
+                && intent.successor.container == *successor
+                && intent.successor.generation == generation,
+            "SuccessorAmbiguous"
+        );
+    }
+    Ok(intent)
+}
+fn save(store: &Store, intent: &ContinuationIntent) -> Result<()> {
+    INTENTS.save(
+        store,
+        &key(&intent.successor.container, intent.successor.generation)?,
+        intent,
+    )
+}
+fn approved(store: &Store, episode: &PaidEpisode) -> Result<()> {
+    let config = store.config_layers()?.config()?;
+    ensure!(
+        episode.approval.policy_digest == config.profile_setup_revision()?
+            && config
+                .profiles
+                .values()
+                .filter_map(|p| p.metadata.as_ref())
+                .filter_map(|m| m.fallback.as_ref())
+                .any(|p| p.automatic
+                    && p.paid_roles.contains(&episode.root.role)
+                    && p.approval == episode.approval.approval
+                    && p.spending.as_ref().is_some_and(|s| s.currency == "USD"
+                        && s.maximum_micros.checked_mul(1000)
+                            == Some(episode.approval.allowance_nanos))),
+        "PolicyNotApproved"
+    );
+    Ok(())
+}
+fn subject_current(
+    store: &Store,
+    container: &ContainerRef,
+    subject: &SubjectRevision,
+) -> Result<()> {
+    ensure!(
+        subject.task.as_deref() == container.task(),
+        "SubjectChanged"
+    );
+    if let Some(task) = container.task() {
+        let task = store.get(task)?;
+        if let Some(revision) = &subject.spec_revision {
+            let current = match container {
+                ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => {
+                    crate::plan_spec_revision(&task)?
+                }
+                _ => corral_core::store::spec_revision(&task)?,
+            };
+            ensure!(&current == revision, "SubjectChanged");
+        }
+        match container {
+            ContainerRef::Reviewer { run, .. } => {
+                let review = task
+                    .runs
+                    .iter()
+                    .find(|r| &r.id == run)
+                    .and_then(|r| r.review.as_ref())
+                    .context("SubjectChanged")?;
+                ensure!(
+                    subject.target.as_deref() == Some(review.sha.as_str()),
+                    "SubjectChanged"
+                );
+            }
+            ContainerRef::PlanReviewer { plan, .. } => {
+                ensure!(
+                    subject.target.as_deref() == Some(plan.as_str())
+                        && task.plans.iter().any(|p| &p.id == plan),
+                    "SubjectChanged"
+                );
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+fn same_lineage(source: &ContainerRef, successor: &ContainerRef) -> bool {
+    match (source, successor) {
+        (ContainerRef::Worker { task: a, .. }, ContainerRef::Worker { task: b, .. })
+        | (ContainerRef::Planner { task: a, .. }, ContainerRef::Planner { task: b, .. }) => {
+            a == b && source != successor
+        }
+        (
+            ContainerRef::Reviewer {
+                task: a, run: ar, ..
+            },
+            ContainerRef::Reviewer {
+                task: b, run: br, ..
+            },
+        ) => a == b && ar == br && source != successor,
+        (
+            ContainerRef::PlanReviewer {
+                task: a, plan: ap, ..
+            },
+            ContainerRef::PlanReviewer {
+                task: b, plan: bp, ..
+            },
+        ) => a == b && ap == bp && source != successor,
+        (ContainerRef::Pm, ContainerRef::Pm) => true,
+        (ContainerRef::Assistant { session: a }, ContainerRef::Assistant { session: b }) => a == b,
+        _ => false,
+    }
+}
+fn context_valid(store: &Store, intent: &ContinuationIntent) -> Result<()> {
+    match &intent.context {
+        ContextSource::Checkpoint { digest } => {
+            checkpoint::load(store, digest, &intent.source, &intent.subject)?;
+        }
+        ContextSource::FreshReadOnly { .. } => ensure!(
+            matches!(
+                intent.role,
+                AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer
+            ),
+            "MissingCheckpoint"
+        ),
+        ContextSource::ResumedSession => ensure!(
+            intent.source.container == intent.successor.container
+                && intent.source.binding == intent.successor.binding
+                && intent.source.binding.connection.api_key(),
+            "MissingCheckpoint"
+        ),
+    }
+    Ok(())
+}
+fn event(
+    store: &Store,
+    kind: &str,
+    intent: &ContinuationIntent,
+    episode: &PaidEpisode,
+) -> Result<()> {
+    store.log_event(intent.successor.container.task(), kind, json!({
+        "role": intent.role, "source": intent.source.container, "successor": intent.successor.container,
+        "source_connection": intent.source.binding.connection, "target_connection": intent.successor.binding.connection,
+        "reason": intent.reason, "candidate": intent.successor.binding.candidate,
+        "episode": episode.id, "allowance_nanos": episode.approval.allowance_nanos,
+        "consumed_or_reserved_nanos": episode.ledger.totals().1, "pause": intent.pause,
+    }))
+}
+
+/// Fence source, advance the financial epoch and insert the sole successor in ONE commit.
+pub(crate) fn prepare(ctx: &Ctx, mut transfer: Transfer) -> Result<ContinuationIntent> {
+    ensure!(
+        same_lineage(&transfer.source, &transfer.successor),
+        "SuccessorAmbiguous"
+    );
+    transfer.target.validate()?;
+    // These are trusted descriptive inputs, not durable error/log channels.
+    let _ = transfer.reason;
+    if let ContextSource::FreshReadOnly { reason } = &mut transfer.context {
+        *reason = "fresh read-only assessment".into();
+    }
+    with_state(ctx, &transfer.source, |state| {
+        // Search by predecessor before any mutation, including after a retained generation
+        // advanced. A different successor or checkpoint must not rewrite any durable bytes.
+        let previous = INTENTS
+            .list(&ctx.store)?
+            .into_iter()
+            .map(|(_, i)| i)
+            .filter(|i| {
+                i.source.container == transfer.source
+                    && (i.source.generation == state.binding.generation
+                        || i.phase == IntentPhase::Prepared
+                            && state.paid_episode.as_ref() == Some(&i.link))
+            })
+            .max_by_key(|i| i.source.generation);
+        if let Some(intent) = previous {
+            ensure!(
+                intent.successor.container == transfer.successor
+                    && intent.successor.binding == transfer.target
+                    && intent.subject == transfer.subject
+                    && intent.context == transfer.context,
+                "SuccessorAmbiguous"
+            );
+            ensure!(
+                matches!(intent.phase, IntentPhase::Prepared | IntentPhase::Active),
+                "SuccessorAmbiguous"
+            );
+            return Ok(intent);
+        }
+        let source = PaidBinding {
+            container: transfer.source.clone(),
+            generation: state.binding.generation,
+            binding: state
+                .current_generation()
+                .and_then(|g| g.connection.clone())
+                .context("LegacyBinding")?,
+        };
+        let source_link = state.paid_episode.clone().context("PolicyNotApproved")?;
+        let mut episode = ctx.store.paid_episode(&source_link.episode)?;
+        approved(&ctx.store, &episode)?;
+        ensure!(!state.binding.closing, "TerminalResult");
+        subject_current(&ctx.store, &source.container, &transfer.subject)?;
+        checkpoint::quiescent(state, source.generation).map_err(|r| anyhow::anyhow!("{r:?}"))?;
+        let generation = if transfer.source == transfer.successor {
+            source
+                .generation
+                .checked_add(1)
+                .context("continuation generation overflow")?
+        } else {
+            1
+        };
+        let successor = PaidBinding {
+            container: transfer.successor.clone(),
+            generation,
+            binding: transfer.target,
+        };
+        ensure!(
+            intent_for(&ctx.store, &successor.container, generation)?.is_none(),
+            "SuccessorAmbiguous"
+        );
+        // Only transport-classified summaries enter durable records. Caller error strings
+        // are intentionally not retained: they may contain SDK dumps or credentials.
+        let reason = state
+            .turns
+            .iter()
+            .filter(|t| t.generation == source.generation)
+            .max_by_key(|t| t.seq)
+            .and_then(|t| t.provider_failure.as_ref())
+            .map(|f| f.summary())
+            .unwrap_or_else(|| "paid session recovery".into());
+        let now = corral_core::clock::now();
+        let mut intent = ContinuationIntent {
+            version: 1,
+            role: source.role(),
+            source,
+            source_link: source_link.clone(),
+            successor,
+            link: source_link.clone(),
+            context: transfer.context,
+            subject: transfer.subject,
+            reason,
+            phase: IntentPhase::Prepared,
+            pause: None,
+            created: now,
+            updated: now,
+        };
+        context_valid(&ctx.store, &intent)?;
+        if matches!(intent.context, ContextSource::ResumedSession) {
+            ensure!(
+                matches!(intent.role, AgentRole::Pm | AgentRole::Assistant),
+                "AuthorityDenied"
+            );
+            ensure!(
+                matches!(state.binding.health, HostHealth::Lost | HostHealth::Fenced),
+                "AuthorityDenied"
+            );
+        } else {
+            ensure!(
+                super::policy::quota_evidence(
+                    state,
+                    state
+                        .turns
+                        .iter()
+                        .filter(|t| t.generation == state.binding.generation)
+                        .max_by_key(|t| t.seq)
+                )
+                .is_some(),
+                "NoApprovedCandidate"
+            );
+        }
+        intent.link = episode.prepare_transfer(
+            &source_link,
+            &intent.source,
+            intent.successor.clone(),
+            state,
+        )?;
+        ctx.store.save_paid_episode(&episode)?;
+        save(&ctx.store, &intent)?;
+        event(&ctx.store, "continuation_prepared", &intent, &episode)?;
+        Ok(intent)
+    })
+}
+
+/// Only retained paid containers may recover their host inside the sticky API episode.
+pub(crate) fn regenerate(
+    ctx: &Ctx,
+    container: &ContainerRef,
+) -> Result<Option<ContinuationIntent>> {
+    ensure!(
+        matches!(container, ContainerRef::Pm | ContainerRef::Assistant { .. }),
+        "AuthorityDenied"
+    );
+    let Some(state) = state_for(&ctx.store, container)? else {
+        return Ok(None);
+    };
+    let Some(binding) = state
+        .current_generation()
+        .and_then(|g| g.connection.clone())
+    else {
+        return Ok(None);
+    };
+    if !binding.connection.api_key() || state.paid_episode.is_none() {
+        return Ok(None);
+    }
+    let current = intent_for(&ctx.store, container, state.binding.generation)?
+        .context("SuccessorAmbiguous")?;
+    ensure!(current.phase == IntentPhase::Active, "SuccessorAmbiguous");
+    prepare(
+        ctx,
+        Transfer {
+            source: container.clone(),
+            successor: container.clone(),
+            target: binding,
+            context: ContextSource::ResumedSession,
+            subject: current.subject,
+            reason: "paid session recovery".into(),
+        },
+    )
+    .map(Some)
+}
+
+pub(crate) fn require_launch(
+    store: &Store,
+    container: &ContainerRef,
+    binding: &ConnectionBinding,
+) -> Result<()> {
+    binding.validate()?;
+    if !binding.connection.api_key() {
+        return binding.connection.require_admission();
+    }
+    let generation = state_for(store, container)?.map_or(Ok(1), |s| {
+        s.generations
+            .iter()
+            .map(|g| g.n)
+            .max()
+            .unwrap_or(0)
+            .max(s.retired.as_ref().map_or(0, |r| r.floor.saturating_sub(1)))
+            .checked_add(1)
+            .context("continuation generation overflow")
+    })?;
+    let intent = intent_for(store, container, generation)?.context("paid_admission_required")?;
+    ensure!(
+        intent.phase == IntentPhase::Prepared && intent.successor.binding == *binding,
+        "paid_admission_required"
+    );
+    let episode = store.paid_episode(&intent.link.episode)?;
+    approved(store, &episode)?;
+    ensure!(
+        episode.epoch == intent.link.epoch
+            && matches!(&episode.phase,
+        PaidPhase::Prepared { successor, .. } if successor == &intent.successor),
+        "paid_admission_required"
+    );
+    subject_current(store, container, &intent.subject)?;
+    context_valid(store, &intent)
+}
+pub(crate) fn require_preflight(
+    store: &Store,
+    role: AgentRole,
+    binding: &ConnectionBinding,
+) -> Result<()> {
+    binding.validate()?;
+    if !binding.connection.api_key() {
+        return binding.connection.require_admission();
+    }
+    for row in store.record_rows(corral_core::paid_episode::AREA)? {
+        let episode = store.paid_episode(&row.key)?;
+        if episode.root.role != role
+            || approved(store, &episode).is_err()
+            || !episode.approval.candidates.contains(binding)
+        {
+            continue;
+        }
+        let route = match &episode.phase {
+            PaidPhase::Active { owner } => Some(&owner.binding),
+            PaidPhase::Prepared { successor, .. } => Some(&successor.binding),
+            PaidPhase::Closed => None,
+        };
+        if route.is_some_and(|b| b == binding || !b.connection.api_key() && episode.switches == 0) {
+            return Ok(());
+        }
+    }
+    bail!("paid_admission_required")
+}
+
+/// Intent ContextSource::Checkpoint.digest identifies the immutable manifest; the returned
+/// context.digest is the artifact SHA-256, checked by the host against context.path bytes.
+pub(crate) fn notice(
+    store: &Store,
+    container: &ContainerRef,
+    generation: u32,
+) -> Result<Option<Value>> {
+    let Some(intent) = intent_for(store, container, generation)? else {
+        return Ok(None);
+    };
+    if intent.phase != IntentPhase::Prepared {
+        return Ok(None);
+    }
+    let episode = store.paid_episode(&intent.link.episode)?;
+    approved(store, &episode)?;
+    ensure!(
+        episode.epoch == intent.link.epoch
+            && matches!(&episode.phase,
+        PaidPhase::Prepared { successor, .. } if successor == &intent.successor),
+        "SuccessorAmbiguous"
+    );
+    let context = match &intent.context {
+        ContextSource::Checkpoint { digest } => {
+            let (checkpoint, _) = checkpoint::load(store, digest, &intent.source, &intent.subject)?;
+            json!({"kind":"checkpoint", "digest":checkpoint.context.blob.hash().as_str(),
+                "path":store.blob_store()?.path_of(checkpoint.context.blob.hash()), "bytes":checkpoint.context.bytes})
+        }
+        other => {
+            context_valid(store, &intent)?;
+            serde_json::to_value(other)?
+        }
+    };
+    Ok(Some(json!({"version":1, "generation":generation,
+        "binding_digest":intent.successor.binding.digest,
+        "source_connection":intent.source.binding.connection, "target_connection":intent.successor.binding.connection,
+        "candidate":intent.successor.binding.candidate, "reason":intent.reason, "episode":episode.id,
+        "allowance_nanos":episode.approval.allowance_nanos,
+        "consumed_or_reserved_nanos":episode.ledger.totals().1, "context":context})))
+}
+pub(crate) fn activate(ctx: &Ctx, container: &ContainerRef, generation: u32) -> Result<bool> {
+    // Ordinary hellos have no financial intent. Keep their keyed admission path
+    // independent of settled task history; this function grants nothing without an intent.
+    let Some(intent) = intent_for(&ctx.store, container, generation)? else {
+        return Ok(false);
+    };
+    match intent.phase {
+        IntentPhase::Prepared => {}
+        IntentPhase::Active => {
+            let episode = ctx.store.paid_episode(&intent.link.episode)?;
+            approved(&ctx.store, &episode)?;
+            episode.owner(&intent.link, &intent.successor)?;
+            return Ok(false);
+        }
+        IntentPhase::Paused | IntentPhase::Closed => bail!("SuccessorAmbiguous"),
+    }
+    with_state(ctx, container, |state| {
+        let mut intent =
+            intent_for(&ctx.store, container, generation)?.context("SuccessorAmbiguous")?;
+        let mut episode = ctx.store.paid_episode(&intent.link.episode)?;
+        approved(&ctx.store, &episode)?;
+        if intent.phase == IntentPhase::Active {
+            episode.owner(&intent.link, &intent.successor)?;
+            return Ok(false);
+        }
+        ensure!(intent.phase == IntentPhase::Prepared, "SuccessorAmbiguous");
+        ensure!(!state.binding.closing, "TerminalResult");
+        subject_current(&ctx.store, container, &intent.subject)?;
+        context_valid(&ctx.store, &intent)?;
+        if matches!(intent.context, ContextSource::ResumedSession) {
+            let previous = state
+                .generation(intent.source.generation)
+                .and_then(|g| g.bound.as_ref())
+                .context("MissingCheckpoint")?;
+            let next = state
+                .generation(generation)
+                .and_then(|g| g.bound.as_ref())
+                .context("MissingCheckpoint")?;
+            ensure!(
+                previous.session_id == next.session_id
+                    && previous.session_file == next.session_file,
+                "MissingCheckpoint"
+            );
+        }
+        episode.activate(&intent.link, &intent.successor, state)?;
+        intent.phase = IntentPhase::Active;
+        intent.updated = corral_core::clock::now();
+        ctx.store.save_paid_episode(&episode)?;
+        save(&ctx.store, &intent)?;
+        event(&ctx.store, "continuation_switched", &intent, &episode)?;
+        Ok(true)
+    })
+}
+
+pub(crate) fn close_in(
+    store: &Store,
+    container: &ContainerRef,
+    state: &mut AgentRunState,
+    _why: &str,
+) -> Result<bool> {
+    if let Some(mut intent) = intent_for(store, container, state.binding.generation)?
+        && intent.phase == IntentPhase::Prepared
+    {
+        let episode = store.paid_episode(&intent.link.episode)?;
+        ensure!(
+            episode.epoch == intent.link.epoch
+                && matches!(&episode.phase,
+            PaidPhase::Prepared { successor, .. } if successor == &intent.successor),
+            "SuccessorAmbiguous"
+        );
+        // Core cannot close a Prepared episode. Revoke the only activation authority and
+        // fence the native host, CASing the unchanged financial row in this same commit.
+        state.binding.health = HostHealth::Fenced;
+        state
+            .generation_mut(state.binding.generation)
+            .context("continuation generation missing")?
+            .fenced = Some(GenerationFence {
+            reason: "continuation revoked".into(),
+            at: corral_core::clock::now(),
+        });
+        intent.phase = IntentPhase::Closed;
+        intent.updated = corral_core::clock::now();
+        store.save_paid_episode(&episode)?;
+        save(store, &intent)?;
+        event(store, "continuation_closed", &intent, &episode)?;
+        return Ok(true);
+    }
+    let Some(link) = state.paid_episode.clone() else {
+        return Ok(false);
+    };
+    let mut episode = store.paid_episode(&link.episode)?;
+    let PaidPhase::Active { owner } = &episode.phase else {
+        return Ok(false);
+    };
+    if &owner.container != container
+        || owner.generation != state.binding.generation
+        || link.epoch != episode.epoch
+    {
+        return Ok(false);
+    }
+    let owner = owner.clone();
+    episode.close(&link, &owner, state)?;
+    store.save_paid_episode(&episode)?;
+    if let Some(mut intent) = intent_for(store, container, owner.generation)? {
+        intent.phase = IntentPhase::Closed;
+        intent.updated = corral_core::clock::now();
+        save(store, &intent)?;
+        event(store, "continuation_closed", &intent, &episode)?;
+    } else {
+        store.log_event(
+            container.task(),
+            "continuation_closed",
+            json!({"episode":episode.id,
+            "role":episode.root.role, "reason":"role lineage closed"}),
+        )?;
+    }
+    Ok(true)
+}
+pub(crate) fn close(ctx: &Ctx, container: &ContainerRef, why: &str) -> Result<bool> {
+    with_state(ctx, container, |state| {
+        close_in(&ctx.store, container, state, why)
+    })
+}
+pub(crate) fn pause(
+    ctx: &Ctx,
+    container: &ContainerRef,
+    reason: PauseReason,
+    _detail: &str,
+) -> Result<()> {
+    let intents = INTENTS.list(&ctx.store)?;
+    let intent = intents
+        .into_iter()
+        .map(|(_, i)| i)
+        .filter(|i| {
+            (&i.successor.container == container || &i.source.container == container)
+                && i.phase != IntentPhase::Closed
+        })
+        .max_by_key(|i| i.created);
+    let write = |state: Option<&mut AgentRunState>| -> Result<()> {
+        if let Some(state) = state
+            && (state
+                .current_generation()
+                .and_then(|g| g.connection.as_ref())
+                .is_some_and(|b| b.connection.api_key())
+                || intent.as_ref().is_some_and(|i| {
+                    i.successor.container == *container
+                        && i.successor.generation == state.binding.generation
+                }))
+        {
+            close_in(&ctx.store, container, state, "continuation paused")?;
+            state.binding.health = HostHealth::Fenced;
+            if let Some(g) = state.generation_mut(state.binding.generation) {
+                g.fenced = Some(GenerationFence {
+                    reason: "continuation paused".into(),
+                    at: corral_core::clock::now(),
+                });
+            }
+        }
+        if let Some(mut intent) = intent {
+            intent.phase = IntentPhase::Paused;
+            intent.pause = Some(reason);
+            intent.updated = corral_core::clock::now();
+            let episode = ctx.store.paid_episode(&intent.link.episode)?;
+            save(&ctx.store, &intent)?;
+            event(&ctx.store, "continuation_paused", &intent, &episode)
+        } else {
+            ctx.store.log_event(
+                container.task(),
+                "continuation_paused",
+                json!({"container":container, "pause":reason}),
+            )
+        }
+    };
+    if state_for(&ctx.store, container)?.is_some() {
+        with_state(ctx, container, |s| write(Some(s)))
+    } else {
+        ctx.store.records_transaction(|| write(None))
+    }
+}
+pub(crate) fn prepared_candidate(
+    store: &Store,
+    task: &str,
+    role: AgentRole,
+) -> Result<Option<String>> {
+    let mut candidate = None;
+    for (_, intent) in INTENTS.list(store)? {
+        if intent.phase != IntentPhase::Prepared
+            || intent.role != role
+            || intent.successor.container.task() != Some(task)
+        {
+            continue;
+        }
+        let episode = store.paid_episode(&intent.link.episode)?;
+        approved(store, &episode)?;
+        ensure!(
+            episode.epoch == intent.link.epoch
+                && matches!(&episode.phase,
+            PaidPhase::Prepared { successor, .. } if successor == &intent.successor),
+            "SuccessorAmbiguous"
+        );
+        ensure!(candidate.is_none(), "SuccessorAmbiguous");
+        candidate = Some(
+            intent
+                .successor
+                .binding
+                .candidate
+                .context("NoApprovedCandidate")?,
+        );
+    }
+    Ok(candidate)
+}

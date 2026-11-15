@@ -573,7 +573,7 @@ pub(crate) fn open_generation_host(
     );
     if let Some(binding) = connection {
         binding.validate()?;
-        binding.connection.require_admission()?;
+        crate::availability::continuation::require_launch(store, &target.container(), binding)?;
     }
     // Settings resolve once per generation; an explicit request the host lacks refuses
     // before any record changes, while an unavailable default is only reported. The

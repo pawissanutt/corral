@@ -43,6 +43,7 @@ fn same_model_candidates_match_the_frozen_connection_not_list_order() {
         candidates: vec![sub, api.clone()],
         fallback: Some(AvailabilityFallback {
             automatic: true,
+            paid_roles: BTreeSet::new(),
             approved_providers: BTreeSet::from(["openai".into()]),
             max_switches: 1,
             allow_unknown_subscription_cost: true,

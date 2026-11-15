@@ -152,8 +152,10 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         }
     };
     let epoch = bound.herdr_seq_epoch;
+    let continuation = crate::availability::continuation::notice(&ctx.store, &container, n)?;
+    let activate_container = container.clone();
     if container.task().is_some() {
-        return receipts::commit_head(ctx, &admitted, move |task| {
+        let response = receipts::commit_head(ctx, &admitted, move |task| {
             let mut generation = task
                 .agent_generation(&container, n)?
                 .context("the generation disappeared")?;
@@ -179,10 +181,13 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 todo,
                 epoch,
                 herdr_status::question_snapshot_rows(questions.iter(), &[]),
+                continuation,
             ))
-        });
+        })?;
+        activate_bound(ctx, &activate_container, n);
+        return Ok(response);
     }
-    receipts::commit(ctx, &admitted, move |state, _| {
+    let response = receipts::commit(ctx, &admitted, move |state, _| {
         // A resumed host projects its still-pending questions from the start.
         let questions = herdr_status::question_snapshot(state, &[]);
         let generation = state
@@ -198,8 +203,39 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         generation.bound = Some(bound);
         let todo = generation.todo;
         state.binding.health = HostHealth::Healthy;
-        Ok(bound_commit(n, role, &key, todo, epoch, questions))
-    })
+        Ok(bound_commit(
+            n,
+            role,
+            &key,
+            todo,
+            epoch,
+            questions,
+            continuation,
+        ))
+    })?;
+    activate_bound(ctx, &activate_container, n);
+    Ok(response)
+}
+
+// The hello receipt is already committed. Failed activation must revoke any spend owner,
+// not turn a successful bind into a retryable hello or expose a raw provider error.
+fn activate_bound(ctx: &Ctx, container: &ContainerRef, generation: u32) {
+    use crate::availability::continuation::{self, PauseReason};
+    if continuation::activate(ctx, container, generation).is_err()
+        && continuation::pause(
+            ctx,
+            container,
+            PauseReason::SuccessorAmbiguous,
+            "activation failed",
+        )
+        .is_err()
+    {
+        crate::messages::report(
+            container.task(),
+            "agent continuation",
+            "continuation activation and pause failed".into(),
+        );
+    }
 }
 
 fn bound_commit(
@@ -209,6 +245,7 @@ fn bound_commit(
     todo: bool,
     epoch: Option<u64>,
     questions: Vec<serde_json::Value>,
+    continuation: Option<serde_json::Value>,
 ) -> Commit {
     Commit {
         result: json!({
@@ -216,6 +253,7 @@ fn bound_commit(
             "ops": AgentOp::implemented_for(role).into_iter()
                 .filter(|op| *op != "todo" || todo).collect::<Vec<_>>(),
             "herdr_seq_epoch_ms": epoch, "questions": questions,
+            "continuation": continuation,
         }),
         effect: Some(ReceiptEffect {
             kind: "generation_bound".into(),

@@ -114,6 +114,7 @@ fn metered_fallback_input(mut input: SetupProposalInput) -> SetupProposalInput {
     }
     metadata.fallback = Some(AvailabilityFallback {
         automatic: true,
+        paid_roles: BTreeSet::new(),
         approved_providers: BTreeSet::from(["openai".into(), "anthropic".into(), "google".into()]),
         max_switches: 2,
         allow_unknown_subscription_cost: false,

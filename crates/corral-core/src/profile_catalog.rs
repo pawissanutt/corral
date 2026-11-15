@@ -92,6 +92,9 @@ pub enum CandidateCost {
 #[serde(deny_unknown_fields)]
 pub struct AvailabilityFallback {
     pub automatic: bool,
+    /// Explicit paid permission per native role; omitted configuration grants none.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub paid_roles: BTreeSet<crate::agent::AgentRole>,
     pub approved_providers: BTreeSet<String>,
     /// Maximum advances, excluding the preferred candidate. Never cycles.
     pub max_switches: u32,

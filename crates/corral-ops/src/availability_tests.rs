@@ -76,6 +76,7 @@ fn pm_sessions_open_on_the_next_approved_candidate_when_the_preferred_is_unavail
                 candidates,
                 fallback: Some(AvailabilityFallback {
                     automatic: true,
+                    paid_roles: BTreeSet::new(),
                     approved_providers: BTreeSet::from(["openai".into(), "anthropic".into()]),
                     max_switches: 1,
                     allow_unknown_subscription_cost: true,

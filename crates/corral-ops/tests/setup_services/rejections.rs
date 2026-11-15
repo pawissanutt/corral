@@ -123,6 +123,7 @@ fn add_fallback(input: &mut SetupProposalInput) {
     metadata.candidates.push(candidate.clone());
     metadata.fallback = Some(AvailabilityFallback {
         automatic: true,
+        paid_roles: BTreeSet::new(),
         approved_providers: BTreeSet::from(["openai".into(), "anthropic".into()]),
         max_switches: 1,
         allow_unknown_subscription_cost: true,

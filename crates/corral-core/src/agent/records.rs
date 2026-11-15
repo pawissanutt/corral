@@ -23,7 +23,7 @@ pub const WAKES_MAX: usize = 256;
 pub const REPORTS_MAX: usize = 64;
 pub const EVIDENCE_MAX: usize = 16;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentRole {
     Worker,

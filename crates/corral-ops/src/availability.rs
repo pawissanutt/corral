@@ -15,8 +15,13 @@ use serde_json::json;
 
 use crate::Ctx;
 
+pub(crate) mod checkpoint;
+pub(crate) mod continuation;
+#[cfg(test)]
+mod continuation_tests;
 mod executor;
 mod paid;
+pub(crate) mod policy;
 mod review;
 pub(crate) use executor::{advance_all, review_continuation_due};
 pub(crate) use review::{
@@ -545,6 +550,26 @@ pub(crate) fn bind_route<T: corral_core::TaskRef + ?Sized>(
         return Ok(());
     };
     if pinned(choice) || !matches!(role, ProfileRole::Implementation | ProfileRole::Planning) {
+        return Ok(());
+    }
+    let agent_role = match role {
+        ProfileRole::Implementation => corral_core::agent::AgentRole::Worker,
+        _ => corral_core::agent::AgentRole::Planner,
+    };
+    if let Some(id) = continuation::prepared_candidate(&ctx.store, task.id(), agent_role)? {
+        let candidate = config.execution_candidate(&decision.profile, &id)?;
+        let resolved = config.resolve_candidate(&decision.profile, candidate)?;
+        apply(
+            decision,
+            &resolved,
+            CandidateBinding {
+                candidate: id,
+                episode: None,
+                reason: Some("prepared paid continuation".into()),
+                skipped: Vec::new(),
+                pinned: false,
+            },
+        );
         return Ok(());
     }
     if role == ProfileRole::Implementation
