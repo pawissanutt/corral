@@ -245,16 +245,22 @@ pub(crate) fn supervise_with(
     let mut previous: Option<String> = None;
     loop {
         let id = claim.id.clone();
-        let generation = ctx
-            .store
-            .get_assistant_container(&id)?
-            .state
-            .binding
-            .generation;
+        let (generation, paid) = {
+            let container = ctx.store.get_assistant_container(&id)?;
+            let paid = container.state.paid_episode.is_some()
+                || container
+                    .state
+                    .current_generation()
+                    .and_then(|g| g.connection.as_ref())
+                    .is_some_and(|binding| binding.connection.api_key());
+            (container.state.binding.generation, paid)
+        };
         let status = match run(&prepared) {
             Ok(status) => status,
             Err(error) => {
-                crate::assistant::continuation::failed_start(ctx, &id, generation)?;
+                if paid {
+                    crate::assistant::continuation::failed_start(ctx, &id, generation)?;
+                }
                 let Some(source) = previous.take() else {
                     // A fresh host that could not start is not left half-open. A resumed
                     // conversation remains recoverable, including when /new failed while
@@ -288,7 +294,9 @@ pub(crate) fn supervise_with(
             }
         };
         previous = None;
-        crate::assistant::continuation::failed_start(ctx, &id, generation)?;
+        if paid {
+            crate::assistant::continuation::failed_start(ctx, &id, generation)?;
+        }
         match status.code() {
             Some(CONTINUE_ASSISTANT_EXIT) => {
                 prepared = crate::assistant::continuation::resume(ctx, &id, pane, generation)?;

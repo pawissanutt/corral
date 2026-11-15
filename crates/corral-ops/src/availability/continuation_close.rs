@@ -11,6 +11,14 @@ fn intent_to_revoke(
     container: &ContainerRef,
     state: &AgentRunState,
 ) -> Result<Option<ContinuationIntent>> {
+    if state.paid_episode.is_none()
+        && !state
+            .current_generation()
+            .and_then(|g| g.connection.as_ref())
+            .is_some_and(|binding| binding.connection.api_key())
+    {
+        return Ok(None);
+    }
     let pending = |intent: &ContinuationIntent| {
         matches!(intent.phase, IntentPhase::Prepared | IntentPhase::Paused)
     };

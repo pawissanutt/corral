@@ -90,6 +90,14 @@ pub(in crate::reviewer) fn selected(
     run: &Run,
     child: &Run,
 ) -> Result<bool> {
+    if !policy::configured(&ctx.store.config, AgentRole::Reviewer)
+        && child
+            .agent_host
+            .as_ref()
+            .is_none_or(|state| state.paid_episode.is_none())
+    {
+        return Ok(false);
+    }
     let id = crate::availability::review_episode(&task.id, &RunHead::of(run)?, &child.agent);
     let Some(episode) = crate::availability::load(ctx, &id)? else {
         return Ok(false);
@@ -243,10 +251,8 @@ pub(in crate::reviewer) fn failed(
     error: &anyhow::Error,
 ) -> Result<()> {
     let source = container(task, run, child);
-    if continuation::INTENTS
-        .list(&ctx.store)?
-        .into_iter()
-        .any(|(_, i)| i.source.container == source && i.phase == IntentPhase::Paused)
+    if continuation::from_source(&ctx.store, &source)?
+        .is_some_and(|i| i.phase == IntentPhase::Paused)
     {
         return Ok(());
     }
@@ -276,23 +282,18 @@ pub(in crate::reviewer) fn failed(
 }
 
 pub(in crate::reviewer) fn launch_failed(ctx: &Ctx, task: &str) -> Result<bool> {
-    let intents = continuation::INTENTS.list(&ctx.store)?;
-    let mut paused = false;
-    for (_, intent) in intents {
-        if intent.role == AgentRole::Reviewer
-            && intent.subject.task.as_deref() == Some(task)
-            && intent.phase == IntentPhase::Prepared
-        {
-            continuation::pause(
-                ctx,
-                &intent.successor.container,
-                PauseReason::SuccessorAmbiguous,
-                "review successor did not bind",
-            )?;
-            paused = true;
-        }
-    }
-    Ok(paused)
+    let Some(intent) = continuation::task_intent(&ctx.store, task, AgentRole::Reviewer)?
+        .filter(|i| i.phase == IntentPhase::Prepared)
+    else {
+        return Ok(false);
+    };
+    continuation::pause(
+        ctx,
+        &intent.successor.container,
+        PauseReason::SuccessorAmbiguous,
+        "review successor did not bind",
+    )?;
+    Ok(true)
 }
 
 /// The watchdog owns asynchronous process loss; only a Prepared paid child is affected.
@@ -306,6 +307,15 @@ pub(in crate::reviewer) fn startup_failed(
         return Ok(false);
     };
     let state = child.agent_host.as_deref();
+    if !policy::configured(&ctx.store.config, AgentRole::Reviewer)
+        && state.is_none_or(|s| s.paid_episode.is_none())
+        && !child
+            .execution
+            .as_ref()
+            .is_some_and(|e| e.resolved.connection.is_some_and(|c| c.api_key()))
+    {
+        return Ok(false);
+    }
     if !failed && !state.is_some_and(|s| s.binding.health == agent::HostHealth::Lost) {
         return Ok(false);
     }

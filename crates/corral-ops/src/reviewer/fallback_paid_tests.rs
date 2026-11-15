@@ -326,6 +326,33 @@ fn paid_reviewer_fresh_attempt_preserves_only_notes_and_closes_on_verdict() {
 
 #[test]
 fn paid_reviewer_lost_ack_and_entering_verdict_never_create_a_competing_child() {
+    // Preparation can commit before the accounting child or its native state exists.
+    let unbound = review();
+    let intent = unbound.prepare().unwrap();
+    let before = ts::task_bytes(&unbound.fx, &unbound.id);
+    assert!(
+        agent::container_state(
+            &unbound.fx.ctx.store.get(&unbound.id).unwrap(),
+            &intent.successor.container,
+        )
+        .is_none()
+    );
+    let error = crate::reviewer::review_run_automatic(&unbound.fx.ctx, &unbound.id, Some("pi"))
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("SuccessorAmbiguous"));
+    let paused = continuation::task_intent(&unbound.fx.ctx.store, &unbound.id, AgentRole::Reviewer)
+        .unwrap()
+        .unwrap();
+    assert_eq!(paused.phase, IntentPhase::Paused);
+    assert_eq!(paused.pause, Some(PauseReason::SuccessorAmbiguous));
+    assert_eq!(ts::task_bytes(&unbound.fx, &unbound.id), before);
+    assert_eq!(
+        unbound.fx.ctx.store.get(&unbound.id).unwrap().runs[0]
+            .review_runs
+            .len(),
+        1
+    );
+
     for state in ["committed", "reserved", "uncertain"] {
         let review = review();
         let source = container(&review.id, "R1", "R1-review1");

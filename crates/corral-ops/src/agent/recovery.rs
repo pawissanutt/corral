@@ -333,7 +333,7 @@ pub(crate) fn recover_with(
     // it still owes keeps the conversation (an ordinary relaunch).
     let fresh = decide.map(|decide| decide()).transpose()?.unwrap_or(false);
     if matches!(container, ContainerRef::Pm) && !rotation {
-        crate::pm::continuation::regenerate(ctx)?;
+        crate::pm::continuation::regenerate(ctx, &state)?;
     }
     let interrupted = classify_lost(ctx, container, n, &plan)?;
     let unconfirmed = settle_unconfirmed(ctx, container, n, &state)?;

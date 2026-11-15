@@ -718,3 +718,32 @@ fn closing_task_source_revokes_uncreated_prepared_or_paused_successor() {
         assert!(episode.ledger.requests.is_empty());
     }
 }
+
+#[test]
+fn missing_continuation_index_never_authorizes_launch_or_another_preparation() {
+    for source_index in [true, false] {
+        let p = prepared();
+        let (area, key) = if source_index {
+            (
+                "role-continuation-sources",
+                corral_core::agent::paths::sha256_hex(
+                    &serde_json::to_vec(&p.intent.source.container).unwrap(),
+                ),
+            )
+        } else {
+            (
+                "role-continuation-tasks",
+                corral_core::agent::paths::sha256_hex(
+                    &serde_json::to_vec(&(&p.task, AgentRole::Worker)).unwrap(),
+                ),
+            )
+        };
+        p.fx.ctx.store.delete_record(area, &key).unwrap();
+        let before = task_bytes(&p.fx, &p.task);
+        let episode = p.fx.ctx.store.paid_episode(&p.intent.link.episode).unwrap();
+        assert!(require_launch(&p.fx.ctx.store, &p.intent.successor.container, &p.api).is_err());
+        assert!(prepare(&p.fx.ctx, transfer(&p, "R3")).is_err());
+        assert_eq!(task_bytes(&p.fx, &p.task), before);
+        assert_eq!(p.fx.ctx.store.paid_episode(&episode.id).unwrap(), episode);
+    }
+}

@@ -9,7 +9,7 @@ use crate::{
     },
 };
 use corral_core::{
-    agent::{ContainerRef, HostHealth},
+    agent::{AgentRole, ContainerRef, HostHealth},
     connection::ConnectionId,
     paid_episode::PaidPhase,
     *,
@@ -264,6 +264,34 @@ fn worker_paid_replacement_links_one_successor_pauses_stale_checkpoint_and_repla
     );
     assert_eq!(code(&send(&w.fx, &fresh_done, "done")), Some("run_ended"));
     assert_eq!(task_bytes(&w.fx, &w.task), before);
+
+    // Dispatch can fail before allocating a successor run or native host state.
+    let unbound = worker();
+    let intent = transfer(&unbound).unwrap().unwrap();
+    let before = task_bytes(&unbound.fx, &unbound.task);
+    assert!(
+        corral_core::agent::container_state(
+            &unbound.fx.ctx.store.get(&unbound.task).unwrap(),
+            &intent.successor.container,
+        )
+        .is_none()
+    );
+    let error = paid::launched(
+        &unbound.fx.ctx,
+        Some(&intent),
+        Err(anyhow::anyhow!("successor launch failed")),
+    )
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("successor launch failed"));
+    let paused = continuation::task_intent(&unbound.fx.ctx.store, &unbound.task, AgentRole::Worker)
+        .unwrap()
+        .unwrap();
+    assert_eq!(paused.phase, IntentPhase::Paused);
+    assert_eq!(
+        paused.pause,
+        Some(continuation::PauseReason::SuccessorAmbiguous)
+    );
+    assert_eq!(task_bytes(&unbound.fx, &unbound.task), before);
 
     for change_spec in [false, true] {
         let stale = worker();
