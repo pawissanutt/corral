@@ -14,29 +14,6 @@ use crate::availability::{
 };
 use crate::{Change, Ctx, DispatchOpts};
 
-/// Disabled roles add no storage work to an ordinary availability tick.
-pub(crate) fn enabled(config: &corral_core::Config) -> bool {
-    config.profiles.values().any(|profile| {
-        profile
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.fallback.as_ref())
-            .is_some_and(|fallback| {
-                fallback.paid_roles.contains(&AgentRole::Planner)
-                    || fallback.paid_roles.contains(&AgentRole::PlanReviewer)
-            })
-    })
-}
-
-pub(crate) fn role_enabled(config: &corral_core::Config, profile: &str, role: AgentRole) -> bool {
-    config
-        .profiles
-        .get(profile)
-        .and_then(|p| p.metadata.as_ref())
-        .and_then(|m| m.fallback.as_ref())
-        .is_some_and(|fallback| fallback.paid_roles.contains(&role))
-}
-
 pub(crate) fn paid_bound(state: &AgentRunState) -> bool {
     state.paid_episode.is_some()
         || state
@@ -50,7 +27,7 @@ pub(crate) fn paid_bound(state: &AgentRunState) -> bool {
 /// histories cost nothing. Non-healthy hosts inspect only their pending financial identity.
 pub(crate) fn due(ctx: &Ctx, head: &corral_core::TaskHead) -> Result<bool> {
     if let Some(run) = &head.last_plan_run
-        && role_enabled(&ctx.store.config, &run.profile, AgentRole::Planner)
+        && policy::profile_configured(&ctx.store.config, &run.profile, AgentRole::Planner)
         && run.state == PlanRunState::Planning
         && let Some(host) = &run.agent_host
         && container_due(
@@ -69,7 +46,7 @@ pub(crate) fn due(ctx: &Ctx, head: &corral_core::TaskHead) -> Result<bool> {
         && let Some(review) = &plan.current_review
         && review.reviewer != "pm"
         && review.verdict.is_none()
-        && role_enabled(&ctx.store.config, &review.reviewer, AgentRole::PlanReviewer)
+        && policy::profile_configured(&ctx.store.config, &review.reviewer, AgentRole::PlanReviewer)
         && let Some(host) = &review.agent_host
     {
         return container_due(
@@ -114,16 +91,7 @@ fn container_due(
     }
     Ok(head
         .latest_agent_turn(container, host.binding.generation)?
-        .is_some_and(|turn| {
-            turn.ended.is_some()
-                && turn.class == Some(agent::TurnClass::ProviderFailed)
-                && turn.provider_failure.as_ref().is_some_and(|failure| {
-                    matches!(
-                        failure.availability(),
-                        Some(corral_core::AvailabilityClass::QuotaExhausted { .. })
-                    )
-                })
-        }))
+        .is_some_and(|turn| policy::quota_turn(host.binding.role, host.binding.generation, &turn)))
 }
 
 /// Planning is independent of implementation-run availability and shares its delivery claim.
@@ -161,15 +129,15 @@ pub(crate) fn advance_all(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<Vec<
 
 /// Never relaunch an acknowledged preparation, including after a crash before bind.
 pub(crate) fn already_prepared(ctx: &Ctx, source: &ContainerRef) -> Result<bool> {
-    let previous = continuation::INTENTS
-        .list(&ctx.store)?
-        .into_iter()
-        .map(|(_, i)| i)
-        .filter(|i| &i.source.container == source)
-        .max_by_key(|i| i.created);
+    let previous = continuation::from_source(&ctx.store, source)?;
     if let Some(intent) = previous {
         if intent.phase == IntentPhase::Prepared {
-            pause_intent(ctx, &intent, PauseReason::SuccessorAmbiguous)?;
+            continuation::pause(
+                ctx,
+                &intent.successor.container,
+                PauseReason::SuccessorAmbiguous,
+                "successor did not bind",
+            )?;
         }
         return Ok(true);
     }
@@ -177,30 +145,36 @@ pub(crate) fn already_prepared(ctx: &Ctx, source: &ContainerRef) -> Result<bool>
 }
 
 /// Ordinary prepared-launch recovery must not retry a paid successor's first bind.
-pub(crate) fn resume_allowed(ctx: &Ctx, container: &ContainerRef) -> Result<bool> {
+pub(crate) fn resume_allowed(ctx: &Ctx, container: &ContainerRef, eligible: bool) -> Result<bool> {
+    if !eligible {
+        return Ok(true);
+    }
     if let Some(intent) = continuation::intent_for(&ctx.store, container, 1)? {
         if intent.phase == IntentPhase::Prepared {
-            pause_intent(ctx, &intent, PauseReason::SuccessorAmbiguous)?;
+            continuation::pause(
+                ctx,
+                &intent.successor.container,
+                PauseReason::SuccessorAmbiguous,
+                "prepared successor cannot relaunch",
+            )?;
         }
         return Ok(false);
     }
     Ok(true)
 }
 
-pub(crate) fn resume_planner(ctx: &Ctx, head: &corral_core::TaskHead) -> Result<bool> {
-    if head.last_plan_run.as_ref().is_none_or(|run| {
-        run.agent_host
+fn paid_planner(run: &corral_core::PlanRunHead) -> bool {
+    run.agent_host
+        .as_ref()
+        .is_some_and(|host| host.paid_episode.is_some())
+        || run
+            .execution
             .as_ref()
-            .is_none_or(|host| host.paid_episode.is_none())
-            && run.execution.as_ref().is_none_or(|snapshot| {
-                snapshot
-                    .resolved
-                    .connection
-                    .is_none_or(|connection| !connection.api_key())
-            })
-    }) {
-        return Ok(true);
-    }
+            .and_then(|snapshot| snapshot.resolved.connection)
+            .is_some_and(|connection| connection.api_key())
+}
+
+pub(crate) fn resume_planner(ctx: &Ctx, head: &corral_core::TaskHead) -> Result<bool> {
     match head.last_plan_run_head()? {
         Some(run) => resume_allowed(
             ctx,
@@ -208,26 +182,11 @@ pub(crate) fn resume_planner(ctx: &Ctx, head: &corral_core::TaskHead) -> Result<
                 task: head.id.clone(),
                 run: run.id.clone(),
             },
+            policy::profile_configured(&ctx.store.config, &run.profile, AgentRole::Planner)
+                || paid_planner(&run),
         ),
         None => Ok(true),
     }
-}
-
-fn pause_intent(
-    ctx: &Ctx,
-    intent: &continuation::ContinuationIntent,
-    reason: PauseReason,
-) -> Result<()> {
-    let successor = &intent.successor.container;
-    let task = successor
-        .task()
-        .context("planning successor task missing")?;
-    let target = if ctx.store.head(task)?.agent_head(successor)?.is_some() {
-        successor
-    } else {
-        &intent.source.container
-    };
-    continuation::pause(ctx, target, reason, "planning continuation refused")
 }
 
 pub(crate) fn paused(
@@ -256,15 +215,15 @@ pub(crate) fn paused(
             .into_iter()
             .find(|r| text.contains(&format!("{r:?}")))
             .unwrap_or(PauseReason::AuthorityDenied);
-            let intent = continuation::INTENTS
-                .list(&ctx.store)?
-                .into_iter()
-                .map(|(_, intent)| intent)
-                .find(|intent| {
-                    &intent.source.container == source && intent.phase == IntentPhase::Prepared
-                });
+            let intent = continuation::from_source(&ctx.store, source)?
+                .filter(|intent| intent.phase == IntentPhase::Prepared);
             if let Some(intent) = intent {
-                pause_intent(ctx, &intent, reason)?;
+                continuation::pause(
+                    ctx,
+                    &intent.successor.container,
+                    reason,
+                    "planning continuation refused",
+                )?;
             } else {
                 continuation::pause(ctx, source, reason, "planning continuation refused")?;
             }
@@ -463,10 +422,8 @@ fn draft_context(
 /// Ordinary replacement revokes a paid attempt, but never the prepared transfer source.
 pub(crate) fn before_dispatch(ctx: &Ctx, head: &corral_core::TaskHead) -> Result<()> {
     if let Some(run) = head.last_plan_run_head()?
-        && run
-            .agent_host
-            .as_ref()
-            .is_some_and(|host| host.paid_episode.is_some())
+        && (policy::profile_configured(&ctx.store.config, &run.profile, AgentRole::Planner)
+            || paid_planner(&run))
     {
         let source = ContainerRef::Planner {
             task: head.id.clone(),
@@ -491,12 +448,12 @@ pub(crate) fn admission_reason(
     admission: &crate::dispatch::Admission,
     next: &str,
 ) -> Result<Option<String>> {
-    if current
-        .head()
-        .last_plan_run
-        .as_ref()
-        .and_then(|run| run.agent_host.as_ref())
-        .is_none_or(|host| host.paid_episode.is_none())
+    if !policy::configured(&store.config, AgentRole::Planner)
+        && current
+            .head()
+            .last_plan_run
+            .as_ref()
+            .is_none_or(|run| !paid_planner(run))
     {
         return admission.reason(ctx, store, &*current, opts);
     }

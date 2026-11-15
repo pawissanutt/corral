@@ -329,6 +329,21 @@ pub(crate) fn ensure_root(
     })
 }
 
+/// Cheap candidate signal only. The caller must still check the exact bound connection
+/// and native quiescence before preparing a continuation.
+pub(crate) fn quota_turn(role: AgentRole, generation: u32, turn: &AgentTurn) -> bool {
+    turn.generation == generation
+        && turn.ended.is_some()
+        && (!matches!(role, AgentRole::Worker | AgentRole::Reviewer)
+            || turn.class == Some(TurnClass::ProviderFailed))
+        && turn.provider_failure.as_ref().is_some_and(|failure| {
+            matches!(
+                failure.availability(),
+                Some(AvailabilityClass::QuotaExhausted { .. })
+            )
+        })
+}
+
 /// Only sanitized native quota evidence from the latest ended current-generation turn on
 /// that generation's subscription binding is eligible; legacy prose is never evidence.
 pub(crate) fn quota_evidence(
@@ -346,18 +361,11 @@ pub(crate) fn quota_evidence(
         .chain(latest)
         .filter(|turn| turn.generation == generation.n && turn.ended.is_some())
         .max_by_key(|turn| turn.seq)?;
-    if matches!(state.binding.role, AgentRole::Worker | AgentRole::Reviewer)
-        && turn.class != Some(TurnClass::ProviderFailed)
-    {
+    if !quota_turn(state.binding.role, generation.n, turn) {
         return None;
     }
     let failure = turn.provider_failure.as_ref()?;
-    if failure.connection != binding.connection
-        || !matches!(
-            failure.availability(),
-            Some(AvailabilityClass::QuotaExhausted { .. })
-        )
-    {
+    if failure.connection != binding.connection {
         return None;
     }
     Some(QuotaEvidence {
