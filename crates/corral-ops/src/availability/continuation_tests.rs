@@ -353,6 +353,23 @@ fn subscription_transfer_fences_replays_activates_and_rejects_ambiguous_successo
         IntentPhase::Active
     );
     assert!(!activate(&p.fx.ctx, &p.intent.successor.container, 1).unwrap());
+    let active = p.fx.ctx.store.paid_episode(&p.intent.link.episode).unwrap();
+    assert!(
+        !close(
+            &p.fx.ctx,
+            &p.intent.source.container,
+            "superseded source ended"
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        p.fx.ctx.store.paid_episode(&p.intent.link.episode).unwrap(),
+        active
+    );
+    assert_eq!(
+        state(&p.fx, &p.intent.successor.container).binding.health,
+        HostHealth::Healthy
+    );
     let input = envelope(
         &host,
         "event",
@@ -604,16 +621,32 @@ fn revoking_prepared_successor_refuses_launch_activation_and_reservation() {
         Ok(())
     })
     .unwrap();
+    let before = task_bytes(&p.fx, &p.task);
+    let error = with_state(&p.fx.ctx, &p.intent.source.container, |state| {
+        close_in(
+            &p.fx.ctx.store,
+            &p.intent.source.container,
+            state,
+            "task-only closure",
+        )
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("close_task_in"));
+    assert_eq!(task_bytes(&p.fx, &p.task), before);
     assert!(
-        !close(
+        close(
             &p.fx.ctx,
             &p.intent.source.container,
             "old source terminalized"
         )
         .unwrap()
     );
+    assert_eq!(
+        state(&p.fx, &p.intent.successor.container).binding.health,
+        HostHealth::Fenced
+    );
     assert!(
-        close(
+        !close(
             &p.fx.ctx,
             &p.intent.successor.container,
             "successor revoked"
@@ -649,4 +682,39 @@ fn state_for_fixture_bound(p: &Prepared) -> corral_core::agent::GenerationBound 
         .bound
         .clone()
         .unwrap()
+}
+
+#[test]
+fn closing_task_source_revokes_uncreated_prepared_or_paused_successor() {
+    for paused in [false, true] {
+        let p = prepared();
+        if paused {
+            pause(
+                &p.fx.ctx,
+                &p.intent.source.container,
+                PauseReason::UnsupportedHost,
+                "launch not opened",
+            )
+            .unwrap();
+        }
+        assert_eq!(p.fx.ctx.store.get(&p.task).unwrap().runs.len(), 1);
+        assert!(
+            close(
+                &p.fx.ctx,
+                &p.intent.source.container,
+                "owner cancelled source"
+            )
+            .unwrap()
+        );
+        let intent = intent_for(&p.fx.ctx.store, &p.intent.successor.container, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(intent.phase, IntentPhase::Closed);
+        assert!(require_launch(&p.fx.ctx.store, &intent.successor.container, &p.api).is_err());
+        assert!(activate(&p.fx.ctx, &intent.successor.container, 1).is_err());
+        assert_eq!(p.fx.ctx.store.get(&p.task).unwrap().runs.len(), 1);
+        let episode = p.fx.ctx.store.paid_episode(&intent.link.episode).unwrap();
+        assert!(episode.owner(&intent.link, &intent.successor).is_err());
+        assert!(episode.ledger.requests.is_empty());
+    }
 }
