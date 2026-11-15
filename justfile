@@ -113,11 +113,11 @@ agent-install:
 agent-doctor:
     {{ corral }} agent doctor
 
-# Run the app against the workspace daemon: `just app` in this terminal, `just app web` in a browser
+# Run the app in this terminal against the workspace daemon (dev port 8791; 8790 serves the web app)
 [group('app')]
 [working-directory('apps/corral-app')]
-app target='tui' *args:
-    socket=$({{ corral }} daemon socket); CORRAL_SOCKET="$socket" nsh run --target {{ target }} {{ args }}
+app *args:
+    socket=$({{ corral }} daemon socket); CORRAL_SOCKET="$socket" nsh run --target tui --port 8791 {{ args }}
 
 # Check the app
 [group('app')]
@@ -131,16 +131,16 @@ app-check:
 app-test *args:
     cargo test {{ args }}
 
-# Package the static web site into apps/corral-app/.nsh/out/Corral
+# Rebuild the web app: the static site in apps/corral-app/.nsh/out/Corral that a loopback server serves
 [group('app')]
 [working-directory('apps/corral-app')]
-app-package:
+app-web:
     nsh package --target web
 
-# Serve the packaged site on loopback
+# Serve the packaged site in the foreground; its origin must be listed in `[daemon] web_origins`
 [group('app')]
 [working-directory('apps/corral-app')]
-app-serve port='4173':
+app-serve port='8790':
     python3 -m http.server --bind 127.0.0.1 --directory .nsh/out/Corral {{ port }}
 
 # The service's unit name: the store id is the directory that holds the daemon socket.
