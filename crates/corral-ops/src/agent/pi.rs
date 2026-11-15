@@ -196,6 +196,8 @@ const NEW_ASSISTANT_EXIT: i32 = 75;
 const RELINK_ASSISTANT_EXIT: i32 = 76;
 /// The managed host's `/resume` picker chose another session (named in its switch request).
 const RESUME_ASSISTANT_EXIT: i32 = 77;
+/// Only native quota evidence and the drained boundary authorize this request.
+pub(crate) const CONTINUE_ASSISTANT_EXIT: i32 = 78;
 
 fn supervise_assistant(
     ctx: &Ctx,
@@ -218,7 +220,7 @@ fn supervise_assistant(
 
 /// /new, /resume and relink happen between hosts, never by replacing the bound Pi file
 /// in-process. The supervisor holds the claim of the session it runs for the host's lifetime.
-fn supervise_with(
+pub(crate) fn supervise_with(
     ctx: &Ctx,
     pane: &str,
     mut claim: Claim,
@@ -252,6 +254,7 @@ fn supervise_with(
         let status = match run(&prepared) {
             Ok(status) => status,
             Err(error) => {
+                crate::assistant::continuation::failed_start(ctx, &id, generation)?;
                 let Some(source) = previous.take() else {
                     // A fresh host that could not start is not left half-open. A resumed
                     // conversation remains recoverable, including when /new failed while
@@ -285,7 +288,11 @@ fn supervise_with(
             }
         };
         previous = None;
+        crate::assistant::continuation::failed_start(ctx, &id, generation)?;
         match status.code() {
+            Some(CONTINUE_ASSISTANT_EXIT) => {
+                prepared = crate::assistant::continuation::resume(ctx, &id, pane, generation)?;
+            }
             Some(RELINK_ASSISTANT_EXIT) => {
                 anyhow::ensure!(
                     ctx.store

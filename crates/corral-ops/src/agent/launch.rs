@@ -24,7 +24,7 @@ use super::bridge::assets::{
     version_satisfies,
 };
 use super::cli::LaunchArgs;
-use crate::Ctx;
+use crate::{Ctx, availability::continuation::require_launch};
 
 mod capabilities;
 pub mod daemon;
@@ -340,6 +340,7 @@ pub(crate) fn prepare_bootstrap_host(
         std::path::absolute(&assets).with_context(|| format!("resolving {}", assets.display()))?;
     let asset_sha256 = asset_digest(&assets)?;
     if let Some(binding) = &spec.binding {
+        require_launch(&ctx.store, &target.container(), binding)?;
         super::connections::compatible(&assets, binding)?;
     }
     let container = target.container();
@@ -368,8 +369,8 @@ pub(crate) fn prepare_bootstrap_host(
             }
         }
         BindTarget::Assistant { session } => {
-            let file = super::ops::assistant::continued_session(ctx, session)?;
-            fresh_session = file.is_none();
+            let file = super::ops::assistant::transcript(ctx, session, spec.fresh_session)?;
+            fresh_session |= file.is_none();
             (super::ops::assistant::session_project(ctx, session)?, file)
         }
         BindTarget::Worker { .. } | BindTarget::Reviewer { .. } => {
