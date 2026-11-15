@@ -149,4 +149,6 @@ corral-owned login and every `ANTHROPIC_*` variable was stripped.
 
 Not ported (follow-ups): a resident long-lived SDK session, session reuse, Claude Code native
 compaction, multiple accounts, failover, rate-limit polling and auto-downloading Claude Code.
+The resident session's design and partial work are handed off in
+`pi-native-claude-resident-handoff.md`.
 The live smoke result is attached to T-493.
