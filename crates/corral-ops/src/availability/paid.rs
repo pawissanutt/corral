@@ -41,6 +41,8 @@ pub(super) fn selected(
         .current_generation()
         .and_then(|g| g.connection.clone())
         .context("paid predecessor connection missing")?;
+    let config = ctx.store.config_layers()?.config()?;
+    super::policy::source_position(&config, &failed.run.agent, &binding)?;
     episode.owner(
         link,
         &PaidBinding {
@@ -55,11 +57,7 @@ pub(super) fn selected(
         .resolve_candidate(&failed.run.agent, candidate)?
         .connection_binding()?
         .context("paid target binding missing")?;
-    let policy = ctx
-        .store
-        .config_layers()?
-        .config()?
-        .profile_setup_revision()?;
+    let policy = config.profile_setup_revision()?;
     ensure!(
         episode.approval.policy_digest == policy && episode.approval.candidates.contains(&exact),
         "paid target/policy differs from explicit approval"

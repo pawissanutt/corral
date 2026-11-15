@@ -79,14 +79,59 @@ fn approved(config: &Config, profile: &str, role: AgentRole) -> Result<PaidAppro
     Ok(approval)
 }
 
-/// Exactly one approved same-vendor API candidate after the exact source, never a model alias.
+/// Locate the source without rewriting its recorded binding. Profile launches omit the
+/// candidate id; only subscription sources may then match one unique runtime identity.
+/// Both bindings validate first. Version stays exact, and origin stays exact even though
+/// it is derived from identity; only candidate and its derived digest may differ.
+pub(crate) fn source_position(
+    config: &Config,
+    profile: &str,
+    source: &ConnectionBinding,
+) -> Result<usize> {
+    source.validate()?;
+    let metadata = config
+        .profiles
+        .get(profile)
+        .and_then(|p| p.metadata.as_ref())
+        .context("LegacyBinding: source profile has no candidates")?;
+    let mut position = None;
+    for (index, candidate) in metadata.candidates.iter().enumerate() {
+        let Some(binding) = config
+            .resolve_candidate(profile, candidate)?
+            .connection_binding()?
+        else {
+            continue;
+        };
+        let matches = if source.candidate.is_some() {
+            &binding == source
+        } else {
+            source.connection.billing() == BillingMode::Subscription
+                && binding.connection.billing() == BillingMode::Subscription
+                && binding.version == source.version
+                && binding.origin == source.origin
+                && binding.connection == source.connection
+                && binding.identity == source.identity
+                && binding.model == source.model
+                && binding.effort == source.effort
+        };
+        if matches {
+            ensure!(
+                position.is_none(),
+                "LegacyBinding: source matches several metadata candidates"
+            );
+            position = Some(index);
+        }
+    }
+    position.context("LegacyBinding: source candidate is missing")
+}
+
+/// Exactly one approved same-vendor API candidate after the uniquely identified source.
 pub(crate) fn target(
     ctx: &Ctx,
     profile: &str,
     role: AgentRole,
     source: &ConnectionBinding,
 ) -> Result<Target> {
-    source.validate()?;
     ensure!(
         source.connection.billing() == BillingMode::Subscription,
         "NoApprovedCandidate: paid fallback needs a subscription source"
@@ -98,19 +143,14 @@ pub(crate) fn target(
         .get(profile)
         .and_then(|p| p.metadata.as_ref())
         .context("PolicyNotApproved: paid profile disappeared")?;
-    let mut after_source = false;
+    let position = source_position(&config, profile, source)?;
     let mut selected = None;
-    for candidate in &metadata.candidates {
+    for candidate in metadata.candidates.iter().skip(position + 1) {
         let resolved = config.resolve_candidate(profile, candidate)?;
         let Some(binding) = resolved.connection_binding()? else {
             continue;
         };
-        if &binding == source {
-            after_source = true;
-            continue;
-        }
-        if !after_source
-            || !binding.connection.api_key()
+        if !binding.connection.api_key()
             || binding.connection.vendor() != source.connection.vendor()
             || !approval.candidates.contains(&binding)
         {
@@ -126,10 +166,6 @@ pub(crate) fn target(
             binding,
         });
     }
-    ensure!(
-        after_source,
-        "LegacyBinding: exact source candidate is missing"
-    );
     selected.context("NoApprovedCandidate: no approved same-vendor API target after source")
 }
 
@@ -196,7 +232,8 @@ pub(crate) fn ensure_root(
     profile: &str,
     subject: &SubjectRevision,
 ) -> Result<PaidLink> {
-    let approval = approval(ctx, profile, role(container))?;
+    let config = ctx.store.config_layers()?.config()?;
+    let approval = approved(&config, profile, role(container))?;
     continuation::with_state(ctx, container, |state| {
         let generation = state
             .current_generation()
@@ -206,6 +243,7 @@ pub(crate) fn ensure_root(
             .as_ref()
             .context("LegacyBinding: paid source needs an explicit connection binding")?;
         binding.validate()?;
+        source_position(&config, profile, binding)?;
         ensure!(
             state.binding.health == HostHealth::Healthy
                 && !state.binding.closing
