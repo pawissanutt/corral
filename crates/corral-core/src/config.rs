@@ -922,6 +922,9 @@ impl Config {
         if let Err(e) = parse_age(&self.ui.done_window) {
             out.push(format!("ui.done_window: {e:#}"));
         }
+        if let Err(e) = parse_age(&self.ui.agents_ended_window) {
+            out.push(format!("ui.agents_ended_window: {e:#}"));
+        }
         out.extend(self.review_problems_with_inputs(inputs));
         out.extend(self.pricing_problems());
         out

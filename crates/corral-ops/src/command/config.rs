@@ -51,6 +51,7 @@ pub(super) fn app_key(key: &str) -> bool {
                 "mouse"
                     | "done_window"
                     | "done_max"
+                    | "agents_ended_window"
                     | "columns"
                     | "show_wip"
                     | "accent"

@@ -13,6 +13,7 @@ use nsh_core::prelude::*;
 
 use crate::model::Id;
 use crate::model::agents::{self, Action, View};
+use crate::model::daemon::Link;
 use crate::screens::PhonePage;
 use crate::state::AppState;
 
@@ -39,7 +40,7 @@ pub fn session_phone(app: AppState) -> PhonePage {
 }
 
 /// A daemon session page on desktop and terminal, by its session id: the same page as the
-/// fixture's, from corrald's row, transcript page and recorded capture.
+/// fixture's, from corrald's row, transcript page and its pane's screen.
 pub fn live_session(app: AppState, id: Id) -> AnyElement {
     let view = computed({
         let id = id.clone();
@@ -100,8 +101,11 @@ fn daemon_session(app: AppState, id: &Id) -> agents::Session {
 }
 
 /// Keeps the open session's details current: its transcript page whenever its row changes (not
-/// while the owner reads an earlier page) and its capture when the terminal is first shown.
-/// The session page itself refreshes the transcript once a reply is delivered.
+/// while the owner reads an earlier page), and its pane's screen while the terminal shows: read
+/// when first shown, then revalidated once a tick of the feed's clock while the link is up. A
+/// failed read is not repeated every tick; it is tried again once the row changes or the link
+/// comes back, or by the owner's Refresh. The session page itself refreshes the transcript once
+/// a reply is delivered.
 fn follow(app: AppState, id: Id) {
     let transcript = DetailRef::Session { id: id.to_string() };
     let capture = DetailRef::Terminal { id: id.to_string() };
@@ -136,9 +140,42 @@ fn follow(app: AppState, id: Id) {
                 .is_some_and(|row| row.pane.is_some())
         })
     });
+    let shown = computed(move || {
+        has_pane.get() && app.agents.with(|state| state.live_view == View::Terminal)
+    });
+    {
+        let capture = capture.clone();
+        effect(move || {
+            if shown.get() {
+                untracked(|| app.load(capture.clone()));
+            }
+        });
+    }
+    // The client driver advances `now` once a second; reading it through this memo runs the
+    // revalidation once a tick rather than on every feed write, and not at all while down.
+    let tick = computed(move || {
+        app.feed
+            .with(|feed| (feed.link == Link::Up).then_some(feed.now))
+    });
+    let tried_rev = stored(None::<Option<u64>>);
     effect(move || {
-        if has_pane.get() && app.agents.with(|state| state.view == View::Terminal) {
-            untracked(|| app.load(capture.clone()));
+        if !shown.get() {
+            return;
         }
+        if tick.get().is_none() {
+            tried_rev.replace(None);
+            return;
+        }
+        untracked(|| {
+            let row = rev.get();
+            let changed = tried_rev.replace(Some(row)) != Some(row);
+            let failed = app.feed.with(|feed| {
+                feed.detail(&capture)
+                    .is_some_and(|cache| cache.error.is_some())
+            });
+            if changed || !failed {
+                app.refresh(capture.clone());
+            }
+        });
     });
 }

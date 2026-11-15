@@ -2,7 +2,7 @@
 //! Connection ticks inspect published Arcs; they never scan the store.
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use corral_core::Store;
@@ -16,6 +16,9 @@ pub(crate) use rows::Rows;
 
 const QUEUE: usize = 32;
 const POLL: Duration = Duration::from_millis(500);
+/// Agent tails and the ended-session window move without a store write, so a watched agents
+/// topic is read again at this interval even when the store is unchanged.
+const OUTSIDE_STORE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Key {
@@ -74,7 +77,15 @@ pub(crate) struct Snapshot {
 struct Entry {
     users: usize,
     checked: Option<(u64, u64)>,
+    /// When the rows were last read, for topics with inputs outside the store.
+    read: Option<Instant>,
     published: Option<std::result::Result<Arc<Snapshot>, String>>,
+}
+
+impl Entry {
+    fn overdue(&self, key: &Key) -> bool {
+        key.topic() == Topic::Agents && self.read.is_none_or(|at| at.elapsed() >= OUTSIDE_STORE)
+    }
 }
 
 enum Job {
@@ -159,6 +170,7 @@ pub(crate) fn watch(shared: &Shared, key: Key) -> Result<Watch> {
         let entry = entries.entry(key.clone()).or_insert(Entry {
             users: 0,
             checked: None,
+            read: None,
             published: None,
         });
         entry.users += 1;
@@ -383,15 +395,16 @@ fn refresh_with(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .iter()
-        .filter(|(_, entry)| entry.checked != Some(stamp))
+        .filter(|(key, entry)| entry.checked != Some(stamp) || entry.overdue(key))
         .map(|(key, _)| key.clone())
         .collect();
     for key in keys {
-        let Some((checked_before, previous)) = ({
+        let Some((checked_before, overdue, previous)) = ({
             let entries = service.entries.lock().unwrap_or_else(|e| e.into_inner());
             entries.get(&key).map(|entry| {
                 (
                     entry.checked,
+                    entry.overdue(&key),
                     entry
                         .published
                         .as_ref()
@@ -404,6 +417,7 @@ fn refresh_with(
         };
         if let Some((after, config)) = checked_before
             && config == generation
+            && !overdue
         {
             let (through, quiet) = ctx.read_step(|snapshot| {
                 let view = snapshot.store.view()?;
@@ -459,6 +473,7 @@ fn refresh_with(
                 continue;
             }
             entry.checked = checked;
+            entry.read = Some(Instant::now());
             publication.map(|value| entry.published.replace(value))
         };
         drop(retired);

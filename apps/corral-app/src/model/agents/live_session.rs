@@ -1,6 +1,7 @@
-//! One agent session from corrald: its row on the wall, its bounded transcript page, the
-//! recorded terminal capture where its pane has one, and replies through `task.reply`. A session
-//! without a pane (a daemon-hosted assistant) has no terminal; none is drawn for it.
+//! One agent session from corrald: its row on the wall, its bounded transcript page, its pane's
+//! screen (read live where corrald serves it, else a recorded capture such as a gate's log), and
+//! replies through `task.reply`. A session without a pane (a daemon-hosted assistant) has no
+//! terminal; none is drawn for it.
 
 use corral_protocol::assistant::ToolLine;
 use corral_protocol::detail::{
@@ -9,13 +10,13 @@ use corral_protocol::detail::{
 use corral_protocol::rows::AgentRow;
 
 use crate::model::board::{Mark, STAGES};
-use crate::model::daemon::{self, DetailCache};
+use crate::model::daemon::{self, DetailCache, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::text::{Rich, span};
 use crate::model::{ActStatus, Id, act};
 
-use super::live::{clock, role_label, shown_id, stale, usage};
+use super::live::{clock, role_label, shown_id, stale, unix, usage};
 use super::{
     Action, FactValue, Feed, Fill, Line, LineClass, Message, MessageItem, QuestionCard, Reply,
     ReplyMode, Run, RunFact, Session, State, Terminal, Tool, Transcript, View, line, reply_busy,
@@ -24,6 +25,9 @@ use super::{
 
 /// Output lines an expanded tool call shows; the rest are counted, not drawn.
 const TOOL_LINES: usize = 200;
+
+/// Seconds within which a screen read counts as "just now": it is read about once a second.
+const JUST_NOW: u64 = 5;
 
 /// The page token of the messages before the shown page, when the daemon has older ones.
 pub(super) fn older_token(cache: &DetailCache) -> Option<String> {
@@ -269,7 +273,37 @@ fn transcript(
     }
 }
 
-/// The recorded capture of the session's pane. It is never a stream and takes no keys.
+/// When the shown screen was last confirmed: the latest reply's time, which a not-modified
+/// answer advances, else the time the rows were read.
+fn read_at<'a>(cache: Option<&'a DetailCache>, capture: &'a TerminalSnapshot) -> &'a str {
+    cache
+        .and_then(|cache| cache.pages.first())
+        .map_or(capture.captured_at.as_str(), |page| page.as_of.as_str())
+}
+
+/// "just now" while reads keep arriving, else the read's clock (`21:40`, `3d ago`): words that
+/// change once when reads stop, not with every tick, so the page is not redrawn each second.
+fn read_when(at: &str, feed: &daemon::Feed) -> String {
+    match unix(at) {
+        Some(when) if feed.now > 0 && feed.now.saturating_sub(when) < JUST_NOW => "just now".into(),
+        _ => clock(Some(at), feed).unwrap_or_else(|| "at an unknown time".into()),
+    }
+}
+
+/// The daemon's reason without its machine prefix: `session has ended` from
+/// `terminal_snapshot_unavailable: session has ended`.
+fn reason(message: &str) -> &str {
+    message
+        .split_once(": ")
+        .filter(|(head, _)| {
+            !head.is_empty() && head.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+        })
+        .map_or(message, |(_, rest)| rest)
+        .trim_end_matches('.')
+}
+
+/// The session pane's screen: read live where corrald serves it, or a recorded capture (a
+/// gate's log). Neither takes keys. Live rows stay as read; only a current read is `Live`.
 fn terminal(
     row: &AgentRow,
     pane: &str,
@@ -278,40 +312,87 @@ fn terminal(
 ) -> Terminal {
     let capture = snapshot(cache);
     let loading = cache.is_none_or(|cache| cache.loading);
+    let error = cache.and_then(|cache| cache.error.as_ref());
+    // A request in flight marks the cache stale until it answers, so only a settled stale cache
+    // or a link that is down means the rows shown are no longer current.
+    let current = feed.link == Link::Up
+        && error.is_none()
+        && cache.is_some_and(|cache| cache.loading || !cache.stale);
+    let gone = error.is_some_and(|error| error.code == "not_found");
+    let unavailable = error.filter(|error| error.code == "unavailable");
+    let live = capture.is_some_and(|capture| capture.live);
     let status = match capture {
+        Some(capture) if capture.live => {
+            let read = read_when(read_at(cache, capture), feed);
+            match (error, unavailable) {
+                _ if current => format!("live screen · read {read} · read-only"),
+                _ if gone => format!("pane gone · last screen read {read}"),
+                (_, Some(why)) => format!("{} · last screen read {read}", reason(&why.message)),
+                (Some(error), _) => format!(
+                    "last screen received · read {read} · refreshing failed: {} ({})",
+                    error.message, error.code
+                ),
+                (None, _) => {
+                    format!("last screen received · read {read} · corrald is not answering")
+                }
+            }
+        }
         Some(capture) => format!(
             "snapshot · captured {} · read-only",
             clock(Some(capture.captured_at.as_str()), feed)
                 .unwrap_or_else(|| "at an unknown time".into())
         ),
-        None if loading => "loading the latest capture".to_owned(),
-        None => "no capture".to_owned(),
+        None if gone => "pane gone".to_owned(),
+        None if unavailable.is_some() => "unavailable".to_owned(),
+        None if error.is_some() => "not loaded".to_owned(),
+        None if loading => "loading".to_owned(),
+        None => "no screen yet".to_owned(),
     };
     let empty = match capture {
-        Some(capture) if capture.lines.is_empty() => Some("The capture is empty.".to_owned()),
+        Some(capture) if capture.lines.is_empty() => Some(if capture.live {
+            "The pane's screen is blank.".to_owned()
+        } else {
+            "The capture is empty.".to_owned()
+        }),
         Some(_) => None,
-        None if loading => Some("Loading the latest capture…".to_owned()),
-        None => Some(match cache.and_then(|cache| cache.error.as_ref()) {
-            Some(error) if matches!(error.code.as_str(), "not_found" | "unavailable") => {
-                "corrald has no recorded capture of this pane. Captures are recorded, not read live."
-                    .to_owned()
-            }
-            Some(error) => format!("The capture could not be loaded: {} ({}).", error.message, error.code),
-            None => "corrald has no recorded capture of this pane.".to_owned(),
+        None => Some(match (error, unavailable) {
+            _ if gone => format!("The pane is gone: herdr no longer has {pane}."),
+            (_, Some(why)) => format!("The terminal is unavailable: {}.", reason(&why.message)),
+            (Some(error), _) => format!(
+                "The terminal could not be loaded: {} ({}).",
+                error.message, error.code
+            ),
+            (None, _) if loading => "Loading the terminal…".to_owned(),
+            (None, _) => "No screen has arrived; it shows once corrald answers.".to_owned(),
         }),
     };
     Terminal {
-        feed: Feed::Snapshot,
+        feed: if live && current {
+            Feed::Live
+        } else {
+            Feed::Snapshot
+        },
         heading: format!(
             "{} · {pane}",
             row.runtime.as_deref().unwrap_or("runtime unknown")
         ),
         status,
-        input: "read-only · keys are not sent".into(),
+        input: "keys are not sent".into(),
         lines: capture
-            .map(|capture| capture.lines.iter().map(|text| tail_line(text)).collect())
+            .map(|capture| {
+                if capture.live {
+                    capture
+                        .lines
+                        .iter()
+                        .map(|row| line(row, LineClass::Plain))
+                        .collect()
+                } else {
+                    capture.lines.iter().map(|text| tail_line(text)).collect()
+                }
+            })
             .unwrap_or_default(),
         cursor: false,
+        verbatim: live,
         empty,
         phone_keys: Vec::new(),
         refresh: Some(Action::Refresh(DetailRef::Terminal { id: row.id.clone() })),
@@ -550,7 +631,7 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, _env: Env, via: &str
         })
         .unwrap_or_default();
     let view = if terminal.is_some() {
-        state.view
+        state.live_view
     } else {
         View::Transcript
     };
@@ -581,5 +662,88 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, _env: Env, via: &str
             steps_title: "Stages",
             steps,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use corral_protocol::detail::{DetailBody, DetailRef, TerminalSnapshot};
+    use corral_protocol::rows::{AgentRow, AgentStatus};
+
+    use super::super::{LineClass, State};
+    use super::session;
+    use crate::model::daemon::{self, DetailCache};
+    use crate::model::health::daemon_env;
+    use crate::model::{Form, Id};
+
+    #[test]
+    fn live_screen_rows_are_not_reclassed_or_trimmed() {
+        let id = "T-1/run/R1";
+        let rows = vec![
+            "  ╭─ PASS · ok 12 tests ─╮".to_owned(),
+            "Edit    src/lib.rs".to_owned(),
+            String::new(),
+            "  │ $ cargo test        │".to_owned(),
+        ];
+        let mut feed = daemon::Feed::default();
+        feed.agents.insert(
+            Id::from(id),
+            AgentRow {
+                id: id.into(),
+                role: "worker".into(),
+                task: Some("T-1".into()),
+                run: Some("R1".into()),
+                title: "Live screen".into(),
+                profile: None,
+                runtime: Some("omp".into()),
+                machine: None,
+                pane: Some("w1:p1".into()),
+                status: AgentStatus::Working,
+                now: String::new(),
+                since: None,
+                tail: Vec::new(),
+                cost_usd: None,
+                cost_basis: None,
+                tokens: None,
+                rev: 1,
+            },
+        );
+        let target = DetailRef::Terminal { id: id.into() };
+        feed.details.insert(
+            daemon::detail_key(&target),
+            DetailCache {
+                target,
+                pages: Vec::new(),
+                loading: false,
+                stale: false,
+                error: None,
+                merged: Some(DetailBody::Terminal(TerminalSnapshot {
+                    lines: rows.clone(),
+                    captured_at: "2026-11-14T10:00:00Z".into(),
+                    live: true,
+                })),
+            },
+        );
+        let page = session(
+            &State::default(),
+            &Id::from(id),
+            &feed,
+            daemon_env(&feed, Form::Desktop),
+            "app:test",
+        );
+        let terminal = page.terminal.expect("a session with a pane has a terminal");
+        let shown: Vec<String> = terminal
+            .lines
+            .iter()
+            .map(|line| line.text.iter().map(|span| span.text.as_str()).collect())
+            .collect();
+        assert_eq!(shown, rows);
+        assert!(
+            terminal
+                .lines
+                .iter()
+                .all(|line| line.class == LineClass::Plain)
+        );
+        assert!(terminal.verbatim);
     }
 }

@@ -1,5 +1,6 @@
 //! The terminal look of the mockup (`.term`, `.bigterm`, `.termbar`, `.tlab`): mono lines on a
-//! surface that stays dark in both appearances, each line coloured by its model class.
+//! surface that stays dark in both appearances, each line coloured by its model class; and a
+//! pane's screen as read, row for row in one ink, never wrapped.
 //!
 //! The theme has no terminal roles, so the surface takes the dark appearance's value of the
 //! shell, ink and state roles in both appearances: the same colours the mockup's `--term-*` and
@@ -10,13 +11,13 @@ use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::agents::{Feed, Line, LineClass, Terminal};
+use crate::model::agents::{Feed, Line, LineClass};
 use crate::model::hue::Hue;
 use crate::model::text::Span;
 use crate::state::AppState;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_MONO, FONT_SCREEN, FONT_TEXT, Token, color};
 
 /// A role's dark-appearance value in both appearances.
 fn night(token: Token) -> AdaptiveColor {
@@ -119,6 +120,23 @@ pub const PHONE: Set = Set {
     leading: 16.5,
     wrap: true,
 };
+/// A pane's screen on the desktop surface: a size that keeps a wide pane's rows within reach,
+/// at about a terminal's own leading (the system monospaces are near 1.17 em tall), so `│`
+/// columns and box frames meet from row to row as they do in the pane.
+pub const SCREEN: Set = Set {
+    size: 12.0,
+    leading: 14.5,
+    wrap: false,
+};
+/// A pane's screen on the phone surface.
+pub const PHONE_SCREEN: Set = Set {
+    size: 10.0,
+    leading: 12.0,
+    wrap: false,
+};
+
+/// How far from its end a scroll still counts as at its end, in points.
+const END_SLACK: f32 = 24.0;
 
 /// One line on the dark surface; an empty line keeps its row.
 fn line_text(line: &Line, set: Set) -> Text {
@@ -190,6 +208,85 @@ pub fn lines(lines: &[Line], set: Set, with_cursor: bool) -> AnyElement {
     view().min_w(px(0.0)).children(rows).into_element()
 }
 
+/// A pane's screen on the dark surface (desktop, phone): each row exactly as read, in the
+/// system monospace (`FONT_SCREEN`) and the surface's ink, its spaces kept; the rows sit at their
+/// full width in a sideways scroll, so a screen wider than the surface scrolls rather than wraps.
+/// The insets are inside the sideways scroll, so its bar never covers the last row.
+pub fn screen_rows(lines: &[Line], set: Set, (sides, ends): (f32, f32)) -> AnyElement {
+    let ink = night(Token::ShellInk);
+    let rows = lines.iter().map(|line| {
+        text("")
+            .flex_shrink_0()
+            .min_h(px(set.leading))
+            .number_of_lines(1u32)
+            .font_family(FONT_SCREEN)
+            .text_size(px(set.size))
+            .line_height(px(set.leading))
+            .text_color(ink)
+            .children(
+                line.text
+                    .iter()
+                    .map(|span| run_of(Form::Desktop, span, ink)),
+            )
+            .into_element()
+    });
+    scroll()
+        .horizontal()
+        .child(
+            view()
+                .flex_shrink_0()
+                .px(px(sides))
+                .py(px(ends))
+                .children(rows),
+        )
+        .into_element()
+}
+
+/// A pane's screen in a real terminal: one row each in the foreground, its spaces kept, at full
+/// width in a sideways scroll (the terminal keeps a row of its own for that scroll's bar once
+/// the rows are wider than the region).
+pub fn cell_screen(lines: &[Line]) -> AnyElement {
+    let ink = color(Token::Ink);
+    let rows = lines.iter().map(|line| {
+        if line.text.iter().all(|span| span.text.is_empty()) {
+            return term::blank();
+        }
+        text("")
+            .flex_shrink_0()
+            .number_of_lines(1u32)
+            .text_color(ink)
+            .children(
+                line.text
+                    .iter()
+                    .map(|span| run_of(Form::Terminal, span, ink)),
+            )
+            .into_element()
+    });
+    scroll()
+        .horizontal()
+        .child(view().flex_shrink_0().px(term::cells(1.0)).children(rows))
+        .into_element()
+}
+
+/// A scroll that opens at its end and keeps to it as `track`'s rows change, unless the owner has
+/// scrolled away from the end: then what they read stays put until they scroll back down.
+pub fn follow_end(surface: Scroll, track: impl Fn() + 'static) -> Scroll {
+    let scroller = element_ref();
+    let at_end = stored(true);
+    effect(move || {
+        track();
+        if at_end.get() {
+            after_answer(move || scroller.scroll_to_end(false));
+        }
+    });
+    surface
+        .element_ref(&scroller)
+        .on_scroll(move |event: &ScrollEvent| {
+            let below = event.content_size.height.0 - event.offset.y.0 - event.size.height.0;
+            at_end.replace(below <= END_SLACK);
+        })
+}
+
 /// The `live` or `snapshot` tag of a tail (`.tlab`): 10 pt words in the ok or held colour in a
 /// half-strength ring of the same colour. A snapshot never passes for a stream.
 pub fn tag(feed: Feed, label: impl Into<SharedString>) -> AnyElement {
@@ -228,8 +325,8 @@ pub fn empty(words: String, set: Set) -> AnyElement {
         .into_element()
 }
 
-/// The toolbar's refresh control: asks corrald for the pane's latest recorded capture. Drawn
-/// in the surface's night inks, with the app's focus ring.
+/// The toolbar's refresh control: asks corrald for the pane's screen or capture again now.
+/// Drawn in the surface's night inks, with the app's focus ring.
 pub fn refresh(on_press: impl Fn() + 'static) -> AnyElement {
     view()
         .flex_row()
@@ -264,9 +361,15 @@ pub fn refresh(on_press: impl Fn() + 'static) -> AnyElement {
 /// The desktop terminal's toolbar (`.termbar`): the runtime, pane and size, the capture's
 /// state, and at the trailing edge where keys go and the refresh control. A snapshot's state
 /// is in the held colour, so it never reads as a live stream.
-pub fn toolbar(terminal: &Terminal, refresh: Option<AnyElement>) -> AnyElement {
-    let words = |content: SharedString, ink: AdaptiveColor| {
-        text(content)
+pub fn toolbar(
+    feed: Feed,
+    heading: &str,
+    status: &str,
+    input: &str,
+    refresh: Option<AnyElement>,
+) -> AnyElement {
+    let words = |content: &str, ink: AdaptiveColor| {
+        text(content.to_owned())
             .number_of_lines(1u32)
             .flex_shrink(1.0)
             .min_w(px(0.0))
@@ -275,10 +378,6 @@ pub fn toolbar(terminal: &Terminal, refresh: Option<AnyElement>) -> AnyElement {
             .text_color(ink)
     };
     let quiet = night(Token::Ink2);
-    let state = match terminal.feed {
-        Feed::Live => quiet,
-        Feed::Snapshot => night(Token::Held),
-    };
     view()
         .test_id("session-termbar")
         .flex_row()
@@ -288,12 +387,47 @@ pub fn toolbar(terminal: &Terminal, refresh: Option<AnyElement>) -> AnyElement {
         .px(px(14.0))
         .py(px(6.0))
         .bg(night(Token::BgSunk))
-        .child(words(terminal.heading.clone().into(), quiet))
-        .child(words(terminal.status.clone().into(), state))
+        .child(words(heading, quiet))
+        .child(words(status, state_ink(feed)))
         .child(view().flex_1().min_w(px(0.0)))
-        .child(words(terminal.input.clone().into(), quiet))
+        .child(words(input, quiet))
         .children(refresh)
         .into_element()
+}
+
+/// The phone's line over the screen: the `live` or `snapshot` tag, how current the rows are,
+/// and the refresh control.
+pub fn phone_toolbar(feed: Feed, status: &str, refresh: Option<AnyElement>) -> AnyElement {
+    view()
+        .test_id("session-termbar")
+        .flex_row()
+        .flex_none()
+        .items_center()
+        .gap(px(8.0))
+        .px(px(12.0))
+        .py(px(7.0))
+        .bg(night(Token::BgSunk))
+        .child(tag(feed, feed.label()))
+        .child(
+            text(status.to_owned())
+                .number_of_lines(1u32)
+                .flex_shrink(1.0)
+                .min_w(px(0.0))
+                .font_family(FONT_MONO)
+                .text_size(px(10.5))
+                .text_color(state_ink(feed)),
+        )
+        .child(view().flex_1().min_w(px(0.0)))
+        .children(refresh)
+        .into_element()
+}
+
+/// The read state's ink: quiet while current, the held colour once the rows are not.
+fn state_ink(feed: Feed) -> AdaptiveColor {
+    match feed {
+        Feed::Live => night(Token::Ink2),
+        Feed::Snapshot => night(Token::Held),
+    }
 }
 
 /// Lines in a real terminal: one row each in the class's role, the agent's spans in their hue.

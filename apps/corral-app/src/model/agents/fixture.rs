@@ -387,6 +387,7 @@ pub fn session(state: &State, _env: Env) -> Session {
             .into(),
             lines: terminal_lines(id),
             cursor: true,
+            verbatim: false,
             empty: None,
             phone_keys: vec!["Esc", "Tab", "Ctrl", "↑", "↓", "⏎"],
             refresh: None,

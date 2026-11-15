@@ -100,6 +100,23 @@ Typed app topics publish coherent Store snapshots even if another writer commits
 while they are read; the next refresh catches up. Lease and command-journal
 bookkeeping does not invalidate cached topics.
 
+The `agents` topic lists the sessions running now and those that ended within
+`[ui] agents_ended_window` (default one hour), not every session the store remembers.
+A resumable assistant session with no host is on the `assistant` topic only. Each row
+carries the last four lines of its recorded transcript, or of a running gate's log.
+Those inputs and the window move without a store write, so a watched `agents` topic is
+read again every two seconds; it is published only when a row changed. A session detail
+is one bounded window of its transcript: `older` is the cursor of the window before it
+and stays valid after later writes, and the reply never has a continuation.
+
+A terminal detail of a running session with a pane is the pane's visible screen, read
+from herdr when the app asks for it (`herdr pane read --source visible`): plain text
+rows, at most 200, marked `live`. The app asks about once per second while the terminal
+is on screen, and an unchanged screen answers not-modified. Nothing is read while no
+one looks, topic reads never probe a pane, and a pane recorded for another herdr
+server is refused. The view is read-only: no keys are sent. A gate's terminal detail
+stays its recorded log.
+
 See [the app guide](../../apps/corral-app/README.md#live-data) for enrolment and recovery.
 
 

@@ -92,6 +92,12 @@ pub fn color(token: Token) -> AdaptiveColor {
 
 pub const FONT_TEXT: &str = asset!("fonts/AtkinsonHyperlegibleNext-Regular.woff2").family;
 pub const FONT_MONO: &str = asset!("fonts/AtkinsonHyperlegibleMono-Regular.woff2").family;
+/// A pane's screen as read: the system's monospace, which draws box drawing, blocks and shapes at
+/// the letters' advance, so frames line up; `FONT_MONO` has none of those glyphs. NSH maps
+/// `ui-monospace`/`monospace` to each platform's own (SF Mono, Consolas, Pango's or Android's
+/// monospace); on the web `ui-monospace` is Safari's alone, so the named families give the
+/// other browsers a terminal face before the generic one.
+pub const FONT_SCREEN: &str = "ui-monospace, Menlo, \"DejaVu Sans Mono\", Consolas, monospace";
 
 /// Text size and row height for the form: Desktop 13 / 30, Phone 16 / 56, Terminal 13 / 16 (points).
 pub fn text_size(form: Form) -> f32 {

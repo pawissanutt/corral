@@ -22,7 +22,7 @@ mod usage;
 mod tests;
 
 use anyhow::{Result, bail};
-use corral_protocol::detail::{DetailGet, DetailRef, DetailReply};
+use corral_protocol::detail::{DetailBody, DetailGet, DetailRef, DetailReply};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -146,7 +146,6 @@ fn read_snapshot(ctx: &Ctx, request: &DetailGet) -> Result<DetailReply> {
             bail!("invalid session page token");
         }
         let etag = digest(&(seq, &request.target))?;
-        paging::check(cursor.as_ref(), &etag)?;
         if cursor.is_none() && request.etag.as_deref() == Some(etag.as_str()) {
             return Ok(DetailReply {
                 etag,
@@ -156,9 +155,17 @@ fn read_snapshot(ctx: &Ctx, request: &DetailGet) -> Result<DetailReply> {
                 body: None,
             });
         }
+        // A session is read one window at a time. Its sources only append, so the cursor of
+        // an older window outlives later writes. That cursor is the page's own `older`, never
+        // `next`: a continuation would have the client assemble the whole history.
         let source = cursor.as_ref().and_then(|page| page.source.as_deref());
-        let (body, next) = agents::session(ctx, id, source)?;
-        return paging::source_reply(body, next, etag, selector, as_of, seq);
+        let mut page = agents::session(ctx, id, source)?;
+        let as_of = now();
+        page.older = page
+            .older
+            .map(|source| paging::source_token(&selector, &etag, &as_of, source))
+            .transpose()?;
+        return paging::reply(DetailBody::Session(page), None, etag, selector, as_of, seq);
     }
     if cursor.as_ref().is_some_and(|page| page.source.is_some()) {
         bail!("invalid detail page token");
@@ -178,7 +185,12 @@ fn read_snapshot(ctx: &Ctx, request: &DetailGet) -> Result<DetailReply> {
         DetailRef::Other => bail!("unsupported app detail selector"),
         DetailRef::PlanDiff { .. } | DetailRef::ReviewFile { .. } => unreachable!(),
     };
-    let etag = digest(&(&request.target, &body))?;
+    let etag = match (&request.target, &body) {
+        (DetailRef::Terminal { .. }, DetailBody::Terminal(snapshot)) => {
+            digest(&(&request.target, &snapshot.lines, snapshot.live))?
+        }
+        _ => digest(&(&request.target, &body))?,
+    };
     paging::check(cursor.as_ref(), &etag)?;
     if cursor.is_none() && request.etag.as_deref() == Some(etag.as_str()) {
         return Ok(DetailReply {

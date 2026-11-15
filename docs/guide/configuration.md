@@ -1018,6 +1018,7 @@ pass = "audit"
 | `mouse` | `true` | Capture the mouse (click, wheel, drag). `--no-mouse` and `CORRAL_MOUSE=0` also turn it off. |
 | `done_window` | `"7d"` | How far back the board's Done column reaches, as a whole number plus `h`, `d` or `w` (no spaces). Older tasks are in the history view. |
 | `done_max` | `10` | At most this many cards in the Done column, newest first. |
+| `agents_ended_window` | `"1h"` | How long an ended agent session (worker, reviewer, planner, gate or assistant) stays in the app's Agents list, as a whole number plus `h`, `d` or `w`. Running sessions always show; an older session's transcript stays reachable from its task. |
 | `columns` | `["backlog", "ready", "running", "needs_me", "review", "done"]` | Visible board columns. At least one, no duplicates; ideas appear in Backlog. `D` temporarily toggles Done. |
 | `show_wip` | `true` | Show slot usage in the header and Running column. Hiding it does not change admission limits. |
 | `accent` | `"cyan"` | Focus, link and shortcut color: `cyan`, `blue`, `magenta`, `green`, or `orange`. Status colors remain unchanged. |

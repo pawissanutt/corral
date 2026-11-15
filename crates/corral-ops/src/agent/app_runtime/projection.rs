@@ -1,6 +1,7 @@
 //! Bounded, provider-free read projections shared by daemon topics and detail readers.
 use anyhow::{Context, Result};
-use corral_core::assistant::threads::Message;
+use corral_core::assistant::AssistantSession;
+use corral_core::assistant::threads::{Message, Thread};
 use corral_protocol::assistant::{ContextRef, EntryCard, EntryKind, MessageState, ThreadEntry};
 use corral_protocol::rows::{
     AssistantKind, AssistantLocation, AssistantRow, AssistantState, WaitReason,
@@ -55,31 +56,57 @@ pub(crate) fn row(ctx: &Ctx, id: &str) -> Result<AssistantRow> {
     Ok(row_with_usage(ctx, id)?.0)
 }
 
-fn row_with_usage(ctx: &Ctx, id: &str) -> Result<(AssistantRow, Option<u64>)> {
+/// One session's row and its total tokens.
+pub(crate) fn row_with_usage(ctx: &Ctx, id: &str) -> Result<(AssistantRow, Option<u64>)> {
     let session = ctx.store.get_assistant(id)?;
-    let container = ctx.store.get_assistant_container(id)?;
-    let usage = crate::usage::assistant_usage(&ctx.store, &session)?;
-    let tokens = usage.as_ref().map(|usage| usage.total_tokens());
     let head = ctx.store.app_thread_head(id).ok();
+    let mut row = base_row(ctx, &session, head)?;
+    let tokens = add_usage(ctx, &session, &mut row)?;
+    Ok((row, tokens))
+}
+
+/// Fills the row's cost from the session's transcripts and returns its total tokens. This is
+/// the expensive part of a row, so feeds call it only for the rows they keep.
+fn add_usage(ctx: &Ctx, session: &AssistantSession, row: &mut AssistantRow) -> Result<Option<u64>> {
+    let usage = crate::usage::assistant_usage(&ctx.store, session)?;
+    row.cost_usd = usage.as_ref().and_then(|usage| usage.cost_usd);
+    row.cost_basis = usage
+        .as_ref()
+        .and_then(|usage| usage.cost_basis)
+        .map(|basis| match basis {
+            corral_core::CostBasis::Reported => corral_protocol::board::CostBasis::Reported,
+            corral_core::CostBasis::Estimated => corral_protocol::board::CostBasis::Estimated,
+            corral_core::CostBasis::Mixed => corral_protocol::board::CostBasis::Mixed,
+        });
+    Ok(usage.as_ref().map(|usage| usage.total_tokens()))
+}
+
+fn state(session: &AssistantSession, head: Option<&Thread>) -> AssistantState {
+    if session.ended.is_some() {
+        return AssistantState::Ended;
+    }
+    match head.map(|h| h.state.as_str()) {
+        Some("starting") => AssistantState::Starting,
+        Some("working") => AssistantState::Working,
+        Some("ready") => AssistantState::Ready,
+        Some("waiting") => AssistantState::Waiting,
+        Some("failed") => AssistantState::Failed,
+        Some("stopping" | "takeover") => AssistantState::Stopping,
+        _ => AssistantState::Cold,
+    }
+}
+
+/// The session's row without usage.
+fn base_row(ctx: &Ctx, session: &AssistantSession, head: Option<Thread>) -> Result<AssistantRow> {
+    let id = session.id.as_str();
+    let container = ctx.store.get_assistant_container(id)?;
     let quick = head.as_ref().is_some_and(|h| h.quick)
         && ctx.store.app_thread_scope("quick")?.as_deref() == Some(id);
     let hosted = container
         .state
         .generation(container.state.binding.generation)
         .is_some_and(|g| g.daemon_hosted);
-    let state = if session.ended.is_some() {
-        AssistantState::Ended
-    } else {
-        match head.as_ref().map(|h| h.state.as_str()) {
-            Some("starting") => AssistantState::Starting,
-            Some("working") => AssistantState::Working,
-            Some("ready") => AssistantState::Ready,
-            Some("waiting") => AssistantState::Waiting,
-            Some("failed") => AssistantState::Failed,
-            Some("stopping" | "takeover") => AssistantState::Stopping,
-            _ => AssistantState::Cold,
-        }
-    };
+    let state = state(session, head.as_ref());
     let turn = container.state.turns.last().map(|t| t.seq);
     let row = AssistantRow {
         id: id.into(),
@@ -103,19 +130,12 @@ fn row_with_usage(ctx: &Ctx, id: &str) -> Result<(AssistantRow, Option<u64>)> {
         } else {
             AssistantLocation::None
         },
-        profile: Some(session.profile),
-        focus: (session.focus != "workspace").then_some(session.focus),
+        profile: Some(session.profile.clone()),
+        focus: (session.focus != "workspace").then(|| session.focus.clone()),
         pending: head.as_ref().map_or(0, |h| h.pending.len() as u32),
         turn,
-        cost_usd: usage.as_ref().and_then(|usage| usage.cost_usd),
-        cost_basis: usage
-            .as_ref()
-            .and_then(|usage| usage.cost_basis)
-            .map(|basis| match basis {
-                corral_core::CostBasis::Reported => corral_protocol::board::CostBasis::Reported,
-                corral_core::CostBasis::Estimated => corral_protocol::board::CostBasis::Estimated,
-                corral_core::CostBasis::Mixed => corral_protocol::board::CostBasis::Mixed,
-            }),
+        cost_usd: None,
+        cost_basis: None,
         wait: head
             .as_ref()
             .and_then(|h| h.failure.as_ref())
@@ -126,24 +146,36 @@ fn row_with_usage(ctx: &Ctx, id: &str) -> Result<(AssistantRow, Option<u64>)> {
             }),
         rev: head.map_or(container.state.binding.generation as u64, |h| h.rev),
     };
-    Ok((row, tokens))
+    Ok(row)
 }
 
 pub fn sessions(ctx: &Ctx) -> Result<Vec<AssistantRow>> {
-    Ok(sessions_with_usage(ctx)?
+    Ok(sessions_with_usage(ctx, |_, _| true)?
         .into_iter()
         .map(|(row, _)| row)
         .collect())
 }
 
-/// One canonical accounting pass supplies both the assistant and agent feed adapters.
-pub(crate) fn sessions_with_usage(ctx: &Ctx) -> Result<Vec<(AssistantRow, Option<u64>)>> {
-    let mut rows: Vec<_> = ctx
-        .store
-        .list_assistants()?
-        .iter()
-        .map(|s| row_with_usage(ctx, &s.id))
-        .collect::<Result<_>>()?;
+/// One canonical accounting pass supplies both the assistant and agent feed adapters. `keep`
+/// sees each session's state and end time before its container and transcripts are read, so
+/// a session a feed leaves out costs one thread-head read at most.
+pub(crate) fn sessions_with_usage(
+    ctx: &Ctx,
+    keep: impl Fn(AssistantState, Option<jiff::Timestamp>) -> bool,
+) -> Result<Vec<(AssistantRow, Option<u64>)>> {
+    let mut rows = Vec::new();
+    for session in ctx.store.list_assistants()? {
+        if session.ended.is_some() && !keep(AssistantState::Ended, session.ended) {
+            continue;
+        }
+        let head = ctx.store.app_thread_head(&session.id).ok();
+        if !keep(state(&session, head.as_ref()), session.ended) {
+            continue;
+        }
+        let mut row = base_row(ctx, &session, head)?;
+        let tokens = add_usage(ctx, &session, &mut row)?;
+        rows.push((row, tokens));
+    }
     rows.sort_by(|a, b| {
         (a.0.kind != AssistantKind::Quick, &a.0.id)
             .cmp(&(b.0.kind != AssistantKind::Quick, &b.0.id))
