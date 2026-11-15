@@ -398,6 +398,7 @@ fn watchdog(ctx: &Ctx, heartbeat: &mut Heartbeat, now: i64) -> Result<()> {
 }
 
 fn supervise_pm(ctx: &Ctx, heartbeat: &mut Heartbeat, now: i64) -> Result<bool> {
+    crate::pm::continuation::advance(ctx, ctx.store.now())?;
     let Some(pm) = pm_state::load_current(&ctx.store)? else {
         return Ok(false);
     };

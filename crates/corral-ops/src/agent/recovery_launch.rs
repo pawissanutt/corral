@@ -14,6 +14,8 @@ use crate::agent::hooks::pm;
 pub(crate) struct RecoveryLaunch<'a> {
     pub pane: Option<&'a str>,
     pub profile: Option<&'a ResolvedProfile>,
+    /// Applied only when the frozen rotation decision approves a fresh conversation.
+    pub fresh_profile: Option<&'a ResolvedProfile>,
     pub adopted: bool,
     pub continue_session: bool,
     /// A rotation attempt (fence reason `rotate`): called once the predecessor is stopped,
@@ -29,6 +31,7 @@ impl<'a> RecoveryLaunch<'a> {
         Self {
             pane: Some(pane),
             profile: Some(profile),
+            fresh_profile: None,
             adopted: true,
             continue_session,
             rotate: None,
@@ -44,9 +47,24 @@ pub(super) fn pm_profile(
     if !matches!(container, ContainerRef::Pm) {
         return Ok(None);
     }
-    let resolved = launch
-        .and_then(|launch| launch.profile)
-        .map_or_else(|| pm::profile(ctx), |profile| Ok(profile.clone()))?;
+    let state = pm_state::load_current(&ctx.store)?
+        .context("no corral-pi PM is bound")?
+        .state;
+    if launch.is_none_or(|launch| launch.rotate.is_none()) {
+        crate::pm::continuation::require_recoverable(ctx, &state)?;
+    }
+    let resolved = if state
+        .current_generation()
+        .and_then(|g| g.connection.as_ref())
+        .is_some_and(|binding| binding.connection.api_key())
+        && launch.is_none_or(|l| l.rotate.is_none())
+    {
+        crate::pm::continuation::recovery_profile(ctx, &state)?
+    } else {
+        launch
+            .and_then(|launch| launch.profile)
+            .map_or_else(|| pm::profile(ctx), |profile| Ok(profile.clone()))?
+    };
     pm::project(ctx)?;
     Ok(Some(resolved))
 }

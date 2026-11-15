@@ -246,7 +246,6 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
 
 #[path = "recovery_launch.rs"]
 mod launch;
-#[cfg(all(test, target_os = "linux"))]
 pub(crate) use launch::PmRecoveryInProgress;
 pub(crate) use launch::{PmRecoveryLease, RecoveryLaunch};
 
@@ -333,6 +332,9 @@ pub(crate) fn recover_with(
     // A rotation decides only now, from the frozen generation's records and journal: anything
     // it still owes keeps the conversation (an ordinary relaunch).
     let fresh = decide.map(|decide| decide()).transpose()?.unwrap_or(false);
+    if matches!(container, ContainerRef::Pm) && !rotation {
+        crate::pm::continuation::regenerate(ctx)?;
+    }
     let interrupted = classify_lost(ctx, container, n, &plan)?;
     let unconfirmed = settle_unconfirmed(ctx, container, n, &state)?;
     if let Some(restore) = restore.as_mut() {
@@ -343,7 +345,14 @@ pub(crate) fn recover_with(
         (None, Some(resolved)) => super::hooks::pm::prepared(
             ctx,
             &plan.pane,
-            &resolved,
+            if fresh {
+                launch
+                    .as_ref()
+                    .and_then(|l| l.fresh_profile)
+                    .unwrap_or(&resolved)
+            } else {
+                &resolved
+            },
             launch.as_ref().is_some_and(|launch| launch.adopted),
             launch.as_ref().is_none_or(|launch| launch.continue_session) && !fresh,
         )?,

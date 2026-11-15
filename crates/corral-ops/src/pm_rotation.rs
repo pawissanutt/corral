@@ -8,7 +8,7 @@
 //! like `relaunch --replace` and the barrier is read again from that frozen evidence. Anything
 //! owed then keeps the conversation (an ordinary relaunch), so the worst case costs one
 //! restart of the same conversation, never a lost one. A host that merely looks idle is never
-//! sufficient. Nothing rotates automatically; only the owner's `corral pm rotate` calls it.
+//! sufficient. Owner rotation and explicitly approved quota continuation share this barrier.
 use std::cell::RefCell;
 use std::path::PathBuf;
 
@@ -276,6 +276,11 @@ pub fn rotate(ctx: &Ctx, reason: &str, force: bool) -> Result<RotateOutcome> {
         .current
         .as_ref()
         .context("there is no corral-pi PM to rotate")?;
+    crate::availability::continuation::close(
+        ctx,
+        &corral_core::agent::ContainerRef::Pm,
+        "owner rotation",
+    )?;
     let frozen = RefCell::new(Vec::new());
     let decide = || -> Result<bool> {
         let (reasons, _) = survey(ctx, fenced, false)?;
@@ -285,7 +290,7 @@ pub fn rotate(ctx: &Ctx, reason: &str, force: bool) -> Result<RotateOutcome> {
     };
     let decide: &dyn Fn() -> Result<bool> = &decide;
     // A live idle host is stopped first, exactly as `relaunch --replace` stops it.
-    let (pane, outcome) = crate::pm::successor(ctx, pm, reason, true, Some(decide))?;
+    let (pane, outcome) = crate::pm::successor(ctx, pm, reason, true, Some(decide), None)?;
     let generation = outcome["generation"]
         .as_u64()
         .and_then(|n| u32::try_from(n).ok())
@@ -336,7 +341,7 @@ fn managed_entry() -> bool {
 
 /// Every blocker of generation `n`, and the Pi session ID of the conversation a rotation
 /// would retire. Read before the freeze as a pre-check and after it as the decision.
-fn survey(ctx: &Ctx, n: u32, starting: bool) -> Result<(Vec<Reason>, Option<String>)> {
+pub(crate) fn survey(ctx: &Ctx, n: u32, starting: bool) -> Result<(Vec<Reason>, Option<String>)> {
     let mut blockers = Vec::new();
     if starting {
         blockers.push(Blocker::SuccessorStarting { generation: n });

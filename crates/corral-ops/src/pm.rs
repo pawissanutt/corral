@@ -7,6 +7,9 @@ use serde_json::json;
 use crate::Ctx;
 use crate::prompt::{corral_bin, render_template};
 
+#[path = "pm_continuation.rs"]
+pub(crate) mod continuation;
+
 const STATE: RecordArea<PmState> = RecordArea::new("pm");
 
 #[derive(Serialize, Deserialize)]
@@ -211,7 +214,7 @@ pub(crate) fn relaunch(ctx: &Ctx, reason: &str, replace: bool) -> Result<String>
     if recovery.keep_current(ctx, replace)? {
         return Ok(pm.pane.clone());
     }
-    Ok(successor(ctx, pm, reason, replace, None)?.0)
+    Ok(successor(ctx, pm, reason, replace, None, None)?.0)
 }
 
 /// Fence, drain and reconcile `pm`, then launch its next generation in a corral-owned pane
@@ -224,12 +227,17 @@ pub(crate) fn successor(
     reason: &str,
     replace: bool,
     rotate: Option<&dyn Fn() -> Result<bool>>,
+    fresh_profile: Option<&ResolvedProfile>,
 ) -> Result<(String, serde_json::Value)> {
     use crate::agent::recovery::{RecoveryLaunch, recover_with};
     use corral_core::agent::ContainerRef;
 
     // Validate the replacement before creating a pane or touching the predecessor.
-    let resolved = crate::agent::hooks::pm::profile(ctx)?;
+    let resolved = if rotate.is_some() {
+        crate::agent::hooks::pm::profile(ctx)?
+    } else {
+        continuation::recovery_profile(ctx, &pm.state)?
+    };
     let adopted = pm.adopted();
     let previous_pane = pm.pane.clone();
     // Even a live adopted host becomes the owner's shell once replacement stops it.
@@ -248,13 +256,19 @@ pub(crate) fn successor(
         Some(RecoveryLaunch {
             pane: Some(&pane),
             profile: Some(&resolved),
+            fresh_profile,
             adopted: false,
             continue_session: true,
             rotate,
         }),
         None,
     )?;
-    launch_pm(ctx, &pane, None, &resolved, &prepared.command())?;
+    let launched = if outcome["rotated"] == true {
+        fresh_profile.unwrap_or(&resolved)
+    } else {
+        &resolved
+    };
+    launch_pm(ctx, &pane, None, launched, &prepared.command())?;
     let mut detail = json!({
         "pane": pane, "reason": reason, "replaced": outcome["replaced"],
         "previous_pane": previous_pane,
