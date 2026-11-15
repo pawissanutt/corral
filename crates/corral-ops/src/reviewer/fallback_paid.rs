@@ -281,22 +281,28 @@ pub(in crate::reviewer) fn failed(
     continuation::pause(ctx, &source, reason, "review launch refused")
 }
 
+/// Synchronous failure or restart discovery: revoke the launch without changing the
+/// caller's task head. A paused attempt is still consumed, never permission to relaunch.
 pub(in crate::reviewer) fn launch_failed(ctx: &Ctx, task: &str) -> Result<bool> {
-    let Some(intent) = continuation::task_intent(&ctx.store, task, AgentRole::Reviewer)?
-        .filter(|i| i.phase == IntentPhase::Prepared)
-    else {
+    let Some(intent) = continuation::task_intent(&ctx.store, task, AgentRole::Reviewer)? else {
         return Ok(false);
     };
-    continuation::pause(
-        ctx,
-        &intent.successor.container,
-        PauseReason::SuccessorAmbiguous,
-        "review successor did not bind",
-    )?;
-    Ok(true)
+    match intent.phase {
+        IntentPhase::Prepared => {
+            continuation::pause(
+                ctx,
+                &intent.successor.container,
+                PauseReason::SuccessorAmbiguous,
+                "review successor did not bind",
+            )?;
+            Ok(true)
+        }
+        IntentPhase::Paused => Ok(true),
+        IntentPhase::Active | IntentPhase::Closed => Ok(false),
+    }
 }
 
-/// The watchdog owns asynchronous process loss; only a Prepared paid child is affected.
+/// The watchdog keeps asynchronous loss paused and holds the task for its owner.
 pub(in crate::reviewer) fn startup_failed(
     ctx: &Ctx,
     task: &TaskHead,
@@ -316,23 +322,21 @@ pub(in crate::reviewer) fn startup_failed(
     {
         return Ok(false);
     }
-    if !failed && !state.is_some_and(|s| s.binding.health == agent::HostHealth::Lost) {
+    if !failed
+        && !state.is_some_and(|s| {
+            matches!(
+                s.binding.health,
+                agent::HostHealth::Lost | agent::HostHealth::Fenced
+            )
+        })
+    {
         return Ok(false);
     }
-    let successor = container(&task.id, &run.id, &child.id);
-    let generation = state.map_or(1, |s| s.binding.generation);
-    let Some(intent) = continuation::intent_for(&ctx.store, &successor, generation)?
-        .filter(|i| i.phase == IntentPhase::Prepared)
-    else {
-        return Ok(false);
-    };
-    continuation::pause(
+    continuation::failed_start(
         ctx,
-        &intent.successor.container,
-        PauseReason::SuccessorAmbiguous,
-        "review successor lost before healthy bind",
-    )?;
-    Ok(true)
+        &container(&task.id, &run.id, &child.id),
+        state.map_or(1, |s| s.binding.generation),
+    )
 }
 
 /// Recheck against the model that actually ran, never today's preferred subscription model.

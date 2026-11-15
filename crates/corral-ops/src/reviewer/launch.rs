@@ -293,11 +293,17 @@ fn check_linked_paid_launch(
     pending_paid: &mut bool,
 ) -> Result<()> {
     if !*pending_paid
-        && run
-            .current_child
-            .as_deref()
-            .and_then(|child| child.agent_host.as_ref())
-            .is_some_and(|state| state.paid_episode.is_some())
+        && run.current_child.as_deref().is_some_and(|child| {
+            child
+                .agent_host
+                .as_ref()
+                .is_some_and(|state| state.paid_episode.is_some())
+                || child
+                    .execution
+                    .as_ref()
+                    .and_then(|execution| execution.resolved.connection)
+                    .is_some_and(|connection| connection.api_key())
+        })
     {
         *pending_paid = true;
         if super::fallback::fallback_paid::launch_failed(ctx, &task.id)? {
@@ -579,7 +585,6 @@ fn review_run_inner(
         }
     })?;
     if resolved.connection.is_some_and(|c| c.api_key()) {
-        *cleanup_paid = true;
         super::fallback::fallback_paid::prepare(
             ctx,
             &task,
@@ -588,6 +593,7 @@ fn review_run_inner(
             &review_id,
             &resolved,
         )?;
+        *cleanup_paid = true;
     }
     if let Some(recovery) = reviewer_recovery {
         anyhow::ensure!(
@@ -726,9 +732,11 @@ fn review_run_inner(
         Reviewer::None => bail!("no reviewer configured"),
     };
     if let Err(error) = &launched
-        && crate::operating::refused(error)
+        && (*cleanup_paid || crate::operating::refused(error))
     {
-        return Err(launched.err().context("review refusal disappeared")?);
+        // A paid failure is paused by the outer launch boundary, never synthesized
+        // into a completed child or a cleared review before that fence is written.
+        return Err(launched.err().context("review launch error disappeared")?);
     }
     let saved = ctx.store.update_head(&task.id, |t| {
         let r = review_parent_head(t, &run.id)?;

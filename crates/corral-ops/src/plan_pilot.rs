@@ -22,15 +22,16 @@ pub(crate) fn reconcile(
     let Some(run) = task.plan_runs.last().filter(|r| r.holds_slot()) else {
         return Ok(());
     };
-    if run
-        .agent_host
+    if run.agent_host.as_ref().is_some_and(|host| {
+        matches!(
+            host.binding.health,
+            corral_core::agent::HostHealth::Lost | corral_core::agent::HostHealth::Fenced
+        )
+    }) && run
+        .execution
         .as_ref()
-        .is_some_and(|host| host.binding.health == corral_core::agent::HostHealth::Lost)
-        && run
-            .execution
-            .as_ref()
-            .and_then(|execution| execution.resolved.connection)
-            .is_some_and(|connection| connection.api_key())
+        .and_then(|execution| execution.resolved.connection)
+        .is_some_and(|connection| connection.api_key())
         && crate::availability::continuation::failed_start(
             ctx,
             &corral_core::agent::ContainerRef::Planner {

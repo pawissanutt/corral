@@ -1,4 +1,6 @@
 //! Raw host context is a private, disposable cache of verified compressed evidence.
+//! The episode-scoped path survives retained host regeneration. Canonical close/pause
+//! removes it; resumed-session intents do not materialize additional checkpoint files.
 use std::io::Write;
 use std::path::PathBuf;
 
