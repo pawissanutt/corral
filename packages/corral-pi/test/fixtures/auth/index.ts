@@ -29,6 +29,12 @@ export function fixtureTransport(): FakeTransport {
 
 let reads = 0;
 let anthropicSubscription = false;
+let paidConnections = false;
+
+/** Opt in from the copied host module, never by widening the shared default fixture. */
+export function enablePaidFixture(): void {
+  paidConnections = true;
+}
 
 /** Opt in only in fixtures exercising the synthetic Claude SDK subscription lane. */
 export function enableAnthropicFixture(): void {
@@ -37,24 +43,30 @@ export function enableAnthropicFixture(): void {
 
 const auth: AuthModule = {
   provider: "openai-codex",
-  providers: ["openai-codex", "anthropic", "openai"],
-  connections: ["openai-subscription", "anthropic-subscription", "openai-api", "anthropic-api"],
+  get providers() {
+    return paidConnections ? ["openai-codex", "anthropic", "openai"] as const : ["openai-codex"] as const;
+  },
+  get connections() {
+    return paidConnections
+      ? ["openai-subscription", "anthropic-subscription", "openai-api", "anthropic-api"] as const
+      : ["openai-subscription"] as const;
+  },
   credentials(context) {
     const access = context.provider === "anthropic" ? "sk-ant-oat01-SYNTHETIC-SUBSCRIPTION" : syntheticAccess(Date.now());
     const api = context.connection === "openai-api" || context.connection === "anthropic-api";
+    const supported = api ? paidConnections
+      : context.provider === "openai-codex" || context.provider === "anthropic" && anthropicSubscription;
     const credential = api
       ? { type: "api_key" as const, key: `sk-SYNTHETIC-${context.connection}-OFFLINE` }
       : { type: "oauth" as const, access, refresh: "", expires: Date.now() + 3_600_000, accountId: "synthetic-account" };
     return {
       async read(provider: string) {
-        if (provider !== context.provider || (provider === "anthropic" && !api && !anthropicSubscription)
-          || (provider === "openai" && !api)) return undefined;
+        if (!supported || provider !== context.provider) return undefined;
         reads++;
         return credential;
       },
       async list() {
-        if ((context.provider === "anthropic" && !api && !anthropicSubscription)
-          || (context.provider === "openai" && !api)) return [];
+        if (!supported) return [];
         return [{ providerId: context.provider, type: credential.type }];
       },
       async modify() {

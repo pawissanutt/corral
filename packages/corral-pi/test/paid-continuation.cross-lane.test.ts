@@ -123,7 +123,7 @@ ${readFileSync(main, "utf8")}`);
       appendFileSync(${JSON.stringify(posts)}, JSON.stringify({ connection: context.connection, method: init?.method ?? "GET", url: input instanceof Request ? input.url : String(input) }) + "\\n");
       return fixtureTransport().send(input, init);
     };`);
-  writeFileSync(auth, `import { appendFileSync } from "node:fs";\n${readFileSync(auth, "utf8")}${vendor === "anthropic" ? claudeFixture() : ""}`);
+  writeFileSync(auth, `import { appendFileSync } from "node:fs";\n${readFileSync(auth, "utf8")}\nenablePaidFixture();\n${vendor === "anthropic" ? claudeFixture() : ""}`);
   if (vendor === "anthropic") {
     // The fake SDK never spawns Claude Code; do not require its optional native executable.
     patch(join(assets.dir, "src/claude/sdk.ts"),
