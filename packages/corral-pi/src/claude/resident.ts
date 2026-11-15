@@ -129,7 +129,7 @@ export interface ResidentEntry {
 interface Slot {
   readonly entry: ResidentEntry;
   readonly markClosed: () => void;
-  idle?: ReturnType<typeof setTimeout>;
+  cancelIdle?: () => void;
 }
 
 export type ResidentPlan =
@@ -137,12 +137,26 @@ export type ResidentPlan =
   | { readonly kind: "seed"; readonly entry: ResidentEntry; readonly reason: "cold" | "changed" | "diverged" | "idle" }
   | { readonly kind: "one-shot"; readonly reason: "busy" | "capacity" };
 
+/** Schedule idle expiry and return its cancellation; tests supply a deterministic scheduler. */
+export type ResidentScheduler = (expire: () => void, delayMs: number) => () => void;
+
+const scheduleResidentIdle: ResidentScheduler = (expire, delayMs) => {
+  const timer = setTimeout(expire, delayMs);
+  timer.unref?.();
+  return () => clearTimeout(timer);
+};
+
 export class ResidentSessions {
   private readonly slots = new Map<string, Slot>();
+  /** Timer expiry must remain distinguishable from a cold start after the slot is gone. */
+  private readonly expired = new Set<string>();
   private exitHooked = false;
   private readonly onExit = () => this.closeAll();
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly schedule: ResidentScheduler = scheduleResidentIdle,
+  ) {}
 
   get size(): number {
     return this.slots.size;
@@ -155,7 +169,7 @@ export class ResidentSessions {
   ): ResidentPlan {
     const slot = this.slots.get(sessionId);
     if (slot?.entry.busy) return { kind: "one-shot", reason: "busy" };
-    let reason: "cold" | "changed" | "diverged" | "idle" = "cold";
+    let reason: "cold" | "changed" | "diverged" | "idle" = this.expired.has(sessionId) ? "idle" : "cold";
     if (slot) {
       const { entry } = slot;
       const prefix = entry.hashes.length < hashes.length && entry.hashes.every((hash, index) => hash === hashes[index]);
@@ -164,8 +178,8 @@ export class ResidentSessions {
       else if (this.now() - entry.lastUsedAt >= RESIDENT_IDLE_MS) reason = "idle";
       else if (!prefix || added.some(message => message.role !== "user" && message.role !== "toolResult")) reason = "diverged";
       else {
-        if (slot.idle) clearTimeout(slot.idle);
-        slot.idle = undefined;
+        slot.cancelIdle?.();
+        slot.cancelIdle = undefined;
         entry.busy = true;
         entry.lastUsedAt = this.now();
         return { kind: "delta", entry, messages: added };
@@ -173,6 +187,7 @@ export class ResidentSessions {
       this.close(entry);
     }
     if (this.slots.size >= RESIDENT_MAX_ENTRIES && !this.evictIdle()) return { kind: "one-shot", reason: "capacity" };
+    this.expired.delete(sessionId);
     return { kind: "seed", reason, entry: this.open(sessionId, scope, start) };
   }
 
@@ -198,8 +213,15 @@ export class ResidentSessions {
     entry.pinned = waitingForTools;
     entry.busy = false;
     entry.lastUsedAt = this.now();
-    slot.idle = setTimeout(() => this.close(entry), RESIDENT_IDLE_MS);
-    slot.idle.unref?.();
+    slot.cancelIdle = this.schedule(() => {
+      if (this.slots.get(entry.sessionId) !== slot || entry.busy) return;
+      this.close(entry);
+      this.expired.add(entry.sessionId);
+      if (this.expired.size > RESIDENT_MAX_ENTRIES) {
+        const oldest = this.expired.values().next().value;
+        if (oldest !== undefined) this.expired.delete(oldest);
+      }
+    }, RESIDENT_IDLE_MS);
   }
 
   close(entry: ResidentEntry): void {
@@ -207,7 +229,7 @@ export class ResidentSessions {
     // A replaced entry was closed when it was replaced.
     if (slot?.entry !== entry) return;
     this.slots.delete(entry.sessionId);
-    if (slot.idle) clearTimeout(slot.idle);
+    slot.cancelIdle?.();
     entry.input.close();
     try {
       entry.query.close();
@@ -219,12 +241,14 @@ export class ResidentSessions {
   closeSession(sessionId: string): void {
     const slot = this.slots.get(sessionId);
     if (slot) this.close(slot.entry);
+    this.expired.delete(sessionId);
   }
 
   closeAll(): void {
     for (const slot of [...this.slots.values()]) this.close(slot.entry);
     process.removeListener("exit", this.onExit);
     this.exitHooked = false;
+    this.expired.clear();
   }
 
   private evictIdle(): boolean {

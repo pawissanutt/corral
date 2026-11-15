@@ -1126,8 +1126,13 @@ export class HostSession {
     } }) : api;
     this.dialogPi = pi;
     registerCacheStats(pi);
-    pi.on("model_select", event => this.modelChanged(`${event.model.provider}/${event.model.id}`,
-      this.session.thinkingLevel, event.source !== "restore"));
+    pi.on("model_select", event => {
+      // This is emitted only after selection commits, including switches away from Claude.
+      // Connection rebinding replaces the host and closes its resident through shutdown.
+      closeResidentSession(this.sessionId());
+      this.modelChanged(`${event.model.provider}/${event.model.id}`,
+        this.session.thinkingLevel, event.source !== "restore");
+    });
     pi.on("thinking_level_select", event => {
       const model = this.session.model;
       if (model) this.modelChanged(`${model.provider}/${model.id}`, event.level);
