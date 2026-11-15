@@ -399,6 +399,10 @@ impl Config {
                 None,
                 None,
             )?;
+            // A model catalog cannot diagnose a provider this native host does not support.
+            if crate::is_corral_pi(&resolved.harness) {
+                crate::check_corral_pi_vendor(&resolved.profile, resolved.vendor.as_deref())?;
+            }
             if let Some(reason) = unavailable(&resolved) {
                 if matches!(source, RouteSource::Task | RouteSource::Auto { .. }) && !explicit {
                     bail!(
