@@ -92,6 +92,7 @@ pub const RESERVED: &[&str] = &[
     "jump",
     "sync",
     "daemon",
+    "device",
     "autopilot",
     "hook",
     "bind-session",
