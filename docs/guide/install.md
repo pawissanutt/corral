@@ -246,5 +246,23 @@ native linker toolchain:
 cargo install --path crates/corral --locked
 ```
 
+With [`just`](https://just.systems) installed, the checkout's `justfile` wraps the routine
+steps; `just` alone lists them:
+
+| Recipe | Does |
+|---|---|
+| `just install` | Builds and installs `corral`, then waits for the running daemon to restart on the new binary |
+| `just upgrade` | `just install`, then `corral agent install` to rebuild the corral-pi host from the same commit |
+| `just daemon-restart` | Drains and stops the daemon, then starts its service again (`daemon-stop`, `daemon-start`) |
+| `just daemon-status`, `just daemon-logs` | Health, and the service journal |
+| `just daemon-service` | Writes the service definition, then enables and starts it |
+| `just agent-install`, `just agent-doctor` | Reinstalls or reports the corral-pi host |
+| `just app`, `just app web` | Runs the [app](../../apps/corral-app/README.md) against the workspace daemon in this terminal or a browser |
+| `just app-check`, `just app-test` | Checks and tests the app |
+
+The stop, start, logs and service recipes drive the systemd user service. Recipes address
+the workspace discovered from the checkout; from a worktree or a checkout outside the
+workspace, pass `root=<workspace>` first: `just root=/path/to/workspace daemon-status`.
+
 See the [release runbook](../releases/README.md) for native CI evidence,
 artifact names, version selection, and owner-controlled publication.
