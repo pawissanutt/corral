@@ -50,6 +50,8 @@ impl Store {
     }
 
     /// Makes event reads and appends fail without changing existing event data.
+    /// The store remains openable so another fixture process can restore storage; schema
+    /// initialization can still maintain indexes while the event detail column is unavailable.
     #[doc(hidden)]
     pub fn fixture_break_events(&self) -> Result<()> {
         self.event_fixture()?.fixture_break_events()
