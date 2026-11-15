@@ -14,6 +14,10 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+#[path = "continuation_close.rs"]
+mod closure;
+pub(crate) use closure::{close, close_in, close_task_in};
+
 pub(crate) const INTENTS: RecordArea<ContinuationIntent> = RecordArea::new("role-continuations");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -623,95 +627,6 @@ pub(crate) fn activate(ctx: &Ctx, container: &ContainerRef, generation: u32) -> 
     })
 }
 
-pub(crate) fn close_in(
-    store: &Store,
-    container: &ContainerRef,
-    state: &mut AgentRunState,
-    _why: &str,
-) -> Result<bool> {
-    let pending_phase = |intent: &ContinuationIntent| {
-        matches!(intent.phase, IntentPhase::Prepared | IntentPhase::Paused)
-    };
-    let mut pending = intent_for(store, container, state.binding.generation)?.filter(pending_phase);
-    if pending.is_none()
-        && matches!(container, ContainerRef::Pm | ContainerRef::Assistant { .. })
-        && let Some(next) = state.binding.generation.checked_add(1)
-        && state.generation(next).is_none()
-    {
-        pending = intent_for(store, container, next)?.filter(|intent| {
-            pending_phase(intent)
-                && intent.source.container == *container
-                && intent.source.generation == state.binding.generation
-                && intent.successor.container == *container
-        });
-    }
-    if let Some(mut intent) = pending {
-        let episode = store.paid_episode(&intent.link.episode)?;
-        // Pausing an already Active owner closes its episode. Preserve the existing
-        // no-op closure behavior for that case; only pending transfers need revocation.
-        if intent.phase == IntentPhase::Paused && matches!(episode.phase, PaidPhase::Closed) {
-            return Ok(false);
-        }
-        ensure!(
-            episode.epoch == intent.link.epoch
-                && matches!(&episode.phase,
-            PaidPhase::Prepared { successor, .. } if successor == &intent.successor),
-            "SuccessorAmbiguous"
-        );
-        // Core cannot close a Prepared episode. The Closed intent is also a durable
-        // fence for a not-yet-opened successor number: require_launch refuses it without
-        // fabricating a generation row. CAS the unchanged financial row with this revocation.
-        state.binding.health = HostHealth::Fenced;
-        state
-            .generation_mut(state.binding.generation)
-            .context("continuation generation missing")?
-            .fenced = Some(GenerationFence {
-            reason: "continuation revoked".into(),
-            at: corral_core::clock::now(),
-        });
-        intent.phase = IntentPhase::Closed;
-        intent.updated = corral_core::clock::now();
-        store.save_paid_episode(&episode)?;
-        save(store, &intent)?;
-        event(store, "continuation_closed", &intent, &episode)?;
-        return Ok(true);
-    }
-    let Some(link) = state.paid_episode.clone() else {
-        return Ok(false);
-    };
-    let mut episode = store.paid_episode(&link.episode)?;
-    let PaidPhase::Active { owner } = &episode.phase else {
-        return Ok(false);
-    };
-    if &owner.container != container
-        || owner.generation != state.binding.generation
-        || link.epoch != episode.epoch
-    {
-        return Ok(false);
-    }
-    let owner = owner.clone();
-    episode.close(&link, &owner, state)?;
-    store.save_paid_episode(&episode)?;
-    if let Some(mut intent) = intent_for(store, container, owner.generation)? {
-        intent.phase = IntentPhase::Closed;
-        intent.updated = corral_core::clock::now();
-        save(store, &intent)?;
-        event(store, "continuation_closed", &intent, &episode)?;
-    } else {
-        store.log_event(
-            container.task(),
-            "continuation_closed",
-            json!({"episode":episode.id,
-            "role":episode.root.role, "reason":"role lineage closed"}),
-        )?;
-    }
-    Ok(true)
-}
-pub(crate) fn close(ctx: &Ctx, container: &ContainerRef, why: &str) -> Result<bool> {
-    with_state(ctx, container, |state| {
-        close_in(&ctx.store, container, state, why)
-    })
-}
 pub(crate) fn pause(
     ctx: &Ctx,
     container: &ContainerRef,
@@ -727,18 +642,24 @@ pub(crate) fn pause(
                 && i.phase != IntentPhase::Closed
         })
         .max_by_key(|i| i.created);
-    let write = |state: Option<&mut AgentRunState>| -> Result<()> {
+    let pending_generation = intent
+        .as_ref()
+        .filter(|i| i.successor.container == *container)
+        .map(|i| i.successor.generation);
+    let needs_fence = |state: &AgentRunState| {
+        state
+            .current_generation()
+            .and_then(|g| g.connection.as_ref())
+            .is_some_and(|b| b.connection.api_key())
+            || pending_generation == Some(state.binding.generation)
+    };
+    let write = |state: Option<&mut AgentRunState>, already_closed: bool| -> Result<()> {
         if let Some(state) = state
-            && (state
-                .current_generation()
-                .and_then(|g| g.connection.as_ref())
-                .is_some_and(|b| b.connection.api_key())
-                || intent.as_ref().is_some_and(|i| {
-                    i.successor.container == *container
-                        && i.successor.generation == state.binding.generation
-                }))
+            && needs_fence(state)
         {
-            close_in(&ctx.store, container, state, "continuation paused")?;
+            if !already_closed {
+                close_in(&ctx.store, container, state, "continuation paused")?;
+            }
             state.binding.health = HostHealth::Fenced;
             if let Some(g) = state.generation_mut(state.binding.generation) {
                 g.fenced = Some(GenerationFence {
@@ -762,10 +683,28 @@ pub(crate) fn pause(
             )
         }
     };
+    if let Some(task) = container.task() {
+        ctx.store.update(task, |task| {
+            if needs_fence(
+                agent::container_state(task, container)
+                    .context("continuation container has no native state")?,
+            ) {
+                close_task_in(&ctx.store, container, task, "continuation paused")?;
+            }
+            write(
+                Some(
+                    agent::container_state_mut(task, container)
+                        .context("continuation container has no native state")?,
+                ),
+                true,
+            )
+        })?;
+        return Ok(());
+    }
     if state_for(&ctx.store, container)?.is_some() {
-        with_state(ctx, container, |s| write(Some(s)))
+        with_state(ctx, container, |s| write(Some(s), false))
     } else {
-        ctx.store.records_transaction(|| write(None))
+        ctx.store.records_transaction(|| write(None, false))
     }
 }
 pub(crate) fn prepared_candidate(
