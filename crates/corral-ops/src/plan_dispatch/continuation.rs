@@ -131,14 +131,11 @@ pub(crate) fn advance_all(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<Vec<
 pub(crate) fn already_prepared(ctx: &Ctx, source: &ContainerRef) -> Result<bool> {
     let previous = continuation::from_source(&ctx.store, source)?;
     if let Some(intent) = previous {
-        if intent.phase == IntentPhase::Prepared {
-            continuation::pause(
-                ctx,
-                &intent.successor.container,
-                PauseReason::SuccessorAmbiguous,
-                "successor did not bind",
-            )?;
-        }
+        continuation::failed_start(
+            ctx,
+            &intent.successor.container,
+            intent.successor.generation,
+        )?;
         return Ok(true);
     }
     Ok(false)
@@ -150,14 +147,11 @@ pub(crate) fn resume_allowed(ctx: &Ctx, container: &ContainerRef, eligible: bool
         return Ok(true);
     }
     if let Some(intent) = continuation::intent_for(&ctx.store, container, 1)? {
-        if intent.phase == IntentPhase::Prepared {
-            continuation::pause(
-                ctx,
-                &intent.successor.container,
-                PauseReason::SuccessorAmbiguous,
-                "prepared successor cannot relaunch",
-            )?;
-        }
+        continuation::failed_start(
+            ctx,
+            &intent.successor.container,
+            intent.successor.generation,
+        )?;
         return Ok(false);
     }
     Ok(true)

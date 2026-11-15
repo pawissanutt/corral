@@ -146,7 +146,17 @@ pub(crate) fn advance(ctx: &Ctx, current: &AgentPm, now: Timestamp) -> Result<bo
         return Ok(false);
     }
     let Some(evidence) = policy::quota_evidence(&pm.state, None) else {
-        // A provider error signals before its turn ends. Keep it until that boundary.
+        // An open provider-error turn may still settle as quota. Ended ineligible turns
+        // (including cancellation/budget exhaustion) and missing turns retire the signal.
+        if pm
+            .state
+            .turns
+            .iter()
+            .find(|turn| turn.generation == n && turn.seq == signal.turn)
+            .is_none_or(|turn| turn.ended.is_some())
+        {
+            clear_signal(ctx, n)?;
+        }
         return Ok(false);
     };
     if evidence.at > now {
@@ -250,6 +260,10 @@ fn frozen(
         .max_by_key(|turn| turn.seq);
     if latest.is_none_or(|turn| {
         turn.ended.is_none() || expected.as_ref().is_none_or(|e| e.turn != turn.seq)
+    }) || policy::quota_evidence(&pm.state, None).is_none_or(|e| {
+        expected
+            .as_ref()
+            .is_none_or(|expected| e.turn != expected.turn)
     }) {
         return refuse(PauseReason::SubjectChanged);
     }

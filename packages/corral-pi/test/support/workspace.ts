@@ -54,7 +54,7 @@ interface Artifact {
 }
 
 function artifacts(args: string[]): Artifact[] {
-  return ok(["cargo", ...args, "--message-format=json"])
+  return ok(["bash", join(REPO, "scripts/cargo.sh"), ...args, "--message-format=json"])
     .split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line) as Artifact)
     .filter((entry) => entry.reason === "compiler-artifact" && entry.executable);
 }

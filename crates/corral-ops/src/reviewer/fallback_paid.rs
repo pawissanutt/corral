@@ -281,8 +281,8 @@ pub(in crate::reviewer) fn failed(
     continuation::pause(ctx, &source, reason, "review launch refused")
 }
 
-/// Synchronous failure or restart discovery: revoke the launch without changing the
-/// caller's task head. A paused attempt is still consumed, never permission to relaunch.
+/// Synchronous failure revokes the launch without changing the caller's task head.
+/// Retry admission uses resume_allowed to finish any separate task hold owed after a crash.
 pub(in crate::reviewer) fn launch_failed(ctx: &Ctx, task: &str) -> Result<bool> {
     let Some(intent) = continuation::task_intent(&ctx.store, task, AgentRole::Reviewer)? else {
         return Ok(false);
@@ -300,6 +300,18 @@ pub(in crate::reviewer) fn launch_failed(ctx: &Ctx, task: &str) -> Result<bool> 
         IntentPhase::Paused => Ok(true),
         IntentPhase::Active | IntentPhase::Closed => Ok(false),
     }
+}
+
+/// Reconcile a consumed first bind before retry admission, including an already-paused one.
+pub(in crate::reviewer) fn resume_allowed(ctx: &Ctx, task: &str) -> Result<bool> {
+    let Some(intent) = continuation::task_intent(&ctx.store, task, AgentRole::Reviewer)? else {
+        return Ok(true);
+    };
+    Ok(!continuation::failed_start(
+        ctx,
+        &intent.successor.container,
+        intent.successor.generation,
+    )?)
 }
 
 /// The watchdog keeps asynchronous loss paused and holds the task for its owner.

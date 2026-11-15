@@ -56,7 +56,28 @@ fn checked<T>(
     })
 }
 
+/// Admission recovery consumes an earlier intent before checkpoint/quiescence checks.
+fn recover_existing(ctx: &Ctx, source: &ContainerRef) -> Result<bool> {
+    let Some(intent) = continuation::from_source(&ctx.store, source)
+        .context("reading worker continuation intent")?
+    else {
+        return Ok(false);
+    };
+    continuation::failed_start(
+        ctx,
+        &intent.successor.container,
+        intent.successor.generation,
+    )?;
+    Ok(true)
+}
+
 pub(super) fn require_checkpoint(ctx: &Ctx, head: &TaskHead, prev: &Run, paid: bool) -> Result<()> {
+    if paid {
+        ensure!(
+            !recover_existing(ctx, &container(head, prev))?,
+            "SuccessorAmbiguous: worker already has a successor intent"
+        );
+    }
     let result = (|| {
         ensure!(
             prev.worktree.is_dir(),
@@ -91,6 +112,11 @@ pub(super) fn transfer(
     prev: &Run,
     decision: &RouteDecision,
 ) -> Result<Option<ContinuationIntent>> {
+    let source = container(head, prev);
+    ensure!(
+        !recover_existing(ctx, &source)?,
+        "SuccessorAmbiguous: worker already has a successor intent"
+    );
     // Re-read current identity before publishing anything. Shell runs omit native history.
     let current = ctx
         .store
@@ -102,7 +128,6 @@ pub(super) fn transfer(
     else {
         return Ok(None);
     };
-    let source = container(head, prev);
     let state = checked(
         ctx,
         &source,
@@ -127,21 +152,6 @@ pub(super) fn transfer(
             .current_generation()
             .and_then(|g| g.connection.clone())
             .context("LegacyBinding"),
-    )?;
-    // A previous Prepared attempt is not an invitation to launch it again after a crash.
-    let previous = continuation::from_source(&ctx.store, &source)
-        .context("reading worker continuation intent")?;
-    checked(
-        ctx,
-        &source,
-        PauseReason::SuccessorAmbiguous,
-        (|| {
-            ensure!(
-                previous.is_none(),
-                "SuccessorAmbiguous: worker already has a successor intent"
-            );
-            Ok(())
-        })(),
     )?;
     checked(
         ctx,

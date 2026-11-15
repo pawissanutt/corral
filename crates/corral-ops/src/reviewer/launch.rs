@@ -306,7 +306,7 @@ fn check_linked_paid_launch(
         })
     {
         *pending_paid = true;
-        if super::fallback::fallback_paid::launch_failed(ctx, &task.id)? {
+        if !super::fallback::fallback_paid::resume_allowed(ctx, &task.id)? {
             bail!("SuccessorAmbiguous: an unbound paid review cannot be relaunched");
         }
     }
@@ -384,7 +384,7 @@ fn review_run_inner(
         &ctx.store.config,
         corral_core::agent::AgentRole::Reviewer,
     );
-    if *pending_paid && super::fallback::fallback_paid::launch_failed(ctx, id)? {
+    if *pending_paid && !super::fallback::fallback_paid::resume_allowed(ctx, id)? {
         bail!("SuccessorAmbiguous: an unbound paid review cannot be relaunched");
     }
     ctx.store.config.validate_review()?;

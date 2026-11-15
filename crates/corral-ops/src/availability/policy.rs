@@ -333,13 +333,20 @@ pub(crate) fn ensure_root(
     })
 }
 
-/// Cheap candidate signal only. The caller must still check the exact bound connection
-/// and native quiescence before preparing a continuation.
+/// Cheap candidate signal only. Worker/reviewer turns require ProviderFailed; roles without
+/// native end classification may also be unclassified. Every other class refuses spending.
+/// The caller must still check the exact bound connection and native quiescence.
 pub(crate) fn quota_turn(role: AgentRole, generation: u32, turn: &AgentTurn) -> bool {
     turn.generation == generation
         && turn.ended.is_some()
-        && (!matches!(role, AgentRole::Worker | AgentRole::Reviewer)
-            || turn.class == Some(TurnClass::ProviderFailed))
+        && match turn.class {
+            Some(TurnClass::ProviderFailed) => true,
+            None => matches!(
+                role,
+                AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer | AgentRole::Assistant
+            ),
+            _ => false,
+        }
         && turn.provider_failure.as_ref().is_some_and(|failure| {
             matches!(
                 failure.availability(),
