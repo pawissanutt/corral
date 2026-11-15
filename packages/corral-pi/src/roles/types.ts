@@ -7,6 +7,7 @@ import type { TSchema } from "typebox";
 import type { WebSettings } from "../extensions/web/settings.ts";
 import type { McpSettings } from "../host/mcp-settings.ts";
 import type { BuildContext } from "../build/types.ts";
+import type { ContinuationNotice } from "../host/continuation.ts";
 
 export type Role = "worker" | "reviewer" | "pm" | "planner" | "plan_reviewer" | "assistant" | "build";
 
@@ -78,6 +79,7 @@ export interface CapabilitySet {
 /** What a role module can see when it builds its loadout and contract. */
 export interface RoleContext {
   readonly identity: HostIdentity;
+  readonly continuation?: ContinuationNotice;
   readonly daemonHosted?: boolean;
   /** Enabled only by the Rust launch snapshot; absent means disabled. */
   readonly todo?: boolean;
