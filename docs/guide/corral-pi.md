@@ -2030,6 +2030,10 @@ without a verdict, with the child's questions and messages settled. A turn the
 host was inside when it died stays recorded as it was, never ended or classified, and does not
 hold the next generation's nudges or provider retries.
 
+The pane launch wrapper saves its incoming terminal mode, restores it and disables
+bracketed paste before writing the exit record, including when a raw-mode host is killed.
+Recovery therefore reaches a usable shell even when the host cannot run its own cleanup.
+
 **`corral agent resume <task> [--run <id>] [--review <id>] [--replace]`** starts the next host
 generation of an open run or review child in the same pane. `corral agent resume --pm`
 resumes the PM's host in its saved pane, retaining its workspace identity and durable records.

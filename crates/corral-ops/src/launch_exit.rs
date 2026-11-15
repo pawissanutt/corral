@@ -57,6 +57,8 @@ pub(crate) fn process_receipt(ctx: &Ctx, marker: &[u8]) -> Result<Option<PathBuf
 /// The command is one opaque argument to its own shell, so a trailing `;`, `&` or comment, a
 /// syntax error, `exec`, `exit`, `set -e` or a fish pane shell cannot skip the receipt
 /// writer; only the generic display is left unarmed.
+/// Restore shell input before publishing the receipt: a killed host cannot leave raw mode
+/// or disable bracketed paste itself, and a plain shell cannot consume the paste delimiters.
 pub(crate) fn arm(ctx: &Ctx, command: &str, receipt: &Path) -> Result<String> {
     if is_display(command) {
         return Ok(command.to_string());
@@ -94,7 +96,12 @@ pub(crate) fn arm(ctx: &Ctx, command: &str, receipt: &Path) -> Result<String> {
         .map(|(task, run)| format!("CORRAL_SANDBOX_TASK='{task}' CORRAL_SANDBOX_RUN='R{run}' "))
         .unwrap_or_default();
     let script = format!(
-        "{identity}CORRAL_PROCESS_OWNER='{marker}' /bin/sh -c \"$1\" corral-launch; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '{path}'"
+        "corral_launch_tty=; if [ -t 0 ]; then corral_launch_tty=$(stty -g 2>/dev/null) || corral_launch_tty=; fi; \
+         {identity}CORRAL_PROCESS_OWNER='{marker}' /bin/sh -c \"$1\" corral-launch; \
+         corral_launch_exit=$?; \
+         if [ -n \"$corral_launch_tty\" ]; then \
+         stty \"$corral_launch_tty\"; printf '\\033[?2004l'; fi; \
+         printf '%s\\n' \"$corral_launch_exit\" > '{path}'"
     );
     Ok(format!(
         "/bin/sh -c {} corral-launch {}",
