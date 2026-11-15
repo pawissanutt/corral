@@ -9,7 +9,7 @@ import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import * as sdk from "@earendil-works/pi-coding-agent";
 import { ReplayCache } from "../src/claude/cache.ts";
 import { type ClaudeLaneConfig, streamClaudeSdk } from "../src/claude/stream.ts";
-import { ResidentSessions, RESIDENT_IDLE_MS, RESIDENT_MAX_ENTRIES, residentSessions } from "../src/claude/resident.ts";
+import { ResidentSessions, type ResidentScheduler, RESIDENT_IDLE_MS, RESIDENT_MAX_ENTRIES, residentSessions } from "../src/claude/resident.ts";
 import { type FailureMessage } from "../src/host/provider-failure.ts";
 import { EventLog } from "../src/bridge/events.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
@@ -44,9 +44,24 @@ function* toolReply(message: SDKUserMessage) {
 const managedTools = [{ name: "bash", description: "Managed shell", parameters: Type.Object({ command: Type.String(), wait_ms: Type.Optional(Type.Number()) }) }];
 const route = (message: AssistantMessage) => message.diagnostics?.find(d => d.type === "claude_cache")?.details;
 
-async function lane(now?: () => number, shared = false) {
+function fakeIdleScheduler() {
+  const callbacks = new Set<() => void>();
+  const schedule: ResidentScheduler = (expire, delayMs) => {
+    expect(delayMs).toBe(RESIDENT_IDLE_MS);
+    callbacks.add(expire);
+    return () => { callbacks.delete(expire); };
+  };
+  return { schedule, fire() {
+    const expire = callbacks.values().next().value;
+    if (!expire) throw new Error("no scheduled idle expiry");
+    callbacks.delete(expire);
+    expire();
+  } };
+}
+
+async function lane(now?: () => number, shared = false, schedule = fakeIdleScheduler().schedule) {
   const setup = await anthropic();
-  const residents = shared ? residentSessions : new ResidentSessions(now);
+  const residents = shared ? residentSessions : new ResidentSessions(now, schedule);
   if (!shared) registries.push(residents);
   const cache = new ReplayCache();
   const send = async (context: Context, options: SimpleStreamOptions = {}, config: Partial<ClaudeLaneConfig> = {}) => {
@@ -84,29 +99,33 @@ test("two turns use one process and send only the new tool result with fresh ids
   expect(run.options[0]?.persistSession).toBe(false);
 });
 
-for (const cause of ["history", "assistant", "system", "tools", "connection", "credential"] as const) {
+for (const cause of ["history", "removed", "assistant", "foreign", "system", "tools", "connection", "credential"] as const) {
   test(`${cause} changes close and reseed from Pi's full history`, async () => {
     const run = fakeSdk(async function* (_options, control) { yield* reply(control.message); });
     const { send } = await lane();
     const first = await send({ systemPrompt: "original system", messages: [user("original user")] }, {}, { connection: "first" });
     const next = await send({ systemPrompt: cause === "system" ? "new system" : "original system",
       tools: cause === "tools" ? managedTools : [],
-      messages: [user(cause === "history" ? "rewritten user" : "original user"),
-        cause === "assistant" ? { ...first, content: [{ type: "text", text: "rewritten assistant" }] } : first, user("next")] },
+      messages: [...(cause === "removed" ? [] : [user(cause === "history" ? "rewritten user" : "original user")]),
+        cause === "assistant" ? { ...first, content: [{ type: "text", text: "rewritten assistant" }] } : first,
+        ...(cause === "foreign" ? [{ ...first, model: "another-model" }] : []), user("next")] },
     cause === "credential" ? { apiKey: `${OAUTH}-refreshed` } : {}, { connection: cause === "connection" ? "second" : "first" });
     expect(next.stopReason).toBe("stop");
     expect(run.options).toHaveLength(2);
     expect(run.closeCalls).toEqual([1, 0]);
-    expect(route(next)).toMatchObject({ mode: "resident-seed", reason: cause === "history" || cause === "assistant" ? "diverged" : "changed" });
-    expect(JSON.stringify(run.prompts[1]?.message.content)).toContain(cause === "history" ? "rewritten user" : "original user");
+    expect(route(next)).toMatchObject({ mode: "resident-seed",
+      reason: ["history", "removed", "assistant", "foreign"].includes(cause) ? "diverged" : "changed" });
+    const replay = JSON.stringify(run.prompts[1]?.message.content);
+    if (cause === "removed") expect(replay).not.toContain("original user");
+    else expect(replay).toContain(cause === "history" ? "rewritten user" : "original user");
   });
 }
 
 for (const cause of ["failure", "abort", "incomplete", "compaction"] as const) {
-  test(`${cause} discards the process and the next call seeds`, async () => {
+  test(`${cause} on a delta discards the process and the next call seeds`, async () => {
     const active = Promise.withResolvers<void>();
     const run = fakeSdk(async function* (_options, control) {
-      if (control.query > 0) { yield* reply(control.message); return; }
+      if (control.query > 0 || control.turn === 0) { yield* reply(control.message); return; }
       if (cause === "failure") {
         yield { type: "result", subtype: "error_during_execution", errors: ["failure"], user_message_uuid: control.message.uuid };
       } else if (cause === "compaction") {
@@ -118,18 +137,21 @@ for (const cause of ["failure", "abort", "incomplete", "compaction"] as const) {
     });
     const { send, residents } = await lane();
     const abort = new AbortController();
-    const pending = send({ messages: [user("first")] }, { signal: abort.signal });
+    const first = await send({ messages: [user("first")] });
+    const pending = send({ messages: [user("first"), first, user("delta")] }, { signal: abort.signal });
     if (cause === "abort") { await active.promise; abort.abort(); }
     const failed = await pending;
+    expect(route(failed)).toMatchObject({ mode: "resident-delta", deltaMessages: 1 });
     expect(failed.stopReason).toBe(cause === "abort" ? "aborted" : "error");
     expect(residents.size).toBe(0);
     expect(run.closeCalls).toEqual([1]);
     if (cause === "abort") expect(run.interrupts).toBe(1);
-    const next = await send({ messages: [user("first"), user("retry")] });
+    const next = await send({ messages: [user("first"), first, user("retry")] });
     expect(next.stopReason).toBe("stop");
     expect(run.options).toHaveLength(2);
     expect(route(next)).toMatchObject({ mode: "resident-seed", reason: "cold" });
-    expect(JSON.stringify(run.prompts[1]?.message.content)).toContain("first");
+    // Prompts so far: the seed, the delta that failed, then the reseed carrying Pi's full history.
+    expect(JSON.stringify(run.prompts[2]?.message.content)).toContain("first");
   });
 }
 
@@ -142,6 +164,56 @@ test("idle expiry reseeds using an injected clock", async () => {
   const next = await send({ messages: [user("first"), first, user("next")] });
   expect(run.closeCalls).toEqual([1, 0]);
   expect(route(next)).toMatchObject({ mode: "resident-seed", reason: "idle" });
+});
+
+test("scheduled idle expiry closes immediately and preserves the next seed's idle reason", async () => {
+  const timer = fakeIdleScheduler();
+  const run = fakeSdk(async function* (_options, control) { yield* reply(control.message); });
+  const { send, residents } = await lane(() => 0, false, timer.schedule);
+  const first = await send({ messages: [user("first")] });
+  timer.fire();
+  expect(run.closeCalls).toEqual([1]);
+  expect(residents.size).toBe(0);
+  const next = await send({ messages: [user("first"), first, user("next")] });
+  expect(next.stopReason).toBe("stop");
+  expect(route(next)).toMatchObject({ mode: "resident-seed", reason: "idle" });
+  expect(run.closeCalls).toEqual([1, 0]);
+  residents.closeSession("resident");
+  const retry = await send({ messages: [user("retry")] });
+  expect(route(retry)).toMatchObject({ mode: "resident-seed", reason: "cold" });
+});
+
+test("idle restart records drop the oldest after the registry-sized bound", async () => {
+  const timer = fakeIdleScheduler();
+  fakeSdk(async function* (_options, control) { yield* reply(control.message); });
+  const { send } = await lane(() => 0, false, timer.schedule);
+  for (let index = 0; index <= RESIDENT_MAX_ENTRIES; index++) {
+    await send({ messages: [user("first")] }, { sessionId: `expired-${index}` });
+    timer.fire();
+  }
+  const oldest = await send({ messages: [user("next")] }, { sessionId: "expired-0" });
+  const retained = await send({ messages: [user("next")] }, { sessionId: "expired-1" });
+  expect(route(oldest)).toMatchObject({ mode: "resident-seed", reason: "cold" });
+  expect(route(retained)).toMatchObject({ mode: "resident-seed", reason: "idle" });
+});
+
+test("a stray prior-turn result fails the next call instead of becoming its reply", async () => {
+  const run = fakeSdk(async function* (_options, control) {
+    yield* reply(control.message);
+    if (control.query === 0 && control.turn === 0) {
+      yield { type: "result", subtype: "success", result: "stray reply", user_message_uuid: control.message.uuid };
+    }
+  });
+  const { send, residents } = await lane();
+  const first = await send({ messages: [user("first")] });
+  const next = await send({ messages: [user("first"), first, user("next")] });
+  expect(next.stopReason).toBe("error");
+  expect(next.errorMessage).toContain("claude_resident_result_mismatch");
+  expect(next.content).toEqual([]);
+  expect(residents.size).toBe(0);
+  expect(run.closeCalls).toEqual([1]);
+  const retry = await send({ messages: [user("first"), first, user("retry")] });
+  expect(route(retry)).toMatchObject({ mode: "resident-seed", reason: "cold" });
 });
 
 for (const id of ["wrong", undefined]) {
@@ -176,7 +248,7 @@ test("waiting tool sessions are pinned; a full registry sends the newcomer one-s
   expect(run.options).toHaveLength(RESIDENT_MAX_ENTRIES + 1);
 });
 
-test("concurrent cold calls reserve one slot and the second is one-shot busy", async () => {
+test("a busy one-shot reply makes the next resident call reseed instead of sending a delta", async () => {
   const active = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const run = fakeSdk(async function* (_options, control) {
@@ -195,6 +267,10 @@ test("concurrent cold calls reserve one slot and the second is one-shot busy", a
   expect(first.stopReason).toBe("stop");
   expect(residents.size).toBe(1);
   expect(run.closeCalls).toEqual([0, 1]);
+  const next = await send({ messages: [user("first"), first, user("concurrent"), second, user("next")] });
+  expect(next.stopReason).toBe("stop");
+  expect(route(next)).toMatchObject({ mode: "resident-seed", reason: "diverged" });
+  expect(run.closeCalls).toEqual([1, 1, 0]);
 });
 
 test("the oldest unpinned idle session is evicted to admit a seed", async () => {
@@ -289,11 +365,15 @@ test("summary, untracked, no-cache and registry-less callers remain one-shot", a
   expect(run.closeCalls).toEqual([1, 1, 1, 1]);
 });
 
-test("real host shutdown and child-session end close entries without the idle timer", async () => {
+async function residentHost() {
   const assets = buildFixtureInstall();
   const work = mkdtempSync(join(tmpdir(), "corral-resident-host-"));
   const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-961", run: "R1", generation: 1 };
   let host: HostSession | undefined;
+  const cleanup = async () => {
+    try { await host?.close(); }
+    finally { assets.cleanup(); rmSync(work, { recursive: true, force: true }); }
+  };
   try {
     const modules = await loadModules(assets.dir, "worker");
     const transport = modules.auth.transport?.(authContext());
@@ -306,6 +386,42 @@ test("real host shutdown and child-session end close entries without the idle ti
       guidance: { projectText: false, settings: { subagents: { max_parallel: 1, model: "gpt-6.1-sol", max_turns: 1, timeout_secs: 30 } } },
       sessionManager: sdk.SessionManager.create(work, join(work, "sessions")) });
     await host.session.bindExtensions({});
+    return { host, work, cleanup };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+}
+
+test("a committed host model change closes the resident and the next Claude call seeds", async () => {
+  const { host, cleanup } = await residentHost();
+  try {
+    const run = fakeSdk(async function* (_options, control) { yield* reply(control.message); });
+    const { send } = await lane(undefined, true);
+    const first = await send({ messages: [user("first")] }, { sessionId: host.sessionId() });
+    expect(residentSessions.size).toBe(1);
+    const models = host.runtime.services.modelRuntime;
+    const current = host.session.model;
+    if (!current) throw new Error("fixture session has no selected model");
+    await expect(host.session.setModel({ ...current, provider: "openai" })).rejects.toThrow("model_unavailable");
+    expect(run.closeCalls).toEqual([0]);
+    const replacement = (await models.getAvailable()).find(model => model.provider === current.provider && model.id !== current.id);
+    if (!replacement) throw new Error("fixture catalog has no alternative model");
+    await host.session.setModel(replacement);
+    expect(run.closeCalls).toEqual([1]);
+    expect(residentSessions.size).toBe(0);
+    const next = await send({ messages: [user("first"), first, user("back to Claude")] }, { sessionId: host.sessionId() });
+    expect(next.stopReason).toBe("stop");
+    expect(route(next)).toMatchObject({ mode: "resident-seed", reason: "cold" });
+    expect(run.closeCalls).toEqual([1, 0]);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("real host shutdown and child-session end close entries without the idle timer", async () => {
+  const { host, work, cleanup } = await residentHost();
+  try {
     const run = fakeSdk(async function* (_options, control) { yield* reply(control.message); });
     const { send } = await lane(undefined, true);
     await send({ messages: [user("parent")] }, { sessionId: host.sessionId() });
@@ -321,8 +437,6 @@ test("real host shutdown and child-session end close entries without the idle ti
     await host.close();
     expect(run.closeCalls).toEqual([1, 1, 1]);
   } finally {
-    await host?.close();
-    assets.cleanup();
-    rmSync(work, { recursive: true, force: true });
+    await cleanup();
   }
 });

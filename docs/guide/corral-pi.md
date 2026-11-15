@@ -1179,6 +1179,9 @@ compact boundary fails with `claude_compaction_conflict`. The policy record is
 
 At most four resident processes are retained, with a ten-minute idle lifetime (~277 MiB per idle
 process in the offline proof). Session shutdown, child-session end and host exit close their entries.
+Committed model selections close the session's process immediately, including selections away
+from Claude; rejected selections leave it intact. Connection rebinding replaces the host and
+uses the same shutdown cleanup.
 A session waiting on Pi's tool results is not evicted to admit another session. Busy sessions and
 capacity overflow run one-shot full replay calls instead. At launch,
 `CORRAL_CLAUDE_RESIDENT=0|off|false|no` restores the independent-query behaviour. Summary calls
@@ -1217,6 +1220,8 @@ are not call usage. No prompt bodies or credentials are logged. Local prefix rea
 proof of a provider cache hit. See the
 [offline comparison and resident timing probe](../records/claude-cache-efficiency.md) for reproduction
 commands and the limits of those measurements.
+Idle timer expiry preserves an `idle` restart reason even after the process has been closed;
+these pending restart reasons are bounded to the four most recently expired sessions.
 
 The Linux Pi gate's `test/claude-wire-cache.test.ts` captures real SDK/CLI requests against a local
 synthetic endpoint, inside isolated network and PID namespaces. It compares tools, system and
