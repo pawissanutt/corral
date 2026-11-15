@@ -30,6 +30,7 @@ import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.
 import type { AuthContext } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
+import { closeResidentSession } from "../claude/resident.ts";
 import type { QuestionUpdate, SubmitInput, SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
 import { scratchRoots, writeSettings } from "../roles/assistant/paths.ts";
@@ -641,7 +642,8 @@ export class HostSession {
           return runAuxiliarySession({ sdk: options.sdk, models: this.auxiliaryModels, provider: this.provider,
             cwd: options.cwd, agentDir: options.agentDir,
             parentLoadout: this.loadout.filter(name => this.planning?.visible(name) !== false),
-            localTools: this.localTools.map(tool => this.planningTool(tool)) }, invocation, signal);
+            localTools: this.localTools.map(tool => this.planningTool(tool)) }, invocation, signal)
+            .finally(() => closeResidentSession(invocation.sessionId));
         },
       });
     }
@@ -1025,7 +1027,9 @@ export class HostSession {
           ? guardedFetch(options.network.fetch, (destination) => { options.network.refuse?.(destination); }, id).fetch
           : options.network.fetch;
         restrictProvider(models, id, fetch as typeof globalThis.fetch,
-          { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd }, options.aws);
+          { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd,
+            connection: options.binding && CONNECTIONS[options.binding.connection].provider === id
+              ? options.binding.identity : resolveConnection(id) }, options.aws);
       }
       const restricted = models.getProvider(id);
       if (!restricted) throw new Error("budget: approved provider is unavailable");
@@ -1366,6 +1370,7 @@ export class HostSession {
     // a home or repository skill can never replace the role's packaged one (corral-worker).
     pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
     pi.on("session_shutdown", async (event) => {
+      closeResidentSession(this.sessionId());
       this.shadow?.cancel();
       // InteractiveMode exits the process after runtime disposal; main's finally never runs.
       // Await the release here, but keep reporting through extension reloads.
@@ -1769,6 +1774,7 @@ export class HostSession {
   }
 
   close(): Promise<void> {
+    closeResidentSession(this.sessionId());
     if (this.open) this.stopCause ??= "host";
     this.closing = true;
     this.shadow?.cancel();

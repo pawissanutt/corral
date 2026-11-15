@@ -1154,12 +1154,13 @@ with a corrected command. A model-only override infers the provider for known mo
 
 Anthropic profiles run on your Claude Pro/Max subscription through the official Claude Agent SDK
 (`@anthropic-ai/claude-agent-sdk`, pinned in `package.json` and `compat.json`). Pi keeps the
-conversation and runs every tool; each model call starts one SDK `query()`, which spawns the real
-Claude Code engine from the SDK's platform package (for example
-`@anthropic-ai/claude-agent-sdk-linux-x64`). Claude Code keeps its own `claude_code` system prompt,
+conversation and runs every tool. Eligible sessions keep a disposable SDK `query()` process,
+spawned from the SDK's platform package (for example `@anthropic-ai/claude-agent-sdk-linux-x64`).
+Claude Code keeps its own `claude_code` system prompt,
 with only corral's role contract and working directory appended (Pi's harness sections are left
 out, since Anthropic bills a request that presents a third-party harness as extra usage). It
-receives the conversation as one user message and the corral login's access token as `CLAUDE_CODE_OAUTH_TOKEN` in its environment, and
+receives a full replay on its first turn and only new user/tool-result messages on proven continuations,
+with the corral login's access token as `CLAUDE_CODE_OAUTH_TOKEN` in its environment, and
 nothing else: every `ANTHROPIC_*` and other `CLAUDE_CODE_*` variable is removed, and its config
 directory is a private `claude-code/` directory under the host's runtime directory, so it never
 reads `~/.claude`. Claude Code only plans: its tool calls stream back to Pi, while a
@@ -1167,22 +1168,29 @@ reads `~/.claude`. Claude Code only plans: its tool calls stream back to Pi, whi
 `read`, `write`, `edit`, `bash`, `grep` and `find` appear to Claude Code as its own Read, Write,
 Edit, Bash, Grep and Glob; the role's other tools (`corral_*`, the LSP tools) appear through an
 in-process MCP server whose handler refuses. Cancelling a turn interrupts and closes the query. A
-missing platform package is refused `claude_code_unavailable`, naming the package to install;
-nothing is downloaded. Each model call is independent: there is no resident Claude Code session,
-session reuse or Claude Code compaction. Pi is the sole compaction owner: SDK auto-compaction is
-explicitly disabled, and an unexpected SDK compact boundary stops the attempt with
-`claude_compaction_conflict`. A query without a terminal success also fails, rather than accepting
-an uncertain replay. Pi compaction rebuilds from its canonical summary and retained messages;
-its first request may legitimately miss the old cache. The policy record is
+missing platform package is refused as `claude_code_unavailable`, naming the package to install;
+nothing is downloaded. Pi remains the only source of truth: Claude Code persistence is off, and no
+Claude session is resumed or saved. Changed history (including compaction), system prompt, tools,
+connection identity, credential, model or other bound spawn settings close and reseed the process
+from Pi's history. Failures, aborts, incomplete streams and mismatched result IDs close it too.
+Pi is the sole compaction owner: SDK auto-compaction is explicitly disabled, and an unexpected SDK
+compact boundary fails with `claude_compaction_conflict`. The policy record is
 `docs/records/pi-native-claude-route.md`.
 
-The host sets `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`: the SDK must not prepend a fresh Git-status
-snapshot before the replay on every query, invalidating cached history after an edit or commit.
+At most four resident processes are retained, with a ten-minute idle lifetime (~277 MiB per idle
+process in the offline proof). Session shutdown, child-session end and host exit close their entries.
+A session waiting on Pi's tool results is not evicted to admit another session. Busy sessions and
+capacity overflow run one-shot full replay calls instead. At launch,
+`CORRAL_CLAUDE_RESIDENT=0|off|false|no` restores the independent-query behaviour. Summary calls
+(`toolChoice: "none"`), disabled caching, missing session IDs and callers without a registry also
+remain one-shot. No provider-cache reuse or complete descendant-reaping guarantee is implied.
+
+The host sets `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`: Git state comes from host tool results,
+not a spawn-time Git-status snapshot before the replay.
 This also removes Claude Code's built-in commit/PR workflow and attribution reminders; corral's
 role contract and Git skill govern that workflow, and host tool results supply current Git state.
 The Claude Code preset, tool-denial hooks and private credentials remain. One-hour caching is the
-default, matching Claude Code's subscription default, so a gate or build longer than five minutes
-does not force the next turn to rewrite the whole cache. At host launch, `CORRAL_CLAUDE_CACHE_TTL=5m`
+default, matching Claude Code's subscription default. At host launch, `CORRAL_CLAUDE_CACHE_TTL=5m`
 selects five-minute retention; `1h` and `none` are the other accepted values. Invalid values are refused. Explicit per-request
 Pi `cacheRetention` (`short`, `long`, `none`) takes precedence; one-off compaction summaries use
 `none`. The SDK and history markers always share a lifetime, with ambient Claude cache flags
@@ -1190,9 +1198,9 @@ removed. One-hour cache writes have a higher API-equivalent price; changing rete
 billing or subscription-coverage guarantee. The reported one-hour write tier is preserved when
 provided by Claude. Automatic cache warming stays off.
 
-Replay seals user/assistant messages and parallel text-result batches into stable text blocks,
-without losing tool IDs, results or images. This avoids a long uncached tail from many tiny text
-blocks. Large image batches can still require a conservative rolling boundary to stay within the
+Seed and one-shot replay seal user/assistant messages and parallel text-result batches into text
+blocks, without losing tool IDs, results or images. Large image batches can still require a
+conservative rolling boundary to stay within the
 20-block lookback and SDK's four-marker budget. Changed prefixes are revalidated; uncertain writes
 never advance the frontier, and expired local frontiers do not pin stale boundaries. Current owner
 question state is appended after reusable history, not folded into the root system prompt;
@@ -1201,9 +1209,12 @@ permanent authority and tool-execution rules are unchanged.
 In managed sessions, use `/cache-stats` to compare the latest model request with the whole-session input cache rate.
 Both divide cache reads by reads + writes + uncached input; output tokens are excluded. Session
 figures include all models, nested tools, summaries and cold starts, not an average of percentages.
-Claude assistant messages also persist a `claude_cache` diagnostic containing retention, local
-frontier state, prefix hash, block/tail counts, elapsed time and reported usage. No prompt bodies
-or credentials are logged. Local prefix reachability is not proof of a provider cache hit. See the
+Claude assistant messages also persist a `claude_cache` diagnostic naming the route (`one-shot`,
+with an optional busy/capacity reason; `resident-seed`, with its restart reason; or `resident-delta`,
+with the number of Pi messages sent), retention, local frontier state, prefix hash, block/tail counts,
+elapsed time and observed per-call usage. Stream usage takes precedence; cumulative process totals
+are not call usage. No prompt bodies or credentials are logged. Local prefix reachability is not
+proof of a provider cache hit. See the
 [offline comparison and resident timing probe](../records/claude-cache-efficiency.md) for reproduction
 commands and the limits of those measurements.
 

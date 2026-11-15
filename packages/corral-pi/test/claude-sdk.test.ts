@@ -9,7 +9,7 @@ afterEach(resetSdkFixture);
 
 test("a streamed text reply becomes one Pi assistant message", async () => {
   const run = fakeSdk(async function* () { yield* textReply("Hello there"); });
-  const { send, guard } = await anthropic();
+  const { send, guard } = await anthropic({ PATH: "/bin", CORRAL_CLAUDE_RESIDENT: "0" });
   const context = { systemPrompt: "You are a corral worker.", messages: [user("hi")] };
   const { events, message } = await send(context, { sessionId: "cache-sequence" });
   expect(events).toEqual(["start", "text_start", "text_delta", "text_delta", "text_end", "done"]);

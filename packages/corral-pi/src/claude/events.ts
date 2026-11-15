@@ -72,16 +72,22 @@ export function hasPromptUsage(usage: SdkUsage | undefined): boolean {
     .some(value => value != null);
 }
 
+/** How a call reached Claude Code: its own query, or a resident process it seeded or continued. */
+export type ClaudeLaneMode =
+  | { readonly mode: "one-shot"; readonly reason?: "busy" | "capacity" }
+  | { readonly mode: "resident-seed"; readonly reason: "cold" | "changed" | "diverged" | "idle" }
+  | { readonly mode: "resident-delta"; readonly deltaMessages: number };
+
 /** Sanitized per-query telemetry; local prefix reachability is not a provider cache-hit claim. */
 export function recordClaudeCache(
   output: AssistantMessage, retention: ClaudeCacheRetention, replay: ReplayObservation, startedAt: number,
-  usageReported: boolean,
+  usageReported: boolean, lane: ClaudeLaneMode = { mode: "one-shot" },
 ): void {
   const usage = output.usage;
   const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
   output.diagnostics = [...(output.diagnostics ?? []), {
     type: "claude_cache", timestamp: Date.now(), details: {
-      mode: "one-shot", retention, ...replay, elapsedMs: Math.max(0, performance.now() - startedAt),
+      ...lane, retention, ...replay, elapsedMs: Math.max(0, performance.now() - startedAt),
       usageReported, inputTokens: usageReported ? usage.input : null,
       cacheReadTokens: usageReported ? usage.cacheRead : null, cacheWriteTokens: usageReported ? usage.cacheWrite : null,
       cacheWrite1hTokens: usage.cacheWrite1h ?? null, promptTokens: usageReported ? promptTokens : null,

@@ -1,6 +1,7 @@
-// Renders Pi's transcript into the single user message one per-turn query sends (T-493), ported
-// from senpi's prompt-bridge.js and content-blocks.js (MIT). Earlier turns become a labelled,
-// non-executable history; the final user message follows as the live request.
+// Renders Pi's transcript into the seed user message for a fresh query (T-493), ported from
+// senpi's prompt-bridge.js and content-blocks.js (MIT). Earlier turns become a labelled,
+// non-executable history; resident continuations send only new user/tool-result messages.
+import { randomUUID } from "node:crypto";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { getCurrentSystemMessage, type AssistantMessage, type ImageContent, type Message, type TextContent } from "@earendil-works/pi-ai";
 
@@ -16,7 +17,7 @@ export type PromptBlock =
 const IMAGE_MEDIA_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
 
 /** Appends `content`; true when it carried text the model can read (false for image-only content). */
-function appendContent(blocks: PromptBlock[], content: string | readonly (TextContent | ImageContent)[]): boolean {
+export function appendContent(blocks: PromptBlock[], content: string | readonly (TextContent | ImageContent)[]): boolean {
   if (typeof content === "string") {
     if (content.length > 0) blocks.push({ type: "text", text: content });
     return content.trim().length > 0;
@@ -122,11 +123,16 @@ export function buildPromptBlocks(
   return blocks;
 }
 
-export async function* promptStream(blocks: PromptBlock[]): AsyncGenerator<SDKUserMessage> {
-  yield {
+export function userMessage(blocks: PromptBlock[]): SDKUserMessage {
+  return {
     type: "user",
+    uuid: randomUUID(),
     message: { role: "user", content: blocks },
     parent_tool_use_id: null,
     session_id: "prompt",
   } as SDKUserMessage;
+}
+
+export async function* promptStream(blocks: PromptBlock[]): AsyncGenerator<SDKUserMessage> {
+  yield userMessage(blocks);
 }
