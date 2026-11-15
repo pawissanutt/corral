@@ -8,14 +8,14 @@ import { fileURLToPath } from "node:url";
 // deliberate: missing unshare/ip/user namespaces fail instead of silently running online/skipping.
 test.skipIf(process.platform !== "linux")("Claude's effective prefix survives edit, stage and commit", () => {
   const fixture = fileURLToPath(new URL("./support/claude-wire-cache.ts", import.meta.url));
-  const child = spawnSync("unshare", ["--user", "--map-root-user", "--net", "--pid", "--fork", "--kill-child",
+  const child = spawnSync("unshare", ["--user", "--map-root-user", "--net", "--pid", "--fork", "--kill-child", "--mount-proc",
     "sh", "-c", 'ip link set lo up && exec "$@"', "claude-cache-fixture",
     process.execPath, fixture, readlinkSync("/proc/self/ns/net"),
     ...(process.env.CORRAL_TEST_CLAUDE_EXECUTABLE ? [process.env.CORRAL_TEST_CLAUDE_EXECUTABLE] : []),
     ...(process.env.CORRAL_TEST_CLAUDE_RESIDENT_PROBE === "1" ? ["--measure-resident"] : [])], {
-    env: { PATH: process.env.PATH }, encoding: "utf8", input: "", timeout: 45_000, maxBuffer: 1024 * 1024,
+    env: { PATH: process.env.PATH }, encoding: "utf8", input: "", timeout: process.env.CORRAL_TEST_CLAUDE_RESIDENT_PROBE === "1" ? 180_000 : 45_000, maxBuffer: 4 * 1024 * 1024,
   });
-  if (child.status !== 0) throw new Error(child.stderr || String(child.error ?? child.signal));
+  if (child.status !== 0) throw new Error(`${child.stdout}\n${child.stderr || String(child.error ?? child.signal)}`);
   expect(child.stdout).toContain('"prefixStable":true');
   console.log(child.stdout.trim());
-}, 60_000);
+}, process.env.CORRAL_TEST_CLAUDE_RESIDENT_PROBE === "1" ? 190_000 : 60_000);

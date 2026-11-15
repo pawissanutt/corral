@@ -188,7 +188,10 @@ try {
   }
   const residentProbe = process.argv.includes("--measure-resident") && probeOptions
     ? await measureResident(probeOptions) : undefined;
+  const residentProof = process.argv.includes("--measure-resident") && probeOptions
+    ? await (await import("./claude-resident-proof.ts")).proveResident(probeOptions) : undefined;
   console.log(JSON.stringify({ cli: version.stdout.toString().trim(), states: 4, inferenceRequests: captures.length,
+    ...(residentProof ? { residentProof } : {}),
     ...(residentProbe ? { residentProbe } : {}),
     network: "isolated-loopback", prefixStable: true, alignedTtls: ["5m", "1h", "none"], growingHistory: true }));
 } finally {
