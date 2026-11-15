@@ -2,7 +2,11 @@ use super::*;
 use corral_protocol::rpc::ErrorCode;
 
 impl AppState {
-    pub(super) fn cancel_message(&mut self, feed: Signal<Feed>, id: String) -> Vec<Outgoing> {
+    pub(super) async fn cancel_message_async(
+        &mut self,
+        feed: Signal<Feed>,
+        id: String,
+    ) -> Vec<Outgoing> {
         let message = self
             .outbox
             .as_ref()
@@ -16,22 +20,27 @@ impl AppState {
         };
         // Only a never-attempted send or a definitive server refusal can be removed locally.
         // Only a recorded definitive RPC refusal qualifies; old transport errors do not.
-        let local = message.can_remove_locally();
-        let result = self
-            .outbox
-            .as_mut()
-            .ok_or_else(|| local_error("Device cancellation storage unavailable.".into()))
-            .and_then(|outbox| {
-                outbox
-                    .update(|saved| {
-                        if local {
-                            saved.messages.remove(&id);
-                        } else if let Some(message) = saved.messages.get_mut(&id) {
-                            message.cancel = true;
-                        }
-                    })
-                    .map_err(local_error)
-            });
+        let mut local = false;
+        let result = match self.outbox.as_mut() {
+            Some(outbox) => outbox
+                .update_async(|saved| {
+                    local = saved
+                        .messages
+                        .get(&id)
+                        .is_none_or(outbox::Message::can_remove_locally);
+                    if local {
+                        saved.messages.remove(&id);
+                        saved.cancelled.insert(id.clone());
+                    } else if let Some(message) = saved.messages.get_mut(&id) {
+                        message.cancel = true;
+                    }
+                })
+                .await
+                .map_err(local_error),
+            None => Err(local_error(
+                "Device cancellation storage unavailable.".into(),
+            )),
+        };
         if let Err(problem) = result {
             feed.update(|feed| feed.problem = Some(problem.message));
             return vec![];
@@ -68,7 +77,7 @@ impl AppState {
             vec![]
         }
     }
-    pub(super) fn cancel_reply(
+    pub(super) async fn cancel_reply(
         &mut self,
         feed: Signal<Feed>,
         tag: Option<String>,
@@ -119,18 +128,19 @@ impl AppState {
             );
         }
         // Persist retirement before publishing either withdrawn or already delivered.
-        if let Err(problem) = self
-            .outbox
-            .as_mut()
-            .ok_or_else(|| local_error("Device cancellation storage unavailable.".into()))
-            .and_then(|outbox| {
-                outbox
-                    .update(|saved| {
-                        saved.messages.remove(&id);
-                    })
-                    .map_err(local_error)
-            })
-        {
+        let result = match self.outbox.as_mut() {
+            Some(outbox) => outbox
+                .update_async(|saved| {
+                    saved.messages.remove(&id);
+                    saved.cancelled.insert(id.clone());
+                })
+                .await
+                .map_err(local_error),
+            None => Err(local_error(
+                "Device cancellation storage unavailable.".into(),
+            )),
+        };
+        if let Err(problem) = result {
             feed.update(|feed| feed.problem = Some(problem.message));
             return Ok(vec![]);
         }

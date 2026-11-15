@@ -6,9 +6,9 @@
 //! inbox holds for review and the board's verifying candidates, reads the `Review` and `Task`
 //! details and each expanded file's `ReviewFile` patch from the feed, and every decision and
 //! comment is a canonical command ([`State::apply_live`]) carrying the current candidate's
-//! preconditions. Confirm-class decisions (approve, request changes, retry, discard) always go
-//! through corrald's preview and a fresh confirmation on this device. Render the builders'
-//! fields without consulting state again.
+//! preconditions. The protocol's canonical command classification decides whether a command
+//! requires corrald's preview and a fresh confirmation on this device.
+//! Render the builders' fields without consulting state again.
 //! Patches and new-comment composers carry the same immutable run/base/head identity. An older
 //! daemon that omits a patch identity can still be read, but cannot safely accept line actions.
 
@@ -54,7 +54,7 @@ pub const KEYS: &[&str] = &["s"];
 /// The desktop preference; phone, terminal and narrow desktop output remain unified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Layout {
-    /// Old and new code side by side when at least 900 pt are available.
+    /// Old and new code side by side when at least 1100 pt of content are available.
     #[default]
     Split,
     /// Old/new gutters on a single stream of source lines.
@@ -329,12 +329,21 @@ impl State {
         &mut self,
         key: &str,
         top: Option<&Live>,
-        _selection: &Selection,
-        _feed: &Feed,
+        selection: &Selection,
+        feed: &Feed,
         _env: Env,
     ) -> Option<Vec<Effect>> {
         if top.is_some_and(|live| !matches!(live, Live::Review(_))) {
             return None;
+        }
+        if key == "." {
+            let id = match top {
+                Some(Live::Review(id)) => id.clone(),
+                _ => selected(selection, feed)?.id.clone(),
+            };
+            return Some(vec![Effect::VerbMenu(crate::model::work::Record::Review(
+                id,
+            ))]);
         }
         self.toggle(key)
     }

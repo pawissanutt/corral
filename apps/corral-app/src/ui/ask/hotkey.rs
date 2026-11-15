@@ -1,7 +1,6 @@
-//! The small Ask window of the global shortcut (`.hkwin`): one field; the result is an answer, a
-//! filed card, or both; the model list opens below the field. On desktop it floats over a dimmed
-//! backdrop standing in for the desktop the window opens on; on a phone and in a terminal it is
-//! the form's modal, so the demo still closes cleanly there.
+//! Fixture-only illustration of the small Ask window (`.hkwin`), not an OS window or shortcut.
+//! The real native shortcut is installed by `os_integration` and opens the live Ask composer.
+//! This preview uses a dimmed backdrop on desktop and a modal on phone/terminal.
 
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::keymap::When;

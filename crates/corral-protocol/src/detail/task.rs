@@ -18,6 +18,9 @@ pub struct TaskDetail {
     pub owner_next: Option<String>,
     pub hold: Option<TaskHold>,
     pub park: Option<TaskHold>,
+    /// Revision of the active canonical park, for revision-bound unpark actions.
+    #[serde(default)]
+    pub park_revision: Option<u64>,
     pub artifacts: Vec<ArtifactRef>,
     pub run: Option<TaskRun>,
     pub plan_context: Option<PlanPosition>,

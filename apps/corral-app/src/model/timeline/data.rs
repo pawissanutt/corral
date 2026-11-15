@@ -239,6 +239,7 @@ pub fn plot() -> Plot {
                     .collect(),
                 ask: lane.ask.as_ref().map(|s| place(lane, s, true)),
                 missing: None,
+                wait: None,
             })
             .collect(),
         last_visit: Some(Marker {
@@ -250,6 +251,7 @@ pub fn plot() -> Plot {
             label: "now".into(),
         },
         accessible_label: "Run timeline 09:00 to 22:12".into(),
+        completeness: None,
     }
 }
 
@@ -309,5 +311,6 @@ pub fn burnup() -> BurnupSeries {
         first: "10-26".into(),
         last: "today".into(),
         disclosure: Some("burn-up numbers illustrative"),
+        completeness: None,
     }
 }

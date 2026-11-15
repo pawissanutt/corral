@@ -36,6 +36,7 @@ fn authority_refusal(feed: &Feed, env: Env, authority: Authority) -> Option<Stri
                 Authority::Reply => !session.authority.reply,
                 Authority::Act => !session.authority.act,
                 Authority::Assistant => !session.authority.assistant,
+                Authority::Admin => !session.authority.admin,
             } =>
         {
             Some(authority.refusal().into())

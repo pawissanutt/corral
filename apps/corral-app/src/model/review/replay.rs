@@ -237,7 +237,7 @@ pub fn phone(state: &State, env: Env) -> PageView {
     )
 }
 
-/// Builds the fixture replay at the available width, applying the 900 pt split threshold.
+/// Builds the fixture replay at the available content width, with a 1100 pt split threshold.
 pub fn page_for_width(state: &State, env: Env, width: f32) -> PageView {
     let phone = env.form == Form::Phone;
     let layout = effective_layout(state, env, width);
@@ -258,7 +258,7 @@ pub fn page_for_width(state: &State, env: Env, width: f32) -> PageView {
     let body = match state.tab {
         Tab::Diff => Body::Diff(DiffView {
             layout,
-            notice: phone.then_some("Unified on phones; side by side needs ≥ 900 pt."),
+            notice: phone.then_some("Unified on phones; side by side needs ≥ 1100 pt of content."),
             files: files(layout),
             empty: None,
         }),
@@ -278,7 +278,6 @@ pub fn page_for_width(state: &State, env: Env, width: f32) -> PageView {
     };
     PageView {
         title: "Review".into(),
-        back_label: phone.then_some("Back"),
         phone,
         stale: env.conn.refuses(),
         conn: env.conn,

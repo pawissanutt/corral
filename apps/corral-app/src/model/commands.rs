@@ -3,10 +3,12 @@
 //! destination answers, and their terminal legend, are in `keys`.
 
 mod keys;
+#[cfg(test)]
+mod tests;
 
 pub use keys::{key_legend, key_legend_live, list_keys, list_keys_live};
 
-use corral_protocol::rows::{InboxKind, InboxState, PlanState};
+use corral_protocol::rows::PlanState;
 
 use crate::model::daemon::Feed;
 use crate::model::{
@@ -26,9 +28,6 @@ pub const fn palette_hints(query_empty: bool) -> [(&'static str, &'static str); 
         ("Esc", if query_empty { "close" } else { "clear" }),
     ]
 }
-
-/// The palette footer's command-system attribution.
-pub const PALETTE_FOOTER: &str = "Command · NSH";
 
 /// Live rows of one kind the palette lists without a query, and with one.
 const LIVE_IDLE: usize = 8;
@@ -121,6 +120,8 @@ pub enum Action {
     Open(Page),
     /// Select or push a live record.
     OpenLive(Live),
+    /// Run the same record action offered in the inspector and row menu.
+    Work(crate::model::work::Press),
     /// Open Ask, optionally with a free-text draft.
     Ask(Option<String>),
     /// Switch the session between transcript and terminal.
@@ -188,6 +189,8 @@ pub fn commands(
     socket_configured: bool,
     data: DataState,
     feed: &Feed,
+    record: Option<&crate::model::work::Record>,
+    form: Form,
 ) -> Vec<Command> {
     let query = query.trim();
     let live = data == DataState::Daemon;
@@ -199,6 +202,7 @@ pub fn commands(
     }
     if live {
         live_needs_you(&mut rows, feed, query);
+        live_verbs(&mut rows, feed, record);
     } else if preview {
         rows.extend(fixture_needs_you());
     }
@@ -277,7 +281,9 @@ pub fn commands(
         Action::ResetNow,
     ));
     if preview {
-        rows.extend(demo_rows());
+        rows.extend(demo_rows().into_iter().filter(|row| {
+            form == Form::Phone || !matches!(row.action, Action::Share | Action::Lock)
+        }));
     }
     rows
 }
@@ -359,47 +365,65 @@ fn push_live(
 
 /// Open owner decisions the daemon served: questions, prompts, plans to accept, reviews.
 fn live_needs_you(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
-    let open = feed
-        .inbox
-        .values()
-        .filter(|row| matches!(row.state, InboxState::Open))
-        .filter_map(|row| {
-            let id = || crate::model::Id::from(&row.id);
-            Some(match row.kind {
-                InboxKind::WorkerQuestion | InboxKind::PmAsk | InboxKind::AssistantAsk => (
-                    format!("Answer {} · {}", row.id, row.title),
-                    Live::Question(id()),
-                ),
-                InboxKind::Prompt => (
-                    format!("Permission {} · {}", row.id, row.title),
-                    Live::Thread(row.id.split('/').next()?.into()),
-                ),
-                InboxKind::PlanAcceptance => {
-                    let plan = row.plan.as_deref().unwrap_or(&row.id);
-                    (
-                        format!("Review plan {plan} · {}", row.title),
-                        Live::Plan(plan.into()),
-                    )
-                }
-                InboxKind::Review => {
-                    let task = row.task.as_deref()?;
-                    (
-                        format!("Review {task} · {}", row.title),
-                        Live::Review(task.into()),
-                    )
-                }
-                InboxKind::OwnerDecision => (
-                    format!("Decide {} · {}", row.id, row.title),
-                    crate::model::inbox::target(row)?,
-                ),
-                InboxKind::PmAction => return None,
-                InboxKind::Stuck | InboxKind::Escalated | InboxKind::Other => {
-                    let task = row.task.as_deref()?;
-                    (format!("{task} · {}", row.title), Live::Task(task.into()))
-                }
-            })
-        });
+    let open = crate::model::inbox::owner_moves(feed).filter_map(|row| {
+        let target = crate::model::inbox::target(row)?;
+        let label = match &target {
+            Live::Question(id) => format!("Answer {id} · {}", row.title),
+            Live::Plan(id) => format!("Review plan {id} · {}", row.title),
+            Live::Review(id) => format!("Review {id} · {}", row.title),
+            Live::Thread(_) | Live::Session(_) => format!("Permission {} · {}", row.id, row.title),
+            Live::Task(id) => format!("{id} · {}", row.title),
+        };
+        Some((label, target))
+    });
     push_live(rows, "Needs you", query, open);
+}
+
+fn live_verbs(rows: &mut Vec<Command>, feed: &Feed, record: Option<&crate::model::work::Record>) {
+    use crate::model::work::{Record, record_verbs};
+    let workspace = Record::Workspace;
+    let actions = record_verbs(feed, record.unwrap_or(&workspace));
+    rows.extend(actions.into_iter().filter(|verb| verb.enabled).map(|verb| {
+        row(
+            format!("verb:{}", verb.slug),
+            "Actions",
+            verb.label,
+            None,
+            Action::Work(verb.press),
+        )
+    }));
+    if record.is_some_and(|record| !matches!(record, Record::Workspace)) {
+        rows.extend(
+            record_verbs(feed, &workspace)
+                .into_iter()
+                .filter(|verb| verb.enabled)
+                .map(|verb| {
+                    row(
+                        format!("verb:{}", verb.slug),
+                        "Workspace actions",
+                        verb.label,
+                        None,
+                        Action::Work(verb.press),
+                    )
+                }),
+        );
+    }
+    rows.extend(
+        feed.commands
+            .keys()
+            .filter(|key| {
+                crate::model::act::status(feed, key) == Some(crate::model::act::ActStatus::Unknown)
+            })
+            .map(|key| {
+                row(
+                    format!("recover:{key}"),
+                    "Command results",
+                    format!("Check command result {key}"),
+                    None,
+                    Action::Work(crate::model::work::Press::Recover(key.clone())),
+                )
+            }),
+    );
 }
 
 /// Records the daemon served: board tasks, plans, agent sessions, assistant threads.
@@ -594,10 +618,12 @@ pub fn filtered(
     socket_configured: bool,
     data: DataState,
     feed: &Feed,
+    record: Option<&crate::model::work::Record>,
+    form: Form,
 ) -> Vec<Command> {
     let folded = query.trim().to_lowercase();
     let (ask, mut rows): (Vec<Command>, Vec<Command>) =
-        commands(query, socket_configured, data, feed)
+        commands(query, socket_configured, data, feed, record, form)
             .into_iter()
             .filter(|command| {
                 command.always
@@ -618,8 +644,10 @@ pub fn run(
     socket_configured: bool,
     data: DataState,
     feed: &Feed,
+    record: Option<&crate::model::work::Record>,
+    form: Form,
 ) -> Option<Action> {
-    commands(query, socket_configured, data, feed)
+    commands(query, socket_configured, data, feed, record, form)
         .into_iter()
         .find(|command| command.id == id)
         .map(|command| command.action)
@@ -733,83 +761,5 @@ pub const fn risk(risk: Risk) -> RiskInfo {
             ],
             ok: "Discarded · receipt in the quick thread",
         },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn free_text_ask_survives_even_when_a_command_matches() {
-        let feed = Feed::default();
-        let rows = filtered("plan", false, DataState::Fixture, &feed);
-        assert!(
-            rows.iter()
-                .any(|row| row.always && matches!(row.action, Action::Ask(Some(_))))
-        );
-        assert!(rows.iter().any(|row| !row.always));
-        for query in ["t-894", "go now", "open task"] {
-            assert!(
-                !filtered(query, false, DataState::Fixture, &feed)
-                    .iter()
-                    .any(|row| row.always)
-            );
-        }
-    }
-
-    #[test]
-    fn task_id_search_does_not_turn_navigation_into_a_question() {
-        let rows = filtered("t-894", false, DataState::Fixture, &Feed::default());
-        assert!(
-            rows.iter()
-                .any(|row| row.action == Action::Open(Page::Task("T-894")))
-        );
-        assert!(!rows.iter().any(|row| matches!(row.action, Action::Ask(_))));
-    }
-
-    #[test]
-    fn daemon_palette_lists_served_records_only() {
-        use corral_protocol::rows::PlanRow;
-        let mut feed = Feed::default();
-        feed.plans.insert(
-            "T-31".into(),
-            PlanRow {
-                id: "T-31".into(),
-                title: "Queue lifecycle".into(),
-                state: PlanState::Awaiting,
-                revision: Some("P1".into()),
-                delivery: None,
-                members_total: 2,
-                members_landed: 0,
-                blockers: Vec::new(),
-                accepted_at: None,
-                role: None,
-                linked: None,
-                rev: 1,
-            },
-        );
-        let rows = filtered("", true, DataState::Daemon, &feed);
-        assert!(rows.iter().any(|row| {
-            row.action == Action::OpenLive(Live::Plan("T-31".into())) && row.id == "live:plan:T-31"
-        }));
-        assert!(!rows.iter().any(|row| {
-            row.group == "Demo"
-                || matches!(
-                    row.action,
-                    Action::Open(_) | Action::Ask(_) | Action::ToggleSession
-                )
-        }));
-        assert_eq!(
-            run("live:plan:T-31", "", true, DataState::Daemon, &feed),
-            Some(Action::OpenLive(Live::Plan("T-31".into())))
-        );
-        feed.capabilities
-            .insert(corral_protocol::app::ASSISTANT_V1.into());
-        assert!(
-            filtered("why", true, DataState::Daemon, &feed)
-                .iter()
-                .any(|row| matches!(row.action, Action::Ask(Some(_))))
-        );
     }
 }

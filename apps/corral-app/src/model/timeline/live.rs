@@ -12,13 +12,15 @@ use super::{
     BurnupSeries, Gap, Grouping, Kind, Marker, Plot, PlotLane, PlotPm, PlotSegment, PlotTick,
     Range, State,
 };
+use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
+use crate::model::usage::completeness_label;
+use crate::model::work::{age, stamp, when};
 
 /// Waits and idle stretches at least this long become gaps worth a look.
 const GAP_MINUTES: i64 = 60;
 /// At most this many gaps are listed, longest first.
 const GAP_LIMIT: usize = 5;
-const MINUTES_PER_DAY: i64 = 24 * 60;
 
 /// The requested local window: today from local midnight, or the seven local days ending today.
 /// The bounds are whole local days, so the request stays the same for the whole day.
@@ -64,13 +66,6 @@ pub fn request(state: &State, window: &Window) -> DetailRef {
     }
 }
 
-/// The workspace-wide goal burn-up.
-pub fn burnup_request() -> DetailRef {
-    DetailRef::Burnup {
-        scope: "all".into(),
-    }
-}
-
 impl Window {
     /// Whole minutes from the window's start; None for an instant corral did not record.
     fn minutes(&self, at: &str) -> Option<i64> {
@@ -82,21 +77,11 @@ impl Window {
         (self.now.as_second() - self.from.as_second()).div_euclid(60)
     }
 
-    /// The local wall clock at `minutes` into the window: `14:05`, or `Tue 14:05` over days.
-    fn clock(&self, minutes: i64, tz: &TimeZone) -> String {
-        let Ok(at) = Timestamp::from_second(self.from.as_second() + minutes * 60) else {
-            return String::new();
-        };
-        let local = at.to_zoned(tz.clone());
-        match self.range {
-            Range::Today => format!("{:02}:{:02}", local.hour(), local.minute()),
-            Range::SevenDays => format!(
-                "{} {:02}:{:02}",
-                weekday(&local),
-                local.hour(),
-                local.minute()
-            ),
-        }
+    /// Timeline labels use the same timestamp wording as task and session details.
+    fn clock(&self, minutes: i64, feed: &Feed) -> String {
+        Timestamp::from_second(self.from.as_second() + minutes * 60)
+            .map(|at| when(&at.to_string(), feed))
+            .unwrap_or_default()
     }
 }
 
@@ -113,13 +98,11 @@ fn weekday(local: &Zoned) -> &'static str {
     }
 }
 
-/// `45m`, `3h`, `7h02`.
 fn duration(minutes: i64) -> String {
-    match (minutes / 60, minutes % 60) {
-        (0, m) => format!("{m}m"),
-        (h, 0) => format!("{h}h"),
-        (h, m) => format!("{h}h{m:02}"),
-    }
+    age(
+        Some(0),
+        u64::try_from(minutes.saturating_mul(60)).unwrap_or(0),
+    )
 }
 
 fn kind(kind: TimelineKind) -> Option<Kind> {
@@ -137,7 +120,7 @@ fn kind(kind: TimelineKind) -> Option<Kind> {
 }
 
 /// The recorded page laid on the window's clock.
-pub fn plot(page: &TimelinePage, window: &Window, tz: &TimeZone) -> Plot {
+pub fn plot(page: &TimelinePage, window: &Window, feed: &Feed) -> Plot {
     let now = window.now_minutes();
     let in_window = |at: i64| (0..=now).contains(&at);
     let mut earliest = now;
@@ -147,6 +130,7 @@ pub fn plot(page: &TimelinePage, window: &Window, tz: &TimeZone) -> Plot {
         .map(|lane| {
             let mut segments = Vec::new();
             let mut missing = Vec::new();
+            let mut waits = Vec::new();
             for segment in &lane.segments {
                 let Some(kind) = kind(segment.kind) else {
                     missing.push("an unknown phase".to_owned());
@@ -173,10 +157,22 @@ pub fn plot(page: &TimelinePage, window: &Window, tz: &TimeZone) -> Plot {
                 let until = if open {
                     "now (still open)".to_owned()
                 } else {
-                    window.clock(end, tz)
+                    window.clock(end, feed)
                 };
                 let length = end - start;
                 let wait = matches!(kind, Kind::Ask | Kind::Held) && length >= GAP_MINUTES;
+                if wait {
+                    let what = if kind == Kind::Ask {
+                        "waiting"
+                    } else {
+                        "awaiting acceptance"
+                    };
+                    waits.push(format!(
+                        "{} · {what} · {}",
+                        window.clock(start, feed),
+                        duration(length)
+                    ));
+                }
                 segments.push(PlotSegment {
                     kind,
                     start,
@@ -185,29 +181,28 @@ pub fn plot(page: &TimelinePage, window: &Window, tz: &TimeZone) -> Plot {
                         "{} {} {}–{until}{}",
                         lane.id,
                         kind.label(),
-                        window.clock(start, tz),
+                        window.clock(start, feed),
                         segment
                             .note
                             .as_ref()
                             .map(|n| format!(" · {n}"))
                             .unwrap_or_default()
                     ),
-                    note: wait.then(|| {
-                        let what = if kind == Kind::Ask {
-                            "waiting"
-                        } else {
-                            "awaiting acceptance"
-                        };
-                        format!("{what} · {}", duration(length))
-                    }),
+                    note: None,
                     phone_note: None,
                 });
             }
             PlotLane {
                 id: lane.id.clone(),
-                title: lane.title.clone(),
+                title: lane
+                    .title
+                    .strip_prefix(lane.id.as_str())
+                    .and_then(|title| title.strip_prefix(" · "))
+                    .unwrap_or(&lane.title)
+                    .to_owned(),
                 segments,
                 ask: None,
+                wait: (!waits.is_empty()).then(|| waits.join(" · ")),
                 missing: (!missing.is_empty())
                     .then(|| format!("times not recorded: {}", missing.join(", "))),
             }
@@ -220,7 +215,7 @@ pub fn plot(page: &TimelinePage, window: &Window, tz: &TimeZone) -> Plot {
             let at = window.minutes(&action.at).filter(|&at| in_window(at))?;
             Some(Marker {
                 at,
-                label: format!("{} {}", window.clock(at, tz), action.text),
+                label: format!("{} {}", window.clock(at, feed), action.text),
             })
         })
         .collect();
@@ -234,7 +229,7 @@ pub fn plot(page: &TimelinePage, window: &Window, tz: &TimeZone) -> Plot {
                 end: at,
                 hue: Hue::Neutral,
                 label: None,
-                accessible_label: format!("PM {} {}", window.clock(at, tz), action.text),
+                accessible_label: format!("PM {} {}", window.clock(at, feed), action.text),
             })
         })
         .collect();
@@ -245,26 +240,7 @@ pub fn plot(page: &TimelinePage, window: &Window, tz: &TimeZone) -> Plot {
         Range::Today => (earliest / 60 * 60).min(now / 60 * 60 - 60).max(0),
         Range::SevenDays => 0,
     };
-    let ticks = match window.range {
-        Range::Today => ((start + 59) / 60..=now / 60)
-            .map(|h| PlotTick {
-                at: h * 60,
-                label: format!("{:02}", h % 24),
-                minor: h % 2 != 0,
-            })
-            .collect(),
-        Range::SevenDays => (0..7)
-            .map(|day| PlotTick {
-                at: day * MINUTES_PER_DAY,
-                label: window
-                    .start
-                    .checked_add(day.days())
-                    .map(|local| weekday(&local).to_owned())
-                    .unwrap_or_default(),
-                minor: day % 2 != 0,
-            })
-            .collect(),
-    };
+    let ticks = ticks(window, start, now);
     let last_visit = page
         .last_visit
         .as_deref()
@@ -272,15 +248,15 @@ pub fn plot(page: &TimelinePage, window: &Window, tz: &TimeZone) -> Plot {
         .filter(|&at| (start..=now).contains(&at))
         .map(|at| Marker {
             at,
-            label: format!("your last visit {}", window.clock(at, tz)),
+            label: format!("your last visit {}", window.clock(at, feed)),
         });
     let accessible_label = match window.range {
         Range::Today => format!(
             "Run timeline {} to {}",
-            window.clock(start, tz),
-            window.clock(now, tz)
+            window.clock(start, feed),
+            window.clock(now, feed)
         ),
-        Range::SevenDays => format!("Run timeline, seven days to {}", window.clock(now, tz)),
+        Range::SevenDays => format!("Run timeline, seven days to {}", window.clock(now, feed)),
     };
     Plot {
         start,
@@ -295,11 +271,39 @@ pub fn plot(page: &TimelinePage, window: &Window, tz: &TimeZone) -> Plot {
             label: "now".into(),
         },
         accessible_label,
+        completeness: completeness_label(&page.completeness),
+    }
+}
+
+fn ticks(window: &Window, start: i64, now: i64) -> Vec<PlotTick> {
+    match window.range {
+        Range::Today => ((start + 59) / 60..=now / 60)
+            .filter_map(|hour| {
+                let at = Timestamp::from_second(window.from.as_second() + hour * 3600).ok()?;
+                let local = at.to_zoned(window.start.time_zone().clone());
+                Some(PlotTick {
+                    at: hour * 60,
+                    // The zone distinguishes the two occurrences of a repeated fall-back hour.
+                    label: local.strftime("%H:%M %Z").to_string(),
+                    minor: local.hour() % 2 != 0,
+                })
+            })
+            .collect(),
+        Range::SevenDays => (0..7)
+            .filter_map(|day| {
+                let local = window.start.checked_add(day.days()).ok()?;
+                Some(PlotTick {
+                    at: (local.timestamp().as_second() - window.from.as_second()).div_euclid(60),
+                    label: weekday(&local).to_owned(),
+                    minor: day % 2 != 0,
+                })
+            })
+            .collect(),
     }
 }
 
 /// The longest recorded waits, holds and idle stretches in the window, longest first.
-pub fn gaps(plot: &Plot, window: &Window, tz: &TimeZone) -> Vec<Gap> {
+pub fn gaps(plot: &Plot, window: &Window, feed: &Feed) -> Vec<Gap> {
     let mut gaps: Vec<(i64, Gap)> = plot
         .lanes
         .iter()
@@ -312,7 +316,7 @@ pub fn gaps(plot: &Plot, window: &Window, tz: &TimeZone) -> Vec<Gap> {
             let until = if s.end == plot.now.at {
                 "now".to_owned()
             } else {
-                window.clock(s.end, tz)
+                window.clock(s.end, feed)
             };
             let wording = match s.kind {
                 Kind::Ask => format!("waited for {}", duration(length)),
@@ -322,7 +326,7 @@ pub fn gaps(plot: &Plot, window: &Window, tz: &TimeZone) -> Vec<Gap> {
             (
                 length,
                 Gap {
-                    time: format!("{}–{until}", window.clock(s.start, tz)),
+                    time: format!("{}–{until}", window.clock(s.start, feed)),
                     task: lane.id.clone(),
                     duration: duration(length),
                     kind: s.kind,
@@ -353,7 +357,7 @@ pub const LIVE_GAPS_NOTE: &str = "From corral's recorded phase times. Phases rec
 
 /// The burn-up as a step series from its first recorded change to now; None when corral has
 /// recorded no goal changes.
-pub fn burnup_series(burnup: &WireBurnup, now: u64, tz: &TimeZone) -> Option<BurnupSeries> {
+pub fn burnup_series(burnup: &WireBurnup, now: u64, feed: &Feed) -> Option<BurnupSeries> {
     let now = Timestamp::from_second(i64::try_from(now).ok()?).ok()?;
     let mut points: Vec<(Timestamp, u32, u32)> = burnup
         .points
@@ -377,8 +381,7 @@ pub fn burnup_series(burnup: &WireBurnup, now: u64, tz: &TimeZone) -> Option<Bur
     if let Some((total, landed)) = last {
         series.push((1.0, total, landed));
     }
-    let start = first.to_zoned(tz.clone());
-    let day = format!("{:02}-{:02}", start.month(), start.day());
+    let day = stamp(&first.to_string(), feed);
     let scope = match burnup.scope.as_str() {
         "all" | "workspace" => "workspace".to_owned(),
         other => other.to_owned(),
@@ -390,6 +393,7 @@ pub fn burnup_series(burnup: &WireBurnup, now: u64, tz: &TimeZone) -> Option<Bur
         first: day,
         last: "today".into(),
         disclosure: None,
+        completeness: completeness_label(&burnup.completeness),
     })
 }
 
@@ -427,10 +431,22 @@ mod tests {
             last_visit: None,
             completeness: Default::default(),
         };
-        let plot = plot(&page, &window, &tz);
+        let plot = plot(
+            &page,
+            &window,
+            &Feed {
+                now: 1_700_000_000,
+                time_zone: Some(tz),
+                ..Feed::default()
+            },
+        );
         let lane = &plot.lanes[0];
         assert_eq!(lane.segments.len(), 1);
         assert_eq!(lane.segments[0].end, plot.now.at);
         assert!(lane.missing.as_deref().is_some_and(|m| m.contains("gate")));
     }
 }
+
+#[cfg(test)]
+#[path = "regression.rs"]
+mod regression;

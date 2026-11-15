@@ -1,8 +1,45 @@
 use super::*;
 
 impl AppState {
-    pub fn event(&mut self, feed: Signal<Feed>, event: Event) -> Result<Vec<Outgoing>, String> {
+    pub async fn event_async(
+        &mut self,
+        feed: Signal<Feed>,
+        event: Event,
+    ) -> Result<Vec<Outgoing>, String> {
+        if self.ready
+            && let Err(problem) = self.offline.capture(&event).await
+        {
+            feed.update(|feed| feed.problem = Some(problem));
+        }
         match event {
+            Event::Notice { method, params } if method == SESSION_AUTHORITY_CHANGED => {
+                let changed: wire::device::SessionAuthorityChanged = decode(params)?;
+                let current = feed.with_untracked(|feed| {
+                    feed.session
+                        .as_ref()
+                        .map(|session| session.device.id.clone())
+                });
+                if current.as_deref() != Some(changed.device.as_str()) {
+                    return Ok(vec![]);
+                }
+                let newer = feed.with_untracked(|feed| changed.revision > feed.authority_revision);
+                if !newer {
+                    return Ok(vec![]);
+                }
+                feed.update(|feed| {
+                    feed.authority_revision = changed.revision;
+                    if let Some(session) = &mut feed.session {
+                        session.authority = DeviceAuthority::default();
+                    }
+                    feed.operations.retain(|_, op| {
+                        !matches!(
+                            op.method.as_str(),
+                            ACT_PREVIEW | PROMPT_PREVIEW | DEVICE_AUTHORITY_PREVIEW
+                        )
+                    });
+                });
+                Ok(vec![out(APP_SESSION, json!({}), None)])
+            }
             Event::Health(health) => {
                 feed.update(|feed| feed.health_received(super::super::map::health(health)));
                 Ok(self.poll_changes(feed))
@@ -24,6 +61,12 @@ impl AppState {
                 code,
                 message,
             } => {
+                if topic == Topic::Terminal
+                    && let Some(scope) = &scope
+                {
+                    self.terminal_capture(feed, scope.clone(), None, Some(message));
+                    return Ok(vec![]);
+                }
                 feed.update(|feed| {
                     let state = feed
                         .topics
@@ -69,6 +112,15 @@ impl AppState {
                         }
                     }
                     if let Some(scope) = scope {
+                        if topic == Topic::Terminal {
+                            if let Some(cache) = feed
+                                .details
+                                .get_mut(&detail_key(&DetailRef::Terminal { id: scope.clone() }))
+                            {
+                                cache.stale = true;
+                                cache.loading = true;
+                            }
+                        }
                         if topic == Topic::Session {
                             if self.session_scopes.contains_key(&scope) {
                                 feed.live.entry(scope.into()).or_default().reset();
@@ -89,11 +141,14 @@ impl AppState {
                 params,
                 outcome,
                 error_data,
-            } => self.reply(feed, method, tag, params, outcome, error_data),
+            } => {
+                self.reply(feed, method, tag, params, outcome, error_data)
+                    .await
+            }
             _ => Ok(vec![]),
         }
     }
-    fn reply(
+    async fn reply(
         &mut self,
         feed: Signal<Feed>,
         method: &'static str,
@@ -112,7 +167,9 @@ impl AppState {
             return self.upload_reply(feed, method, tag, params, outcome, error_data);
         }
         if method == ASSISTANT_CANCEL {
-            return self.cancel_reply(feed, tag, params, outcome, error_data);
+            return self
+                .cancel_reply(feed, tag, params, outcome, error_data)
+                .await;
         }
         if method == CHANGES_PAGE {
             self.changes_inflight = false;
@@ -197,13 +254,24 @@ impl AppState {
                         }
                     }
                     feed.problem = Some(error.message.clone());
+                    if matches!(
+                        method,
+                        wire::device::PAIR_BEGIN
+                            | wire::device::PAIR_STATUS
+                            | wire::device::PAIR_CONFIRM
+                            | wire::device::PAIR_CANCEL
+                    ) {
+                        feed.pairing = crate::model::devices::Pairing::Ended {
+                            line: error.message.clone(),
+                        };
+                    }
                     if walk_failed {
                         feed.registry = Registry::Failed;
                     }
                 });
                 if method != ACT_RESULT {
                     if let Some(id) = &id {
-                        self.settled(feed, id);
+                        self.settled(feed, id).await;
                     }
                 }
                 return Ok(if conflict {
@@ -223,7 +291,7 @@ impl AppState {
             });
         }
         match method {
-            APP_SESSION => self.session(feed, decode(result)?),
+            APP_SESSION => self.session(feed, decode(result)?).await,
             ACT_SUBMIT | ACT_RESULT | PROMPT_ANSWER => {
                 let result: CmdResult = decode(result)?;
                 if result.output.is_some() {
@@ -244,7 +312,7 @@ impl AppState {
                 if status == CommandStatus::Running {
                     return Ok(vec![recover(&cmd_id)]);
                 }
-                self.settled(feed, &cmd_id);
+                self.settled(feed, &cmd_id).await;
                 Ok(
                     if matches!(status, CommandStatus::Done | CommandStatus::Conflict) {
                         self.refresh_details(feed)
@@ -280,7 +348,7 @@ impl AppState {
                         }
                     });
                     // Settle first: retiring a Done send must never skip clearing its saved copy.
-                    self.settled(feed, &id);
+                    self.settled(feed, &id).await;
                     feed.update(Feed::retire_echoed_sends);
                 }
                 Ok(vec![])
@@ -337,6 +405,16 @@ impl AppState {
                 Ok(vec![])
             }
             DEVICE_SET_AUTHORITY => Ok(vec![devices(), out(APP_SESSION, json!({}), None)]),
+            PUSH_STATUS | PUSH_SUBSCRIBE | PUSH_UNSUBSCRIBE => {
+                let status: wire::device::PushStatus = decode(result)?;
+                feed.update(|feed| feed.push = Some(status));
+                Ok(vec![])
+            }
+            DEVICE_REVOKE
+            | wire::device::PAIR_BEGIN
+            | wire::device::PAIR_STATUS
+            | wire::device::PAIR_CONFIRM
+            | wire::device::PAIR_CANCEL => self.device_reply(feed, method, result),
             DEVICE_PAGE => {
                 let page: DevicePage = decode(result)?;
                 let id = id.ok_or("device page has no correlation identity")?;
@@ -381,6 +459,10 @@ impl AppState {
             }
             _ => Ok(vec![]),
         }
+    }
+    #[cfg(test)]
+    pub fn event(&mut self, feed: Signal<Feed>, event: Event) -> Result<Vec<Outgoing>, String> {
+        super::super::durable::wait(self.event_async(feed, event))
     }
 }
 
@@ -501,6 +583,10 @@ mod registry_tests {
     }
 
     fn session(app: &mut AppState, feed: Signal<Feed>) {
+        feed.update(|feed| {
+            feed.store
+                .get_or_insert_with(|| "/registry-session-fixture".into());
+        });
         let event = Event::Reply {
             method: APP_SESSION,
             tag: None,
@@ -601,3 +687,7 @@ mod registry_tests {
         assert_ne!(failed, empty);
     }
 }
+
+#[cfg(test)]
+#[path = "authority_tests.rs"]
+mod authority_tests;

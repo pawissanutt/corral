@@ -6,8 +6,9 @@ pub(crate) mod drawer;
 mod hotkey;
 pub(crate) mod models;
 mod share;
+mod unconnected;
 
-pub(crate) use attach::{chip_row, field_row, foot_controls, tray};
+pub(crate) use attach::{chip_row, field_row, foot_controls, plus, tray};
 
 use nsh_core::prelude::*;
 

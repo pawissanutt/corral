@@ -213,6 +213,7 @@ mod tests {
             inherited,
             references: refusal.map(|_| vec!["pm.agent".into()]).unwrap_or_default(),
             remove_refusal: refusal.map(str::to_owned),
+            summary_refusal: None,
         }
     }
 

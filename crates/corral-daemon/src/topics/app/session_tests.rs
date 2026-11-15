@@ -6,6 +6,7 @@ fn service() -> Arc<Service> {
         entries: Mutex::default(),
         revisions: Arc::default(),
         thread: Mutex::default(),
+        terminal: Arc::default(),
     })
 }
 

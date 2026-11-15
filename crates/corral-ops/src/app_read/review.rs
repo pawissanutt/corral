@@ -12,7 +12,7 @@ use anyhow::{Context, Result, ensure};
 use corral_core::{RunHead, TaskHead};
 use corral_protocol::detail::{
     AnnotationMessage, ArtifactRef, DetailBody, PatchPage, ReviewAnnotation, ReviewCandidate,
-    ReviewDetail, ReviewFile, ReviewVerdict,
+    ReviewDetail, ReviewFile, ReviewGate, ReviewVerdict,
 };
 
 // Even JSON's worst-case six-byte control-character escaping remains below CONTROL's
@@ -158,6 +158,7 @@ pub(super) fn review(ctx: &Ctx, id: &str) -> Result<DetailBody> {
         .unwrap_or_default();
     let annotations = annotation_threads(&task, run, candidate.as_ref())?;
     let gate_log_tail = gate_tail(ctx, &task, run)?;
+    let gates = gates(ctx, &task, run, candidate.as_ref())?;
     let approvable = candidate
         .as_ref()
         .is_some_and(|candidate| approval(ctx, &task, run, candidate).is_ok());
@@ -167,6 +168,7 @@ pub(super) fn review(ctx: &Ctx, id: &str) -> Result<DetailBody> {
         base: candidate.as_ref().map(|c| c.base.clone()),
         state: task.status.as_str().into(),
         verdicts,
+        gates,
         files,
         report: run.summary.as_ref().map(|text| short(text, 4096)),
         acceptance,
@@ -198,6 +200,59 @@ fn verdict(review: &corral_core::ReviewRecord, candidate: Option<&Candidate>) ->
         text: review.notes.as_ref().map(|v| short(v, 8192)),
         stale: candidate.is_none_or(|candidate| candidate.head != review.sha),
     }
+}
+
+fn gates(
+    ctx: &Ctx,
+    task: &TaskHead,
+    run: &RunHead,
+    candidate: Option<&Candidate>,
+) -> Result<Vec<ReviewGate>> {
+    let Some(gate) = &run.gate else {
+        return Ok(Vec::new());
+    };
+    // Use the attempt's captured commands, not mutable policy or rail progress.
+    let mut by = if let Some(identity) = &gate.identity
+        && let Some(attempt) = ctx
+            .store
+            .gate_attempt(&task.id, &run.id, &identity.attempt)?
+        && let Some(bytes) = ctx.store.blob_bytes(&attempt.commands)?
+    {
+        serde_json::from_slice::<Vec<String>>(&bytes)
+            .context("decoding canonical gate commands")?
+            .join("\n")
+    } else {
+        let mut commands = String::new();
+        for receipt in &gate.commands {
+            if !commands.is_empty() {
+                commands.push('\n');
+            }
+            commands.push_str(&receipt.command);
+        }
+        commands
+    };
+    if by.is_empty() {
+        by.push_str("gate");
+    }
+    Ok(vec![ReviewGate {
+        by,
+        sha: gate.sha.clone(),
+        verdict: if gate.process_lost && gate.result == corral_core::GateResult::Running {
+            "unavailable".into()
+        } else {
+            gate.result.as_str().into()
+        },
+        at: Some(gate.at.to_string()),
+        text: gate.failed_cmd.as_ref().map(|text| short(text, 8192)),
+        stale: gate.result == corral_core::GateResult::Stale
+            || candidate.is_none_or(|candidate| {
+                gate.sha != candidate.head
+                    || gate.identity.as_ref().is_some_and(|identity| {
+                        identity.head != candidate.head
+                            || identity.integration_base != candidate.base
+                    })
+            }),
+    }])
 }
 
 fn approval(ctx: &Ctx, task: &TaskHead, run: &RunHead, candidate: &Candidate) -> Result<()> {

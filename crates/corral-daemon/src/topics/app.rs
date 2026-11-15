@@ -18,11 +18,13 @@ use corral_protocol::{
 };
 
 pub(crate) mod session;
+mod terminal;
 
 #[derive(Default)]
 pub(super) struct AppTopics {
     subscribers: BTreeMap<Key, Subscriber>,
     sessions: session::SessionTopics,
+    terminals: terminal::TerminalTopics,
 }
 
 struct Subscriber {
@@ -64,10 +66,19 @@ struct Transfer {
 
 impl AppTopics {
     pub fn open(&mut self, shared: &Shared, open: SubOpen) -> Result<()> {
+        if open.topic == Topic::Terminal {
+            ensure!(
+                self.terminals.contains(open.scope.as_deref())
+                    || self.subscribers.len() + self.sessions.len() + self.terminals.len()
+                        < session::SESSION_SUBSCRIPTIONS,
+                "too many topic subscriptions"
+            );
+            return self.terminals.open(shared, open);
+        }
         if open.topic == Topic::Session {
             ensure!(
                 self.sessions.contains(open.scope.as_deref())
-                    || self.subscribers.len() + self.sessions.len()
+                    || self.subscribers.len() + self.sessions.len() + self.terminals.len()
                         < session::SESSION_SUBSCRIPTIONS,
                 "too many topic subscriptions"
             );
@@ -76,7 +87,8 @@ impl AppTopics {
         let key = Key::new(open.topic, open.scope)?;
         ensure!(
             self.subscribers.contains_key(&key)
-                || self.subscribers.len() + self.sessions.len() < session::SESSION_SUBSCRIPTIONS,
+                || self.subscribers.len() + self.sessions.len() + self.terminals.len()
+                    < session::SESSION_SUBSCRIPTIONS,
             "too many topic subscriptions"
         );
         // Drop the replaced watch first; counters count subscriptions, never open calls.
@@ -106,6 +118,10 @@ impl AppTopics {
     }
 
     pub fn close(&mut self, topic: Topic, scope: Option<String>) {
+        if topic == Topic::Terminal {
+            self.terminals.close(scope);
+            return;
+        }
         if topic == Topic::Session {
             self.sessions.close(scope);
             return;
@@ -116,6 +132,9 @@ impl AppTopics {
     }
 
     pub fn ack(&mut self, ack: SubAck) -> Result<()> {
+        if ack.topic == Topic::Terminal {
+            return self.terminals.ack(ack);
+        }
         if ack.topic == Topic::Session {
             return self.sessions.ack(ack);
         }
@@ -137,6 +156,7 @@ impl AppTopics {
 
     pub fn flush(&mut self, shared: &Shared, conn: &mut dyn crate::conn::Conn) -> Result<()> {
         self.sessions.flush(shared, conn)?;
+        self.terminals.flush(conn)?;
         let mut closed = Vec::new();
         for (key, subscriber) in &mut self.subscribers {
             match subscriber.next(shared) {

@@ -1,5 +1,5 @@
-//! Shared live date/age formatting. The tick's local date and clock together disambiguate
-//! offsets on either side of the date line; a clock alone cannot distinguish UTC+14 from −10.
+//! Shared live date/age formatting uses the client-fed IANA zone for each recorded instant.
+//! Before a zone arrives, a complete local date/clock tick supplies the fallback offset.
 
 use crate::model::daemon::Feed;
 
@@ -54,6 +54,21 @@ fn day(local: i64) -> String {
 
 /// A daemon instant as a feed time: `18:40` today, `Nov 12` before; empty when unparseable.
 pub fn stamp(at: &str, feed: &Feed) -> String {
+    if let Some(zone) = &feed.time_zone {
+        let Some(at) = at.parse::<jiff::Timestamp>().ok() else {
+            return String::new();
+        };
+        let at = at.to_zoned(zone.clone());
+        let today = i64::try_from(feed.now)
+            .ok()
+            .and_then(|now| jiff::Timestamp::from_second(now).ok())
+            .map(|now| now.to_zoned(zone.clone()).date());
+        return if Some(at.date()) == today {
+            at.strftime("%H:%M").to_string()
+        } else {
+            at.strftime("%b %-d").to_string()
+        };
+    }
     let Some(at) = seconds(at) else {
         return String::new();
     };
@@ -69,6 +84,21 @@ pub fn stamp(at: &str, feed: &Feed) -> String {
 
 /// A daemon instant with its day and time, for attribution: `Nov 12 18:40`, or `18:40` today.
 pub fn when(at: &str, feed: &Feed) -> String {
+    if let Some(zone) = &feed.time_zone {
+        let Some(at) = at.parse::<jiff::Timestamp>().ok() else {
+            return String::new();
+        };
+        let at = at.to_zoned(zone.clone());
+        let today = i64::try_from(feed.now)
+            .ok()
+            .and_then(|now| jiff::Timestamp::from_second(now).ok())
+            .map(|now| now.to_zoned(zone.clone()).date());
+        return if Some(at.date()) == today {
+            at.strftime("%H:%M").to_string()
+        } else {
+            at.strftime("%b %-d %H:%M").to_string()
+        };
+    }
     let Some(at) = seconds(at) else {
         return String::new();
     };

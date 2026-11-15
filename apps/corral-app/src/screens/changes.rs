@@ -5,8 +5,8 @@
 
 use nsh_core::prelude::*;
 
+use crate::model::Form;
 use crate::model::work::{self, Action, ChangeFilter, Changes};
-use crate::model::{Form, PhoneTab};
 use crate::screens::now::feed::{row, seen_line};
 use crate::screens::now::parts::{act, dim_when, model_button, pressable, quiet, stale};
 use crate::state::AppState;
@@ -27,9 +27,8 @@ pub fn screen(app: AppState) -> AnyElement {
         if app.daemon() {
             let device = app.device_name();
             return app.feed.with(|feed| {
-                app.work.with(|state| {
-                    work::live_changes(state, feed, device.as_deref(), form, PhoneTab::More)
-                })
+                app.work
+                    .with(|state| work::live_changes(state, feed, device.as_deref(), form))
             });
         }
         let env = app.env();

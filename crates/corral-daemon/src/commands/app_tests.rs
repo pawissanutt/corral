@@ -31,6 +31,67 @@ fn comment() -> Command {
     })
 }
 
+#[test]
+fn terminal_input_requires_admin_and_a_fresh_device_bound_confirmation() {
+    use corral_protocol::cmd::session::SessionCommand;
+
+    let keys = Command::Session(SessionCommand::Keys {
+        id: "pm".into(),
+        keys: vec!["ctrl-c".into()],
+        text: None,
+        json: true,
+    });
+    let mut authority = DeviceAuthority {
+        act: true,
+        ..DeviceAuthority::default()
+    };
+    assert_eq!(
+        policy(&authority, &keys),
+        Err((ErrorCode::Refused, "admin_only"))
+    );
+    let cancel = Command::Session(SessionCommand::Cancel {
+        id: "pm".into(),
+        generation: Some(1),
+        turn: None,
+        json: true,
+    });
+    let send = Command::Session(SessionCommand::Send {
+        id: "pm".into(),
+        text: "owner input".into(),
+        policy: "steer".into(),
+        json: true,
+    });
+    assert_eq!(policy(&authority, &cancel), Ok(ActClass::Act));
+    assert_eq!(policy(&authority, &send), Ok(ActClass::Act));
+    authority.act = false;
+    assert!(policy(&authority, &cancel).is_err());
+    assert!(policy(&authority, &send).is_err());
+    authority.admin = true;
+    assert_eq!(policy(&authority, &keys), Ok(ActClass::Admin));
+
+    let fixture = Fixture::new();
+    let (shared, service, device) = setup(&fixture);
+    let digest = action_digest(&device, &keys, None).unwrap();
+    let preview = issue(
+        &service,
+        &device,
+        digest.clone(),
+        ActClass::Admin,
+        Vec::new(),
+    )
+    .unwrap();
+    let proof = ConfirmProof {
+        preview_id: preview.preview_id,
+        digest: preview.digest,
+    };
+    assert!(consume(&service, &device, &digest, None).is_err());
+    assert!(consume(&service, "another-device", &digest, Some(&proof)).is_err());
+    assert!(consume(&service, &device, "changed-input", Some(&proof)).is_err());
+    assert!(consume(&service, &device, &digest, Some(&proof)).is_ok());
+    assert!(consume(&service, &device, &digest, Some(&proof)).is_err());
+    shared.close();
+}
+
 fn queued_submit(device: &str) -> CmdSubmit {
     let issued = corral_core::clock::now();
     CmdSubmit {

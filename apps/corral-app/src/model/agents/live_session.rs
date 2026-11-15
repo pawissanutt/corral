@@ -11,7 +11,7 @@ use crate::model::board::STAGES;
 use crate::model::daemon::{self, DetailCache, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
-use crate::model::text::{Rich, span};
+use crate::model::text::{Rich, Span, span};
 use crate::model::{ActStatus, Id};
 
 use super::live::{clock, role_label, shown_id, stale, unix, usage};
@@ -104,11 +104,12 @@ fn terminal(
     let gone = error.is_some_and(|error| error.code == "not_found");
     let unavailable = error.filter(|error| error.code == "unavailable");
     let live = capture.is_some_and(|capture| capture.live);
+    let writable = matches!(&keys, Some(Keys::Open(bar)) if bar.enabled);
     let status = match capture {
         Some(capture) if capture.live => {
             let read = read_when(read_at(cache, capture), feed);
             match (error, unavailable) {
-                _ if current => format!("live screen · read {read} · read-only"),
+                _ if current => format!("live terminal · read {read}"),
                 _ if gone => format!("pane gone · last screen read {read}"),
                 (_, Some(why)) => format!("{} · last screen read {read}", reason(&why.message)),
                 (Some(error), _) => format!(
@@ -160,7 +161,7 @@ fn terminal(
             row.runtime.as_deref().unwrap_or("runtime unknown")
         ),
         status,
-        input: if matches!(keys, Some(Keys::Open(_))) {
+        input: if writable {
             "keys go to the pane from the bar below"
         } else {
             "keys are not sent"
@@ -196,6 +197,15 @@ fn fact(label: &'static str, value: Rich) -> RunFact {
     RunFact {
         label,
         value: FactValue::Text(value),
+    }
+}
+
+/// A profile, runtime, pane or machine name: an identifier (mono, cut rather than broken where
+/// room is short) when known, else the plain words saying it is not.
+fn identifier(name: Option<String>, unknown: &str) -> Span {
+    match name {
+        Some(name) => span(name).mono(),
+        None => span(unknown),
     }
 }
 
@@ -312,25 +322,16 @@ pub fn session(
         });
     }
     facts.extend([
-        fact(
-            "Agent",
-            vec![span(profile.unwrap_or_else(|| "profile unknown".into()))],
-        ),
+        fact("Agent", vec![identifier(profile, "profile unknown")]),
         fact(
             "Runtime",
             vec![
-                span(format!(
-                    "{} · ",
-                    row.and_then(|row| row.runtime.clone())
-                        .unwrap_or_else(|| "runtime unknown".into())
-                )),
-                span(pane.clone().unwrap_or_else(|| "no pane".into())).mono(),
+                identifier(row.and_then(|row| row.runtime.clone()), "runtime unknown"),
+                span(" · "),
+                identifier(pane.clone(), "no pane"),
             ],
         ),
-        fact(
-            "Machine",
-            vec![span(machine.unwrap_or_else(|| "unknown".into()))],
-        ),
+        fact("Machine", vec![identifier(machine, "unknown")]),
         fact(
             "Started",
             vec![span(since.unwrap_or_else(|| "unknown".into()))],
@@ -381,7 +382,6 @@ pub fn session(
         switch_key: "`",
         switch_hint: "switch",
         phone_title: format!("{shown} session"),
-        back_label: "Back",
         desktop_back_label: "Agents",
         back: Action::Back,
         view,

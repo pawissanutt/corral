@@ -85,6 +85,8 @@ pub struct Story {
     pub goal: Option<&'static str>,
     /// Agent, machine, illustrative attribution and start time for an active task.
     pub facts: Rich,
+    /// Separate illustrative attribution, not part of the recorded machine name.
+    pub machine_note: Option<&'static str>,
     /// Plan and now-phrase for a task without detailed steps.
     pub summary: Rich,
     /// Four-stage stepper; absent for simple queued task stories.
@@ -129,8 +131,7 @@ pub fn story(state: &State, env: Env) -> Story {
     let facts = if detailed {
         match t.machine {
             Some(machine) => vec![
-                span(format!("{} · on {machine} ", t.agent.unwrap_or(""))),
-                span("machine name illustrative").dim(),
+                span(format!("{} · on {machine}", t.agent.unwrap_or(""))),
                 span(format!(" · started {}", t.started.unwrap_or(""))),
             ],
             None => Vec::new(),
@@ -204,6 +205,7 @@ pub fn story(state: &State, env: Env) -> Story {
         changed: (detailed && t.changed).then_some("▲ changed since 18:40"),
         goal: t.goal,
         facts,
+        machine_note: (detailed && t.machine.is_some()).then_some("machine name illustrative"),
         summary,
         stages,
         progress: detailed.then(|| {
@@ -628,10 +630,6 @@ pub fn live(state: &State, env: Env) -> LiveDock {
 pub struct TaskPage {
     /// Navigation title is the selected task id.
     pub title: &'static str,
-    /// Back label beside the navigation chevron.
-    pub back_label: &'static str,
-    /// Pop the phone task page.
-    pub back: Action,
     /// Task story; the full goal remains available even if not shown by the mockup.
     pub story: Story,
     /// Session, Ask about this and Review controls.
@@ -653,8 +651,6 @@ pub fn task_page(state: &State, mut env: Env) -> TaskPage {
     env.form = Form::Phone;
     TaskPage {
         title: state.sel,
-        back_label: "Now",
-        back: Action::Back,
         story: story(state, env),
         actions: task_actions(state.sel, true),
         live_label: "Live",

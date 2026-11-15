@@ -232,7 +232,7 @@ pub fn live_task_phone(app: AppState, id: Id) -> PhonePage {
 enum LiveTaskView {
     Missing(String),
     Ready {
-        story: work::Inspector,
+        story: Box<work::Inspector>,
         buttons: Vec<work::Button>,
         tail: Option<work::Tail>,
     },
@@ -249,7 +249,13 @@ fn live_task_view(state: &work::State, feed: &crate::model::daemon::Feed, id: &I
         });
     };
     LiveTaskView::Ready {
-        story: work::task_inspector(state, feed, task, NowTab::Story, Form::Phone),
+        story: Box::new(work::task_inspector(
+            state,
+            feed,
+            task,
+            NowTab::Story,
+            Form::Phone,
+        )),
         buttons: work::task_buttons(feed, task, true),
         tail: work::task_tail(feed, task).filter(|tail| !tail.lines.is_empty()),
     }
@@ -264,12 +270,7 @@ fn live_task_body(app: AppState, page: &LiveTaskView) -> AnyElement {
             tail,
         } => (story, buttons, tail),
     };
-    let actions = buttons
-        .iter()
-        .enumerate()
-        // The mock's first two share the row; Review keeps its own width.
-        .map(|(index, button)| pressable(app, button, index < 2))
-        .collect::<Vec<_>>();
+    let actions = body_buttons(app, buttons);
     view()
         .child(content(app, story))
         .child(
@@ -289,14 +290,24 @@ fn live_task_body(app: AppState, page: &LiveTaskView) -> AnyElement {
         .into_element()
 }
 
-fn task_body(app: AppState, page: &work::TaskPage) -> AnyElement {
-    let actions = page
-        .actions
+/// The page's buttons under its story, without Ask: the header's control is the page's one
+/// Ask affordance. The first two share the row, as in the mock; Review keeps its own width.
+fn body_buttons(app: AppState, buttons: &[work::Button]) -> Vec<AnyElement> {
+    buttons
         .iter()
+        .filter(|button| {
+            !matches!(
+                button.action,
+                Some(Press::Ask { .. } | Press::Work(work::Action::AskAbout(_)))
+            )
+        })
         .enumerate()
-        // The mock's first two share the row; Review keeps its own width.
         .map(|(index, button)| pressable(app, button, index < 2))
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn task_body(app: AppState, page: &work::TaskPage) -> AnyElement {
+    let actions = body_buttons(app, &page.actions);
     let plan = match page.plan.plan {
         Some(plan) => crate::screens::plans::graph(app, plan, page.plan.member),
         None => match page.plan.empty {

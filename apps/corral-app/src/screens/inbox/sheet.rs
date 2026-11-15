@@ -1,50 +1,62 @@
 //! The handover sheet: its head, the S B A R Thread History bands in each form, the focus
-//! page's head and context column; the decide bar is in `decide`. Each band is made again only
-//! when its own part of the model changes. A served question first loads its detail
-//! (`detail.get`, revalidated when its inbox row changes) and says truthfully while it loads,
-//! fails or is gone.
+//! page's head and context column; the decide bar is in `decide`, Situation in `situation`,
+//! Background in `graph`. Each band is made again only when its own part of the model changes.
+//! A served question first loads its detail (`detail.get`, revalidated when its inbox row
+//! changes) and says truthfully while it loads, fails or is gone.
 
+use corral_protocol::detail::{DetailGet, DetailRef};
 use nsh_core::prelude::*;
 
 use super::decide::{decide, decide_note};
+use super::situation::situation;
 use super::{
-    Key, blind, button, button_as, code, evidence, graph, icon_for, kind, live, options, press,
-    rich_at, ring, thread, with_source, words,
+    Key, SIDE, blind, button, button_as, cells_of, code, evidence, graph, icon_for, kind, live,
+    options, press, rich_at, ring, thread, verbs, with_source, words,
 };
-use crate::model::board::Mark;
-use crate::model::inbox::{
-    self, Action, Background, Band, BandKind, Handover, Header, Notice, Sheet, Situation, WaitKind,
-    WaitLine,
-};
-use crate::model::{Destination, Form, Hue, Rich};
+use crate::model::inbox::{self, Action, Band, BandKind, Handover, Header, Sheet};
+use crate::model::{Destination, Form, Hue, Id, Rich};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::band::{band, band_head};
 use crate::ui::kit::button::{ButtonOptions, button_with};
-use crate::ui::kit::chip::{chip, illus, stamp};
-use crate::ui::kit::marks::{dot, hue_fill, mark};
-use crate::ui::kit::notice::{empty, notice, skeleton};
-use crate::ui::kit::page::{bar_pane, context, qhead};
-use crate::ui::kit::text::h3;
+use crate::ui::kit::chip::chip;
+use crate::ui::kit::notice::{empty, loading, notice};
+use crate::ui::kit::page::{bar_pane, context, give_way, qhead};
+use crate::ui::kit::page_phone::short_window;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
-/// Background's placeholder bars while task detail loads (`.skel` 90 %, 70 %, 80 % × 60).
-const PLACE_BARS: [(f32, f32); 3] = [(0.9, 10.0), (0.7, 10.0), (0.8, 60.0)];
 /// A handover's placeholder while its question loads.
 const SHEET_BARS: [(f32, f32); 3] = [(0.3, 10.0), (0.7, 18.0), (1.0, 90.0)];
 
 /// Where a band's content sits: the desktop inline sheet lays Situation and Background out in two
 /// columns; the context column and the phone stack them.
 #[derive(Clone, Copy, PartialEq)]
-enum Place {
+pub(super) enum Place {
     Wide,
     Narrow,
 }
 
+/// What a served handover needs from corrald while it is shown.
+#[derive(Clone, PartialEq)]
+struct Want {
+    /// The shown question.
+    shown: Id,
+    /// Its inbox row's revision.
+    rev: Option<u64>,
+    /// Its detail is absent or stale and not on its way.
+    stale: bool,
+    /// The plan and the selected image the question draws on, kept in the cache while shown.
+    context: Vec<DetailRef>,
+    /// Of those, the pages not yet asked for.
+    gets: Vec<DetailGet>,
+}
+
 /// Served: request the shown question's detail when it is absent or stale, and revalidate it
-/// with its etag whenever its inbox row's revision moves (an answer elsewhere, a follow-up).
-/// A failed load waits for Retry rather than looping.
+/// with its etag whenever its inbox row's revision moves (an answer elsewhere, a follow-up);
+/// request the plan and the selected image it draws on. All of them stay pinned in the client's
+/// cache while the handover shows them and are let go when it moves on or closes. A failed load
+/// waits for Retry rather than looping.
 pub(super) fn load(app: AppState, key: Key) {
     let wanted = computed(move || {
         if !app.daemon() {
@@ -57,30 +69,64 @@ pub(super) fn load(app: AppState, key: Key) {
                 let stale = feed
                     .detail(&inbox::question_ref(&shown))
                     .is_none_or(|cache| cache.stale && !cache.loading);
-                Some((shown, rev, stale))
+                let context = inbox::question_context_refs(state, feed, &shown);
+                let gets = inbox::question_dependencies(state, feed, &shown);
+                Some(Want {
+                    shown,
+                    rev,
+                    stale,
+                    context,
+                    gets,
+                })
             })
         })
     });
-    let last = stored(None::<(crate::model::Id, Option<u64>)>);
+    let last = stored(None::<(Id, Option<u64>)>);
+    let pinned = stored(Vec::<DetailRef>::new());
     effect(move || {
-        let Some((shown, rev, _)) = wanted.get() else {
+        let Some(want) = wanted.get() else {
+            untracked(|| pin(app, pinned, Vec::new()));
             return;
         };
-        let previous = last.replace(Some((shown.clone(), rev)));
-        let moved = previous.is_some_and(|(id, old)| id == shown && old != rev);
-        let target = inbox::question_ref(&shown);
+        let previous = last.replace(Some((want.shown.clone(), want.rev)));
+        let moved = previous.is_some_and(|(id, old)| id == want.shown && old != want.rev);
+        let target = inbox::question_ref(&want.shown);
         untracked(|| {
+            let mut shown = Vec::with_capacity(want.context.len() + 1);
+            shown.push(target.clone());
+            shown.extend(want.context);
+            pin(app, pinned, shown);
             if moved {
                 app.refresh(target);
             } else {
                 app.load(target);
             }
+            for get in want.gets {
+                app.detail(get);
+            }
         });
+    });
+    // The owner may already be letting go of its values when this runs.
+    cleanup(move || {
+        for gone in pinned.try_with(std::mem::take).unwrap_or_default() {
+            app.watch_detail(gone, false);
+        }
     });
 }
 
-/// The served question's handover once it can be drawn: its skeleton while it loads, the
-/// failure with Retry, or why it is gone. The fixture is always ready.
+/// Pins `wanted` in the client's cache and lets go of what was pinned before and no longer is.
+fn pin(app: AppState, pinned: Stored<Vec<DetailRef>>, wanted: Vec<DetailRef>) {
+    let was = pinned.replace(wanted.clone());
+    for gone in was.iter().filter(|target| !wanted.contains(target)) {
+        app.watch_detail(gone.clone(), false);
+    }
+    for new in wanted.iter().filter(|target| !was.contains(target)) {
+        app.watch_detail(new.clone(), true);
+    }
+}
+
+/// The served question's handover once it can be drawn: its skeleton with the model's caption
+/// while it loads, the failure with Retry, or why it is gone. The fixture is always ready.
 pub(super) fn gate(
     app: AppState,
     key: Key,
@@ -93,11 +139,10 @@ pub(super) fn gate(
         let phase = phase.get();
         Some(untracked(|| match phase {
             Handover::Ready => build(app),
-            Handover::Loading => view()
+            Handover::Loading { caption } => view()
                 .flex_1()
-                .label("Loading")
                 .p(px(if terminal { 0.0 } else { 24.0 }))
-                .child(skeleton(app, &SHEET_BARS))
+                .child(loading(app, caption, &SHEET_BARS))
                 .into_element(),
             Handover::Failed(failure) => view()
                 .flex_1()
@@ -141,6 +186,7 @@ pub(super) fn inline(app: AppState, compact: bool) -> AnyElement {
     let place = if compact { Place::Narrow } else { Place::Wide };
     let content = view()
         .child(main(app, sheet, place))
+        .child(verbs::row(app, None))
         .when(compact, |v| v.child(decide_note(app, None)))
         .into_element();
     bar_pane(app, "inbox-sheet", content, decide(app, None, compact))
@@ -155,6 +201,7 @@ pub(super) fn focus_main(app: AppState, key: Key, with_side: bool, compact: bool
     let terminal = app.form == Form::Terminal;
     let content = view()
         .child(main(app, sheet, place))
+        .child(verbs::row(app, key.clone()))
         .when(with_side && terminal, |v| {
             v.child(term::blank())
                 .child(view().px(term::cells(1.0)).child(side_content(app, sheet)))
@@ -180,53 +227,112 @@ pub(super) fn side(app: AppState, key: Key) -> AnyElement {
     context(app, "question-side", side_content(app, sheet))
 }
 
-/// The phone's question body: the pager, the head, the bands in phone order, the thread sheet.
+/// The phone's question body: the pager row (held upright; held sideways the pager moves into
+/// the header, [`phone_trailing`]), the head, the bands in phone order, the thread sheet.
 pub(super) fn phone_body(app: AppState, key: Key) -> AnyElement {
-    let sheet = sheet_of(app, key, true);
+    let sheet = sheet_of(app, key.clone(), true);
     let pager = computed(move || sheet.with(|s| (s.pager.clone(), s.next.clone())));
     let talk = computed(move || sheet.with(|s| s.thread.clone()));
     view()
-        .child(live(pager, move |(pager, next)| {
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(8.0))
-                .pl(px(18.0))
-                .pr(px(8.0))
-                .bg(color(Token::BgSunk))
-                .border_b_1()
-                .border_b_color(color(Token::Rule))
-                .children(pager.map(|pager| words(app, pager, 13.0, Token::Ink3)))
-                .child(view().flex_1())
-                .children(next.map(|next| {
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(2.0))
-                        .min_h(px(44.0))
-                        .px(px(10.0))
-                        .cursor_pointer()
-                        .role(AccessibilityRole::Button)
-                        .label(next.label.clone())
-                        .test_id("btn-next")
-                        .on_press(press(app, next.action.clone()))
-                        .active(|s| s.opacity(0.6))
-                        .focus_visible(ring)
-                        .child(
-                            words(app, next.label.clone(), 13.0, Token::Ink2)
-                                .font_weight(FontWeight::SEMIBOLD),
-                        )
-                        .child(icon(Icon::Chevron, 14.0, color(Token::Ink2)))
-                }))
-                .into_element()
+        .child(dynamic(move || {
+            if short_window() {
+                return None;
+            }
+            Some(untracked(|| {
+                live(pager, move |(pager, next)| pager_row(app, pager, next))
+            }))
         }))
         .child(main(app, sheet, Place::Narrow))
+        .child(verbs::row(app, key))
         .child(thread::sheet(app, talk))
         .into_element()
 }
 
+/// The upright phone's pager row: "1 of 5" quiet, Next with its chevron at the trailing edge.
+fn pager_row(app: AppState, pager: Option<String>, next: Option<inbox::Button>) -> AnyElement {
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .pl(px(18.0))
+        .pr(px(8.0))
+        .bg(color(Token::BgSunk))
+        .border_b_1()
+        .border_b_color(color(Token::Rule))
+        .children(pager.map(|pager| words(app, pager, 13.0, Token::Ink3)))
+        .child(view().flex_1())
+        .children(next.map(|next| {
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(2.0))
+                .min_h(px(44.0))
+                .px(px(10.0))
+                .cursor_pointer()
+                .role(AccessibilityRole::Button)
+                .label(next.label.clone())
+                .test_id("btn-next")
+                .on_press(press(app, next.action.clone()))
+                .active(|s| s.opacity(0.6))
+                .focus_visible(ring)
+                .child(
+                    words(app, next.label.clone(), 13.0, Token::Ink2)
+                        .font_weight(FontWeight::SEMIBOLD),
+                )
+                .child(icon(Icon::Chevron, 14.0, color(Token::Ink2)))
+        }))
+        .into_element()
+}
+
+/// The phone header's trailing controls. Held sideways, where the window is too short for a
+/// pager row, the pager comes up here: "1/5"-style position quiet, then Next as a 44 pt chevron
+/// named by its full label; then the Ask-about icon, always.
+pub(super) fn phone_trailing(app: AppState, key: Key) -> AnyElement {
+    let sheet = sheet_of(app, key.clone(), true);
+    let pager = computed(move || sheet.with(|s| (s.pager.clone(), s.next.clone())));
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(2.0))
+        .child(dynamic(move || {
+            if !short_window() {
+                return None;
+            }
+            Some(untracked(|| {
+                live(pager, move |(pager, next)| {
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .children(pager.map(|pager| {
+                            code(app, pager, 13.0, Token::Ink3)
+                                .number_of_lines(1u32)
+                                .pr(px(2.0))
+                        }))
+                        .children(next.map(|next| {
+                            view()
+                                .size(px(44.0))
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(10.0))
+                                .cursor_pointer()
+                                .role(AccessibilityRole::Button)
+                                .label(next.label.clone())
+                                .test_id("btn-next")
+                                .on_press(press(app, next.action.clone()))
+                                .active(|s| s.opacity(0.6))
+                                .focus_visible(ring)
+                                .child(icon(Icon::Chevron, 18.0, color(Token::Ink2)))
+                        }))
+                        .into_element()
+                })
+            }))
+        }))
+        .child(ask_icon(app, key))
+        .into_element()
+}
+
 /// The phone header's Ask-about control: the chat icon, a 44 pt target.
-pub(super) fn ask_icon(app: AppState, key: Key) -> AnyElement {
+fn ask_icon(app: AppState, key: Key) -> AnyElement {
     let ask = computed(move || {
         let env = app.env();
         with_source(app, |state, src| {
@@ -257,7 +363,8 @@ pub(super) fn ask_icon(app: AppState, key: Key) -> AnyElement {
 /// The focus page's head (`.pagehead`): back to Inbox and the pager, then the keys, Ask about
 /// this and Next at the trailing edge. Terminal: one row with a joined line under it, without
 /// the keys (the shell's key legend shows them): back, the whole pager, then Next, and Ask
-/// about this only on a wide grid, where it fits.
+/// about this only while the page holds the context column beside the bands (`term::beside`),
+/// where the row has room for it.
 pub(super) fn focus_head(app: AppState, key: Key) -> AnyElement {
     let sheet = sheet_of(app, key, true);
     let head = computed(move || {
@@ -276,6 +383,9 @@ pub(super) fn focus_head(app: AppState, key: Key) -> AnyElement {
     })
 }
 
+/// The head row. Desktop: when the window runs short the keys legend gives way first (whole,
+/// never cut; the palette and `?` list the same keys), and the controls never shrink, so Next
+/// stays whole at 900 pt.
 fn head_row(
     app: AppState,
     back: Option<inbox::Button>,
@@ -290,7 +400,7 @@ fn head_row(
             icon: icon_for(&model.action),
             ..ButtonOptions::default()
         };
-        if model.action == Action::Go(Destination::Inbox) {
+        let drawn = if model.action == Action::Go(Destination::Inbox) {
             button_with(
                 app,
                 model.label.clone(),
@@ -301,25 +411,34 @@ fn head_row(
             )
         } else {
             button_as(app, model, options)
-        }
+        };
+        view()
+            .flex_row()
+            .flex_shrink_0()
+            .child(drawn)
+            .into_element()
     };
     if form == Form::Terminal {
-        let whole = |item: AnyElement| view().flex_shrink_0().child(item).into_element();
         let leading: Vec<AnyElement> = back
             .iter()
-            .map(|back| whole(control(back)))
-            .chain(pager.map(|pager| whole(term::quiet(pager).into_element())))
+            .map(&control)
+            .chain(pager.map(|pager| {
+                view()
+                    .flex_shrink_0()
+                    .child(term::quiet(pager))
+                    .into_element()
+            }))
             .collect();
         let ask = ask.iter().map(|ask| {
             view()
                 .flex_row()
                 .flex_shrink_0()
-                .style_when(move || !term::wide(), |s| s.hidden())
+                .style_when(move || !term::beside(app, cells_of(SIDE)), |s| s.hidden())
                 .child(control(ask))
                 .child(term::space(2.0))
                 .into_element()
         });
-        let next = next.iter().map(|next| whole(control(next)));
+        let next = next.iter().map(&control);
         return view()
             .flex_none()
             .child(
@@ -339,11 +458,17 @@ fn head_row(
     let leading: Vec<AnyElement> = back
         .iter()
         .map(&control)
-        .chain(pager.map(|pager| words(app, pager, 12.0, Token::Ink3).into_element()))
+        .chain(pager.map(|pager| {
+            words(app, pager, 12.0, Token::Ink3)
+                .flex_shrink(1.0)
+                .min_w(px(0.0))
+                .truncate()
+                .into_element()
+        }))
         .collect();
     let trailing: Vec<AnyElement> = key_help
         .as_ref()
-        .map(|keys| keys_line(app, keys))
+        .map(|keys| give_way(keys_line(app, keys)))
         .into_iter()
         .chain(ask.iter().map(&control))
         .chain(next.iter().map(&control))
@@ -511,7 +636,7 @@ fn body(app: AppState, sheet: Memo<Sheet>, which: BandKind, place: Place) -> Any
         ),
         BandKind::Background => live(
             computed(move || sheet.with(|s| s.background.clone())),
-            move |part| background(app, part, place),
+            move |part| graph::background(app, part, place),
         ),
         BandKind::Assessment => live(
             computed(move || sheet.with(|s| s.assessment.clone())),
@@ -529,216 +654,5 @@ fn body(app: AppState, sheet: Memo<Sheet>, which: BandKind, place: Place) -> Any
             computed(move || sheet.with(|s| (s.history.clone(), s.history_empty))),
             move |(rows, none)| thread::history(app, rows, none),
         ),
-    }
-}
-
-/// The question as a lede (14 pt, 1.55; the phone's 15.5 pt), its deadline, the waits beside it
-/// (desktop inline) or under it, the answer's stamp under both.
-fn situation(app: AppState, part: Situation, place: Place) -> AnyElement {
-    let form = app.form;
-    let lede = match form {
-        Form::Phone => words(app, part.text, 15.5, Token::Ink).line_height(px(23.0)),
-        _ => words(app, part.text, 14.0, Token::Ink)
-            .line_height(px(21.7))
-            .max_w(px(640.0)),
-    };
-    let lede = view().child(lede).children(part.deadline.map(|deadline| {
-        view()
-            .mt(px(8.0))
-            .when(form == Form::Terminal, |v| v.child(term::blank()))
-            .child(rich_at(
-                app,
-                &deadline,
-                if form == Form::Phone { 13.5 } else { 12.5 },
-                color(Token::Ink2),
-            ))
-    }));
-    let waits_head = match form {
-        Form::Terminal => h3(app, part.waits_title, None),
-        _ => band_head(app, None, part.waits_title, None, Hue::Neutral),
-    };
-    let size = if form == Form::Phone { 13.0 } else { 12.5 };
-    let waits = view().child(waits_head).child(
-        view()
-            .mt(px(if form == Form::Desktop { 12.0 } else { 6.0 }))
-            .gap(px(4.0))
-            .children(part.waits.iter().map(|wait| wait_row(app, wait)))
-            .children(
-                part.waits_empty
-                    .map(|none| words(app, none, size, Token::Ink3)),
-            ),
-    );
-    let top = if place == Place::Wide && form == Form::Desktop {
-        view()
-            .flex_row()
-            .items_start()
-            .gap(px(22.0))
-            .child(view().flex_1().min_w(px(0.0)).child(lede))
-            .child(view().w(px(290.0)).flex_shrink_0().pt(px(2.0)).child(waits))
-    } else {
-        view().child(lede).child(
-            view()
-                .mt(px(14.0))
-                .when(form == Form::Terminal, |v| v.child(term::blank()))
-                .child(waits),
-        )
-    };
-    view()
-        .child(top)
-        .children(part.notice.map(|notice| {
-            view()
-                .mt(px(12.0))
-                .when(form == Form::Terminal, |v| v.child(term::blank()))
-                .child(stamped_notice(app, notice))
-        }))
-        .into_element()
-}
-
-/// One dependency: needs-you dot, not-yet mark or not-applicable mark, the id, the reason
-/// (quiet for the independent one).
-fn wait_row(app: AppState, wait: &WaitLine) -> AnyElement {
-    let form = app.form;
-    let lead = match wait.kind {
-        WaitKind::You => dot(app, Hue::You),
-        WaitKind::Plan => mark(app, Mark::Next, Hue::Neutral),
-        WaitKind::Info => mark(app, Mark::Na, Hue::Neutral),
-    };
-    let size = if form == Form::Phone { 13.0 } else { 12.5 };
-    let reason_ink = if wait.kind == WaitKind::Info {
-        Token::Ink3
-    } else {
-        Token::Ink
-    };
-    let (lead_w, id_w) = if form == Form::Terminal {
-        (term::cells(2.0), term::cells(7.0))
-    } else {
-        (px(14.0), px(54.0))
-    };
-    view()
-        .flex_row()
-        .items_center()
-        .gap(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
-        .child(view().w(lead_w).flex_shrink_0().items_center().child(lead))
-        .child(
-            view()
-                .w(id_w)
-                .flex_shrink_0()
-                .child(code(app, wait.id.clone(), size - 1.0, Token::Ink).truncate()),
-        )
-        .child(
-            words(app, wait.text.clone(), size, reason_ink)
-                .flex_1()
-                .min_w(px(0.0))
-                .line_height(px(size * 1.45)),
-        )
-        .into_element()
-}
-
-/// A notice that leads with its stamp: ANSWERED, ANSWERED ELSEWHERE, SENDING, UNKNOWN, REFUSED
-/// (`.notice` with a `.stamp`), on its hue's ground, its recovery control at the end.
-fn stamped_notice(app: AppState, notice: Notice) -> AnyElement {
-    let form = app.form;
-    let size = if form == Form::Phone { 13.5 } else { 12.5 };
-    let sentence =
-        view()
-            .flex_1()
-            .min_w(px(0.0))
-            .child(rich_at(app, &notice.body, size, color(Token::Ink)));
-    let retry = notice
-        .retry
-        .map(|retry| view().flex_row().flex_shrink_0().child(button(app, &retry)));
-    let row = view()
-        .flex_row()
-        .items_start()
-        .children(notice.stamp.map(|label| stamp(app, label, notice.hue)));
-    if form == Form::Terminal {
-        return row
-            .child(term::space(1.0))
-            .child(sentence)
-            .children(retry.map(|retry| view().flex_row().child(term::space(2.0)).child(retry)))
-            .into_element();
-    }
-    row.gap(px(10.0))
-        .px(px(14.0))
-        .py(px(10.0))
-        .rounded(px(if form == Form::Phone { 10.0 } else { 8.0 }))
-        .bg(hue_fill(notice.hue))
-        .child(sentence)
-        .children(retry)
-        .into_element()
-}
-
-/// The task's goal and place: goal and plan line beside the mini graph (desktop inline), or the
-/// graph under them; without a graph the words alone. Loading: placeholder bars and the
-/// lazy-detail note. Absent: what is not recorded.
-fn background(app: AppState, part: Background, place: Place) -> AnyElement {
-    let form = app.form;
-    match part {
-        Background::Loading {
-            skeleton_count,
-            note,
-        } => view()
-            .label("Loading")
-            .gap(px(8.0))
-            .child(skeleton(
-                app,
-                &PLACE_BARS[..usize::from(skeleton_count).min(PLACE_BARS.len())],
-            ))
-            .child(illus(app, note))
-            .into_element(),
-        Background::Absent { note } => words(
-            app,
-            note,
-            if form == Form::Phone { 14.0 } else { 12.5 },
-            Token::Ink3,
-        )
-        .into_element(),
-        Background::Ready {
-            goal,
-            plan_line,
-            graph: mini,
-        } => {
-            let plan_line: Rich = plan_line.into_iter().map(|run| run.dim()).collect();
-            let goal_size = if form == Form::Phone { 14.5 } else { 12.5 };
-            let words_part = view()
-                .gap(px(8.0))
-                .when(!goal.is_empty(), |v| {
-                    v.child(rich_at(app, &goal, goal_size, color(Token::Ink2)).max_w(px(620.0)))
-                })
-                .when(!plan_line.is_empty(), |v| {
-                    v.child(rich_at(
-                        app,
-                        &plan_line,
-                        if form == Form::Phone { 13.0 } else { 12.0 },
-                        color(Token::Ink3),
-                    ))
-                });
-            let Some(mini) = mini else {
-                return words_part.into_element();
-            };
-            if place == Place::Wide && form == Form::Desktop {
-                return view()
-                    .flex_row()
-                    .items_start()
-                    .gap(px(22.0))
-                    .child(view().flex_1().min_w(px(0.0)).child(words_part))
-                    .child(
-                        view()
-                            .w(px(300.0))
-                            .flex_shrink_0()
-                            .child(graph::mini(app, mini)),
-                    )
-                    .into_element();
-            }
-            view()
-                .child(words_part)
-                .child(
-                    view()
-                        .mt(px(12.0))
-                        .when(form == Form::Terminal, |v| v.child(term::blank()))
-                        .child(graph::mini(app, mini)),
-                )
-                .into_element()
-        }
     }
 }

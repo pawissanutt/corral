@@ -5,17 +5,26 @@
 //! and connection branches; the renderer only supplies presentation and dispatches [`Action`]
 //! through [`State::act`] (fixture) or [`State::act_live`] (served).
 
+mod attention;
+mod context;
+#[cfg(test)]
+mod context_tests;
 mod data;
 mod evidence;
 mod list;
 mod live;
+mod live_background;
 mod live_evidence;
 mod live_list;
 mod live_notice;
 mod live_sheet;
+mod provenance;
 mod sheet;
+mod sheet_types;
 mod view;
 
+pub use attention::{AttentionLine, attention_counts, attention_line, owner_moves};
+pub use context::{question_context_refs, question_dependencies};
 pub use data::*;
 pub use evidence::assessment;
 pub use list::*;
@@ -23,6 +32,7 @@ pub use live::{
     Desk, Draft, Sent, can_answer, choice, clock, is_open, is_question, ordered, question_detail,
     question_ref, question_state as served_state, reply_value, selected, target,
 };
+pub use provenance::{provenance, via_name};
 pub use sheet::*;
 pub use view::*;
 
@@ -317,10 +327,10 @@ impl State {
         } else {
             self.status = Status::Mine;
             vec![Effect::Toast(format!(
-                "Answered {} · option {} · actor=owner {}",
+                "Answered {} · option {} · you on {}",
                 Q.key,
                 self.choice + 1,
-                env.via()
+                env.device()
             ))]
         }
     }
@@ -334,7 +344,7 @@ impl State {
     /// Preserve the source's illustrative send action without inventing thread persistence.
     pub fn send_thread(&mut self) -> Vec<Effect> {
         vec![Effect::Toast(
-            "Sent to worker T-868 · posted to the question thread · actor=owner".into(),
+            "Sent to worker T-868 · posted to the question thread by you".into(),
         )]
     }
 

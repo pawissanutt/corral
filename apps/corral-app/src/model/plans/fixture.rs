@@ -266,6 +266,7 @@ fn awaiting(env: Env) -> AwaitingView {
     let doc = &super::DOCUMENT;
     AwaitingView {
         header: Header {
+            plan: None,
             chips: vec![
                 Chip {
                     label: "needs you".into(),
@@ -322,6 +323,7 @@ fn executing(state: &State, p: &Plan, env: Env) -> ExecutingView {
     let n = p.scenarios.unwrap_or(0);
     ExecutingView {
         header: Header {
+            plan: None,
             chips: vec![Chip {
                 label: "executing".into(),
                 hue: Hue::Corral,
@@ -465,6 +467,7 @@ pub fn scale(_state: &State, env: Env) -> ScaleView {
         .count();
     ScaleView {
         header: Header {
+            plan: None,
             chips: vec![Chip {
                 label: "executing".into(),
                 hue: Hue::Corral,
@@ -533,8 +536,6 @@ pub fn phone_page(state: &State, env: Env) -> PhonePage {
         } else {
             p.id.into()
         },
-        back_label: "Plans",
-        back: crate::model::effect::Effect::Back,
         right: executing.then(|| Button::new("Ask about this", Action::Ask(p.id))),
         right_label: executing.then_some("Ask the assistant about this plan"),
         detail: detail(

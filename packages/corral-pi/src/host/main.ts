@@ -42,6 +42,7 @@ import { connectionRules, isApiConnection } from "../auth/connections.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
 import { errorPresenter } from "../ui/error-copy.ts";
 import { RemoteOwner } from "./remote-owner.ts";
+import { summaryOptions } from "./summary.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -64,6 +65,7 @@ export async function runHost(config: HostConfig, overrides: {
   const provider = config.provider ?? "openai-codex";
   const connection = admitConnection(provider, config.binding, true);
   restrictEnvironment(process.env, provider);
+  if (config.summary?.provider === "amazon-bedrock") restrictEnvironment(process.env, "amazon-bedrock");
   exportAssistantSession(process.env, config.identity);
   const compat = readCompat(config.assets);
   if (compiledBundle()) checkCompiledRuntime(compat);
@@ -100,11 +102,14 @@ export async function runHost(config: HostConfig, overrides: {
           ? [new URL(server.url).origin] : []),
       send: rawFetch,
     } : undefined);
-  if (aws) {
+  const summary = await summaryOptions(config, modules, rawFetch);
+  if (aws || summary?.awsRoute) {
     const { installSocketTripwire } = await import("./smithy.ts");
     installSocketTripwire((destination) => network.refuse?.(destination) ?? new NetworkRefused(destination));
   }
-  globalThis.fetch = network.fetch as typeof globalThis.fetch;
+  globalThis.fetch = summary?.awsRoute ? guardedFetch(rawFetch, undefined, providers,
+    [...(rules ?? providers.flatMap(id => hostRules(id))), ...summary.rules]).fetch as typeof globalThis.fetch
+    : network.fetch as typeof globalThis.fetch;
   // An unusable profile or an expired SSO session stops the host here, before any session exists.
   if (aws) await aws.resolver.get();
   const sdk = await import("@earendil-works/pi-coding-agent");
@@ -130,6 +135,8 @@ export async function runHost(config: HostConfig, overrides: {
     ...(config.binding ? { binding: config.binding } : {}),
     ...(config.daemonHosted ? { daemonHosted: true, ui: "plain" as const } : {}),
     ...(config.effort ? { effort: config.effort } : {}),
+    quickSummary: config.quickSummary,
+    ...(summary ? { summary } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
     ...(config.memoryFile ? { memoryFile: config.memoryFile } : {}),
     ...(!config.daemonHosted && config.ui ? { ui: config.ui } : {}),

@@ -91,6 +91,7 @@ fn fixed_task_rails_remain_valid_on_every_page() -> Result<()> {
         owner_next: None,
         hold: None,
         park: None,
+        park_revision: None,
         artifacts: (0..1000)
             .map(|index| ArtifactRef {
                 source_ref: format!("T-1:R1:{index}"),
@@ -132,6 +133,7 @@ fn large_annotation_preserves_all_messages_with_same_canonical_identity() -> Res
         base: None,
         state: "review".into(),
         verdicts: vec![],
+        gates: vec![],
         files: vec![],
         report: None,
         acceptance: vec![],
@@ -352,7 +354,7 @@ fn live_terminal_fixture() -> Result<(tempfile::TempDir, Ctx, String)> {
         &bin,
         concat!(
             "#!/bin/sh\n",
-            "[ \"$*\" = '--session terminal-fixture pane read pane-live --source visible --format ansi' ] || exit 70\n",
+            "[ \"$*\" = '--session terminal-fixture pane read pane-live --source recent-unwrapped --lines 200 --format ansi' ] || exit 70\n",
             "dir=$(dirname \"$0\")\n",
             "printf called > \"$dir/probed\"\n",
             "cat \"$dir/screen\"\n",

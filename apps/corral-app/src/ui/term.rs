@@ -38,8 +38,11 @@ const SIDEBAR_WIDE_COLUMNS: f32 = 32.0;
 const SIDEBAR_COLUMNS: f32 = 24.0;
 /// The content frame's two lines.
 const FRAME_COLUMNS: f32 = 2.0;
-/// The least a detail keeps beside its list; on a narrower page the list stacks above it.
-const DETAIL_COLUMNS: f32 = 40.0;
+/// The least a detail keeps beside its list; on a narrower page the list stacks above it. Under
+/// this a review's numbered diff lines keep under 30 Cells of code; so on the classic 80-column
+/// grid (68 Cells of page beside the rail) every list-and-detail page stacks, while at 120 they
+/// all sit beside their details.
+const DETAIL_COLUMNS: f32 = 44.0;
 /// On a wide page a list grows to this share of it, up to `LIST_MAX_COLUMNS`, so its names stop
 /// being cut while the detail has more room than it can use.
 const LIST_SHARE: f32 = 0.4;
@@ -692,12 +695,28 @@ mod tests {
     /// The natural list widths of the terminal's list-and-detail pages (Review, Plans, Inbox,
     /// Now), in Cells.
     const LISTS: [f32; 4] = [25.0, 32.0, 33.0, 44.0];
+    /// The lists that stack below `beside`'s width (Review, Plans, Inbox); Now lays out its own
+    /// panes.
+    const STACKING_LISTS: [f32; 3] = [25.0, 32.0, 33.0];
 
     #[test]
     fn sidebar_folds_on_an_eighty_column_grid() {
         assert!(folds(80));
         assert!(folds(100));
         assert!(!folds(WIDE_COLUMNS as usize));
+    }
+
+    /// TT-13: at 80 columns a list used to be left out, its detail alone across the page, so
+    /// `j`/`k` moved an unseen selection. Every list now stacks there, and sits beside its
+    /// detail on the 120-column grid with the full sidebar.
+    #[test]
+    fn lists_stack_on_eighty_columns_and_sit_beside_on_one_hundred_twenty() {
+        let narrow = page_room(80, sidebar_width(true, is_wide(80)), false);
+        let wide = page_room(120, sidebar_width(false, is_wide(120)), false);
+        for list in STACKING_LISTS {
+            assert!(!holds_beside(narrow, list), "list {list} beside at 80");
+            assert!(holds_beside(wide, list), "list {list} stacked at 120");
+        }
     }
 
     #[test]

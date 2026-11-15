@@ -8,7 +8,7 @@ use nsh_core::prelude::*;
 use crate::model::Form;
 use crate::model::assistant::{
     Action, ActionCard, ActionOutcome, AskUserCard, Button, Chip, DiffLine, Editing, FILED_LABELS,
-    FiledCard, LABELS, MergeInput, MergedCard, PermissionCard, SavedCard,
+    FiledCard, LABELS, MergeInput, MergedCard, PermissionCard, SavedCard, TextReply,
 };
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
@@ -162,8 +162,8 @@ fn receipt(app: AppState, outcome: &ActionOutcome) -> AnyElement {
 }
 
 /// The ask_user card (`.askuser`): who asks and when, the question, the options with their
-/// consequences (the recorded one outlined in ink; an open one answers it when pressed), and how
-/// it was answered.
+/// consequences (the recorded one outlined in ink; an open one answers it when pressed), the
+/// field for the owner's own words when the question takes them, and how it was answered.
 pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
     let form = app.form;
     let options = card.options.iter().enumerate().map(|(at, option)| {
@@ -241,12 +241,36 @@ pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
     let mut parts = vec![
         asks_head(app, &card.heading, None),
         rich(app, &card.question),
-        options.into_element(),
     ];
+    // A question that takes only the owner's own words has no options row.
+    if !card.options.is_empty() {
+        parts.push(options.into_element());
+    }
+    if let Some(reply) = &card.reply {
+        parts.push(text_reply(app, reply));
+    }
     if let Some(answer) = &card.answer {
         parts.push(rich_small(app, answer));
     }
     frame(app, Edge::Asks, true, parts)
+}
+
+/// The question's own-words answer: the field, then Send, which reads the field when pressed;
+/// Enter in the field sends too while Send is enabled.
+fn text_reply(app: AppState, reply: &TextReply) -> AnyElement {
+    let typed = signal(reply.value.clone());
+    let submit = reply.send.enabled.then(|| reply.send.action.clone());
+    let entry = field(app, reply.value.clone(), reply.label, Some(typed), submit);
+    view()
+        .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
+        .child(entry)
+        .child(typed_row(
+            app,
+            std::slice::from_ref(&reply.send),
+            typed,
+            8.0,
+        ))
+        .into_element()
 }
 
 /// The head of a card that asks (`.askuser .hd`): the needs-you dot, the heading, a chip at the
@@ -442,12 +466,13 @@ pub fn filed(app: AppState, card: &FiledCard) -> AnyElement {
         Editing::No => words(app, idea.title.clone(), value_size, Token::Ink)
             .font_weight(FontWeight::BOLD)
             .into_element(),
-        Editing::Fixture => field(app, idea.title.clone(), FILED_LABELS.title, None),
+        Editing::Fixture => field(app, idea.title.clone(), FILED_LABELS.title, None, None),
         Editing::Title => field(
             app,
             idea.title.clone(),
             FILED_LABELS.title,
             Some(title_text),
+            None,
         ),
     };
     let project = if card.editing == Editing::Fixture {
@@ -483,7 +508,7 @@ pub fn filed(app: AppState, card: &FiledCard) -> AnyElement {
         .gap(px(if form == Form::Terminal { 0.0 } else { 3.0 }))
         .children(idea.criteria.iter().enumerate().map(|(at, criterion)| {
             let entry = if card.editing == Editing::Fixture {
-                field(app, criterion.clone(), FILED_LABELS.criteria, None)
+                field(app, criterion.clone(), FILED_LABELS.criteria, None, None)
             } else {
                 words(app, criterion.clone(), value_size, Token::Ink).into_element()
             };
@@ -556,8 +581,8 @@ pub fn filed(app: AppState, card: &FiledCard) -> AnyElement {
     frame(app, Edge::Plain, true, parts)
 }
 
-/// Model buttons in a wrapping row, those whose command carries typed text (Save, Merge) reading
-/// it from `typed` when pressed rather than when drawn.
+/// Model buttons in a wrapping row, those whose command carries typed text (Save, Merge, a
+/// question's own-words answer) reading it from `typed` when pressed rather than when drawn.
 fn typed_row(app: AppState, buttons: &[Button], typed: Signal<String>, gap: f32) -> View {
     let terminal = app.form == Form::Terminal;
     let base = view().flex_row().flex_wrap().items_center();
@@ -568,7 +593,7 @@ fn typed_row(app: AppState, buttons: &[Button], typed: Signal<String>, gap: f32)
             parts.push(term::space(2.0));
         }
         parts.push(match &button.action {
-            Action::SaveIdea { .. } | Action::MergeInto { .. } => {
+            Action::SaveIdea { .. } | Action::MergeInto { .. } | Action::AnswerText { .. } => {
                 let action = button.action.clone();
                 button_with(
                     app,
@@ -603,6 +628,11 @@ fn with_text(action: &Action, text: String) -> Action {
             task: task.clone(),
             into: text,
         },
+        Action::AnswerText { key, rev, .. } => Action::AnswerText {
+            key: key.clone(),
+            rev: *rev,
+            text,
+        },
         other => other.clone(),
     }
 }
@@ -610,7 +640,7 @@ fn with_text(action: &Action, text: String) -> Action {
 /// The merge destination (`.einput`) and Merge and Cancel; Merge sends the typed task id.
 fn merge_field(app: AppState, merge: &MergeInput, into: Signal<String>) -> AnyElement {
     let form = app.form;
-    let entry = field(app, String::new(), "Merge into task id", Some(into));
+    let entry = field(app, String::new(), "Merge into task id", Some(into), None);
     view()
         .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
         .child(label_value(app, "Merge into", entry))
@@ -618,14 +648,16 @@ fn merge_field(app: AppState, merge: &MergeInput, into: Signal<String>) -> AnyEl
         .into_element()
 }
 
-/// An editable field of the filed card (`.einput`): words on the sunken ground in the focus
-/// line. The fixture's fields keep their text until Save or Cancel leaves the edit state; a live
-/// field writes what is typed into `bound`, which the command reads when sent.
+/// An editable field of a card (`.einput`): words on the sunken ground in the focus line. The
+/// fixture's fields keep their text until Save or Cancel leaves the edit state; a live field
+/// writes what is typed into `bound`, which the command reads when sent, and Enter sends
+/// `submit` with the typed words when one is given.
 fn field(
     app: AppState,
     value: String,
     label: &'static str,
     bound: Option<Signal<String>>,
+    submit: Option<Action>,
 ) -> AnyElement {
     let form = app.form;
     // NSH's web host puts `label` on the field's wrapper, not on the input a screen reader
@@ -641,6 +673,12 @@ fn field(
         .selection_color(move || for_appearance(color(Token::Sel)));
     let entry = match bound {
         Some(bound) => entry.on_change(move |text: &str| bound.set(text.to_owned())),
+        None => entry,
+    };
+    let entry = match submit {
+        Some(action) => {
+            entry.on_submit(move |typed: &str| act(app, with_text(&action, typed.to_owned())))
+        }
         None => entry,
     };
     match form {

@@ -7,9 +7,11 @@
 
 use nsh_core::prelude::*;
 
-use crate::model::{Form, Hue, Rich};
+use crate::model::health::{ConnectionBanner, connection_banner, daemon_connection_banner};
+use crate::model::{DataState, Form, Hue, Rich, Tone};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::marks::{hue_fill, hue_ink};
 use crate::ui::kit::text::{rich, rich_small};
 use crate::ui::term;
@@ -168,27 +170,28 @@ pub fn empty(
 /// The loading skeleton (`.skel`): one bar per `(width, height)`, the width a fraction of the
 /// row (0.4 is 40 %), the height in desktop points (10 is a text line). Desktop and phone:
 /// radius 4 bars in the rule colour (surface-2 barely parted from the page), 8 pt apart,
-/// pulsing slowly (not under reduced motion). Terminal: bands a whole number of rows high (one
-/// per 16 points), no pulse. Hidden from screen readers, which hear the container's label
-/// "Loading"; test_id "skeleton". For the placeholder of a cell or a row among others; a
-/// region whose whole content is loading uses [`loading`], which says so.
+/// pulsing slowly (not under reduced motion). Terminal: rows of `░` a whole number of rows high
+/// (one per 16 points), no pulse: a terminal may draw no bands, and a text capture never does, so
+/// a band alone left a loading pane blank. Hidden from screen readers, which hear the
+/// container's label "Loading"; test_id "skeleton". For the placeholder of a cell or a row among
+/// others; a region whose whole content is loading uses [`loading`], which says so.
 pub fn skeleton(app: AppState, bars: &[(f32, f32)]) -> AnyElement {
     let form = app.form;
     let bars = bars.iter().map(|&(width, height)| {
-        let bar = view()
-            .w(relative(width.clamp(0.0, 1.0)))
-            .accessibility_elements_hidden(true);
+        let width = relative(width.clamp(0.0, 1.0));
         if form == Form::Terminal {
-            return bar
-                .bg(color(Token::Surface2))
-                .h(term::rows((height / 16.0).round().max(1.0)))
+            return term::shade((height / 16.0).round().max(1.0) as usize)
+                .w(width)
                 .into_element();
         }
         let pulse = motion().entering(
             MotionSpec::new(KeyframeTiming::new(PULSE_MS).infinite())
                 .values(MotionChannel::Opacity, [1.0, 0.55, 1.0]),
         );
-        bar.bg(color(Token::Rule))
+        view()
+            .w(width)
+            .accessibility_elements_hidden(true)
+            .bg(color(Token::Rule))
             .h(px(height))
             .rounded(px(4.0))
             .bind_motion(&pulse)
@@ -233,6 +236,62 @@ pub fn loading(app: AppState, caption: impl Into<SharedString>, bars: &[(f32, f3
         .child(skeleton(app, bars))
         .child(words)
         .into_element()
+}
+
+/// The connection banner over the page while the connection is degraded, down or offline;
+/// nothing while it is healthy or on the relay, nor without a connection, where the health line
+/// and each page already say so. Its buttons run the model's effects (Details, Diagnostics and
+/// Queue open Settings › Connection; Restart corrald answers with a toast); the phone's has
+/// none. The desktop and terminal shells mount it over the page; on the phone it sits under the
+/// page's large title ([`super::page::head`]). Buttons "btn-<label>".
+pub fn connection(app: AppState) -> AnyElement {
+    let shown = computed(move || match app.data.get() {
+        DataState::Daemon => app
+            .feed
+            .with(|feed| daemon_connection_banner(feed, app.form)),
+        DataState::Fixture => connection_banner(app.env().conn, app.form),
+        DataState::Disconnected => None,
+    });
+    dynamic(move || {
+        let shown = shown.get()?;
+        Some(untracked(move || connection_face(app, shown)))
+    })
+}
+
+fn connection_face(app: AppState, shown: ConnectionBanner) -> AnyElement {
+    let ConnectionBanner {
+        tone,
+        text,
+        buttons,
+    } = shown;
+    let actions = buttons
+        .into_iter()
+        .map(|item| {
+            let effect = item.effect;
+            button(
+                app,
+                item.label,
+                if item.quiet {
+                    ButtonKind::Quiet
+                } else {
+                    ButtonKind::Ghost
+                },
+                format!("btn-{}", item.label.to_lowercase().replace(' ', "-")),
+                move || app.run(vec![effect.clone()]),
+            )
+        })
+        .collect();
+    banner(app, tone_hue(tone), &text, actions)
+}
+
+/// The banner's tone as a hue: warn is held, failure fails, the offline notice plain.
+fn tone_hue(tone: Tone) -> Hue {
+    match tone {
+        Tone::Ok => Hue::Ok,
+        Tone::Warn => Hue::Held,
+        Tone::Fail => Hue::Fail,
+        Tone::Muted => Hue::Neutral,
+    }
 }
 
 /// The connection banner (`.conn-banner`): a strip across the top of the page saying how the

@@ -5,7 +5,13 @@ mod core;
 mod credentials;
 #[cfg(not(target_arch = "wasm32"))]
 mod driver;
+mod durable;
+#[cfg(not(target_arch = "wasm32"))]
+mod durable_native;
+#[cfg(target_arch = "wasm32")]
+mod durable_web;
 mod map;
+mod offline;
 mod outbox;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod pairing_link;
@@ -18,6 +24,9 @@ mod socket;
 mod transport;
 #[cfg(target_arch = "wasm32")]
 mod web;
+#[cfg(test)]
+#[path = "web/source_tests.rs"]
+mod web_source_tests;
 
 pub const PAIRED_KEY: &str = "corral.paired";
 
@@ -38,7 +47,7 @@ pub fn pairing_link() -> Result<Option<String>, &'static str> {
     }
 }
 
-/// Whether a native endpoint or a persisted browser pairing is configured.
+/// Whether a native endpoint exists, or browser credential probing is supported.
 pub fn configured() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -46,16 +55,44 @@ pub fn configured() -> bool {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        nsh_core::storage::Storage::get_item(PAIRED_KEY).as_deref() == Some("1")
+        true
     }
 }
 
-/// Start once under the app owner; no task, thread or I/O when unconfigured.
+/// Start once under the app owner; load authenticated cached data before dialing.
 pub fn start(feed: nsh_core::prelude::Signal<crate::model::daemon::Feed>) {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(socket) = socket::resolve(std::env::var_os("CORRAL_SOCKET")) {
-        driver::start(feed, socket);
-    }
+    driver::start(
+        feed,
+        socket::resolve(std::env::var_os("CORRAL_SOCKET"))
+            .unwrap_or_else(|| Err("No daemon socket configured.".into())),
+    );
     #[cfg(target_arch = "wasm32")]
     web::start(feed);
+}
+
+pub fn push_supported() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Reflect::has(
+            &js_sys::global(),
+            &wasm_bindgen::JsValue::from_str("PushManager"),
+        )
+        .unwrap_or(false)
+    }
+}
+
+pub fn page_origin() -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        None
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window().and_then(|window| window.location().origin().ok())
+    }
 }

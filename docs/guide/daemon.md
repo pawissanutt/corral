@@ -52,7 +52,7 @@ Other listener failures drain and exit nonzero so the service manager can restar
 ## Enrolled app connections
 
 Native apps use the existing peer-UID-checked Unix socket and enrol a device with
-`device.v1`. Browsers need the optional `127.0.0.1` listener, off by default:
+`device.v1`. Browsers need the optional app listener, off by default:
 
 ```toml
 [daemon]
@@ -60,12 +60,13 @@ listen = "127.0.0.1:7841"
 web_origins = ["http://127.0.0.1:8790"]
 ```
 
-Both values are read at daemon startup; edits require a restart. Origins match exactly,
-never as wildcards. HTTPS origins and HTTP loopback origins are supported; paths and
-insecure non-loopback origins are invalid. No public bootstrap endpoint or plaintext
-WebSocket-to-Unix proxy is exposed.
+These values are read at daemon startup; edits require a restart. Origins match exactly,
+never as wildcards. HTTPS origins and HTTP loopback origins are supported; paths,
+credentials and insecure non-loopback origins are invalid. Every WebSocket still requires
+pinned Noise IK (IKpsk2 during pairing); there is no plaintext application protocol or
+WebSocket-to-Unix proxy.
 
-- `corral device pair`: offer a short-lived local pairing link (raw-code fallback),
+- `corral device pair`: offer a short-lived pairing link suitable for QR encoding (raw-code fallback),
   wait for the browser's explicit Pair action, then confirm only if its six-digit
   code matches. Settings › Devices in an enrolled native app offers the same flow.
 - `corral device list [--json]`: list native/browser records, including revoked ones.
@@ -78,12 +79,42 @@ At most four offers/claims and eight app connections are live; the total connect
 cap remains 64. Sessions renew after one hour or 2^20 encrypted messages.
 The device registry is bounded to 256 records including revoked devices.
 
-The pairing format carries a port, not a network host; `daemon.listen` therefore
-accepts only `127.0.0.1:<port>`. Other IPv4 loopback addresses and IPv6 binds are refused
-rather than producing unusable offers. The short-lived code is carried in the app URL's
-fragment (`#corral-pair=…`), never a query/path. The browser clears that fragment before
-pairing and still requires explicit Pair and trusted-side confirmation. No LAN endpoint
-is enabled.
+`listen` accepts one explicit numeric unicast interface, including IPv6, LAN or a Tailscale
+address. Hostnames, unspecified/wildcard and multicast binds are refused. Omitting it opens
+no TCP port; the existing Unix socket is unchanged. Binding a remote interface is an
+explicit opt-in, not discovery or firewall configuration. Keep the listener on an interface
+whose exposure you intend; use the host firewall to restrict access.
+
+Remote **browsers need HTTPS for the app and WSS for its carrier**, even though Noise
+already encrypts application frames. WebCrypto needs a secure context; HTTP-delivered app
+code can be rewritten, and an HTTPS page cannot open an insecure LAN WebSocket. Put a
+trusted TLS reverse proxy (or Tailscale Serve with HTTPS enabled) in front of the listener
+and set the externally reachable WebSocket base URL:
+
+```toml
+[daemon]
+listen = "100.64.0.2:7841"
+web_endpoint = "wss://workstation.tailnet.ts.net"
+web_origins = ["https://corral.example"]
+```
+
+The proxy forwards `/v1/session` and `/v1/pair/<id>` as WebSocket upgrades to the exact
+configured address, preserving the browser's `Origin` header. Serve the packaged app at
+the allow-listed HTTPS origin. TLS certificates, DNS and proxy deployment are operator
+prerequisites, not supplied by `corrald`. Do not rewrite Origin to bypass admission.
+For a same-host TLS terminator, keep `listen = "127.0.0.1:7841"` instead. Noise remains
+end-to-end through that terminator; it never gets daemon/device private keys.
+
+Pairing on a remote listener refuses until `web_endpoint` is configured. Offers include
+`reach` hints and a version-2 remote code containing the WSS endpoint; ordinary IPv4
+loopback offers retain version-1 codes. The app URL carries the code in its fragment (`#corral-pair=…`),
+never a query/path. The browser clears the fragment before pairing and still requires an
+explicit Pair and trusted-side matching-code confirmation. A QR is just that same URL,
+not additional authority. Device listings include coarse `last_seen` and the last
+authenticated `reach`; `app.session` reports the current connection's reach. This is the
+daemon-observed final hop (a local TLS terminator appears as loopback), not a claim to
+detect a VPN or a proxy's remote peer. Last seen is refreshed at most once a minute and
+is not an online-presence promise.
 
 Public device records and owner-attributed enrol/pair/revoke events live in the
 workspace store. The daemon's static key does not: it is a private `0600`
@@ -94,6 +125,64 @@ Enrolled WebSocket sessions negotiate typed app subscriptions, detail pages, ass
 chat and permitted actions. Device authority, canonical revisions and confirmations
 are checked on the daemon. Newly enrolled native devices and paired browsers have all authority flags, including `admin` and `assistant_act`, editable per device. Generic CLI commands, opaque CLI reads, nudges and shutdown
 remain refused on this carrier. Existing CLI executable/build checks are unchanged.
+
+### Opt-in Web Push
+
+Web Push is supported for paired browsers with service workers and notification permission.
+It is off by default, separately for each device. Generate a private P-256 VAPID PEM outside
+the workspace (never commit it), then configure a contact and exact HTTPS push-service
+origins. For example, a Firefox subscription uses Mozilla's push service:
+
+```sh
+umask 077
+openssl ecparam -name prime256v1 -genkey -noout -out "$HOME/.local/state/corral/vapid.pem"
+```
+
+```toml
+[daemon.push]
+vapid_private_key = "/home/owner/.local/state/corral/vapid.pem"
+subject = "mailto:owner@example.com"
+origins = ["https://updates.push.services.mozilla.com"]
+```
+
+The key must be an absolute-path private regular file (0600); restart the daemon after
+changing these settings. Add only the exact push-service origin your browser actually
+returns (for example `https://fcm.googleapis.com` or `https://web.push.apple.com`).
+Non-HTTPS and unlisted subscription endpoints are refused; the sender does not follow
+redirects and bounds each HTTP request to five seconds.
+
+In browser Settings › Notifications, explicitly enable push and choose kinds:
+needs-you, plan awaiting acceptance, stuck, escalated, or daemon unhealthy. Permission
+is requested from that gesture. The paired, authenticated device stores its own
+subscription and filters through `push.subscribe`; `push.unsubscribe` deletes it.
+Other devices cannot replace it. Revoking a device removes its subscription and prevents
+future sends; an already accepted/in-flight content-free notification may still arrive.
+
+The worker is the app's shipped wasm-bindgen JS module, registered with module scope
+inside its own directory, not a root-scope cache/proxy. Host the scripts on the app's
+same origin; a cross-origin `--asset-url` CDN cannot host this worker. Browser/platform
+restrictions still apply (including installed-web-app requirements on iOS).
+Notifications say only “Corral: Something needs you”; no task ids, titles, text, kinds
+or counts go to the notification service. RFC 8291 ECE encrypts the fixed payload and
+VAPID authenticates the daemon. Opening a notification focuses/opens the app; it must
+reconnect through Noise to fetch facts or act.
+
+The daemon watches the shared canonical Inbox projection only while opted-in subscriptions
+exist. Open owner moves, not fixture counts or PM/worker waits, trigger a push; identical
+attention sets are suppressed. Sends are reserved durably and limited to one per device
+per minute, with a five-minute TTL and one collapse topic. `last_delivered` means the
+push service accepted the message, **not proof the browser displayed or read it**.
+Failures remain visible through `push.status`; endpoint URLs and key material never
+appear in that response or events.
+
+This is not a relay: the browser must still reach the configured Noise endpoint when
+opened. Web Push depends on the browser vendor's external push service and network
+availability. It can announce degradation while corrald runs; a stopped daemon cannot
+send its own “unreachable” notification. That requires an independently hosted dead-man
+service. Native APNs/FCM app tokens, publisher credentials, ticket-authenticated rendezvous,
+outbound daemon multiplexing and hosted TLS are not supplied by this direct-listener
+implementation.
+
 
 Typed app topics publish coherent Store snapshots even if another writer commits
 while they are read; the next refresh catches up. Lease and command-journal

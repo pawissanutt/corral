@@ -102,11 +102,19 @@ fn meta(state: &State, feed: &Feed, row: &InboxRow, status: Option<QuestionState
             if from_this_device(feed, None, via) {
                 format!("answered by you {}", clock(at, feed.now))
             } else {
-                format!("answered by {by} via {via} {}", clock(at, feed.now))
+                format!(
+                    "answered by {} {}",
+                    super::provenance(feed, by, None, via),
+                    clock(at, feed.now)
+                )
             }
         }
         (InboxState::Answered { by, via, at }, _) => {
-            format!("answered by {by} via {via} {}", clock(at, feed.now))
+            format!(
+                "answered by {} {}",
+                super::provenance(feed, by, None, via),
+                clock(at, feed.now)
+            )
         }
         (InboxState::Cancelled, _) => "cancelled".into(),
         (InboxState::Expired, _) => "expired".into(),
@@ -181,6 +189,7 @@ fn item(state: &State, feed: &Feed, row: &InboxRow, chosen: Option<&str>, env: E
         heading.push(span(" · in pane").dim());
     }
     NeedYouItem {
+        attention: super::attention_line(row),
         test_id: format!("inbox-{}", row.id),
         lead,
         id,
@@ -264,6 +273,7 @@ pub fn list(state: &State, feed: &Feed, env: Env) -> InboxList {
         return InboxList::Loading {
             skeleton_count: if phone(env) { 2 } else { 5 },
             blocks_per_item: if phone(env) { 3 } else { 2 },
+            caption: super::LOADING_LIST,
         };
     }
     let rows = ordered(feed);
@@ -315,16 +325,12 @@ pub fn list(state: &State, feed: &Feed, env: Env) -> InboxList {
             }
         })
         .collect();
-    let unseen = if feed.changes_head > 0 {
-        feed.changes_head.saturating_sub(through)
-    } else {
-        feed.changes.keys().filter(|seq| **seq > through).count() as u64
-    };
+    let unseen = crate::model::work::unseen_count(feed);
     InboxList::Ready {
         label: "Inbox",
         error,
         needs_title: "Needs you",
-        needs_count: items.len(),
+        needs_count: super::attention_counts(feed).inbox as usize,
         items,
         empty,
         since_title: match (&visited, phone(env)) {
@@ -332,13 +338,14 @@ pub fn list(state: &State, feed: &Feed, env: Env) -> InboxList {
             _ => "Since your last visit".into(),
         },
         last_visit: visited,
-        changes_count: unseen,
+        changes_count: unseen.count,
         feed: feed_rows,
         all_changes: button(
-            match (phone(env), unseen) {
-                (true, _) => "All".to_owned(),
-                (false, 0) => "All changes".to_owned(),
-                (false, n) => format!("All {n} changes"),
+            match (phone(env), unseen.count, unseen.total) {
+                (true, _, _) => "All".to_owned(),
+                (false, 0, _) => "All changes".to_owned(),
+                (false, n, true) => format!("All {n} changes"),
+                (false, n, false) => format!("All changes · {n} loaded unseen"),
             },
             Action::Go(Destination::Changes),
             ButtonKind::Quiet,
@@ -383,6 +390,7 @@ fn plan_preview(feed: &Feed, row: &InboxRow) -> PlanPreview {
         )),
     }
     PlanPreview {
+        attention: super::attention_line(row),
         chips,
         record: record(feed, row),
         title: plan.map_or_else(|| row.title.clone(), |plan| plan.title.clone()),
@@ -418,6 +426,7 @@ fn item_preview(state: &State, feed: &Feed, row: &InboxRow) -> ItemPreview {
         button(label, Action::Live(live), ButtonKind::Primary)
     });
     ItemPreview {
+        attention: super::attention_line(row),
         chips: vec![Chip {
             label: if is_open(row) { "needs you" } else { "settled" },
             hue: if is_open(row) { Hue::You } else { Hue::Neutral },
@@ -432,7 +441,10 @@ fn item_preview(state: &State, feed: &Feed, row: &InboxRow) -> ItemPreview {
 /// The selected row's pane on desktop and terminal.
 pub fn preview(state: &State, feed: &Feed, env: Env) -> InboxPreview {
     if loading(feed) {
-        return InboxPreview::Loading { skeleton_count: 3 };
+        return InboxPreview::Loading {
+            skeleton_count: 3,
+            caption: super::LOADING_ITEM,
+        };
     }
     let rows = ordered(feed);
     let Some(row) = selected(&state.desk, &rows) else {
@@ -449,7 +461,10 @@ pub fn preview(state: &State, feed: &Feed, env: Env) -> InboxPreview {
         let key = Id::new(&row.id);
         return match handover(feed, &key) {
             Handover::Ready => InboxPreview::Question(sheet(state, feed, &key, env, false, false)),
-            Handover::Loading => InboxPreview::Loading { skeleton_count: 3 },
+            Handover::Loading { caption } => InboxPreview::Loading {
+                skeleton_count: 3,
+                caption,
+            },
             Handover::Failed(notice) => InboxPreview::Failed(notice),
             Handover::Gone(empty) => InboxPreview::Empty(empty),
         };
@@ -461,5 +476,30 @@ pub fn preview(state: &State, feed: &Feed, env: Env) -> InboxPreview {
         },
         InboxKind::PlanAcceptance => InboxPreview::Plan(plan_preview(feed, row)),
         _ => InboxPreview::Item(item_preview(state, feed, row)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unseen_uses_owner_relevant_count_not_the_event_sequence_gap() {
+        let mut feed = Feed {
+            changes_head: 90_000,
+            changes_unseen: Some((0, 2)),
+            ..Feed::default()
+        };
+        feed.topics.insert("inbox".into(), Default::default());
+        let env = crate::model::health::daemon_env(&feed, crate::model::nav::Form::Terminal);
+        for expected in [2, 0] {
+            let view = list(&State::default(), &feed, env);
+            let InboxList::Ready { changes_count, .. } = view else {
+                panic!("inbox topic is loaded");
+            };
+            assert_eq!(changes_count, expected);
+            assert_eq!(changes_count, crate::model::work::unseen_count(&feed).count);
+            feed.changes_unseen = None;
+        }
     }
 }

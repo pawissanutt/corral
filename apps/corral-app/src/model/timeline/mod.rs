@@ -5,12 +5,16 @@
 
 mod data;
 mod live;
+mod scope;
 
 pub use data::GAPS_DISCLOSURE;
 pub use live::{
-    LIVE_GAPS_NOTE, Window, burnup_request, burnup_series, empty_gaps_line, gaps as live_gaps,
-    plot as live_plot, request, window,
+    LIVE_GAPS_NOTE, Window, burnup_series, empty_gaps_line, gaps as live_gaps, plot as live_plot,
+    request, window,
 };
+pub use scope::{BurnupScope, ScopeOption, burnup_request, scope_options};
+
+pub const BURNUP_SCOPE_LABEL: &str = "Burn-up scope";
 
 use crate::model::effect::{Effect, Env};
 use crate::model::hue::Hue;
@@ -25,7 +29,7 @@ pub enum Range {
     SevenDays,
 }
 
-/// Selected desktop grouping.
+/// Selected grouping, available on every form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Grouping {
     /// Group by task.
@@ -40,8 +44,9 @@ pub enum Grouping {
 pub struct State {
     /// Active range switch option.
     pub range: Range,
-    /// Active desktop grouping option.
+    /// Active grouping option.
     pub grouping: Grouping,
+    pub burnup_scope: BurnupScope,
 }
 impl State {
     /// Select a range without navigating away.
@@ -49,9 +54,13 @@ impl State {
         self.range = range;
         Vec::new()
     }
-    /// Select the desktop grouping.
+    /// Select the grouping on any form.
     pub fn set_grouping(&mut self, grouping: Grouping) -> Vec<Effect> {
         self.grouping = grouping;
+        Vec::new()
+    }
+    pub fn set_burnup_scope(&mut self, scope: BurnupScope) -> Vec<Effect> {
+        self.burnup_scope = scope;
         Vec::new()
     }
 }
@@ -145,6 +154,8 @@ pub struct PlotLane {
     pub ask: Option<PlotSegment>,
     /// Phases corral recorded without times, said instead of drawn.
     pub missing: Option<String>,
+    /// Wait summary anchored to this row rather than floating between bars.
+    pub wait: Option<String>,
 }
 /// A supervisor interval or instant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +178,7 @@ pub struct Plot {
     pub last_visit: Option<Marker>,
     pub now: Marker,
     pub accessible_label: String,
+    pub completeness: Option<String>,
 }
 
 /// The illustrative day of the fixture preview.
@@ -209,6 +221,7 @@ pub struct PlacedLane {
     pub segments: Vec<PlacedSegment>,
     /// Phases without recorded times, written in the track.
     pub missing: Option<String>,
+    pub wait: Option<String>,
 }
 /// An owner action dot with its accessibility text.
 #[derive(Debug, Clone, PartialEq)]
@@ -321,6 +334,7 @@ pub fn layout(plot: &Plot, width: f32, phone: bool) -> Layout {
                 y: top + 2.0 * lane_height + 6.0 + i as f32 * lane_height,
                 segments,
                 missing: lane.missing.clone(),
+                wait: lane.wait.clone(),
             }
         })
         .collect();
@@ -369,11 +383,11 @@ pub struct Head {
     pub title: &'static str,
     pub subtitle: &'static str,
     pub ranges: [RangeOption; 2],
-    /// Desktop grouping controls, absent on phone.
+    /// Grouping controls on desktop, terminal and phone.
     pub grouping: Option<[GroupOption; 2]>,
 }
 /// Build the page heading and its selected options.
-pub fn head(state: &State, _env: Env, phone: bool) -> Head {
+pub fn head(state: &State, _env: Env, _phone: bool) -> Head {
     Head {
         title: "Timeline",
         subtitle: "who worked when · run, gate, review, land · idle and stalls",
@@ -389,7 +403,7 @@ pub fn head(state: &State, _env: Env, phone: bool) -> Head {
                 selected: state.range == Range::SevenDays,
             },
         ],
-        grouping: (!phone).then_some([
+        grouping: Some([
             GroupOption {
                 label: "By task",
                 grouping: Grouping::ByTask,
@@ -477,6 +491,7 @@ pub struct BurnupSeries {
     pub first: String,
     pub last: String,
     pub disclosure: Option<&'static str>,
+    pub completeness: Option<String>,
 }
 /// The illustrative burn-up of the fixture preview.
 pub fn fixture_burnup() -> BurnupSeries {
@@ -496,6 +511,7 @@ pub struct Burnup {
     pub period: String,
     pub accessible_label: String,
     pub disclosure: Option<&'static str>,
+    pub completeness: Option<String>,
     pub size: (f32, f32),
     pub scope: Vec<Point>,
     pub landed: Vec<Point>,
@@ -564,8 +580,16 @@ pub fn burnup(series: &BurnupSeries, width: f32, height: f32) -> Burnup {
     Burnup {
         title: series.title.clone(),
         period: series.period.clone(),
-        accessible_label: format!("Burn-up: {landed_total} of {scope_total} landed"),
+        accessible_label: format!(
+            "Burn-up: {landed_total} of {scope_total} landed{}",
+            series
+                .completeness
+                .as_ref()
+                .map(|note| format!(" · {note}"))
+                .unwrap_or_default()
+        ),
         disclosure: series.disclosure,
+        completeness: series.completeness.clone(),
         size: (width, height),
         scope,
         landed,
@@ -603,6 +627,7 @@ mod tests {
             first: "11-14".into(),
             last: "today".into(),
             disclosure: None,
+            completeness: None,
         };
         let chart = burnup(&series, 404.0, 150.0);
         let [scope, landed] = &chart.series_labels;

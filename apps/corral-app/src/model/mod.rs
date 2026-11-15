@@ -50,7 +50,9 @@ pub mod work;
 pub use act::{Act, ActStatus, Authority};
 pub use effect::{Conn, DataMode, Effect, Env, Page, Risk};
 pub use fixture::snapshot;
-pub use health::{Availability, DataState, Health, Segment, Snapshot, Tone, Workspace};
+pub use health::{
+    Availability, DataState, Health, Segment, Snapshot, Tone, Workspace, compact_segments,
+};
 pub use hue::Hue;
 pub use id::Id;
 pub use live::{Live, LiveKind, Route, Selection};

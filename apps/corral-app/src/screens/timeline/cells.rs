@@ -358,6 +358,12 @@ fn grid(layout: Layout, columns: usize) -> AnyElement {
                 noted = true;
             }
         }
+        // The lane's long waits belong to the row (TT-27): on the row over its bars, from the
+        // track's start.
+        if let Some(words) = &lane.wait {
+            notes.text(layout.label_width, words, Ink::Hue(Hue::Held));
+            noted = true;
+        }
         if let Some(words) = &lane.missing {
             let end = lane
                 .segments
@@ -387,6 +393,7 @@ fn grid(layout: Layout, columns: usize) -> AnyElement {
                 lane.segments
                     .iter()
                     .map(|s| s.accessible_label.as_str())
+                    .chain(lane.wait.as_deref())
                     .chain(lane.missing.as_deref()),
             )),
         ));

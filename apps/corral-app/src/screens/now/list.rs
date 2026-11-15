@@ -23,6 +23,7 @@ use super::cells;
 use super::parts::{
     act, action_id, by_data, model_button, press, press_id, pressable, question_open, quiet,
 };
+use super::verbs::{row_record, with_menu};
 
 const RING: f32 = 2.0;
 
@@ -258,21 +259,26 @@ fn groups(
                 Row::Task(task) => {
                     let id = task.line.id.clone();
                     let action = task.action.clone();
+                    let record = row_record(&action);
                     let test_id = format!("task-{id}");
                     let selected = {
                         let id = id.clone();
                         computed(move || is_selected(source, &id))
                     };
-                    revealing(
-                        selected,
-                        task_row(
-                            app,
-                            task.line.clone(),
-                            move || is_selected(source, &id),
-                            move || press(app, action.clone()),
-                            test_id,
-                        ),
-                    )
+                    let row = task_row(
+                        app,
+                        task.line.clone(),
+                        move || is_selected(source, &id),
+                        move || press(app, action.clone()),
+                        test_id,
+                    );
+                    // A daemon task's row carries its commands: its context menu on desktop
+                    // and terminal, the action sheet a held finger opens on the phone.
+                    let row = match record {
+                        Some(record) => with_menu(app, record, row),
+                        None => row,
+                    };
+                    revealing(selected, row)
                 }
                 Row::Extra(extra) => extra_row(app, extra, columns),
                 Row::More(button) => {

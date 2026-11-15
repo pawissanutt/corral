@@ -11,10 +11,11 @@ use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 use crate::model::plans::{self, Action, Button, GraphInput, Lens, LiveAction};
 use crate::model::text::span;
+use crate::model::work;
 use crate::model::{Form, Id};
 use crate::screens::PhonePage;
 use crate::state::AppState;
-use crate::ui::kit::notice::{error, notice, skeleton};
+use crate::ui::kit::notice::{error, loading, notice};
 use crate::ui::kit::text::dim;
 
 use super::{command, graph};
@@ -40,13 +41,15 @@ fn cached(feed: &Feed, target: &DetailRef) -> Cached {
     }
 }
 
-/// What keeps one served plan current: its row revision, what the cache holds of it and of the
-/// diff open on it, and whether a command about it lost to a newer revision.
+/// What keeps one served plan current: its row revision, what the cache holds of it, of its
+/// task (whose owner revision the plan's commands carry) and of the diff open on it, and whether
+/// a command about it lost to a newer revision.
 #[derive(Debug, Clone, PartialEq)]
 struct Want {
     plan: Id,
     rev: Option<u64>,
     cached: Cached,
+    task_cached: Cached,
     diff: Option<DetailRef>,
     diff_cached: Cached,
     conflict: bool,
@@ -73,6 +76,7 @@ fn want(app: AppState, plan: Id) -> Want {
     app.feed.with(|feed| Want {
         rev: feed.plans.get(plan.as_str()).map(|row| row.rev),
         cached: cached(feed, &plan_ref(&plan)),
+        task_cached: cached(feed, &work::task_ref(&plan)),
         diff_cached: diff
             .as_ref()
             .map_or(Cached::Missing, |target| cached(feed, target)),
@@ -92,9 +96,11 @@ fn plan_ref(plan: &Id) -> DetailRef {
 
 /// Loads the plan (and its open diff) when first shown, gone stale or dropped from the cache,
 /// and revalidates it when its row revision moves or a command about it met a newer revision.
-/// A failed request is fetched again only when the plan is shown anew: the detail offers Retry.
-/// While shown, the plan and its diff are pinned, so the cache keeps them over older details.
-fn keep_current(app: AppState, plan: impl Fn() -> Option<Id> + 'static) {
+/// With `commands`, the plan's task detail too, so the plan's verbs can carry its canonical
+/// owner revision (RC-03). A failed request is fetched again only when the plan is shown anew:
+/// the detail offers Retry. While shown, what it loads is pinned, so the cache keeps it over
+/// older details.
+fn keep_current(app: AppState, commands: bool, plan: impl Fn() -> Option<Id> + 'static) {
     let wanted = computed(move || {
         if !app.daemon() {
             return None;
@@ -109,17 +115,29 @@ fn keep_current(app: AppState, plan: impl Fn() -> Option<Id> + 'static) {
         };
         let before = last.replace(Some(now.clone()));
         let target = plan_ref(&now.plan);
+        let task = commands.then(|| work::task_ref(&now.plan));
         untracked(|| {
             let fresh = before.as_ref().is_none_or(|before| before.plan != now.plan);
             let moved = !fresh
                 && before.as_ref().is_some_and(|before| {
                     before.rev != now.rev || (!before.conflict && now.conflict)
                 });
-            pin(app, pinned, [Some(target.clone()), now.diff.clone()]);
+            pin(
+                app,
+                pinned,
+                [Some(target.clone()), task.clone(), now.diff.clone()],
+            );
             if moved {
                 app.refresh(target);
             } else if fresh || now.cached != Cached::Failed {
                 app.load(target);
+            }
+            if let Some(task) = task {
+                if moved {
+                    app.refresh(task);
+                } else if fresh || now.task_cached != Cached::Failed {
+                    app.load(task);
+                }
             }
             if let Some(diff) = now.diff.clone()
                 && (fresh || now.diff_cached != Cached::Failed)
@@ -137,7 +155,7 @@ fn keep_current(app: AppState, plan: impl Fn() -> Option<Id> + 'static) {
 }
 
 /// Pins `wanted` in the client's cache and lets go of what was pinned before and no longer is.
-fn pin(app: AppState, pinned: Stored<Vec<DetailRef>>, wanted: [Option<DetailRef>; 2]) {
+fn pin(app: AppState, pinned: Stored<Vec<DetailRef>>, wanted: [Option<DetailRef>; 3]) {
     let wanted: Vec<DetailRef> = wanted.into_iter().flatten().collect();
     let was = pinned.replace(wanted.clone());
     for gone in was.iter().filter(|target| !wanted.contains(target)) {
@@ -150,7 +168,7 @@ fn pin(app: AppState, pinned: Stored<Vec<DetailRef>>, wanted: [Option<DetailRef>
 
 /// Keeps the desktop and terminal detail's plan current: the root selection, or the first plan.
 pub(super) fn keep_selected_loaded(app: AppState) {
-    keep_current(app, move || {
+    keep_current(app, true, move || {
         let selection = app.selection();
         app.feed.with(|feed| plans::current_plan(&selection, feed))
     });
@@ -193,7 +211,7 @@ pub(super) fn keep_rows_loaded(app: AppState) {
 /// from corrald's plan; its detail is kept current while the page is up.
 pub fn live_plan_phone(app: AppState, id: Id) -> PhonePage {
     let shown = id.clone();
-    keep_current(app, move || Some(shown.clone()));
+    keep_current(app, true, move || Some(shown.clone()));
     let env = app.env();
     let page = app.plans.with(|state| {
         app.feed
@@ -215,7 +233,8 @@ enum GraphState {
 /// itself, rings `member`, and opens a member's task (or its open question) on press.
 pub fn live_graph(app: AppState, plan: Id, member: Option<Id>) -> AnyElement {
     let shown = plan.clone();
-    keep_current(app, move || Some(shown.clone()));
+    // Now's panel offers no plan commands, so the plan's task detail is not needed here.
+    keep_current(app, false, move || Some(shown.clone()));
     let target = DetailRef::Plan {
         id: plan.to_string(),
     };
@@ -274,7 +293,7 @@ pub fn live_graph(app: AppState, plan: Id, member: Option<Id>) -> AnyElement {
             }))
             .into_element(),
         GraphState::Empty => dim(app, "No members are published for this plan yet.").into_element(),
-        GraphState::Loading => skeleton(app, &[(0.5, 12.0), (0.8, 54.0)]),
+        GraphState::Loading => loading(app, plans::DETAIL_LOADING, &[(0.5, 12.0), (0.8, 54.0)]),
         GraphState::Failed(why) => error(
             app,
             &vec![span(format!("Could not load plan {plan}: {why}"))],

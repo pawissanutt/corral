@@ -15,6 +15,7 @@ import { parseControls } from "./tool-controls.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 import { LlamaCppSettingsSchema, type LlamaCppSettings } from "../auth/local.ts";
 import { type ConnectionBinding, parseBinding } from "./connections.ts";
+import type { SummaryProfile } from "./summary.ts";
 
 export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
@@ -65,6 +66,8 @@ export interface HostConfig {
   readonly aws?: AwsBinding;
   readonly effort?: string;
   readonly promptFile?: string;
+  readonly quickSummary?: boolean;
+  readonly summary?: SummaryProfile;
   readonly memoryFile?: string;
   readonly ui?: UiMode;
 }
@@ -207,6 +210,25 @@ export function parseLaunchMessage(text: string): HostConfig {
   }
   const model = field(message, "model", provider === "llama.cpp" ? /^[^\s\0]+$/ : /^[A-Za-z0-9._:/+-]+$/, provider === "llama.cpp" ? 512 : 128);
   const effort = optional(message, "effort", TOKEN);
+  if (message.quick_summary !== undefined && typeof message.quick_summary !== "boolean") {
+    throw new LaunchMessageInvalid("quick_summary must be a boolean");
+  }
+  let summary: SummaryProfile | undefined;
+  if (message.summary != null) {
+    if (typeof message.summary !== "object" || Array.isArray(message.summary)
+        || role !== "assistant" || message.quick_summary !== true) {
+      throw new LaunchMessageInvalid("summary requires a quick assistant thread");
+    }
+    const value = message.summary as Json;
+    const provider = value.provider;
+    if (!isProviderId(provider)) throw new LaunchMessageInvalid("summary provider is unknown");
+    const model = field(value, "model", /^[^\s\0]+$/, 512);
+    const effort = optional(value, "effort", TOKEN);
+    summary = { profile: field(value, "profile", TOKEN, 96), model, provider,
+      ...(effort ? { effort } : {}),
+      binding: parseBinding(value.binding, provider, model, effort),
+      aws: awsBinding(value.aws) };
+  }
   const binding = parseBinding(message.binding, provider ?? "openai-codex", model, effort);
   const aws = awsBinding(message.aws);
   const capabilities = capabilitySet(message.capabilities);
@@ -280,6 +302,8 @@ export function parseLaunchMessage(text: string): HostConfig {
     ...(capabilities ? { capabilities } : {}),
     ...(guidance ? { guidance } : {}),
     model,
+    quickSummary: message.quick_summary === true,
+    ...(summary ? { summary } : {}),
     ...(provider ? { provider } : {}),
     ...(binding ? { binding } : {}),
     ...(aws ? { aws } : {}),

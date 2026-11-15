@@ -30,7 +30,7 @@ impl Aggregate {
         &mut self,
         connection: String,
         profile: Option<String>,
-        entry: UsageEntry,
+        mut entry: UsageEntry,
         cutoff: Timestamp,
         now: Timestamp,
     ) {
@@ -47,6 +47,7 @@ impl Aggregate {
             self.budget.coverage.undated_entries += 1;
         }
         let day = entry.at.map(|at| at.as_second().div_euclid(DAY));
+        let profile = entry.profile.take().or(profile);
         let total = self
             .groups
             .entry((connection, profile))

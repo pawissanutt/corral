@@ -37,6 +37,7 @@ const ALL: [Interleaving; 6] = [
 fn usage(tokens: u64) -> corral_core::Usage {
     corral_core::Usage::from_entries(vec![UsageEntry {
         connection: None,
+        profile: None,
         billing: None,
         at: Some(fixture::now()),
         latency_ms: Some(1),

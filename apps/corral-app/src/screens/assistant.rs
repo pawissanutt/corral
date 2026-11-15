@@ -9,7 +9,9 @@ mod attachments;
 mod cards;
 mod page;
 mod parts;
+mod side_facts;
 mod transcript;
+mod verbs;
 
 use std::time::Duration;
 
@@ -24,6 +26,8 @@ pub use agents::{agents_head, agents_tail};
 pub use page::{
     live_prompt, live_thread, live_thread_phone, live_thread_title, prompt, thread, thread_phone,
 };
+pub use side_facts::{identified, stacked};
+pub use verbs::session_verbs;
 
 /// One revealed step of the fixture's streamed answer, as the mockup's interval.
 const STREAM_STEP: Duration = Duration::from_millis(260);

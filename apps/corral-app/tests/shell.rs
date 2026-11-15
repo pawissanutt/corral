@@ -24,6 +24,16 @@ fn phone() -> EngineConfig {
     config
 }
 
+/// A terminal 80 columns wide and 24 rows high, in 8 × 16 pt Cells.
+fn terminal_80() -> EngineConfig {
+    let mut config = phone();
+    config.viewport = Size::new(Points(640.0), Points(384.0));
+    config.environment.os = Os::Linux;
+    config.environment.idiom = Idiom::Terminal;
+    config.environment.cell = Some(Size::new(Points(8.0), Points(16.0)));
+    config
+}
+
 /// Starts the app with `entries` in Storage. Without a daemon that is the disconnected state:
 /// no launch restores the fixture preview.
 fn with_storage(config: EngineConfig, entries: &[(&str, &str)]) -> Headless {
@@ -248,7 +258,9 @@ fn disconnected_state_shows_no_healthy_segment_and_no_count() {
     for config in [desktop(), phone()] {
         let mut app = with_storage(config, &[]);
         app.wait_for("text:not connected").unwrap();
-        app.wait_for("text:No connection to corrald.").unwrap();
+        // The destination says why it is empty and offers the way to connect and the preview.
+        app.wait_for("id:btn-connect").unwrap();
+        assert!(app.screen().count("id:btn-preview").unwrap() > 0);
         let texts = app.screen().texts();
         assert!(texts.contains(&"corrald"));
         assert!(texts.contains(&"not connected"));
@@ -256,7 +268,6 @@ fn disconnected_state_shows_no_healthy_segment_and_no_count() {
             assert!(!texts.contains(&healthy), "disconnected shows {healthy}");
         }
         assert_eq!(app.screen().count("id:count-inbox").unwrap(), 0);
-        assert!(texts.contains(&"No connection to corrald."));
     }
 }
 
@@ -394,4 +405,43 @@ fn confirmation_takes_the_focus_so_enter_cancels_it() {
     app.wait_for_gone("id:confirm", Duration::from_secs(5))
         .unwrap();
     assert_eq!(app.screen().count("id:toast").unwrap(), 0);
+}
+
+#[test]
+fn phone_landscape_question_keeps_next_in_the_header() {
+    let mut config = phone();
+    config.viewport = Size::new(Points(844.0), Points(390.0));
+    let mut app = preview(config, &[]);
+    app.press("id:inbox-question").unwrap();
+    app.wait_for("id:qhead-title").unwrap();
+    app.wait_for("id:btn-next").unwrap();
+    // Held sideways the pager row is gone; Next sits among the header's controls, not below.
+    let nodes = app.screen().layout_nodes();
+    let next: Vec<_> = nodes
+        .iter()
+        .filter(|node| node.test_id.as_deref() == Some("btn-next"))
+        .collect();
+    assert_eq!(next.len(), 1, "one Next on the page");
+    let bounds = &next[0].bounds;
+    assert!(
+        bounds.origin.y.0 + bounds.size.height.0 <= 100.0,
+        "Next is in the header, not under it: {bounds:?}"
+    );
+}
+
+#[test]
+fn terminal_80_columns_stacks_the_inbox_list_instead_of_hiding_it() {
+    let mut app = preview(terminal_80(), &[("corral.destination", "inbox")]);
+    app.wait_for("id:inbox-list").unwrap();
+    app.wait_for("id:inbox-question").unwrap();
+    let nodes = app.screen().layout_nodes();
+    let list = nodes
+        .iter()
+        .find(|node| node.test_id.as_deref() == Some("inbox-list"))
+        .expect("id:inbox-list is on the page");
+    assert!(
+        list.bounds.size.width.0 > 0.0 && list.bounds.size.height.0 > 0.0,
+        "the list has room: {:?}",
+        list.bounds
+    );
 }

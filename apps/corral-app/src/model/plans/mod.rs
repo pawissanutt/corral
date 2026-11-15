@@ -1,8 +1,8 @@
 //! Plans content for all forms, from two sources. The fixture preview (`fixture.rs`) keeps the
 //! mockup's six plans and the synthetic S-900 tracker; daemon mode (`live*.rs`) builds the same
 //! descriptors from corrald's plan rows, plan details, revision diffs and board. `list` and
-//! `live_list` supply grouped rows; `detail` and `live_detail` the selected review, tracker,
-//! approved empty state, document or diff. Phone renderers use `phone_page`/`live_phone_page`.
+//! `live_list` supply grouped rows; `detail` and `live_detail` the selected planning lifecycle,
+//! review, tracker, approved state, document or diff. Phone uses `phone_page`/`live_phone_page`.
 //! `layout` resolves graph geometry, including compact vertical-layer rows. Screens dispatch
 //! each descriptor's `Action` to `State::reduce` (fixture) or `State::reduce_live` (daemon); the
 //! app executes the returned effects. This module imports no UI runtime.
@@ -14,6 +14,7 @@ mod live;
 mod live_doc;
 mod live_role;
 mod live_story;
+mod planning;
 mod story;
 mod view;
 
@@ -31,8 +32,8 @@ pub use view::{
     ApprovedView, AwaitingView, Blocker, Button, ButtonKind, Chip, Compose, Decide, DecideNote,
     DecisionRow, Detail, DiffLine, DiffLineKind, DiffView, DocumentSection, DocumentView,
     ExecutingView, Header, LegendEntry, ListNotice, ListSection, MemberSquare, NoticeView,
-    PhonePage, PipelineStage, PlanList, PlanRow, ProposedRow, ReviewRow, ScaleLayerView, ScaleLine,
-    ScaleView, SectionBody, SquareState,
+    PhonePage, PipelineStage, PlanList, PlanRow, PlanningView, ProposedRow, ReviewRow,
+    ScaleLayerView, ScaleLine, ScaleView, SectionBody, SquareState,
 };
 
 use corral_protocol::cmd::Command;
@@ -45,6 +46,9 @@ use crate::model::daemon::Feed;
 use crate::model::effect::{Effect, Env, Page, Risk};
 use crate::model::nav::{Destination, Form};
 use crate::model::{Id, Live, Selection};
+/// Captions shared by all form-specific loading notices.
+pub const LIST_LOADING: &str = "Loading plans…";
+pub const DETAIL_LOADING: &str = "Loading the plan…";
 
 /// The fixture's Plans selection and synthetic-tracker toggle, and the daemon-mode sub-state.
 /// The selected live plan itself is the root's `Selection.plan`.

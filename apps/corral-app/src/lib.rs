@@ -3,6 +3,11 @@
 
 pub mod client;
 pub mod model;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+mod os_integration;
 pub mod screens;
 pub mod shell;
 pub mod state;
@@ -38,6 +43,13 @@ pub fn App() -> impl IntoElement {
         _ => Form::Phone,
     };
     let app = AppState::install(form);
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    if form == Form::Desktop {
+        os_integration::install(app);
+    }
     let frame = match form {
         Form::Desktop => shell::desktop::shell(app),
         Form::Phone => shell::phone::shell(app),

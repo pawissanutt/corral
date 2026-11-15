@@ -11,6 +11,7 @@ use crate::model::assistant::{Action, AttachField, Composer, ContextChip, Staged
 use crate::model::hue::Hue;
 use crate::state::AppState;
 use crate::ui::ask::act;
+use crate::ui::atoms::control_height;
 use crate::ui::composer::state_mark;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -276,12 +277,9 @@ fn staged_chip(app: AppState, chip: &StagedChip) -> AnyElement {
         .into_element()
 }
 
-/// Screenshot, Link and File with why any is dimmed; on desktop and in a terminal the open link
-/// or path field takes their place (a phone shows it on its own row above).
+/// Screenshot, Link and File with why any is dimmed; the open link or path field takes their
+/// place. Desktop and terminal; a phone keeps them behind its "+" ([`plus`]).
 pub(crate) fn foot_controls(app: AppState, built: Memo<Composer>) -> AnyElement {
-    if app.form == Form::Phone {
-        return controls(app, built);
-    }
     let open = computed(move || app.ask_field.with(Option::is_some));
     when(move || open.get(), move || untracked(|| field_row(app)))
         .otherwise(move || untracked(|| controls(app, built)))
@@ -289,8 +287,7 @@ pub(crate) fn foot_controls(app: AppState, built: Memo<Composer>) -> AnyElement 
 }
 
 /// The controls in a row, then why any is dimmed on its own line under them, wrapping inside
-/// the room left beside Send so it never runs under it (a 390 pt phone has no room for both
-/// on one line).
+/// the room left beside Send so it never runs under it.
 fn controls(app: AppState, built: Memo<Composer>) -> AnyElement {
     let form = app.form;
     let count = built.with_untracked(|c| c.attachments.len());
@@ -304,7 +301,7 @@ fn controls(app: AppState, built: Memo<Composer>) -> AnyElement {
                 .flex_wrap()
                 .items_center()
                 .gap(px(if form == Form::Terminal { 16.0 } else { 4.0 }))
-                .children((0..count).map(|index| control(app, built, index))),
+                .children((0..count).map(|index| control(app, built, index, None))),
         )
         .child(dynamic(move || {
             note.get().map(|note| {
@@ -321,8 +318,114 @@ fn controls(app: AppState, built: Memo<Composer>) -> AnyElement {
         .into_element()
 }
 
+/// What the phone's "+" is called to a screen reader.
+const PLUS_LABEL: &str = "Attach";
+/// The phone's attachments menu's width.
+const MENU_WIDTH: f32 = 248.0;
+
+/// The phone's "+" at the start of the composer's row: a full touch target that opens
+/// Screenshot, Link and File as a menu above it, each a full-height row, and why any is dimmed
+/// under them. Pressing one closes the menu before it attaches; pressing outside closes it.
+/// Nothing when the composer offers no attachments.
+pub(crate) fn plus(app: AppState, built: Memo<Composer>) -> AnyElement {
+    let count = built.with_untracked(|c| c.attachments.len());
+    if count == 0 {
+        return view().into_element();
+    }
+    let open = signal(false);
+    let anchor = element_ref();
+    let note = computed(move || built.with(|c| c.attach_note.clone()));
+    let face = view()
+        .test_id("btn-attach")
+        .element_ref(&anchor)
+        .role(AccessibilityRole::Button)
+        .label(PLUS_LABEL)
+        .accessibility_state(move || AccessibilityState {
+            expanded: Some(open.get()),
+            has_popup: true,
+            ..AccessibilityState::default()
+        })
+        .on_press(move || open.update(|open| *open = !*open))
+        .size(px(TARGET))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(color(Token::Rule2))
+        .bg(move || {
+            if open.get() {
+                color(Token::Surface2)
+            } else {
+                color(Token::Surface)
+            }
+        })
+        .cursor_pointer()
+        .active(|s| s.bg(color(Token::Sel)))
+        .focus_visible(|s| {
+            s.outline(px(2.0))
+                .outline_color(color(Token::Focus))
+                .outline_offset(px(2.0))
+        })
+        .child(icon(Icon::Plus, 20.0, color(Token::Ink2)));
+    let menu = when(
+        move || open.get(),
+        move || {
+            overlay()
+                .anchor(&anchor)
+                .placement(Placement::Top)
+                .align(Align::Start)
+                .offset(px(6.0))
+                .margin(px(8.0))
+                .on_press_outside(move |_: &Point<Points>| open.set(false))
+                .child(
+                    view()
+                        .role(AccessibilityRole::Menu)
+                        .label(PLUS_LABEL)
+                        .w(px(MENU_WIDTH))
+                        .p(px(4.0))
+                        .gap(px(1.0))
+                        .rounded(px(12.0))
+                        .bg(color(Token::Surface))
+                        .border_1()
+                        .border_color(color(Token::Rule2))
+                        .shadow_xl()
+                        .shadow_color(color(Token::Shell))
+                        .children((0..count).map(|index| control(app, built, index, Some(open))))
+                        .child(dynamic(move || {
+                            note.get().map(|note| {
+                                note_text(Form::Phone, note)
+                                    .number_of_lines(3u32)
+                                    .px(px(10.0))
+                                    .pt(px(6.0))
+                                    .pb(px(6.0))
+                                    .text_color(color(Token::Ink3))
+                                    .into_element()
+                            })
+                        })),
+                )
+        },
+    );
+    view()
+        .flex_row()
+        .flex_shrink_0()
+        .child(face)
+        .child(menu)
+        .into_element()
+}
+
+/// The phone's touch target.
+const TARGET: f32 = 44.0;
+
 /// One control, redrawn when it is enabled or dimmed. A dimmed one takes no press and says why.
-fn control(app: AppState, built: Memo<Composer>, index: usize) -> AnyElement {
+/// In the phone's "+" menu (`menu` is its open state) it is a full-height row that closes the
+/// menu as it is pressed.
+fn control(
+    app: AppState,
+    built: Memo<Composer>,
+    index: usize,
+    menu: Option<Signal<bool>>,
+) -> AnyElement {
     let state = computed(move || {
         built.with(|c| {
             c.attachments
@@ -345,13 +448,22 @@ fn control(app: AppState, built: Memo<Composer>, index: usize) -> AnyElement {
                 };
                 let face = view()
                     .test_id(&format!("btn-attach-{index}"))
-                    .role(AccessibilityRole::Button)
+                    .role(if menu.is_some() {
+                        AccessibilityRole::Menuitem
+                    } else {
+                        AccessibilityRole::Button
+                    })
                     .label(spoken)
                     .flex_row()
                     .items_center()
                     .when(enabled, |v| {
-                        v.on_press(move || act(app, action.clone()))
-                            .cursor_pointer()
+                        v.on_press(move || {
+                            if let Some(open) = menu {
+                                open.set(false);
+                            }
+                            act(app, action.clone());
+                        })
+                        .cursor_pointer()
                     })
                     .when(!enabled, |v| v.opacity(0.45));
                 if form == Form::Terminal {
@@ -360,31 +472,40 @@ fn control(app: AppState, built: Memo<Composer>, index: usize) -> AnyElement {
                         .child(text(label).text_color(color(ink)))
                         .into_element();
                 }
-                let phone = form == Form::Phone;
-                face.gap(px(5.0))
-                    .h(px(26.0))
-                    .px(px(8.0))
-                    .rounded(px(6.0))
+                let face = face
                     .when(enabled, |v| v.hover(|s| s.bg(color(Token::Hover))))
                     .focus_visible(|s| {
                         s.outline(px(2.0))
                             .outline_color(color(Token::Focus))
                             .outline_offset(px(1.0))
-                    })
-                    .when(phone, |v| {
-                        v.hit_slop(EdgeInsets {
-                            top: px(9.0),
-                            right: px(0.0),
-                            bottom: px(9.0),
-                            left: px(0.0),
-                        })
-                    })
+                    });
+                if menu.is_some() {
+                    return face
+                        .gap(px(12.0))
+                        .min_h(px(TARGET))
+                        .px(px(10.0))
+                        .rounded(px(8.0))
+                        .active(|s| s.bg(color(Token::Sel)))
+                        .child(icon(glyph, 18.0, color(Token::Ink2)))
+                        .child(
+                            text(label)
+                                .number_of_lines(1u32)
+                                .font_family(FONT_TEXT)
+                                .text_size(px(15.0))
+                                .text_color(color(Token::Ink)),
+                        )
+                        .into_element();
+                }
+                face.gap(px(5.0))
+                    .h(px(control_height(26.0)))
+                    .px(px(8.0))
+                    .rounded(px(6.0))
                     .child(icon(glyph, 13.0, color(Token::Ink3)))
                     .child(
                         text(label)
                             .number_of_lines(1u32)
                             .font_family(FONT_TEXT)
-                            .text_size(px(if phone { 13.0 } else { 12.0 }))
+                            .text_size(px(12.0))
                             .text_color(color(Token::Ink3)),
                     )
                     .into_element()
@@ -441,7 +562,7 @@ fn field_view(app: AppState, field: AttachField) -> AnyElement {
         entry.h(px(16.0)).bg(AdaptiveColor::TRANSPARENT)
     } else {
         entry
-            .h(px(if phone { 36.0 } else { 26.0 }))
+            .h(px(if phone { TARGET } else { 26.0 }))
             .px(px(8.0))
             .font_family(FONT_TEXT)
             .text_size(px(if phone { 16.0 } else { 12.5 }))

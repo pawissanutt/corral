@@ -101,6 +101,7 @@ pub(super) fn task(ctx: &Ctx, id: &str) -> Result<DetailBody> {
             since: Some(park.at.to_string()),
             by: Some(park.by.label().to_ascii_lowercase()),
         }),
+        park_revision: head.park.as_ref().map(|park| park.revision),
         artifacts,
         run,
         plan_context: context.map(|(position, _)| position),
@@ -179,4 +180,41 @@ fn tail(text: &str) -> Vec<String> {
 
 fn count(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use corral_core::{Status, Store};
+
+    #[test]
+    fn task_detail_uses_canonical_park_revision() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let store = Store::init(tmp.path())?;
+        let mut owner = store.create("Parked", None, Status::Ready, "")?;
+        owner.park = Some(serde_json::from_value(serde_json::json!({
+            "version": 1, "revision": 47, "by": "owner", "reason": "Wait",
+            "at": "2026-11-14T00:00:00Z", "resume_when": [],
+            "resume_action": "Resume", "review_by": "2026-11-15T00:00:00Z"
+        }))?);
+        store.fixture_put_task(&owner)?;
+        let ctx = crate::resources::FixedResourceProbe::ctx(store);
+
+        let DetailBody::Task(detail) = task(&ctx, &owner.id)? else {
+            anyhow::bail!("wrong detail body")
+        };
+        assert_eq!(
+            detail.park_revision,
+            owner.park.as_ref().map(|park| park.revision)
+        );
+        assert_eq!(detail.park_revision, Some(47));
+
+        owner.park = None;
+        ctx.store.fixture_put_task(&owner)?;
+        let DetailBody::Task(detail) = task(&ctx, &owner.id)? else {
+            anyhow::bail!("wrong detail body")
+        };
+        assert_eq!(detail.park_revision, None);
+        Ok(())
+    }
 }

@@ -1,26 +1,83 @@
 use super::*;
 
 impl AppState {
-    pub fn request(&mut self, feed: Signal<Feed>, request: ClientRequest) -> Vec<Outgoing> {
+    pub async fn request_async(
+        &mut self,
+        feed: Signal<Feed>,
+        request: ClientRequest,
+    ) -> Vec<Outgoing> {
+        self.refresh_local(feed).await;
+        let request = match self.device_request(feed, request) {
+            Ok(outgoing) => return outgoing,
+            Err(request) => *request,
+        };
         match request {
+            ClientRequest::PushStatus { request_id } => {
+                self.operation(feed, request_id, PUSH_STATUS, json!({}))
+            }
+            ClientRequest::BrowserPush { request_id, .. } => {
+                feed.update(|feed| {
+                    trim_operations(feed);
+                    feed.operations.insert(
+                        Id::from(request_id),
+                        Operation {
+                            method: PUSH_SUBSCRIBE.into(),
+                            loading: false,
+                            value: None,
+                            error: Some(ClientError {
+                                code: "unsupported".into(),
+                                message:
+                                    "Push delivery requires a browser with Service Worker support."
+                                        .into(),
+                            }),
+                        },
+                    );
+                });
+                vec![]
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            ClientRequest::Forget => {
+                let namespace = self.namespace.clone();
+                match self.forget_local(feed).await {
+                    Ok(()) => {
+                        if let Some((store, _)) = namespace {
+                            let removed =
+                                blocking(move || super::super::credentials::remove(&store))
+                                    .await
+                                    .map_err(|error| error.to_string())
+                                    .and_then(|result| result);
+                            if let Err(problem) = removed {
+                                feed.update(|feed| {
+                                    feed.device = crate::model::devices::DeviceLink::Failed(problem)
+                                });
+                            }
+                        }
+                    }
+                    Err(problem) => feed.update(|feed| feed.problem = Some(problem)),
+                }
+                vec![]
+            }
+            ClientRequest::RetryTopic(key) => self.retry_topic(feed, &key),
+            ClientRequest::Terminal { session, open } => self.terminal_request(feed, session, open),
             ClientRequest::DetailWatch { target, open } => {
                 self.watch_detail(feed, target, open);
                 vec![]
             }
             ClientRequest::SaveDraft { thread, text } => {
-                let result = self
-                    .outbox
-                    .as_mut()
-                    .ok_or_else(|| "Pair/enrol before saving a device draft.".to_owned())
-                    .and_then(|outbox| {
-                        outbox.update(|saved| {
-                            if text.is_empty() {
-                                saved.drafts.remove(&thread);
-                            } else {
-                                saved.drafts.insert(thread.clone(), text.clone());
-                            }
-                        })
-                    });
+                let result = match self.outbox.as_mut() {
+                    Some(outbox) => {
+                        outbox
+                            .update_async(|saved| {
+                                if text.is_empty() {
+                                    saved.drafts.remove(&thread);
+                                } else {
+                                    saved.drafts.insert(thread.clone(), text.clone());
+                                }
+                            })
+                            .await
+                    }
+                    None => Err("Pair/enrol before saving a device draft.".to_owned()),
+                };
                 match result {
                     Ok(()) => feed.update(|feed| {
                         if text.is_empty() {
@@ -33,8 +90,8 @@ impl AppState {
                 }
                 vec![]
             }
-            ClientRequest::AssistantSend(request) => self.send_message(feed, request),
-            ClientRequest::AssistantCancel(id) => self.cancel_message(feed, id),
+            ClientRequest::AssistantSend(request) => self.send_message_async(feed, request).await,
+            ClientRequest::AssistantCancel(id) => self.cancel_message_async(feed, id).await,
             ClientRequest::Attach(request) => self.attach(feed, request),
             ClientRequest::AttachDiscard(upload) => self.discard_upload(feed, upload),
             #[cfg(not(target_arch = "wasm32"))]
@@ -48,9 +105,11 @@ impl AppState {
             } => self.attach_loaded(feed, upload, kind, name, result),
             ClientRequest::ActSubmit(request) => {
                 self.command(feed, ACT_SUBMIT, request.cmd_id.clone(), value(request))
+                    .await
             }
             ClientRequest::PromptAnswer(request) => {
                 self.command(feed, PROMPT_ANSWER, request.cmd_id.clone(), value(request))
+                    .await
             }
             ClientRequest::ActResult(request) => {
                 if self.ready {
@@ -211,14 +270,10 @@ impl AppState {
                 request_id,
                 request,
             } => self.operation(feed, request_id, SEEN_ADVANCE, value(request)),
-            ClientRequest::DeviceSetAuthority {
-                request_id,
-                request,
-            } => self.operation(feed, request_id, DEVICE_SET_AUTHORITY, value(request)),
             _ => vec![],
         }
     }
-    pub(super) fn operation(
+    pub(in crate::client) fn operation(
         &self,
         feed: Signal<Feed>,
         id: String,
@@ -243,7 +298,7 @@ impl AppState {
             vec![]
         }
     }
-    fn command(
+    async fn command(
         &mut self,
         feed: Signal<Feed>,
         method: &'static str,
@@ -301,22 +356,21 @@ impl AppState {
         } else {
             // Persist only recovery identity, never arbitrary command bodies or credentials.
             let safe = json!({"_request_digest": request_digest(method, &params)});
-            let result =
-                self.outbox
-                    .as_mut()
-                    .ok_or_else(|| "Device recovery storage unavailable.".to_owned())
-                    .and_then(|outbox| {
-                        outbox.update(|saved| {
+            let result = match self.outbox.as_mut() {
+                Some(outbox) => outbox.update_checked(|saved| {
+                            if let Some(prior) = saved.commands.get(&id) {
+                                if prior.method != method || prior.params != safe {
+                                    return Err("Command identity already belongs to different input.".into());
+                                }
+                                if prior.result.is_some() {
+                                    return Err("This command already has a recorded outcome; recover that outcome instead.".into());
+                                }
+                            }
                             if saved.commands.len() >= 256 && !saved.commands.contains_key(&id) {
                                 let evict = saved
                                     .commands
                                     .iter()
-                                    .find(|(_, command)| {
-                                        command.error.is_some()
-                                            || command.result.as_ref().is_some_and(|result| {
-                                                result.state != CmdState::Unknown
-                                            })
-                                    })
+                                    .find(|(_, command)| command.is_settled())
                                     .map(|(id, _)| id.clone());
                                 if let Some(evict) = evict {
                                     saved.commands.remove(&evict);
@@ -326,13 +380,15 @@ impl AppState {
                                 id.clone(),
                                 outbox::Command {
                                     method: method.into(),
-                                    params: safe,
+                                    params: safe.clone(),
                                     result: None,
                                     error: None,
                                 },
                             );
-                        })
-                    });
+                            Ok(())
+                }).await,
+                None => Err("Device recovery storage unavailable.".to_owned()),
+            };
             if let Err(problem) = result {
                 state.status = CommandStatus::Refused;
                 state.error = Some(local_error(problem));
@@ -348,7 +404,11 @@ impl AppState {
             vec![]
         }
     }
-    fn send_message(&mut self, feed: Signal<Feed>, request: AssistantSend) -> Vec<Outgoing> {
+    async fn send_message_async(
+        &mut self,
+        feed: Signal<Feed>,
+        request: AssistantSend,
+    ) -> Vec<Outgoing> {
         trim_commands(feed);
         let id = request.cmd_id.clone();
         let params = value(&request);
@@ -362,14 +422,15 @@ impl AppState {
                 &request,
                 "Message identity already belongs to different text.".into(),
                 false,
-            );
+            )
+            .await;
             return vec![];
         }
         if existing.is_some_and(|message| message.cancel) {
-            return self.cancel_message(feed, id);
+            return self.cancel_message_async(feed, id).await;
         }
         if let Err(problem) = super::super::core::preflight_request(ASSISTANT_SEND, &params) {
-            self.refuse_send(feed, &request, problem, true);
+            self.refuse_send(feed, &request, problem, true).await;
             return vec![];
         }
         if !outbox::valid_message(&request)
@@ -380,7 +441,8 @@ impl AppState {
                 &request,
                 "Message needs text and successfully uploaded attachments (maximum four).".into(),
                 true,
-            );
+            )
+            .await;
             return vec![];
         }
         if feed.with_untracked(|feed| {
@@ -392,36 +454,57 @@ impl AppState {
             return vec![];
         }
         let attempted = self.ready || existing.is_some_and(|message| message.attempted);
-        let first_acceptance = existing.is_none();
         let mut consumed_draft = None;
-        let result = self
-            .outbox
-            .as_mut()
-            .ok_or_else(|| "Pair/enrol before queuing a message on this device.".to_owned())
-            .and_then(|outbox| {
-                outbox.update(|saved| {
-                    saved.messages.insert(
-                        id.clone(),
-                        outbox::Message {
-                            request: request.clone(),
-                            attempted,
-                            cancel: false,
-                            refused: false,
-                            error: None,
-                        },
-                    );
-                    // The debounce may have saved an earlier prefix of this composer value.
-                    // A replay must never consume a draft typed after its original handoff.
-                    if first_acceptance
-                        && saved
-                            .drafts
-                            .get(&request.thread)
-                            .is_some_and(|draft| request.text.trim().starts_with(draft.trim()))
-                    {
-                        consumed_draft = saved.drafts.remove(&request.thread);
-                    }
-                })
-            });
+        let result = match self.outbox.as_mut() {
+            Some(outbox) => {
+                outbox
+                    .update_checked(|saved| {
+                        consumed_draft = None;
+                        if saved.cancelled.contains(&id) {
+                            return Err("This message was withdrawn on this device.".into());
+                        }
+                        let first_acceptance = !saved.messages.contains_key(&id);
+                        if let Some(message) = saved.messages.get_mut(&id) {
+                            if message.request != request {
+                                return Err(
+                                    "Message identity already belongs to different text.".into()
+                                );
+                            }
+                            if message.cancel {
+                                return Err(
+                                "This message has a committed cancellation; it cannot be resent."
+                                    .into(),
+                            );
+                            }
+                            message.attempted |= attempted;
+                        } else {
+                            saved.messages.insert(
+                                id.clone(),
+                                outbox::Message {
+                                    request: request.clone(),
+                                    attempted,
+                                    cancel: false,
+                                    refused: false,
+                                    error: None,
+                                },
+                            );
+                        }
+                        // The debounce may have saved an earlier prefix of this composer value.
+                        // A replay must never consume a draft typed after its original handoff.
+                        if first_acceptance
+                            && saved
+                                .drafts
+                                .get(&request.thread)
+                                .is_some_and(|draft| request.text.trim().starts_with(draft.trim()))
+                        {
+                            consumed_draft = saved.drafts.remove(&request.thread);
+                        }
+                        Ok(())
+                    })
+                    .await
+            }
+            None => Err("Pair/enrol before queuing a message on this device.".to_owned()),
+        };
         let mut state = feed.with_untracked(|feed| {
             command_state(
                 feed,
@@ -468,7 +551,7 @@ impl AppState {
         }
     }
 
-    fn refuse_send(
+    async fn refuse_send(
         &mut self,
         feed: Signal<Feed>,
         request: &AssistantSend,
@@ -494,8 +577,16 @@ impl AppState {
         });
         if quarantine {
             // Legacy oversized entries stay editable/cancellable, but never poison replay.
-            self.settled(feed, &request.cmd_id);
+            self.settled(feed, &request.cmd_id).await;
         }
+    }
+    #[cfg(test)]
+    pub fn request(&mut self, feed: Signal<Feed>, request: ClientRequest) -> Vec<Outgoing> {
+        super::super::durable::wait(self.request_async(feed, request))
+    }
+    #[cfg(test)]
+    fn send_message(&mut self, feed: Signal<Feed>, request: AssistantSend) -> Vec<Outgoing> {
+        super::super::durable::wait(self.send_message_async(feed, request))
     }
 }
 

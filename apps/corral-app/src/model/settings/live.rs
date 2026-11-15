@@ -2,7 +2,6 @@
 //! authority, the canonical settings snapshot (configuration, assistant profiles, operating mode
 //! and grants), and what this platform cannot do. Nothing here is a fixture.
 
-use corral_protocol::app::DeviceAuthority;
 use corral_protocol::cmd::Command;
 use corral_protocol::cmd::config::ConfigCommand;
 use corral_protocol::rows::{GrantLine, OperatingMode, SettingsSnapshot};
@@ -20,7 +19,7 @@ pub fn admin_refusal(feed: &Feed) -> Option<&'static str> {
             "Waiting for corrald to confirm this device's authority; changes are off until it does.",
         ),
         Some(session) if !session.authority.admin => Some(
-            "This device has no admin authority, so it can read these settings but not change them. Change them from the trusted desktop or terminal app on the daemon host.",
+            "This device isn't an administrator, so it can read these settings but not change them. An administrator device can make it one in Settings › Devices.",
         ),
         Some(_) => None,
     }
@@ -37,6 +36,8 @@ pub enum Standing {
     Ready,
     Stale,
     Loading,
+    /// corrald cannot be reached and nothing was received yet; the reason, when known.
+    Unreachable(Option<String>),
     Failed(String),
 }
 
@@ -46,13 +47,16 @@ pub fn standing(feed: &Feed) -> Standing {
     }
     let topic = feed.topics.get("settings");
     let have = snapshot(feed).is_some();
+    if !have && feed.link == Link::Down {
+        return Standing::Unreachable(feed.problem.clone());
+    }
     match topic {
         None if have => Standing::Ready,
         None => Standing::Loading,
         Some(topic) => match (&topic.error, have) {
             (Some(error), false) => Standing::Failed(error.message.clone()),
             (Some(_), true) => Standing::Stale,
-            (None, true) if topic.stale => Standing::Stale,
+            (None, true) if topic.stale || feed.link != Link::Up => Standing::Stale,
             (None, false) => Standing::Loading,
             (None, true) => Standing::Ready,
         },
@@ -109,41 +113,24 @@ pub fn daemon_connection_details(feed: &Feed) -> Vec<(&'static str, String)> {
     rows
 }
 
-/// What a device may do, in the mockup's "May instruct" words: whether its typed words can
-/// instruct an assistant to act, else what it may still do.
-pub fn may_instruct(authority: Option<&DeviceAuthority>) -> (&'static str, Hue) {
-    match authority {
-        None => ("unknown", Hue::Neutral),
-        Some(a) if a.assistant_act => ("yes", Hue::Ok),
-        Some(a) if a.assistant => ("ask and file only", Hue::Neutral),
-        Some(a) if a.act || a.reply => ("answer and act only", Hue::Neutral),
-        Some(_) => ("read only", Hue::Neutral),
+/// When a device last showed authenticated activity and how it reached corrald, as far as
+/// corrald reports them ("seen 4m ago · LAN"); nothing from daemons that report neither.
+pub fn seen_line(device: &DeviceRow, feed: &Feed) -> Option<String> {
+    let seen = device.last_seen.as_deref().map(|at| {
+        at.parse::<jiff::Timestamp>()
+            .ok()
+            .and_then(|stamp| u64::try_from(stamp.as_second()).ok())
+            .map_or_else(
+                || format!("seen {at}"),
+                |at| format!("seen {} ago", daemon::age(Some(at), feed.now)),
+            )
+    });
+    match (seen, &device.reach) {
+        (Some(seen), Some(reach)) => Some(format!("{seen} · {reach}")),
+        (Some(seen), None) => Some(seen),
+        (None, Some(reach)) => Some(reach.clone()),
+        (None, None) => None,
     }
-}
-
-/// The authority a device would have with instructing turned on or off; None while its current
-/// authority is unknown, since the rest of it must be sent back unchanged.
-pub fn with_instructing(device: &DeviceRow, on: bool) -> Option<DeviceAuthority> {
-    let mut authority = device.authority.clone()?;
-    authority.assistant_act = on;
-    Some(authority)
-}
-
-/// Whether a device is an administrator, which lets it change other devices' authority.
-pub fn administrator(authority: Option<&DeviceAuthority>) -> (&'static str, Hue) {
-    match authority {
-        None => ("unknown", Hue::Neutral),
-        Some(a) if a.admin => ("yes", Hue::Ok),
-        Some(_) => ("no", Hue::Neutral),
-    }
-}
-
-/// The authority a device would have with administrator turned on or off; None while its
-/// current authority is unknown, since the rest of it must be sent back unchanged.
-pub fn with_admin(device: &DeviceRow, on: bool) -> Option<DeviceAuthority> {
-    let mut authority = device.authority.clone()?;
-    authority.admin = on;
-    Some(authority)
 }
 
 /// One row of a facts table.
@@ -162,7 +149,7 @@ pub fn general_facts(feed: &Feed, settings: &SettingsSnapshot) -> Vec<Fact> {
                 settings.host.clone()
             },
         ),
-        ("Operating mode", mode_label(settings.mode).into()),
+        ("Operating mode", mode_line(settings)),
     ];
     match &settings.listener {
         Some(listener) => {
@@ -198,6 +185,20 @@ pub fn mode_label(mode: OperatingMode) -> &'static str {
     }
 }
 
+/// The effective mode first, as the sidebar and `corral mode` say it: a paused or turbo
+/// Autopilot grant is part of the mode, not a separate switch.
+pub fn mode_line(settings: &SettingsSnapshot) -> String {
+    match settings.mode {
+        OperatingMode::Autopilot if grant_on(settings, "automation.paused") => {
+            "autopilot · paused".into()
+        }
+        OperatingMode::Autopilot if grant_on(settings, "automation.turbo") => {
+            "autopilot · turbo".into()
+        }
+        mode => mode_label(mode).into(),
+    }
+}
+
 /// A grant line in owner words: its name, whether it is on, its scope and expiry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantView {
@@ -209,10 +210,13 @@ pub struct GrantView {
 }
 
 /// Keys of configuration switches corrald reports beside the grants; they are not part of the
-/// Autopilot grant and are shown as their own facts.
+/// Autopilot grant (pausing the grant leaves them as they are) and are shown as their own facts.
 const SWITCHES: [(&str, &str); 2] = [
-    ("dispatch.paused", "Dispatch paused (dispatch.paused)"),
-    ("pm.supervise", "PM supervision enabled (pm.supervise)"),
+    (
+        "dispatch.paused",
+        "Legacy coding-admission hold (dispatch.paused)",
+    ),
+    ("pm.supervise", "PM supervision (pm.supervise)"),
 ];
 
 /// The configuration switches outside the grant, each on, off, or unknown when corrald does not
@@ -313,13 +317,63 @@ pub fn assistant_line(settings: &SettingsSnapshot) -> String {
     }
 }
 
-/// The rollover summary writer: corral's configuration has no setting for it (the assistant's
-/// is only its profile, live count and scratch limits), so nothing is offered to change.
+/// Who writes the rollover summary when a quick thread rolls over: the configured summary
+/// profile, or the thread's own model when none is set. The assistant host reads the choice when
+/// it starts, so a change never rebinds a running host.
 pub fn summary_line(settings: &SettingsSnapshot) -> String {
-    match &settings.summary_profile {
-        Some(profile) => format!("Summaries are written by {profile}."),
-        None => "Not configurable yet: corral has no summary-profile setting, so there is no writer to choose here.".into(),
-    }
+    let who = match &settings.summary_profile {
+        Some(profile) => format!("Rollover summaries are written by {profile}."),
+        None => {
+            "No summary profile is set, so each thread's own model writes its rollover summary."
+                .into()
+        }
+    };
+    format!(
+        "{who} A change applies when the assistant host next starts; a running host keeps its current writer."
+    )
+}
+
+/// One configured profile as a rollover-summary writer: corrald says which cannot write
+/// summaries (not a corral-pi profile with a model, or paid API use without its own episode).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SummaryChoice {
+    pub name: String,
+    pub model: String,
+    pub current: bool,
+    /// Why it cannot write summaries, when it cannot.
+    pub refusal: Option<String>,
+}
+
+pub fn summary_choices(settings: &SettingsSnapshot) -> Vec<SummaryChoice> {
+    settings
+        .profiles
+        .iter()
+        .map(|profile| SummaryChoice {
+            current: settings.summary_profile.as_deref() == Some(profile.name.as_str()),
+            name: profile.name.clone(),
+            model: match (&profile.model, &profile.effort) {
+                (Some(model), Some(effort)) => format!("{model} · {effort}"),
+                (Some(model), None) => model.clone(),
+                (None, _) => format!("{} · no model", profile.harness),
+            },
+            refusal: profile.summary_refusal.clone(),
+        })
+        .collect()
+}
+
+/// The hash-guarded edit that makes `profile` the summary writer, or with None returns the
+/// summary to each thread's own model (corrald unsets the field on an empty value).
+pub fn summary_set(settings: &SettingsSnapshot, profile: Option<&str>) -> Act {
+    let title = match profile {
+        Some(profile) => format!("Write rollover summaries with {profile}"),
+        None => "Write rollover summaries with each thread's own model".into(),
+    };
+    config_set(
+        settings,
+        title,
+        "assistant.summary_profile".into(),
+        profile.unwrap_or_default().to_owned(),
+    )
 }
 
 /// Settings › Machines: this daemon host is the only machine corral runs agents on.
@@ -350,8 +404,16 @@ pub fn machine(feed: &Feed) -> [String; 5] {
             }
         },
     );
+    // The rows the Agents wall shows: an assistant listed among the assistants is counted there,
+    // not twice.
     let agents = if feed.capable(corral_protocol::app::AGENTS_V1) {
-        feed.agents.len().to_string()
+        feed.agents
+            .values()
+            .filter(|row| {
+                !(row.role == "assistant" && feed.assistants.contains_key(row.id.as_str()))
+            })
+            .count()
+            .to_string()
     } else {
         "not served".into()
     };
@@ -368,9 +430,6 @@ pub fn machine(feed: &Feed) -> [String; 5] {
 
 /// Machines' explanation: one host is what corral supports today.
 pub const MACHINES_NOTE: &str = "corral runs every agent on this daemon host. Remote machines are not supported yet, so there is nothing to add or change here.";
-
-/// Notifications' explanation: no delivery path exists yet, so no switch is offered.
-pub const NOTIFICATIONS_NOTE: &str = "Notifications are not delivered: corrald has no push or relay delivery, and this app does not post system notifications. What needs you appears in Inbox and on its badge.";
 
 /// The phone root list's subtitle for a section, from live facts.
 pub fn phone_subtitle(feed: &Feed, section: SettingsSection) -> String {
@@ -396,7 +455,7 @@ pub fn phone_subtitle(feed: &Feed, section: SettingsSection) -> String {
             Link::Connecting => "connecting".into(),
             Link::Down => "not connected".into(),
         },
-        SettingsSection::Notifications => "not delivered yet".into(),
+        SettingsSection::Notifications => super::push::subtitle(feed).into(),
         SettingsSection::Assistant => settings.map_or_else(String::new, |s| {
             let count = s.assistant_models.len();
             match &s.assistant_profile {
@@ -405,25 +464,30 @@ pub fn phone_subtitle(feed: &Feed, section: SettingsSection) -> String {
             }
         }),
         SettingsSection::Autopilot => {
-            settings.map_or_else(String::new, |s| format!("mode {}", mode_label(s.mode)))
+            settings.map_or_else(String::new, |s| format!("mode {}", mode_line(s)))
         }
-        SettingsSection::General => settings.map_or_else(String::new, |s| s.workspace.clone()),
+        SettingsSection::General => settings.map_or_else(
+            || "theme and data on this device".into(),
+            |s| format!("this device · {}", s.workspace),
+        ),
     }
 }
 
 /// The phone root list's subtitle for a section without a connection: Connection names how far
-/// this browser's pairing got; every other section waits for corrald.
+/// this browser's pairing got, General holds this device's own preferences, and every other
+/// section waits for corrald.
 pub fn disconnected_subtitle(feed: &Feed, section: SettingsSection) -> &'static str {
-    if section != SettingsSection::Connection {
-        return "needs a connection to corrald";
-    }
-    match feed.browser_pairing {
-        BrowserPairing::Idle => "not connected · not paired",
-        BrowserPairing::Connecting => "pairing · connecting",
-        BrowserPairing::Claimed { .. } => "pairing · compare codes",
-        BrowserPairing::Paired { .. } => "paired",
-        BrowserPairing::Failed(_) => "pairing failed",
-        BrowserPairing::Blocked(_) => "pairing link blocked",
+    match section {
+        SettingsSection::Connection => match feed.browser_pairing {
+            BrowserPairing::Idle => "not connected · not paired",
+            BrowserPairing::Connecting => "pairing · connecting",
+            BrowserPairing::Claimed { .. } => "pairing · compare codes",
+            BrowserPairing::Paired { .. } => "paired",
+            BrowserPairing::Failed(_) => "pairing failed",
+            BrowserPairing::Blocked(_) => "pairing link blocked",
+        },
+        SettingsSection::General => "theme and data on this device",
+        _ => "needs a connection to corrald",
     }
 }
 
@@ -432,47 +496,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn instructing_toggle_keeps_the_rest_of_the_authority() {
-        let device = DeviceRow {
-            id: "d1".into(),
-            name: "browser".into(),
-            authority: Some(DeviceAuthority {
-                reply: true,
-                act: true,
-                assistant: true,
-                assistant_act: false,
-                admin: false,
-            }),
-            platform: "web",
-            enrolled: "2026-11-14".into(),
-            revoked: None,
+    fn settings_stop_loading_and_say_why_while_corrald_is_unreachable() {
+        let mut feed = Feed {
+            link: Link::Down,
+            problem: Some("connection refused".into()),
+            ..Feed::default()
         };
-        let on = with_instructing(&device, true).unwrap();
-        assert!(on.assistant_act && on.act && on.reply && on.assistant && !on.admin);
-        let unknown = DeviceRow {
-            authority: None,
-            ..device
-        };
-        assert!(with_instructing(&unknown, true).is_none());
-    }
-
-    #[test]
-    fn admin_toggle_keeps_every_other_flag() {
-        let device = DeviceRow {
-            id: "d1".into(),
-            name: "browser".into(),
-            authority: Some(DeviceAuthority {
-                reply: true,
-                act: false,
-                assistant: true,
-                assistant_act: true,
-                admin: false,
-            }),
-            platform: "web",
-            enrolled: "2026-11-14".into(),
-            revoked: None,
-        };
-        let on = with_admin(&device, true).unwrap();
-        assert!(on.admin && on.reply && !on.act && on.assistant && on.assistant_act);
+        assert_eq!(
+            standing(&feed),
+            Standing::Unreachable(Some("connection refused".into()))
+        );
+        feed.link = Link::Connecting;
+        assert_eq!(standing(&feed), Standing::Loading);
     }
 }

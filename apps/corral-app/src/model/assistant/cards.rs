@@ -185,6 +185,18 @@ pub struct AskOption {
     pub action: Option<Action>,
 }
 
+/// The free-text answer a question takes in the thread: the field (its name, and the words a
+/// refused answer keeps) and Send, which carries the typed words when pressed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextReply {
+    /// The field's accessible name and placeholder.
+    pub label: &'static str,
+    /// The field's starting text: the words of an answer corrald refused, else empty.
+    pub value: String,
+    /// Send, disabled while an answer is in flight.
+    pub send: Button,
+}
+
 /// An ask_user card: the question, its options and how it was answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskUserCard {
@@ -194,6 +206,8 @@ pub struct AskUserCard {
     pub question: Rich,
     /// Choices with consequences.
     pub options: Vec<AskOption>,
+    /// The owner's own words as the answer, while the question takes them.
+    pub reply: Option<TextReply>,
     /// Answer time, input id and response surface, or the pending/refused state of an answer.
     pub answer: Option<Rich>,
 }
@@ -225,6 +239,7 @@ pub fn duplicate_card() -> AskUserCard {
                 action: None,
             },
         ],
+        reply: None,
         answer: Some(vec![
             span("Answered inline by you after 40 s · "),
             span("A-7/g2/i18").mono(),

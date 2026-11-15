@@ -364,10 +364,15 @@ fn fit_start(x: f32, words: &str, advance: f32, left: f32, right: f32) -> f32 {
 
 /// A lane label's id and title, each cut to its room, with where the title starts: after the
 /// id (at least the mockup's 52 pt on desktop), inside the label column on desktop and the
-/// canvas on the phone.
-fn label_parts(layout: &Layout, phone: bool, (id, title): (&str, &str)) -> (String, String, f32) {
+/// canvas on the phone, short of the `reserve` points kept at the line's end.
+fn label_parts(
+    layout: &Layout,
+    phone: bool,
+    (id, title): (&str, &str),
+    reserve: f32,
+) -> (String, String, f32) {
     let right = if phone {
-        layout.width
+        layout.width - reserve
     } else {
         layout.label_width - LABEL_GAP
     };
@@ -382,9 +387,29 @@ fn label_parts(layout: &Layout, phone: bool, (id, title): (&str, &str)) -> (Stri
 }
 
 /// Whether a lane label is cut to fit, so its full words need a hover hint.
-fn label_cut(layout: &Layout, phone: bool, words: (&str, &str)) -> bool {
-    let (id, title, _) = label_parts(layout, phone, words);
+fn label_cut(layout: &Layout, phone: bool, words: (&str, &str), reserve: f32) -> bool {
+    let (id, title, _) = label_parts(layout, phone, words, reserve);
     id != words.0 || title != words.1
+}
+
+/// The phone's room at the end of a lane's label line for its wait caption: the caption's
+/// width, never more than 45 % of the line, so the title keeps the rest.
+fn wait_reserve(layout: &Layout, phone: bool, lane: &timeline::PlacedLane) -> f32 {
+    match (&lane.wait, phone) {
+        (Some(words), true) => {
+            (words.chars().count() as f32 * NOTE_ADVANCE + LABEL_GAP).min(layout.width * 0.45)
+        }
+        _ => 0.0,
+    }
+}
+
+/// The baseline of a lane's label line.
+fn label_baseline(layout: &Layout, phone: bool, lane_y: f32) -> f32 {
+    if phone {
+        lane_y + 11.0
+    } else {
+        lane_y + layout.lane_height / 2.0 + 4.0
+    }
 }
 
 fn lane_label(
@@ -393,13 +418,10 @@ fn lane_label(
     phone: bool,
     lane_y: f32,
     words: (&str, &str),
+    reserve: f32,
 ) -> Painter {
-    let (id, title, title_x) = label_parts(layout, phone, words);
-    let baseline = if phone {
-        lane_y + 11.0
-    } else {
-        lane_y + layout.lane_height / 2.0 + 4.0
-    };
+    let (id, title, title_x) = label_parts(layout, phone, words, reserve);
+    let baseline = label_baseline(layout, phone, lane_y);
     p.text_align(CanvasTextAlign::Start)
         .font(&mono_font(11.0))
         .fill_color(ink(Token::Ink3))
@@ -407,6 +429,12 @@ fn lane_label(
         .font(&text_font(400, 12.0))
         .fill_color(ink(Token::Ink))
         .fill_text(&title, title_x, baseline)
+}
+
+/// Where a lane's words after its bars start (desktop), and the room left to them.
+fn trail_start(layout: &Layout, lane: &timeline::PlacedLane) -> (f32, f32) {
+    let x = lane_end(lane).map_or(layout.label_width, |end| end + 6.0);
+    (x, (layout.width - x).max(0.0))
 }
 
 fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
@@ -436,7 +464,7 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
         p = p.fill_text(&tick.label, x, 14.0);
     }
 
-    p = lane_label(p, layout, phone, layout.top, layout.owner_label);
+    p = lane_label(p, layout, phone, layout.top, layout.owner_label, 0.0);
     let dot_y = bar_top(layout, phone, layout.top, DOT) + DOT / 2.0;
     p = p.fill_color(now(hue_ink(Hue::You)));
     for marker in &layout.owner {
@@ -447,7 +475,7 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
     }
 
     let pm_y = supervisor_y(layout);
-    p = lane_label(p, layout, phone, pm_y, layout.pm_label);
+    p = lane_label(p, layout, phone, pm_y, layout.pm_label, 0.0);
     let pm_top = supervisor_top(layout, phone);
     for interval in &layout.pm {
         let fill = match interval.hue {
@@ -470,17 +498,44 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
     }
 
     for lane in &layout.lanes {
+        let reserve = wait_reserve(layout, phone, lane);
         p = lane_label(
             p,
             layout,
             phone,
             lane.y,
             (lane.id.as_str(), lane.title.as_str()),
+            reserve,
         );
         let top = bar_top(layout, phone, lane.y, BAR);
+        // A lane's long waits belong to its row (TT-27): at the end of the phone's label line,
+        // after the desktop's last bar; the phases recorded without times follow them.
+        if phone && let Some(words) = &lane.wait {
+            let words = clip(words, reserve - LABEL_GAP, NOTE_ADVANCE);
+            p = p
+                .font(&note)
+                .fill_color(now(hue_ink(Hue::Held)))
+                .text_align(CanvasTextAlign::End)
+                .fill_text(
+                    &words,
+                    layout.width - 2.0,
+                    label_baseline(layout, phone, lane.y),
+                );
+        }
+        let (mut x, room) = trail_start(layout, lane);
+        let end = x + room;
+        if !phone && let Some(words) = &lane.wait {
+            let words = clip(words, end - x, NOTE_ADVANCE);
+            let width = words.chars().count() as f32 * NOTE_ADVANCE;
+            p = p
+                .font(&note)
+                .fill_color(now(hue_ink(Hue::Held)))
+                .text_align(CanvasTextAlign::Start)
+                .fill_text(&words, x, top + BAR - 2.0);
+            x += width + LABEL_GAP;
+        }
         if let Some(words) = &lane.missing {
-            let x = lane_end(lane).map_or(layout.label_width, |end| end + 6.0);
-            let words = clip(words, layout.width - x, NOTE_ADVANCE);
+            let words = clip(words, (end - x).max(0.0), NOTE_ADVANCE);
             p = p
                 .font(&text_font(400, 11.0))
                 .fill_color(ink(Token::Ink3))
@@ -586,7 +641,8 @@ fn hit_boxes(layout: &Layout, form: Form) -> Vec<AnyElement> {
     for lane in &layout.lanes {
         let top = bar_top(layout, phone, lane.y, BAR);
         let words = (lane.id.as_str(), lane.title.as_str());
-        if form == Form::Desktop && label_cut(layout, phone, words) {
+        let reserve = wait_reserve(layout, phone, lane);
+        if form == Form::Desktop && label_cut(layout, phone, words, reserve) {
             boxes.push(hit(
                 form,
                 Rect::new(
@@ -602,13 +658,22 @@ fn hit_boxes(layout: &Layout, form: Form) -> Vec<AnyElement> {
             let (area, _) = segment_rect(top, segment);
             boxes.push(hit(form, area, &segment.accessible_label));
         }
-        if let Some(words) = &lane.missing {
-            let x = lane_end(lane).map_or(layout.label_width, |end| end + 6.0);
-            let width = (layout.width - x).max(0.0);
+        // The row's words in full, wherever they were cut to fit.
+        let trail: Vec<&str> = [lane.wait.as_deref(), lane.missing.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect();
+        if !trail.is_empty() {
+            let area = if phone && lane.wait.is_some() {
+                Rect::new(layout.width - reserve, lane.y, reserve, 14.0)
+            } else {
+                let (x, room) = trail_start(layout, lane);
+                Rect::new(x, top, room, BAR)
+            };
             boxes.push(hit(
                 form,
-                Rect::new(x, top, width, BAR),
-                &format!("{} {}", lane.id, words),
+                area,
+                &format!("{} {}", lane.id, trail.join(" · ")),
             ));
         }
     }

@@ -6,14 +6,15 @@
 use std::collections::BTreeMap;
 
 use corral_protocol::board::CostBasis;
-use corral_protocol::detail::{DetailRef, UsageSeries};
-use corral_protocol::rows::{AgentRow, AssistantRow, LimitBasis, UsageRow};
+use corral_protocol::detail::{DetailRef, UsageQuota, UsageSeries};
+use corral_protocol::rows::{AgentRow, AssistantRow, UsageRow};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
+use super::totals::Sum;
 use super::{
-    Chart, CostBar, Costs, Level, Page, Period, PhoneProfile, ProfileRow, ProviderView, SessionRow,
-    USED_LABEL, level, money, percent,
+    Chart, Level, Page, Period, PhoneProfile, ProfileRow, ProviderView, SessionRow, USED_LABEL,
+    completeness_label, level, percent, quota,
 };
 
 /// Sessions listed at most, costliest first.
@@ -36,41 +37,18 @@ pub fn series_request(period: Period) -> DetailRef {
 /// What the live page is built from.
 pub struct Inputs<'a> {
     pub rows: Vec<&'a UsageRow>,
+    pub rows_error: Option<&'a str>,
+    pub rows_loading: bool,
     pub series: Option<&'a UsageSeries>,
-    /// Why the series is missing, when its request failed.
+    /// Includes failed refreshes even when a retained series is available.
     pub series_error: Option<&'a str>,
+    pub series_stale: bool,
     pub agents: Vec<&'a AgentRow>,
     pub assistants: Vec<&'a AssistantRow>,
     pub period: Period,
     /// Unix seconds.
     pub now: u64,
     pub tz: &'a TimeZone,
-}
-
-/// A sum of costs that remembers whether any part was estimated.
-#[derive(Debug, Clone, Copy, Default)]
-struct Sum {
-    total: f64,
-    known: bool,
-    estimated: bool,
-}
-
-impl Sum {
-    fn add(&mut self, value: Option<f64>, basis: Option<CostBasis>) {
-        if let Some(value) = value {
-            self.total += value;
-            self.known = true;
-            self.estimated |= basis != Some(CostBasis::Reported);
-        }
-    }
-
-    fn label(self) -> String {
-        match (self.known, self.estimated) {
-            (false, _) => "unknown".into(),
-            (true, true) => format!("~{}", money(self.total)),
-            (true, false) => money(self.total),
-        }
-    }
 }
 
 fn period_word(period: Period) -> &'static str {
@@ -83,10 +61,7 @@ fn period_word(period: Period) -> &'static str {
 
 /// The window fraction a row's quota fact gives, when it has one.
 fn quota(row: &UsageRow) -> Option<f32> {
-    match (row.used, row.limit) {
-        (Some(used), Some(limit)) if limit > 0.0 => Some((used / limit) as f32),
-        _ => None,
-    }
+    row.quotas.iter().find_map(quota::fraction)
 }
 
 /// A profile's cost over the period: the row's own today and week sums, or the series' daily
@@ -94,19 +69,48 @@ fn quota(row: &UsageRow) -> Option<f32> {
 fn row_cost(row: &UsageRow, input: &Inputs) -> Sum {
     let mut sum = Sum::default();
     match input.period {
-        Period::Today => sum.add(row.today_usd, row.cost_basis),
-        Period::Week => sum.add(row.week_usd, row.cost_basis),
+        Period::Today => sum.add_total(row.today_usd, row.cost_basis, &row.today_completeness),
+        Period::Week => sum.add_total(row.week_usd, row.cost_basis, &row.week_completeness),
         Period::Month => {
-            if let (Some(profile), Some(series)) = (&row.profile, input.series) {
-                for day in &series.days {
-                    for usage in day.by_profile.iter().filter(|u| &u.profile == profile) {
-                        sum.add(usage.cost_usd, usage.cost_basis);
-                    }
+            if let Some(series) = input.series {
+                for usage in series
+                    .days
+                    .iter()
+                    .flat_map(|day| &day.by_profile)
+                    .filter(|usage| {
+                        usage.connection == row.connection
+                            && usage.profile == row.profile.as_deref().unwrap_or_default()
+                    })
+                {
+                    sum.add_total(usage.cost_usd, usage.cost_basis, &usage.completeness);
                 }
+                sum.qualify(&series.completeness);
+            } else {
+                sum.qualify(&Default::default());
             }
         }
     }
     sum
+}
+
+fn period_label(sum: &Sum, input: &Inputs) -> String {
+    let figure = sum.figure();
+    match period_note(sum, input) {
+        Some(note) => format!("{figure} · {note}"),
+        None => figure,
+    }
+}
+
+fn period_note(sum: &Sum, input: &Inputs) -> Option<String> {
+    let note = sum.note();
+    if input.period == Period::Month && (input.series_stale || input.series_error.is_some()) {
+        Some(note.map_or_else(
+            || "stale series".into(),
+            |note| format!("{note} · stale series"),
+        ))
+    } else {
+        note
+    }
 }
 
 fn local_clock(at: Timestamp, tz: &TimeZone) -> String {
@@ -114,12 +118,12 @@ fn local_clock(at: Timestamp, tz: &TimeZone) -> String {
     format!("{:02}:{:02}", local.hour(), local.minute())
 }
 
-fn resets(row: Option<&UsageRow>, now: Timestamp, tz: &TimeZone) -> (String, String) {
-    let Some(at) = row
-        .and_then(|row| row.resets_at.as_deref())
+fn resets(quota: Option<&UsageQuota>, now: Timestamp, tz: &TimeZone) -> (String, String) {
+    let Some(at) = quota
+        .and_then(|quota| quota.resets_at.as_deref())
         .and_then(|at| at.parse::<Timestamp>().ok())
     else {
-        return (String::new(), String::new());
+        return ("reset unknown".into(), "reset unknown".into());
     };
     let minutes = (at.as_second() - now.as_second()).max(0) / 60;
     let phone = if minutes < 24 * 60 {
@@ -157,10 +161,14 @@ fn chart(
             (local.date() == today).then(|| (fraction, format!("{:02}", local.hour())))
         })
         .unzip();
+    let coverage = series.and_then(|series| completeness_label(&series.completeness));
     (values.len() >= 2).then(|| Chart {
         label: format!(
-            "{label} window use today, {} percent at the last sample",
-            values.last().map_or(0, |&v| percent(v))
+            "{label} window use today, {} percent at the last sample{}",
+            values.last().map_or(0, |&v| percent(v)),
+            coverage
+                .map(|note| format!(" · {note}"))
+                .unwrap_or_default()
         ),
         series: values,
         ticks,
@@ -176,6 +184,9 @@ fn tokens(count: u64) -> String {
 }
 
 fn session_cost(value: Option<f64>, basis: Option<CostBasis>) -> (f64, String) {
+    if value.is_none() {
+        return (0.0, "unknown".into());
+    }
     let mut sum = Sum::default();
     sum.add(value, basis);
     (sum.total, sum.label())
@@ -248,186 +259,65 @@ fn sessions(input: &Inputs) -> (Vec<SessionRow>, Option<String>) {
     )
 }
 
-fn day_label(day: &str, period: Period) -> String {
-    let Ok(date) = day.parse::<jiff::civil::Date>() else {
-        return day.to_owned();
-    };
-    match period {
-        Period::Month => format!("{:02}-{:02}", date.month(), date.day()),
-        Period::Today | Period::Week => {
-            use jiff::civil::Weekday;
-            match date.weekday() {
-                Weekday::Monday => "Mon",
-                Weekday::Tuesday => "Tue",
-                Weekday::Wednesday => "Wed",
-                Weekday::Thursday => "Thu",
-                Weekday::Friday => "Fri",
-                Weekday::Saturday => "Sat",
-                Weekday::Sunday => "Sun",
-            }
-            .to_owned()
-        }
-    }
-}
-
-/// Daily costs stacked by profile: the two costliest profiles and the rest together, or each
-/// profile when there are three or fewer. Bars are scaled to the costliest day.
-fn costs(input: &Inputs) -> Costs {
-    let title = match input.period {
-        Period::Month => "Cost per day · 30 days (UTC days)",
-        Period::Today | Period::Week => "Cost per day · 7 days (UTC days)",
-    }
-    .to_owned();
-    let Some(series) = input.series else {
-        return Costs {
-            title,
-            legend: Vec::new(),
-            bars: Vec::new(),
-            empty: Some(match input.series_error {
-                Some(error) => format!("Daily costs unavailable: {error}"),
-                None => "Loading daily costs from corrald…".into(),
-            }),
-        };
-    };
-    let mut totals: BTreeMap<&str, f64> = BTreeMap::new();
-    for usage in series.days.iter().flat_map(|day| &day.by_profile) {
-        *totals.entry(usage.profile.as_str()).or_default() += usage.cost_usd.unwrap_or(0.0);
-    }
-    let mut ranked: Vec<(&str, f64)> = totals.into_iter().filter(|(_, v)| *v > 0.0).collect();
-    ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
-    if ranked.is_empty() {
-        let recorded = series.days.iter().flat_map(|day| &day.by_profile);
-        let mut zero = Sum::default();
-        let mut unpriced = false;
-        for usage in recorded {
-            zero.add(usage.cost_usd, usage.cost_basis);
-            unpriced |= usage.cost_usd.is_none();
-        }
-        let empty = match (zero.known, unpriced) {
-            (false, false) => "corral recorded no usage in this period.".to_owned(),
-            (false, true) => "Usage recorded in this period has no price.".to_owned(),
-            (true, false) => format!("corral recorded {} of cost in this period.", zero.label()),
-            (true, true) => format!(
-                "corral recorded {} of cost in this period; some usage has no price.",
-                zero.label()
-            ),
-        };
-        return Costs {
-            title,
-            legend: Vec::new(),
-            bars: Vec::new(),
-            empty: Some(empty),
-        };
-    }
-    let grouped = ranked.len() > 3;
-    let named: Vec<&str> = ranked
-        .iter()
-        .take(if grouped { 2 } else { 3 })
-        .map(|(name, _)| *name)
-        .collect();
-    let mut legend: Vec<String> = named.iter().map(|&name| name.to_owned()).collect();
-    if grouped {
-        legend.push("other profiles".into());
-    }
-    let days: Vec<([f64; 3], Sum, String)> = series
-        .days
-        .iter()
-        .map(|day| {
-            let mut values = [0.0; 3];
-            let mut sum = Sum::default();
-            for usage in &day.by_profile {
-                sum.add(usage.cost_usd, usage.cost_basis);
-                let slot = named
-                    .iter()
-                    .position(|&name| name == usage.profile)
-                    .unwrap_or(2);
-                values[slot] += usage.cost_usd.unwrap_or(0.0);
-            }
-            (values, sum, day_label(&day.day, input.period))
-        })
-        .collect();
-    let most = days
-        .iter()
-        .map(|(values, _, _)| values.iter().sum::<f64>())
-        .fold(0.0, f64::max)
-        .max(f64::MIN_POSITIVE);
-    let bars = days
-        .into_iter()
-        .map(|(values, sum, day)| {
-            // Widths round on the running total, so the bar's length is its total's.
-            let mut widths = [0; 3];
-            let mut running = 0.0;
-            let mut drawn = 0;
-            for (slot, value) in values.into_iter().enumerate() {
-                running += value;
-                let end = (running / most * 100.0).round().min(100.0) as u32;
-                widths[slot] = end.saturating_sub(drawn);
-                drawn = end;
-            }
-            CostBar {
-                day,
-                values: widths,
-                total_label: if sum.known { sum.label() } else { "—".into() },
-            }
-        })
-        .collect();
-    Costs {
-        title,
-        legend,
-        bars,
-        empty: None,
-    }
-}
-
 /// The live page.
 pub fn page(input: &Inputs) -> Page {
     let now = Timestamp::from_second(i64::try_from(input.now).unwrap_or(0))
         .unwrap_or(Timestamp::UNIX_EPOCH);
-    let mut connections: BTreeMap<&str, Vec<&UsageRow>> = BTreeMap::new();
+    let mut connections: BTreeMap<&str, Vec<(&UsageRow, Sum)>> = BTreeMap::new();
     for row in &input.rows {
         connections
             .entry(row.connection.as_str())
             .or_default()
-            .push(*row);
+            .push((*row, row_cost(row, input)));
     }
     let mut providers = Vec::new();
     let mut profiles = Vec::new();
     for (connection, rows) in &connections {
-        let quota_row = rows.iter().copied().find(|row| quota(row).is_some());
-        let used = quota_row.and_then(quota);
-        let provider_level = used.map_or(Level::None, level);
-        let window = rows
+        let quota_fact = rows
             .iter()
-            .find_map(|row| row.window.clone())
+            .flat_map(|(row, _)| &row.quotas)
+            .filter(|fact| fact.source != "unknown" && fact.scope.as_deref() == Some("account"))
+            .max_by(|a, b| a.observed_at.cmp(&b.observed_at));
+        let used = quota_fact.and_then(quota::fraction);
+        let provider_level = used.map_or(Level::None, level);
+        let window = quota_fact
+            .and_then(|quota| quota.window.clone())
             .unwrap_or_else(|| "window unknown".into());
         let mut period = Sum::default();
         let mut today = Sum::default();
         let mut week = Sum::default();
-        for row in rows {
-            let cost = row_cost(row, input);
-            period.add(
-                cost.known.then_some(cost.total),
-                (!cost.estimated).then_some(CostBasis::Reported),
-            );
-            today.add(row.today_usd, row.cost_basis);
-            week.add(row.week_usd, row.cost_basis);
+        for (row, cost) in rows {
+            period.add_sum(cost);
+            today.add_total(row.today_usd, row.cost_basis, &row.today_completeness);
+            week.add_total(row.week_usd, row.cost_basis, &row.week_completeness);
         }
-        let (resets, phone_resets) = resets(quota_row, now, input.tz);
-        let basis = match quota_row.map(|row| row.limit_basis) {
-            Some(LimitBasis::Declared) => " · limit declared",
-            Some(LimitBasis::Observed) => " · limit observed",
-            _ => "",
-        };
-        let headroom = used.map_or_else(
+        let (resets, phone_resets) = resets(quota_fact, now, input.tz);
+        let headroom = quota_fact.and_then(|quota| quota.headroom).map_or_else(
             || "quota unknown".into(),
-            |used| format!("{}% headroom", percent((1.0 - used).max(0.0))),
+            |value| format!("{value} headroom"),
         );
+        let mut quotas: Vec<_> = rows
+            .iter()
+            .flat_map(|(row, _)| {
+                row.quotas
+                    .iter()
+                    .map(move |fact| quota::view(fact, row.profile.as_deref(), input.tz))
+            })
+            .collect();
+        if quotas.is_empty() {
+            quotas.push(quota::unknown());
+        }
         let chart = chart(input.series, connection, connection, input.tz, now);
         providers.push(ProviderView {
             id: (*connection).to_owned(),
             label: (*connection).to_owned(),
             window: window.clone(),
-            big: used.map_or_else(|| period.label(), |used| format!("{}%", percent(used))),
+            big: used.map_or_else(|| period.figure(), |used| format!("{}%", percent(used))),
+            big_note: if used.is_some() {
+                quota_fact.and_then(|fact| completeness_label(&fact.completeness))
+            } else {
+                period_note(&period, input)
+            },
             big_label: if used.is_some() {
                 USED_LABEL
             } else {
@@ -438,13 +328,13 @@ pub fn page(input: &Inputs) -> Page {
             level: provider_level,
             resets,
             phone_resets,
-            costs: format!("today {} · 7 days {}{basis}", today.label(), week.label()),
+            costs: format!("today {} · 7 days {}", today.label(), week.label()),
             chart_missing: chart.is_none().then_some("no window samples recorded"),
             chart,
             profiles: rows
                 .iter()
-                .map(|row| {
-                    let cost = row_cost(row, input).label();
+                .map(|(row, cost)| {
+                    let cost = period_label(cost, input);
                     PhoneProfile {
                         name: row
                             .profile
@@ -457,8 +347,9 @@ pub fn page(input: &Inputs) -> Page {
                     }
                 })
                 .collect(),
+            quotas,
         });
-        for (i, row) in rows.iter().enumerate() {
+        for (i, (row, cost)) in rows.iter().enumerate() {
             let share = quota(row).map(percent);
             profiles.push(ProfileRow {
                 provider: if i == 0 {
@@ -470,23 +361,35 @@ pub fn page(input: &Inputs) -> Page {
                     .profile
                     .clone()
                     .unwrap_or_else(|| "no profile recorded".into()),
-                window: row.window.clone().unwrap_or_else(|| "—".into()),
+                window: row
+                    .quotas
+                    .first()
+                    .and_then(|quota| quota.window.clone())
+                    .unwrap_or_else(|| "unknown".into()),
                 share_percent: share,
                 level: provider_level,
-                today: row_cost(row, input).label(),
-                headroom: match (i, used) {
-                    (0, Some(used)) => format!("{}%", percent((1.0 - used).max(0.0))),
-                    (0, None) => "unknown".into(),
-                    _ => String::new(),
-                },
+                today: cost.figure(),
+                today_note: period_note(cost, input),
+                headroom: row
+                    .quotas
+                    .first()
+                    .and_then(|quota| quota.headroom)
+                    .map_or_else(|| "unknown".into(), |value| value.to_string()),
             });
         }
     }
     let (sessions, sessions_note) = sessions(input);
     Page {
-        providers_empty: providers
-            .is_empty()
-            .then_some("corral has recorded no provider usage yet."),
+        providers_empty: (providers.is_empty()
+            && input.rows_error.is_none()
+            && !input.rows_loading
+            && !input.series_stale
+            && input.series_error.is_none()
+            && input
+                .series
+                .is_some_and(|series| completeness_label(&series.completeness).is_none())
+            && sessions.is_empty())
+        .then_some("corral has recorded no provider usage yet."),
         providers,
         profile_headers: [
             "Provider",
@@ -501,17 +404,49 @@ pub fn page(input: &Inputs) -> Page {
             "Headroom",
         ],
         profiles,
-        costs: costs(input),
+        costs: super::daily::costs(input),
         sessions: Some(sessions),
         sessions_note,
         disclaimer: LIVE_DISCLAIMER,
         phone_disclaimer: LIVE_PHONE_DISCLAIMER,
+        notices: notices(input),
     }
+}
+
+/// Suppress repeated transport wrappers without hiding the actual daemon cause.
+fn cause(mut error: &str) -> &str {
+    while let Some((wrapper, rest)) = error.split_once(": ") {
+        if ![
+            "app topic unavailable",
+            "unavailable",
+            "usage unavailable",
+            "daily costs unavailable",
+        ]
+        .iter()
+        .any(|prefix| wrapper.eq_ignore_ascii_case(prefix))
+        {
+            break;
+        }
+        error = rest;
+    }
+    error
+}
+
+fn notices(input: &Inputs) -> Vec<String> {
+    let rows = input.rows_error.map(cause);
+    let series = input.series_error.map(cause);
+    let text = match (rows, series) {
+        (None, None) => return vec![],
+        (Some(rows), Some(series)) if rows != series => format!("{rows}; daily costs: {series}"),
+        (Some(error), _) | (_, Some(error)) => error.to_owned(),
+    };
+    vec![format!("Usage unavailable: {text}")]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use corral_protocol::rows::LimitBasis;
 
     #[test]
     fn missing_quota_is_unknown_not_a_band() {
@@ -535,8 +470,11 @@ mod tests {
         let tz = TimeZone::UTC;
         let page = page(&Inputs {
             rows: vec![&row],
+            rows_error: None,
+            rows_loading: false,
             series: None,
             series_error: None,
+            series_stale: false,
             agents: vec![],
             assistants: vec![],
             period: Period::Today,
@@ -603,8 +541,11 @@ mod tests {
         let build = |assistants: Vec<&AssistantRow>| {
             page(&Inputs {
                 rows: vec![],
+                rows_error: None,
+                rows_loading: false,
                 series: None,
                 series_error: None,
+                series_stale: false,
                 agents: agents.iter().collect(),
                 assistants,
                 period: Period::Today,
@@ -628,3 +569,7 @@ mod tests {
         assert_eq!(both.sessions_note, agents_only.sessions_note);
     }
 }
+
+#[cfg(test)]
+#[path = "regression.rs"]
+mod regression;

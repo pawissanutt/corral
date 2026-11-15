@@ -607,19 +607,26 @@ fn plain(text: &str) -> String {
 }
 
 fn readback(feed: &Feed, entry: &str, fact: &AttachmentFact) -> Readback {
-    let Some(cache) = feed.detail(&attachment_ref(entry, &fact.id)) else {
+    artifact_readback(feed, &attachment_ref(entry, &fact.id), &fact.kind)
+}
+
+/// What corrald served at `target` (an attachment or any artifact) read back as `kind`: safe
+/// text, a sniffed image, or why it is not shown. Never fetches; the caller loads `target`.
+pub fn artifact_readback(feed: &Feed, target: &DetailRef, kind: &AttachmentKind) -> Readback {
+    let Some(cache) = feed.detail(target) else {
         return Readback::Loading;
     };
     let Some(DetailBody::Artifact(page)) = cache.body() else {
         return match &cache.error {
             Some(error) => Readback::Failed(format!(
-                "corrald could not serve this attachment: {}",
+                "corrald could not serve this {}: {}",
+                kind_word(kind),
                 refusal_words(error)
             )),
             None => Readback::Loading,
         };
     };
-    match (&fact.kind, &page.encoding) {
+    match (kind, &page.encoding) {
         (AttachmentKind::File, ArtifactEncoding::Text) => Readback::Text {
             text: plain(&page.content),
             truncated: page.truncated,

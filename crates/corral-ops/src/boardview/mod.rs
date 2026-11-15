@@ -17,6 +17,9 @@ mod projection_tests;
 #[cfg(test)]
 mod held_tests;
 
+#[cfg(test)]
+mod age_tests;
+
 use anyhow::{Context, Result};
 use corral_core::backend::{ChangeScope, ChangeSeq, FeedError, HeadQuery};
 use corral_core::{Status, Store};

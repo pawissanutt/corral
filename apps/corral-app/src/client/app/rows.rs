@@ -132,6 +132,17 @@ impl AppState {
                 self.touch_session(feed, &scope);
                 Topic::Session
             }
+            SubDelta::Terminal {
+                scope,
+                snapshot,
+                error,
+                ..
+            } => {
+                if self.terminal_scopes.contains_key(&scope) {
+                    self.terminal_capture(feed, scope, snapshot, error);
+                }
+                return Ok(vec![]);
+            }
             _ => return Ok(vec![]),
         };
         feed.update(|feed| {
@@ -200,8 +211,13 @@ impl AppState {
             feed.details
                 .values()
                 .filter(|cache| {
-                    affected(&cache.target, topic, changed)
-                        || (cache.stale && !cache.loading && topic_affects(&cache.target, topic))
+                    !matches!(&cache.target, DetailRef::Terminal { id }
+                        if self.terminal_scopes.contains_key(id)
+                            && feed.capable(STREAM_TERMINAL_V1))
+                        && (affected(&cache.target, topic, changed)
+                            || (cache.stale
+                                && !cache.loading
+                                && topic_affects(&cache.target, topic)))
                 })
                 .map(|cache| cache.target.clone())
                 .collect::<Vec<_>>()

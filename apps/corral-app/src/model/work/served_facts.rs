@@ -199,7 +199,7 @@ fn daemon_chips(feed: &daemon::Feed) -> Vec<SummaryChip> {
             new,
         ));
     }
-    let you = count(&[daemon::Group::NeedsYou]);
+    let you = u32::try_from(crate::model::inbox::attention_counts(feed).now).unwrap_or(u32::MAX);
     chips.push(SummaryChip::new(
         format!("{you} need you"),
         if you == 0 { Hue::Neutral } else { Hue::You },

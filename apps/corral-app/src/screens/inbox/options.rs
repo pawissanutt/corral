@@ -52,6 +52,9 @@ fn answer_option(app: AppState, locked: bool, option: &AnswerOption) -> AnyEleme
     let form = app.form;
     let on = option.selected;
     let value_size = if form == Form::Phone { 14.0 } else { 12.5 };
+    let phone = form == Form::Phone;
+    // The phone gives the proof link its own 44 pt line; inline it would be a 20 pt target.
+    let inline_proof = !phone && !option.consequences.is_empty();
     let last = option.consequences.len().saturating_sub(1);
     let cells: Vec<AnyElement> = option
         .consequences
@@ -62,7 +65,7 @@ fn answer_option(app: AppState, locked: bool, option: &AnswerOption) -> AnyEleme
                 .flex_shrink(1.0)
                 .min_w(px(0.0))
                 .line_height(px(value_size * 1.5));
-            let dd = match option.proof.as_ref().filter(|_| at == last) {
+            let dd = match option.proof.as_ref().filter(|_| inline_proof && at == last) {
                 Some(link) => dd
                     .child(text(" "))
                     .child(proof_link(app, option.number, link)),
@@ -71,16 +74,36 @@ fn answer_option(app: AppState, locked: bool, option: &AnswerOption) -> AnyEleme
             consequence(app, *label, dd)
         })
         .collect();
-    // With nothing recorded under the label, the proof link stands alone beneath it.
-    let lone_proof = option
-        .proof
-        .as_ref()
-        .filter(|_| option.consequences.is_empty())
-        .map(|link| {
-            view()
+    // With nothing recorded under the label, or on the phone, the proof link stands alone
+    // beneath it.
+    let lone_proof = option.proof.as_ref().filter(|_| !inline_proof).map(|link| {
+        if !phone {
+            return view()
+                .flex_row()
                 .mt(px(6.0))
                 .child(proof_link(app, option.number, link))
-        });
+                .into_element();
+        }
+        view()
+            .flex_row()
+            .items_center()
+            .self_start()
+            .min_h(px(44.0))
+            .cursor_pointer()
+            .role(AccessibilityRole::Link)
+            .label(link.label.clone())
+            .test_id(&format!("btn-proof-{}", option.number))
+            .on_press(press(app, link.action.clone()))
+            .active(|s| s.opacity(0.6))
+            .focus_visible(ring)
+            .child(
+                words(app, link.label.clone(), 13.0, Token::Ink3)
+                    .underline()
+                    .text_decoration_color(color(Token::Rule2))
+                    .underline_offset(px(2.0)),
+            )
+            .into_element()
+    });
     let consequences = match form {
         Form::Desktop => view()
             .flex_row()
@@ -297,7 +320,7 @@ fn draft_row(app: AppState, part: &Recommendation) -> AnyElement {
         field
             .font_family(FONT_TEXT)
             .text_size(px(if form == Form::Phone { 15.5 } else { 13.0 }))
-            .h(px(if form == Form::Phone { 28.0 } else { 22.0 }))
+            .h(px(if form == Form::Phone { 44.0 } else { 22.0 }))
     };
     let pencil = if form == Form::Terminal {
         text(format!(" {} ", part.draft_mark))
@@ -330,7 +353,7 @@ fn draft_row(app: AppState, part: &Recommendation) -> AnyElement {
             .gap(px(10.0))
             .pl(px(10.0))
             .pr(px(14.0))
-            .py(px(10.0))
+            .py(px(if form == Form::Phone { 2.0 } else { 10.0 }))
             .rounded(px(if form == Form::Phone { 12.0 } else { 8.0 }))
             .border_1()
             .border_color(color(Token::Rule))

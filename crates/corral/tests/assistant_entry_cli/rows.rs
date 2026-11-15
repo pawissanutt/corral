@@ -4,6 +4,7 @@ use super::Class::{self, File, Read, Refused};
 /// One row per command path, plus one per argument that changes the class.
 pub(super) const ROWS: &[(&str, &[&str], Class)] = &[
     ("", &[], Refused),
+    ("ask", &["message"], Refused),
     ("daemon run", &[], Refused),
     ("daemon status", &["--json"], Read),
     ("daemon socket", &[], Read),

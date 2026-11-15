@@ -3,9 +3,8 @@
 use std::borrow::Cow;
 
 use corral_protocol::app as wire;
-use corral_protocol::rows::{InboxState, PlanState};
 
-use crate::model::daemon::{DaemonLevel, Feed, Group, Link, PmLevel, RuntimeLevel};
+use crate::model::daemon::{DaemonLevel, Feed, Link, PmLevel, RuntimeLevel};
 use crate::model::devices::DeviceLink;
 use crate::model::effect::{Conn, Effect};
 use crate::model::nav::{Destination, Form, SettingsSection};
@@ -77,6 +76,43 @@ pub struct Health {
     /// The visible source description.
     pub source: Option<Cow<'static, str>>,
 }
+
+/// Fold healthy runtimes on a narrow phone strip without hiding a degraded runtime or PM.
+pub fn compact_segments(health: &Health) -> Vec<Segment> {
+    let start = health
+        .segments
+        .iter()
+        .position(|segment| segment.name == "corrald")
+        .map(|index| index + 1);
+    let end = health
+        .segments
+        .iter()
+        .position(|segment| segment.name == "PM");
+    let Some((start, end)) = start.zip(end).filter(|(start, end)| start <= end) else {
+        return health.segments.clone();
+    };
+    let healthy = health.segments[start..end]
+        .iter()
+        .filter(|segment| segment.tone == Tone::Ok)
+        .count();
+    if healthy < 2 {
+        return health.segments.clone();
+    }
+    let mut segments = Vec::with_capacity(health.segments.len() - healthy + 1);
+    for (index, segment) in health.segments.iter().enumerate() {
+        if index == start {
+            segments.push(Segment {
+                name: "runtimes".into(),
+                value: "ok".into(),
+                tone: Tone::Ok,
+            });
+        }
+        if !(start..end).contains(&index) || segment.tone != Tone::Ok {
+            segments.push(segment.clone());
+        }
+    }
+    segments
+}
 /// Workspace identity and device details.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
@@ -143,7 +179,10 @@ impl Snapshot {
     }
     /// Whether the destination has a count requiring the user's attention.
     pub fn needs_you(&self, destination: Destination) -> bool {
-        destination == Destination::Inbox && self.count(destination).is_some()
+        matches!(
+            destination,
+            Destination::Inbox | Destination::Now | Destination::Plans | Destination::Review
+        ) && self.count(destination).is_some()
     }
     /// The destination body line for this state.
     pub fn body_line(&self, destination: Destination) -> Cow<'static, str> {
@@ -217,24 +256,14 @@ pub fn unavailable_line(feed: &Feed, destination: Destination) -> String {
     }
 }
 
-/// Open needs-you rows: served questions when the Inbox is served, else the board's group.
+/// Canonical open owner moves, never inferred from task status or PM work.
 pub fn needs_you(feed: &Feed) -> usize {
-    if feed.capable(wire::INBOX_V1) {
-        feed.inbox
-            .values()
-            .filter(|row| matches!(row.state, InboxState::Open))
-            .count()
-    } else {
-        feed.board.count(Group::NeedsYou)
-    }
+    crate::model::inbox::attention_counts(feed).total as usize
 }
 
 /// Plans waiting for the owner's acceptance.
 pub fn awaiting_plans(feed: &Feed) -> usize {
-    feed.plans
-        .values()
-        .filter(|row| matches!(row.state, PlanState::Awaiting))
-        .count()
+    crate::model::inbox::attention_counts(feed).plans as usize
 }
 
 /// The authenticated name of this device: the daemon's session, else its enrolment.
@@ -435,12 +464,24 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
             || Cow::Borrowed("offline"),
             |synced| Cow::Owned(format!("offline · last sync {synced}")),
         ))
-    } else if cfg!(target_arch = "wasm32") {
-        Some(Cow::Borrowed("direct · paired, encrypted"))
     } else {
-        Some(Cow::Borrowed("direct · loopback"))
+        use corral_protocol::device::DeviceReach;
+        Some(Cow::Borrowed(
+            match feed
+                .session
+                .as_ref()
+                .and_then(|session| session.device.reach)
+            {
+                Some(DeviceReach::Unix) => "direct · Unix socket",
+                Some(DeviceReach::Loopback) => "direct · loopback",
+                Some(DeviceReach::Lan) => "direct · LAN",
+                Some(DeviceReach::Tailscale) => "direct · Tailscale",
+                Some(DeviceReach::Other) | None => "direct · reach unknown",
+            },
+        ))
     };
-    let count = needs_you(feed);
+    let attention = crate::model::inbox::attention_counts(feed);
+    let count = attention.total;
     let workspace_name = feed.workspace.as_deref().and_then(|path| {
         path.trim_end_matches('/')
             .rsplit('/')
@@ -468,16 +509,23 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
             OperatingMode::Other => "Mode · unknown",
         }
     });
-    let mut counts = vec![(Destination::Inbox, count as u32)];
-    if feed.capable(wire::PLANS_V1) {
-        counts.push((Destination::Plans, awaiting_plans(feed) as u32));
-    }
+    let counts = Destination::ALL
+        .into_iter()
+        .filter_map(|destination| {
+            destination
+                .attention_count(&attention)
+                .map(|count| (destination, u32::try_from(count).unwrap_or(u32::MAX)))
+        })
+        .collect();
     Snapshot::new(
         DataState::Daemon,
         Health {
             segments,
             reach,
-            e2e: !refused && cfg!(target_arch = "wasm32"),
+            e2e: !refused
+                && feed.session.as_ref().is_some_and(|session| {
+                    session.device.platform == corral_protocol::device::DevicePlatform::Web
+                }),
             attention: (count > 0).then(|| format!("{count} need you").into()),
             clock: (!feed.clock.is_empty()).then(|| feed.clock.clone().into()),
             source: Some(source),
@@ -496,8 +544,8 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
                 .map(|name| Cow::Owned(name.to_owned()))
                 .unwrap_or(Cow::Borrowed("this device")),
             via: device
-                .map(|name| Cow::Owned(format!("via=app:{name}")))
-                .unwrap_or(Cow::Borrowed("via=app")),
+                .map(|name| Cow::Owned(format!("you on {name}")))
+                .unwrap_or(Cow::Borrowed("you on this device")),
         }),
         counts,
     )
@@ -535,7 +583,13 @@ pub fn daemon_connection_banner(feed: &Feed, form: Form) -> Option<ConnectionBan
     Some(ConnectionBanner {
         tone,
         text,
-        buttons: if form == Form::Phone {
+        buttons: if matches!(feed.device, DeviceLink::Failed(_)) {
+            vec![BannerButton {
+                label: "Open Connection",
+                effect: Effect::GoSettings(SettingsSection::Connection),
+                quiet: false,
+            }]
+        } else if form == Form::Phone {
             Vec::new()
         } else {
             vec![BannerButton {
@@ -551,6 +605,23 @@ pub fn daemon_connection_banner(feed: &Feed, form: Form) -> Option<ConnectionBan
 mod tests {
     use super::*;
     use crate::model::daemon::{DaemonHealth, Runtime};
+
+    #[test]
+    fn refused_identity_offers_connection_recovery_in_every_form() {
+        let feed = Feed {
+            device: DeviceLink::Failed("daemon identity did not match".into()),
+            ..Feed::default()
+        };
+        for form in [Form::Desktop, Form::Phone, Form::Terminal] {
+            let banner = daemon_connection_banner(&feed, form).expect("identity refusal");
+            assert!(banner.buttons.iter().any(|button| {
+                matches!(
+                    button.effect,
+                    Effect::GoSettings(SettingsSection::Connection)
+                ) && !button.quiet
+            }));
+        }
+    }
 
     #[test]
     fn ask_is_unknown_before_negotiation_and_refused_only_by_a_negotiated_daemon() {
@@ -657,7 +728,7 @@ mod tests {
         let workspace = snapshot.workspace.as_ref().expect("workspace");
         assert_eq!(workspace.name, "workspace");
         assert_eq!(workspace.device, "owner-laptop");
-        assert_eq!(workspace.via, "via=app:owner-laptop");
+        assert_eq!(workspace.via, "you on owner-laptop");
         assert_eq!(
             snapshot.health.source.as_deref(),
             Some("corrald · workspace · Sat 14 Nov")
@@ -673,7 +744,7 @@ mod tests {
         let workspace = unknown.workspace.as_ref().expect("workspace");
         assert_eq!(workspace.name, "corrald");
         assert_eq!(workspace.device, "this device");
-        assert_eq!(workspace.via, "via=app");
+        assert_eq!(workspace.via, "you on this device");
         assert_eq!(unknown.health.source.as_deref(), Some("corrald"));
     }
 }

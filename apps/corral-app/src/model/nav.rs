@@ -11,6 +11,8 @@ pub const ASK_LABEL: &str = "Ask";
 pub const PALETTE_HINT: &str = "Go to, answer, open…";
 /// Compact terminal palette launcher label.
 pub const PALETTE_LABEL: &str = "Go to";
+/// The sidebar's name in the terminal key line, after its Ctrl+B cap.
+pub const SIDEBAR_LABEL: &str = "Sidebar";
 /// Global Ask shortcut displayed by shell chrome.
 pub const ASK_KEY: &str = "/";
 /// Global palette shortcut displayed by shell chrome.
@@ -84,6 +86,16 @@ pub enum Destination {
 }
 
 impl Destination {
+    /// Sidebar badges use the same canonical owner moves as their destination groups.
+    pub fn attention_count(self, counts: &corral_protocol::rows::AttentionCounts) -> Option<u64> {
+        match self {
+            Self::Inbox => Some(counts.inbox),
+            Self::Now => Some(counts.now),
+            Self::Plans => Some(counts.plans),
+            Self::Review => Some(counts.review),
+            _ => None,
+        }
+    }
     /// Destinations in navigation order.
     pub const ALL: [Destination; 9] = [
         Self::Inbox,

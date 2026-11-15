@@ -14,7 +14,7 @@ Fixture mode includes:
 - **Settings**: device pairing, notifications, profiles and other preferences.
 - **Ask**: a composer for questions, ideas and instructions, plus assistant threads. Replies to newly typed messages are not simulated, as in the mockup.
 
-The explicit fixture preview includes the palette's Demo controls and local hotkey window, share sheet and lock-screen push demos. Open the palette with `Ctrl K` and choose `Data: fixture` to enter it.
+The explicit fixture preview includes the palette's Demo controls and illustrations of a hotkey window, phone share sheet and lock-screen push. These are not OS integration; share/push illustrations are offered only where mounted. Open the palette with `Ctrl K` and choose `Data: fixture` to enter it.
 
 The app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain, not a member of corral's workspace. The [design handoff](../../docs/app-design/README.md) contains the requirements, architecture proposal and runnable mockup, with their authority and implementation-status caveats.
 
@@ -175,6 +175,42 @@ by the app. Attachment uploads require a connection; ready uploads may accompany
 message, but expiry or delivery failure is shown. Queued messages can be cancelled; a
 cancellation that loses a delivery race is reported rather than presented as withdrawn.
 
+### Native entry points
+
+On macOS, Windows and Linux, the app registers `mod+shift+space` system-wide
+(Command on macOS, Control elsewhere). It raises the main window and opens the same
+Ask composer as the in-app button, retaining the current draft and connection state.
+Closing the main window hides it rather than terminating the root that owns the shortcut;
+the native tray offers Show Corral, Ask and Quit Corral. Linux needs a desktop portal
+supporting GlobalShortcuts, and its tray needs a StatusNotifierItem-capable panel
+(stock GNOME needs an extension). Registration refusal is reported, not treated as success.
+Set `CORRAL_ASK_SHORTCUT` before launching to use another NSH keystroke, for example
+`ctrl+alt+space`; malformed overrides are refused without registering. Linux may ask
+for confirmation or a different binding through its desktop portal.
+
+The shortcut runs while the native app is running, including while its main window
+is hidden, not after Quit. Packaged launches (and the direct desktop binary on
+Windows/Linux) use single-instance behavior. Browser, terminal and headless targets
+do not register system keys or a tray. Native execution has not been verified on
+this host; `cargo run --features desktop` requires a desktop-capable build machine.
+
+Inbound OS sharing is blocked by NSH 0.5.0's packaged-host API, not implemented by
+the fixture share sheet. Android's
+[`AppActivity.java:21–24,46–53`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-platform-android/java/com/longbridge/nsh/AppActivity.java#L21-L53)
+routes notifications and URL intents only;
+[`NshView.java:610–613`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-platform-android/java/com/longbridge/nsh/NshView.java#L610-L613)
+rejects `ACTION_SEND`/`ACTION_SEND_MULTIPLE`. iOS's
+[`app.rs:148–164`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-platform-ios/src/app.rs#L148-L164)
+routes URL contexts, not a share-extension payload; no packaged share-extension target
+or inbound text/link/file share event is exposed. Desktop URL/file opening is not an
+OS share-target registration API either. Web packaging
+[`web.rs:1260–1287`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-cli/src/web.rs#L1260-L1287)
+generates a fixed `manifest.webmanifest` without `share_target`, and
+[`WebConfig`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-cli/src/package.rs#L532-L556)
+has no manifest override/share-target setting. No unsupported manifest key or simulated
+share receiver is installed. Paste, file picking and link attachments remain available
+inside Ask.
+
 ## Commands
 
 Run one cargo or NSH build at a time on this shared host.
@@ -229,10 +265,11 @@ Native desktop backends are behind the off-by-default `desktop` Cargo feature be
 
 ## Not built
 
-Not built: LAN or relay access, native window chrome, tray, system-level global hotkey,
-share and push integration, biometric confirmation and installer packaging. The hotkey
-window, share sheet and lock-screen push are local demos. The web package is a static site,
-not an installer; `com.example.corral` is a placeholder identifier before release.
+Not built: LAN or relay access, native window chrome, inbound OS share targets, push integration,
+biometric confirmation and installer packaging. The fixture hotkey illustration,
+share sheet and lock-screen push are local demos; the native shortcut and tray above
+use real desktop APIs. The web package is a static site, not an installer;
+`com.example.corral` is a placeholder identifier before release.
 GTK desktop and physical phone builds have not been exercised on this host; phone web
 layout is part of the app. Local terminal and paired Chromium verification is not evidence
 of native OS integration or a full release gate.

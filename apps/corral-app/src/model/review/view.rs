@@ -414,8 +414,6 @@ pub struct DetailView {
 pub struct PageView {
     /// Pushed-page title on phone.
     pub title: String,
-    /// Phone back-control label; absent on desktop and terminal.
-    pub back_label: Option<&'static str>,
     pub phone: bool,
     /// Reading the last known state while offline, down or revalidating.
     pub stale: bool,
@@ -430,9 +428,9 @@ pub struct PageView {
     pub decide: DecideBar,
 }
 
-/// Resolves the Diff idiom rule: only desktop widths ≥ 900 pt may show split rows.
+/// Only content widths ≥ 1100 pt have enough room for readable split code columns.
 pub fn effective_layout(state: &State, env: Env, width: f32) -> Layout {
-    if env.form == Form::Desktop && width >= 900.0 {
+    if env.form == Form::Desktop && width >= 1100.0 {
         state.layout
     } else {
         Layout::Unified

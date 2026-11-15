@@ -20,12 +20,12 @@ const ORIGINS: usize = 8;
 ///
 /// Model choices contain only corral-pi profiles with a configured model. Their names are exact
 /// profile keys suitable for `assistant.agent`; launch eligibility is not asserted. The explicit
-/// assistant profile is absent when it inherits `pm.agent`. No canonical summary-profile or host
-/// identity is available in this contract, so those fields remain absent/empty.
+/// assistant profile is absent when it inherits `pm.agent`; the summary profile is absent when
+/// rollover inherits the thread's current model. Host identity is not available in this contract.
 /// `profiles` separately contains every exact configured profile (including non-assistant harnesses,
 /// profiles without a model, and personal-layer profiles). It exposes configured model/effort,
 /// workspace/personal presence, and removal restrictions from the same service used at commit.
-/// The summary-profile field remains absent because no such canonical configuration exists.
+/// It also reports structural summary-profile refusals; credentials and access are not asserted.
 ///
 /// Choices are limited to sixteen (the configured effective assistant choice first), origins to
 /// eight, and display-only paths/scope descriptions to 256 characters. Oversized identifiers are
@@ -85,7 +85,11 @@ fn settings(ctx: &Ctx) -> Result<SettingsSnapshot> {
             .agent
             .as_deref()
             .and_then(|value| exact(value, 96)),
-        summary_profile: None,
+        summary_profile: config
+            .assistant
+            .summary_profile
+            .as_deref()
+            .and_then(|value| exact(value, 96)),
         listener,
         config_hash: crate::command::config_hash(&document),
         rev: 0,

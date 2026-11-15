@@ -147,6 +147,10 @@ pub enum Action {
         rev: u32,
         option: String,
     },
+    /// Daemon: answer an assistant's ask_user question in the owner's own words, at its
+    /// revision. The field owns the text while typing, so the renderer fills `text` when Send
+    /// is pressed.
+    AnswerText { key: String, rev: u32, text: String },
     /// Daemon: start (`Some(task)`) or leave editing a filed Idea's title.
     EditIdea(Option<String>),
     /// Daemon: save the typed title of a filed Idea. The field owns the text while typing, so

@@ -19,6 +19,9 @@ pub struct ReviewDetail {
     pub base: Option<String>,
     pub state: String,
     pub verdicts: Vec<ReviewVerdict>,
+    /// Canonical gate receipts, independent of human or agent reviewer verdicts.
+    #[serde(default)]
+    pub gates: Vec<ReviewGate>,
     pub files: Vec<ReviewFile>,
     pub report: Option<String>,
     pub acceptance: Vec<String>,
@@ -30,6 +33,19 @@ pub struct ReviewDetail {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewVerdict {
+    pub by: String,
+    pub sha: String,
+    pub verdict: String,
+    pub at: Option<String>,
+    pub text: Option<String>,
+    pub stale: bool,
+}
+
+/// A run's latest gate receipt, retained even when it checked an older candidate.
+/// `by` names its recorded commands; `text` contains failure or stale diagnostics.
+/// Combined canonical output remains available in `ReviewDetail::gate_log_tail`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReviewGate {
     pub by: String,
     pub sha: String,
     pub verdict: String,

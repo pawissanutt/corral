@@ -107,7 +107,8 @@ pub fn is_question(row: &InboxRow) -> bool {
 
 /// Whether a row still waits on the owner.
 pub fn is_open(row: &InboxRow) -> bool {
-    row.kind != InboxKind::PmAction && matches!(row.state, InboxState::Open)
+    row.kind != InboxKind::PmAction
+        && corral_protocol::rows::AttentionCounts::from_rows(std::slice::from_ref(row)).total > 0
 }
 
 /// Where opening a row leads: its question, assistant thread, plan, review or task.
@@ -116,15 +117,11 @@ pub fn target(row: &InboxRow) -> Option<Live> {
     match row.kind {
         _ if is_question(row) => Some(Live::Question(Id::new(&row.id))),
         InboxKind::Prompt => (!row.from.is_empty()).then(|| Live::Thread(Id::new(&row.from))),
-        InboxKind::OwnerDecision => Some(
-            match row.attention.as_ref().map(|a| a.destination) {
-                Some(AttentionDestination::Now) => id(&row.task).map(Live::Task),
-                Some(AttentionDestination::Plans) => id(&row.plan).map(Live::Plan),
-                Some(AttentionDestination::Review) => id(&row.task).map(Live::Review),
-                _ => None,
-            }
-            .unwrap_or_else(|| Live::Question(Id::new(&row.id))),
-        ),
+        InboxKind::OwnerDecision => match row.attention.as_ref().map(|a| a.destination) {
+            Some(AttentionDestination::Plans) => id(&row.plan).map(Live::Plan),
+            Some(AttentionDestination::Review) => id(&row.task).map(Live::Review),
+            _ => id(&row.task).map(Live::Task),
+        },
         InboxKind::PlanAcceptance => Some(Live::Plan(
             id(&row.plan).unwrap_or_else(|| Id::new(&row.id)),
         )),
@@ -135,17 +132,11 @@ pub fn target(row: &InboxRow) -> Option<Live> {
     }
 }
 
-/// Rows in the order the owner works them: open before settled, blocking first, then the
-/// oldest ask, then id.
+/// Canonical owner moves in working order: blocking first, then the oldest ask and id.
 pub fn ordered(feed: &Feed) -> Vec<&InboxRow> {
-    let mut rows: Vec<&InboxRow> = feed
-        .inbox
-        .values()
-        .filter(|row| row.kind != InboxKind::PmAction)
-        .collect();
+    let mut rows: Vec<&InboxRow> = feed.inbox.values().filter(|row| is_open(row)).collect();
     rows.sort_by_cached_key(|row| {
         (
-            !is_open(row),
             !row.blocking,
             row.asked_at.as_deref().and_then(unix).unwrap_or(u64::MAX),
             row.id.clone(),
@@ -335,7 +326,21 @@ impl State {
             Action::Submit(key) => self.submit(key, feed),
             Action::Followup(key) => self.followup(key, feed),
             Action::Recover(cmd) => vec![Effect::Recover(cmd)],
-            Action::Refetch(key) => vec![refetch(feed, &key)],
+            Action::Refetch(key) => {
+                let mut effects = vec![refetch(feed, &key)];
+                effects.extend(
+                    super::question_context_refs(self, feed, &key)
+                        .into_iter()
+                        .map(|target| {
+                            Effect::Detail(DetailGet {
+                                target,
+                                etag: None,
+                                page: None,
+                            })
+                        }),
+                );
+                effects
+            }
             Action::AskAbout(key, pm) => {
                 let rev = question_detail(feed, &key).map(|detail| u64::from(detail.rev));
                 vec![Effect::AskAbout {

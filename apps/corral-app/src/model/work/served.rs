@@ -78,15 +78,31 @@ fn shown<'a>(state: &State, tasks: &'a [daemon::Task]) -> Vec<&'a daemon::Task> 
         .collect()
 }
 
+pub(super) fn task_group(feed: &daemon::Feed, task: &daemon::Task) -> GroupKey {
+    if crate::model::inbox::owner_moves(feed).any(|row| {
+        row.task.as_deref() == Some(task.id.as_str())
+            || row.plan.as_deref() == Some(task.id.as_str())
+    }) {
+        GroupKey::You
+    } else if task.group == daemon::Group::NeedsYou {
+        GroupKey::Queued
+    } else {
+        group_key(task.group)
+    }
+}
+
 /// The non-empty groups of `tasks`, in display order, each keeping the board's order.
-fn grouped<'a>(tasks: &[&'a daemon::Task]) -> Vec<(GroupKey, Vec<&'a daemon::Task>)> {
+fn grouped<'a>(
+    tasks: &[&'a daemon::Task],
+    feed: &daemon::Feed,
+) -> Vec<(GroupKey, Vec<&'a daemon::Task>)> {
     ORDER
         .iter()
-        .map(|(key, members)| {
+        .map(|(key, _)| {
             let rows: Vec<&daemon::Task> = tasks
                 .iter()
                 .copied()
-                .filter(|task| members.contains(&task.group))
+                .filter(|task| task_group(feed, task) == *key)
                 .collect();
             (*key, rows)
         })
@@ -110,8 +126,13 @@ fn limit(state: &State, key: GroupKey, form: Form) -> usize {
 }
 
 /// The task ids the list shows, in display order: collapsed groups hide their rest.
-fn visible<'a>(state: &State, tasks: &[&'a daemon::Task], form: Form) -> Vec<&'a Id> {
-    grouped(tasks)
+fn visible<'a>(
+    state: &State,
+    tasks: &[&'a daemon::Task],
+    feed: &daemon::Feed,
+    form: Form,
+) -> Vec<&'a Id> {
+    grouped(tasks, feed)
         .into_iter()
         .flat_map(|(key, rows)| {
             let limit = limit(state, key, form);
@@ -125,24 +146,25 @@ fn selection<'a>(
     state: &State,
     chosen: Option<&Id>,
     tasks: &[&'a daemon::Task],
+    feed: &daemon::Feed,
     form: Form,
 ) -> Option<&'a Id> {
     chosen
         .and_then(|id| tasks.iter().copied().find(|task| task.id == *id))
         .map(|task| &task.id)
-        .or_else(|| visible(state, tasks, form).first().copied())
+        .or_else(|| visible(state, tasks, feed, form).first().copied())
 }
 
 /// The task the daemon's Now treats as selected on the board, if the list shows any.
 pub fn daemon_selection<'a>(
     state: &State,
     selected: &Selection,
-    board: &'a daemon::Board,
+    feed: &'a daemon::Feed,
     form: Form,
 ) -> Option<&'a daemon::Task> {
-    let tasks = shown(state, board.tasks());
-    let id = selection(state, selected.task.as_ref(), &tasks, form)?;
-    board.task(id)
+    let tasks = shown(state, feed.board.tasks());
+    let id = selection(state, selected.task.as_ref(), &tasks, feed, form)?;
+    feed.board.task(id)
 }
 
 /// The tasks with an event in the changes feed past this device's seen cursor.
@@ -211,9 +233,9 @@ fn list(
 ) -> GroupedList {
     let mut view = GroupedList::new(form);
     let phone = form == Form::Phone;
-    let selected = selection(state, chosen, tasks, form);
+    let selected = selection(state, chosen, tasks, feed, form);
     let unseen = unseen_tasks(feed);
-    for (key, members) in grouped(tasks) {
+    for (key, members) in grouped(tasks, feed) {
         let limit = limit(state, key, form);
         let mut rows: Vec<Row> = members
             .iter()
@@ -246,7 +268,11 @@ fn list(
         view.groups.push(GroupView {
             key,
             label: group_label(key),
-            count: u32::try_from(members.len()).unwrap_or(u32::MAX),
+            count: if key == GroupKey::You && state.goal.is_none() {
+                u32::try_from(crate::model::inbox::attention_counts(feed).now).unwrap_or(u32::MAX)
+            } else {
+                u32::try_from(members.len()).unwrap_or(u32::MAX)
+            },
             hue: key.hue(),
             detail: (!phone && key == GroupKey::Corral).then_some("gating · reviewing · landing"),
             rows,
@@ -297,9 +323,9 @@ pub(super) fn attention_button(feed: &daemon::Feed, task: &str) -> Option<Button
 
 impl State {
     /// Now's keys in the Daemon state: j/k and the arrows walk the visible rows in display
-    /// order (a collapsed group's hidden rows are skipped), Tab cycles the inspector, Enter
-    /// opens the selected task's open question or its session. `top` keeps keys away from
-    /// another domain's pushed page.
+    /// order (a collapsed group's hidden rows are skipped), ] cycles the inspector, Enter
+    /// opens canonical attention or shows the session in the same inspector.
+    /// `top` keeps keys away from another domain's pushed page.
     pub fn key_live(
         &mut self,
         key: &str,
@@ -325,8 +351,8 @@ impl State {
     ) -> Option<Vec<Effect>> {
         match key {
             "j" | "down" | "ArrowDown" | "k" | "up" | "ArrowUp" => {
-                let ids = visible(self, tasks, form);
-                let at = selection(self, chosen, tasks, form)
+                let ids = visible(self, tasks, feed, form);
+                let at = selection(self, chosen, tasks, feed, form)
                     .and_then(|current| ids.iter().position(|id| *id == current));
                 let next = match at {
                     Some(index) if matches!(key, "j" | "down" | "ArrowDown") => {
@@ -341,14 +367,21 @@ impl State {
                         .collect(),
                 )
             }
-            "enter" | "Enter" => {
-                let task = selection(self, chosen, tasks, form)
-                    .and_then(|id| tasks.iter().find(|task| task.id == *id))?;
-                let open = task_attention(feed, &task.id)
-                    .or_else(|| task_session(feed, task).map(Live::Session));
-                Some(open.map(Effect::OpenLive).into_iter().collect())
+            "." => {
+                let id = selection(self, chosen, tasks, feed, form)?;
+                Some(vec![Effect::VerbMenu(super::Record::Task(id.clone()))])
             }
-            "tab" | "Tab" => {
+            "enter" | "Enter" => {
+                let task = selection(self, chosen, tasks, feed, form)
+                    .and_then(|id| tasks.iter().find(|task| task.id == *id))?;
+                if let Some(attention) = task_attention(feed, &task.id) {
+                    Some(vec![Effect::OpenLive(attention)])
+                } else {
+                    self.now_tab = super::NowTab::Session;
+                    Some(Vec::new())
+                }
+            }
+            "]" => {
                 self.cycle_tab();
                 Some(Vec::new())
             }
@@ -379,6 +412,7 @@ mod tests {
             now: String::new(),
             now_code: String::new(),
             since: None,
+            age_since: None,
             held_reason: None,
             questions: 0,
             attention: Vec::new(),
@@ -386,6 +420,34 @@ mod tests {
             cost: None,
             cost_estimated: false,
             rev: 1,
+        }
+    }
+
+    fn owner_move(task: &str) -> corral_protocol::rows::InboxRow {
+        use corral_protocol::rows::*;
+        InboxRow {
+            id: task.into(),
+            kind: InboxKind::OwnerDecision,
+            task: Some(task.into()),
+            plan: None,
+            project: None,
+            title: String::new(),
+            from: String::new(),
+            asked_at: None,
+            needed_by: None,
+            blocking: true,
+            state: InboxState::Open,
+            question_rev: None,
+            answerable: false,
+            unanswerable_reason: None,
+            rev: 1,
+            attention: Some(AttentionMove {
+                whose_move: AttentionActor::Owner,
+                reason: "decision".into(),
+                next_step: "decide".into(),
+                command: None,
+                destination: AttentionDestination::Now,
+            }),
         }
     }
 
@@ -448,13 +510,9 @@ mod tests {
             task("T-4", daemon::Group::Queued),
         ];
         let refs: Vec<&daemon::Task> = tasks.iter().collect();
-        let list = list(
-            &State::default(),
-            &refs,
-            None,
-            &daemon::Feed::default(),
-            Form::Desktop,
-        );
+        let mut feed = daemon::Feed::default();
+        feed.inbox.insert("T-3".into(), owner_move("T-3"));
+        let list = list(&State::default(), &refs, None, &feed, Form::Desktop);
         let keys: Vec<GroupKey> = list.groups.iter().map(|group| group.key).collect();
         assert_eq!(keys, [GroupKey::You, GroupKey::Worker, GroupKey::Queued]);
         assert_eq!(ids(&list, GroupKey::Queued), ["T-1", "T-4"]);
@@ -614,7 +672,22 @@ mod tests {
                     question_rev: question.then_some(1),
                     answerable: question,
                     unanswerable_reason: None,
-                    attention: None,
+                    attention: Some(corral_protocol::rows::AttentionMove {
+                        whose_move: corral_protocol::rows::AttentionActor::Owner,
+                        reason: "owner action".into(),
+                        next_step: "decide".into(),
+                        command: None,
+                        destination: match kind {
+                            InboxKind::Review => {
+                                corral_protocol::rows::AttentionDestination::Review
+                            }
+                            InboxKind::PlanAcceptance => {
+                                corral_protocol::rows::AttentionDestination::Plans
+                            }
+                            InboxKind::Stuck => corral_protocol::rows::AttentionDestination::Now,
+                            _ => corral_protocol::rows::AttentionDestination::Inbox,
+                        },
+                    }),
                     rev: 1,
                 },
             );
@@ -705,5 +778,32 @@ mod tests {
         feed.topics.insert("board".into(), TopicState::default());
         assert!(!super::super::daemon_status(&feed).dimmed);
         assert!(super::super::daemon_status(&feed).banner.is_none());
+    }
+
+    #[test]
+    fn next_tab_key_and_enter_keep_the_live_session_in_now() {
+        let mut state = State::default();
+        let mut row = task("T-1", daemon::Group::Producing);
+        row.agent = Some(daemon::Agent {
+            session: Some("worker-1".into()),
+            role: "worker".into(),
+            profile: None,
+            runtime: None,
+            machine: None,
+        });
+        let feed = daemon::Feed::default();
+        assert_eq!(
+            state.key_tasks("]", None, &[&row], &feed, Form::Desktop),
+            Some(vec![])
+        );
+        assert_eq!(state.now_tab, super::super::NowTab::Evidence);
+        assert!(
+            state
+                .key_tasks("Tab", None, &[&row], &feed, Form::Desktop)
+                .is_none()
+        );
+        let effects = state.key_tasks("Enter", None, &[&row], &feed, Form::Desktop);
+        assert_eq!(effects, Some(vec![]));
+        assert_eq!(state.now_tab, super::super::NowTab::Session);
     }
 }

@@ -8,21 +8,21 @@ use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::plans::{
     self, ApprovedView, AwaitingView, Decide, Detail, DiffLine, DiffLineKind, DiffView,
-    DocumentSection, DocumentView, ExecutingView, Header, NoticeView, PipelineStage, ProposedRow,
-    ReviewRow, SectionBody,
+    DocumentSection, DocumentView, ExecutingView, Header, NoticeView, PipelineStage, PlanningView,
+    ProposedRow, ReviewRow, SectionBody,
 };
 use crate::model::text::span;
 use crate::model::{Form, Id};
 use crate::state::AppState;
 use crate::ui::kit::chip::{chip, illus};
 use crate::ui::kit::marks::{hue_ink, mark};
-use crate::ui::kit::notice::{empty, error, notice, skeleton};
+use crate::ui::kit::notice::{empty, error, loading as loading_notice, notice};
 use crate::ui::kit::page::{bar, bar_pane, pane as scroll_pane, qhead};
 use crate::ui::kit::text::{rich, rich_small};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
-use super::{command, decide, tracker};
+use super::{command, decide, tracker, verbs};
 
 /// Which detail shows, with the content its builder reads untracked. Parts that track their own
 /// reads (the decide bar, the graph, the story, typed fields) are blanked here, so a keystroke,
@@ -37,6 +37,7 @@ enum Kind {
     Scale,
     Loading,
     Notice(NoticeView),
+    Planning(Box<PlanningView>),
 }
 
 fn blank_decide() -> Decide {
@@ -79,6 +80,7 @@ fn kind_of(detail: &Detail) -> Kind {
         Detail::Scale(_) => Kind::Scale,
         Detail::Loading => Kind::Loading,
         Detail::Notice(view) => Kind::Notice(view.clone()),
+        Detail::Planning(view) => Kind::Planning(Box::new(view.clone())),
     }
 }
 
@@ -134,6 +136,7 @@ pub(super) fn pane(app: AppState) -> AnyElement {
             Kind::Scale => scroll_pane(app, "plan-detail", tracker::scale(app, detail)),
             Kind::Loading => scroll_pane(app, "plan-detail", loading(app)),
             Kind::Notice(_) => scroll_pane(app, "plan-detail", notice_view(app, detail)),
+            Kind::Planning(_) => scroll_pane(app, "plan-detail", planning(app, detail)),
         }))
         .into_element()
 }
@@ -152,6 +155,7 @@ pub(super) fn phone_body(app: AppState, plan: Option<Id>) -> AnyElement {
             Kind::Scale => tracker::scale(app, detail),
             Kind::Loading => loading(app),
             Kind::Notice(_) => notice_view(app, detail),
+            Kind::Planning(_) => planning(app, detail),
         }))
         .into_element()
 }
@@ -219,11 +223,13 @@ pub(super) fn header(app: AppState, head: &Header) -> AnyElement {
         meta.push(rich_small(app, &head.meta));
     }
     meta.extend(head.illustrative.map(|label| illus(app, label)));
-    let actions = head
+    let mut actions: Vec<AnyElement> = head
         .actions
         .iter()
         .map(|button| command(app, button, false))
         .collect();
+    // A served plan's commands (cancel, add or move a member) follow its own actions.
+    actions.extend(head.plan.clone().map(|plan| verbs::head_menu(app, plan)));
     let top = qhead(app, meta, head.title.clone(), None, actions);
     match &head.stale {
         None => top,
@@ -561,6 +567,20 @@ fn review(app: AppState, row: &ReviewRow) -> AnyElement {
         .into_element()
 }
 
+/// A plan still being drafted or reviewed, or whose planning failed: its head with its state,
+/// the pipeline at the design stage, then what is happening and what stands in the way. No
+/// decide bar: nothing awaits the owner's acceptance yet.
+fn planning(app: AppState, detail: Memo<Detail>) -> AnyElement {
+    let Detail::Planning(state) = detail.get_untracked() else {
+        return element_view().into_element();
+    };
+    element_view()
+        .child(header(app, &state.header))
+        .child(inset(app).pb(px(0.0)).child(pipeline(app, &state.pipeline)))
+        .child(empty(app, state.heading, state.body, None))
+        .into_element()
+}
+
 /// The approved plan: its head (state, id and revision, title) when corrald serves it, the
 /// empty state, its tracker and document commands wrapping 8 pt apart (two Cells in a
 /// terminal), and a stale copy's notice.
@@ -656,11 +676,12 @@ fn diff_content(app: AppState, detail: Memo<Detail>) -> AnyElement {
         .into_element()
 }
 
-/// corrald has not delivered the plan yet.
+/// corrald has not delivered the plan yet: the skeleton, and the caption once the wait is felt.
 fn loading(app: AppState) -> AnyElement {
     inset(app)
-        .child(skeleton(
+        .child(loading_notice(
             app,
+            plans::DETAIL_LOADING,
             &[
                 (0.3, 12.0),
                 (0.75, 20.0),

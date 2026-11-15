@@ -5,9 +5,13 @@
 
 use nsh_core::prelude::*;
 
+use crate::model::Form;
 use crate::model::usage::{Level, ProviderView};
 use crate::screens::usage::cellbar::gauge;
 use crate::screens::usage::chart::chart;
+use crate::screens::usage::costs::qualifier;
+use crate::screens::usage::quotas::quotas;
+use crate::state::AppState;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
@@ -45,9 +49,10 @@ fn window_chart(item: &ProviderView, (width, height): (f32, f32), size: f32) -> 
 }
 
 /// A desktop cell: the label and window, the big figure with its word, the headroom in its
-/// level, the reset time at the trailing edge, the band chart, the cost line. `first` leaves
-/// out the rule on its left. test_id `usage-<provider id>`.
-pub fn desktop_cell(item: &ProviderView, first: bool) -> AnyElement {
+/// level, the reset time at the trailing edge, what keeps the figure from being whole, the band
+/// chart, the cost line, then the quotas corral holds. `first` leaves out the rule on its left.
+/// test_id `usage-<provider id>`.
+pub fn desktop_cell(app: AppState, item: &ProviderView, first: bool) -> AnyElement {
     view()
         .test_id(&format!("usage-{}", item.id))
         .role(AccessibilityRole::Group)
@@ -110,19 +115,21 @@ pub fn desktop_cell(item: &ProviderView, first: bool) -> AnyElement {
                         .ml(auto()),
                 ),
         )
+        .children(big_note(app, item))
         .child(
             view()
                 .mt(px(6.0))
                 .child(window_chart(item, DESKTOP_CHART, 12.0)),
         )
         .child(words_text(item.costs.clone(), 12.0, FontWeight::NORMAL, Token::Ink3).mt(px(4.0)))
+        .children(quotas(app, item))
         .into_element()
 }
 
 /// A phone block (`.pband`): the label and window, the big figure, the headroom, the reset
-/// time, the band chart, then each profile with its share and cost. test_id
-/// `usage-<provider id>`.
-pub fn phone_block(item: &ProviderView) -> AnyElement {
+/// time, what keeps the figure from being whole, the band chart, each profile with its share and
+/// cost, then the quotas corral holds. test_id `usage-<provider id>`.
+pub fn phone_block(app: AppState, item: &ProviderView) -> AnyElement {
     let profiles = item
         .profiles
         .iter()
@@ -199,21 +206,23 @@ pub fn phone_block(item: &ProviderView) -> AnyElement {
                     .ml(auto()),
                 ),
         )
+        .children(big_note(app, item))
         .child(
             view()
                 .mt(px(6.0))
                 .child(window_chart(item, PHONE_CHART, 13.0)),
         )
         .child(view().gap(px(4.0)).mt(px(8.0)).children(profiles))
+        .children(quotas(app, item))
         .into_element()
 }
 
 /// A terminal gauge line and its detail: the label (bold, in a fixed column), the big figure
 /// (bold), the window gauge as wide as `room` Cells allow (blank where the quota is unknown),
-/// the headroom (bold in the held hue once in a zone, quiet before); under it, indented, the
-/// window, the reset time and the cost line, wrapped onto as many lines as `room` needs.
-/// test_id `usage-<provider id>`.
-pub fn terminal_line(item: &ProviderView, room: usize) -> AnyElement {
+/// the headroom (bold in the held hue once in a zone, quiet before); under it, indented, what
+/// keeps the figure from being whole, the window, the reset time and the cost line, wrapped onto
+/// as many lines as `room` needs, then the quotas. test_id `usage-<provider id>`.
+pub fn terminal_line(app: AppState, item: &ProviderView, room: usize) -> AnyElement {
     let headroom_cells = item.headroom.chars().count();
     let figure_cells = item.big.chars().count().max(USED_CELLS);
     let bar = room
@@ -276,6 +285,12 @@ pub fn terminal_line(item: &ProviderView, room: usize) -> AnyElement {
                 .child(term::space(GAP_CELLS as f32))
                 .child(headroom),
         )
+        .children(big_note(app, item).map(|note| {
+            view()
+                .pl(term::cells(GAP_CELLS as f32))
+                .child(note)
+                .into_element()
+        }))
         .children(details.into_iter().map(|line| {
             view()
                 .flex_row()
@@ -284,7 +299,23 @@ pub fn terminal_line(item: &ProviderView, room: usize) -> AnyElement {
                 .child(term::quiet(line).number_of_lines(1u32))
                 .into_element()
         }))
+        .children(quotas(app, item).map(|block| {
+            view()
+                .pl(term::cells(GAP_CELLS as f32))
+                .child(block)
+                .into_element()
+        }))
         .into_element()
+}
+
+/// What keeps the big figure from being whole (a partial scan, unpriced entries), under it.
+fn big_note(app: AppState, item: &ProviderView) -> Option<AnyElement> {
+    item.big_note.as_deref().map(|line| {
+        view()
+            .when(app.form != Form::Terminal, |v| v.mt(px(4.0)))
+            .child(qualifier(app, line))
+            .into_element()
+    })
 }
 
 /// Lines of at most `room` Cells holding `parts` in order, two Cells apart; a part longer than

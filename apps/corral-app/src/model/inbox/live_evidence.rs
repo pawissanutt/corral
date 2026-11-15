@@ -27,7 +27,12 @@ pub fn label(at: usize, block: &EvidenceBlock) -> String {
 }
 
 /// The evidence band of `key`, with the owner's selected block.
-pub fn assessment(key: &Id, draft: Option<&Draft>, detail: &QuestionDetail) -> Assessment {
+pub fn assessment(
+    key: &Id,
+    draft: Option<&Draft>,
+    detail: &QuestionDetail,
+    feed: &crate::model::daemon::Feed,
+) -> Assessment {
     if detail.evidence.is_empty() {
         return Assessment::Empty {
             note: "The asker attached no evidence to this question.",
@@ -51,7 +56,7 @@ pub fn assessment(key: &Id, draft: Option<&Draft>, detail: &QuestionDetail) -> A
     Assessment::Ready {
         label: "Evidence",
         tabs,
-        body: body(&detail.evidence[selected]),
+        body: body(&detail.evidence[selected], feed),
     }
 }
 
@@ -63,7 +68,7 @@ fn truncated(block: &EvidenceBlock) -> Rich {
     ]
 }
 
-fn body(block: &EvidenceBlock) -> EvidenceBody {
+fn body(block: &EvidenceBlock, feed: &crate::model::daemon::Feed) -> EvidenceBody {
     match &block.body {
         Body::Diff {
             path,
@@ -117,14 +122,18 @@ fn body(block: &EvidenceBlock) -> EvidenceBody {
                 .collect(),
             note: cut.then(|| truncated(block)),
         },
-        Body::Image { artifact } => EvidenceBody::Text {
-            file: block.title.clone(),
-            attribution: None,
-            lines: vec![vec![span(format!(
-                "Image: {} ({})",
-                artifact.title, artifact.source_ref
-            ))]],
-            note: None,
+        Body::Image { artifact } => EvidenceBody::Image {
+            file: artifact.title.clone(),
+            preview: match super::context::image_ref(artifact) {
+                Some(target) => crate::model::assistant::artifact_readback(
+                    feed,
+                    &target,
+                    &corral_protocol::attachment::AttachmentKind::Image,
+                ),
+                None => crate::model::assistant::Readback::Failed(
+                    "The evidence has no canonical artifact catalog reference.".into(),
+                ),
+            },
         },
         Body::Unresolved { reason } => EvidenceBody::Unresolved {
             file: block.title.clone(),

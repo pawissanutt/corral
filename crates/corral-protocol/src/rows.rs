@@ -401,6 +401,9 @@ pub struct ProfileChoice {
     pub references: Vec<String>,
     /// None only when canonical removal is currently possible; rechecked at commit.
     pub remove_refusal: Option<String>,
+    /// A configured profile may be unsuitable for an independent quick-thread summary request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_refusal: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

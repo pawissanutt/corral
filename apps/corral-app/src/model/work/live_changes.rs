@@ -3,10 +3,10 @@
 //! device's Mark seen advancing its cursor through the newest line.
 
 use crate::model::daemon::{Feed, Link};
-use crate::model::nav::{Form, PhoneTab};
+use crate::model::nav::Form;
 
 use super::{
-    Action, Button, ButtonKind, Changes, FeedRow, Press, State, change_row, changes_loading,
+    Button, ButtonKind, Changes, FeedRow, Press, State, change_row, changes_loading,
     changes_notice, daemon_status, feed_filters, stamp,
 };
 
@@ -48,15 +48,8 @@ fn last_visit(feed: &Feed) -> Option<String> {
         .filter(|at| !at.is_empty())
 }
 
-/// Changes in the Daemon state. `device` is the authenticated device's name, whose cursor this
-/// is; `tab` decides the phone's back label.
-pub fn live_changes(
-    state: &State,
-    feed: &Feed,
-    device: Option<&str>,
-    form: Form,
-    tab: PhoneTab,
-) -> Changes {
+/// Changes for the authenticated device's own cursor; the shell owns back navigation.
+pub fn live_changes(state: &State, feed: &Feed, device: Option<&str>, form: Form) -> Changes {
     let phone = form == Form::Phone;
     let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
     let visit = last_visit(feed);
@@ -114,12 +107,6 @@ pub fn live_changes(
         });
     Changes {
         title: "Changes",
-        back_label: phone.then_some(if tab == PhoneTab::More {
-            "More"
-        } else {
-            "Back"
-        }),
-        back: phone.then_some(Action::Back),
         subtitle,
         filters: feed_filters(state, form),
         recent,
@@ -185,7 +172,7 @@ mod tests {
             at: Some("2026-11-14T09:00:00Z".into()),
         });
         let mut state = State::default();
-        let changes = live_changes(&state, &feed, Some("phone"), Form::Desktop, PhoneTab::More);
+        let changes = live_changes(&state, &feed, Some("phone"), Form::Desktop);
         let ids = |rows: &[FeedRow]| rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&changes.recent), ["T-4", "T-3"]);
         assert_eq!(ids(&changes.history), ["T-2", "T-1"]);
@@ -196,7 +183,7 @@ mod tests {
             Some(Press::Seen(4))
         );
         state.filter = ChangeFilter::Verdicts;
-        let changes = live_changes(&state, &feed, None, Form::Desktop, PhoneTab::More);
+        let changes = live_changes(&state, &feed, None, Form::Desktop);
         assert_eq!(ids(&changes.recent), ["T-4"]);
         assert_eq!(ids(&changes.history), ["T-1"]);
     }
@@ -222,13 +209,7 @@ mod tests {
             at: None,
         });
         feed.changes_unseen = Some((100, 500));
-        let view = live_changes(
-            &State::default(),
-            &feed,
-            None,
-            Form::Terminal,
-            PhoneTab::More,
-        );
+        let view = live_changes(&State::default(), &feed, None, Form::Terminal);
         assert_eq!(view.recent.len(), 2);
         assert_eq!(view.recent[0].kind, MarkKind::Mark(Mark::Fail));
         assert!(view.recent[1].text.contains("backlog"));

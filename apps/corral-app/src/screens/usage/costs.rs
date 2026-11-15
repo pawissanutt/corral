@@ -2,14 +2,17 @@
 //! track (as the mockup draws them), the day before it and the total after it,
 //! then the legend. Desktop and phone draw filled boxes; a terminal draws Cell bars as wide as
 //! its room allows. The day and total beside each bar are its text; the bar itself is hidden
-//! from screen readers.
+//! from screen readers. The series' coverage or staleness comes first, in the held ink, and a
+//! day whose total is only partly known says so under its bar.
 
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::usage::Costs;
+use crate::model::hue::Hue;
+use crate::model::usage::{CostBar, Costs};
 use crate::screens::usage::cellbar::{COST_LOOKS, stacked, swatch};
 use crate::state::AppState;
+use crate::ui::kit::marks::hue_ink;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
@@ -50,74 +53,34 @@ fn metrics(form: Form) -> Metrics {
     }
 }
 
-/// The bars and the legend on desktop and phone: rows `day | bar | total` (34, the rest, 52 on
-/// desktop), bars 10 pt high with 2 pt corners, the legend 10 pt under them. test_id
-/// "usage-costs".
+/// The section on desktop and phone: the coverage note, then the bars and the legend, or what
+/// is said in their place. Rows `day | bar | total` (34, the rest, 52 on desktop), bars 10 pt
+/// high with 2 pt corners, a day's qualifier under its bar, the legend 10 pt under them.
+/// test_id "usage-costs".
 pub fn bars(app: AppState, costs: &Costs) -> AnyElement {
+    let content = match &costs.empty {
+        Some(words) => empty(app, words),
+        None => drawn(app, costs),
+    };
+    view()
+        .test_id("usage-costs")
+        .children(costs.note.as_deref().map(|line| {
+            view()
+                .pb(px(8.0))
+                .child(qualifier(app, line))
+                .into_element()
+        }))
+        .child(content)
+        .into_element()
+}
+
+fn drawn(app: AppState, costs: &Costs) -> AnyElement {
     let form = app.form;
     let m = metrics(form);
-    if let Some(words) = &costs.empty {
-        return empty(app, words);
-    }
     let rows = costs
         .bars
         .iter()
-        .cloned()
-        .map(|bar| {
-            let segments = bar
-                .values
-                .into_iter()
-                .zip(FILLS)
-                .map(|(value, fill)| {
-                    view()
-                        .h_full()
-                        .flex_shrink_0()
-                        .w(relative(value.min(100) as f32 / 100.0))
-                        .bg(color(fill))
-                        .into_element()
-                })
-                .collect::<Vec<_>>();
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(8.0))
-                .child(
-                    text(bar.day)
-                        .w(px(m.day))
-                        .flex_shrink_0()
-                        .number_of_lines(1u32)
-                        .font_family(FONT_TEXT)
-                        .text_size(px(m.size))
-                        .text_color(color(Token::Ink3)),
-                )
-                .child(
-                    view()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .h(px(m.bar))
-                        .flex_row()
-                        .rounded(px(2.0))
-                        .overflow_hidden()
-                        .accessibility_elements_hidden(true)
-                        .children(segments),
-                )
-                .child(
-                    view()
-                        .w(px(m.total))
-                        .flex_shrink_0()
-                        .flex_row()
-                        .justify_end()
-                        .child(
-                            text(bar.total_label)
-                                .number_of_lines(1u32)
-                                .font_family(FONT_MONO)
-                                .tabular_nums()
-                                .text_size(px(m.size * 0.93))
-                                .text_color(color(Token::Ink3)),
-                        ),
-                )
-                .into_element()
-        })
+        .map(|bar| day_row(app, bar, &m))
         .collect::<Vec<_>>();
     let legend = costs
         .legend
@@ -133,6 +96,7 @@ pub fn bars(app: AppState, costs: &Costs) -> AnyElement {
                     view()
                         .w(px(18.0))
                         .h(px(8.0))
+                        .flex_shrink_0()
                         .rounded(px(2.0))
                         .bg(color(fill)),
                 )
@@ -146,7 +110,6 @@ pub fn bars(app: AppState, costs: &Costs) -> AnyElement {
         })
         .collect::<Vec<_>>();
     view()
-        .test_id("usage-costs")
         .child(view().gap(px(m.gap)).children(rows))
         .child(
             view()
@@ -160,20 +123,89 @@ pub fn bars(app: AppState, costs: &Costs) -> AnyElement {
         .into_element()
 }
 
-/// The terminal's bars, `room` Cells wide: the day, the Cell bar, the total at the end; then the
-/// legend, each segment's Cell before its name. test_id "usage-costs".
+/// One day: its row, and under the bar what keeps its total from being whole.
+fn day_row(app: AppState, bar: &CostBar, m: &Metrics) -> AnyElement {
+    let segments = bar
+        .values
+        .into_iter()
+        .zip(FILLS)
+        .map(|(value, fill)| {
+            view()
+                .h_full()
+                .flex_shrink_0()
+                .w(relative(value.min(100) as f32 / 100.0))
+                .bg(color(fill))
+                .into_element()
+        })
+        .collect::<Vec<_>>();
+    let row = view()
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .child(
+            text(bar.day.clone())
+                .w(px(m.day))
+                .flex_shrink_0()
+                .number_of_lines(1u32)
+                .font_family(FONT_TEXT)
+                .text_size(px(m.size))
+                .text_color(color(Token::Ink3)),
+        )
+        .child(
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .h(px(m.bar))
+                .flex_row()
+                .rounded(px(2.0))
+                .overflow_hidden()
+                .accessibility_elements_hidden(true)
+                .children(segments),
+        )
+        .child(
+            view()
+                .w(px(m.total))
+                .flex_shrink_0()
+                .flex_row()
+                .justify_end()
+                .child(
+                    text(bar.total_label.clone())
+                        .number_of_lines(1u32)
+                        .font_family(FONT_MONO)
+                        .tabular_nums()
+                        .text_size(px(m.size * 0.93))
+                        .text_color(color(Token::Ink3)),
+                ),
+        );
+    match &bar.total_note {
+        None => row.into_element(),
+        Some(line) => view()
+            .gap(px(2.0))
+            .child(row)
+            // Under the bar: past the day column and its 8 pt gap.
+            .child(view().pl(px(m.day + 8.0)).child(qualifier(app, line)))
+            .into_element(),
+    }
+}
+
+/// The terminal's section, `room` Cells wide: the coverage note, then the day, the Cell bar and
+/// the total at the end, a day's qualifier on the line under it; then the legend, each
+/// segment's Cell before its name. test_id "usage-costs".
 pub fn terminal(app: AppState, costs: &Costs, room: usize) -> AnyElement {
+    let note = costs.note.as_deref().map(|line| qualifier(app, line));
     if let Some(words) = &costs.empty {
-        return empty(app, words);
+        return view()
+            .test_id("usage-costs")
+            .children(note)
+            .child(empty(app, words))
+            .into_element();
     }
     let cells = room
         .saturating_sub(TERM_DAY as usize + 1 + TERM_GAP + TERM_TOTAL)
         .clamp(TERM_BAR_MIN, TERM_BAR_MAX);
-    let rows = costs
-        .bars
-        .iter()
-        .cloned()
-        .map(|bar| {
+    let mut rows = Vec::with_capacity(costs.bars.len());
+    for bar in &costs.bars {
+        rows.push(
             view()
                 .flex_row()
                 .items_center()
@@ -182,7 +214,7 @@ pub fn terminal(app: AppState, costs: &Costs, room: usize) -> AnyElement {
                     view()
                         .w(term::cells(TERM_DAY))
                         .flex_shrink_0()
-                        .child(term::quiet(bar.day).number_of_lines(1u32)),
+                        .child(term::quiet(bar.day.clone()).number_of_lines(1u32)),
                 )
                 .child(term::space(1.0))
                 .child(
@@ -199,14 +231,22 @@ pub fn terminal(app: AppState, costs: &Costs, room: usize) -> AnyElement {
                         .flex_row()
                         .justify_end()
                         .child(
-                            text(bar.total_label)
+                            text(bar.total_label.clone())
                                 .number_of_lines(1u32)
                                 .text_color(color(Token::Ink)),
                         ),
                 )
-                .into_element()
-        })
-        .collect::<Vec<_>>();
+                .into_element(),
+        );
+        if let Some(line) = &bar.total_note {
+            rows.push(
+                view()
+                    .pl(term::cells(TERM_DAY + 1.0))
+                    .child(qualifier(app, line))
+                    .into_element(),
+            );
+        }
+    }
     let mut legend = Vec::new();
     for (at, (label, look)) in costs.legend.iter().cloned().zip(COST_LOOKS).enumerate() {
         if at > 0 {
@@ -218,9 +258,23 @@ pub fn terminal(app: AppState, costs: &Costs, room: usize) -> AnyElement {
     }
     view()
         .test_id("usage-costs")
+        .children(note)
         .children(rows)
         .child(term::blank())
         .child(view().flex_row().flex_wrap().children(legend))
+        .into_element()
+}
+
+/// What keeps a figure from being whole (partial scan, unpriced entries, a retained series):
+/// small words in the held ink, wrapping, so it is read before the figures it qualifies.
+pub(crate) fn qualifier(app: AppState, words: &str) -> AnyElement {
+    let line = text(words.to_owned()).text_color(hue_ink(Hue::Held));
+    if app.form == Form::Terminal {
+        return line.into_element();
+    }
+    line.font_family(FONT_TEXT)
+        .text_size(px(if app.form == Form::Phone { 13.0 } else { 11.5 }))
+        .line_height(px(if app.form == Form::Phone { 18.0 } else { 16.0 }))
         .into_element()
 }
 
@@ -228,14 +282,10 @@ pub fn terminal(app: AppState, costs: &Costs, room: usize) -> AnyElement {
 fn empty(app: AppState, words: &str) -> AnyElement {
     let words = text(words.to_owned()).text_color(color(Token::Ink3));
     if app.form == Form::Terminal {
-        return view().test_id("usage-costs").child(words).into_element();
+        return words.into_element();
     }
-    view()
-        .test_id("usage-costs")
-        .child(
-            words
-                .font_family(FONT_TEXT)
-                .text_size(px(if app.form == Form::Phone { 14.0 } else { 12.5 })),
-        )
+    words
+        .font_family(FONT_TEXT)
+        .text_size(px(if app.form == Form::Phone { 14.0 } else { 12.5 }))
         .into_element()
 }

@@ -23,16 +23,15 @@ pub(super) struct Socket {
 
 impl Socket {
     pub(super) fn open(
-        port: u16,
+        endpoint: &str,
         path: &str,
         generation: u64,
         tx: UnboundedSender<Input>,
     ) -> Result<Self, String> {
-        // A path must not be able to extend or replace the loopback authority.
-        if !path.starts_with('/') {
-            return Err("the browser socket path must start with /".into());
+        if !corral_protocol::device::valid_endpoint(endpoint) || !path.starts_with('/') {
+            return Err("the browser socket endpoint or protocol path is invalid".into());
         }
-        let ws = WebSocket::new(&format!("ws://127.0.0.1:{port}{path}"))
+        let ws = WebSocket::new(&format!("{endpoint}{path}"))
             .map_err(|err| js_error("opening browser socket", err))?;
         ws.set_binary_type(BinaryType::Arraybuffer);
         let queued = Rc::new(Cell::new(0usize));

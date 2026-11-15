@@ -1,4 +1,4 @@
-//! Explicitly enabled, authenticated loopback app connections.
+//! Explicitly enabled, authenticated app connections; remote browsers use a TLS proxy.
 pub(crate) mod dispatch;
 mod session;
 mod ws;
@@ -61,12 +61,11 @@ pub(crate) fn serve_listener(
     listener
         .set_nonblocking(true)
         .context("setting app listener nonblocking")?;
-    let port = listener
+    let address = listener
         .local_addr()
-        .context("reading app listener address")?
-        .port();
+        .context("reading app listener address")?;
     let devices = shared.devices().context("device registry is unavailable")?;
-    devices.set_listener(port, origins.first().cloned());
+    devices.set_listener(address, &origins);
     std::thread::Builder::new()
         .name("corrald-app-server".into())
         .spawn(move || {

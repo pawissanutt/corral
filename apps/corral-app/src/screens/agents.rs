@@ -12,7 +12,7 @@ mod session;
 mod transcript;
 mod wall;
 
-use corral_protocol::detail::DetailRef;
+use corral_protocol::detail::{DetailRef, STREAM_TERMINAL_V1};
 use nsh_core::prelude::*;
 
 use crate::model::Id;
@@ -137,8 +137,10 @@ fn daemon_session(app: AppState, id: &Id) -> agents::Session {
 /// while the owner reads an earlier page), and its pane's screen while the terminal shows: read
 /// when first shown, then revalidated once a tick of the feed's clock while the link is up. A
 /// failed read is not repeated every tick; it is tried again once the row changes or the link
-/// comes back, or by the owner's Refresh. The session page itself refreshes the transcript once
-/// a reply is delivered.
+/// comes back, or by the owner's Refresh. A corrald that streams terminals sends the screen
+/// itself, its first frame complete, to the session page's stream; reading it here as well
+/// would race that stream, so then nothing is read. The session page itself refreshes the
+/// transcript once a reply is delivered.
 fn follow(app: AppState, id: Id) {
     let transcript = DetailRef::Session { id: id.to_string() };
     let capture = DetailRef::Terminal { id: id.to_string() };
@@ -173,8 +175,11 @@ fn follow(app: AppState, id: Id) {
                 .is_some_and(|row| row.pane.is_some())
         })
     });
+    let streamed = computed(move || app.feed.with(|feed| feed.capable(STREAM_TERMINAL_V1)));
     let shown = computed(move || {
-        has_pane.get() && app.agents.with(|state| state.live_view == View::Terminal)
+        has_pane.get()
+            && !streamed.get()
+            && app.agents.with(|state| state.live_view == View::Terminal)
     });
     {
         let capture = capture.clone();

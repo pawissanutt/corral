@@ -1,5 +1,6 @@
 //! Launch payload checks for the local llama.cpp provider (T-578), kept beside `launch.rs`.
 use super::*;
+use serde_json::json;
 
 #[test]
 fn launch_payload_includes_local_settings_only_when_effective() {

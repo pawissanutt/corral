@@ -1,5 +1,6 @@
 //! UI intents only; each transport accepts its own device-management subset.
 use corral_protocol::attachment::AttachmentKind;
+use corral_protocol::device::{DeviceAuthorityChange, DeviceRevoke, PushKind};
 use corral_protocol::{app::*, assistant::*, cmd::CmdResultQuery, detail::DetailGet};
 
 #[derive(Debug)]
@@ -101,7 +102,28 @@ pub enum ClientRequest {
     },
     DeviceSetAuthority {
         request_id: String,
+        request: DeviceAuthorityChange,
+    },
+    DeviceAuthorityPreview {
+        request_id: String,
         request: DeviceSetAuthority,
+    },
+    DeviceRevoke {
+        request_id: String,
+        request: DeviceRevoke,
+    },
+    BrowserPush {
+        request_id: String,
+        enabled: bool,
+        kinds: Vec<PushKind>,
+    },
+    PushStatus {
+        request_id: String,
+    },
+    RetryTopic(String),
+    Terminal {
+        session: String,
+        open: bool,
     },
     Thread {
         scope: String,
@@ -197,7 +219,27 @@ operation!(assistant_stop, AssistantStop, AssistantStop);
 operation!(assistant_session, AssistantSessionOp, AssistantSession);
 operation!(changes_page, ChangesQuery, ChangesPage);
 operation!(seen_advance, SeenAdvance, SeenAdvance);
-operation!(device_set_authority, DeviceSetAuthority, DeviceSetAuthority);
+operation!(
+    device_set_authority,
+    DeviceAuthorityChange,
+    DeviceSetAuthority
+);
+operation!(
+    device_authority_preview,
+    DeviceSetAuthority,
+    DeviceAuthorityPreview
+);
+pub fn device_revoke(device: String) -> String {
+    let request_id = new_id();
+    send(ClientRequest::DeviceRevoke {
+        request_id: request_id.clone(),
+        request: DeviceRevoke { device },
+    });
+    request_id
+}
+pub fn terminal(session: String, open: bool) -> bool {
+    send(ClientRequest::Terminal { session, open })
+}
 
 pub fn act_submit(request: ActSubmit) -> bool {
     send(ClientRequest::ActSubmit(request))

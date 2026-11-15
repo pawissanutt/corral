@@ -284,14 +284,23 @@ impl Herdr {
         }
     }
 
-    /// The pane's visible screen with its SGR colours and text attributes.
-    pub fn pane_screen(&self, pane_id: &str) -> Result<Option<String>> {
+    /// Bounded scrollback and visible screen in terminal order, retaining SGR styling.
+    pub fn pane_terminal(&self, pane_id: &str, lines: usize) -> Result<Option<String>> {
+        let lines = lines.min(200).to_string();
         match self.raw(&[
-            "pane", "read", pane_id, "--source", "visible", "--format", "ansi",
+            "pane",
+            "read",
+            pane_id,
+            "--source",
+            "recent-unwrapped",
+            "--lines",
+            &lines,
+            "--format",
+            "ansi",
         ]) {
             Ok(text) => Ok(Some(extract_read_text(&text))),
             Err(error) if error_code(&error) == Some("pane_not_found") => Ok(None),
-            Err(error) => Err(error),
+            Err(error) => Err(error.context("reading bounded terminal scrollback")),
         }
     }
 

@@ -56,6 +56,38 @@ pub(super) fn drawer_buttons(phone: bool, phone_link: &'static str) -> Vec<Butto
     ]
 }
 
+/// Ask without a connection to corrald: why nothing is sent, and the way to connect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unconnected {
+    pub title: &'static str,
+    pub body: &'static str,
+    pub connect: &'static str,
+    pub send: &'static str,
+    pub placeholder: &'static str,
+}
+
+pub const UNCONNECTED: Unconnected = Unconnected {
+    title: "Not connected",
+    body: "Connect this device to corrald to ask. Nothing is sent until it is paired.",
+    connect: "Connect",
+    send: "Send",
+    placeholder: "Ask a question, drop an idea, or give an instruction…",
+};
+
+/// Ask's head without a connection: no state chip and no host scope, since neither is known;
+/// Close only, as there is no thread to open.
+pub fn unconnected_drawer() -> Drawer {
+    Drawer {
+        label: "Ask",
+        title: "Ask".into(),
+        state: None,
+        subtitle: None,
+        buttons: vec![button("Close", Action::CloseAsk)],
+        keyboard_requested: false,
+        close_label: "Close (Esc)",
+    }
+}
+
 /// A compact filed result in the small global window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactFiled {

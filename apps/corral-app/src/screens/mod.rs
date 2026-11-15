@@ -1,6 +1,8 @@
 //! The screens over the model, one module per destination, and the routing between them: a
 //! destination's screen, or on desktop and terminal the page above it. Routes corrald does not
-//! serve show a frame that says why; browser Settings keeps Connection available for pairing.
+//! serve show a frame that says why; without a connection that frame offers Settings ›
+//! Connection and the labelled sample-data preview, and Settings itself stays available (its
+//! Connection page and this device's own preferences need no connection).
 
 pub mod agents;
 pub mod assistant;
@@ -15,8 +17,12 @@ pub mod usage;
 
 use nsh_core::prelude::*;
 
-use crate::model::{Availability, DataState, Destination, Form, Live, Page, Route};
+use crate::model::settings::connect;
+use crate::model::{
+    Availability, DataState, Destination, Form, Live, Page, Route, SettingsSection,
+};
 use crate::state::AppState;
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::page;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color, row_height, text_size};
@@ -118,11 +124,10 @@ pub fn content(app: AppState) -> AnyElement {
 }
 
 /// Tracked: whether the destination shows the unavailable frame instead of its screen.
+/// Settings never does: its sections say for themselves what waits for corrald.
 fn unavailable(app: AppState, destination: Destination) -> bool {
     match app.data.get() {
-        DataState::Disconnected => {
-            !(destination == Destination::Settings && crate::client::pairing_supported())
-        }
+        DataState::Disconnected => destination != Destination::Settings,
         DataState::Daemon => app.available(destination) != Availability::Ready,
         DataState::Fixture => false,
     }
@@ -198,8 +203,10 @@ impl Frame {
 }
 
 /// The unavailable frame: the destination's label as the title (test_id "page-title"), then
-/// why it is unavailable (test_id "page-body"): no connection, or what corrald does not serve.
-/// A phone tab root (`root`) sets the title as the large head with search, like its own screen.
+/// why it is unavailable (test_id "page-body"): what corrald does not serve, or without a
+/// connection why nothing shows, with the way to Settings › Connection (`btn-connect`) and the
+/// explicit sample-data preview (`btn-preview`). A phone tab root (`root`) sets the title as the
+/// large head with search, like its own screen.
 fn frame(app: AppState, destination: Destination, root: bool) -> AnyElement {
     let frame = Frame::of(app.form);
     let head = if root && app.form == Form::Phone {
@@ -226,23 +233,6 @@ fn frame(app: AppState, destination: Destination, root: bool) -> AnyElement {
             )
             .into_element()
     };
-    let body = view().px(px(frame.pad_x)).pt(px(frame.body_pad_y)).child(
-        text(move || {
-            if app.daemon() {
-                app.feed
-                    .with(|feed| crate::model::health::unavailable_line(feed, destination))
-            } else {
-                app.snapshot().body_line(destination).into_owned()
-            }
-        })
-        .test_id("page-body")
-        .text_size(px(text_size(app.form)))
-        .text_color(color(if app.form == Form::Terminal {
-            Token::Ink
-        } else {
-            Token::Ink3
-        })),
-    );
     view()
         .size_full()
         .flex_col()
@@ -251,6 +241,90 @@ fn frame(app: AppState, destination: Destination, root: bool) -> AnyElement {
         .when(frame.rule == Rule::Line, |page| {
             page.child(term::hrule()).child(term::blank())
         })
-        .child(body)
+        .child(
+            view()
+                .px(px(frame.pad_x))
+                .pt(px(frame.body_pad_y))
+                .child(unavailable_body(app, destination)),
+        )
         .into_element()
+}
+
+/// Why the destination shows nothing (test_id "page-body") and, without a connection, the two
+/// ways on. Shared with Settings sections that wait for corrald.
+pub(crate) fn unavailable_body(app: AppState, destination: Destination) -> AnyElement {
+    let form = app.form;
+    let size = text_size(form);
+    let ink = if form == Form::Terminal {
+        Token::Ink
+    } else {
+        Token::Ink3
+    };
+    let web = crate::client::pairing_supported();
+    dynamic(move || {
+        if app.data.get() != DataState::Disconnected {
+            let line = if app.daemon() {
+                app.feed
+                    .with(|feed| crate::model::health::unavailable_line(feed, destination))
+            } else {
+                app.snapshot().body_line(destination).into_owned()
+            };
+            return untracked(move || {
+                text(line)
+                    .test_id("page-body")
+                    .text_size(px(size))
+                    .text_color(color(ink))
+                    .into_element()
+            });
+        }
+        let view_model = app.feed.with(|feed| connect::unavailable(feed, web));
+        untracked(move || {
+            let connect = button_with(
+                app,
+                view_model.connect,
+                ButtonKind::Primary,
+                ButtonOptions::default(),
+                "btn-connect",
+                move || app.go_settings(SettingsSection::Connection),
+            );
+            let preview = button_with(
+                app,
+                view_model.preview,
+                ButtonKind::Ghost,
+                ButtonOptions::default(),
+                "btn-preview",
+                move || app.set_data(DataState::Fixture),
+            );
+            let actions = if form == Form::Terminal {
+                view()
+                    .flex_row()
+                    .items_center()
+                    .child(connect)
+                    .child(term::space(2.0))
+                    .child(preview)
+            } else {
+                view()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(connect)
+                    .child(preview)
+            };
+            let terminal = form == Form::Terminal;
+            view()
+                .when(!terminal, |body| body.max_w(px(560.0)).gap(px(14.0)))
+                .child(
+                    text(view_model.reason)
+                        .test_id("page-body")
+                        .text_size(px(size))
+                        .when(!terminal, |t| t.line_height(px((size * 1.5).round())))
+                        .text_color(color(ink)),
+                )
+                .when(terminal, |body| body.child(term::blank()))
+                .child(actions)
+                .into_element()
+        })
+    })
+    .into_element()
 }

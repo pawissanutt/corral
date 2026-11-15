@@ -6,6 +6,7 @@ use corral_protocol::app::ActClass;
 use corral_protocol::assistant::{
     ContextRef, EntryCard, MessageState as WireState, PromptChoice, ThreadEntry,
 };
+use corral_protocol::cmd::question::QuestionCommand;
 use corral_protocol::cmd::{CmdResult, CmdState, Command};
 use corral_protocol::detail::question::{QuestionAnswer, QuestionOption};
 
@@ -13,10 +14,11 @@ use super::views::button;
 use super::{
     Action, ActionCard, ActionClass, ActionOutcome, AskOption, AskUserCard, Body, Chip, DiffLine,
     Editing, FiledCard, IdeaFields, MergeInput, PermissionCard, PermissionChoice, PromptCard,
-    PromptPane, State, choice_label, clock, subject,
+    PromptPane, State, TextReply, choice_label, clock, subject,
 };
-use crate::model::act::{self, ActStatus};
+use crate::model::act::{self, Act, ActStatus};
 use crate::model::daemon::Feed;
+use crate::model::effect::Effect;
 use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::Live;
@@ -130,7 +132,9 @@ pub(super) fn action_card(
     }
 }
 
-/// The assistant's ask_user question with its options; choosing one answers it canonically.
+/// The assistant's ask_user question with its options and, when it takes them, a field for the
+/// owner's own words; either answers it canonically at the question's revision.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn question_card(
     state: &State,
     feed: &Feed,
@@ -139,9 +143,14 @@ pub(super) fn question_card(
     rev: u32,
     options: &[QuestionOption],
     answer: Option<&QuestionAnswer>,
+    accepts_text: bool,
 ) -> AskUserCard {
     let remembered = subject("answer", key);
     let sending = busy(state, feed, &remembered);
+    // A cancelled or expired question is mirrored as Withdrawn and takes no answer; one another
+    // device answered first carries that answer, which closes every control here.
+    let settled = answer.is_some() || entry.state.is_some();
+    let open = !settled && !sending;
     let options = options
         .iter()
         .map(|option| {
@@ -152,8 +161,6 @@ pub(super) fn question_card(
                 }
                 consequence.push_str("recommended");
             }
-            // A cancelled or expired question is mirrored as Withdrawn and takes no answer.
-            let open = answer.is_none() && !sending && entry.state.is_none();
             AskOption {
                 label: option.label.clone(),
                 consequence,
@@ -168,23 +175,86 @@ pub(super) fn question_card(
             }
         })
         .collect();
+    let reply = (accepts_text && !settled).then(|| {
+        let mut send = button(
+            "Send answer",
+            Action::AnswerText {
+                key: key.to_owned(),
+                rev,
+                text: String::new(),
+            },
+        );
+        send.primary = true;
+        send.enabled = open;
+        TextReply {
+            label: "Answer in your own words",
+            value: state
+                .live
+                .answer_words
+                .get(key)
+                .cloned()
+                .unwrap_or_default(),
+            send,
+        }
+    });
     let answered = answer.map(|answer| {
         vec![
             span(format!("Answered by {} · ", answer.by)),
             span(answer.via.clone()).mono(),
-            span(format!(" · {}", clock(&answer.at, &feed.date))),
+            span(format!(" · {}", clock(&answer.at, feed))),
         ]
     });
     let status = act_chip(state, feed, &remembered, "Your answer")
         .map(|chip| vec![span(chip.label).hue(chip.hue)]);
     AskUserCard {
-        heading: format!(
-            "assistant asks · ask_user · {}",
-            clock(&entry.at, &feed.date)
-        ),
+        heading: format!("assistant asks · ask_user · {}", clock(&entry.at, feed)),
         question: vec![span(entry.text.clone().unwrap_or_else(|| key.to_owned()))],
         options,
+        reply,
         answer: answered.or(status),
+    }
+}
+
+impl State {
+    /// Answers question `key` at `rev` in the owner's own words, with no option; blank words
+    /// send nothing. The words are kept until corrald settles the answer, so a refused one is
+    /// sent again without retyping.
+    pub(super) fn answer_text(
+        &mut self,
+        key: String,
+        rev: u32,
+        text: String,
+        feed: &Feed,
+    ) -> Vec<Effect> {
+        let words = text.trim();
+        if words.is_empty() {
+            return Vec::new();
+        }
+        let words = words.to_owned();
+        let title = format!("Answer {key}");
+        let effects = self.once(subject("answer", &key), feed, || {
+            Act::new(
+                title,
+                Command::Question(QuestionCommand::Answer {
+                    key: key.clone(),
+                    rev,
+                    text: words.clone(),
+                    option: None,
+                    basis: Vec::new(),
+                    scope_note: None,
+                    owner: true,
+                    json: false,
+                }),
+            )
+            .about(Live::Question(Id::from(key.as_str())))
+        });
+        if effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Act(_)))
+        {
+            self.live.answer_words.insert(key, words);
+        }
+        effects
     }
 }
 
@@ -295,7 +365,7 @@ pub(super) fn prompt_body(
         heading: format!(
             "assistant wants to {} · {}",
             tool.map_or("act", String::as_str),
-            clock(&entry.at, &feed.date)
+            clock(&entry.at, feed)
         ),
         state: state_chip,
         path: path.cloned().unwrap_or_else(|| "path not stated".into()),
@@ -557,7 +627,7 @@ pub fn live_prompt_pane(state: &State, feed: &Feed, scope: &str, key: &str) -> L
         } else {
             Chip::new("needs you", Hue::You)
         },
-        origin: format!("{place} · {}", clock(&entry.at, &feed.date)),
+        origin: format!("{place} · {}", clock(&entry.at, feed)),
         title,
         card,
         note: "One answer wins: answering here also settles it in the thread on every device.",

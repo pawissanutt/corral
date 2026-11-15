@@ -1,13 +1,16 @@
 //! Assessment: the evidence tabs and the selected artifact (a diff hunk with line numbers, a
-//! file excerpt, a log tail, the fixture's rendered screenshot, or why a reference could not be
-//! resolved), and their loading, empty and error looks.
+//! file excerpt, a log tail, a screenshot or other image corrald stores, the fixture's rendered
+//! screenshot, or why a reference could not be resolved), and their loading, empty and error
+//! looks.
 
 use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
 
 use super::{button, code, press, rich_at, ring, words};
+use crate::model::assistant::Readback;
 use crate::model::board::LineKind;
 use crate::model::inbox::{Assessment, DiffLine, EvidenceBody, EvidenceTab};
+use crate::model::text::span;
 use crate::model::{Form, Hue, Rich};
 use crate::state::AppState;
 use crate::ui::kit::chip::illus;
@@ -22,6 +25,14 @@ const BOX_DESKTOP: f32 = 124.0;
 const BOX_PHONE: f32 = 196.0;
 /// The streaming placeholder (`.skel` 120 pt high).
 const LOADING_BAR: (f32, f32) = (1.0, 120.0);
+/// An image's bounds: never wider than the mockup's capture, never taller than a share of the
+/// first screen, so the options under the evidence stay in reach (the phone's column is its
+/// width).
+const IMAGE_MAX_W: f32 = 520.0;
+const IMAGE_MAX_H_DESKTOP: f32 = 300.0;
+const IMAGE_MAX_H_PHONE: f32 = 360.0;
+/// An image's proportions until it has loaded and says its own.
+const IMAGE_RATIO: f32 = 16.0 / 9.0;
 
 pub(super) fn assessment(app: AppState, part: Assessment) -> AnyElement {
     match part {
@@ -171,7 +182,91 @@ fn artifact(app: AppState, body: EvidenceBody) -> AnyElement {
             .child(file_line(app, file, None))
             .child(words(app, reason, note_size, Token::Ink3))
             .into_element(),
+        EvidenceBody::Image { file, preview } => view()
+            .child(file_line(app, file.clone(), None))
+            .child(image_body(app, file, preview, note_size))
+            .into_element(),
     }
+}
+
+/// An image the asker attached, read through corrald's bounded artifact reader: while it loads,
+/// why it could not be read, or the picture at its own proportions within the evidence bounds,
+/// named for screen readers by its title. A terminal cannot draw it and says where to see it.
+fn image_body(app: AppState, file: String, preview: Readback, note_size: f32) -> AnyElement {
+    let form = app.form;
+    match preview {
+        Readback::Loading => loading(app, "Loading from corrald…", &[LOADING_BAR]),
+        Readback::Failed(line) => words(app, line, note_size, Token::Ink3)
+            .text_color(hue_ink(Hue::Fail))
+            .into_element(),
+        Readback::Unsupported(line) => words(app, line, note_size, Token::Ink3).into_element(),
+        Readback::Image { .. } if form == Form::Terminal => words(
+            app,
+            "A terminal cannot draw images; open this question in the desktop or web app to see it.",
+            note_size,
+            Token::Ink3,
+        )
+        .into_element(),
+        Readback::Image { uri, truncated } => view()
+            .child(picture(app, file, uri))
+            .children(truncated.then(|| cut_note(app, note_size)))
+            .into_element(),
+        Readback::Text { text, truncated } => {
+            let lines: Vec<Rich> = text.lines().map(|line| vec![span(line)]).collect();
+            view()
+                .child(terminal_box(app, &lines, false, None))
+                .children(truncated.then(|| cut_note(app, note_size)))
+                .into_element()
+        }
+    }
+}
+
+/// The picture on a hairline frame, contained in the evidence bounds.
+fn picture(app: AppState, title: String, uri: String) -> AnyElement {
+    let phone = app.form == Form::Phone;
+    let ratio = signal(IMAGE_RATIO);
+    view()
+        .test_id("evidence-image")
+        .self_start()
+        .w_full()
+        .when(!phone, |v| v.max_w(px(IMAGE_MAX_W)))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(color(Token::Rule))
+        .bg(color(Token::BgSunk))
+        .overflow_hidden()
+        .child(
+            image(uri)
+                .w_full()
+                .aspect_ratio(move || ratio.get())
+                .max_h(px(if phone {
+                    IMAGE_MAX_H_PHONE
+                } else {
+                    IMAGE_MAX_H_DESKTOP
+                }))
+                .object_fit(ResizeMode::Contain)
+                .role(AccessibilityRole::Image)
+                .label(title)
+                .on_load(move |size: &Size<DevicePixels>| {
+                    if size.width.0 > 0 && size.height.0 > 0 {
+                        ratio.set(size.width.0 as f32 / size.height.0 as f32);
+                    }
+                }),
+        )
+        .into_element()
+}
+
+/// Under an artifact corrald stopped at its size bound.
+fn cut_note(app: AppState, note_size: f32) -> AnyElement {
+    view()
+        .mt(px(6.0))
+        .child(words(
+            app,
+            "corrald stops this artifact at its size bound; the rest is not served to the app.",
+            note_size,
+            Token::Ink3,
+        ))
+        .into_element()
 }
 
 /// The artifact's path in mono ink-3 (`.ev-file`), cut in the middle so both its root and its

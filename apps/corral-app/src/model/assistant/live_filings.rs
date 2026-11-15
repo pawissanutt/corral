@@ -136,7 +136,7 @@ fn line(feed: &Feed, idea: &FiledIdea) -> FiledLine {
     FiledLine {
         id: idea.task.clone(),
         title,
-        at: clock(&idea.at, &feed.date),
+        at: clock(&idea.at, feed),
         source,
         action: Action::OpenLive(Live::Task(Id::from(opens.as_str()))),
     }

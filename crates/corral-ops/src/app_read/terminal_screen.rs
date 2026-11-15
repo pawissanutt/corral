@@ -6,7 +6,7 @@ use corral_protocol::detail::session::{TerminalColor, TerminalRun, TerminalSnaps
 
 use super::{now, paging};
 
-const MAX_ROWS: usize = 200;
+const MAX_ROWS: usize = corral_protocol::detail::TERMINAL_ROWS_MAX;
 const ROW_BYTES: usize = 2048;
 const TEXT_BUDGET: usize = 40 * 1024;
 /// CONTROL and APP_CONTROL_MAX are both 60 KiB. Detail paging reserves 4 KiB
@@ -15,7 +15,7 @@ const TEXT_BUDGET: usize = 40 * 1024;
 /// (at most 40 KiB), leaving another 4 KiB for body metadata/paging overhead.
 /// This keeps both parallel arrays in one page. If rows do not fit in full,
 /// omit all styling for this capture rather than separating rows from lines.
-const ARRAYS_BUDGET: usize = 52 * 1024;
+const ARRAYS_BUDGET: usize = corral_protocol::detail::TERMINAL_ARRAYS_MAX;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct Style {

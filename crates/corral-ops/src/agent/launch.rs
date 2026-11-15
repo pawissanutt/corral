@@ -16,7 +16,6 @@ use corral_core::agent::{self, AgentRole, AgentRunState, ContainerRef, paths, pm
 use corral_core::inbox::Recipient;
 use corral_core::{SessionAction, SessionPolicy, Store};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use super::admission::BindTarget;
 use super::bridge::assets::{
@@ -29,9 +28,12 @@ use crate::{Ctx, availability::continuation::require_launch};
 mod capabilities;
 pub mod daemon;
 mod fixture_assets;
+mod message;
 mod secrets;
+mod summary;
 pub(crate) use capabilities::capabilities_payload;
 use fixture_assets::explicit_assets;
+pub use message::launch_message;
 pub use secrets::{Secrets, write_ctl_cap};
 
 /// The T-252 child that lands the launcher and the launch command.
@@ -43,7 +45,6 @@ pub const SOCKET_FILE: &str = "host.sock";
 /// The host entry point under an asset root.
 pub const HOST_ENTRY: &str = "src/host/main.ts";
 const BOOTSTRAP_MAX_BYTES: u64 = 64 * 1024;
-const MESSAGE_MAX_BYTES: usize = 32 * 1024;
 
 /// The one-shot bootstrap dispatch writes 0600 into the generation's 0700 runtime directory.
 /// It holds the bind nonce, so its `Debug` never prints it.
@@ -96,6 +97,10 @@ pub struct Bootstrap {
     pub aws: Option<super::aws_profile::AwsBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    #[serde(default)]
+    pub quick_summary: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<summary::SummaryProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_file: Option<PathBuf>,
     /// `[agent] ui` at dispatch; absent in older bootstraps, which means rich.
@@ -439,6 +444,7 @@ pub(crate) fn prepare_bootstrap_host(
         .map(|pins| pins.capabilities)
         .unwrap_or_default();
     let memory = super::hooks::memory::projection(&ctx.store, target.role(), &project)?;
+    let (quick_summary, summary) = summary::prepare(ctx, target, &assets)?;
     let grant = super::admission::open_generation_host(
         &ctx.store,
         target,
@@ -495,6 +501,8 @@ pub(crate) fn prepare_bootstrap_host(
         binding: spec.binding.clone(),
         aws,
         effort: spec.effort.clone(),
+        quick_summary,
+        summary,
         prompt_file: spec.prompt_file.clone(),
         ui: ctx.store.config.agent.ui,
         todo: grant.capabilities.enabled("todo"),
@@ -823,38 +831,6 @@ pub fn check_with(
         bun_version,
         generation_dir: generation_dir.to_path_buf(),
     })
-}
-
-/// The JSON the host reads from its inherited descriptor (`src/host/config.ts`).
-pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -> Result<Vec<u8>> {
-    let message = json!({
-        "version": 1, "store": bootstrap.store, "project": bootstrap.project,
-        "role": bootstrap.role.as_str(), "task": bootstrap.task, "run": bootstrap.run,
-        "review": bootstrap.review, "callback": bootstrap.callback,
-        "assistant": bootstrap.assistant,
-        "generation": bootstrap.generation,
-        "secrets": {"host_cap": secrets.host_cap, "ctl_cap": secrets.ctl_cap,
-                    "bind_nonce": bootstrap.bind_nonce},
-        "pane": (!bootstrap.daemon_hosted).then_some(&bootstrap.pane),
-        "daemon_hosted": bootstrap.daemon_hosted, "cwd": bootstrap.cwd, "root": bootstrap.root,
-        "corral": bootstrap.corral, "assets": ready.assets,
-        "runtime_dir": ready.generation_dir, "session_dir": bootstrap.session_dir,
-        "resume_session": bootstrap.resume_session,
-        "fresh_session": bootstrap.fresh_session, "resume_leaf": bootstrap.resume_leaf,
-        "model": bootstrap.model, "provider": bootstrap.provider, "effort": bootstrap.effort,
-        "aws": bootstrap.aws, "binding": bootstrap.binding,
-        "prompt_file": bootstrap.prompt_file, "ui": bootstrap.ui.as_str(),
-        "memory_file": super::hooks::memory::role(bootstrap.role)
-            .map(|_| ready.generation_dir.join(super::hooks::memory::FILE)),
-        "todo": bootstrap.todo,
-        "capabilities": bootstrap.capabilities.as_ref().map(|snapshot|
-            capabilities_payload(snapshot, bootstrap.project_dir.as_deref())),
-    });
-    let bytes = serde_json::to_vec(&message)?;
-    if bytes.len() > MESSAGE_MAX_BYTES {
-        bail!("the launch message exceeds {MESSAGE_MAX_BYTES} bytes");
-    }
-    Ok(bytes)
 }
 
 /// `bun --no-env-file <assets>/src/host/main.ts --launch-fd <n>` in the asset directory (or

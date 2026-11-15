@@ -1,15 +1,16 @@
 //! Where Ask opens: the drawer docked on the right over the current screen on desktop, a pane of
 //! the frame in a terminal, a sheet riding on the keyboard on a phone. Desktop and terminal show
 //! the quick thread above the composer; the phone sheet holds the composer alone and links to the
-//! thread.
+//! thread. Without a connection each shows why nothing can be sent and the way to connect.
 
 use nsh_core::prelude::*;
 
 use crate::model::assistant::{self, Action, Button, Chip, QUICK, ThreadRef};
-use crate::model::{Form, Id};
+use crate::model::{DataState, Form, Id};
 use crate::screens::assistant::{items, open_scope};
 use crate::state::AppState;
-use crate::ui::ask::act;
+use crate::ui::ask::{act, unconnected};
+use crate::ui::atoms::control_height;
 use crate::ui::composer::composer;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
@@ -39,10 +40,10 @@ struct Head {
 fn head(app: AppState) -> Memo<Head> {
     computed(move || {
         let env = app.env();
-        let drawer = if app.daemon() {
-            app.feed.with(|feed| assistant::live_drawer(feed, env))
-        } else {
-            app.assistant.with(|state| assistant::drawer(state, env))
+        let drawer = match app.data.get() {
+            DataState::Daemon => app.feed.with(|feed| assistant::live_drawer(feed, env)),
+            DataState::Disconnected => assistant::unconnected_drawer(),
+            DataState::Fixture => app.assistant.with(|state| assistant::drawer(state, env)),
         };
         Head {
             label: drawer.label,
@@ -103,9 +104,29 @@ pub(crate) fn desktop(app: AppState) -> AnyElement {
             let head = head.get();
             untracked(|| desktop_head(app, &head))
         }))
-        .child(items(app, quick(app)))
-        .child(composer(app))
+        .child(thread(app, false))
         .into_element()
+}
+
+/// The quick thread scrolling to its newest message over the composer, ruled apart in a
+/// terminal (`rule`); without a connection, why nothing can be sent and the way to connect.
+fn thread(app: AppState, rule: bool) -> AnyElement {
+    when(
+        move || unconnected::unconnected(app),
+        move || untracked(|| unconnected::body(app)),
+    )
+    .otherwise(move || {
+        untracked(|| {
+            view()
+                .flex_1()
+                .min_h(px(0.0))
+                .child(items(app, quick(app)))
+                .when(rule, |v| v.child(term::hrule()))
+                .child(composer(app))
+                .into_element()
+        })
+    })
+    .into_element()
 }
 
 /// `.dhead`: the title, the state chip, the cross-device scope (cut first), Open in Agents and
@@ -170,8 +191,7 @@ fn close_icon(app: AppState, action: Action, label: &'static str) -> AnyElement 
         .role(AccessibilityRole::Button)
         .label(label)
         .on_press(move || act(app, action.clone()))
-        .w(px(30.0))
-        .h(px(30.0))
+        .size(px(control_height(30.0)))
         .items_center()
         .justify_center()
         .rounded(px(6.0))
@@ -199,9 +219,7 @@ pub(crate) fn pane(app: AppState) -> AnyElement {
         .min_w(px(0.0))
         .child(terminal_head(app, head))
         .child(term::hrule())
-        .child(items(app, quick(app)))
-        .child(term::hrule())
-        .child(composer(app));
+        .child(thread(app, true));
     let pane = view()
         .role(AccessibilityRole::Region)
         .label(label)
@@ -329,8 +347,6 @@ const ESC: &str = "Esc";
 pub(crate) fn phone_panel(app: AppState) -> AnyElement {
     let head = head(app);
     let label = head.with_untracked(|h| h.label);
-    // The sheet shows no transcript, but its sends land in the quick thread it subscribes.
-    let _ = quick(app);
     view()
         .pb_keyboard()
         .max_h(move || px(window().height.0 * SHEET_SHARE))
@@ -370,7 +386,20 @@ pub(crate) fn phone_panel(app: AppState) -> AnyElement {
                     let head = head.get();
                     untracked(|| phone_head(app, &head))
                 }))
-                .child(composer(app)),
+                .child(
+                    when(
+                        move || unconnected::unconnected(app),
+                        move || untracked(|| unconnected::body(app)),
+                    )
+                    .otherwise(move || {
+                        untracked(|| {
+                            // The sheet shows no transcript, but its sends land in the quick
+                            // thread it subscribes.
+                            let _ = quick(app);
+                            composer(app)
+                        })
+                    }),
+                ),
         )
         .into_element()
 }

@@ -25,11 +25,13 @@ const ASCENT: f32 = 0.8;
 const EDGE: f32 = 1.3;
 /// Layer caption size (`.layer-h`, the vertical layers' heading).
 const CAPTION: f32 = 10.5;
+/// The phone's touch-target floor.
+const TARGET: f32 = 44.0;
 
 /// The graph `source` gives (members, edges and the selected member), measured to the width it
 /// is given. A terminal takes no measure: its layout is the vertical one. The source is read
 /// tracked, so a member press or a board change redraws the graph alone.
-pub(super) fn drawing(
+pub(crate) fn drawing(
     app: AppState,
     source: impl Fn() -> (GraphInput, Option<Id>) + 'static,
 ) -> AnyElement {
@@ -365,7 +367,8 @@ fn layer_row(app: AppState, node: &Node) -> AnyElement {
         .flex_row()
         .items_center()
         .gap(px(8.0))
-        .h(px(node.h))
+        // A phone row is a tap target: never under the 44 pt floor, whatever the model's pitch.
+        .h(px(if phone { node.h.max(TARGET) } else { node.h }))
         .px(px(6.0))
         .rounded(px(4.0))
         .cursor_pointer()

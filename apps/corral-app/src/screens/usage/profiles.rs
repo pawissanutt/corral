@@ -10,6 +10,7 @@ use nsh_core::prelude::*;
 use crate::model::Form;
 use crate::model::usage::{Level, Page, ProfileRow, SHARE_MARKER_PERCENT};
 use crate::screens::usage::cellbar::meter;
+use crate::screens::usage::costs::qualifier;
 use crate::state::AppState;
 use crate::ui::kit::page::Width;
 use crate::ui::kit::table::devtable;
@@ -73,7 +74,7 @@ pub fn desktop(app: AppState, page: &Page) -> AnyElement {
                     Some(share) => share_meter(share, row.level),
                     None => unknown(form),
                 },
-                figure(form, row.today),
+                cost(form, row.today, row.today_note.is_some()),
                 figure(form, row.headroom),
             ]
         })
@@ -81,6 +82,7 @@ pub fn desktop(app: AppState, page: &Page) -> AnyElement {
     view()
         .test_id("usage-profiles")
         .child(devtable(app, &DESKTOP_WIDTHS, &page.profile_headers, rows))
+        .children(cost_notes(app, page))
         .into_element()
 }
 
@@ -121,6 +123,7 @@ pub fn terminal(app: AppState, page: &Page, room: usize) -> AnyElement {
     view()
         .test_id("usage-profiles")
         .child(devtable(app, widths, &header, rows))
+        .children(cost_notes(app, page))
         .into_element()
 }
 
@@ -166,7 +169,7 @@ fn profile_row(app: AppState, row: ProfileRow, wide: bool) -> Vec<AnyElement> {
             None => unknown(form),
         });
     }
-    cells.push(figure(form, row.today));
+    cells.push(cost(form, row.today, row.today_note.is_some()));
     cells.push(view().into_element());
     cells
 }
@@ -188,9 +191,20 @@ fn provider_name(provider: String) -> AnyElement {
 /// A figure at the trailing edge of its column (`td.n`): mono 12 pt, tabular, in ink; a
 /// terminal shows it in its own font.
 fn figure(form: Form, content: String) -> AnyElement {
-    let words = text(content)
-        .number_of_lines(1u32)
-        .text_color(color(Token::Ink));
+    figure_in(form, content, Token::Ink)
+}
+
+/// A period cost: a figure, in the held ink when a note under the table qualifies it.
+fn cost(form: Form, content: String, qualified: bool) -> AnyElement {
+    figure_in(
+        form,
+        content,
+        if qualified { Token::Held } else { Token::Ink },
+    )
+}
+
+fn figure_in(form: Form, content: String, ink: Token) -> AnyElement {
+    let words = text(content).number_of_lines(1u32).text_color(color(ink));
     let words = if form == Form::Terminal {
         words
     } else {
@@ -205,6 +219,33 @@ fn figure(form: Form, content: String) -> AnyElement {
         .justify_end()
         .child(words)
         .into_element()
+}
+
+/// What keeps the profiles' period costs from being whole, under the table: said once when every
+/// qualified cost shares it, else per profile. A cost column is too narrow to carry it.
+fn cost_notes(app: AppState, page: &Page) -> Option<AnyElement> {
+    let noted: Vec<(&str, &str)> = page
+        .profiles
+        .iter()
+        .filter_map(|row| Some((row.profile.as_str(), row.today_note.as_deref()?)))
+        .collect();
+    let (_, first) = *noted.first()?;
+    let lines: Vec<AnyElement> = if noted.iter().all(|&(_, note)| note == first) {
+        vec![qualifier(app, first)]
+    } else {
+        noted
+            .iter()
+            .map(|(profile, note)| qualifier(app, &format!("{profile} · {note}")))
+            .collect()
+    };
+    let terminal = app.form == Form::Terminal;
+    Some(
+        view()
+            .gap(px(if terminal { 0.0 } else { 4.0 }))
+            .pt(px(if terminal { 0.0 } else { 8.0 }))
+            .children(lines)
+            .into_element(),
+    )
 }
 
 /// The share meter (`.meter`): a sunk track, the share filled in the provider's level (ink-2,

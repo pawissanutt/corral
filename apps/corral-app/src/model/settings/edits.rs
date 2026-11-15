@@ -1,45 +1,34 @@
 //! The daemon session's owner edits in Settings: the command identity behind each control (so
 //! its truthful status shows beside it and is never re-minted after an uncertain result), the
-//! inline fresh confirmation for device changes, the profile model being edited, the profile
-//! being added, and the autopilot grant being written.
+//! device authority being written and the inline fresh confirmation for device changes, the
+//! profile model being edited, the profile being added, and the autopilot grant being written.
 
 use std::collections::BTreeMap;
 
 use corral_protocol::rows::SettingsSnapshot;
 
 use super::State;
+use super::authority::{Draft, Flag, may_turn_on};
 use super::autopilot::{Field, GrantForm, ModeVerb, Power};
 use super::live::config_set;
 use super::profiles::{self, ProfileField, ProfileForm};
 use crate::model::daemon::Feed;
+use crate::model::devices::{DeviceOp, DeviceRow};
 use crate::model::effect::Effect;
 use crate::model::{Act, ActStatus, Id, act};
 
 /// A device change waiting for this device's fresh confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pending {
-    Revoke {
-        device: String,
-        name: String,
-    },
-    Instruct {
-        device: String,
-        name: String,
-        on: bool,
-    },
-    Admin {
-        device: String,
-        name: String,
-        on: bool,
-    },
+    Revoke { device: String, name: String },
+    Authority(Draft),
 }
 
 impl Pending {
     pub fn device(&self) -> &str {
         match self {
-            Pending::Revoke { device, .. }
-            | Pending::Instruct { device, .. }
-            | Pending::Admin { device, .. } => device,
+            Pending::Revoke { device, .. } => device,
+            Pending::Authority(draft) => &draft.device,
         }
     }
 
@@ -49,46 +38,21 @@ impl Pending {
             Pending::Revoke { name, .. } => {
                 format!("Revoke {name}? Its sessions end at once and it must be paired again.")
             }
-            Pending::Instruct { name, on: true, .. } => {
-                format!("Let what you type on {name} instruct assistants to act for you?")
-            }
-            Pending::Instruct {
-                name, on: false, ..
-            } => format!(
-                "Stop what you type on {name} from instructing assistants? It can still ask and file."
-            ),
-            Pending::Admin { name, on: true, .. } => format!(
-                "Make {name} an administrator? It will be able to change other devices' authority, including making more administrators, and to revoke devices."
-            ),
-            Pending::Admin {
-                name, on: false, ..
-            } => format!(
-                "Remove {name}'s administrator authority? It can no longer change or revoke devices."
-            ),
+            Pending::Authority(draft) => draft.question(),
         }
     }
 
     pub fn confirm_label(&self) -> &'static str {
         match self {
             Pending::Revoke { .. } => "Revoke",
-            Pending::Instruct { on: true, .. } => "Turn on",
-            Pending::Instruct { on: false, .. } => "Turn off",
-            Pending::Admin { on: true, .. } => "Make administrator",
-            Pending::Admin { on: false, .. } => "Remove administrator",
+            Pending::Authority(draft) => draft.confirm_label(),
         }
     }
+}
 
-    /// The device row's button that asks for this change; the two switches name what they
-    /// switch so they are told apart when a row shows both.
-    pub fn toggle_label(&self) -> &'static str {
-        match self {
-            Pending::Revoke { .. } => "Revoke",
-            Pending::Instruct { on: true, .. } => "Allow instructing",
-            Pending::Instruct { on: false, .. } => "Stop instructing",
-            Pending::Admin { on: true, .. } => "Make admin",
-            Pending::Admin { on: false, .. } => "Remove admin",
-        }
-    }
+/// The control slot of the last change sent for `device`, whose status shows on its row.
+pub fn device_slot(device: &str) -> String {
+    format!("device-{device}")
 }
 
 /// Owner edits in progress.
@@ -97,8 +61,8 @@ pub struct Edits {
     /// Command identity per control slug.
     pub acts: BTreeMap<String, Id>,
     pub confirming: Option<Pending>,
-    /// `device.set_authority` correlation per device id.
-    pub authority: BTreeMap<String, String>,
+    /// The device authority being written, before it is reviewed.
+    pub authority: Option<Draft>,
     /// The profile whose model is being edited, and the draft.
     pub model: Option<(String, String)>,
     /// The profile being added, while its form is open.
@@ -115,6 +79,9 @@ pub const ADD_PROFILE: &str = "profile-add";
 pub fn remove_slot(profile: &str) -> String {
     format!("remove-{profile}")
 }
+
+/// The control slot of the rollover summary writer.
+pub const SUMMARY: &str = "summary-profile";
 
 impl State {
     fn track(&mut self, slot: String, act: Act) -> Vec<Effect> {
@@ -210,20 +177,116 @@ impl State {
         Vec::new()
     }
 
-    /// Drop the device change waiting for confirmation.
+    /// Drop the device change waiting for confirmation; an authority draft stays open to edit.
     pub fn cancel_device(&mut self) -> Vec<Effect> {
         self.edits.confirming = None;
         Vec::new()
     }
 
-    /// The confirmed device change was sent; `operation` correlates an authority change.
-    pub fn device_sent(&mut self, operation: Option<String>) -> Vec<Effect> {
-        if let (Some(pending), Some(operation)) = (self.edits.confirming.take(), operation) {
-            self.edits
-                .authority
-                .insert(pending.device().to_owned(), operation);
+    /// Open the authority editor on `device`, starting from what corrald reports.
+    pub fn edit_authority(&mut self, device: &DeviceRow, own: bool) -> Vec<Effect> {
+        if let Some(authority) = &device.authority {
+            self.edits.authority = Some(Draft {
+                device: device.id.clone(),
+                name: device.name.clone(),
+                from: authority.clone(),
+                to: authority.clone(),
+                own,
+            });
+            self.edits.confirming = None;
         }
         Vec::new()
+    }
+
+    /// Flip one flag of the draft; a flag this device may not raise stays off.
+    pub fn flip_flag(&mut self, flag: Flag) -> Vec<Effect> {
+        if let Some(draft) = &mut self.edits.authority {
+            let on = !flag.of(&draft.to);
+            if !on || may_turn_on(draft, flag).is_ok() {
+                flag.set(&mut draft.to, on);
+            }
+        }
+        Vec::new()
+    }
+
+    pub fn close_authority(&mut self) -> Vec<Effect> {
+        self.edits.authority = None;
+        if matches!(self.edits.confirming, Some(Pending::Authority(_))) {
+            self.edits.confirming = None;
+        }
+        Vec::new()
+    }
+
+    /// Review the draft: its exact changes wait for this device's confirmation.
+    pub fn review_authority(&mut self) -> Vec<Effect> {
+        if let Some(draft) = &self.edits.authority
+            && !draft.changes().is_empty()
+        {
+            self.edits.confirming = Some(Pending::Authority(draft.clone()));
+        }
+        Vec::new()
+    }
+
+    /// Send the confirmed device change under a new identity, whose status shows on the row.
+    pub fn apply_device(&mut self) -> Vec<Effect> {
+        let Some(pending) = self.edits.confirming.take() else {
+            return Vec::new();
+        };
+        let key = Id::from(crate::client::requests::new_id());
+        self.edits
+            .acts
+            .insert(device_slot(pending.device()), key.clone());
+        let op = match pending {
+            Pending::Revoke { device, .. } => DeviceOp::Revoke { key, device },
+            Pending::Authority(draft) => {
+                self.edits.authority = None;
+                DeviceOp::SetAuthority {
+                    key,
+                    title: draft.title(),
+                    change: corral_protocol::app::DeviceSetAuthority {
+                        device: draft.device,
+                        authority: draft.to,
+                    },
+                }
+            }
+        };
+        vec![Effect::Device(op)]
+    }
+
+    /// Run this device's own operation (enrol, pair, forget, push, a trusted-side pairing step):
+    /// a name or code is sent trimmed, and an empty one sends nothing.
+    pub fn device(&mut self, op: DeviceOp) -> Vec<Effect> {
+        let op = match op {
+            DeviceOp::Enrol { name } => {
+                let name = name.trim();
+                if name.is_empty() {
+                    return Vec::new();
+                }
+                DeviceOp::Enrol { name: name.into() }
+            }
+            DeviceOp::Pair { code, name } => {
+                let (code, name) = (code.trim(), name.trim());
+                if code.is_empty() || name.is_empty() {
+                    return Vec::new();
+                }
+                DeviceOp::Pair {
+                    code: code.into(),
+                    name: name.into(),
+                }
+            }
+            op => op,
+        };
+        vec![Effect::Device(op)]
+    }
+
+    /// Choose who writes rollover summaries (None: each thread's own model), guarded by the
+    /// configuration it was read from.
+    pub fn set_summary(
+        &mut self,
+        settings: &SettingsSnapshot,
+        profile: Option<&str>,
+    ) -> Vec<Effect> {
+        self.track(SUMMARY.into(), super::live::summary_set(settings, profile))
     }
 
     /// Make `profile` the assistant profile, guarded by the configuration it was read from.

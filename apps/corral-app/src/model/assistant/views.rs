@@ -235,7 +235,7 @@ fn context(id: &'static str) -> ContextChip {
         "T-890" => ("task", "T-890 pm-bounded-read-contract".into()),
         "T-868/R1/Q1" => ("question", "T-868/R1/Q1 restore policy".into()),
         "hunk" => ("diff hunk", "85b45e1e · cross-lane.test.ts @@ -212".into()),
-        "T-870" => ("plan", "plan T-870".into()),
+        "T-870" => ("plan", "T-870".into()),
         "T-854" => ("session", "A-15 · T-854".into()),
         _ => (
             "task",

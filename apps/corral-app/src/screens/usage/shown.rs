@@ -6,18 +6,22 @@ use corral_protocol::detail::DetailBody;
 use jiff::tz::TimeZone;
 use nsh_core::prelude::*;
 
+use crate::model::Effect;
 use crate::model::daemon::Feed;
 use crate::model::usage::{self, Inputs, Page};
 use crate::state::AppState;
 
-/// Where the recorded usage stands.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The subscription topic of the usage rows.
+const TOPIC: &str = "usage";
+
+/// Where the recorded usage rows stand. A failed read is not a status here: the page's own
+/// `notices` say it once, with the daemon's cause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Ready,
-    /// The last rows received, kept while corrald is unreachable.
+    /// The last rows received, kept while corrald is unreachable or failing.
     Stale,
     Loading,
-    Failed(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -27,10 +31,10 @@ pub struct Shown {
 }
 
 fn status(feed: &Feed) -> Status {
-    match feed.topics.get("usage") {
+    match feed.topics.get(TOPIC) {
         None => Status::Loading,
         Some(topic) => match (&topic.error, feed.usage.is_empty()) {
-            (Some(error), true) => Status::Failed(error.message.clone()),
+            (Some(_), true) => Status::Ready,
             (Some(_), false) => Status::Stale,
             (None, _) if topic.stale => Status::Stale,
             (None, true) if topic.loading => Status::Loading,
@@ -48,21 +52,27 @@ pub fn shown(app: AppState) -> Shown {
         };
     }
     let period = app.usage.with(|state| state.period);
-    let tz = TimeZone::system();
     app.feed.with(|feed| {
+        let tz = feed.time_zone.clone().unwrap_or(TimeZone::UTC);
+        let topic = feed.topics.get(TOPIC);
         let cache = feed.detail(&usage::series_request(period));
         let series = cache.and_then(|cache| match cache.body() {
             Some(DetailBody::UsageSeries(series)) => Some(series),
             _ => None,
         });
+        // A failed refresh is said even while the last series stays readable (LA-09).
         let series_error = cache
-            .filter(|cache| cache.body().is_none())
             .and_then(|cache| cache.error.as_ref())
             .map(|error| error.message.as_str());
         let page = usage::live_page(&Inputs {
             rows: feed.usage.values().collect(),
+            rows_error: topic
+                .and_then(|topic| topic.error.as_ref())
+                .map(|error| error.message.as_str()),
+            rows_loading: topic.is_none_or(|topic| topic.loading),
             series,
             series_error,
+            series_stale: cache.is_some_and(|cache| cache.stale),
             agents: feed.agents.values().collect(),
             assistants: feed.assistants.values().collect(),
             period,
@@ -74,6 +84,14 @@ pub fn shown(app: AppState) -> Shown {
             status: status(feed),
         }
     })
+}
+
+/// Asks corrald again for the usage rows and the selected period's series: the bounded,
+/// explicit retry beside a failed read (one press, one request each).
+pub fn retry(app: AppState) {
+    let period = untracked(|| app.usage.with(|state| state.period));
+    app.refresh(usage::series_request(period));
+    app.act(app.usage, |_, _| vec![Effect::RetryTopic(TOPIC.into())]);
 }
 
 /// Keeps the usage series for the selected period requested, revalidating it whenever a usage

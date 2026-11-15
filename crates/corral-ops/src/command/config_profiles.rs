@@ -140,6 +140,9 @@ pub(crate) fn profile_choices(
                 workspace,
                 inherited,
                 remove_refusal: removal_refusal(workspace, inherited, &references),
+                summary_refusal: corral_core::assistant::resolve_summary_profile(config, name)
+                    .err()
+                    .map(|error| error.to_string()),
                 references,
             })
         })
@@ -165,6 +168,9 @@ fn references(store: &Store, config: &Config) -> Result<BTreeMap<String, Vec<Str
     record(&config.pm.agent, "pm.agent".into());
     if let Some(profile) = &config.assistant.agent {
         record(profile, "assistant.agent".into());
+    }
+    if let Some(profile) = &config.assistant.summary_profile {
+        record(profile, "assistant.summary_profile".into());
     }
     if let Some(profile) = &config.lessons.profile {
         record(profile, "lessons.profile".into());

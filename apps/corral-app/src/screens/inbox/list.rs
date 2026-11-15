@@ -1,26 +1,29 @@
 //! The Inbox list (needs-you rows, then what changed since the last visit), the phone's cards,
-//! and the desktop pane of the selected row.
+//! and the desktop pane of the selected row. A served question's row carries its record verbs
+//! (escalate, cancel, deadline) on its context menu.
 
 use corral_protocol::app::{CHANGES_V1, ChangesQuery};
 use nsh_core::prelude::*;
 
-use super::{blind, button, code, live, press, rich_at, ring, sheet, with_source, words};
+use super::feed::{feed_row, more_row};
+use super::{
+    attention, blind, button, code, live, press, rich_at, ring, sheet, with_source, words,
+};
 use crate::model::assistant::Prompt;
-use crate::model::board::{ChangeKind, Mark};
 use crate::model::daemon::Link;
 use crate::model::inbox::{
-    self, EmptyState, FeedRow, InboxList, InboxPreview, ItemPreview, NeedYouItem, Notice,
+    self, Action, EmptyState, InboxList, InboxPreview, ItemPreview, NeedYouItem, Notice,
     PlanPreview, Selection,
 };
+use crate::model::work::Record;
 use crate::model::{Effect, Form, Hue, Id, Rich, flat};
 use crate::screens::assistant;
+use crate::screens::now::with_menu;
 use crate::state::AppState;
-use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::chip::{chip, illus};
-use crate::ui::kit::marks::{dot, hue_ink, mark};
-use crate::ui::kit::notice::{empty, error, notice, skeleton};
+use crate::ui::kit::marks::{dot, hue_ink};
+use crate::ui::kit::notice::{empty, error, loading, notice, skeleton};
 use crate::ui::kit::page::{self, group_head, pane};
-use crate::ui::kit::rows::list_row;
 use crate::ui::kit::text::{h3, rich};
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
@@ -144,6 +147,26 @@ impl Kind {
     }
 }
 
+/// Placeholder rows while the list loads: plain bars for all but the last, whose bars carry the
+/// model's caption as the region's status ("Loading inbox…"), so it is said once, at the end.
+fn loading_rows(
+    app: AppState,
+    count: u8,
+    bars: &[(f32, f32)],
+    caption: &'static str,
+    frame: impl Fn(AnyElement) -> AnyElement,
+) -> Vec<AnyElement> {
+    (0..count)
+        .map(|at| {
+            frame(if at + 1 == count {
+                loading(app, caption, bars)
+            } else {
+                skeleton(app, bars)
+            })
+        })
+        .collect()
+}
+
 /// The list's rows; `revealed` is the row last scrolled into view as the selection.
 fn list_body(app: AppState, list: InboxList, revealed: Stored<Option<String>>) -> AnyElement {
     let form = app.form;
@@ -151,17 +174,17 @@ fn list_body(app: AppState, list: InboxList, revealed: Stored<Option<String>>) -
         InboxList::Loading {
             skeleton_count,
             blocks_per_item,
+            caption,
         } => {
             let bars = &ROW_BARS[..usize::from(blocks_per_item).min(ROW_BARS.len())];
             view()
-                .label("Loading")
-                .children((0..skeleton_count).map(|_| {
+                .children(loading_rows(app, skeleton_count, bars, caption, |bars| {
                     view()
                         .when(form == Form::Desktop, |v| v.px(px(16.0)).py(px(10.0)))
                         .when(form == Form::Terminal, |v| {
                             v.px(term::cells(1.0)).pb(px(16.0))
                         })
-                        .child(skeleton(app, bars))
+                        .child(bars)
                         .into_element()
                 }))
                 .into_element()
@@ -222,20 +245,20 @@ fn phone_body(app: AppState, list: InboxList) -> AnyElement {
         InboxList::Loading {
             skeleton_count,
             blocks_per_item,
+            caption,
         } => {
             let bars = &CARD_BARS[..usize::from(blocks_per_item).min(CARD_BARS.len())];
             view()
-                .label("Loading")
                 .px(px(14.0))
                 .py(px(12.0))
                 .gap(px(10.0))
-                .children((0..skeleton_count).map(|_| {
+                .children(loading_rows(app, skeleton_count, bars, caption, |bars| {
                     view()
                         .p(px(16.0))
                         .rounded(px(14.0))
                         .border_1()
                         .border_color(color(Token::Rule))
-                        .child(skeleton(app, bars))
+                        .child(bars)
                         .into_element()
                 }))
                 .into_element()
@@ -301,13 +324,27 @@ fn empty_state(app: AppState, state: EmptyState) -> AnyElement {
 }
 
 fn row_label(item: &NeedYouItem) -> String {
-    format!(
+    let mut label = format!(
         "{}, {}, {}, {}",
         flat(&item.heading),
         item.title,
         item.meta,
         item.age
-    )
+    );
+    if let Some(line) = &item.attention {
+        label = format!("{label}, {}: {}", line.whose, line.reason);
+    }
+    label
+}
+
+/// A served question's record verbs on its row's context menu; any other row as it is.
+fn with_verbs(app: AppState, item_action: &Action, question: bool, row: AnyElement) -> AnyElement {
+    match item_action {
+        Action::Row(key) | Action::OpenRow(key) if question => {
+            with_menu(app, Record::Question(key.clone()), row)
+        }
+        _ => row,
+    }
 }
 
 /// A needs-you row. The selected one, when the selection has just moved to it, scrolls into the
@@ -330,17 +367,25 @@ fn selectable(app: AppState, item: NeedYouItem, revealed: Stored<Option<String>>
         .into_element()
 }
 
-/// A needs-you row. Desktop: the dot, then the lead line, the title in semibold and the meta
-/// line (`.row` at auto height, padding 9 14 9 16), the age at the trailing edge; selected is the
-/// sel fill with the 1 pt ink bar. Terminal: [`terminal_row`].
+/// A needs-you row. Desktop: the dot, then the lead line, the title in semibold, the attention
+/// move (whose move, why) and the meta line (`.row` at auto height, padding 9 14 9 16), the age
+/// at the trailing edge; selected is the sel fill with the 1 pt ink bar. Terminal:
+/// [`terminal_row`].
 fn row(app: AppState, item: NeedYouItem) -> AnyElement {
     let selected = item.selected;
     let label = row_label(&item);
     let on_press = press(app, item.action.clone());
+    let action = item.action.clone();
+    let question = item.state.is_some();
     if app.form == Form::Terminal {
-        return terminal_row(app, item, label, on_press);
+        let drawn = terminal_row(app, item, label, on_press);
+        return with_verbs(app, &action, question, drawn);
     }
-    view()
+    let move_line = item
+        .attention
+        .as_ref()
+        .map(|line| attention::summary(app, line, 12.0, 1).truncate());
+    let drawn = view()
         .relative()
         .flex_row()
         .items_start()
@@ -389,15 +434,17 @@ fn row(app: AppState, item: NeedYouItem) -> AnyElement {
                         .truncate()
                         .font_weight(FontWeight::SEMIBOLD),
                 )
+                .children(move_line)
                 .child(words(app, item.meta, 12.0, Token::Ink3).truncate()),
         )
         .child(code(app, item.age, 11.0, Token::Ink3).flex_shrink_0())
-        .into_element()
+        .into_element();
+    with_verbs(app, &action, question, drawn)
 }
 
 /// A needs-you row in Cells, on two rows so the title keeps the width: the lead line (lead and
-/// id) quiet above, then the dot, the title taking the room and the age. A one-Cell bar marks
-/// the selected row; NSH bands it.
+/// id) quiet above, then the dot, the title taking the room and the age; the attention move on
+/// a third row when corrald records one. A one-Cell bar marks the selected row; NSH bands it.
 fn terminal_row(
     app: AppState,
     item: NeedYouItem,
@@ -405,6 +452,12 @@ fn terminal_row(
     on_press: impl Fn() + 'static,
 ) -> AnyElement {
     let selected = item.selected;
+    let rows = if item.attention.is_some() { 3 } else { 2 };
+    let bar = if selected {
+        vec!["▌"; rows].join("\n")
+    } else {
+        " ".to_owned()
+    };
     view()
         .flex_row()
         .flex_shrink_0()
@@ -422,7 +475,7 @@ fn terminal_row(
                 .w(term::cells(1.0))
                 .flex_shrink_0()
                 .accessibility_elements_hidden(true)
-                .child(text(if selected { "▌\n▌" } else { " " }).text_color(color(Token::Ink))),
+                .child(text(bar).text_color(color(Token::Ink))),
         )
         .child(
             view()
@@ -450,20 +503,34 @@ fn terminal_row(
                         )
                         .child(term::space(1.0))
                         .child(term::quiet(item.age).flex_shrink_0()),
-                ),
+                )
+                .children(item.attention.as_ref().map(|line| {
+                    view()
+                        .flex_row()
+                        .child(term::space(2.0))
+                        .child(attention::summary(app, line, 12.0, 1).flex_1().truncate())
+                })),
         )
         .into_element()
 }
 
 /// A phone needs-you card (`.pcard-q`): the dot and the bold lead line in the item's hue, the
-/// 17 pt title, the meta line; pressing it opens the item.
+/// 17 pt title, the meta line, the attention move under it (two lines at most); pressing it
+/// opens the item, holding it offers a served question's verbs.
 fn card(app: AppState, item: NeedYouItem) -> AnyElement {
     let lead_ink = match item.hue {
         Hue::Neutral => color(Token::Ink2),
         hue => hue_ink(hue),
     };
     let heading: Rich = item.heading.iter().cloned().map(|run| run.bold()).collect();
-    view()
+    let move_line = item.attention.as_ref().map(|line| {
+        attention::summary(app, line, 13.5, 2)
+            .line_height(px(19.0))
+            .mt(px(6.0))
+    });
+    let action = item.action.clone();
+    let question = item.state.is_some();
+    let drawn = view()
         .mx(px(14.0))
         .mt(px(6.0))
         .mb(px(4.0))
@@ -497,161 +564,9 @@ fn card(app: AppState, item: NeedYouItem) -> AnyElement {
                 .mb(px(6.0)),
         )
         .child(words(app, item.meta, 13.5, Token::Ink2).line_height(px(19.0)))
-        .into_element()
-}
-
-/// What changed, by its kind: the stage's own mark, a worker start, a note, a message for you.
-fn change_mark(app: AppState, kind: ChangeKind) -> AnyElement {
-    match kind {
-        ChangeKind::Mark(state) => mark(app, state, Hue::Neutral),
-        ChangeKind::Note => mark(app, Mark::Na, Hue::Neutral),
-        ChangeKind::Message => dot(app, Hue::You),
-        ChangeKind::Start => text("▶")
-            .when(app.form != Form::Terminal, |t| t.text_size(px(10.0)))
-            .text_color(hue_ink(Hue::Worker))
-            .accessibility_elements_hidden(true)
-            .into_element(),
-    }
-}
-
-/// A row of the feed. Desktop (`.ev`, 26 pt): time, mark, id, the text in ink while unseen.
-/// Phone (`.prow`, 48 pt): time, id and text on one line, the mark at the end. Terminal: the
-/// kit's one-line row.
-fn feed_row(app: AppState, row: FeedRow) -> AnyElement {
-    let label = format!("{} {} {}", row.at, row.id, row.text);
-    let on_press = press(app, row.action.clone());
-    match app.form {
-        Form::Terminal => list_row(
-            app,
-            label,
-            row.test_id.clone(),
-            || false,
-            on_press,
-            vec![
-                term::quiet(row.at.clone()).flex_shrink_0().into_element(),
-                change_mark(app, row.kind),
-                term::quiet(row.id.clone()).flex_shrink_0().into_element(),
-                text(row.text.clone())
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .truncate()
-                    .text_color(color(Token::Ink))
-                    .into_element(),
-            ],
-        ),
-        Form::Desktop => view()
-            .flex_row()
-            .items_center()
-            .gap(px(8.0))
-            .px(px(16.0))
-            .h(px(26.0))
-            .cursor_pointer()
-            .role(AccessibilityRole::Button)
-            .label(label)
-            .test_id(&row.test_id)
-            .on_press(on_press)
-            .hover(|s| s.bg(color(Token::Hover)))
-            .focus_visible(ring)
-            .child(view().w(px(40.0)).flex_shrink_0().child(code(
-                app,
-                row.at.clone(),
-                11.0,
-                Token::Ink3,
-            )))
-            .child(
-                view()
-                    .w(px(14.0))
-                    .flex_shrink_0()
-                    .items_center()
-                    .child(change_mark(app, row.kind)),
-            )
-            .child(view().w(px(50.0)).flex_shrink_0().child(code(
-                app,
-                row.id.clone(),
-                11.0,
-                Token::Ink3,
-            )))
-            .child(
-                words(
-                    app,
-                    row.text.clone(),
-                    12.0,
-                    if row.unseen { Token::Ink } else { Token::Ink2 },
-                )
-                .flex_1()
-                .min_w(px(0.0))
-                .truncate(),
-            )
-            .into_element(),
-        Form::Phone => view()
-            .flex_row()
-            .items_center()
-            .gap(px(10.0))
-            .min_h(px(48.0))
-            .px(px(18.0))
-            .py(px(8.0))
-            .border_b_1()
-            .border_b_color(color(Token::Rule))
-            .cursor_pointer()
-            .role(AccessibilityRole::Button)
-            .label(label)
-            .test_id(&row.test_id)
-            .on_press(on_press)
-            .active(|s| s.bg(color(Token::Hover)))
-            .focus_visible(ring)
-            .child(view().w(px(44.0)).flex_shrink_0().child(code(
-                app,
-                row.at.clone(),
-                12.5,
-                Token::Ink3,
-            )))
-            .child(
-                text("")
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .number_of_lines(1u32)
-                    .child(code(app, row.id.clone(), 13.5, Token::Ink3))
-                    .child(words(app, " ", 14.5, Token::Ink))
-                    .child(words(app, row.text.clone(), 14.5, Token::Ink)),
-            )
-            .child(
-                view()
-                    .w(px(14.0))
-                    .flex_shrink_0()
-                    .items_center()
-                    .child(change_mark(app, row.kind)),
-            )
-            .into_element(),
-    }
-}
-
-/// "All 12 changes ›" under the desktop feed (`.more`: 26 pt, 48 pt in, ink-3); the kit's quiet
-/// button in a terminal.
-fn more_row(app: AppState, all: &inbox::Button) -> AnyElement {
-    if app.form != Form::Desktop {
-        return view()
-            .flex_row()
-            .px(term::cells(1.0))
-            .child(button(app, all))
-            .into_element();
-    }
-    view()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .h(px(26.0))
-        .pl(px(48.0))
-        .pr(px(16.0))
-        .cursor_pointer()
-        .role(AccessibilityRole::Button)
-        .label(all.label.clone())
-        .test_id("btn-go-changes")
-        .on_press(press(app, all.action.clone()))
-        .hover(|s| s.bg(color(Token::Hover)))
-        .focus_visible(ring)
-        .child(words(app, all.label.clone(), 12.0, Token::Ink3))
-        .child(icon(Icon::Chevron, 12.0, color(Token::Ink3)))
-        .into_element()
+        .children(move_line)
+        .into_element();
+    with_verbs(app, &action, question, drawn)
 }
 
 /// The padding of a preview pane's body, per form.
@@ -661,18 +576,32 @@ fn pane_body(app: AppState) -> View {
         .when(app.form == Form::Terminal, |v| v.px(term::cells(1.0)))
 }
 
+/// The attention move at the top of a pane's body, a rule's distance from what follows.
+fn move_block(app: AppState, line: Option<inbox::AttentionLine>) -> Option<AnyElement> {
+    line.map(|line| {
+        view()
+            .when(app.form != Form::Terminal, |v| v.mb(px(16.0)))
+            .child(attention::block(app, line))
+            .when(app.form == Form::Terminal, |v| v.child(term::blank()))
+            .into_element()
+    })
+}
+
 /// The panes other than the handover and the assistant's prompts.
 fn other_pane(app: AppState, shown: InboxPreview) -> AnyElement {
     match shown {
-        InboxPreview::Loading { skeleton_count } => view()
-            .label("Loading")
+        InboxPreview::Loading {
+            skeleton_count,
+            caption,
+        } => view()
             .p(px(if app.form == Form::Terminal {
                 0.0
             } else {
                 24.0
             }))
-            .child(skeleton(
+            .child(loading(
                 app,
+                caption,
                 &PANE_BARS[..usize::from(skeleton_count).min(PANE_BARS.len())],
             ))
             .into_element(),
@@ -722,8 +651,8 @@ fn other_pane(app: AppState, shown: InboxPreview) -> AnyElement {
     }
 }
 
-/// A plan awaiting acceptance: the head with its chips, the goal when known, what accepting
-/// does, Open plan review.
+/// A plan awaiting acceptance: the head with its chips, the attention move, the goal when known,
+/// what accepting does, Open plan review.
 fn plan_pane(app: AppState, plan: PlanPreview) -> AnyElement {
     let mut meta: Vec<AnyElement> = plan
         .chips
@@ -735,6 +664,7 @@ fn plan_pane(app: AppState, plan: PlanPreview) -> AnyElement {
         .child(page::qhead(app, meta, plan.title, None, Vec::new()))
         .child(
             pane_body(app)
+                .children(move_block(app, plan.attention))
                 .children(plan.goal.map(|goal| {
                     words(app, goal, 13.0, Token::Ink)
                         .line_height(px(20.0))
@@ -752,7 +682,8 @@ fn plan_pane(app: AppState, plan: PlanPreview) -> AnyElement {
         .into_element()
 }
 
-/// A served review, stuck task or escalation: its head, its recorded facts, its own page.
+/// A served review, stuck task or escalation: its head, why it waits and what comes next, its
+/// recorded facts, its own page.
 fn item_pane(app: AppState, item: ItemPreview) -> AnyElement {
     let mut meta: Vec<AnyElement> = item
         .chips
@@ -765,6 +696,7 @@ fn item_pane(app: AppState, item: ItemPreview) -> AnyElement {
         .child(
             pane_body(app)
                 .gap(px(4.0))
+                .children(move_block(app, item.attention))
                 .children(
                     item.facts
                         .into_iter()

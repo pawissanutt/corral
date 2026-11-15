@@ -17,6 +17,8 @@ use crate::model::text::{Rich, span};
 /// One needs-you row or phone card, with every visible string resolved for the form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NeedYouItem {
+    /// Canonical blocker and next move; absent from the illustrative fixture.
+    pub attention: Option<super::AttentionLine>,
     /// The row's test id: `inbox-<key>` for served rows, the fixture's own names otherwise.
     pub test_id: String,
     /// Lead phrase, also available separately for accessibility.
@@ -73,6 +75,11 @@ pub struct EmptyState {
     pub action: Option<Button>,
 }
 
+/// What a loading list, item and question say once the wait is long enough to mention.
+pub const LOADING_LIST: &str = "Loading inbox…";
+pub const LOADING_ITEM: &str = "Loading this item…";
+pub const LOADING_QUESTION: &str = "Loading the question…";
+
 /// Inbox list content, including loading placeholders and stale/error fallback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InboxList {
@@ -82,6 +89,8 @@ pub enum InboxList {
         skeleton_count: u8,
         /// Placeholder blocks per row/card.
         blocks_per_item: u8,
+        /// The status the placeholders announce.
+        caption: &'static str,
     },
     /// The projection is usable, including while stale or showing a refresh error.
     Ready {
@@ -113,6 +122,8 @@ pub enum InboxList {
 /// A plan's small inbox preview, not the full plan-review document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanPreview {
+    /// Canonical blocker and next move.
+    pub attention: Option<super::AttentionLine>,
     /// Ordered needs-you and state chips.
     pub chips: Vec<Chip>,
     /// Plan id and revision.
@@ -133,6 +144,8 @@ pub struct PlanPreview {
 /// stuck task or an escalation without a question record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemPreview {
+    /// Canonical blocker and next move.
+    pub attention: Option<super::AttentionLine>,
     /// Needs-you and state chips.
     pub chips: Vec<Chip>,
     /// Row id.
@@ -170,6 +183,8 @@ pub enum InboxPreview {
     Loading {
         /// Header/title/body placeholder count.
         skeleton_count: u8,
+        /// The status the placeholders announce.
+        caption: &'static str,
     },
     /// No item is waiting on the owner.
     Empty(EmptyState),
@@ -246,6 +261,7 @@ pub fn need_you(state: &State, env: Env) -> Vec<NeedYouItem> {
                age: &str,
                question_state: Option<QuestionState>,
                sample| NeedYouItem {
+        attention: None,
         test_id: fixture_id(key).into(),
         lead: lead.into(),
         id: id.into(),
@@ -396,6 +412,7 @@ pub fn fixture_list(state: &State, env: Env) -> InboxList {
         return InboxList::Loading {
             skeleton_count: if phone(env) { 2 } else { 5 },
             blocks_per_item: if phone(env) { 3 } else { 2 },
+            caption: LOADING_LIST,
         };
     }
     let items = need_you(state, env);
@@ -471,7 +488,10 @@ pub fn fixture_list(state: &State, env: Env) -> InboxList {
 /// assistant model and are composed using the typed prompt identity on AssistantPreview.
 pub fn fixture_preview(state: &State, env: Env) -> InboxPreview {
     if env.mode == DataMode::Loading {
-        return InboxPreview::Loading { skeleton_count: 3 };
+        return InboxPreview::Loading {
+            skeleton_count: 3,
+            caption: LOADING_ITEM,
+        };
     }
     if env.mode == DataMode::Empty {
         return InboxPreview::Empty(EmptyState {
@@ -483,6 +503,7 @@ pub fn fixture_preview(state: &State, env: Env) -> InboxPreview {
     match state.sel {
         Selection::Question => InboxPreview::Question(fixture_desk(state, env, false)),
         Selection::Plan => InboxPreview::Plan(PlanPreview {
+            attention: None,
             chips: vec![
                 Chip {
                     label: "needs you",

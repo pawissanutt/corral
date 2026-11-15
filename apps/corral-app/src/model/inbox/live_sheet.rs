@@ -9,6 +9,7 @@ use super::live::{
     Draft, age, can_answer, choice, clock, is_open, ordered, question_detail, question_ref,
     question_state, sent_status,
 };
+use super::live_background::background;
 use super::live_notice::{followup_status, situation_notice};
 use super::sheet::{band, button, desk_bands, key_help, phone_bands};
 use super::{
@@ -20,13 +21,15 @@ use crate::model::daemon::{Feed, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::nav::Destination;
-use crate::model::text::{Rich, span};
+use crate::model::text::span;
 use crate::model::{Id, Live};
 
 /// Whether the handover of `key` can be drawn.
 pub fn handover(feed: &Feed, key: &Id) -> Handover {
     let Some(cache) = feed.detail(&question_ref(key)) else {
-        return Handover::Loading;
+        return Handover::Loading {
+            caption: super::LOADING_QUESTION,
+        };
     };
     if question_detail(feed, key).is_some() {
         return Handover::Ready;
@@ -71,7 +74,9 @@ pub fn handover(feed: &Feed, key: &Id) -> Handover {
                 ButtonKind::Quiet,
             )),
         }),
-        None => Handover::Loading,
+        None => Handover::Loading {
+            caption: super::LOADING_QUESTION,
+        },
     }
 }
 
@@ -99,6 +104,7 @@ pub fn placeholder() -> Sheet {
         bands: Vec::new(),
         side_bands: Vec::new(),
         situation: Situation {
+            attention: None,
             text: String::new(),
             deadline: None,
             waits_title: "Waiting on this answer",
@@ -251,6 +257,7 @@ fn situation(
     status: QuestionState,
 ) -> Situation {
     Situation {
+        attention: row.and_then(super::attention_line),
         text: detail.text.clone(),
         deadline: detail.deadline.as_ref().map(|deadline| {
             vec![
@@ -282,58 +289,6 @@ fn situation(
     }
 }
 
-fn background(detail: &QuestionDetail, feed: &Feed) -> Background {
-    let task = detail.task.as_deref();
-    let board = task.and_then(|task| feed.board.task(task));
-    let mut goal: Rich = Vec::new();
-    if let Some(task) = task {
-        let name = match board {
-            Some(row) => format!("{task} {}", row.title),
-            None => task.to_owned(),
-        };
-        goal.push(span(name).bold().live(Live::Task(Id::new(task))));
-    }
-    let text = detail
-        .place
-        .goal
-        .clone()
-        .or_else(|| board.and_then(|row| row.goal.clone()));
-    if let Some(text) = text {
-        if !goal.is_empty() {
-            goal.push(span(" · "));
-        }
-        goal.push(span(text));
-    }
-    let mut plan_line: Rich = Vec::new();
-    if let Some(position) = &detail.place.position {
-        plan_line.extend([
-            span("Plan "),
-            span(position.plan.clone())
-                .mono()
-                .live(Live::Plan(Id::new(&position.plan))),
-            span(format!(
-                " · layer {} of {} · {} of {} landed",
-                position.layer, position.layers, position.landed, position.total
-            )),
-        ]);
-    } else if let Some(plan) = &detail.plan {
-        plan_line.extend([
-            span("Plan "),
-            span(plan.clone()).mono().live(Live::Plan(Id::new(plan))),
-        ]);
-    }
-    if goal.is_empty() && plan_line.is_empty() {
-        return Background::Absent {
-            note: "No task or plan is recorded for this question.",
-        };
-    }
-    Background::Ready {
-        goal,
-        plan_line,
-        graph: None,
-    }
-}
-
 fn recommendation(
     key: &Id,
     draft: Option<&Draft>,
@@ -359,7 +314,7 @@ fn recommendation(
             .enumerate()
             .map(|(index, option)| {
                 let unblocks = option.unblocks.join(", ");
-                let consequences = [
+                let mut consequences: Vec<(&'static str, String)> = [
                     ("Then", option.next.clone()),
                     ("Unblocks", (!unblocks.is_empty()).then_some(unblocks)),
                     ("Costs", option.cost.clone()),
@@ -367,6 +322,12 @@ fn recommendation(
                 .into_iter()
                 .filter_map(|(label, value)| value.map(|value| (label, value)))
                 .collect();
+                if option.consequence_missing {
+                    consequences.push(("Consequence", "Not recorded; the effect of this option is unknown.".into()));
+                }
+                if option.consequence_derived {
+                    consequences.push(("Derived", "Dependency effects are inferred from the recorded task graph, not an option-specific promise.".into()));
+                }
                 AnswerOption {
                     number: index + 1,
                     label: option.label.clone(),
@@ -425,7 +386,7 @@ fn thread(
             .iter()
             .map(|message| ThreadLine {
                 who: message.by.clone(),
-                via: Some(message.via.clone()),
+                via: Some(super::via_name(feed, None, &message.via)),
                 at: clock(&message.at, feed.now),
                 text: message.text.clone(),
             })
@@ -460,6 +421,12 @@ fn history(detail: &QuestionDetail, feed: &Feed) -> Vec<HistoryRow> {
             } else {
                 " · tried"
             });
+            if let Some(via) = &entry.via {
+                label.push_str(&format!(
+                    " · {}",
+                    super::provenance(feed, &entry.by, None, via)
+                ));
+            }
             HistoryRow {
                 label,
                 owner_decision: owner,
@@ -558,7 +525,7 @@ pub fn sheet(
         side_bands: Vec::new(),
         situation: situation(state, feed, detail, row, status),
         background: background(detail, feed),
-        assessment: live_evidence::assessment(key, draft, detail),
+        assessment: live_evidence::assessment(key, draft, detail, feed),
         recommendation: recommendation(key, draft, detail, locked),
         thread,
         thread_preview,
@@ -615,7 +582,7 @@ pub fn decide(state: &State, feed: &Feed, key: &Id, env: Env) -> DecideBar {
     let row = feed.inbox.get(key.as_str());
     let status = question_state(state, feed, detail);
     let session = feed.session.as_ref();
-    let via = session.map(|session| format!("app:{}", session.device.name));
+    let via = session.map(|session| format!("app:{}", session.device.id));
     if matches!(
         status,
         QuestionState::Mine | QuestionState::Elsewhere | QuestionState::Closed
@@ -662,7 +629,10 @@ pub fn decide(state: &State, feed: &Feed, key: &Id, env: Env) -> DecideBar {
             QuestionState::Mine => (format!("ANSWERED{at}"), Hue::Ok),
             QuestionState::Elsewhere => (
                 match by_via {
-                    Some(by_via) => format!("ANSWERED VIA {}{at}", by_via.to_uppercase()),
+                    Some(by_via) => format!(
+                        "ANSWERED ON {}{at}",
+                        super::via_name(feed, None, by_via).to_uppercase()
+                    ),
                     None => format!("ANSWERED{at}"),
                 },
                 Hue::Ok,
@@ -748,7 +718,7 @@ pub fn decide(state: &State, feed: &Feed, key: &Id, env: Env) -> DecideBar {
     };
     if let Some(via) = via {
         note.push(span("\n"));
-        note.push(span(format!("actor=owner · via={via}")).mono());
+        note.push(span(super::provenance(feed, "owner", None, &via)));
     }
     DecideBar {
         buttons: vec![

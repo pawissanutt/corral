@@ -6,7 +6,7 @@
 use nsh_core::prelude::*;
 
 use crate::model::inbox::QuestionState;
-use crate::model::work::{self, Action, Button, Press, TaskVerb};
+use crate::model::work::{self, Action, Button, Press};
 use crate::model::{Env, Form, Live};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
@@ -122,11 +122,10 @@ pub(crate) fn press_id(press: &Press) -> String {
         Press::Open(Live::Review(_)) => "btn-review".into(),
         Press::Open(Live::Thread(id)) => format!("thread-{id}"),
         Press::Ask { .. } => "btn-ask-about".into(),
-        Press::Run { verb, .. } => match verb {
-            TaskVerb::Hold => "btn-hold".into(),
-            TaskVerb::Release => "btn-release".into(),
-            TaskVerb::Retry { .. } => "btn-retry".into(),
-        },
+        Press::Verb { verb, .. } => format!("btn-{}", verb.slug()),
+        Press::SubmitVerb(_) => "btn-verb-send".into(),
+        Press::CancelVerb => "btn-verb-cancel".into(),
+        Press::CloseMenu => "btn-verbs-close".into(),
         Press::Recover(_) => "btn-check-result".into(),
         Press::Goal(_) => "btn-goal".into(),
         Press::Seen(_) => "btn-mark-seen".into(),
@@ -181,12 +180,27 @@ pub(crate) fn quiet(app: AppState, words: impl Into<SharedString>) -> AnyElement
 /// or stale while the link is up.
 pub(crate) type Wanted = Option<(crate::model::Id, u64, bool)>;
 
-/// Keeps a task's detail loaded while `target` names it: requests it when absent or stale, and
-/// revalidates it when the board row's revision moves.
+/// Keeps a task's detail loaded while `target` names it: requests it when absent or stale,
+/// revalidates it when the board row's revision moves, and pins it in the client's cache while
+/// it is shown, letting go when the target changes or the view goes.
 pub(crate) fn keep_loaded(app: AppState, target: Memo<Wanted>) {
     let seen = stored(None::<(crate::model::Id, u64)>);
+    let pinned = stored(None::<crate::model::Id>);
     effect(move || {
-        let Some((id, rev, needed)) = target.get() else {
+        let wanted = target.get();
+        let shown = wanted.as_ref().map(|(id, _, _)| id.clone());
+        if pinned.with(|pinned| *pinned != shown) {
+            let was = pinned.replace(shown.clone());
+            untracked(|| {
+                if let Some(gone) = was {
+                    app.watch_detail(work::task_ref(&gone), false);
+                }
+                if let Some(new) = &shown {
+                    app.watch_detail(work::task_ref(new), true);
+                }
+            });
+        }
+        let Some((id, rev, needed)) = wanted else {
             return;
         };
         let reference = work::task_ref(&id);
@@ -199,6 +213,12 @@ pub(crate) fn keep_loaded(app: AppState, target: Memo<Wanted>) {
                 app.load(reference);
             }
         });
+    });
+    // The owner may already be letting go of its values when this runs.
+    cleanup(move || {
+        if let Some(gone) = pinned.try_with(Option::take).flatten() {
+            app.watch_detail(work::task_ref(&gone), false);
+        }
     });
 }
 
@@ -224,7 +244,7 @@ pub(crate) fn selected_task(app: AppState) -> Memo<Wanted> {
         let selection = app.selection();
         app.feed.with(|feed| {
             app.work.with(|state| {
-                work::daemon_selection(state, &selection, &feed.board, form)
+                work::daemon_selection(state, &selection, feed, form)
                     .and_then(|task| wanted(feed, task))
             })
         })

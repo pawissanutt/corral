@@ -63,13 +63,13 @@ fn owner(state: &State, feed: &Feed, entry: &ThreadEntry) -> OwnerMessage {
             .unwrap_or_else(|| "origin unknown".into()),
         // The time the owner typed it, as the queued copy promised; corrald's receipt (which
         // orders the thread) follows when it differs, and stands alone for older records.
-        at: clock(entry.typed_at.as_deref().unwrap_or(&entry.at), &feed.date),
+        at: clock(entry.typed_at.as_deref().unwrap_or(&entry.at), feed),
         text: entry.text.clone().unwrap_or_default(),
         tag: tag(entry.state.as_ref()),
         extra: entry
             .typed_at
             .as_deref()
-            .map(|typed| (clock(typed, &feed.date), clock(&entry.at, &feed.date)))
+            .map(|typed| (clock(typed, feed), clock(&entry.at, feed)))
             .filter(|(typed, received)| typed != received)
             .map(|(_, received)| format!("received {received}")),
         attachment: attachment(&entry.links),
@@ -149,7 +149,7 @@ impl Thread<'_> {
             }),
             // Each reply names the session that wrote it, never whichever is current now.
             id: entry_session(&entry.id).map_or_else(|| self.author.clone(), str::to_owned),
-            at: clock(&entry.at, &self.feed.date),
+            at: clock(&entry.at, self.feed),
             model: entry
                 .model
                 .clone()
@@ -160,9 +160,12 @@ impl Thread<'_> {
             tools,
             streaming: false,
             stop: None,
-            cost: entry
-                .cost_usd
-                .map(|usd| format!("this ask {}", super::cost(Some(usd), entry.cost_basis))),
+            // One semantic answer's own amount, reported or estimated as corrald attributed
+            // it; without an attribution it is unknown, never a share of the session's total.
+            cost: (entry.kind == EntryKind::Answer).then(|| match entry.cost_usd {
+                Some(usd) => format!("this ask {}", super::amount(usd, entry.cost_basis)),
+                None => "this ask · cost unknown".into(),
+            }),
             sources: entry
                 .links
                 .iter()
@@ -218,7 +221,7 @@ impl Thread<'_> {
                 rev,
                 options,
                 answer,
-                ..
+                accepts_text,
             } => Body::AskUser(question_card(
                 self.state,
                 self.feed,
@@ -227,6 +230,7 @@ impl Thread<'_> {
                 *rev,
                 options,
                 answer.as_ref(),
+                *accepts_text,
             )),
             EntryCard::Prompt {
                 key,
@@ -254,7 +258,6 @@ impl Thread<'_> {
 
     /// An assistant reply or card entry, with the streamed text while its turn runs.
     fn reply(&self, entry: &ThreadEntry, live: Option<(&str, u64, bool)>) -> AssistantMessage {
-        let streaming = live.is_some_and(|(_, _, done)| !done);
         let text = match live {
             Some((text, _, _)) => text,
             None if entry.kind == EntryKind::Answer => entry.text.as_deref().unwrap_or(""),
@@ -272,19 +275,26 @@ impl Thread<'_> {
         body.extend(card);
         let mut message = self.message(entry, body);
         self.turn(&mut message, live);
-        match entry.completion {
-            Some(TurnCompletion::Aborted) => {
-                message.streaming = false;
-                message.stop = None;
-                message.state = Some(Chip::new("stopped", Hue::Neutral));
-                message.stopped_note = Some("This turn was stopped · partial answer kept.");
+        // corrald's settlement of the turn outranks the stream: a canonical completion ends
+        // the caret and Stop whatever the last streamed step said.
+        if let Some(completion) = entry.completion {
+            message.streaming = false;
+            message.stop = None;
+            message.state = None;
+            match completion {
+                TurnCompletion::Completed => {}
+                TurnCompletion::Aborted => {
+                    message.state = Some(Chip::new("stopped", Hue::Neutral));
+                    message.stopped_note = Some("This turn was stopped · partial answer kept.");
+                }
+                TurnCompletion::Failed => {
+                    message.state = Some(Chip::new("turn failed", Hue::Fail));
+                    message.stopped_note = Some("This turn failed · what arrived is kept.");
+                }
+                TurnCompletion::Other => {
+                    message.state = Some(Chip::new("turn ended · outcome unknown", Hue::Neutral));
+                }
             }
-            Some(TurnCompletion::Failed) => {
-                message.streaming = false;
-                message.stop = None;
-                message.state = Some(Chip::new("turn failed", Hue::Fail));
-            }
-            _ => {}
         }
         if message.state.is_none() {
             message.state = if asks {
@@ -296,7 +306,7 @@ impl Thread<'_> {
             };
         }
         // Records an answer rests on are cited once the turn completes.
-        if streaming {
+        if message.streaming {
             message.sources.clear();
         }
         message
@@ -313,6 +323,8 @@ impl Thread<'_> {
             .and_then(|session| self.state.live.stopping.get(session))
             == Some(&turn);
         if !done {
+            // A turn still answering has no amount of its own yet.
+            message.cost = None;
             message.streaming = true;
             message.state = Some(if stopping {
                 Chip::new("stopping", Hue::Neutral)
@@ -358,7 +370,7 @@ impl Thread<'_> {
                 format!("waiting for assistant · {}", wait_label(reason)),
                 Hue::Held,
             ),
-            explanation: full.then(|| wait_explanation(reason, &self.feed.date)),
+            explanation: full.then(|| wait_explanation(reason, self.feed)),
             note: if full { WAIT_NOTE } else { "" },
             buttons,
             status,
@@ -414,7 +426,7 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
             Some(EntryCard::PmItem { id, .. }) => Some((
                 id.as_str(),
                 PmReply {
-                    at: clock(&entry.at, &feed.date),
+                    at: clock(&entry.at, feed),
                     text: entry.text.clone().unwrap_or_default(),
                 },
             )),
@@ -481,7 +493,7 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
                 Some(EntryCard::PmItem { id, .. }) => items.push(ThreadItem::PmReply {
                     id: id.clone(),
                     reply: PmReply {
-                        at: clock(&entry.at, &feed.date),
+                        at: clock(&entry.at, feed),
                         text: entry.text.clone().unwrap_or_default(),
                     },
                 }),
@@ -748,7 +760,7 @@ fn outbox(
         let message = OwnerMessage {
             author: "you",
             provenance: "this device".into(),
-            at: clock(&send.typed_at, &feed.date),
+            at: clock(&send.typed_at, feed),
             text: send.text.clone(),
             tag: Chip::new(label, hue),
             extra: None,
