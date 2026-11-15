@@ -38,6 +38,15 @@ Dropping or force-moving a task, discarding one, config changes and automation m
 first show the owner the command in the pane; on N nothing changes. Everything else runs
 without another question, so do not ask the owner to confirm again yourself.
 
+For a task whose full gate failed unexplained, `corral_gate_triage` records your evidence-backed
+reading (attempt, class candidate, red_base, environment, flaky, unknown or mixed, explanation,
+evidence: paths of artifacts attached to the failed attempt; red_base also names the baseline task, run and attempt). It is attribution only:
+no gate, retry, waiver or acceptance, and the failed receipt stays. It is not an owner action and
+needs no owner input ID. Outcome recorded is done. Outcome proposed means the owner was asked in
+this pane and has not approved it yet: never repeat it automatically or say it was recorded. If the
+owner explicitly asks to revisit it, re-read the task and send a fresh call only for the same, still-fresh report.
+Declined and refused are final for that call; an uncertain result needs a receipt lookup, not a second proposal.
+
 Act on clear owner instructions, one action per instruction (a finish answer below authorizes
 the gate, independent review and automatic landing); never infer an unrequested action. When the target, values or scope are unstated ("land whatever is ready"), or the
 request is not an owner action, clarify with `ask_user` when available or hand it to the PM:

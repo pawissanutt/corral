@@ -39,6 +39,7 @@ pub enum AgentOp {
     Evidence,
     Artifact,
     Gate,
+    GateTriage,
     Done,
     Verdict,
     QuestionAnswer,
@@ -101,9 +102,10 @@ const REVIEWER: &[AgentRole] = &[AgentRole::Reviewer];
 const PM: &[AgentRole] = &[AgentRole::Pm];
 const ASSISTANT: &[AgentRole] = &[AgentRole::Assistant];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
+const TRIAGE: &[AgentRole] = &[AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 52] = [
+    pub const ALL: [AgentOp; 53] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -119,6 +121,7 @@ impl AgentOp {
         AgentOp::Evidence,
         AgentOp::Artifact,
         AgentOp::Gate,
+        AgentOp::GateTriage,
         AgentOp::Done,
         AgentOp::Verdict,
         AgentOp::QuestionAnswer,
@@ -166,6 +169,7 @@ impl AgentOp {
     pub fn roles(self) -> &'static [AgentRole] {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => ALL_ROLES,
+            AgentOp::GateTriage => TRIAGE,
             AgentOp::ReadAnnotations => super::ops::annotations::ROLES,
             AgentOp::Todo
             | AgentOp::MemoryList
@@ -208,6 +212,7 @@ impl AgentOp {
     /// The role module that handles the op; `None` for the ops `call` handles itself.
     fn route(self, role: AgentRole) -> Option<Route> {
         match self {
+            AgentOp::GateTriage => None,
             AgentOp::Notes | AgentOp::PmAction | AgentOp::PmShadow => None,
             AgentOp::OwnerAsk | AgentOp::OwnerPrompt | AgentOp::IdeaFile => None,
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup | AgentOp::ReadAnnotations => {
@@ -561,6 +566,7 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::OwnerAsk => super::ops::owner_ask::call(ctx, &envelope),
             AgentOp::OwnerPrompt => super::ops::owner_prompt::call(ctx, &envelope),
             AgentOp::IdeaFile => super::app_runtime::actions::host_call(ctx, &envelope),
+            AgentOp::GateTriage => super::ops::gate_triage::call(ctx, &envelope),
             AgentOp::WritePermission => super::ops::write_permission::call(ctx, &envelope),
             AgentOp::AssistantPlan | AgentOp::AssistantPlanReview | AgentOp::AssistantHandoff => {
                 super::ops::assistant_workflow::call(ctx, &envelope, op)

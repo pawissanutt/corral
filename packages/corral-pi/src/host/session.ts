@@ -87,7 +87,8 @@ import { oracleTool } from "../extensions/oracle/index.ts";
 import { runAuxiliarySession } from "../extensions/subagent/session.ts";
 import { executionRefusal, exploreLoadout, nestedCorralRead } from "../roles/common/execution.ts";
 import { OWNER_INPUT_TEXT_MAX, ownerInputText, utf8Prefix } from "../roles/assistant/owner-action.ts";
-import type { ConfirmUi } from "../tools/define.ts";
+import type { ConfirmUi, GateTriageProposal, TriageUi } from "../tools/define.ts";
+import { askGateTriage } from "./triage-dialog.ts";
 import { memoryContext } from "./memory.ts";
 import { transcriptPreview } from "./transcript-preview.ts";
 import { AssistantRelink } from "./assistant-relink.ts";
@@ -1207,6 +1208,10 @@ export class HostSession {
         ...(this.options.identity.role === "assistant"
           ? { confirm: (command: string, context: ConfirmUi, requestId: string) =>
             this.confirmOwnerAction(command, context, requestId) } : {}),
+        ...(role === "pm" || role === "assistant" ? { triage: { generation: this.options.identity.generation,
+          ask: (proposal: GateTriageProposal, context: TriageUi, signal: AbortSignal | undefined) =>
+            askGateTriage(proposal, context, signal ? AbortSignal.any([this.writeAbort.signal, signal]) : this.writeAbort.signal,
+              () => this.planning?.refusal("corral_gate_triage")) } } : {}),
       });
       pi.registerTool(tool);
     }

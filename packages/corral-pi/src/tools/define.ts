@@ -10,12 +10,18 @@ import { renderFailure, renderReceipt } from "./presentation.ts";
 import type { CorralOp, CorralToolSpec } from "../roles/types.ts";
 import { nestedChild } from "../extensions/codemode/child.ts";
 import { nestedCorralRead } from "../roles/common/execution.ts";
-import { CorralCallError, type CorralClient, type CorralReceipt, toolRequestId } from "./corral.ts";
+import { CorralCallError, type CorralClient, type CorralReceipt, toolRequestId, triageDecisionRequestId } from "./corral.ts";
 
 /** The pane UI a confirmation is shown in; absent when the host has no dialog-capable UI. */
 export interface ConfirmUi {
   readonly hasUI: boolean;
   readonly ui: Pick<ExtensionUIContext, "confirm">;
+}
+
+/** The pane UI a gate-triage proposal is shown in, with a distinct cancel (`select` answers undefined). */
+export interface TriageUi {
+  readonly hasUI: boolean;
+  readonly ui: Pick<ExtensionUIContext, "select">;
 }
 
 export interface ToolHost {
@@ -28,6 +34,16 @@ export interface ToolHost {
    * answer is journaled. Only an assistant host provides it.
    */
   confirm?(command: string, context: ConfirmUi, requestId: string): Promise<boolean>;
+  /**
+   * Gate triage: the host's own half of a `proposed` result. `ask` shows the owner one proposal in
+   * the pane's choice dialog: true to record it, false for an explicit decline, undefined when
+   * nobody decided (no dialog UI, cancelled, timed out, aborted, or "decide later"). The PM and
+   * assistant hosts provide it; the model never can.
+   */
+  readonly triage?: {
+    readonly generation: number;
+    ask(proposal: GateTriageProposal, context: TriageUi, signal: AbortSignal | undefined): Promise<boolean | undefined>;
+  };
 }
 
 export function corralToolNames(specs: readonly CorralToolSpec[]): string[] {
@@ -39,6 +55,23 @@ export function confirmationCommand(receipt: CorralReceipt): string | undefined 
   const result = receipt.result as { code?: unknown; command?: unknown } | undefined;
   return receipt.state === "rejected" && result?.code === "confirmation_required" && typeof result.command === "string"
     ? result.command : undefined;
+}
+
+/** What the owner is asked to approve: the stored proposal, its digest and corral's own summary of it. */
+export interface GateTriageProposal {
+  readonly proposal: string;
+  readonly digest: string;
+  readonly summary: string;
+}
+
+/** The proposal a committed `gate_triage` receipt is waiting on the owner for, if it is one. */
+export function gateTriageProposal(receipt: CorralReceipt): GateTriageProposal | undefined {
+  const result = receipt.result as { outcome?: unknown; proposal?: unknown; digest?: unknown;
+    summary?: unknown; confirmation_required?: unknown } | null | undefined;
+  if (receipt.state !== "committed" || result?.outcome !== "proposed" || result.confirmation_required !== true) return undefined;
+  const { proposal, digest, summary } = result;
+  return typeof proposal === "string" && proposal !== "" && typeof digest === "string" && digest !== ""
+    && typeof summary === "string" && summary !== "" ? { proposal, digest, summary } : undefined;
 }
 
 export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefinition {
@@ -55,9 +88,9 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
     async execute(toolCallId, params, _signal, _update, context) {
       const child = nestedChild(spec.name, toolCallId);
       const requestId = toolRequestId(host.sessionId(), child?.key ?? toolCallId);
-      const failure = (error: Record<string, unknown>) => {
-        const value = { request_id: requestId, op: spec.op, error };
-        return { content: [{ type: "text" as const, text: renderFailure(spec.op, requestId, error) }], details: value,
+      const failure = (error: Record<string, unknown>, id = requestId) => {
+        const value = { request_id: id, op: spec.op, error };
+        return { content: [{ type: "text" as const, text: renderFailure(spec.op, id, error) }], details: value,
           structuredContent: value as JsonValue, isError: true };
       };
       // Pi validates normal calls as well. Keep raw execute()/host callers safe and return
@@ -78,6 +111,8 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
         ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
       });
       let receipt: CorralReceipt;
+      // The request a transport failure must name: the call, or the host's own decision on its proposal.
+      let sent = { id: requestId, decision: false };
       try {
         receipt = await send(payload);
         // A confirmation refusal stores nothing; repeat only after its bound owner answer.
@@ -85,6 +120,21 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
         const answered = command !== undefined && context !== undefined
           && await host.confirm?.(command, context, requestId) === true;
         if (answered) receipt = await send(payload);
+        // A gate-triage proposal is shown to the owner once, on the call that created it. A replayed
+        // receipt is a resend or a reconnect: it never asks again, and the proposal stays proposed.
+        const proposal = spec.op === "gate_triage" && context !== undefined && receipt.replayed !== true
+          ? gateTriageProposal(receipt) : undefined;
+        const approved = proposal && context !== undefined
+          ? await host.triage?.ask(proposal, context, _signal) : undefined;
+        if (proposal && host.triage && approved !== undefined) {
+          // Host-only: no turn and no parent, which corral requires of a decision.
+          const decision = { action: "decide", proposal: proposal.proposal, digest: proposal.digest, approved };
+          sent = { id: triageDecisionRequestId(host.sessionId(), host.triage.generation, proposal.proposal), decision: true };
+          receipt = await host.client.call(spec.op, {
+            requestId: sent.id, payload: decision,
+            ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
+          });
+        }
       } catch (error) {
         if (!(error instanceof CorralCallError)) throw error;
         const effect = error.diagnostics.effect ?? (error.code === "bad_payload" ? "not_started" : "unknown");
@@ -93,14 +143,16 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
             : effect === "unknown" && !nestedCorralRead(spec.op) ? "uncertain_effect" : "runtime_failure",
           reason: error.code === "call_timeout" && spec.op === "done"
             ? `${error.message}. The executor was stopped; look up this request's receipt. If committed, completion succeeded; if no receipt exists, retry done. Check task status before retrying.`
-            : error.message, ...error.diagnostics, effect,
+            : sent.decision
+              ? `${error.message}. The owner answered the proposal, but whether corral recorded that answer is unknown: look up this decision request's receipt. Do not propose again or ask the owner again.`
+              : error.message, ...error.diagnostics, effect,
           ...(effect === "unknown" && !nestedCorralRead(spec.op) ? { lookup: { tool: "corral_receipt_lookup", arguments: {
-            request_id: requestId,
+            request_id: sent.id,
             ...(["comment", "reply"].includes(spec.op) && typeof payload.task === "string" ? { task: payload.task } : {}),
             ...(["question_answer", "question_escalate", "question_cancel"].includes(spec.op)
               && typeof payload.key === "string" ? { task: payload.key.split("/")[0] } : {}),
           } } } : {}),
-        });
+        }, sent.id);
       }
       return {
         content: [{ type: "text", text: renderReceipt(receipt) }],

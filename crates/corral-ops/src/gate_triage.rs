@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Ctx, verification};
 
-const AREA: &str = "gate-triage";
+pub(crate) const AREA: &str = "gate-triage";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -111,7 +111,7 @@ pub(crate) fn observe(store: &Store, id: &str, gate: &GateRecord) -> Result<Gate
         for entry in state
             .failures
             .iter_mut()
-            .filter(|entry| entry.resolved_by.is_none())
+            .filter(|entry| entry.resolved_by.is_none() && covers(&entry.gate, gate))
         {
             entry.resolved_by = Some(gate.clone());
             changed = true;
@@ -121,6 +121,20 @@ pub(crate) fn observe(store: &Store, id: &str, gate: &GateRecord) -> Result<Gate
         store.save_record(AREA, id, &state)?;
     }
     Ok(state)
+}
+
+/// A full receipt dominates reduced coverage; reduced receipts must match the exact
+/// selection binding. Coverage closes retained episodes, not progress into review.
+fn covers(failed: &GateRecord, passed: &GateRecord) -> bool {
+    let required = failed
+        .identity
+        .as_ref()
+        .and_then(|identity| identity.gate_tier.as_deref());
+    let actual = passed
+        .identity
+        .as_ref()
+        .and_then(|identity| identity.gate_tier.as_deref());
+    actual.is_none() || actual == required
 }
 
 fn unresolved(state: &GateTriage) -> bool {
@@ -186,7 +200,7 @@ pub(crate) fn check_retry(
                 .diagnostic_attempt
                 .as_deref()
                 .is_none_or(|old| Some(old) == attempt),
-            "gate diagnosis retry exhausted; inspect retained failures and resolve attribution before another gate"
+            "gate diagnosis retry exhausted; inspect retained failures and resolve attribution before another gate; Pi PM/assistant: use corral_gate_triage to record evidence or request exact in-chat owner confirmation; other callers: corral repair triage"
         );
     }
     Ok(diagnostic)
@@ -227,7 +241,7 @@ pub(crate) fn route(store: &Store, id: &str, gate: &GateRecord) -> Result<Route>
         return Ok(Route::Retry);
     }
     if unresolved(&state) {
-        return Ok(Route::Block("gate failure needs bounded diagnosis (unknown/mixed/flaky); no code-repair round spent. Inspect `corral repair triage-status` and record evidence with `corral repair triage`. One diagnostic retry is available; green alone cannot clear the failure".into(), true));
+        return Ok(Route::Block("gate failure needs bounded diagnosis (unknown/mixed/flaky); no code-repair round spent. Inspect `corral repair triage-status`. Pi PM/assistant: use `corral_gate_triage` for evidence-backed attribution and exact in-chat owner confirmation if needed. Other callers: `corral repair triage`. One diagnostic retry is available; green alone cannot clear the failure".into(), true));
     }
     let class = state
         .failures
@@ -278,39 +292,10 @@ pub fn diagnose(
     let head = ctx.store.head(&id)?;
     require_driver(&head, owner, invoker)?;
     crate::operating::require_diagnosis(&ctx.store, &head, owner)?;
-    ensure!(
-        !report.explanation.trim().is_empty() && !report.evidence.is_empty(),
-        "diagnosis requires explanation and retained evidence"
-    );
-    let task = ctx.store.get(&id)?;
-    for reference in &report.evidence {
-        let artifact = task
-            .artifacts
-            .iter()
-            .find(|a| a.path == *reference)
-            .context("diagnosis evidence is not attached to this task")?;
-        crate::artifact_read(ctx, artifact)?;
+    let (run, mut state) = prepare(ctx, &head, &report)?;
+    if let Some(gate) = run.gate.as_ref() {
+        state = observe(&ctx.store, &id, gate)?;
     }
-    let run = head
-        .current_run_head()?
-        .context("diagnosis needs a current run")?
-        .into_owned();
-    ensure!(
-        matches!(
-            head.status,
-            corral_core::Status::Review | corral_core::Status::NeedsMe
-        ) && run.outcome == Some(corral_core::RunOutcome::Done)
-            && run.gate.as_ref().is_none_or(|gate| !gate.holds_slot())
-            && run
-                .review
-                .as_ref()
-                .is_none_or(|review| review.verdict.is_some()),
-        "diagnosis requires a settled candidate, not an active writer/check"
-    );
-    let mut state = match run.gate.as_ref() {
-        Some(gate) => observe(&ctx.store, &id, gate)?,
-        None => status(ctx, &id)?,
-    };
     let entry = state
         .failures
         .iter_mut()
@@ -329,16 +314,6 @@ pub fn diagnose(
         entry.diagnoses.is_empty() || owner,
         "diagnosis already recorded; a changed attribution requires explicit owner investigation"
     );
-    if report.class == FailureClass::RedBase {
-        prove_baseline(
-            ctx,
-            &entry.gate,
-            report
-                .baseline
-                .as_ref()
-                .context("red-base diagnosis requires baseline receipt")?,
-        )?;
-    }
     if report.retry {
         ensure!(
             run.gate
@@ -410,6 +385,79 @@ pub fn diagnose(
         Ok(())
     })?;
     Ok(state)
+}
+
+/// Shared validation for CLI diagnosis and attribution-only protocol calls. Merely inspecting
+/// a proposal does not observe/resolve receipts or otherwise change gate admission.
+pub(crate) fn prepare(
+    ctx: &Ctx,
+    head: &impl corral_core::TaskRef,
+    report: &GateDiagnosis,
+) -> Result<(corral_core::RunHead, GateTriage)> {
+    ensure!(
+        !report.explanation.trim().is_empty() && !report.evidence.is_empty(),
+        "diagnosis requires explanation and retained evidence"
+    );
+    let task = ctx.store.get(head.id())?;
+    for reference in &report.evidence {
+        let artifact = task
+            .artifacts
+            .iter()
+            .find(|a| a.path == *reference)
+            .context("diagnosis evidence is not attached to this task")?;
+        crate::artifact_read(ctx, artifact)?;
+    }
+    let run = head
+        .current_run_head()?
+        .context("diagnosis needs a current run")?
+        .into_owned();
+    ensure!(
+        matches!(
+            head.status(),
+            corral_core::Status::Review | corral_core::Status::NeedsMe
+        ) && run.outcome == Some(corral_core::RunOutcome::Done)
+            && run.gate.as_ref().is_none_or(|gate| !gate.holds_slot())
+            && run
+                .review
+                .as_ref()
+                .is_none_or(|review| review.verdict.is_some()),
+        "diagnosis requires a settled candidate, not an active writer/check"
+    );
+    let mut state = status(ctx, head.id())?;
+    if let Some(gate) = run
+        .gate
+        .as_ref()
+        .filter(|gate| gate.result == GateResult::Fail)
+        && !state.failures.iter().any(|entry| entry.gate == *gate)
+    {
+        state.failures.push(FailureEpisode {
+            gate: gate.clone(),
+            diagnoses: Vec::new(),
+            resolved_by: None,
+        });
+    }
+    let entry = state
+        .failures
+        .iter()
+        .find(|entry| {
+            entry
+                .gate
+                .identity
+                .as_ref()
+                .is_some_and(|identity| identity.attempt == report.attempt)
+        })
+        .context("diagnosis attempt is not a retained failed receipt")?;
+    if report.class == FailureClass::RedBase {
+        prove_baseline(
+            ctx,
+            &entry.gate,
+            report
+                .baseline
+                .as_ref()
+                .context("red-base diagnosis requires baseline receipt")?,
+        )?;
+    }
+    Ok((run, state))
 }
 
 fn prove_baseline(ctx: &Ctx, failed: &GateRecord, baseline: &Baseline) -> Result<()> {

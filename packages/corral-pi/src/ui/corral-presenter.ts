@@ -780,6 +780,19 @@ const ENTRIES: Readonly<Record<CorralOp, Entry>> = {
     },
     prose: c => str(c.args.note) ?? str(c.args.reason),
   },
+  gate_triage: {
+    did: c => c.result?.outcome === "recorded" ? "Recorded gate diagnosis for"
+      : c.result?.outcome === "declined" ? "Gate diagnosis declined for" : "Proposed gate diagnosis for",
+    doing: "Proposing a gate diagnosis", noun: "Gate diagnosis",
+    target: c => str(c.args.task),
+    digest: c => {
+      const kind = str(fields(c.args.diagnosis).class), outcome = str(c.result.outcome);
+      if (outcome === "proposed") return { state: "needs-you", outcome: "waiting for the owner's approval", tone: "warning" };
+      if (outcome === "declined") return { outcome: "the owner declined it" };
+      return kind ? { outcome: words(kind) } : undefined;
+    },
+    prose: c => str(fields(c.args.diagnosis).explanation),
+  },
   pm_shadow: { did: "Recorded a shadow decision", doing: "Recording a shadow decision", noun: "Shadow decision" },
   owner_ask: {
     did: c => OWNER_ASK_DID[str(c.args.action) ?? ""] ?? "Asked the owner",
@@ -826,7 +839,7 @@ export const CORRAL_TOOL_OPS: Readonly<Record<string, CorralOp>> = {
   corral_plan_write: "plan_write", corral_plan_submit: "plan_submit", corral_plan_verdict: "plan_verdict",
   corral_owner_action: "owner_action", corral_assistant_plan: "assistant_plan",
   corral_assistant_plan_review: "assistant_plan_review", corral_assistant_handoff: "assistant_handoff",
-  corral_notes: "notes", corral_action: "pm_action",
+  corral_notes: "notes", corral_action: "pm_action", corral_gate_triage: "gate_triage",
 };
 
 /** Prose under the row: the first rows once settled, the newest while the arguments stream; the kit marks a cut with `…`. */

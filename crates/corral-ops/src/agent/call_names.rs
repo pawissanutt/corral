@@ -19,6 +19,7 @@ impl AgentOp {
             AgentOp::Evidence => "evidence",
             AgentOp::Artifact => "artifact",
             AgentOp::Gate => "gate",
+            AgentOp::GateTriage => "gate_triage",
             AgentOp::Done => "done",
             AgentOp::Verdict => "verdict",
             AgentOp::QuestionAnswer => "question_answer",
