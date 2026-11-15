@@ -303,13 +303,10 @@ pub(super) fn transfer(
 
 pub(super) fn close(ctx: &Ctx, head: &TaskHead, prev: &Run) -> Result<()> {
     let source = container(head, prev);
-    // Heads omit the link; inspect canonical state and avoid opening a write for legacy runs.
-    let current = ctx
-        .store
-        .get(&head.id)
-        .context("reading superseded worker paid binding")?;
-    if let Some(state) = current
-        .current_run()
+    // The scalar link is present on heads; ordinary retries must not hydrate history.
+    if let Some(state) = head
+        .current_run
+        .as_deref()
         .filter(|r| r.id == prev.id)
         .and_then(|r| r.agent_host.as_ref())
         && (state.paid_episode.is_some()

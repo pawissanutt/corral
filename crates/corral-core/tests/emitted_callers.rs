@@ -160,6 +160,13 @@ fn emitted_checkpoint_and_own_record_readers_are_called_only_where_allowed() {
             let checkpoint_paths = [
                 ("corral-ops/src/resume.rs", "require_checkpoint"),
                 ("corral-core/src/progress.rs", "save_checkpoint"),
+                // Paid worker handoff checks inspect only the source run's newest checkpoint
+                // and its keyed payload, after an API continuation has actually been selected.
+                (
+                    "corral-ops/src/dispatch/retry_paid.rs",
+                    "require_checkpoint",
+                ),
+                ("corral-ops/src/dispatch/retry_paid.rs", "transfer"),
             ];
             assert!(
                 BUILDERS.contains(&call.file.as_str())
