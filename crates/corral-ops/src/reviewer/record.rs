@@ -81,6 +81,10 @@ pub(super) fn record_verdict(
     ended: Timestamp,
     report: Option<&effects::Report<'_>>,
 ) -> Result<Recorded> {
+    if let Err(error) = super::submission::verdict_check(ctx, task, &run.id) {
+        super::submission::verdict_pause(ctx, task, &run.id, &error)?;
+        return Err(error);
+    }
     refuse_review_child(ctx, task, &run.id)?;
     // Separate processes need not share a monotonic clock; preserve transition order.
     let ended =
@@ -191,10 +195,12 @@ pub(super) fn record_verdict(
                 json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "review_at": record.at.to_string(), "notes": notes }),
             )?;
         }
+        super::submission::verdict_commit(ctx, t, &run.id)?;
         staged.attach(ctx, t, &run.id)
     });
     if let Err(error) = updated {
         staged.release(ctx)?;
+        super::submission::verdict_pause(ctx, &ctx.store.get(&task.id)?, &run.id, &error)?;
         return Err(error);
     }
     drop(staged);

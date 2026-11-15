@@ -47,7 +47,7 @@ fn review_parent_head<'a>(task: &'a mut TaskHeadMut, run_id: &str) -> Result<&'a
 }
 
 /// The accounting child a launch records for its review.
-fn review_child(
+pub(in crate::reviewer) fn review_child(
     ctx: &Ctx,
     run: &RunHead,
     resolved: &ResolvedProfile,
@@ -56,7 +56,10 @@ fn review_child(
     record: &ReviewRecord,
 ) -> Result<Run> {
     Ok(Run {
-        execution: None,
+        execution: Some(corral_core::ExecutionSnapshot::new(
+            &ctx.store.config,
+            resolved.clone(),
+        )),
         delivery: crate::delivery::owner::review_launch_mode(&resolved.harness),
         inbox: Default::default(),
         completion: Default::default(),
@@ -290,6 +293,23 @@ pub(super) fn review_run_origin(
     origin: crate::operating::Origin,
     recovery: Option<&corral_core::RecoveryRecord>,
 ) -> Result<ReviewRecord> {
+    if super::fallback::fallback_paid::launch_failed(ctx, id)? {
+        bail!("SuccessorAmbiguous: an unbound paid review cannot be relaunched");
+    }
+    let result = review_run_inner(ctx, id, reviewer, origin, recovery);
+    if result.is_err() {
+        super::fallback::fallback_paid::launch_failed(ctx, id)?;
+    }
+    result
+}
+
+fn review_run_inner(
+    ctx: &Ctx,
+    id: &str,
+    reviewer: Option<&str>,
+    origin: crate::operating::Origin,
+    recovery: Option<&corral_core::RecoveryRecord>,
+) -> Result<ReviewRecord> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     crate::recovery::require_no_pending(ctx, id, recovery)?;
     let reviewer_recovery = recovery.filter(|r| {
@@ -435,7 +455,22 @@ pub(super) fn review_run_origin(
             bail!("confirmed reviewer unavailable: {reason}");
         }
     } else {
-        crate::review_contracts::check_family(&policy, &run, vendor.as_deref(), &resolved)?;
+        if let Err(error) =
+            crate::review_contracts::check_family(&policy, &run, vendor.as_deref(), &resolved)
+        {
+            if resolved.connection.is_some_and(|c| c.api_key())
+                && let Some(previous) = run.current_child.as_deref()
+            {
+                crate::availability::continuation::pause(
+                    ctx,
+                    &super::fallback::fallback_paid::container(id, &run.id, &previous.id),
+                    crate::availability::continuation::PauseReason::IndependenceViolated,
+                    "review independence changed",
+                )?;
+                bail!("IndependenceViolated");
+            }
+            return Err(error);
+        }
     }
     crate::agent::hooks::review::preflight(ctx, &resolved)?;
     instruction_guard::check(
@@ -504,6 +539,16 @@ pub(super) fn review_run_origin(
             candidate = format!("{}-review{number}", run.id);
         }
     })?;
+    if resolved.connection.is_some_and(|c| c.api_key()) {
+        super::fallback::fallback_paid::prepare(
+            ctx,
+            &task,
+            &run,
+            run.current_child.as_deref(),
+            &review_id,
+            &resolved,
+        )?;
+    }
     if let Some(recovery) = reviewer_recovery {
         anyhow::ensure!(
             matches!(&recovery.preview.proposed_effect, corral_core::RecoveryEffect::ReviewAttempt { attempt, .. } if attempt == &review_id),
@@ -519,7 +564,11 @@ pub(super) fn review_run_origin(
         Some(&review_id),
     )?;
     crate::watch::capture_review(ctx, &task, &run);
-    let inherited = callback::inherited(&run, record.identity.as_ref());
+    let inherited = if resolved.connection.is_some_and(|c| c.api_key()) {
+        None
+    } else {
+        callback::inherited(&run, record.identity.as_ref())
+    };
     if let Some(route) = record.route.as_mut() {
         route.attempt = Some(review_id.clone());
         route.callback = Some(inherited.unwrap_or_else(|| review_id.clone()));

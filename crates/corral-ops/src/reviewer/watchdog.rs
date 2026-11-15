@@ -245,6 +245,9 @@ pub(crate) fn reconcile_review_sampled_at(
     // The worker is finished: this idle stretch belongs to its pending reviewer.
     let since = idle.then(|| run.idle_since.filter(|at| *at >= review.at).unwrap_or(now));
     let elapsed = since.is_some_and(|at| now.duration_since(at) >= window);
+    if super::fallback::fallback_paid::startup_failed(ctx, &head, run, gone || elapsed)? {
+        return Ok(None);
+    }
     let startup = SignedDuration::from_secs(
         i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap_or(i64::MAX),
     );

@@ -3,6 +3,7 @@ use corral_core::{Run, RunHead, Status, Store, Task, TaskRef};
 
 use crate::{Ctx, review_budget::ReviewLaunch, verification};
 
+pub(super) use super::fallback::fallback_paid::{verdict_check, verdict_commit, verdict_pause};
 pub(super) fn submit<T: TaskRef + ?Sized, R>(
     ctx: &Ctx,
     task: &T,
