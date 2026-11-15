@@ -100,8 +100,7 @@ test("committed hello refuses invalid paid context before binding and consumes i
       model: "gpt-6.1-sol", modules, client, events, sessionManager: manager,
       network: guardedFetch(fixtureAuth.transport!({ provider: "openai-codex", apiEndpoint: "", refreshEndpoint: "" })) };
     host = await HostSession.create(options);
-    // Exercise the post-admission hello boundary without enabling an API catalog. No model
-    // request is made: production API construction remains refused until integration slice Z.
+    // Isolate the committed-hello authority gate; catalog admission is covered cross-lane.
     Object.assign(options, { binding });
     const contextPath = join(dir, "context");
     const manifest = JSON.stringify({ owner_input_ids: ["A-1/g1/i1"], receipts: [] });

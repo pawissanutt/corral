@@ -292,6 +292,15 @@ fn probe_hosts<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<()> {
                         && let Some(lost) = task.agent_generation(&container, generation)?
                     {
                         super::super::herdr_status::release_after_loss(ctx, &container, &lost);
+                        if lost
+                            .connection
+                            .as_ref()
+                            .is_some_and(|binding| binding.connection.api_key())
+                        {
+                            crate::availability::continuation::failed_start(
+                                ctx, &container, generation,
+                            )?;
+                        }
                     }
                     Ok(recorded)
                 });
@@ -346,6 +355,13 @@ fn consume_exit<T: TaskRef + ?Sized>(
     };
     if super::super::bridge::liveness::record(&ctx.store, container, &loss)? {
         super::super::herdr_status::release_after_loss(ctx, container, &generation);
+        if generation
+            .connection
+            .as_ref()
+            .is_some_and(|binding| binding.connection.api_key())
+        {
+            crate::availability::continuation::failed_start(ctx, container, generation.n)?;
+        }
     }
     match std::fs::remove_file(&receipt) {
         Ok(()) => Ok(()),

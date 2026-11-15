@@ -53,6 +53,24 @@ impl Prepared {
             &cwd,
             &self.prompt,
         )?;
+        if resolved
+            .connection
+            .is_some_and(|connection| connection.api_key())
+        {
+            let container = corral_core::agent::ContainerRef::PlanReviewer {
+                task: task.id.clone(),
+                plan: self.plan.clone(),
+                review: self.review.id.clone(),
+            };
+            let intent = crate::availability::continuation::intent_for(&ctx.store, &container, 1)?
+                .context("paid plan review has no prepared continuation")?;
+            // Keep the inherited lineage on the head before submitting the process.
+            // This is not activation: spending still requires the exact healthy hello.
+            crate::availability::continuation::with_state(ctx, &container, |state| {
+                state.paid_episode = Some(intent.link);
+                Ok(())
+            })?;
+        }
         let receipt = crate::launch_exit::receipt(
             ctx,
             &task.id,

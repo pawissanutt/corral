@@ -197,3 +197,186 @@ fn reviewer_auth_failure_is_selected_from_real_current_generation_with_constant_
     }
     assert_eq!(measured[0], measured[1]);
 }
+
+#[test]
+fn native_quota_assesses_worker_and_reviewer_but_other_stalls_do_no_extra_work() {
+    use crate::agent::{BindTarget, test_support as ts};
+    use crate::availability::continuation;
+    use corral_core::{CandidateBinding, ExecutionSnapshot};
+    for reviewer in [false, true] {
+        let mut fx = ts::fx();
+        let profile = serde_json::from_value(json!({
+            "harness":"corral-pi","vendor":"openai","model":"same-model",
+            "metadata":{"display_name":"fixture","purpose":"fixture","guidance":{},
+                "instructions":"fixture","revision":"fixture","evidence":"synthetic",
+                "eligibility":{"enabled":true,"automatic":true,"roles":["implementation","implementation_review"],"projects":[]},
+                "candidates":[
+                    {"id":"sub","harness":"corral-pi","connection":"openai-subscription","provider":"openai","model":"same-model","args":[],"evidence":"synthetic","cost":{"kind":"subscription"}},
+                    {"id":"api","harness":"corral-pi","connection":"openai-api","provider":"openai","model":"same-model","args":[],"evidence":"synthetic","cost":{"kind":"metered","currency":"USD","maximum_micros":1}}
+                ],
+                "fallback":{"automatic":true,"paid_roles":["worker","reviewer"],"approved_providers":["openai"],
+                    "max_switches":1,"allow_unknown_subscription_cost":true,"approval":"synthetic",
+                    "spending":{"currency":"USD","maximum_micros":1}}
+            }
+        })).unwrap();
+        fx.ctx.store.config.profiles.insert("pi".into(), profile);
+        fx.ctx.store.save_config().unwrap();
+        let resolved = fx
+            .ctx
+            .store
+            .config
+            .resolve_candidate(
+                "pi",
+                &fx.ctx.store.config.profiles["pi"]
+                    .metadata
+                    .as_ref()
+                    .unwrap()
+                    .candidates[0],
+            )
+            .unwrap();
+        let binding = resolved.connection_binding().unwrap().unwrap();
+        let mut snapshot = ExecutionSnapshot::new(&fx.ctx.store.config, resolved);
+        snapshot.candidate = Some(CandidateBinding {
+            candidate: "sub".into(),
+            episode: None,
+            reason: None,
+            skipped: vec![],
+            pinned: false,
+        });
+        let (id, target) = if reviewer {
+            ts::reviewer_task(&fx)
+        } else {
+            let id = ts::worker_task(&fx, "p1");
+            (
+                id.clone(),
+                BindTarget::Worker {
+                    task: id,
+                    run: "R1".into(),
+                },
+            )
+        };
+        fx.ctx
+            .store
+            .update(&id, |task| {
+                if reviewer {
+                    task.runs[0].review = Some(
+                        serde_json::from_value(json!({
+                            "sha":"abc","reviewer":"pi","at":"2026-10-23T00:00:00Z"
+                        }))
+                        .unwrap(),
+                    );
+                }
+                let run = if reviewer {
+                    &mut task.runs[0].review_runs[0]
+                } else {
+                    &mut task.runs[0]
+                };
+                run.harness = Some("corral-pi".into());
+                run.model = Some("same-model".into());
+                run.execution = Some(snapshot.clone());
+                Ok(())
+            })
+            .unwrap();
+        let container = target.container();
+        let host = ts::bind(
+            &fx,
+            &target,
+            if reviewer { "p2" } else { "p1" },
+            "quota-session",
+        );
+        ts::committed(&ts::hello(&fx, &host));
+        let at = corral_core::clock::now();
+        continuation::with_state(&fx.ctx, &container, |state| {
+            state.generations[0].connection = Some(binding.clone());
+            state.binding.health = HostHealth::Healthy;
+            state.turns.push(serde_json::from_value(json!({
+                "generation":1,"seq":1,"origin":{"kind":"unknown"},"started":at,"ended":at,"class":"provider_failed",
+                "provider_error":"quota","provider_failure":{"version":1,"connection":"openai-subscription",
+                    "category":"subscription_quota","scope":"account"}
+            })).unwrap());
+            Ok(())
+        }).unwrap();
+        let head = fx.ctx.store.head(&id).unwrap();
+        let run = if reviewer {
+            head.current_run
+                .as_deref()
+                .unwrap()
+                .current_child
+                .as_deref()
+                .unwrap()
+        } else {
+            head.current_run.as_deref().unwrap()
+        };
+        let stalled = stall(1, head.latest_agent_turn(&container, 1).unwrap().as_ref()).unwrap();
+        let mut state = None;
+        advance_state(&mut state, Some(&stalled), true, at);
+        let mut state = state.unwrap();
+        let fallback = fx
+            .ctx
+            .store
+            .config
+            .profiles
+            .get_mut("pi")
+            .unwrap()
+            .metadata
+            .as_mut()
+            .unwrap()
+            .fallback
+            .as_mut()
+            .unwrap();
+        let paid_roles = std::mem::take(&mut fallback.paid_roles);
+        {
+            let _hot = HotScope::enter();
+            let before = work::snapshot();
+            assert!(!select_quota_fallback(&fx.ctx, &head, run, &container, &state, at).unwrap());
+            assert_eq!(work::snapshot(), before);
+        }
+        fx.ctx
+            .store
+            .config
+            .profiles
+            .get_mut("pi")
+            .unwrap()
+            .metadata
+            .as_mut()
+            .unwrap()
+            .fallback
+            .as_mut()
+            .unwrap()
+            .paid_roles = paid_roles;
+        state.class = Some(AvailabilityClass::Transient {
+            retry_after_secs: None,
+        });
+        {
+            let _hot = HotScope::enter();
+            let before = work::snapshot();
+            assert!(!select_quota_fallback(&fx.ctx, &head, run, &container, &state, at).unwrap());
+            assert_eq!(work::snapshot(), before);
+        }
+        if reviewer {
+            assert!(matches!(
+                advance_reviewer(&fx.ctx, &head, &container, at).unwrap(),
+                Drive::Fallback(_)
+            ));
+        } else {
+            assert!(advance_agent(&fx.ctx, &head, run, at).unwrap().is_none());
+        }
+        let episode = if reviewer {
+            crate::availability::review_episode(&id, head.current_run.as_deref().unwrap(), "pi")
+        } else {
+            crate::availability::run_episode_head(&id, run)
+        };
+        let selected = crate::availability::load(&fx.ctx, &episode)
+            .unwrap()
+            .unwrap();
+        assert_eq!(selected.attempts.last().unwrap().candidate, "api");
+        assert!(selected.attempts.last().unwrap().run.is_none());
+        assert!(
+            STALLS
+                .load(&fx.ctx.store, &run_key(&id, &container).unwrap())
+                .unwrap()
+                .unwrap()
+                .fallback_selected
+        );
+    }
+}

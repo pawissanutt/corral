@@ -222,6 +222,80 @@ fn retry<T: TaskRef + ?Sized>(
     Ok(())
 }
 
+/// Native quota evidence joins the same durable selection/executor path as other hosts.
+/// All projection/record work stays behind the quota and per-role permission gates.
+fn select_quota_fallback<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    container: &ContainerRef,
+    state: &State,
+    now: Timestamp,
+) -> Result<bool> {
+    if !matches!(state.class(), AvailabilityClass::QuotaExhausted { .. }) {
+        return Ok(false);
+    }
+    let (role, paid_role) = match container {
+        ContainerRef::Worker { .. } => (
+            corral_core::ProfileRole::Implementation,
+            agent::AgentRole::Worker,
+        ),
+        ContainerRef::Reviewer { .. } => (
+            corral_core::ProfileRole::ImplementationReview,
+            agent::AgentRole::Reviewer,
+        ),
+        _ => return Ok(false),
+    };
+    if !ctx
+        .store
+        .config
+        .profiles
+        .get(&run.agent)
+        .and_then(|profile| profile.metadata.as_ref())
+        .and_then(|metadata| metadata.fallback.as_ref())
+        .is_some_and(|fallback| fallback.paid_roles.contains(&paid_role))
+    {
+        return Ok(false);
+    }
+    let Some(_delivery) = ctx.store.try_lock(&format!("delivery-{}", task.id()))? else {
+        return Ok(false);
+    };
+    let shell = task.shell_task()?;
+    let source = agent::container_run(&shell, container).context("quota source run missing")?;
+    let (episode, exclusion) = if role == corral_core::ProfileRole::Implementation {
+        (crate::availability::run_episode_head(task.id(), run), None)
+    } else {
+        let parent = task
+            .current_run_head()?
+            .context("quota reviewer parent missing")?;
+        (
+            crate::availability::review_episode(task.id(), &parent, &run.agent),
+            crate::availability::review_exclusion(ctx, task, &parent),
+        )
+    };
+    let failed = crate::availability::Failed {
+        task: task.id(),
+        run: source,
+        role,
+        episode: &episode,
+        exclude_provider: exclusion.as_deref(),
+        class: state.class(),
+        message: &state.message,
+        since: state.since,
+        retries: state.attempts,
+    };
+    if !matches!(
+        crate::availability::assess(ctx, &failed, now)?,
+        crate::availability::Assessment::Switch(_)
+    ) {
+        return Ok(false);
+    }
+    let mut selected = state.clone();
+    selected.fallback_selected = true;
+    STALLS.save(&ctx.store, &run_key(task.id(), container)?, &selected)?;
+    Ok(true)
+}
+
 pub(crate) fn advance_agent<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     task: &T,
@@ -247,6 +321,9 @@ pub(crate) fn advance_agent<T: TaskRef + ?Sized>(
         let (Step::Escalate, Some(state)) = (step, state) else {
             return Ok(None);
         };
+        if select_quota_fallback(ctx, task, run, &container, &state, now)? {
+            return Ok(None);
+        }
         state.reason()
     };
     let from = *task.status();
@@ -316,6 +393,14 @@ pub(crate) fn advance_reviewer(
     }
     Ok(match tick(ctx, task, container, now)? {
         (Step::Escalate, Some(state)) => {
+            if let Some(run) = task
+                .current_run
+                .as_deref()
+                .and_then(|run| run.current_child.as_deref())
+                && select_quota_fallback(ctx, task, run, container, &state, now)?
+            {
+                return Ok(Drive::Fallback(String::new()));
+            }
             ctx.store.log_event(
                 Some(&task.id),
                 "provider_escalated",

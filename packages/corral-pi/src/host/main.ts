@@ -38,6 +38,7 @@ import { NEW_ASSISTANT_EXIT, RELINK_ASSISTANT_EXIT } from "./assistant-relink.ts
 import { RESUME_ASSISTANT_EXIT } from "./assistant-resume.ts";
 import { CONTINUE_ASSISTANT_EXIT } from "./continuation.ts";
 import { admitConnection } from "./connections.ts";
+import { connectionRules, isApiConnection } from "../auth/connections.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
 import { errorPresenter } from "../ui/error-copy.ts";
 import { RemoteOwner } from "./remote-owner.ts";
@@ -61,7 +62,7 @@ export async function runHost(config: HostConfig, overrides: {
   build?: BuildContext;
 } = {}): Promise<void> {
   const provider = config.provider ?? "openai-codex";
-  admitConnection(provider, config.binding);
+  const connection = admitConnection(provider, config.binding, true);
   restrictEnvironment(process.env, provider);
   exportAssistantSession(process.env, config.identity);
   const compat = readCompat(config.assets);
@@ -70,10 +71,11 @@ export async function runHost(config: HostConfig, overrides: {
   const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
   const events = new EventLog(config.identity.generation);
   const rawFetch = globalThis.fetch.bind(globalThis);
-  const subscriptions = await subscriptionRoutes(modules.auth, provider, config.identity.role);
-  const send = modules.auth.transport?.(authContext(provider)) ?? rawFetch;
+  const api = isApiConnection(connection);
+  const providers = api ? [provider] : (await subscriptionRoutes(modules.auth, provider, config.identity.role)).providers;
+  const send = modules.auth.transport?.(authContext(provider, connection)) ?? rawFetch;
   let aws: AwsRoute | undefined;
-  let rules: readonly DestinationRule[] | undefined;
+  let rules: readonly DestinationRule[] | undefined = api ? connectionRules(connection) : undefined;
   if (provider === "llama.cpp" && config.capabilities?.llama_cpp) {
     rules = localInferenceRules(config.capabilities.llama_cpp);
   }
@@ -90,7 +92,7 @@ export async function runHost(config: HostConfig, overrides: {
     rules = hostRules(provider, bedrockRoute(config.aws, model, await resolver.profile()));
     aws = { binding: config.aws, resolver };
   }
-  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), subscriptions.providers, rules,
+  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), providers, rules,
     config.capabilities?.web ? { settings: config.capabilities.web, send: rawFetch } : undefined,
     config.capabilities?.mcp ? {
       origins: Object.values(config.capabilities.mcp.servers)

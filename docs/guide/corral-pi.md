@@ -1131,12 +1131,11 @@ kernel releases it if a host dies, so concurrent hosts never double-refresh and 
 needs recovery. Without a login for that provider, dispatch from the managed installation
 refuses `credentials_unavailable` naming the provider, and the host stops with
 `credentials_unavailable`; both name the command to run, for example
-`corral agent login --provider anthropic`. For these subscription providers only OAuth credentials are stored. There is no
-API-key or other paid fallback for them: the host drops Pi's Anthropic API-key handler and clears every
-`ANTHROPIC_*` variable (API key, auth and OAuth tokens, workload federation) before Pi loads, so
-after a `/logout` or a removed credential the provider has no auth rather than a paid key, and
-any Anthropic request without the subscription OAuth token is refused before it is sent. corral
-never reads or writes `~/.codex`, `~/.pi`, `~/.claude` or another harness's store.
+`corral agent login --provider anthropic`. Subscription logins store OAuth credentials.
+The subscription lane does not silently use an ambient API key: the host clears
+`ANTHROPIC_*` variables before Pi loads. A separately configured and approved API
+continuation uses its own metered connection, as described below. Corral never reads or
+writes `~/.codex`, `~/.pi`, `~/.claude` or another harness's store.
 
 Assistant and PM sessions launched on a subscription provider also discover the other usable
 subscription login at startup. `/model` lists both OpenAI Codex and Anthropic models when both
@@ -1146,6 +1145,43 @@ a missing login or incompatible model leaves the current selection unchanged. Ea
 its own guarded transport (Claude model traffic still belongs only to its subprocess lane).
 Workers, reviewers, Bedrock and local-inference sessions keep their launch provider.
 Corral records the active provider and model on each turn, not just on the initial launch.
+
+### Paid continuation after subscription quota
+
+Paid continuation is opt-in, not an authentication fallback. A confirmed quota exhaustion
+on the current subscription binding may continue on one approved same-vendor API candidate
+after it in the profile. The profile's automatic fallback must explicitly include the role
+in `paid_roles`, permit the candidate, and have an approved finite USD spending bound.
+The default role set is empty. Credentials alone and profile setup alone grant no spending.
+Direct API starts without a prepared continuation remain refused. See the
+[profile setup field reference](../profile-setup.md#template-and-field-reference).
+
+| `paid_roles` value | Continuation |
+|---|---|
+| `worker` | Linked replacement run from a usable checkpoint. |
+| `reviewer` | Fresh read-only review attempt; prior notes are not a verdict. |
+| `planner` | New planning attempt with a committed draft when available, otherwise fresh read-only. |
+| `plan_reviewer` | Fresh read-only review of the same plan, without a copied verdict. |
+| `pm` | Same PM container, fresh conversation from a checkpoint. |
+| `assistant` | Same assistant session, fresh conversation from a checkpoint. |
+
+The successor shows a continuation warning once per generation, including the source and
+target connection, reason, candidate, episode, allowance and consumed or reserved amount.
+The switch does not grant tool or action authority; recorded receipts are references, not
+instructions to replay effects. PM and assistant retain their container and journals, not
+the subscription conversation, across the binding change.
+
+Continuation pauses rather than guessing when policy or an approved candidate is missing or
+changed, the switch is already used, the source binding is legacy, the checkpoint is missing
+or invalid, the subject changed, an effect is entering or uncertain, a terminal result exists,
+the successor is ambiguous or fails to start, reviewer independence fails, authority is denied,
+or the host is unsupported. A non-quota failure does not trigger this paid switch. An exhausted
+allowance or closed episode cannot admit further spending.
+
+To roll back, remove the role from `fallback.paid_roles` (or disable automatic fallback) and
+apply the updated policy; omitted `paid_roles` grants no paid roles. Resume or retry through
+the ordinary subscription path as appropriate. A policy change is not a way to replay an
+ambiguous successor or an uncertain effect.
 
 For assistant/PM launches, `corral pi --provider anthropic` retains an already-compatible profile
 model or defaults to `claude-opus-5-5`; `corral pi --provider openai-codex` similarly uses
@@ -2159,7 +2195,9 @@ is kept as a terminal transcript.
 the task in Blocked with an excerpt that starts `corral-pi provider authentication failed:` and
 asks you to run `corral agent login`; for a worker it clears when another turn starts, and a
 reviewer's review is escalated by the review watchdog (`provider_escalated`, class `auth`), to be
-restarted after the login. There is no automatic paid fallback outside the configured availability policy. A transient failure (`overload`,
+restarted after the login. Confirmed subscription quota exhaustion may instead use an explicitly
+approved [paid continuation](#paid-continuation-after-subscription-quota); authentication failures
+do not trigger it. A transient failure (`overload`,
 `rate_limit` or another `provider` error) follows the provider-stall backoff: the host gets one
 `turn_nudge` to continue after 60, 120 and 300 seconds (labelled "corral automatic retry n/3", each logged
 `provider_retry`), and once those are used up the task goes to Blocked with the reason

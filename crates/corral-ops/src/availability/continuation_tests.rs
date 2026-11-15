@@ -289,6 +289,23 @@ pub(super) fn hello_binding(fx: &Fx, host: &Host, binding: &ConnectionBinding) -
 }
 
 #[test]
+fn failed_paid_start_pauses_once_and_revokes_launch_and_activation() {
+    let p = prepared();
+    bind_successor(&p);
+    let successor = &p.intent.successor.container;
+    assert!(failed_start(&p.fx.ctx, successor, 1).unwrap());
+    let paused = intent_for(&p.fx.ctx.store, successor, 1).unwrap().unwrap();
+    assert_eq!(paused.phase, IntentPhase::Paused);
+    assert_eq!(paused.pause, Some(PauseReason::SuccessorAmbiguous));
+    assert_eq!(state(&p.fx, successor).binding.health, HostHealth::Fenced);
+    assert!(require_launch(&p.fx.ctx.store, successor, &p.api).is_err());
+    assert!(activate(&p.fx.ctx, successor, 1).is_err());
+    let before = task_bytes(&p.fx, &p.task);
+    assert!(failed_start(&p.fx.ctx, successor, 1).unwrap());
+    assert_eq!(task_bytes(&p.fx, &p.task), before);
+}
+
+#[test]
 fn subscription_transfer_fences_replays_activates_and_rejects_ambiguous_successors() {
     let p = prepared();
     let before = task_bytes(&p.fx, &p.task);
@@ -345,6 +362,30 @@ fn subscription_transfer_fences_replays_activates_and_rejects_ambiguous_successo
         hello.result["continuation"]["context"]["digest"],
         p.checkpoint.context.blob.hash().as_str()
     );
+    let context = &hello.result["continuation"]["context"];
+    let path = std::path::Path::new(context["path"].as_str().unwrap());
+    let bytes = std::fs::read(path).unwrap();
+    assert_eq!(bytes.len(), p.checkpoint.context.bytes);
+    assert_eq!(
+        corral_core::blob_ref::BlobHash::of(&bytes),
+        *p.checkpoint.context.blob.hash()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
     assert_eq!(
         intent_for(&p.fx.ctx.store, &p.intent.successor.container, 1)
             .unwrap()
@@ -396,6 +437,10 @@ fn subscription_transfer_fences_replays_activates_and_rejects_ambiguous_successo
     );
     assert_eq!(task_bytes(&p.fx, &p.task), before);
     close(&p.fx.ctx, &p.intent.successor.container, "terminal result").unwrap();
+    assert!(
+        !path.exists(),
+        "closed continuations must release raw context caches"
+    );
     assert!(matches!(
         p.fx.ctx
             .store
@@ -746,4 +791,52 @@ fn missing_continuation_index_never_authorizes_launch_or_another_preparation() {
         assert_eq!(task_bytes(&p.fx, &p.task), before);
         assert_eq!(p.fx.ctx.store.paid_episode(&episode.id).unwrap(), episode);
     }
+}
+
+#[test]
+fn quota_evidence_accepts_unclassified_roles_without_reusing_stale_quota() {
+    let now = corral_core::clock::now();
+    let binding = ConnectionBinding::new(
+        ConnectionId::OpenaiSubscription,
+        None,
+        "same-model".into(),
+        None,
+    )
+    .unwrap();
+    let mut state: corral_core::agent::AgentRunState = serde_json::from_value(json!({
+        "version":1,
+        "binding":{"role":"assistant","store":"fixture","project":"corral","generation":2,"health":"healthy"},
+        "generations":[{
+            "n":2,"bind_nonce_sha256":"nonce","pane":"p1","created":now,"connection":binding,
+            "bound":{"host_cap_sha256":"host","ctl_cap_sha256":"control","session_id":"session",
+                "session_file":"session.jsonl","pid":1,"start_time":"start","request_id":"hello","at":now}
+        }],
+        "turns":[{
+            "generation":2,"seq":1,"origin":{"kind":"bridge"},"started":now,"ended":now,
+            "provider_failure":{"version":1,"connection":"openai-subscription",
+                "category":"subscription_quota","scope":"account"}
+        }]
+    }))
+    .unwrap();
+    for role in ROLES {
+        state.binding.role = role;
+        assert_eq!(
+            policy::quota_evidence(&state, None).is_some(),
+            !matches!(role, AgentRole::Worker | AgentRole::Reviewer),
+            "{role:?}"
+        );
+    }
+    state.binding.role = AgentRole::Assistant;
+    let mut latest = state.turns[0].clone();
+    latest.seq = 2;
+    latest.provider_failure.as_mut().unwrap().category = FailureCategory::Transient;
+    state.turns.push(latest);
+    assert!(policy::quota_evidence(&state, None).is_none());
+    let failure = state.turns[1].provider_failure.as_mut().unwrap();
+    failure.category = FailureCategory::SubscriptionQuota;
+    failure.connection = ConnectionId::AnthropicSubscription;
+    assert!(policy::quota_evidence(&state, None).is_none());
+    state.turns.pop();
+    state.turns[0].generation = 1;
+    assert!(policy::quota_evidence(&state, None).is_none());
 }

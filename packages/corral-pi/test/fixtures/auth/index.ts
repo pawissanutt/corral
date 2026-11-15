@@ -28,19 +28,34 @@ export function fixtureTransport(): FakeTransport {
 }
 
 let reads = 0;
+let anthropicSubscription = false;
+
+/** Opt in only in fixtures exercising the synthetic Claude SDK subscription lane. */
+export function enableAnthropicFixture(): void {
+  anthropicSubscription = true;
+}
 
 const auth: AuthModule = {
   provider: "openai-codex",
-  credentials() {
-    const access = syntheticAccess(Date.now());
+  providers: ["openai-codex", "anthropic", "openai"],
+  connections: ["openai-subscription", "anthropic-subscription", "openai-api", "anthropic-api"],
+  credentials(context) {
+    const access = context.provider === "anthropic" ? "sk-ant-oat01-SYNTHETIC-SUBSCRIPTION" : syntheticAccess(Date.now());
+    const api = context.connection === "openai-api" || context.connection === "anthropic-api";
+    const credential = api
+      ? { type: "api_key" as const, key: `sk-SYNTHETIC-${context.connection}-OFFLINE` }
+      : { type: "oauth" as const, access, refresh: "", expires: Date.now() + 3_600_000, accountId: "synthetic-account" };
     return {
       async read(provider: string) {
-        if (provider !== "openai-codex") return undefined;
+        if (provider !== context.provider || (provider === "anthropic" && !api && !anthropicSubscription)
+          || (provider === "openai" && !api)) return undefined;
         reads++;
-        return { type: "oauth" as const, access, refresh: "", expires: Date.now() + 3_600_000, accountId: "synthetic-account" };
+        return credential;
       },
       async list() {
-        return [{ providerId: "openai-codex", type: "oauth" as const }];
+        if ((context.provider === "anthropic" && !api && !anthropicSubscription)
+          || (context.provider === "openai" && !api)) return [];
+        return [{ providerId: context.provider, type: credential.type }];
       },
       async modify() {
         throw new Error("fixture credentials are read-only");

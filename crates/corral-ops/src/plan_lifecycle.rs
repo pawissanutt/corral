@@ -152,6 +152,24 @@ impl Smoke {
 
 pub(crate) fn fail(ctx: &Ctx, task: &Task, reason: &str, now: Timestamp) -> Result<bool> {
     let run = task.plan_runs.last().context("planner run missing")?;
+    if run
+        .execution
+        .as_ref()
+        .and_then(|execution| execution.resolved.connection)
+        .is_some_and(|connection| connection.api_key())
+        && crate::availability::continuation::failed_start(
+            ctx,
+            &corral_core::agent::ContainerRef::Planner {
+                task: task.id.clone(),
+                run: run.id.clone(),
+            },
+            run.agent_host
+                .as_ref()
+                .map_or(1, |host| host.binding.generation),
+        )?
+    {
+        return Ok(true);
+    }
     let mut failed = false;
     let saved = ctx.store.update(&task.id, |t| {
         let Some(current) = t

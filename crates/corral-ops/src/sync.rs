@@ -498,6 +498,23 @@ fn reconcile(
     let omo_active = looks_idle && omo_recently_active(ctx, run, now, idle_after);
     let working = herdr_status == Some(AgentStatus::Working) || omo_active;
     let exited = !working && crate::launch_exit::exited_for(ctx, &task.id, &run.id);
+    if let Some(host) = watchdog_run.agent_host.as_deref()
+        && host
+            .current_generation()
+            .and_then(|generation| generation.connection.as_ref())
+            .is_some_and(|binding| binding.connection.api_key())
+        && (exited || gone || host.binding.health == corral_core::agent::HostHealth::Lost)
+        && crate::availability::continuation::failed_start(
+            ctx,
+            &corral_core::agent::ContainerRef::Worker {
+                task: task.id.clone(),
+                run: run.id.clone(),
+            },
+            host.binding.generation,
+        )?
+    {
+        return Ok(None);
+    }
     let state = match pane {
         None if !gone => run.agent_state.clone().unwrap_or_else(|| "starting".into()),
         None => "gone".to_string(),
