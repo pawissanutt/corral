@@ -1182,6 +1182,9 @@ process in the offline proof). Session shutdown, child-session end and host exit
 Committed model selections close the session's process immediately, including selections away
 from Claude; rejected selections leave it intact. Connection rebinding replaces the host and
 uses the same shutdown cleanup.
+Fleet and research helpers clean up their own SDK session IDs, without relying on parent-host
+extension hooks. Closing a session also invalidates resident setup already in progress: an old
+call whose setup finishes later fails with `claude_resident_stale` before starting a process.
 A session waiting on Pi's tool results is not evicted to admit another session. Busy sessions and
 capacity overflow run one-shot full replay calls instead. At launch,
 `CORRAL_CLAUDE_RESIDENT=0|off|false|no` restores the independent-query behaviour. Summary calls

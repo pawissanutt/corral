@@ -6,6 +6,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { BuildContext, ChildQuestion, ChildSpec, ChildUsage } from "../../build/types.ts";
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
+import { closeResidentSession } from "../../claude/resident.ts";
 import { classifyBuildWrite } from "../../roles/build/guard.ts";
 import type { HelperEvent } from "../subagent/inspection.ts";
 import { observeHelperEvent } from "../subagent/session.ts";
@@ -227,6 +228,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
       const model = options.models.getModel(choice.provider, choice.model);
       if (!model) throw new Error(`model_unavailable: ${choice.provider}/${choice.model}`);
       await session!.setModel(model);
+      closeResidentSession(session!.sessionId);
       session!.setThinkingLevel(thinking(choice.effort));
     };
     const { promise: ready, resolve: readyResolve, reject: readyReject } = Promise.withResolvers<void>();
@@ -295,8 +297,12 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         return { report: session?.getLastAssistantText()?.slice(0, 32768) ?? "", failed: error instanceof Error ? error.message : String(error) };
       } finally {
         signal.removeEventListener("abort", abort);
-        unsubscribe();
-        try { usage(); } finally { complete = true; session?.dispose(); }
+        try { unsubscribe(); usage(); }
+        finally {
+          complete = true;
+          try { if (session) closeResidentSession(session.sessionId); }
+          finally { session?.dispose(); }
+        }
       }
     })();
     return { done, usage,

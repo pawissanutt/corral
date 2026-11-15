@@ -20,6 +20,8 @@ import { buildFixtureInstall } from "./support/fixture-install.ts";
 import { writeFakeCorral } from "./support/fake-corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { OAUTH, anthropic, fakeSdk, resetSdkFixture, textReply, user } from "./support/claude-sdk-fixture.ts";
+import type { BuildContext } from "../src/build/types.ts";
+import { createSdkRunner } from "../src/extensions/fleet/child.ts";
 
 const registries: ResidentSessions[] = [];
 afterEach(() => {
@@ -166,9 +168,14 @@ test("idle expiry reseeds using an injected clock", async () => {
   expect(route(next)).toMatchObject({ mode: "resident-seed", reason: "idle" });
 });
 
-test("scheduled idle expiry closes immediately and preserves the next seed's idle reason", async () => {
+test("scheduled idle expiry closes immediately and its restart reason is consumed exactly once", async () => {
   const timer = fakeIdleScheduler();
-  const run = fakeSdk(async function* (_options, control) { yield* reply(control.message); });
+  const run = fakeSdk(async function* (_options, control) {
+    if (control.query === 1 && control.turn === 1) {
+      yield { type: "result", subtype: "error_during_execution", errors: ["unrelated turn failure"],
+        user_message_uuid: control.message.uuid };
+    } else yield* reply(control.message);
+  });
   const { send, residents } = await lane(() => 0, false, timer.schedule);
   const first = await send({ messages: [user("first")] });
   timer.fire();
@@ -178,10 +185,47 @@ test("scheduled idle expiry closes immediately and preserves the next seed's idl
   expect(next.stopReason).toBe("stop");
   expect(route(next)).toMatchObject({ mode: "resident-seed", reason: "idle" });
   expect(run.closeCalls).toEqual([1, 0]);
-  residents.closeSession("resident");
-  const retry = await send({ messages: [user("retry")] });
+  const failed = await send({ messages: [user("first"), first, user("next"), next, user("fail")] });
+  expect(failed.stopReason).toBe("error");
+  expect(run.closeCalls).toEqual([1, 1]);
+  const retry = await send({ messages: [user("first"), first, user("next"), next, user("retry")] });
   expect(route(retry)).toMatchObject({ mode: "resident-seed", reason: "cold" });
 });
+
+for (const kind of ["off-switch", "summary"] as const) {
+  test(`${kind} one-shot between idle expiry and reseed does not consume the idle reason`, async () => {
+    const timer = fakeIdleScheduler();
+    const run = fakeSdk(async function* (_options, control) { yield* reply(control.message); });
+    const { send } = await lane(() => 0, false, timer.schedule);
+    const first = await send({ messages: [user("first")] });
+    timer.fire();
+    const oneShot = await send({ messages: [user("one-shot")] },
+      kind === "summary" ? { toolChoice: "none" } : {},
+      kind === "off-switch" ? { env: { CORRAL_CLAUDE_RESIDENT: "0" } } : {});
+    expect(route(oneShot)).toMatchObject({ mode: "one-shot" });
+    const next = await send({ messages: [user("first"), first, user("next")] });
+    expect(route(next)).toMatchObject({ mode: "resident-seed", reason: "idle" });
+    expect(run.closeCalls).toEqual([1, 1, 0]);
+  });
+}
+
+for (const close of ["session", "all"] as const) {
+  test(`${close} close invalidates Claude acquisition while SDK setup is pending`, async () => {
+    const setup = await lane();
+    const ready = Promise.withResolvers<void>();
+    const run = fakeSdk(async function* (_options, control) { yield* reply(control.message); }, ready.promise);
+    const pending = setup.send({ messages: [user("old model")] });
+    if (close === "session") setup.residents.closeSession("resident");
+    else setup.residents.closeAll();
+    ready.resolve();
+    const result = await pending;
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("claude_resident_stale");
+    expect(setup.residents.size).toBe(0);
+    expect(run.options).toHaveLength(0);
+    expect(run.closes).toBe(run.options.length);
+  });
+}
 
 test("idle restart records drop the oldest after the registry-sized bound", async () => {
   const timer = fakeIdleScheduler();
@@ -440,3 +484,68 @@ test("real host shutdown and child-session end close entries without the idle ti
     await cleanup();
   }
 });
+
+for (const cause of ["finish", "model-change"] as const) {
+  test(`fleet child ${cause} closes the Claude resident using its SDK session id`, async () => {
+    const run = fakeSdk(async function* (_options, control) { yield* reply(control.message); });
+    const setup = await lane(undefined, true);
+    const started = Promise.withResolvers<void>();
+    const finished = Promise.withResolvers<void>();
+    const messages: AssistantMessage[] = [];
+    let disposed = false;
+    const session = {
+      sessionId: `fleet-sdk-${cause}`, model: setup.model, thinkingLevel: "off", messages, isStreaming: false,
+      subscribe() { return () => {}; },
+      async bindExtensions() {},
+      async prompt() {
+        messages.push(await setup.send({ messages: [user("fleet work")] }, { sessionId: this.sessionId }));
+        started.resolve();
+        await finished.promise;
+      },
+      async abort() { finished.resolve(); },
+      async setModel(model: typeof setup.model) { this.model = model; },
+      setThinkingLevel(level: string) { this.thinkingLevel = level; },
+      getLastAssistantText() { return "ok"; },
+      getSessionStats() { return { tokens: { input: 12, output: 5 }, cost: 0 }; },
+      getContextUsage() { return undefined; },
+      dispose() { disposed = true; },
+    };
+    const childSdk = {
+      CURRENT_SESSION_VERSION: sdk.CURRENT_SESSION_VERSION,
+      SettingsManager: { inMemory: () => ({}) },
+      SessionManager: { open: () => ({}) },
+      async createAgentSessionServices() { return {}; },
+      async createAgentSessionFromServices() { return { session }; },
+    } as unknown as typeof sdk;
+    const root = setup.config.cwd;
+    const context: BuildContext = { dir: root, corral: "unused",
+      settings: { maxParallel: 1, exitPolicy: "none", profiles: [] },
+      session: { version: 1, id: "B-resident", name: "test", created: "", updated: "",
+        repoRoot: root, worktree: root, branch: "build/test", base: null, here: true } };
+    const runner = createSdkRunner({ sdk: childSdk,
+      models: { getModel: (_provider: string, id: string) => ({ ...setup.model, id }) } as unknown as sdk.ModelRuntime,
+      context, agentDir: root, localTools: [] });
+    const handle = runner.run({ id: "fleet-report-id", title: "Child", brief: "Work", owns: [] },
+      { profile: "fixture", provider: setup.model.provider, model: setup.model.id },
+      { onEvent() {}, onToolStart() {}, onTurn() {}, async ask() { return "answer"; } }, new AbortController().signal);
+    try {
+      await started.promise;
+      expect(residentSessions.size).toBe(1);
+      expect(run.closeCalls).toEqual([0]);
+      if (cause === "model-change") {
+        await handle.setModel(setup.model.provider, "new-model");
+        expect(session.model.id).toBe("new-model");
+        expect(run.closeCalls).toEqual([1]);
+        expect(residentSessions.size).toBe(0);
+      }
+      finished.resolve();
+      await handle.done;
+      expect(disposed).toBe(true);
+      expect(run.closeCalls).toEqual([1]);
+      expect(residentSessions.size).toBe(0);
+    } finally {
+      finished.resolve();
+      await handle.done;
+    }
+  });
+}

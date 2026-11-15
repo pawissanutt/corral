@@ -21,7 +21,7 @@ import { DEFAULT_CACHE_TTL, resolveCacheRetention, type ClaudeCacheRetention } f
 import { loadSdk, resolveClaudeCode } from "./sdk.ts";
 import { NativeFailure, failureSummary, normalizeFailure, type ProviderFailure } from "../host/provider-failure.ts";
 import { HOST_TOOL_DENIAL_HOOKS, canUseTool, resolveSdkTools } from "./tools.ts";
-import { ResidentSessions, type ResidentEntry, deltaBlocks, messageHash, residentTranscript,
+import { ResidentSessions, type ResidentEntry, type ResidentAcquisition, deltaBlocks, messageHash, residentTranscript,
   residentTurn, residentSessions } from "./resident.ts";
 
 /** The Pi API id of this lane; Anthropic models are re-addressed to it by the restricted provider. */
@@ -147,6 +147,7 @@ export function streamClaudeSdk(
     const argumentsStreams: Parameters<typeof applyStreamEvent>[0]["argumentsStreams"] = new Map();
     let query: Query | undefined;
     let entry: ResidentEntry | undefined;
+    let acquisition: ResidentAcquisition | undefined;
     let released = false;
     let closed = false;
     let aborted = false;
@@ -175,13 +176,18 @@ export function streamClaudeSdk(
       if (typeof token !== "string" || token.length === 0) {
         throw new Error("credentials_unavailable: no subscription OAuth token for the Claude Agent SDK lane");
       }
-      const executable = (config.executable ?? resolveClaudeCode)();
-      const sdk = await loadSdk();
-      mkdirSync(config.configDir, { recursive: true, mode: 0o700 });
       const messages = context.messages;
       const env = config.env ?? process.env;
       const retention = resolveCacheRetention(config.cacheRetention ?? env.CORRAL_CLAUDE_CACHE_TTL, options?.cacheRetention);
       const toolLess = options?.toolChoice === "none";
+      // Ineligible calls never touch the registry. Eligible calls acquire before any async setup.
+      if (residents && options?.sessionId && !toolLess && retention !== "none" &&
+          !/^(0|off|false|no)$/i.test(env.CORRAL_CLAUDE_RESIDENT ?? "")) {
+        acquisition = residents.acquire(options.sessionId);
+      }
+      const executable = (config.executable ?? resolveClaudeCode)();
+      const sdk = await loadSdk();
+      mkdirSync(config.configDir, { recursive: true, mode: 0o700 });
       const tools = resolveSdkTools(toolLess ? [] : getCurrentTools(messages));
       const mcpServers = await buildCustomToolServers(tools.customTools);
       const queryOptions: Options = {
@@ -205,10 +211,7 @@ export function streamClaudeSdk(
       let prompt: PreparedReplay | undefined;
       let observation: ReplayObservation;
       let turns: AsyncIterable<SDKMessage>;
-      // The off switch never calls the registry, preserving the independent-query lane exactly.
-      const eligible = residents && options?.sessionId && !toolLess && retention !== "none" &&
-        !/^(0|off|false|no)$/i.test(env.CORRAL_CLAUDE_RESIDENT ?? "");
-      const plan = eligible && residents && options?.sessionId ? residents.plan(options.sessionId, cacheScope([...scopeParts, config.connection,
+      const plan = acquisition && residents ? residents.plan(acquisition, cacheScope([...scopeParts, config.connection,
         cacheScope(token), executable, config.configDir]), transcript, hashes,
       input => sdk.query({ prompt: input, options: queryOptions })) : undefined;
       const startedAt = performance.now();
@@ -297,6 +300,7 @@ export function streamClaudeSdk(
       stream.push({ type: "error", reason: output.stopReason, error: output });
     } finally {
       options?.signal?.removeEventListener("abort", onAbort);
+      if (acquisition) residents?.finishAcquisition(acquisition);
       if (!released) close();
       stream.end();
     }
