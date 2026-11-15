@@ -2,8 +2,8 @@
 
 `corral setup` exposes the same proposal services that interactive setup can call.
 It does not dispatch a task, launch a reviewer, enable Autopilot, grant spending
-authority, or change acceptance policy. PM conversation, semantic task selection,
-runtime fallback, and role-aware review launching belong to later increments.
+authority, or change acceptance policy. PM conversation and semantic task selection
+belong to later increments.
 
 The app's Settings › Assistant shows configured profiles and lets an authorized device
 choose the assistant profile, edit models and manage profile copies through the daemon.
@@ -64,6 +64,18 @@ the discovery envelope; the envelope may instead be any later time up to
 `<prepared-at>` (see the discovery mapping below).
 Set the boolean facets to what was actually observed rather than leaving the
 defaults. Use `procedure_version` from `corral setup procedure` (`version`).
+
+Paid continuation is separately opt-in. A profile's `metadata.fallback` may specify
+`paid_roles`, a list of native roles (`worker`, `reviewer`, `planner`, `plan_reviewer`,
+`pm`, `assistant`); omitted means an empty list and authorizes no paid roles. For paid
+continuation the fallback must be automatic, allow at least one switch, have an owner
+approval and a finite `spending` bound with `currency: "USD"` and `maximum_micros`.
+Its approved providers and metered candidate cost must satisfy that policy. The candidate
+list must contain exactly one approved same-vendor API candidate after the subscription
+source; its connection and model are explicit. The template's `fallback: null` does not
+enable this behavior. Setup itself grants no spending authority, and credentials are not
+approval. See [paid continuation](guide/corral-pi.md#paid-continuation-after-subscription-quota)
+for triggers, pauses and rollback.
 
 <!-- Byte-equal to `corral setup template`; a test enforces it. -->
 ```json

@@ -21,6 +21,13 @@ pub(crate) use closure::{close, close_in, close_task_in};
 mod index;
 pub(crate) use index::{from_source, latest_for, task_intent};
 
+#[path = "continuation_start.rs"]
+mod startup;
+pub(crate) use startup::failed_start;
+
+#[path = "continuation_context.rs"]
+mod context_cache;
+
 pub(crate) const INTENTS: RecordArea<ContinuationIntent> = RecordArea::new("role-continuations");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -565,9 +572,11 @@ pub(crate) fn notice(
     );
     let context = match &intent.context {
         ContextSource::Checkpoint { digest } => {
-            let (checkpoint, _) = checkpoint::load(store, digest, &intent.source, &intent.subject)?;
+            let (checkpoint, bytes) =
+                checkpoint::load(store, digest, &intent.source, &intent.subject)?;
+            let path = context_cache::materialize(store, &intent, &checkpoint, &bytes)?;
             json!({"kind":"checkpoint", "digest":checkpoint.context.blob.hash().as_str(),
-                "path":store.blob_store()?.path_of(checkpoint.context.blob.hash()), "bytes":checkpoint.context.bytes})
+                "path":path, "bytes":checkpoint.context.bytes})
         }
         other => {
             context_valid(store, &intent)?;
@@ -674,6 +683,7 @@ pub(crate) fn pause(
             intent.updated = corral_core::clock::now();
             let episode = ctx.store.paid_episode(&intent.link.episode)?;
             save(&ctx.store, &intent)?;
+            context_cache::remove(&ctx.store, &intent)?;
             event(&ctx.store, "continuation_paused", &intent, &episode)
         } else {
             ctx.store.log_event(

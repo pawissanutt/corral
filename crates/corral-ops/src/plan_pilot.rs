@@ -22,6 +22,28 @@ pub(crate) fn reconcile(
     let Some(run) = task.plan_runs.last().filter(|r| r.holds_slot()) else {
         return Ok(());
     };
+    if run
+        .agent_host
+        .as_ref()
+        .is_some_and(|host| host.binding.health == corral_core::agent::HostHealth::Lost)
+        && run
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.resolved.connection)
+            .is_some_and(|connection| connection.api_key())
+        && crate::availability::continuation::failed_start(
+            ctx,
+            &corral_core::agent::ContainerRef::Planner {
+                task: task.id.clone(),
+                run: run.id.clone(),
+            },
+            run.agent_host
+                .as_ref()
+                .map_or(1, |host| host.binding.generation),
+        )?
+    {
+        return Ok(());
+    }
     let pane_id = run.herdr.as_ref().map(|h| h.pane_id.as_str());
     let pane = pane_id.and_then(|id| panes.get(id));
     if let Some(reason) = crate::plan_lifecycle::exit_reason(run)? {

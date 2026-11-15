@@ -266,6 +266,30 @@ pub(crate) fn plan_review(
             },
         )?
     };
+    let lost = review.agent_host.as_ref().is_some_and(|host| {
+        host.paid_episode.is_some() && host.binding.health == corral_core::agent::HostHealth::Lost
+    });
+    if !returned && !gone && !lost {
+        return Ok(None);
+    }
+    // The inherited link is already on the native head before process submission.
+    // Ordinary plan-review failures do not read continuation records.
+    if let Some(host) = review
+        .agent_host
+        .as_ref()
+        .filter(|host| host.paid_episode.is_some())
+        && crate::availability::continuation::failed_start(
+            ctx,
+            &corral_core::agent::ContainerRef::PlanReviewer {
+                task: task.id.clone(),
+                plan: plan.id.clone(),
+                review: review.id.clone(),
+            },
+            host.binding.generation,
+        )?
+    {
+        return Ok(None);
+    }
     if !returned && !gone {
         return Ok(None);
     }

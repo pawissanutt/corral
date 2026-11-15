@@ -495,6 +495,15 @@ fn plan_review_continuation_is_fresh_and_uncertain_verdict_pauses() {
             intent.context,
             ContextSource::FreshReadOnly { .. }
         ));
+        assert_eq!(
+            after.plans[0].reviews[1]
+                .agent_host
+                .as_ref()
+                .unwrap()
+                .paid_episode
+                .as_ref(),
+            Some(&intent.link)
+        );
         let next = host_from_bootstrap(&fx, &successor);
         hello(&fx, &next, &successor);
         let late = ts::envelope(
@@ -632,3 +641,5 @@ fn planning_sweep_reads_only_keyed_evidence_after_role_opt_in() {
         }
     }
 }
+#[path = "start_failure_tests.rs"]
+mod start_failure_tests;

@@ -47,10 +47,10 @@ export function parseBinding(value: unknown, provider: ProviderId, model: string
   return binding;
 }
 
-/** No installed host, including an auxiliary/compaction caller, may activate paid traffic yet. */
-export function admitConnection(provider: ProviderId, binding?: ConnectionBinding): ConnectionId {
+/** API routes require the caller to install the physical-request metered adapter. */
+export function admitConnection(provider: ProviderId, binding?: ConnectionBinding, meteredAdapter = false): ConnectionId {
   const connection = resolveConnection(provider, binding?.connection);
-  requirePaidAdmission(connection);
+  if (!meteredAdapter) requirePaidAdmission(connection);
   return connection;
 }
 

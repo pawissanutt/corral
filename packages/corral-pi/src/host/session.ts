@@ -63,6 +63,7 @@ import { type HerdrLifecycle, answeredKeys } from "./herdr.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
+import { createApiCatalog } from "./api-connections.ts";
 import { installModelSelection, subscriptionRoutes } from "./subscriptions.ts";
 import { observeTerminalInput, type InputObservation } from "./input-observation.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
@@ -99,7 +100,7 @@ import { PlanningPolicy, type AdmissionHandle, type PlanningState, type Workflow
 import { ManagedEffects, type Lifecycle } from "./managed-effects.ts";
 import { PlanReviews, reviewAssociation } from "./plan-review.ts";
 import { type ConnectionBinding, admitConnection, parseBinding } from "./connections.ts";
-import { CONNECTIONS, type ConnectionId, resolveConnection } from "../auth/connections.ts";
+import { CONNECTIONS, type ConnectionId, isApiConnection, resolveConnection } from "../auth/connections.ts";
 import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
 import type { ProviderFailure } from "./provider-failure.ts";
 import { HostQueue } from "./queue.ts";
@@ -513,7 +514,7 @@ export class HostSession {
       this.panels?.refresh();
     }) : undefined;
     this.budget = new RunBudget({
-      unbounded: PROVIDERS[this.provider].lane !== undefined,
+      unbounded: !isApiConnection(resolveConnection(this.provider, options.binding?.connection)) && PROVIDERS[this.provider].lane !== undefined,
       sessionId: () => this.sessionId(),
       record: async (payload) => {
         if (!this.bound) throw new Error("host_not_bound");
@@ -1007,7 +1008,7 @@ export class HostSession {
 
   static async create(options: HostSessionOptions): Promise<HostSession> {
     parseBinding(options.binding, options.provider ?? "openai-codex", options.model, options.effort);
-    admitConnection(options.provider ?? "openai-codex", options.binding);
+    const connection = admitConnection(options.provider ?? "openai-codex", options.binding, true);
     if (options.binding?.origin === "registered" && !options.modules.auth.connections?.includes(options.binding.connection)) {
       throw new Error("connection_unsupported_by_auth: installed auth module does not implement the explicit binding");
     }
@@ -1022,13 +1023,17 @@ export class HostSession {
       throw new Error("module_invalid: llama.cpp requires its explicit generation-bound capability");
     }
     const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
-    const subscriptions = await subscriptionRoutes(options.modules.auth, route.id,
-      options.binding ? "worker" : options.identity.role);
-    const models = localModels?.models ?? await createModelCatalog(subscriptions.credentials, {
+    const apiBinding = isApiConnection(connection) ? options.binding : undefined;
+    const subscriptions = apiBinding
+      ? { providers: [route.id], credentials: options.modules.auth.credentials(authContext(route.id, connection)) }
+      : await subscriptionRoutes(options.modules.auth, route.id, options.binding ? "worker" : options.identity.role);
+    const apiModels = apiBinding ? await createApiCatalog(subscriptions.credentials, apiBinding, options.network.fetch,
+      request => host.budget.physical(request)) : undefined;
+    const models = apiModels?.models ?? localModels?.models ?? await createModelCatalog(subscriptions.credentials, {
       providers: subscriptions.providers,
     });
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
-    const model = localModels?.model ?? models.getModel(route.id, modelId);
+    const model = apiModels?.model ?? localModels?.model ?? models.getModel(route.id, modelId);
     if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
     const cacheMode = options.identity.role === "pm" ? pmCacheKeyMode(options.promptFile) : "session";
     if (cacheMode === "stable" && model.api !== "openai-codex-responses") {
@@ -1036,7 +1041,7 @@ export class HostSession {
     }
     const cacheKey = { mode: cacheMode, identity: options.identity, sessionId: () => host.sessionId() };
     for (const id of subscriptions.providers) {
-      if (!localModels) {
+      if (!localModels && !apiBinding) {
         const fetch = PROVIDERS[id].auth === "oauth"
           ? guardedFetch(options.network.fetch, (destination) => { options.network.refuse?.(destination); }, id).fetch
           : options.network.fetch;
@@ -1047,7 +1052,7 @@ export class HostSession {
       }
       const restricted = models.getProvider(id);
       if (!restricted) throw new Error("budget: approved provider is unavailable");
-      const budgeted = (options.capabilities?.catalog ?? 0) >= 7;
+      const budgeted = !apiBinding && (options.capabilities?.catalog ?? 0) >= 7;
       if (budgeted || cacheMode === "stable") {
         const unbounded = PROVIDERS[id].lane !== undefined;
         const stream = pmCacheKeyStream(restricted.stream.bind(restricted), cacheKey);
@@ -1060,7 +1065,7 @@ export class HostSession {
     }
     host.auxiliaryModels = models;
     host.buildProviders = subscriptions.providers;
-    if (options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
+    if (!apiBinding && options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
       const providers = subscriptions.providers.filter((id) => id === "openai-codex" || id === "anthropic");
       const search = await createModelCatalog(subscriptions.credentials, { providers });
       for (const id of providers) {
@@ -1103,7 +1108,7 @@ export class HostSession {
         ...(sessionStartEvent ? { sessionStartEvent } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
       });
-      if (!localModels) installModelSelection(result.session, models, subscriptions.providers);
+      if (!localModels && !apiBinding) installModelSelection(result.session, models, subscriptions.providers);
       result.session.setActiveToolsByName([...host.initialTools]);
       host.watch(result.session);
       host.sessionsCreated++;

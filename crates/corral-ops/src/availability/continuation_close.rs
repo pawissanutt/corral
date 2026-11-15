@@ -63,6 +63,7 @@ fn revoke_pending(
     let episode = store.paid_episode(&intent.link.episode)?;
     // An Active owner's pause already closed its financial episode.
     if intent.phase == IntentPhase::Paused && matches!(episode.phase, PaidPhase::Closed) {
+        context_cache::remove(store, intent)?;
         return Ok(false);
     }
     ensure!(
@@ -79,6 +80,7 @@ fn revoke_pending(
     intent.updated = corral_core::clock::now();
     store.save_paid_episode(&episode)?;
     save(store, intent)?;
+    context_cache::remove(store, intent)?;
     event(store, "continuation_closed", intent, &episode)?;
     Ok(true)
 }
@@ -178,6 +180,7 @@ fn close_active(
         intent.phase = IntentPhase::Closed;
         intent.updated = corral_core::clock::now();
         save(store, &intent)?;
+        context_cache::remove(store, &intent)?;
         event(store, "continuation_closed", &intent, &episode)?;
     } else {
         store.log_event(

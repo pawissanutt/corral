@@ -17,6 +17,8 @@ export interface FakeStep {
   /** Awaited after the first chunk is sent, so a partially streamed reply can be observed. */
   readonly afterFirstChunk?: () => Promise<void>;
   readonly toolCalls?: readonly FakeToolCall[];
+  /** Structured offline provider failure (for example confirmed subscription quota). */
+  readonly error?: { readonly status: number; readonly body: Record<string, unknown> };
   /** Terminal provider usage; defaults preserve the standard fixture's 32 input / 3 output. */
   readonly usage?: { readonly input: number; readonly output: number };
   /**
@@ -46,9 +48,11 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 function lastUserText(body: unknown): string {
-  if (!record(body) || !Array.isArray(body.input)) return "";
-  for (let index = body.input.length - 1; index >= 0; index--) {
-    const item: unknown = body.input[index];
+  if (!record(body)) return "";
+  const messages: unknown = body.input ?? body.messages;
+  if (!Array.isArray(messages)) return "";
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const item: unknown = messages[index];
     if (!record(item) || item.role !== "user") continue;
     if (typeof item.content === "string") return item.content;
     if (Array.isArray(item.content)) {
@@ -69,6 +73,30 @@ export function requestBody(init: RequestInit | undefined): unknown {
   return JSON.parse(bytes.toString("utf8"));
 }
 
+async function* messageFrames(step: FakeStep, id: string): AsyncGenerator<Record<string, unknown>> {
+  const usage = step.usage ?? { input: 32, output: 3 };
+  yield { type: "message_start", message: { id, type: "message", role: "assistant",
+    model: "fixture", content: [], stop_reason: null, stop_sequence: null,
+    usage: { input_tokens: usage.input, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } } };
+  let index = 0;
+  if (step.text !== undefined || step.chunks) {
+    yield { type: "content_block_start", index, content_block: { type: "text", text: "" } };
+    for (const [part, text] of (step.chunks ?? [step.text ?? ""]).entries()) {
+      yield { type: "content_block_delta", index, delta: { type: "text_delta", text } };
+      if (part === 0) await step.afterFirstChunk?.();
+    }
+    yield { type: "content_block_stop", index: index++ };
+  }
+  for (const call of step.toolCalls ?? []) {
+    yield { type: "content_block_start", index, content_block: { type: "tool_use", id: call.callId, name: call.name, input: {} } };
+    yield { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(call.arguments) } };
+    yield { type: "content_block_stop", index: index++ };
+  }
+  yield { type: "message_delta", delta: { stop_reason: step.toolCalls?.length ? "tool_use" : "end_turn", stop_sequence: null },
+    usage: { output_tokens: usage.output } };
+  yield { type: "message_stop" };
+}
+
 export function fakeCodexTransport(): FakeTransport {
   const queue: FakeStep[] = [];
   const holdWaiters: (() => void)[] = [];
@@ -84,7 +112,7 @@ export function fakeCodexTransport(): FakeTransport {
   let release: (() => void) | undefined;
   const encoder = new TextEncoder();
 
-  const send: Fetch = async (_input, init) => {
+  const send: Fetch = async (input, init) => {
     const sequence = ++requests;
     const body = requestBody(init);
     const prompt = lastUserText(body);
@@ -98,6 +126,10 @@ export function fakeCodexTransport(): FakeTransport {
     const index = queue.findIndex((entry) => entry.match === undefined || prompt.includes(entry.match));
     const step = (index < 0 ? undefined : queue.splice(index, 1)[0])
       ?? { text: /Reply only ([A-Z_]+)\./.exec(prompt)?.[1] ?? "FAKE_TRANSPORT_OK" };
+    if (step.error) {
+      failures++;
+      return Response.json(step.error.body, { status: step.error.status });
+    }
     const hold = holdNext;
     holdNext = false;
     const id = `resp_fake_${sequence}`;
@@ -138,13 +170,14 @@ export function fakeCodexTransport(): FakeTransport {
         input_tokens: usage.input, input_tokens_details: { cached_tokens: 0 }, output_tokens: usage.output,
         output_tokens_details: { reasoning_tokens: 0 }, total_tokens: usage.input + usage.output } } };
     }
-    const iterator = frames();
+    const messages = new URL(input instanceof Request ? input.url : input).pathname === "/v1/messages";
+    const iterator = messages ? messageFrames(step, `msg_fake_${sequence}`) : frames();
     return new Response(new ReadableStream({
       async pull(controller) {
         try {
           const next = await iterator.next();
           if (next.done) controller.close();
-          else controller.enqueue(encoder.encode(`data: ${JSON.stringify(next.value)}\n\n`));
+          else controller.enqueue(encoder.encode(`${messages ? `event: ${next.value.type}\n` : ""}data: ${JSON.stringify(next.value)}\n\n`));
         } catch (error) {
           aborted++;
           try { controller.error(error); } catch { /* the reader already cancelled */ }
