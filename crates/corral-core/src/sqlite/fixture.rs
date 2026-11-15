@@ -69,8 +69,10 @@ impl SqliteBackend {
             .fixture_event_input
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Keep the table and its indexed columns available to schema initialization in
+        // independently opened processes. Both reads and appends still require detail.
         self.writer()
-            .execute_batch("ALTER TABLE events RENAME TO fixture_events_unavailable")
+            .execute_batch("ALTER TABLE events RENAME COLUMN detail TO fixture_detail_unavailable")
             .context("make fixture event storage unavailable")?;
         pending.clear();
         Ok(())
@@ -81,7 +83,7 @@ impl SqliteBackend {
         let transaction = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin fixture event restore")?;
-        restore_event_table(&transaction)?;
+        restore_event_detail(&transaction)?;
         transaction
             .commit()
             .context("restore fixture event storage")
@@ -126,7 +128,7 @@ impl SqliteBackend {
         let transaction = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin fixture event transaction")?;
-        restore_event_table(&transaction)?;
+        restore_event_detail(&transaction)?;
         if replace {
             // Condition pointers and blob owners reference event identities. Remove those
             // references in the same transaction, retaining unrelated task/blob state.
@@ -174,15 +176,15 @@ impl SqliteBackend {
     }
 }
 
-fn restore_event_table(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+fn restore_event_detail(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
     let unavailable: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'fixture_events_unavailable')",
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('events') WHERE name = 'fixture_detail_unavailable')",
         [], |row| row.get(0),
     ).context("inspect fixture event storage")?;
     if unavailable {
         transaction
-            .execute_batch("ALTER TABLE fixture_events_unavailable RENAME TO events")
-            .context("restore fixture event table")?;
+            .execute_batch("ALTER TABLE events RENAME COLUMN fixture_detail_unavailable TO detail")
+            .context("restore fixture event detail")?;
     }
     Ok(())
 }

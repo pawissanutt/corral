@@ -40,6 +40,11 @@ pub(super) fn run_index() -> String {
     )
 }
 
+/// Every index these queries name, as schema setup creates them.
+pub fn indexes() -> String {
+    format!("{EVENT_INDEXES}\n{}", run_index())
+}
+
 /// Merge at most one page per kind, not an unbounded lifetime sort. Sequence-only
 /// callers never enter this path; their existing ordering/index choices are intact.
 pub(super) fn events(q: &EventQuery, page: &PageReq) -> Result<(String, Vec<Sql>), ViewError> {

@@ -21,8 +21,10 @@ fn fixture_run(id: &str, started: &str, ended: Option<&str>) -> Run {
 fn historical_window(history: usize) -> Result<Vec<(TimelinePage, u64, u64)>> {
     let dir = tempfile::tempdir()?;
     let store = Store::init(dir.path())?;
+    // Creation time is immutable: set the fixture clock before inserting the task,
+    // otherwise a wall-clock date beyond `to` excludes all of its run rows.
+    store.fixture_pin_now("2025-01-01T00:00:00Z".parse()?)?;
     let mut task = store.create("Window", None, Status::Running, "")?;
-    task.created = "2025-01-01T00:00:00Z".parse()?;
     task.runs = (0..history)
         .map(|n| {
             fixture_run(
@@ -267,7 +269,10 @@ fn timeline_window_ignores_historical_growth_and_preserves_crossing_phase_contex
         "historical growth must not change the data or decode work"
     );
     for (page, events, rows) in small {
-        assert!(events > 0 && rows > 0, "work counters must be active");
+        assert!(
+            events > 0 && rows > 0,
+            "work counters must be active: events={events}, rows={rows}"
+        );
         let gate = page
             .lanes
             .iter()

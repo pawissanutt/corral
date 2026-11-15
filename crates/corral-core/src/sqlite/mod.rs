@@ -53,6 +53,7 @@ pub use lesson_approvals::TABLES as LESSON_APPROVAL_TABLES;
 pub use lesson_artifacts::TABLES as LESSON_ARTIFACT_TABLES;
 pub use maintenance::WAL_LIMIT_BYTES;
 pub use schema::{BACKEND_TABLES, SCHEMA_VERSION, SECTION_11};
+pub use time_queries::indexes as time_indexes;
 
 use crate::backend::*;
 use crate::blob_ref::BlobHash;

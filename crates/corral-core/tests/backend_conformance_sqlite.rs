@@ -153,6 +153,7 @@ fn expected_schema() -> Result<Vec<(String, String, Option<String>)>> {
     conn.execute_batch(corral_core::sqlite::ARTIFACT_REVIEW_TABLES)?;
     conn.execute_batch(corral_core::sqlite::LESSON_APPROVAL_TABLES)?;
     conn.execute_batch(corral_core::sqlite::LESSON_ARTIFACT_TABLES)?;
+    conn.execute_batch(&corral_core::sqlite::time_indexes())?;
     schema_of(&conn)
 }
 

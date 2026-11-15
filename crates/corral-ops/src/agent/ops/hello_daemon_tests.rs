@@ -11,7 +11,7 @@ fn hello_with_pane(fx: &Fx, host: &Host, pane: Option<&str>) -> crate::agent::Ca
         "session_file": host.sessions.join("session.jsonl"),
         "pid": 4242, "start_time": "123456", "pane": pane,
     });
-    let request = format!("bind-host-{}", host.identity.generation);
+    let request = crate::agent::envelope::event_request_id(host.identity.generation, 0);
     send(
         fx,
         &envelope(host, "hello", &request, payload, true),
