@@ -443,12 +443,15 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
         kind,
         Kind::RepairLegacy | Kind::RepairInbox | Kind::RepairTickLegacy | Kind::RepairTickInbox
     ) {
+        // A round is stamped from the store clock, moved just past its review when they tie.
         let head = bench.ctx.store.head(&bench.id).unwrap();
-        if let Some(round) = head
-            .current_run
-            .as_deref()
-            .and_then(|run| run.changes_round.as_ref())
-            && round.at != bench.ctx.store.now()
+        if let Some(run) = head.current_run.as_deref()
+            && let Some(round) = run.changes_round.as_ref()
+            && crate::round_notice::ordered_after(
+                bench.ctx.store.now(),
+                run.review.as_ref().map(|review| review.at),
+            )
+            .is_ok_and(|expected| round.at != expected)
         {
             m.failures.push(format!(
                 "changes-round timestamp is not the store clock: {}",

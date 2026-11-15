@@ -29,6 +29,7 @@ conformance!(
     claim_race_has_one_winner,
     change_feed_one_entry_per_commit,
     change_feed_gap_after_pruning,
+    exclusive_event_sequence_bounds,
     head_form_keeps_history,
     authorization_transitions,
     task_operation_preconditions,
