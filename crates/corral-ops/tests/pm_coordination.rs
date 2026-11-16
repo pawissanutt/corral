@@ -360,7 +360,7 @@ fn shared_status_requires_actual_finite_acceptance_and_exposes_pause() {
 }
 
 #[test]
-fn paused_policy_keeps_verified_landing_pm_runnable_without_an_executor_id() {
+fn paused_policy_hands_a_verified_candidate_to_the_pm_without_an_executor_id() {
     let mut fx = Fx::new();
     let task = fx.task("verified manual landing", Status::Ready);
     fx.grant(&[&task.id]);
@@ -379,19 +379,28 @@ fn paused_policy_keeps_verified_landing_pm_runnable_without_an_executor_id() {
     .unwrap();
     fx.ctx.store.pause_operating_policy(true).unwrap();
 
+    // Then the PM gets a card it runs itself, carrying the executor's refusal: not an owner
+    // decision, and no executor action ID.
     let state = corral_ops::pm_workset(&fx.fresh()).unwrap();
-    assert_eq!(state.next.kind, PmActionKind::Land);
+    assert_eq!(state.next.task.as_deref(), Some(task.id.as_str()));
     assert!(!state.next.requires_owner);
-    let option = state
-        .next
-        .options
-        .iter()
-        .find(|option| option.id == state.next.recommended)
-        .unwrap();
-    assert!(!option.requires_owner);
-    assert!(option.pm_runs);
-    assert!(option.command.contains(" approve "));
-    assert!(!option.command.contains(" pm act "));
+    assert!(
+        state
+            .next
+            .options
+            .iter()
+            .any(|option| option.id == state.next.recommended && option.pm_runs)
+    );
+    assert!(
+        state
+            .next
+            .evidence
+            .iter()
+            .any(|line| line.contains("paused")),
+        "{:?}",
+        state.next.evidence
+    );
+    assert!(state.decisions.is_empty());
     assert!(state.actions.is_empty());
     assert_eq!(fx.ctx.store.get(&task.id).unwrap().status, Status::Review);
 }
