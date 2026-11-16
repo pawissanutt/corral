@@ -63,7 +63,11 @@ impl Aggregate {
     pub(super) fn merge(&mut self, other: &Self) {
         self.future |= other.future;
         let coverage = &other.budget.coverage;
-        self.budget.coverage.scanned_rows = self.budget.coverage.scanned_rows.saturating_add(coverage.scanned_rows);
+        self.budget.coverage.scanned_rows = self
+            .budget
+            .coverage
+            .scanned_rows
+            .saturating_add(coverage.scanned_rows);
         if coverage.partial {
             self.budget
                 .partial(coverage.reason.as_deref().unwrap_or("partial_source"));
@@ -89,9 +93,17 @@ impl Aggregate {
         let first_day = cutoff.as_second().div_euclid(DAY);
         let mut result = Self::new(usize::MAX);
         result.future = self.future;
-        result.budget.admit(self.budget.coverage.scanned_rows as usize);
+        result
+            .budget
+            .admit(self.budget.coverage.scanned_rows as usize);
         if self.budget.coverage.partial {
-            result.budget.partial(self.budget.coverage.reason.as_deref().unwrap_or("partial_source"));
+            result.budget.partial(
+                self.budget
+                    .coverage
+                    .reason
+                    .as_deref()
+                    .unwrap_or("partial_source"),
+            );
         }
         for at in [self.budget.first, self.budget.last].into_iter().flatten() {
             result.budget.observe(at);
@@ -105,7 +117,11 @@ impl Aggregate {
                 if day.is_none() {
                     result.budget.coverage.undated_entries += total.count;
                 }
-                result.groups.entry(key.clone()).or_default().insert(*day, total.clone());
+                result
+                    .groups
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(*day, total.clone());
             }
         }
         result
@@ -204,28 +220,47 @@ impl Total {
     }
 }
 
+/// One group's attributed day buckets, as saved.
+type SavedDays = Vec<(Option<i64>, Total)>;
+
 /// JSON cannot encode tuple map keys; persist a compact sequence of attributed day buckets.
 #[derive(Serialize, Deserialize)]
 pub(super) struct Saved {
-    groups: Vec<(Key, Vec<(Option<i64>, Total)>)>,
+    groups: Vec<(Key, SavedDays)>,
     first: Option<Timestamp>,
     last: Option<Timestamp>,
 }
 
 impl Saved {
     pub(super) fn valid(&self, now: Timestamp) -> bool {
-        !self.last.is_some_and(|at| at > now)
-            && !self.first.zip(self.last).is_some_and(|(first, last)| first > last)
-            && self.groups.iter().all(|(_, days)| days.iter().all(|(_, total)| {
-                total.usd.is_finite() && total.usd >= 0.0
-                    && total.priced <= total.count && total.unpriced <= total.count
-            }))
+        self.last.is_none_or(|at| at <= now)
+            && self
+                .first
+                .zip(self.last)
+                .is_none_or(|(first, last)| first <= last)
+            && self.groups.iter().all(|(_, days)| {
+                days.iter().all(|(_, total)| {
+                    total.usd.is_finite()
+                        && total.usd >= 0.0
+                        && total.priced <= total.count
+                        && total.unpriced <= total.count
+                })
+            })
     }
     pub(super) fn new(facts: &Aggregate) -> Self {
         Self {
-            groups: facts.groups.iter().map(|(key, days)| {
-                (key.clone(), days.iter().map(|(day, total)| (*day, total.clone())).collect())
-            }).collect(),
+            groups: facts
+                .groups
+                .iter()
+                .map(|(key, days)| {
+                    (
+                        key.clone(),
+                        days.iter()
+                            .map(|(day, total)| (*day, total.clone()))
+                            .collect(),
+                    )
+                })
+                .collect(),
             first: facts.budget.first,
             last: facts.budget.last,
         }
@@ -233,9 +268,11 @@ impl Saved {
 
     pub(super) fn restore(&self, cutoff: Timestamp) -> Aggregate {
         let mut facts = Aggregate::new(usize::MAX);
-        facts.groups = self.groups.iter().map(|(key, days)| {
-            (key.clone(), days.iter().cloned().collect())
-        }).collect();
+        facts.groups = self
+            .groups
+            .iter()
+            .map(|(key, days)| (key.clone(), days.iter().cloned().collect()))
+            .collect();
         for at in [self.first, self.last].into_iter().flatten() {
             facts.budget.observe(at);
         }
