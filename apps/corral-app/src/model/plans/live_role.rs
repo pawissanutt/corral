@@ -6,7 +6,7 @@
 use corral_protocol::detail::PlanDetail;
 use corral_protocol::rows::{PlanRole, PlanRow as WirePlan, PlanState as WireState};
 
-use super::live::{state_chip, title};
+use super::live::{project_of, state_chip, title};
 use super::{Action, ApprovedView, Button, Chip, Header, LiveAction};
 use crate::model::Id;
 use crate::model::effect::Env;
@@ -105,6 +105,7 @@ pub(super) fn approved(
                 .revision
                 .as_ref()
                 .map_or_else(|| id.to_string(), |rev| format!("{id} {rev}")),
+            project: project_of(row),
             title: title(id, row),
             meta: vec![],
             illustrative: None,

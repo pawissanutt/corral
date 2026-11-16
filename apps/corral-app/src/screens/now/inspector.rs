@@ -1,16 +1,16 @@
-//! The inspector for the selected task (`.insp`): its Story (header, stepper and key/value parts
-//! from the task detail: its body, progress, needs, holds, run and plan position, the legal task
-//! commands and this device's last command's outcome), the Evidence list of its artifacts, and
-//! the Session hand-off with the captured log tail, each with its detail's loading, stale or
-//! failed state.
+//! The selected task's story in Now's side column and on the phone's task page (`.insp`): its
+//! Story (header, stepper and key/value parts from the task detail: its body, progress, needs,
+//! holds, run and plan position, the legal task commands and this device's last command's
+//! outcome), the Evidence list of its artifacts, and the Session hand-off with the captured log
+//! tail, each with its detail's loading, stale or failed state.
 
 use nsh_core::prelude::*;
 
 use crate::model::board::Mark;
 use crate::model::text::span;
 use crate::model::work::{
-    self, Dependency, DetailNote, Fact, Inspector, LiveEvidence, LiveSession, LiveStory, NowTab,
-    Press, Stage,
+    self, Dependency, DetailNote, Fact, Inspector, LiveEvidence, LiveSession, LiveStory, Press,
+    Stage,
 };
 use crate::model::{Form, Hue};
 use crate::screens::markdown::{markdown, provide_styles};
@@ -23,38 +23,18 @@ use crate::ui::kit::text::{dim, h3, mono, plain, rich, rich_small};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::context::tail;
-use super::parts::{model_button, press, press_id, pressable, quiet, scope};
+use super::parts::{model_button, press, press_id, pressable, quiet};
 use super::verbs::reasons;
 
 /// The phone's least touch target: a dependency id or the plan link is pressed as a button is.
 const TARGET: f32 = 44.0;
 
-/// The panel key of the inspector that follows the model's selected tab (the two-pane fallback).
-pub(super) const FOLLOW: &str = "inspector";
-
-/// The inspector for `tab`, or for the model's selected tab when `None`. The model decides what
-/// shows: the loading placeholders, or the tab's content for the selected task.
-pub(super) fn panel(app: AppState, tab: Option<NowTab>) -> AnyElement {
-    let form = app.form;
-    let inspector = computed(move || {
-        let mut state = app.work.get();
-        if let Some(tab) = tab {
-            state.now_tab = tab;
-        }
-        let selection = app.selection();
-        let (filter, grouping) = scope(app);
-        app.feed.with(|feed| {
-            work::daemon_inspector_filtered(&state, feed, &selection, form, &filter, grouping)
-        })
-    });
-    dynamic(move || inspector.with(|inspector| content(app, inspector)))
-}
-
-/// `.insp`'s padding: 16 20 24 on desktop, 14 18 on the phone, a Cell in on a terminal.
+/// `.insp`'s padding: the side column's 14 18 24 on desktop, 14 18 on the phone, a Cell in on a
+/// terminal.
 fn padded(app: AppState, child: AnyElement) -> AnyElement {
     let frame = view();
     match app.form {
-        Form::Desktop => frame.px(px(20.0)).pt(px(16.0)).pb(px(24.0)),
+        Form::Desktop => frame.px(px(18.0)).pt(px(14.0)).pb(px(24.0)),
         Form::Phone => frame.px(px(18.0)).py(px(14.0)),
         Form::Terminal => frame.px(px(8.0)),
     }

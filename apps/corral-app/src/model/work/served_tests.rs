@@ -422,16 +422,6 @@ fn board_topic_failure_stops_loading_and_marks_retained_rows_last_known() {
         ),
         [Effect::RetryTopic("board".into())]
     );
-    assert!(
-        super::super::daemon_live_filtered(&state, &feed, &selected, Form::Desktop, &ALL, BY_STATE)
-            .selected_note
-            .is_some()
-    );
-    assert!(
-        super::super::daemon_plan_filtered(&state, &feed, &selected, Form::Desktop, &ALL, BY_STATE)
-            .empty
-            .is_some()
-    );
 
     feed.board_received(1, vec![task("T-1", daemon::Group::Queued)], &[], true);
     assert!(
@@ -513,7 +503,7 @@ fn closed_rows_join_the_list_keys_only_while_the_section_is_open() {
         },
     );
     let mut state = State::default();
-    let tasks = shown(&state, &feed, &ProjectFilter::All);
+    let tasks = shown(&feed, &ProjectFilter::All);
     let mut current = Some(Id::from("T-1"));
     let effects = state.key_tasks("j", current.as_ref(), &tasks, &feed, Form::Desktop, SCOPE);
     selected_after(effects, &mut current);

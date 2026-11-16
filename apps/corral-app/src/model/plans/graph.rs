@@ -1,11 +1,19 @@
-//! Dependency graph geometry for feed-backed plan members.
+//! Dependency graph geometry for feed-backed plan members: member cards in dependency layers,
+//! left to right, joined by curves, or, where the layers do not fit, the layers stacked.
 
 use super::Action;
 use crate::model::Id;
-use crate::model::board::Rail;
+use crate::model::glance::StageRail;
 use crate::model::hue::Hue;
 
-/// One coordinate in mockup graph units.
+/// A member card (`.mcard`): 236 wide, its id and rail over its title.
+const CARD_WIDTH: f32 = 236.0;
+const CARD_HEIGHT: f32 = 60.0;
+/// Between layers (`.graph` gap) and between the cards of a layer (`.layer` gap).
+const LAYER_GAP: f32 = 48.0;
+const CARD_GAP: f32 = 12.0;
+
+/// One coordinate in graph points.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
     /// Horizontal coordinate.
@@ -31,77 +39,58 @@ pub struct Edge {
     pub end: Point,
 }
 
-/// Internal SVG positions relative to a horizontal card's origin.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CardGeometry {
-    /// Id, title and now-phrase baselines.
-    pub text: [Point; 3],
-    /// Four rail-mark top-left positions, in stage order.
-    pub rail: [Point; 4],
-    /// Rail-mark width and height.
-    pub rail_size: Point,
-}
-
-/// One graph card, or a compact row when `Graph::fits` is false.
+/// One member card, placed in its layer when the graph fits, stacked otherwise.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
-    /// Task id, also the first text line.
+    /// Task id, the card's first line.
     pub id: Id,
-    /// Card or row origin.
+    /// Card origin.
     pub x: f32,
-    /// Card or row origin.
+    /// Card origin.
     pub y: f32,
-    /// Card or row width.
+    /// Card width.
     pub w: f32,
-    /// Card or row height.
+    /// Card height.
     pub h: f32,
-    /// Id, title and now-phrase; card titles use the mockup's 21-character cutoff.
-    pub lines: [String; 3],
-    /// Untruncated title for accessibility and compact rows.
+    /// Full title.
     pub title: String,
-    /// Four delivery marks.
-    pub rail: Rail,
-    /// Internal card geometry; absent for compact rows laid out as rows.
-    pub card: Option<CardGeometry>,
+    /// The rail with its current stage named; its hint is the now-phrase.
+    pub stage: StageRail,
     /// Actor colour, independent of selection.
     pub hue: Hue,
-    /// Colour of the now-phrase, including stale results.
-    pub now_hue: Hue,
     /// Neutral selection emphasis.
     pub selected: bool,
     /// Needs-you card treatment and question target.
     pub needs_you: bool,
-    /// Press target; compact rows open tasks, cards select members.
+    /// Press target; stacked cards open tasks, placed cards select members.
     pub action: Action,
 }
 
-/// A layer heading and its ordered members.
+/// A layer and its ordered members.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layer {
     /// Zero-based dependency layer number.
     pub index: usize,
-    /// Full rendered heading, including compact dependency wording.
+    /// The stacked layout's heading, saying what the layer waits for.
     pub label: String,
-    /// Heading origin (baseline for horizontal SVG headings, top for compact headings).
-    pub position: Point,
     /// Members in this layer, in source order.
     pub members: Vec<Id>,
 }
 
-/// Complete graph geometry. Render compact rows when `fits` is false; no geometry is deferred.
+/// Complete graph geometry; stacked layers when `fits` is false.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Graph {
-    /// True only if every 172-wide card layer plus 40-wide gaps fits.
+    /// True only if every layer of cards and the gaps between them fit.
     pub fits: bool,
-    /// Full graph or compact-row width.
+    /// Full graph or stacked width.
     pub width: f32,
-    /// Full graph or compact-row height.
+    /// Full graph or stacked height.
     pub height: f32,
-    /// Ordered layer headings and membership.
+    /// Ordered layers and membership.
     pub layers: Vec<Layer>,
-    /// Ordered cards or compact rows with their press targets.
+    /// Ordered cards with their press targets.
     pub nodes: Vec<Node>,
-    /// Cubic dependency segments; empty for compact vertical layers.
+    /// Cubic dependency segments; empty for stacked layers.
     pub edges: Vec<Edge>,
 }
 
@@ -111,20 +100,17 @@ pub struct GraphMember {
     pub id: Id,
     /// Full task title.
     pub title: String,
-    /// The now-phrase under the title.
-    pub now: String,
-    pub rail: Rail,
+    /// The rail with its current stage named.
+    pub stage: StageRail,
     /// Actor colour.
     pub hue: Hue,
-    /// Colour of the now-phrase.
-    pub now_hue: Hue,
     /// Owner action needed: the needs-you card treatment.
     pub needs_you: bool,
     /// Zero-based dependency layer.
     pub layer: usize,
-    /// What a card press does (select the member, or open its question).
+    /// What a placed card press does (select the member, or open its question).
     pub select: Action,
-    /// What a compact row press does (open the task, or its question).
+    /// What a stacked card press does (open the task, or its question).
     pub open: Action,
 }
 
@@ -135,10 +121,10 @@ pub struct GraphInput {
     pub edges: Vec<(Id, Id)>,
 }
 
-/// Port PLANGRAPH's fit calculation, card positions, dependency curves and vertical fallback.
-/// `phone` changes compact row height from 28 to 40; it does not change the source fit equation.
-/// Pass a narrow width for terminal vertical layers, as the screen builder does.
-pub fn layout(input: &GraphInput, selected: Option<&str>, width: f32, phone: bool) -> Graph {
+/// Places the layers left to right when they fit `width`, each layer's cards centred on the
+/// tallest layer, with a curve from each prerequisite's right edge to its dependent's left;
+/// otherwise stacks the layers top to bottom under their headings. A terminal passes no width.
+pub fn layout(input: &GraphInput, selected: Option<&str>, width: f32) -> Graph {
     let count = input
         .members
         .iter()
@@ -154,103 +140,54 @@ pub fn layout(input: &GraphInput, selected: Option<&str>, width: f32, phone: boo
                 .collect()
         })
         .collect();
-    let cw = 172.0;
-    let ch = 54.0;
-    let gx = 40.0;
-    let gy = 12.0;
-    let required = layers.len() as f32 * cw + layers.len().saturating_sub(1) as f32 * gx;
+    let required =
+        layers.len() as f32 * CARD_WIDTH + layers.len().saturating_sub(1) as f32 * LAYER_GAP;
     let fits = required <= width;
+    let column =
+        |cards: usize| cards as f32 * CARD_HEIGHT + cards.saturating_sub(1) as f32 * CARD_GAP;
+    let tallest = layers
+        .iter()
+        .map(|members| column(members.len()))
+        .fold(0.0, f32::max);
     let mut graph = Graph {
         fits,
         width: if fits { required } else { width.max(0.0) },
-        height: 0.0,
+        height: if fits { tallest } else { 0.0 },
         layers: Vec::with_capacity(layers.len()),
         nodes: Vec::with_capacity(input.members.len()),
         edges: Vec::new(),
     };
-    let mut compact_y = 0.0;
+    let mut stacked_y = 0.0;
     for (li, members) in layers.iter().enumerate() {
-        let heading_y = if fits {
-            10.0
-        } else {
-            if li > 0 {
-                compact_y += 10.0;
-            }
-            compact_y
-        };
         graph.layers.push(Layer {
             index: li,
-            label: if fits {
-                format!("Layer {li}")
-            } else if li == 0 {
+            label: if li == 0 {
                 "Layer 0 · can start now".into()
             } else {
                 format!("Layer {li} · after layer {}", li - 1)
             },
-            position: Point {
-                x: if fits { li as f32 * (cw + gx) } else { 0.0 },
-                y: heading_y,
-            },
             members: members.iter().map(|member| member.id.clone()).collect(),
         });
-        if !fits {
-            compact_y += 10.5 * if phone { 1.4 } else { 1.45 } + 4.0;
-        }
+        let top = (tallest - column(members.len())) / 2.0;
         for (mi, member) in members.iter().enumerate() {
-            let h = if fits {
-                ch
-            } else if phone {
-                40.0
-            } else {
-                28.0
-            };
             let y = if fits {
-                18.0 + mi as f32 * (ch + gy)
+                top + mi as f32 * (CARD_HEIGHT + CARD_GAP)
             } else {
-                compact_y
-            };
-            let title = if fits && member.title.chars().count() > 21 {
-                format!("{}…", member.title.chars().take(20).collect::<String>())
-            } else {
-                member.title.clone()
+                stacked_y
             };
             graph.nodes.push(Node {
                 id: member.id.clone(),
-                x: if fits { li as f32 * (cw + gx) } else { 0.0 },
+                x: if fits {
+                    li as f32 * (CARD_WIDTH + LAYER_GAP)
+                } else {
+                    0.0
+                },
                 y,
-                w: if fits { cw } else { graph.width },
-                h,
-                lines: [member.id.to_string(), title, member.now.clone()],
+                w: if fits { CARD_WIDTH } else { graph.width },
+                h: CARD_HEIGHT,
                 title: member.title.clone(),
-                rail: member.rail,
-                card: fits.then(|| CardGeometry {
-                    text: [
-                        Point { x: 10.0, y: 17.0 },
-                        Point { x: 10.0, y: 33.0 },
-                        Point { x: 10.0, y: 47.0 },
-                    ],
-                    rail: [
-                        Point {
-                            x: cw - 64.0,
-                            y: 7.0,
-                        },
-                        Point {
-                            x: cw - 50.0,
-                            y: 7.0,
-                        },
-                        Point {
-                            x: cw - 36.0,
-                            y: 7.0,
-                        },
-                        Point {
-                            x: cw - 22.0,
-                            y: 7.0,
-                        },
-                    ],
-                    rail_size: Point { x: 11.0, y: 11.0 },
-                }),
+                stage: member.stage.clone(),
                 hue: member.hue,
-                now_hue: member.now_hue,
                 selected: selected == Some(member.id.as_str()),
                 needs_you: member.needs_you,
                 action: if fits {
@@ -259,15 +196,13 @@ pub fn layout(input: &GraphInput, selected: Option<&str>, width: f32, phone: boo
                     member.open.clone()
                 },
             });
-            if fits {
-                graph.height = graph.height.max(18.0 + (mi + 1) as f32 * (ch + gy));
-            } else {
-                compact_y += h;
+            if !fits {
+                stacked_y += CARD_HEIGHT + CARD_GAP;
             }
         }
     }
     if !fits {
-        graph.height = compact_y;
+        graph.height = stacked_y;
         return graph;
     }
     for (dep, id) in &input.edges {
@@ -277,25 +212,21 @@ pub fn layout(input: &GraphInput, selected: Option<&str>, width: f32, phone: boo
         ) else {
             continue;
         };
+        let (from_y, to_y) = (from.y + CARD_HEIGHT / 2.0, node.y + CARD_HEIGHT / 2.0);
+        let middle = (from.x + CARD_WIDTH + node.x) / 2.0;
         graph.edges.push(Edge {
             from: from.id.clone(),
             to: node.id.clone(),
             start: Point {
-                x: from.x + cw,
-                y: from.y + ch / 2.0,
+                x: from.x + CARD_WIDTH,
+                y: from_y,
             },
             control1: Point {
-                x: from.x + cw + gx / 2.0,
-                y: from.y + ch / 2.0,
+                x: middle,
+                y: from_y,
             },
-            control2: Point {
-                x: node.x - gx / 2.0,
-                y: node.y + ch / 2.0,
-            },
-            end: Point {
-                x: node.x,
-                y: node.y + ch / 2.0,
-            },
+            control2: Point { x: middle, y: to_y },
+            end: Point { x: node.x, y: to_y },
         });
     }
     graph
@@ -305,7 +236,8 @@ pub fn layout(input: &GraphInput, selected: Option<&str>, width: f32, phone: boo
 mod tests {
     use super::{GraphInput, GraphMember, layout};
     use crate::model::Id;
-    use crate::model::board::Mark;
+    use crate::model::board::{Actor, Mark};
+    use crate::model::glance::StageRail;
     use crate::model::hue::Hue;
     use crate::model::plans::{Action, LiveAction};
 
@@ -314,10 +246,8 @@ mod tests {
         let member = |id: &str, layer| GraphMember {
             id: Id::from(id),
             title: id.into(),
-            now: String::new(),
-            rail: [Mark::Next; 4],
+            stage: StageRail::of([Mark::Next; 4], Actor::Queued, ""),
             hue: Hue::Neutral,
-            now_hue: Hue::Neutral,
             needs_you: false,
             layer,
             select: Action::Live(LiveAction::Task(Id::from(id))),
@@ -327,8 +257,8 @@ mod tests {
             members: vec![member("T-1", 0), member("T-2", 1)],
             edges: vec![(Id::from("T-1"), Id::from("T-2"))],
         };
-        let wide = layout(&members, Some("T-1"), 384.0, false);
-        let narrow = layout(&members, Some("T-1"), 383.0, false);
+        let wide = layout(&members, Some("T-1"), 520.0);
+        let narrow = layout(&members, Some("T-1"), 519.0);
         assert!(wide.fits);
         assert!(!narrow.fits);
         assert!(narrow.edges.is_empty());

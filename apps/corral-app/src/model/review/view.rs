@@ -2,10 +2,10 @@
 //! No widgets, dimensions or styling APIs live here.
 
 use crate::model::board::Mark;
-use crate::model::effect::{Conn, Env};
+use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
-use crate::model::text::{Rich, span};
+use crate::model::text::Rich;
 
 use super::diff::{Anchor, split_rows, unified_rows};
 use super::{Action, Compose, Layout, State, Tab};
@@ -42,88 +42,27 @@ pub enum ButtonStyle {
 pub struct Button {
     /// Visible label.
     pub label: String,
+    /// The label where a row of controls runs out of room (a terminal's decide line).
+    pub short: Option<&'static str>,
     /// Reducer intent.
     pub action: Action,
     /// Whether the control can be activated at all.
     pub enabled: bool,
     /// Source emphasis.
     pub style: ButtonStyle,
-    /// Why activating it will not run the command, shown beside the control.
+    /// Why activating it will not run the command: the control's hint.
     pub refusal: Option<String>,
 }
 
 pub(super) fn button(label: impl Into<String>, action: Action, style: ButtonStyle) -> Button {
     Button {
         label: label.into(),
+        short: None,
         action,
         enabled: true,
         style,
         refusal: None,
     }
-}
-
-/// One candidate-list row.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CandidateRow {
-    /// Task id, the row's stable key and test id.
-    pub task: String,
-    /// Project context when the workspace-wide list needs disambiguation.
-    pub project_chip: Option<String>,
-    /// Short title below the identity.
-    pub title: String,
-    /// Stage line below the title.
-    pub state: String,
-    /// Actor mark colour, independent of selection.
-    pub hue: Hue,
-    /// Formatted task id and candidate identity.
-    pub identity: Rich,
-    /// Whether this is the candidate shown beside the list.
-    pub selected: bool,
-    /// Intent for the whole row.
-    pub action: Action,
-}
-
-/// Candidate group heading and its rows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CandidateGroup {
-    /// `Your verdict` or `Verifying`.
-    pub label: &'static str,
-    /// Group count displayed alongside the heading.
-    pub count: u32,
-    /// Heading's semantic state colour.
-    pub hue: Hue,
-    /// Rows in order.
-    pub rows: Vec<CandidateRow>,
-}
-
-/// The selected candidate's title, metadata and tags.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Header {
-    /// Candidate title.
-    pub title: String,
-    /// Form-specific metadata, including desktop base and totals.
-    pub metadata: Rich,
-    /// Replay, review state and freshness tags.
-    pub chips: Vec<Chip>,
-}
-
-/// A verdict's complete presentation, including stale mark, strike and older-candidate tag.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerdictView {
-    /// Display mark; stale overrides the original mark.
-    pub mark: Mark,
-    /// Who supplied the verdict, in bold.
-    pub who: String,
-    /// Candidate SHA with stale hue already applied.
-    pub sha: Rich,
-    /// Clock time, or empty when none was recorded.
-    pub time: String,
-    /// Phone attribution line: bold actor, monospace SHA and optional clock time.
-    pub line: Rich,
-    /// Result text with strike/dim/owner hue resolved.
-    pub text: Rich,
-    /// Older-candidate tag, including its form-specific wording.
-    pub tag: Option<Chip>,
 }
 
 /// A tab button in the desktop tab list or phone segmented list.
@@ -377,43 +316,6 @@ pub struct Notice {
     pub action: Option<Button>,
 }
 
-/// The selected candidate's detail.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetailView {
-    pub header: Header,
-    pub notice: Option<Notice>,
-    /// Form-specific verdict section heading.
-    pub verdict_heading: &'static str,
-    /// Phone's right-hand verdict heading label.
-    pub verdict_binding: Option<&'static str>,
-    pub verdicts: Vec<VerdictView>,
-    /// Shown instead of verdict rows when none are recorded.
-    pub verdicts_empty: Option<&'static str>,
-    pub tabs: Vec<TabView>,
-    /// Desktop Diff preference controls; empty on phone, terminal or other tabs.
-    pub layouts: Vec<LayoutChoice>,
-    pub body: Body,
-}
-
-/// Complete content of Review; the shell supplies shared connection banners and navigation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PageView {
-    /// Pushed-page title on phone.
-    pub title: String,
-    pub phone: bool,
-    /// Reading the last known state while offline, down or revalidating.
-    pub stale: bool,
-    pub conn: Conn,
-    /// Candidate groups in source order.
-    pub candidates: Vec<CandidateGroup>,
-    pub candidate_note: Option<String>,
-    /// The selected candidate, absent when there is none.
-    pub detail: Option<DetailView>,
-    /// Why no candidate is shown.
-    pub empty: Option<String>,
-    pub decide: DecideBar,
-}
-
 /// Only content widths ≥ 1100 pt have enough room for readable split code columns.
 pub fn effective_layout(state: &State, env: Env, width: f32) -> Layout {
     if env.form == Form::Desktop && width >= 1100.0 {
@@ -421,19 +323,6 @@ pub fn effective_layout(state: &State, env: Env, width: f32) -> Layout {
     } else {
         Layout::Unified
     }
-}
-
-/// One tab per form-specific label, in order.
-pub(super) fn tabs(state: &State, specs: &[(Tab, &'static str)]) -> Vec<TabView> {
-    specs
-        .iter()
-        .map(|&(tab, label)| TabView {
-            tab,
-            label,
-            selected: state.tab == tab,
-            action: Action::Tab(tab),
-        })
-        .collect()
 }
 
 /// Desktop Side by side | Unified switch, shown with the Diff tab.
@@ -464,52 +353,5 @@ pub(super) fn hunk_content(
     match layout {
         Layout::Split => DiffContent::Split(split_rows(&lines, anchors)),
         Layout::Unified => DiffContent::Unified(unified_rows(lines, anchors)),
-    }
-}
-
-/// One recorded verdict row's presentation.
-pub(super) fn verdict_view(
-    phone: bool,
-    who: &str,
-    sha: &str,
-    time: &str,
-    mark: Mark,
-    text: &str,
-    stale: bool,
-) -> VerdictView {
-    let mut line = vec![span(who).bold(), span(" · "), span(sha).mono()];
-    if !time.is_empty() {
-        line.push(span(" "));
-        line.push(span(time));
-    }
-    VerdictView {
-        mark: if stale { Mark::Stale } else { mark },
-        who: who.into(),
-        sha: vec![span(sha).mono().hue(if stale && !phone {
-            Hue::Held
-        } else {
-            Hue::Neutral
-        })],
-        time: time.into(),
-        line,
-        text: vec![if stale {
-            span(text).strike().dim()
-        } else {
-            span(text).hue(if who == "you" && !phone {
-                Hue::You
-            } else {
-                Hue::Neutral
-            })
-        }],
-        tag: stale.then(|| {
-            chip(
-                if phone {
-                    "older candidate"
-                } else {
-                    "stale · older candidate"
-                },
-                Hue::Held,
-            )
-        }),
     }
 }

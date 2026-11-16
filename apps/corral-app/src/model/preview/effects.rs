@@ -321,7 +321,7 @@ fn send_inner(feed: &mut Feed, request: &AssistantSend) -> Result<(), String> {
         _ => {}
     }
     if request.target == AskTarget::Pm {
-        sessions::append(feed, "PM", &request.text)?;
+        sessions::append(feed, "pm", &request.text)?;
     }
     let id = format!("preview-message:{}", request.cmd_id);
     let at = stamp(feed, feed.now);

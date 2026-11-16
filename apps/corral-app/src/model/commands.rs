@@ -112,8 +112,6 @@ pub enum Action {
     Theme(ThemeChoice),
     /// Select live transport, explicit preview, or disconnected data.
     Data(DataState),
-    /// Restore the user's Now dock arrangement.
-    ResetNow,
     /// Show the global hotkey demo window.
     Hotkey,
     /// Show the phone share-sheet demo.
@@ -272,15 +270,6 @@ pub fn commands(
         None,
         Action::PreviewNoProjects,
     ));
-    if managed {
-        rows.push(row(
-            "reset-now",
-            "Now",
-            "Reset Now layout",
-            None,
-            Action::ResetNow,
-        ));
-    }
     if live && managed {
         // One row for both directions: the palette reads no Now state, and either word finds it.
         rows.push(row(

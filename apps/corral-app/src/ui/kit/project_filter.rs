@@ -10,7 +10,11 @@
 //! targets) in 13.5 pt, so many projects never wrap the list down; Now's Group toggle sits on a
 //! second line under it, always in view. On desktop and in a terminal the toggles wrap onto
 //! further lines within a narrow pane, so none is out of reach. Terminal: the toggles a Cell
-//! apart after a quiet caption; NSH bands the pressed one itself. test ids:
+//! apart after a quiet caption; NSH bands the pressed one itself. A project's chip carries the
+//! count of what waits on the owner there (`corral 3`, bold mono in the needs-you colour) when
+//! the daemon reports it, and its hint (`3 wait on you in corral · …`) shows on pointer rest or
+//! keyboard focus (desktop) or on the status line (terminal); the phone has no hint and screen
+//! readers hear the count with the name. test ids:
 //! "seg-project-<all|unassigned|project id>" and "seg-group-<state|project>".
 
 use std::rc::Rc;
@@ -21,12 +25,21 @@ use nsh_core::prelude::*;
 use crate::model::Form;
 use crate::model::projects::{self, FilterScreen, NowGroup, ProjectFilter};
 use crate::state::AppState;
+use crate::ui::kit::hint::hint_on_live;
 use crate::ui::term::cells;
-use crate::ui::tokens::{FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 /// The phone's least touch target.
 const TARGET: f32 = 44.0;
 const RING: f32 = 2.0;
+/// What a project chip says beyond its name, which follows the feed while the bar stays put.
+#[derive(Debug, Clone, PartialEq, Default)]
+struct Facts {
+    needs: Option<String>,
+    hint: String,
+    spoken: String,
+}
+
 /// What the bar scopes, for its caption and screen readers.
 const PROJECT_CAPTION: &str = "Project";
 const GROUP_CAPTION: &str = "Group";
@@ -87,17 +100,42 @@ fn strip(
     trailing: Trailing,
 ) -> AnyElement {
     let form = app.form;
+    let facts = computed(move || {
+        app.feed.with(|feed| {
+            projects::chips(feed, &app.project_filter(screen), screen)
+                .into_iter()
+                .map(|chip| {
+                    let facts = Facts {
+                        needs: chip.needs,
+                        hint: chip.hint,
+                        spoken: chip.spoken,
+                    };
+                    (chip.filter, facts)
+                })
+                .collect::<Vec<_>>()
+        })
+    });
     let options = chips
         .iter()
         .map(|(label, filter)| {
             let chosen = filter.clone();
             let picked = filter.clone();
+            let mine = filter.clone();
             let on = computed(move || current.with(|current| *current == chosen));
+            let said = computed(move || {
+                facts.with(|all| {
+                    all.iter()
+                        .find(|(filter, _)| *filter == mine)
+                        .map(|(_, facts)| facts.clone())
+                        .unwrap_or_default()
+                })
+            });
             option(
-                form,
+                app,
                 label.clone(),
                 format!("seg-project-{}", value(filter)),
                 on,
+                Some(said),
                 move || app.set_project_filter(screen, picked.clone()),
             )
         })
@@ -146,22 +184,23 @@ fn strip(
     }
 }
 
-/// Now's Group toggle: the list grouped by state (who acts next) or by project.
+/// Now's Group toggle: the list grouped by actor (who acts next) or by project.
 fn group_toggle(app: AppState) -> AnyElement {
     let form = app.form;
     let current = computed(move || app.now_group());
     let options = [
-        (NowGroup::State, "State", "state"),
+        (NowGroup::State, "Actor", "state"),
         (NowGroup::Project, "Project", "project"),
     ]
     .into_iter()
     .map(|(group, label, slug)| {
         let on = computed(move || current.get() == group);
         option(
-            form,
+            app,
             label.into(),
             format!("seg-group-{slug}"),
             on,
+            None,
             move || app.set_now_group(group),
         )
     })
@@ -234,15 +273,18 @@ fn gap(form: Form) -> Points {
     }
 }
 
-/// One pill: its words, pressed while `on` holds; pressing the pressed one keeps it, so the bar
+/// One pill: its words, and for a project scope the count waiting on the owner after them and
+/// the scope's hint; pressed while `on` holds; pressing the pressed one keeps it, so the bar
 /// always names one scope.
 fn option(
-    form: Form,
+    app: AppState,
     label: String,
     test_id: String,
     on: Memo<bool>,
+    facts: Option<Memo<Facts>>,
     pick: impl Fn() + 'static,
 ) -> AnyElement {
+    let form = app.form;
     let (height, size, pad) = match form {
         Form::Desktop => (22.0, 12.0, 9.0),
         Form::Phone => (32.0, 13.5, 12.0),
@@ -261,7 +303,7 @@ fn option(
         .when(form != Form::Terminal, |t| {
             t.font_family(FONT_TEXT).text_size(px(size))
         });
-    toggle()
+    let pill = toggle()
         .pressed(move || on.get())
         .on_change(move |_: &bool| pick())
         .flex_shrink_0()
@@ -306,6 +348,54 @@ fn option(
                     left: px(0.0),
                 })
         })
-        .child(view().test_id(&test_id).child(words))
-        .into_element()
+        .when_some(facts, |t, facts| {
+            t.accessibility_label(move || {
+                facts.with(|facts| Some(SharedString::from(facts.spoken.clone())))
+            })
+        })
+        .child(
+            view()
+                .test_id(&test_id)
+                .flex_row()
+                .items_center()
+                .gap(match form {
+                    Form::Terminal => cells(1.0),
+                    Form::Desktop | Form::Phone => px(6.0),
+                })
+                .child(words)
+                .children(facts.map(|facts| {
+                    dynamic(move || {
+                        facts.with(|facts| facts.needs.clone().map(|n| needs_count(form, n)))
+                    })
+                })),
+        );
+    match facts {
+        // A toggle takes no tooltip of its own: the view around it does, and the focus on the
+        // toggle inside still shows it.
+        Some(facts) if form != Form::Phone => {
+            hint_on_live(app, view().flex_shrink_0().child(pill), move || {
+                facts.with(|facts| SharedString::from(facts.hint.clone()))
+            })
+            .into_element()
+        }
+        _ => pill.into_element(),
+    }
+}
+
+/// The figures of what waits on the owner in a project (`.pc b`): bold mono in the needs-you
+/// colour, desktop 11.5 pt, phone 13 pt; a terminal's in bold.
+fn needs_count(form: Form, needs: String) -> AnyElement {
+    let figures = text(needs)
+        .number_of_lines(1u32)
+        .flex_shrink_0()
+        .font_weight(FontWeight::BOLD)
+        .text_color(color(Token::You));
+    match form {
+        Form::Terminal => figures.into_element(),
+        Form::Desktop | Form::Phone => figures
+            .font_family(FONT_MONO)
+            .tabular_nums()
+            .text_size(px(if form == Form::Phone { 13.0 } else { 11.5 }))
+            .into_element(),
+    }
 }

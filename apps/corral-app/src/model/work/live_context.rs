@@ -1,26 +1,15 @@
-//! Now's lower docks in the Daemon state: the selected task's captured log tail with the
-//! running agents' tiles, the selected task's plan for the graph, and what changed since this
-//! device's last visit.
+//! What a task's context and the changes feed show in the Daemon state: the plan a task belongs
+//! to (the phone task page's plan section) and each change as a feed row, with why changes
+//! cannot be shown.
 
-use corral_protocol::app::{AGENTS_V1, CHANGES_PAGE, CHANGES_V1, ChangeLine};
-use corral_protocol::rows::{AgentRow, AgentStatus};
+use corral_protocol::app::{CHANGES_PAGE, CHANGES_V1, ChangeLine};
 
 use crate::model::board::ChangeKind;
 use crate::model::daemon::{Feed, Link};
-use crate::model::hue::Hue;
-use crate::model::nav::Form;
-use crate::model::projects::{NowGroup, ProjectFilter};
-use crate::model::{Id, Live, Selection};
+use crate::model::projects::ProjectFilter;
+use crate::model::{Id, Live};
 
-use super::{
-    FeedRow, LiveTile, NO_TAIL, Press, State, Tail, TailLine, daemon_selection_filtered,
-    detail_note, loaded_task, stamp, task_tail,
-};
-
-/// The lines a tile shows of an agent's tail.
-const TILE_LINES: usize = 4;
-/// The most events the Since panel lists.
-const SINCE_ROWS: usize = 50;
+use super::{FeedRow, Press, loaded_task, stamp};
 
 /// One quiet line in place of a panel's content, owned or fixed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,150 +27,8 @@ impl Notice {
     }
 }
 
-/// The Live dock in the Daemon state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveNow {
-    /// The selected task's captured log tail, when corrald holds one.
-    pub selected: Option<Tail>,
-    /// Why there is no tail: the detail is loading, failed, or captured nothing.
-    pub selected_note: Option<Notice>,
-    /// Running agents' tiles.
-    pub tiles: Vec<LiveTile>,
-    /// Why there are no tiles.
-    pub tiles_note: Option<&'static str>,
-}
-
-/// Said when no agent is running.
-pub const NO_AGENTS: &str = "No agent is running.";
-/// Said when corrald serves no agent rows.
-pub const AGENTS_NOT_SERVED: &str = "corrald does not serve running agents.";
 /// Said when corrald serves no changes feed.
 pub const CHANGES_NOT_SERVED: &str = "corrald does not serve changes.";
-
-/// The board's notice when there is no board to show yet, as the list says it.
-fn board_notice(feed: &Feed) -> Option<Notice> {
-    if let Some(line) = feed.device.board_notice() {
-        return Some(Notice::Quiet(line));
-    }
-    if !feed.board.complete
-        && let Some(problem) = super::served_facts::board_problem(feed)
-    {
-        return Some(Notice::Said(problem));
-    }
-    (!feed.board.complete).then_some(Notice::Quiet(if feed.link == Link::Down {
-        super::NO_BOARD
-    } else {
-        "Waiting for the board…"
-    }))
-}
-
-fn chip(status: AgentStatus) -> (&'static str, Hue) {
-    match status {
-        AgentStatus::Live => ("live", Hue::Corral),
-        AgentStatus::Working => ("working", Hue::Worker),
-        AgentStatus::Asking => ("needs you", Hue::You),
-        AgentStatus::Gating => ("gating", Hue::Corral),
-        AgentStatus::Reviewing => ("reviewing", Hue::Corral),
-        AgentStatus::Idle => ("idle", Hue::Neutral),
-        AgentStatus::Waiting => ("waiting", Hue::Neutral),
-        AgentStatus::Paused => ("paused", Hue::Held),
-        AgentStatus::Ended => ("ended", Hue::Neutral),
-        AgentStatus::Unavailable => ("unavailable", Hue::Held),
-        AgentStatus::Other => ("unknown", Hue::Neutral),
-    }
-}
-
-/// A running agent's tile: its state, what it is on, its last lines as corrald projects them.
-fn tile(row: &AgentRow, feed: &Feed) -> LiveTile {
-    let (chip, chip_hue) = chip(row.status);
-    let session = Id::from(row.id.as_str());
-    let lines = &row.tail[row.tail.len().saturating_sub(TILE_LINES)..];
-    LiveTile {
-        id: row.id.clone(),
-        role: row.role.clone(),
-        doing: row.now.clone(),
-        doing_hue: if row.status == AgentStatus::Asking {
-            Hue::You
-        } else {
-            Hue::Neutral
-        },
-        profile: row.profile.clone().unwrap_or_default(),
-        runtime: row.runtime.clone().unwrap_or_default(),
-        pane: row.pane.clone().unwrap_or_else(|| "−".into()),
-        chip,
-        chip_hue,
-        title: row.title.clone(),
-        since: row
-            .since
-            .as_deref()
-            .map(|at| stamp(at, feed))
-            .filter(|at| !at.is_empty())
-            .map(|at| format!("since {at}"))
-            .unwrap_or_default(),
-        tail: Tail {
-            id: row.id.clone(),
-            pane: row.pane.clone().unwrap_or_else(|| "−".into()),
-            runtime: row.runtime.clone().unwrap_or_default(),
-            label: "latest lines".into(),
-            snapshot: true,
-            illustrative: None,
-            lines: lines.iter().map(TailLine::new).collect(),
-            cursor: false,
-            action: None,
-        },
-        action: Some(Press::Open(Live::Session(session))),
-    }
-}
-
-/// The Live dock in the Daemon state: the selected task's captured tail, then a tile for each
-/// agent that has not ended.
-pub fn daemon_live_filtered(
-    state: &State,
-    feed: &Feed,
-    selected: &Selection,
-    form: Form,
-    filter: &ProjectFilter,
-    grouping: NowGroup,
-) -> LiveNow {
-    if let Some(notice) = board_notice(feed) {
-        return LiveNow {
-            selected: None,
-            selected_note: Some(notice),
-            tiles: Vec::new(),
-            tiles_note: None,
-        };
-    }
-    let task = daemon_selection_filtered(state, selected, feed, form, filter, grouping);
-    let off_board = super::off_board(selected, feed);
-    let tail = match task {
-        Some(task) => task_tail(feed, task),
-        None => off_board.and_then(|id| super::live_task::tail_for(feed, id, None)),
-    };
-    let selected_note = match (task.map(|task| &task.id).or(off_board), &tail) {
-        (None, _) => Some(Notice::Quiet(super::EMPTY_BOARD)),
-        (Some(id), None) => detail_note(feed, id).map(|note| Notice::Said(note.text)),
-        (Some(_), Some(tail)) if tail.lines.is_empty() => Some(Notice::Quiet(NO_TAIL)),
-        (Some(_), Some(_)) => None,
-    };
-    let (tiles, tiles_note) = if feed.capable(AGENTS_V1) {
-        let tiles: Vec<LiveTile> = feed
-            .agents
-            .values()
-            .filter(|row| !matches!(row.status, AgentStatus::Ended))
-            .map(|row| tile(row, feed))
-            .collect();
-        let note = tiles.is_empty().then_some(NO_AGENTS);
-        (tiles, note)
-    } else {
-        (Vec::new(), Some(AGENTS_NOT_SERVED))
-    };
-    LiveNow {
-        selected: tail.filter(|tail| !tail.lines.is_empty()),
-        selected_note,
-        tiles,
-        tiles_note,
-    }
-}
 
 /// The plan graph's hand-off in the Daemon state: the plan the selected task belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,40 +79,6 @@ pub fn plan_context(feed: &Feed, id: &Id, board: Option<&str>) -> LivePlan {
         action: plan.clone().map(|plan| Press::Open(Live::Plan(plan))),
         member: Some(id.clone()),
         plan,
-    }
-}
-
-/// The plan graph dock in the Daemon state.
-pub fn daemon_plan_filtered(
-    state: &State,
-    feed: &Feed,
-    selected: &Selection,
-    form: Form,
-    filter: &ProjectFilter,
-    grouping: NowGroup,
-) -> LivePlan {
-    let quiet = |notice| LivePlan {
-        plan: None,
-        member: None,
-        heading: String::new(),
-        empty: Some(notice),
-        action: None,
-    };
-    if let Some(notice) = board_notice(feed) {
-        return quiet(notice);
-    }
-    if let Some(task) = daemon_selection_filtered(state, selected, feed, form, filter, grouping) {
-        return task_plan_context(feed, task);
-    }
-    // A task off the board has a plan only once its detail says so.
-    match super::off_board(selected, feed) {
-        Some(id) if loaded_task(feed, id).is_some() => plan_context(feed, id, None),
-        Some(id) => quiet(
-            detail_note(feed, id).map_or(Notice::Quiet(super::INSPECTOR_LOADING), |note| {
-                Notice::Said(note.text)
-            }),
-        ),
-        None => quiet(Notice::Quiet(super::EMPTY_BOARD)),
     }
 }
 
@@ -409,38 +222,4 @@ pub(super) fn changes_notice(feed: &Feed) -> Option<Notice> {
         return Some(Notice::Quiet("No changes received from corrald yet."));
     }
     Some(Notice::Quiet("No changes recorded yet."))
-}
-
-/// What the Since panel shows in the Daemon state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Since {
-    pub rows: Vec<FeedRow>,
-    pub notice: Option<Notice>,
-}
-
-/// The changes past this device's seen cursor, newest first, each opening its task.
-pub fn daemon_since_filtered(feed: &Feed, filter: &ProjectFilter) -> Since {
-    let filter = filter.resolved(feed);
-    if let Some(notice) = changes_notice(feed) {
-        return Since {
-            rows: Vec::new(),
-            notice: Some(notice),
-        };
-    }
-    let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
-    let rows: Vec<FeedRow> = feed
-        .changes
-        .range(through.saturating_add(1)..)
-        .rev()
-        .filter(|(_, line)| owner_relevant(line))
-        .filter(|(_, line)| super::change_matches_project(line, feed, &filter))
-        .take(SINCE_ROWS)
-        .map(|(_, line)| change_row_filtered(line, feed, true, &filter))
-        .collect();
-    Since {
-        notice: rows
-            .is_empty()
-            .then_some(Notice::Quiet("Nothing new since your last visit.")),
-        rows,
-    }
 }

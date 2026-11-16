@@ -23,6 +23,7 @@ pub fn list_keys_live(destination: Destination, top: Option<&Live>) -> &'static 
         (Destination::Now, None | Some(Live::Task(_))) => LIVE_MOVE_OPEN,
         (Destination::Review, None | Some(Live::Review(_))) => MENU,
         (Destination::Plans | Destination::Builds, _) => MOVE,
+        (Destination::Agents, None) => MOVE,
         _ => &[],
     }
 }
@@ -52,6 +53,7 @@ pub fn key_legend_live(
         }
         (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member")],
         (Destination::Builds, _) => vec![("j k", "build")],
+        (Destination::Agents, _) => vec![("j k", "session")],
         (Destination::Review, _) => vec![("s", "split"), (".", "actions")],
         _ => Vec::new(),
     }
@@ -71,11 +73,11 @@ mod tests {
             ),
             list_keys_live(Destination::Now, None),
             list_keys_live(Destination::Plans, None),
+            list_keys_live(Destination::Agents, None),
         ];
         for keys in lists {
             assert!(!keys.contains(&"tab") && !keys.contains(&"space"));
         }
-        assert!(list_keys_live(Destination::Agents, None).is_empty());
         assert!(list_keys_live(Destination::Settings, None).is_empty());
     }
 }

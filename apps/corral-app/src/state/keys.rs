@@ -211,7 +211,7 @@ impl AppState {
         let mut effects = None;
         self.feed.with_untracked(|feed| match destination {
             Destination::Now => self.work.update(|state| {
-                effects = state.key_live_filtered(
+                effects = state.key_now_page(
                     key,
                     top,
                     &selection,
@@ -227,6 +227,9 @@ impl AppState {
                 effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
             }),
             Destination::Plans => self.plans.update(|state| {
+                effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
+            }),
+            Destination::Agents => self.agents.update(|state| {
                 effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
             }),
             Destination::Review => self.review.update(|state| {

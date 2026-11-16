@@ -1,16 +1,15 @@
-//! The changes feed's rows, shared by Now's "Since your last visit" and "Parked" panels and the
-//! Changes destination: time, a mark per kind of change, the task id and the event, newest first;
-//! the per-device seen line between what is new and what was seen.
+//! The changes feed's rows for the Changes destination: time, a mark per kind of change, the
+//! task id and the event, newest first; the per-device seen line between what is new and what
+//! was seen.
 
 use nsh_core::prelude::*;
 
 use crate::model::board::{ChangeKind, Mark};
-use crate::model::work::{self, FeedRow, HoldRow};
+use crate::model::work::{self, FeedRow};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::marks::{dot, hue_ink, mark};
 use crate::ui::kit::rows::{measured, project_chip};
-use crate::ui::kit::text::rich_small;
 use crate::ui::term::{cells, hrule};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
@@ -210,60 +209,6 @@ pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement
             .children(by)
             .into_element(),
     }
-}
-
-/// One hold, in the feed's columns: when the hold began, its mark, the id, the title with its
-/// attribution dimmed after it. A hold with an action opens its task.
-pub(crate) fn hold(app: AppState, held: &HoldRow) -> AnyElement {
-    let form = app.form;
-    let mut label = format!("{} {} {}", held.since, held.id, held.title);
-    if let Some(project) = &held.project_chip {
-        label = format!("{label}, {project}");
-    }
-    // A terminal row's Cells beside the text: time 5, mark 1, id 5, the side padding and gaps.
-    let room = signal(0.0_f32);
-    let row = measured(app, view().flex_row().items_center().flex_shrink_0(), room)
-        .overflow_hidden()
-        .label(label)
-        .child(column(
-            form,
-            40.0,
-            5.0,
-            mono(form, held.since.clone(), 11.0),
-        ))
-        .child(column(form, 14.0, 1.0, mark(app, held.mark, Hue::Neutral)))
-        .child(column(form, 50.0, 5.0, mono(form, held.id.clone(), 11.0)))
-        .child(
-            view()
-                .flex_1()
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .child(rich_small(app, &held.text)),
-        )
-        .children(
-            held.project_chip
-                .clone()
-                .map(|project| project_chip(app, project, room, 16.0)),
-        );
-    let row = match held.action.clone() {
-        Some(action) => row
-            .test_id(&format!("task-{}", held.id))
-            .cursor_pointer()
-            .role(AccessibilityRole::Button)
-            .on_press(move || press(app, action.clone()))
-            .hover(|s| s.bg(color(Token::Hover)))
-            .focus_visible(|s| {
-                s.outline(px(RING))
-                    .outline_color(color(Token::Focus))
-                    .outline_offset(px(-RING))
-            }),
-        None => row,
-    };
-    match form {
-        Form::Terminal => row.h(px(16.0)).px(cells(1.0)).gap(px(8.0)),
-        Form::Desktop | Form::Phone => row.h(px(26.0)).px(px(16.0)).gap(px(8.0)),
-    }
-    .into_element()
 }
 
 /// The per-device seen line (`.seenline`): the model's words in faint spaced capitals between

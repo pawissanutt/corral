@@ -207,37 +207,6 @@ pub(super) fn targets(target: AskTarget, pm: Chip) -> Vec<TargetOption> {
     ]
 }
 
-/// Pinned quick-thread tile; render the same content as a compact row on phone.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QuickThread {
-    /// Session id.
-    pub id: String,
-    /// Full tile title.
-    pub title: String,
-    /// Compact-row title.
-    pub row_title: &'static str,
-    /// Current answering/waiting chip.
-    pub state: Chip,
-    /// Pinning description.
-    pub pinned: &'static str,
-    /// Latest turn outcome.
-    pub last_line: String,
-    /// Last owner question, clipped at 96 characters.
-    pub last_question: String,
-    /// Attribution for the last owner message.
-    pub owner_at: String,
-    /// Thread-wide model selection.
-    pub model: String,
-    /// Host description.
-    pub location: String,
-    /// Cross-device scope.
-    pub scope: &'static str,
-    /// Host's lifetime, unrelated to idle time.
-    pub lifetime: String,
-    /// Opens the quick thread.
-    pub action: Action,
-}
-
 /// A session row with both compact and desktop fact lines prebuilt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRow {
@@ -272,11 +241,9 @@ pub struct FiledLine {
     pub action: Action,
 }
 
-/// Agents' three assistant blocks; no assistant destination is introduced.
+/// The two assistant blocks below the Agents roster: sessions and Filed from chat.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Agents {
-    /// Pinned quick-thread tile or row.
-    pub quick_thread: QuickThread,
     /// Assistant sessions section heading.
     pub sessions_title: &'static str,
     /// Named daemon and pane session rows, excluding the quick thread.

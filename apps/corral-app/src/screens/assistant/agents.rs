@@ -1,12 +1,10 @@
-//! The assistant's blocks inside Agents: the pinned quick-thread tile (a compact row on the
-//! phone and in a terminal), then the assistant sessions with + New session, and Filed from chat
-//! naming the session each Idea came from, all from the served rows of the selected feed.
+//! The assistant's blocks inside Agents, under the roster: the assistant sessions with + New
+//! session, and Filed from chat naming the session each Idea came from, all from the served rows
+//! of the selected feed.
 
 use nsh_core::prelude::*;
 
-use crate::model::assistant::{
-    Agents, FiledLine, LABELS, QuickThread, SessionRow, filings_target, live_agents,
-};
+use crate::model::assistant::{Agents, FiledLine, SessionRow, filings_target, live_agents};
 use crate::model::{Authority, Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -16,9 +14,9 @@ use crate::ui::kit::page::group_head;
 use crate::ui::kit::rows::list_row;
 use crate::ui::kit::text::h3;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_MONO, Token, color};
 
-use super::parts::{act, button_row, model_button, ring, spacer, test_id, words};
+use super::parts::{act, button_row, model_button, ring, test_id, words};
 
 /// The blocks from the selected feed, tracked.
 fn blocks(app: AppState) -> Agents {
@@ -27,200 +25,6 @@ fn blocks(app: AppState) -> Agents {
         app.assistant
             .with(|state| live_agents(state, feed, can_send))
     })
-}
-
-/// The quick thread pinned first in Agents. Desktop: the tile (`.tile.qt`) that fills its cell:
-/// state, id and pinning; title; the latest turn; the last question under a rule; model, host,
-/// scope and cost in its foot. Phone: the pinned row on the surface (`.prow.qtrow`).
-/// Terminal: one row. Pressing it opens the quick thread.
-///
-/// The tile quotes the quick thread's latest question and answer, so the page placing it holds
-/// the thread's subscription for its own lifetime ([`super::open_scope`]). The tile itself
-/// subscribes nothing: the Agents wall rebuilds it whenever agent rows change, and a
-/// subscription per build would close and reopen the thread on every update.
-pub fn agents_head(app: AppState) -> AnyElement {
-    let quick = computed(move || blocks(app).quick_thread);
-    dynamic(move || {
-        let qt = quick.get();
-        Some(match app.form {
-            Form::Desktop => tile(app, qt),
-            Form::Phone => phone_row(app, qt),
-            Form::Terminal => terminal_row(app, qt),
-        })
-    })
-}
-
-fn tile(app: AppState, qt: QuickThread) -> AnyElement {
-    let action = qt.action.clone();
-    let small = |content: String| {
-        text(content)
-            .number_of_lines(1u32)
-            .font_family(FONT_TEXT)
-            .text_size(px(11.0))
-            .text_color(color(Token::Ink3))
-    };
-    let head = view()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .px(px(12.0))
-        .pt(px(9.0))
-        .pb(px(2.0))
-        .child(chip(app, qt.state.label.clone(), qt.state.hue))
-        .child(
-            text(qt.id.clone())
-                .font_family(FONT_MONO)
-                .text_size(px(11.5))
-                .text_color(color(Token::Ink3)),
-        )
-        .child(spacer())
-        .child(words(app, qt.pinned, 12.0, Token::Ink3).number_of_lines(1u32));
-    let last = words(app, "", 12.5, Token::Ink2)
-        .child(text(qt.owner_at).text_color(color(Token::Ink3)))
-        .child(text(format!(" {}", qt.last_question)));
-    view()
-        .flex_1()
-        .flex_col()
-        .min_w(px(0.0))
-        .bg(color(Token::Surface))
-        .rounded(px(8.0))
-        .border_1()
-        .border_color(color(Token::Rule2))
-        .overflow_hidden()
-        .role(AccessibilityRole::Button)
-        .label(qt.title.clone())
-        .test_id(&format!("thread-{}", qt.id))
-        .cursor_pointer()
-        .hover(|s| s.bg(color(Token::Hover)))
-        .focus_visible(ring)
-        .on_press(move || act(app, action.clone()))
-        .child(head)
-        .child(
-            words(app, qt.title, 13.5, Token::Ink)
-                .font_weight(FontWeight::SEMIBOLD)
-                .truncate()
-                .px(px(12.0)),
-        )
-        .child(
-            words(app, qt.last_line, 12.0, Token::Ink2)
-                .truncate()
-                .px(px(12.0))
-                .pt(px(2.0))
-                .pb(px(8.0)),
-        )
-        .child(
-            view()
-                .flex_1()
-                .min_h(px(92.0))
-                .px(px(12.0))
-                .py(px(8.0))
-                .overflow_hidden()
-                .border_t_1()
-                .border_t_color(color(Token::Rule))
-                .child(last),
-        )
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(10.0))
-                .px(px(12.0))
-                .py(px(6.0))
-                .border_t_1()
-                .border_t_color(color(Token::Rule))
-                .child(small(qt.model.into()))
-                .child(small(qt.location.into()))
-                .child(small(qt.scope.into()).flex_shrink(1.0).min_w(px(0.0)))
-                .child(spacer())
-                .child(small(qt.lifetime.into())),
-        )
-        .into_element()
-}
-
-fn phone_row(app: AppState, qt: QuickThread) -> AnyElement {
-    let action = qt.action.clone();
-    let first = view()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .child(mono(app, qt.id.clone(), 13.0, Token::Ink3))
-        .child(
-            words(app, qt.row_title, 16.0, Token::Ink)
-                .font_weight(FontWeight::SEMIBOLD)
-                .flex_1()
-                .min_w(px(0.0))
-                .truncate(),
-        )
-        .child(chip(app, qt.state.label.clone(), qt.state.hue));
-    let second = view()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .child(
-            words(app, qt.last_line, 13.5, Token::Ink2)
-                .flex_1()
-                .min_w(px(0.0))
-                .truncate(),
-        )
-        .child(mono(app, LABELS.pinned, 12.0, Token::Ink3));
-    view()
-        .bg(color(Token::Surface))
-        .border_t_1()
-        .border_t_color(color(Token::Rule))
-        .child(list_row(
-            app,
-            qt.title,
-            format!("thread-{}", qt.id),
-            || false,
-            move || act(app, action.clone()),
-            vec![
-                view()
-                    .w(px(12.0))
-                    .flex_shrink_0()
-                    .items_center()
-                    .child(dot(app, Hue::Corral))
-                    .into_element(),
-                view()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .gap(px(2.0))
-                    .child(first)
-                    .child(second)
-                    .into_element(),
-            ],
-        ))
-        .into_element()
-}
-
-fn terminal_row(app: AppState, qt: QuickThread) -> AnyElement {
-    let action = qt.action.clone();
-    list_row(
-        app,
-        qt.title,
-        format!("thread-{}", qt.id),
-        || false,
-        move || act(app, action.clone()),
-        vec![
-            dot(app, Hue::Corral),
-            text(qt.id.clone())
-                .flex_shrink_0()
-                .text_color(color(Token::Ink3))
-                .into_element(),
-            text(qt.row_title)
-                .flex_shrink_0()
-                .font_weight(FontWeight::BOLD)
-                .text_color(color(Token::Ink))
-                .into_element(),
-            chip(app, qt.state.label.clone(), qt.state.hue),
-            text(qt.last_line)
-                .flex_1()
-                .min_w(px(0.0))
-                .truncate()
-                .text_color(color(Token::Ink))
-                .into_element(),
-            term::quiet(LABELS.pinned).into_element(),
-        ],
-    )
 }
 
 /// The assistant sessions and Filed from chat, under the agents. Desktop: two columns 24 pt
@@ -244,8 +48,9 @@ pub fn agents_tail(app: AppState) -> AnyElement {
     })
 }
 
-/// Keeps the global filings page the wall shows served: fetched when absent and refetched when
-/// it went stale. A failed fetch waits for the owner's Retry; nothing loops.
+/// Keeps the global filings page the Agents roster's Filed from chat shows served: fetched when
+/// absent and refetched when it went stale. A failed fetch waits for the owner's Retry; nothing
+/// loops.
 fn load_filings(app: AppState) {
     effect(move || {
         if !app.capable(corral_protocol::app::FILINGS_V1) {

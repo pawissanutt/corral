@@ -16,7 +16,7 @@ Web pairing requires an existing admin app or the owner CLI to compare/confirm t
 
 Ask is one composer for assistant and PM messages. The daemon hosts assistants; PM messages enter its inbox. Transaction completion must acknowledge local persistence before send acceptance, matching draft retirement or command submission. Per-device/store drafts, cancellable messages and same-ID result recovery survive reconnect; other offline actions refuse. Offline boot may restore complete Board/Inbox/Plans/Builds/Health snapshots only for saved credentials, marked stale. Revision-checked transactions preserve concurrent instances' updates. Images and bounded UTF-8 files upload from the client; links are opaque. Missing provider/quota/raw-terminal facts stay unknown.
 
-NSH Storage keys: `corral.destination`, `corral.settings`, `corral.theme`, `corral.now.layout`, `corral.sidebar`, `corral.filters`, `corral.paired`. `corral.filters` holds each screen's project filter and Now grouping keyed by daemon store, so several daemons can keep separate scopes. `corral.data`, `corral.conn` and `corral.mode` are removed. Transactional outbox/cache uses IndexedDB `corral-local-state` v1 (`records`, `meta`), or native `corral-app/durable.json` with retained lock. Credentials use IndexedDB `corral-app` v1 (`credentials`) or native `devices.json`. See README › Local storage for record keys, migration and bounds. Cargo version `0.1.0` and NSH package version `1.0.0`/build `1` are diagnostic; negotiate capabilities, not version-string equality.
+NSH Storage keys: `corral.destination`, `corral.settings`, `corral.theme`, `corral.sidebar`, `corral.filters`, `corral.paired`. `corral.filters` holds each screen's project filter and Now grouping keyed by daemon store, so several daemons can keep separate scopes. `corral.data`, `corral.conn` and `corral.mode` are removed. Transactional outbox/cache uses IndexedDB `corral-local-state` v1 (`records`, `meta`), or native `corral-app/durable.json` with retained lock. Credentials use IndexedDB `corral-app` v1 (`credentials`) or native `devices.json`. See README › Local storage for record keys, migration and bounds. Cargo version `0.1.0` and NSH package version `1.0.0`/build `1` are diagnostic; negotiate capabilities, not version-string equality.
 
 Projects come from `projects.v1` (`Feed.projects`), or from task rows on older daemons. A complete empty Projects page is `WorkspaceMode::AssistantOnly`: no project management, board destinations hidden rather than unavailable. Never infer assistant-only from loading, stale or missing-capability state.
 
@@ -30,33 +30,45 @@ Projects come from `projects.v1` (`Feed.projects`), or from task rows on older d
 - `src/client/{durable,durable_native,durable_web}.rs`: acknowledged revision-checked storage; `outbox.rs`: per-namespace drafts/messages/commands/tombstones; `offline.rs`: credential-checked stale bootstrap snapshots.
 - `src/client/app/{local,devices,scopes,terminal}.rs`: local persistence lifecycle, authority/device operations, scoped subscriptions and terminal windows; `src/client/web/{identity,lifecycle,keystore,push,push_runtime}.rs`: browser identity, Forget, storage and opt-in Web Push/service-worker bridge.
 - `src/model/hue.rs`, `text.rs`, `effect.rs`: semantic colours, rich text, environment and reducer effects.
-- `src/model/nav.rs`, `health.rs`, `commands.rs`: navigation, health and palette commands; `src/model/preview.rs`, `preview/`: pure synthetic feed/sample simulation through the live models, never a client executor; `preview/closed.rs` supplies sample closed tasks.
+- `src/model/glance.rs`: counts, loop bands, named stage rails and activity strips, each with its hint.
+- `src/model/nav.rs`, `health.rs`, `commands.rs`: navigation, health and palette commands; `NavState.opened` and `opens` track records opened by name so narrow Plans and Review show the record; `src/model/preview.rs`, `preview/`: pure synthetic feed/sample simulation through the live models, never a client executor; `preview/closed.rs` supplies sample closed tasks.
 - `src/model/disconnected.rs`: honest empty shell snapshot, without sample facts.
 - `src/model/commands/keys.rs`: focused-list bindings and shared terminal legends; `src/model/settings/{qr,authority,connect,push}.rs`: pairing QR, authority editor, first-run instructions and push preferences.
 - `src/model/board/`: shared board snapshot, tasks, changes and review hunk.
 - `src/model/inbox/`, `work/`, `plans/`, `builds/`, `timeline/`, `agents/`, `usage/`, `review/`, `settings/`, `assistant/`: domain reducers and view logic; `work` covers Now and Changes; `builds` holds published build-session records (`builds.v1`), never tasks. `work/closed.rs` models the paged done/dropped list via `DetailRef::Closed`, gated on `closed.v1`; `work/task_page.rs` builds the read-only off-board task view from `TaskDetail` and the phone task page model. Sample preview uses the same live reducers/routes/screens, not separate per-screen fixture behavior.
+- `src/model/work/now_asks.rs`: inbox owner moves and their panels; `now_digest.rs`: since-visit digest; `now_keys.rs`: list walk; `now_page.rs`: Now page, rows and side panel.
+- `src/model/agents/roster.rs`: scoped session roster; `roster_panel.rs`: selected-session panel and its summary.
+- `src/model/plans/outline.rs`: plan list and statistics; `brief.rs`, `brief_view.rs`, `awaiting_brief.rs`, `member_brief.rs`: executing and awaiting plan briefs and member facts; `path.rs`: Path to done.
+- `src/model/review/outline.rs`: candidate list and header; `loop_page.rs`: review page; `brief.rs`, `brief_side.rs`: changes and asked-for facts; `readiness.rs`: readiness chain.
 - `src/state.rs`, `src/state/`: `AppState`, signals, effect dispatch and persistence; `keys.rs` routes focused-list/global keys, `confirmation.rs` owns preview/proof lifecycle, `devices.rs` dispatches device effects and `sidebar.rs` owns sidebar preference.
-- `src/model/projects/`: project list, per-screen `ProjectFilter`s (`filters.rs`), `WorkspaceMode`, assistant landing and Project page (`page.rs`, `Route::Project`); `src/state/projects.rs` persists filters and composer project context. List screens use the domain `*_filtered` builders; `src/ui/kit/project_filter.rs` draws the chip bar.
+- `src/state/selection.rs`: Escape handling for Now and Agents selections.
+- `src/model/projects/`: project list, per-screen `ProjectFilter`s (`filters.rs`), `WorkspaceMode`, assistant landing and Project page (`page.rs`, `Route::Project`), which scopes Now's loop and digest to the project and opens rows as records; `src/state/projects.rs` persists filters and composer project context. List screens use the domain `*_filtered` builders; `src/ui/kit/project_filter.rs` draws the chip bar.
 - `src/state/source.rs`: selects daemon/preview feed and assistant interaction state without copying retained caches; `src/state/preview.rs`: handles local sample effects and the real clock. Delayed draft/subscription cleanup stays bound to its original source.
 - `src/ui/kit/`: shared pieces every screen is built from, including marks, rows, page scaffolds, notices, tables and overlays.
+- `src/ui/kit/glance.rs`: count, loop, rail and activity renderers; `src/ui/kit/hint.rs`: hint wrapper.
+- `src/ui/health_line.rs`: responsive health display; `src/model/health/line.rs`: condensed health and status facts.
 - `src/ui/kit/page_phone.rs`: phone page scaffolds and helpers.
 - `src/ui/`: tokens, atoms, icons, Ask and composer surfaces, palette and terminal-specific pieces in `term.rs`.
 - `src/ui/ask.rs`, `src/ui/ask/`: docked composer, model list, entry illustrations and `unconnected.rs` for disconnected Ask.
 - `src/ui/composer/{draft,pending,send,phone}.rs`: draft lifecycle, queued/cancellable sends, accepted-send retirement and compact phone composer.
 - `src/shell/`: desktop, phone and terminal shells; `src/shell/phone/nav.rs` owns phone page stacks/navigation.
+- `src/shell/terminal_bar.rs`: terminal top bar.
 - `src/shell/lock.rs`: explicitly labelled phone lock-screen push illustration.
 - `src/shell/projects.rs`: the desktop/terminal sidebar's PROJECTS section (rows `project-<id>`, folded rail mark `nav-projects`); shells list destinations from `nav::navigation`, phone tabs from `nav::phone_navigation`.
 - `src/os_integration.rs`, `src/os_integration/tray.rs`: native desktop global Ask shortcut, close-to-hide and tray recovery/Quit; not installed for browser/terminal/headless targets.
 - `src/screens/`: destination renderers and page routing; look in the destination's module and its subdirectory for its screen. `src/screens/now/closed.rs` renders the Closed section at the bottom of the Now list.
-- `src/screens/projects.rs`, `src/screens/projects/list.rs`: the Project page (`Route::Project`, all forms) and the phone More › Projects list; `src/screens/landing.rs`: the assistant-only landing shown in Now's place.
+- `src/screens/now/`: list, rows, digest and selection side panel, phone pages and Closed section; `src/screens/agents/`: roster, roster rows, summary and terminal panel, session and transcript.
+- `src/screens/plans/`: list, executing detail, document, graph, Path to done and decide bar; `src/screens/review/`: candidate list, brief, diff, evidence and decide bar.
+- `src/screens/projects.rs`, `src/screens/projects/list.rs`: the Project page (`Route::Project`, all forms), with scoped Now sections, plans, sessions, builds, burn-up and project facts over the digest, and the phone More › Projects list; `src/screens/landing.rs`: the assistant-only landing shown in Now's place.
 - `tests/shell.rs`: headless shell tests.
 - `theme.json`, `nsh.json`: theme and app configuration.
 
 ## How a screen is built
 
 Each domain's model supplies a `State`, reducers and pure view builders. Read the tracked state and environment in a view, render the resulting content with `src/ui/kit/`, and dispatch actions with `AppState::act(signal, reducer)`, which updates the signal and runs returned `Effect`s. Keep wording, numbers and branching in the model. Screens support desktop/web, phone and terminal forms; phone pushed pages use `PhonePage`.
+A count is a `glance::Stat` (icon and number alone, sentence as hint); a row's explanation is its hint, with one explanatory line kept on phone.
 
-Give pressable controls and testable regions IDs in these shapes: `task-<id>`, `plan-<id>`, `build-<id>`, `project-<id>`, `inbox-<key>`, `agent-<id>`, `agent-<session>-child-<id>`, `agent-<session>-msg-<seq>`, `thread-<id>`, `seg-<group>-<value>` (project filters: `seg-project-<all|unassigned|id>`), `btn-<action>`, `opt-<n>`, and `page-title`. Preserve the shell IDs `tab-<slug>`, `nav-<slug>`, `settings-<slug>`, `ask-open`, `ask-close`, `health`, `health-source` and `count-<slug>`.
+Give pressable controls and testable regions IDs in these shapes: `task-<id>`, `plan-<id>`, `build-<id>`, `project-<id>`, `inbox-<key>`, `agent-<id>` (including Project page session rows), `agent-<session>-child-<id>`, `agent-<session>-msg-<seq>`, `thread-<id>`, `stat-<key>`, `loop-<key>`, `seg-<group>-<value>` (project filters: `seg-project-<all|unassigned|id>`), `btn-<action>`, `opt-<n>`, and `page-title`. Preserve the shell IDs `tab-<slug>`, `nav-<slug>`, `settings-<slug>`, `ask-open`, `ask-close`, `health`, `health-source` and `count-<slug>`.
 
 The explicit preview offers Demo controls; normal palette entries use the served data. List keys bind only with list focus or no focused control, never over overlays/confirmations; Tab and Space are not list bindings. Keep the sidebar available/collapsible, auto-folding when narrow. Render real dates, not mockup dates. Review defaults to Unified below about 1100 pt of content width.
 

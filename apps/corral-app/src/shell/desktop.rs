@@ -8,6 +8,7 @@ use nsh_core::AccessibilityCurrent;
 use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
+use crate::model::health::waits_on_you;
 use crate::model::nav::{
     ASK_HINT, ASK_KEY, ASK_LABEL, PALETTE_HINT, PALETTE_KEY, SIGNS_AS, THIS_DEVICE,
 };
@@ -20,10 +21,10 @@ use crate::shell::{
 use crate::state::AppState;
 use crate::ui::ask;
 use crate::ui::atoms::{
-    HealthLayout, control_height, count, destination_spoken, health_line, key_hint, nav_row,
-    nav_row_icon,
+    control_height, count, destination_spoken, key_hint, nav_row, nav_row_icon,
 };
 use crate::ui::composer::ask_surface;
+use crate::ui::health_line::{HealthLayout, health_line};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::notice;
 use crate::ui::palette::palette;
@@ -389,7 +390,7 @@ fn rail_projects(app: AppState) -> AnyElement {
                 },
                 move || match needs.get() {
                     0 => SharedString::from(PROJECTS_HEADING),
-                    n => SharedString::from(format!("{PROJECTS_HEADING}, {n} need you")),
+                    n => SharedString::from(format!("{PROJECTS_HEADING}, {}", waits_on_you(n))),
                 },
                 "nav-projects".into(),
                 move || projects::open_project(app).is_some(),

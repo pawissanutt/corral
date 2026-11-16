@@ -297,7 +297,7 @@ pub(super) fn session_task(
     status: AgentStatus,
     relaunched: bool,
 ) {
-    if session == "PM"
+    if session == "pm"
         && let Some(health) = &mut feed.health
     {
         health.pm = if status == AgentStatus::Ended {

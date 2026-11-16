@@ -1,26 +1,16 @@
-//! The Agents wall from corrald's agent rows: the PM, workers, planners, reviewers and gates, and
-//! any assistant session that is not already in the assistant blocks. Every fact comes from the
-//! row; what the daemon does not report is said to be unknown, never filled in.
-
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
+//! Facts read from corrald's agent rows for the roster, its panel and the session page: the
+//! state, the role, the id shown, times, usage and staleness. Every fact comes from the row; what
+//! the daemon does not report is said to be unknown, never filled in.
 
 use corral_protocol::board::CostBasis;
 use corral_protocol::rows::{self, AgentRow};
 
 use crate::model::daemon::{self, Link};
-use crate::model::effect::Env;
-use crate::model::{Hue, Id};
 
-use super::{
-    Action, AgentStatus, Feed, Fill, Line, LineClass, Note, State, Tile, Wall, line, tail_line,
-};
+use super::AgentStatus;
 
-/// Tail lines a tile shows.
-const TILE_TAIL: usize = 4;
-
-/// The wall's state as the protocol reports it.
-pub(super) fn status(status: rows::AgentStatus) -> AgentStatus {
+/// The session's state as the protocol reports it.
+pub(crate) fn status(status: rows::AgentStatus) -> AgentStatus {
     match status {
         rows::AgentStatus::Live => AgentStatus::Live,
         rows::AgentStatus::Working => AgentStatus::Working,
@@ -45,33 +35,8 @@ pub(super) fn role_label(role: &str) -> String {
     }
 }
 
-/// Wall order: the PM, then those producing work, then those checking it, then the rest.
-fn rank(role: &str) -> u8 {
-    match role {
-        "pm" => 0,
-        "worker" => 1,
-        "planner" => 2,
-        "reviewer" => 3,
-        "plan_reviewer" => 4,
-        "gate" => 5,
-        "assistant" => 6,
-        _ => 7,
-    }
-}
-
-/// Task ids in number order, then everything else by name.
-fn by_id(a: &str, b: &str) -> Ordering {
-    let number = |id: &str| id.strip_prefix("T-").and_then(|n| n.parse::<u64>().ok());
-    match (number(a), number(b)) {
-        (Some(x), Some(y)) => x.cmp(&y).then_with(|| a.cmp(b)),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => a.cmp(b),
-    }
-}
-
-/// The id a tile shows: the task the session works on, else the session itself.
-pub(super) fn shown_id(row: &AgentRow) -> String {
+/// The id a row shows: the task the session works on, else the session itself.
+pub(crate) fn shown_id(row: &AgentRow) -> String {
     row.task.clone().unwrap_or_else(|| row.id.clone())
 }
 
@@ -121,167 +86,6 @@ pub(super) fn usage(
 /// Whether the agents shown are the current ones, or the last known while the link is down.
 pub(super) fn stale(feed: &daemon::Feed, topic: &str) -> bool {
     feed.link != Link::Up || feed.topics.get(topic).is_some_and(|state| state.stale)
-}
-
-/// The rows the wall shows, in wall order. Assistant sessions served as assistant rows are in
-/// the assistant blocks already.
-fn shown(feed: &daemon::Feed) -> Vec<&AgentRow> {
-    let mut rows: Vec<&AgentRow> = feed
-        .agents
-        .values()
-        .filter(|row| !(row.role == "assistant" && feed.assistants.contains_key(row.id.as_str())))
-        .collect();
-    rows.sort_by(|a, b| {
-        rank(&a.role)
-            .cmp(&rank(&b.role))
-            .then_with(|| by_id(&shown_id(a), &shown_id(b)))
-            .then_with(|| a.id.cmp(&b.id))
-    });
-    rows
-}
-
-fn tile(row: &AgentRow, feed: &daemon::Feed, stale: bool) -> Tile {
-    let state = status(row.status);
-    let (chip, hue) = state.chip();
-    let since = clock(row.since.as_deref(), feed);
-    let (feed_kind, feed_label) = if stale {
-        let synced = feed.synced.clone().unwrap_or_else(|| "unknown".into());
-        (Feed::Snapshot, format!("as of {synced}"))
-    } else {
-        (Feed::Live, "latest".to_owned())
-    };
-    let tail: Vec<Line> = if row.tail.is_empty() {
-        vec![line("no output recorded", LineClass::Dim)]
-    } else {
-        row.tail[row.tail.len().saturating_sub(TILE_TAIL)..]
-            .iter()
-            .map(|text| tail_line(text))
-            .collect()
-    };
-    Tile {
-        id: row.id.clone(),
-        label: shown_id(row),
-        role: role_label(&row.role),
-        title: row.title.clone(),
-        doing: if row.now.is_empty() && state == AgentStatus::Paused {
-            "paused by you · automated input waits".into()
-        } else {
-            row.now.clone()
-        },
-        profile: row
-            .profile
-            .clone()
-            .unwrap_or_else(|| "profile unknown".into()),
-        runtime: row
-            .runtime
-            .clone()
-            .unwrap_or_else(|| "runtime unknown".into()),
-        pane: row.pane.clone().unwrap_or_else(|| "no pane".into()),
-        usage: usage(row.cost_usd, row.cost_basis, row.tokens),
-        feed: feed_kind,
-        feed_short: feed_label.clone(),
-        feed_label,
-        since: since
-            .as_ref()
-            .map(|at| format!("since {at}"))
-            .unwrap_or_default(),
-        since_short: since.unwrap_or_else(|| "—".into()),
-        chip,
-        hue,
-        doing_hue: if state == AgentStatus::Asking {
-            Hue::You
-        } else {
-            Hue::Neutral
-        },
-        tail,
-        action: Action::OpenSession(Id::from(row.id.as_str())),
-    }
-}
-
-/// `herdr-core · 6 agents · Herdr TUI (legacy) · 1 agent`: agents per runtime, as reported.
-fn runtimes(rows: &[&AgentRow]) -> String {
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for row in rows {
-        *counts
-            .entry(row.runtime.as_deref().unwrap_or("runtime unknown"))
-            .or_default() += 1;
-    }
-    counts
-        .into_iter()
-        .map(|(runtime, n)| format!("{runtime} · {n} agent{}", if n == 1 { "" } else { "s" }))
-        .collect::<Vec<_>>()
-        .join(" · ")
-}
-
-/// Build the wall and phone rows from the daemon's agent rows.
-pub fn wall(state: &State, feed: &daemon::Feed, env: Env) -> Wall {
-    let rows = shown(feed);
-    let stale = stale(feed, "agents");
-    let topic = feed.topics.get("agents");
-    let mut machines: Vec<&str> = rows
-        .iter()
-        .filter_map(|row| row.machine.as_deref())
-        .collect();
-    machines.sort_unstable();
-    machines.dedup();
-    let machine = match machines.as_slice() {
-        [] => "Machine unknown".to_owned(),
-        [one] => (*one).to_owned(),
-        many => format!("{} machines", many.len()),
-    };
-    let detail = match machines.as_slice() {
-        [_, _, ..] => format!("{} · {}", machines.join(", "), runtimes(&rows)),
-        _ => runtimes(&rows),
-    };
-    let fill = match (rows.is_empty(), topic) {
-        (false, _) => Fill::Ready,
-        (true, Some(topic)) if topic.error.is_some() && !topic.loading => Fill::Failed(
-            topic
-                .error
-                .as_ref()
-                .map(|error| {
-                    format!(
-                        "corrald could not list the agents ({}): {}. The list fills in when it answers.",
-                        error.code, error.message
-                    )
-                })
-                .unwrap_or_default(),
-        ),
-        (true, None) => Fill::Loading("Loading agents…"),
-        (true, Some(topic)) if topic.loading => Fill::Loading("Loading agents…"),
-        (true, Some(_)) => Fill::Empty {
-            heading: "No agents running",
-            paragraph: "The PM, workers, reviewers and gates appear here while corrald runs them."
-                .into(),
-        },
-    };
-    let stale_note = (stale && !rows.is_empty()).then(|| {
-        format!(
-            "Showing the agents as of {}; corrald is not answering, so states and tails may have moved on.",
-            feed.synced.as_deref().unwrap_or("the last update")
-        )
-    });
-    Wall {
-        title: "Agents",
-        subtitle: "the quick thread first, then the PM, workers, gates and assistant sessions · what each is doing now, and where",
-        machine,
-        phone_machine_detail: detail.clone(),
-        machine_detail: detail,
-        machine_note: None,
-        other_machines: "Other machines join over SSH later (Settings › Machines)",
-        phone_machine_note: None,
-        count: rows.len(),
-        tiles: rows.iter().map(|row| tile(row, feed, stale)).collect(),
-        fill,
-        stale: stale_note,
-        footer: Note::Plain(
-            "Each tail is the last output corrald recorded for that agent; open one for its transcript."
-                .into(),
-        ),
-        mode: state.mode,
-        mode_labels: ["Wall", "List"],
-        launch: super::controls::launch(state, feed, env),
-    }
 }
 
 #[cfg(test)]

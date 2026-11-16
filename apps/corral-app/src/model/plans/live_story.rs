@@ -155,10 +155,12 @@ pub(super) fn story(
     }
     buttons.push(Button::new(
         "Ask about this",
-        Action::Live(LiveAction::Ask(
-            Live::Task(id.clone()),
-            task.map(|task| task.rev),
-        )),
+        Action::Live(LiveAction::Ask {
+            record: Live::Task(id.clone()),
+            rev: task.map(|task| task.rev),
+            to: None,
+            text: None,
+        }),
     ));
     if !matches!(marks[2], Mark::Next | Mark::Na) {
         buttons.push(
@@ -172,13 +174,8 @@ pub(super) fn story(
     Story {
         title: task.map_or_else(|| member.title.clone(), |task| task.title.clone()),
         plan: Some(format!("· plan {plan}")),
-        changed: None,
         context,
-        context_note: None,
         stages,
-        progress: None,
-        progress_count: None,
-        steps: vec![],
         fields: vec![
             field(
                 "Next",

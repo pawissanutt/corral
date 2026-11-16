@@ -1,7 +1,7 @@
 //! Feed-backed work content descriptors and phone destination navigation.
 
 use super::{Action, Button, ChangeFilter, Press, State};
-use crate::model::board::{ChangeKind, Mark};
+use crate::model::board::ChangeKind;
 use crate::model::hue::Hue;
 use crate::model::nav::{Destination, Form};
 use crate::model::text::Rich;
@@ -73,23 +73,6 @@ impl FeedRow {
             .collect::<Vec<_>>()
             .join(" ")
     }
-}
-/// A displayed hold row, with the source's neutral mark and dim attribution suffix.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HoldRow {
-    /// Mono task id.
-    pub id: String,
-    /// When the hold began: a date, or how long ago.
-    pub since: String,
-    /// Full task title, for screen readers.
-    pub title: String,
-    /// The hold row's neutral not-applicable mark.
-    pub mark: Mark,
-    /// Title followed by the dimmed attribution.
-    pub text: Rich,
-    /// Open the task, in the Daemon state.
-    pub action: Option<Press>,
-    pub project_chip: Option<String>,
 }
 /// A Changes filter control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

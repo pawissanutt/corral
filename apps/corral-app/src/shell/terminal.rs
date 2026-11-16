@@ -15,7 +15,7 @@ use crate::{
         nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, SIDEBAR_LABEL, THIS_DEVICE},
     },
     screens,
-    shell::{confirmation, destinations, projects, section_short, toast},
+    shell::{confirmation, destinations, projects, section_short, terminal_bar, toast},
     state::AppState,
     ui::{
         ask, atoms, composer,
@@ -48,7 +48,7 @@ pub fn shell(app: AppState) -> AnyElement {
     view()
         .flex_1()
         .flex_col()
-        .child(term::top_bar(app))
+        .child(terminal_bar::top_bar(app))
         .child(
             // The page comes first in the tree, the sidebar laid out to its left: the terminal's
             // keys with nothing focused (Page Down, the arrows, Tab) start at the first scroll or

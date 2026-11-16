@@ -21,7 +21,7 @@ use super::{command, press};
 /// The decide bar of the detail, if it has one, with the typed note blanked.
 pub(super) fn shape(detail: &Detail) -> Option<Decide> {
     let mut decide = match detail {
-        Detail::Awaiting(review) => review.decide.clone(),
+        Detail::Awaiting(review) => review.brief.decide.clone(),
         Detail::Diff(diff) => diff.decide.clone()?,
         _ => return None,
     };

@@ -7,28 +7,43 @@
 //! Render the builders' fields without consulting state again.
 //! Patches and new-comment composers carry the same immutable run/base/head identity. An older
 //! daemon that omits a patch identity can still be read, but cannot safely accept line actions.
+//! `loop_page_filtered` is the page: the one-line outline, then the Brief-first candidate with
+//! its evidence tabs and decide bar.
 
+mod brief;
+mod brief_side;
 mod decide;
 mod diff;
 mod evidence;
 mod live;
 mod live_files;
+mod loop_page;
+mod outline;
+mod readiness;
 mod view;
 
 #[cfg(test)]
+mod brief_tests;
+#[cfg(test)]
 mod candidate_tests;
+
+pub use brief::{Brief, ChangedFile, candidate_brief};
+pub use brief_side::{AskedFor, BriefSide, ReviewFact};
 pub use diff::{
     Anchor, Highlight, NumberedLine, ParsedHunk, ParsedPatch, SplitRow, UnifiedRow, line_index,
     parse_patch, split_rows, unified_rows, word_mark,
 };
-pub use live::{
-    candidate_list_filtered, candidates_filtered, live_page_filtered, selected_filtered,
+pub use live::{candidates_filtered, selected_filtered};
+pub use loop_page::{LoopCandidate, LoopContent, LoopPage, loop_page_filtered};
+pub use outline::{
+    CandidateHeader, OutlineGroup, OutlineRow, candidate_decide_bar, candidate_header,
+    candidate_tabs, outline_filtered, page_stats,
 };
+pub use readiness::{ReadyLink, ReviewQuote, readiness_chain};
 pub use view::{
-    AcceptanceView, ArtifactContent, ArtifactView, ArtifactsView, Body, Button, ButtonStyle,
-    CandidateGroup, CandidateRow, Chip, CommentView, Composer, DecideBar, DetailView, DiffContent,
-    DiffView, FileBody, FileView, Header, HunkView, LayoutChoice, LogView, MessageView, Notice,
-    PageView, ReportView, StatusLine, TabView, VerdictView, effective_layout,
+    AcceptanceView, ArtifactContent, ArtifactView, ArtifactsView, Body, Button, ButtonStyle, Chip,
+    CommentView, Composer, DecideBar, DiffContent, DiffView, FileBody, FileView, HunkView,
+    LayoutChoice, LogView, MessageView, Notice, ReportView, StatusLine, TabView, effective_layout,
 };
 
 use std::collections::BTreeSet;
@@ -51,11 +66,10 @@ pub enum Layout {
     Unified,
 }
 
-/// Evidence tabs for the candidate's patches and artifact records.
+/// Brief first, followed by candidate patches and the recorded evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
     /// Changed files.
-    #[default]
     Diff,
     /// Rendered implementation report and acceptance list.
     Report,
@@ -63,6 +77,9 @@ pub enum Tab {
     Shot,
     /// Gate output.
     Log,
+    /// Readiness, changed files and the task's recorded request.
+    #[default]
+    Brief,
 }
 /// A task and the immutable coding candidate an action or draft belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,7 +168,7 @@ pub struct State {
     pub ids: crate::model::id::IdSupply,
     /// Preferred desktop diff presentation.
     pub layout: Layout,
-    /// Active evidence tab; the default is Diff.
+    /// Active evidence tab; the default is Brief.
     pub tab: Tab,
     /// Served files whose patches are shown, by candidate task.
     pub expanded: BTreeSet<(Id, String)>,
@@ -186,6 +203,10 @@ pub enum Action {
         path: String,
         hunk: Option<String>,
     },
+    /// Open the shared Ask composer with the whole candidate as context.
+    AskCandidate,
+    /// Open the session explicitly recorded by this candidate's task run.
+    OpenSession,
     /// Start a new comment on a served line.
     Annotate {
         candidate: CandidateAt,

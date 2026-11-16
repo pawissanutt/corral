@@ -31,14 +31,14 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::console::{self, BIG, PHONE, PHONE_SCREEN, SCREEN};
 use super::transcript::{fleet, line, transcript};
-use super::{controls, grid, keys, reply, run};
+use super::{Dispatch, controls, grid, keys, reply, run};
 
 /// The run column's width (`minmax(0, 1fr) 280px`).
 const RUN_WIDTH: f32 = 280.0;
 
 /// What the terminal surface draws below its toolbar; a new screen redraws only this.
 #[derive(Clone, PartialEq)]
-struct Rows {
+pub(super) struct Rows {
     lines: Vec<Line>,
     empty: Option<String>,
     cursor: bool,
@@ -47,7 +47,7 @@ struct Rows {
 }
 
 impl Rows {
-    fn of(screen: &Terminal) -> Self {
+    pub(super) fn of(screen: &Terminal) -> Self {
         Self {
             lines: screen.lines.clone(),
             empty: screen.empty.clone(),
@@ -61,7 +61,7 @@ impl Rows {
 /// The toolbar's words and control, apart from the rows: it is redrawn only when the read state
 /// changes, so its Refresh keeps the focus while the screen updates.
 #[derive(Clone, PartialEq)]
-struct Termbar {
+pub(super) struct Termbar {
     feed: Feed,
     heading: String,
     status: String,
@@ -69,22 +69,24 @@ struct Termbar {
     refresh: Option<Action>,
 }
 
+impl Termbar {
+    pub(super) fn of(screen: &Terminal) -> Self {
+        Self {
+            feed: screen.feed,
+            heading: screen.heading.clone(),
+            status: screen.status.clone(),
+            input: screen.input.clone(),
+            refresh: screen.refresh.clone(),
+        }
+    }
+}
+
 fn rows_of(session: Memo<Session>) -> Memo<Option<Rows>> {
     computed(move || session.with(|s| s.terminal.as_ref().map(Rows::of)))
 }
 
 fn termbar_of(session: Memo<Session>) -> Memo<Option<Termbar>> {
-    computed(move || {
-        session.with(|s| {
-            s.terminal.as_ref().map(|screen| Termbar {
-                feed: screen.feed,
-                heading: screen.heading.clone(),
-                status: screen.status.clone(),
-                input: screen.input.clone(),
-                refresh: screen.refresh.clone(),
-            })
-        })
-    })
+    computed(move || session.with(|s| s.terminal.as_ref().map(Termbar::of)))
 }
 
 /// Whether the terminal shows, and the notice over the page: what decides the page's layout.
@@ -119,12 +121,22 @@ fn switch(app: AppState, session: Memo<Session>) -> AnyElement {
     )
 }
 
-/// One draft per open session page, kept while the view switches. A delivered reply clears it
+/// One draft per open session page, kept while the view switches.
+fn draft_for(app: AppState, session: Memo<Session>, id: Id) -> Signal<String> {
+    let delivered = computed(move || session.with(|s| s.reply.delivered.clone()));
+    draft(app, delivered, id, run)
+}
+
+/// A reply draft for session `id`. A delivered reply (`delivered` names the latest) clears it
 /// once and refetches the transcript, which now holds the reply; a refused or unknown one keeps
 /// the words so nothing typed is lost.
-fn draft_for(app: AppState, session: Memo<Session>, id: Id) -> Signal<String> {
+pub(super) fn draft(
+    app: AppState,
+    delivered: Memo<Option<String>>,
+    id: Id,
+    send: Dispatch,
+) -> Signal<String> {
     let draft = signal(String::new());
-    let delivered = computed(move || session.with(|s| s.reply.delivered.clone()));
     let seen = stored(None::<Option<String>>);
     effect(move || {
         let now = delivered.get();
@@ -134,7 +146,7 @@ fn draft_for(app: AppState, session: Memo<Session>, id: Id) -> Signal<String> {
         {
             draft.set(String::new());
             let target = DetailRef::Session { id: id.to_string() };
-            untracked(|| run(app, Action::Refresh(target)));
+            untracked(|| send(app, Action::Refresh(target)));
         }
     });
     draft
@@ -463,7 +475,7 @@ fn run_details(app: AppState, details: &Run) -> AnyElement {
 /// What the terminal surface shows inside its scroll, `sides` and `ends` in from its edges (a
 /// Cell aside in a real terminal): a pane's screen row for row, the classed lines, or why there
 /// are none.
-fn rows_view(
+pub(super) fn rows_view(
     app: AppState,
     rows: Option<&Rows>,
     set: console::Set,
@@ -513,15 +525,29 @@ fn rows_view(
 }
 
 /// The pressable Refresh for a toolbar, when the terminal can be revalidated.
-fn refresh_control(app: AppState, bar: &Termbar) -> Option<AnyElement> {
+fn refresh_control(app: AppState, bar: &Termbar, send: Dispatch) -> Option<AnyElement> {
     bar.refresh
         .clone()
-        .map(|action| console::refresh(move || run(app, action.clone())))
+        .map(|action| console::refresh(move || send(app, action.clone())))
+}
+
+/// The toolbar over the terminal surface for the form, its Refresh sent through `send`.
+pub(super) fn toolbar(app: AppState, bar: &Termbar, send: Dispatch) -> AnyElement {
+    if app.form == Form::Terminal {
+        return cell_toolbar(app, bar, send);
+    }
+    console::toolbar(
+        bar.feed,
+        &bar.heading,
+        &bar.status,
+        &bar.input,
+        refresh_control(app, bar, send),
+    )
 }
 
 /// The real terminal's toolbar: its words quiet on one row, the read state held once the rows
 /// are not current, and the refresh control.
-fn cell_toolbar(app: AppState, bar: &Termbar) -> AnyElement {
+fn cell_toolbar(app: AppState, bar: &Termbar, send: Dispatch) -> AnyElement {
     view()
         .flex_row()
         .h(term::rows(1.0))
@@ -550,7 +576,7 @@ fn cell_toolbar(app: AppState, bar: &Termbar) -> AnyElement {
                 ButtonKind::Ghost,
                 ButtonOptions::default(),
                 "btn-refresh-capture",
-                move || run(app, action.clone()),
+                move || send(app, action.clone()),
             ))
         })
         .into_element()
@@ -558,7 +584,7 @@ fn cell_toolbar(app: AppState, bar: &Termbar) -> AnyElement {
 
 /// The terminal surface's scroll: it opens at its newest rows and keeps to them as the screen
 /// changes, unless the owner scrolled up.
-fn surface_scroll(rows: Memo<Option<Rows>>) -> Scroll {
+pub(super) fn surface_scroll(rows: Memo<Option<Rows>>) -> Scroll {
     console::follow_end(
         scroll().test_id("session-terminal").flex_1().min_h(px(0.0)),
         move || rows.with(|_| ()),
@@ -574,16 +600,9 @@ fn terminal_view(app: AppState, session: Memo<Session>, draft: Signal<String>) -
     let rows = rows_of(session);
     let under = keys::under(app, session);
     let answer = reply::region(app, session, draft);
-    let toolbar = dynamic(move || {
+    let top = dynamic(move || {
         bar.with(|bar| match bar {
-            Some(bar) if app.form == Form::Terminal => cell_toolbar(app, bar),
-            Some(bar) => console::toolbar(
-                bar.feed,
-                &bar.heading,
-                &bar.status,
-                &bar.input,
-                refresh_control(app, bar),
-            ),
+            Some(bar) => toolbar(app, bar, run),
             None => view().into_element(),
         })
     });
@@ -591,7 +610,7 @@ fn terminal_view(app: AppState, session: Memo<Session>, draft: Signal<String>) -
         return view()
             .flex_1()
             .min_h(px(0.0))
-            .child(toolbar)
+            .child(top)
             .child(term::hrule())
             .child(surface_scroll(rows).child(dynamic(move || {
                 rows.with(|rows| rows_view(app, rows.as_ref(), BIG, (0.0, 0.0)))
@@ -604,7 +623,7 @@ fn terminal_view(app: AppState, session: Memo<Session>, draft: Signal<String>) -
         .flex_1()
         .min_h(px(0.0))
         .flex_col()
-        .child(toolbar)
+        .child(top)
         .child(
             surface_scroll(rows)
                 .bg(console::ground())
@@ -677,7 +696,7 @@ fn phone_terminal(app: AppState, session: Memo<Session>) -> AnyElement {
         .child(dynamic(move || {
             bar.with(|bar| match bar {
                 Some(bar) => {
-                    console::phone_toolbar(bar.feed, &bar.status, refresh_control(app, bar))
+                    console::phone_toolbar(bar.feed, &bar.status, refresh_control(app, bar, run))
                 }
                 None => view().into_element(),
             })

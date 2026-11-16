@@ -46,6 +46,7 @@ pub(super) const CAPS: &[&str] = &[
     BUILDS_V1,
     PROJECTS_V1,
     AGENTS_V1,
+    corral_protocol::AGENTS_ACTIVITY_V1,
     REVIEW_V1,
     TIMELINE_V1,
     USAGE_V1,

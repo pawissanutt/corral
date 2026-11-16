@@ -5,6 +5,12 @@ mod list;
 mod live_changes;
 mod live_context;
 mod live_task;
+mod now_asks;
+mod now_digest;
+mod now_keys;
+mod now_page;
+#[cfg(test)]
+mod now_page_tests;
 mod served;
 mod served_facts;
 mod standing;
@@ -31,6 +37,13 @@ pub use list::*;
 pub use live_changes::*;
 pub use live_context::*;
 pub use live_task::*;
+pub use now_asks::{NowAskKind, NowAskPanel, NowAskRow};
+pub use now_digest::{NowDigest, NowDigestRow};
+pub use now_keys::{NowWalk, now_walk_order};
+pub use now_page::{
+    NowPage, NowPanel, NowRow, NowScopeAction, NowSection, NowTaskRow, NowWaiting, NowWaitingGroup,
+    now_page,
+};
 pub use served::*;
 pub use served_facts::*;
 pub use standing::*;
@@ -68,52 +81,6 @@ impl NowTab {
             Self::Story => "Story",
             Self::Evidence => "Evidence",
             Self::Session => "Session",
-        }
-    }
-}
-
-/// The lower-right context tab.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CtxTab {
-    /// The selected task's terminal tail.
-    #[default]
-    Live,
-    /// The selected task's plan and highlighted member.
-    PlanGraph,
-}
-
-impl CtxTab {
-    /// The context tab strip.
-    pub const ALL: [Self; 2] = [Self::Live, Self::PlanGraph];
-
-    /// The tab's visible label.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Live => "Live",
-            Self::PlanGraph => "Plan graph",
-        }
-    }
-}
-
-/// The lower-left dock tab.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LowTab {
-    /// Newest changes since this device's last visit.
-    #[default]
-    Since,
-    /// Tasks with the owner's dispatch hold.
-    Parked,
-}
-
-impl LowTab {
-    /// The lower dock tab strip.
-    pub const ALL: [Self; 2] = [Self::Since, Self::Parked];
-
-    /// Stable tab label; counts and timestamps are supplied by the feed builder.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Since => "Since your last visit",
-            Self::Parked => "Parked",
         }
     }
 }
@@ -170,27 +137,23 @@ const SENT_KEPT: usize = 16;
 /// Changes fetched per page.
 pub const CHANGES_PER_PAGE: u16 = 100;
 
-/// Selection, dock tabs, the daemon list's expanded groups and filters, initially focused on
-/// T-890's story in the fixture. The Daemon state's selected task is the root's live selection.
+/// Selection, the inspector tab, the daemon list's expanded groups and filters. The Daemon
+/// state's selected task is the root's live selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State {
     pub ids: crate::model::id::IdSupply,
     /// Selected inspector tab.
     pub now_tab: NowTab,
-    /// Selected context tab.
-    pub ctx_tab: CtxTab,
-    /// Selected lower-left dock tab.
-    pub low_tab: LowTab,
     /// The daemon list shows every queued task, not only the first few.
     pub all_queued: bool,
     /// The daemon list shows every parked task, not only the first few.
     pub all_parked: bool,
     /// The daemon list shows every held task, not only the first few.
     pub all_held: bool,
+    /// Now's Waiting line is open: its queued, held and parked rows show and the keys walk them.
+    pub waiting_open: bool,
     /// The Changes feed's filter.
     pub filter: ChangeFilter,
-    /// The board goal the daemon list is narrowed to.
-    pub goal: Option<String>,
     /// Task commands sent from Now, newest last.
     pub sent: Vec<Sent>,
     /// A structured action bound to the record revision at the time it was opened.
@@ -199,6 +162,10 @@ pub struct State {
     pub menu: Option<Record>,
     /// Now's Closed section, read from corrald on request.
     pub closed: ClosedState,
+    /// An owner move selected in the redesigned Now list, not in Inbox's own desk.
+    pub selected_ask: Option<Id>,
+    /// Escape dismisses the shared task selection locally without changing other pages.
+    pub digest_only: bool,
 }
 
 impl Default for State {
@@ -206,17 +173,17 @@ impl Default for State {
         Self {
             ids: Default::default(),
             now_tab: NowTab::Story,
-            ctx_tab: CtxTab::Live,
-            low_tab: LowTab::Since,
             all_queued: false,
             all_parked: false,
             all_held: false,
+            waiting_open: false,
             filter: ChangeFilter::All,
-            goal: None,
             sent: Vec::new(),
             composer: None,
             menu: None,
             closed: ClosedState::default(),
+            selected_ask: None,
+            digest_only: false,
         }
     }
 }
@@ -226,10 +193,8 @@ impl Default for State {
 pub enum Action {
     /// Switch the inspector tab.
     NowTab(NowTab),
-    /// Switch the context tab.
-    CtxTab(CtxTab),
-    /// Switch the lower-left tab.
-    LowTab(LowTab),
+    /// Open or fold Now's Waiting rows.
+    ToggleWaiting,
     /// Open a destination, including entries on the More page.
     Go(Destination),
     /// Return from a pushed task or Changes page.
@@ -246,6 +211,10 @@ pub enum Press {
     Work(Action),
     /// Select a task in place.
     Select(Id),
+    /// Select an owner move in the redesigned Now side panel.
+    SelectAsk(Id),
+    /// Return the redesigned Now side panel to its digest.
+    ClearSelection,
     /// Open a live record (a task page, a session, a question, a plan, a review).
     Open(Live),
     /// Open Ask about a record, at the revision the app shows.
@@ -263,8 +232,6 @@ pub enum Press {
     CloseMenu,
     /// Ask corrald for the result of a command whose outcome is unknown, under its own id.
     Recover(Id),
-    /// Narrow the daemon list to a goal, or show every goal.
-    Goal(Option<String>),
     /// Move this device's seen cursor through the change `seq`.
     Seen(u64),
     /// Fetch the page of changes before `seq`.
@@ -343,8 +310,7 @@ impl State {
     pub fn act(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::NowTab(tab) => self.now_tab = tab,
-            Action::CtxTab(tab) => self.ctx_tab = tab,
-            Action::LowTab(tab) => self.low_tab = tab,
+            Action::ToggleWaiting => self.waiting_open = !self.waiting_open,
             Action::Go(to) => return vec![Effect::Go(to)],
             Action::Back => return vec![Effect::Back],
             Action::ShowAll(GroupKey::Parked) => self.all_parked = true,
@@ -359,8 +325,28 @@ impl State {
     pub fn press(&mut self, press: Press, feed: &daemon::Feed, _env: Env) -> Vec<Effect> {
         match press {
             Press::Work(action) => self.act(action),
-            Press::Select(id) => vec![Effect::Select(Live::Task(id))],
-            Press::Open(live) => vec![Effect::OpenLive(live)],
+            Press::Select(id) => {
+                self.selected_ask = None;
+                self.digest_only = false;
+                vec![Effect::Select(Live::Task(id))]
+            }
+            Press::SelectAsk(key) => {
+                self.selected_ask = Some(key);
+                self.digest_only = false;
+                Vec::new()
+            }
+            Press::ClearSelection => {
+                self.selected_ask = None;
+                self.digest_only = true;
+                Vec::new()
+            }
+            Press::Open(live) => {
+                if matches!(&live, Live::Task(_)) {
+                    self.selected_ask = None;
+                    self.digest_only = false;
+                }
+                vec![Effect::OpenLive(live)]
+            }
             Press::Ask { about, rev } => vec![Effect::AskAbout {
                 context: Some(about.context(rev)),
                 text: None,
@@ -378,10 +364,6 @@ impl State {
             }
             Press::Recover(key) => vec![Effect::Recover(key)],
             Press::RetryBoard => vec![Effect::RetryTopic("board".into())],
-            Press::Goal(goal) => {
-                self.goal = goal;
-                Vec::new()
-            }
             Press::Seen(through) => vec![Effect::Seen(SeenAdvance { through })],
             Press::Older(before) => vec![Effect::Changes(ChangesQuery {
                 before: Some(before),

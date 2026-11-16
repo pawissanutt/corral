@@ -89,7 +89,7 @@ fn phone_opens_on_inbox_and_desktop_on_now() {
     drop(app);
 
     let mut app = preview(desktop(), &[]);
-    app.wait_for("text:Who acts next").unwrap();
+    app.wait_for("id:now-main").unwrap();
 }
 
 #[test]
@@ -111,9 +111,9 @@ fn desktop_sidebar_reaches_every_destination() {
         if slug == "inbox" {
             app.wait_for("id:inbox-list").unwrap();
         } else if slug == "now" {
-            app.wait_for("text:Who acts next").unwrap();
-        } else if matches!(slug, "plans" | "review" | "builds") {
-            app.wait_for("id:qhead-title").unwrap();
+            app.wait_for("id:now-main").unwrap();
+        } else if slug == "builds" {
+            app.wait_for("id:builds-list").unwrap();
         } else if slug == "settings" {
             app.wait_for("id:page-title").unwrap();
         } else {
@@ -298,16 +298,12 @@ fn destination_is_restored_from_storage() {
     for (config, home) in [(desktop(), "Now"), (phone(), "Inbox")] {
         let mut app = preview(config.clone(), &[("corral.destination", "plans")]);
         app.wait_for("id:plans-list").unwrap();
-        if home == "Now" {
-            app.wait_for("id:qhead-title").unwrap();
-        } else {
-            assert_text(&mut app, "page-title", "Plans");
-        }
+        assert_text(&mut app, "page-title", "Plans");
         drop(app);
 
         let mut app = preview(config, &[("corral.destination", "not-a-destination")]);
         if home == "Now" {
-            app.wait_for("text:Who acts next").unwrap();
+            app.wait_for("id:now-main").unwrap();
         } else {
             assert_text(&mut app, "page-title", home);
         }
@@ -343,7 +339,7 @@ fn phone_question_back_returns_to_the_inbox_list() {
 #[test]
 fn tab_moves_the_keyboard_focus_instead_of_being_swallowed() {
     let mut app = preview(desktop(), &[("corral.destination", "now")]);
-    app.wait_for("text:Who acts next").unwrap();
+    app.wait_for("id:now-main").unwrap();
     let expanded = |app: &Headless| {
         app.screen()
             .accessibility_state("id:sidebar-toggle")
@@ -355,7 +351,7 @@ fn tab_moves_the_keyboard_focus_instead_of_being_swallowed() {
     app.press_key("tab").unwrap();
     app.press_key("enter").unwrap();
     assert_eq!(expanded(&app), Some(false));
-    app.wait_for("text:Who acts next").unwrap();
+    app.wait_for("id:now-main").unwrap();
 }
 
 #[test]
@@ -475,17 +471,39 @@ fn a_build_landed_over_open_findings_is_called_out_when_opened() {
 }
 
 /// A session running child agents lists them and their messages beside its transcript; a
-/// session without any shows no children list at all.
+/// session without any shows no children list at all. A roster row opens its panel; the panel
+/// opens the session.
 #[test]
 fn only_a_session_with_children_lists_them() {
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
     app.press("id:agent-T-871").unwrap();
+    app.wait_for("id:btn-open-session").unwrap();
+    app.press("id:btn-open-session").unwrap();
     app.wait_for("id:agent-T-871-child-reader").unwrap();
     app.wait_for("id:agent-T-871-msg-3").unwrap();
     drop(app);
 
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
     app.press("id:agent-T-854").unwrap();
+    app.wait_for("id:btn-open-session").unwrap();
+    app.press("id:btn-open-session").unwrap();
     app.wait_for("id:session-transcript").unwrap();
     assert_eq!(app.screen().count("id:session-fleet").unwrap(), 0);
+}
+
+/// Escape closes the roster's panel first: the page stays Agents rather than navigating back.
+#[test]
+fn escape_clears_the_roster_selection_before_leaving_agents() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.press("id:agent-T-871").unwrap();
+    app.wait_for("id:seg-agent-panel-summary").unwrap();
+    app.press_key("escape").unwrap();
+    app.wait_for_gone("id:seg-agent-panel-summary", Duration::from_secs(5))
+        .unwrap();
+    assert!(
+        app.screen()
+            .accessibility_state("id:nav-agents")
+            .unwrap()
+            .selected
+    );
 }

@@ -9,7 +9,7 @@ pub(super) fn session(feed: &mut Feed, command: &Session) -> Result<(), String> 
         | Session::Relaunch { id, .. }
         | Session::Send { id, .. }
         | Session::Keys { id, .. } => id.as_str(),
-        Session::PmOpen { .. } => "PM",
+        Session::PmOpen { .. } => "pm",
         _ => return unsupported(command.verb()),
     };
     let row = feed

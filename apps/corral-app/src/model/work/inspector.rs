@@ -115,21 +115,3 @@ pub struct Progress {
     pub total: usize,
     pub figure: String,
 }
-
-/// The latest recorded state of a running agent.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveTile {
-    pub id: String,
-    pub role: String,
-    pub doing: String,
-    pub doing_hue: crate::model::hue::Hue,
-    pub profile: String,
-    pub runtime: String,
-    pub pane: String,
-    pub chip: &'static str,
-    pub chip_hue: crate::model::hue::Hue,
-    pub title: String,
-    pub since: String,
-    pub tail: Tail,
-    pub action: Option<Press>,
-}

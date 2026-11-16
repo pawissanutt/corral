@@ -6,6 +6,7 @@
 
 use nsh_core::prelude::*;
 
+use crate::model::glance::StatIcon;
 use crate::model::{Destination, PhoneTab};
 
 const INBOX: ImageAsset = asset!("icons/inbox.svg");
@@ -37,6 +38,19 @@ const BATTERY: ImageAsset = asset!("icons/batt.svg");
 const SIDEBAR: ImageAsset = asset!("icons/sidebar.svg");
 const PLUS: ImageAsset = asset!("icons/plus.svg");
 const PROJECT: ImageAsset = asset!("icons/project.svg");
+const PIN: ImageAsset = asset!("icons/pin.svg");
+// The count glyphs share the rail marks' and actor dots' 12-unit shapes, so a stat reads as the
+// mark it counts.
+const NEEDS_YOU: ImageAsset = asset!("icons/actor-solid.svg");
+const MOVING: ImageAsset = asset!("icons/mk-active.svg");
+const STALE: ImageAsset = asset!("icons/mk-stale.svg");
+const LANDED: ImageAsset = asset!("icons/mk-done.svg");
+const FAILED: ImageAsset = asset!("icons/mk-fail.svg");
+const QUEUED: ImageAsset = asset!("icons/queue.svg");
+const PARKED: ImageAsset = asset!("icons/park.svg");
+const HELD: ImageAsset = asset!("icons/actor-diamond.svg");
+const EVENTS: ImageAsset = asset!("icons/delta.svg");
+const FILES: ImageAsset = asset!("icons/note.svg");
 
 /// The mock's sprite (`ui.js`, `i-*`). `Ask` is the sprite's `i-chat` speech bubble.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -83,6 +97,28 @@ pub enum Icon {
     Plus,
     /// A folder: a configured project (its page, the composer's default project).
     Project,
+    /// A push pin: the quick thread kept at the top of Now.
+    Pin,
+    /// A filled dot: waits on the owner (the sprite's `m-you`).
+    NeedsYou,
+    /// A half-filled ring: verifying, producing, executing (`m-now`).
+    Moving,
+    /// A dashed ring: a result of an older candidate (`m-stale`).
+    Stale,
+    /// A check (`m-done`).
+    Landed,
+    /// A cross (`m-fail`).
+    Failed,
+    /// Three dots (`i-queue`).
+    Queued,
+    /// Two bars (`i-park`).
+    Parked,
+    /// A diamond: held on a rule or a question.
+    Held,
+    /// A filled triangle: recorded changes (`i-delta`).
+    Events,
+    /// A page with lines (`i-note`).
+    Files,
 }
 
 impl Icon {
@@ -110,6 +146,24 @@ impl Icon {
             PhoneTab::Agents => Icon::Agents,
             PhoneTab::Plans => Icon::Plans,
             PhoneTab::More => Icon::More,
+        }
+    }
+
+    /// The glyph of a count: the shape of the state it counts. Sessions are the Agents
+    /// destination's terminal window.
+    pub const fn stat(icon: StatIcon) -> Icon {
+        match icon {
+            StatIcon::NeedsYou => Icon::NeedsYou,
+            StatIcon::Moving => Icon::Moving,
+            StatIcon::Stale => Icon::Stale,
+            StatIcon::Landed => Icon::Landed,
+            StatIcon::Failed => Icon::Failed,
+            StatIcon::Queued => Icon::Queued,
+            StatIcon::Parked => Icon::Parked,
+            StatIcon::Held => Icon::Held,
+            StatIcon::Events => Icon::Events,
+            StatIcon::Sessions => Icon::Agents,
+            StatIcon::Files => Icon::Files,
         }
     }
 
@@ -144,6 +198,17 @@ impl Icon {
             Icon::Sidebar => SIDEBAR,
             Icon::Plus => PLUS,
             Icon::Project => PROJECT,
+            Icon::Pin => PIN,
+            Icon::NeedsYou => NEEDS_YOU,
+            Icon::Moving => MOVING,
+            Icon::Stale => STALE,
+            Icon::Landed => LANDED,
+            Icon::Failed => FAILED,
+            Icon::Queued => QUEUED,
+            Icon::Parked => PARKED,
+            Icon::Held => HELD,
+            Icon::Events => EVENTS,
+            Icon::Files => FILES,
         }
     }
 }

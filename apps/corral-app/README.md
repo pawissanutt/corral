@@ -5,22 +5,26 @@ Corral is a Rust app built on [NSH 0.5.1](https://nsh.dev), with desktop, web, p
 Destinations:
 
 - **Inbox**: items needing attention and a question handover with evidence and answers.
-- **Now**: the workspace, task details and plan graph. **Changes** shows changes since the last visit. Closed tasks appear in the collapsed Closed section at the bottom of Now.
-- **Plans**: plan lists, details, review and graphs.
+- **Now**: a single list with a Plan, Run, Gate, Review and Land loop band; Needs-you owner moves from the inbox with one action each; Corral and Workers task rows with named stage rails; a Waiting fold; and a Closed section. A side column shows the digest since the last visit or the selected ask or task.
+- **Plans**: a list with member progress. An executing plan shows a headline, member graph and Path to done; an awaiting plan shows its document, reviewer verdicts and a pinned decide bar.
 - **Builds**: records interactive build sessions publish (outcome, intent, slices, gate
   attempts, review rounds, agent messages, owner decisions, usage, timeline); never tasks.
   Needs `builds.v1`; a daemon without it shows Builds as unavailable.
-- **Agents**: the agent wall, sessions, quick thread and filed chat records.
-- **Review**: a candidate replay, verdicts, evidence and diff.
+- **Agents**: a roster with one row per agent session showing state, what it is doing, a 20-minute activity strip, last output, since and cost. Among assistant sessions, only the quick thread is a roster row, pinned first; named assistant sessions appear in the Assistant sessions section below. Activity older than two minutes is labelled with its recorded window rather than `now`. The side panel offers Summary (waits-on-you, steps, recent turns and reply) and Terminal; **Open session** opens the full session page. Activity, last-output and step facts require `agents.activity.v1` and are unknown without it.
+- **Review**: Brief with a readiness chain, changes with inline diffs and the asked-for checklist; Diff; Gate log with Report and Artifacts when present; and a pinned decide bar.
 - **Timeline**: the activity timeline and range selection.
 - **Usage**: reported costs, completeness and sourced quota facts; absent facts stay unknown.
 - **Settings**: device pairing, authority, notifications, profiles and local preferences.
 - **Ask**: one composer for questions, ideas and instructions, addressed to the assistant or PM.
 
+Counts are an icon and number, with the sentence in a hint on hover or keyboard focus on desktop and in the status line in a terminal; phone rows keep one explanatory line. The top-bar health display is one `healthy` chip when every component is healthy and names the component otherwise.
+
 Projects (`projects.v1`): the sidebar (phone: More › Projects) lists the workspace's
 configured projects with open, running and needs-me counts, plus Unassigned when a task
-names no project. A **Project page** shows its tasks, plans, builds and burn-up, with
-Open in Now and Ask about this project. Now, Changes, Plans, Builds, Inbox and Review each
+names no project. A **Project page** is Now scoped to that project: its loop band, Needs you,
+Corral, Workers, Plans, Sessions, Waiting and Closed, followed by Builds and burn-up. The side
+column shows project facts and the scoped digest; a row opens its record rather than a side panel.
+Now, Changes, Plans, Builds, Inbox, Agents and Review each
 keep their own project filter; rows show a project chip under All when there are two or
 more projects, and Now can group by project. Ask sends the project in scope as context,
 so the assistant files Ideas there unless told otherwise. A daemon without `projects.v1`
@@ -154,7 +158,9 @@ park/unpark, comment, new task, unstick, revert, plan cancel/add-member/move-mem
 verdict, question escalate/cancel/deadline, route/focus/move, mode off and permission revoke,
 where the selected record, capability and authority allow them. Unavailable actions retain
 their refusal reason. Review uses Unified below about 1100 pt of content width; wider
-views offer side-by-side.
+views offer side-by-side. Below about 900 pt, Plans and Review show either the list or the
+opened record with a back control; opening a record by name from Now, Inbox, a link or the
+palette shows that record.
 
 Opening a task that is not on the board from Changes, plans, dependencies or the palette's `Open T-<n>` shows it read-only from its detail.
 
@@ -179,7 +185,7 @@ sessions). A control corrald does not offer is never pressable; one it refused f
 stays visible, dimmed, with the
 reason. Words typed on the page go to the session as `session send`, after its current turn,
 or interrupting it with Steer while it works; an assistant's page chats in its own thread
-with the shared composer. The Agents wall offers Launch PM while no PM is live.
+with the shared composer. The Agents roster's head offers Launch PM while no PM is live.
 
 An agent session's transcript replays the recorded session as the corral-pi terminal shows
 it, for every role: words as rendered Markdown, thinking (folding to one row), tool rows that
@@ -308,7 +314,7 @@ Run one cargo or NSH build at a time on this shared host.
 | `.` on a live Now/Review list | Selected row's action menu; otherwise Changes |
 | `` ` `` | Toggle session transcript/terminal |
 | `Ctrl Shift M` | Cycle assistant model |
-| `Esc` | Close newest overlay; in terminal session view, cancel an offered turn when no overlay is open |
+| `Esc` | Close newest overlay; clear a Now or Agents selection before going back; in terminal session view, cancel an offered turn when no overlay is open |
 
 On macOS, `Ctrl` shortcuts above use Command (`mod`). Letter shortcuts do not navigate
 while editing a field. List keys (`j`/`k`, arrows, Enter and answer digits) bind only
@@ -337,7 +343,7 @@ scale), and Review `s` (split when wide enough).
 
 | Store | Keys / contents |
 |---|---|
-| NSH Storage | `corral.destination`, `corral.settings`, `corral.theme`, `corral.now.layout`, `corral.sidebar`, `corral.filters` (per daemon store: each screen's project filter and Now grouping), non-secret `corral.paired` |
+| NSH Storage | `corral.destination`, `corral.settings`, `corral.theme`, `corral.sidebar`, `corral.filters` (per daemon store: each screen's project filter and Now grouping), non-secret `corral.paired` |
 | Browser IndexedDB `corral-app` v1, `credentials` | `device` (AES-GCM-wrapped credential and non-extractable key), retryable `forget` intent |
 | Browser IndexedDB `corral-local-state` v1 | `records` plus `meta` (`revision`); transactional outbox/offline cache, separate from credentials |
 | Native state directory | `$XDG_STATE_HOME/corral-app/` (fallback `$HOME/.local/state/corral-app/`): private `devices.json`, `durable.json`, retained locks |
@@ -359,6 +365,8 @@ Pairing secrets/proofs never go in the outbox or NSH Storage.
 Start with `desktop-dark-now.png`, `desktop-dark-question.png`, `phone-dark-inbox.png`, `phone-dark-question.png` and `terminal-120x36-now.png`.
 
 The build's scripts rendered the packaged web build in headless Chromium with a desktop pointer and phone emulation, and rendered the terminal target to PNG in a private tmux. These are not captures from a real phone or the owner's terminal.
+
+The Now, Agents, Plans and Review desktop and phone renders and their `terminal-120x36` and `terminal-80x24` captures were re-rendered after the main-loop rebuild from the packaged web build and a private tmux; the `terminal-120x36-now-16`, `-now-bandless`, `-now-light` and `-now-mono` variants and the other destinations' renders predate it.
 
 ## Toolchain on this host
 

@@ -3,28 +3,19 @@
 //! a field corrald does not serve is shown as unknown, never filled in.
 
 use corral_protocol::cmd::Expect;
-use corral_protocol::detail::{DetailBody, DetailRef, ReviewDetail, ReviewVerdict, TaskDetail};
+use corral_protocol::detail::{DetailBody, DetailRef, ReviewDetail, TaskDetail};
 use corral_protocol::rows::{InboxKind, InboxState};
 
 use crate::model::board::Mark;
-use crate::model::daemon::{DetailCache, Feed, Group, Link, Task};
-use crate::model::effect::Env;
+use crate::model::daemon::{DetailCache, Feed, Group, Task};
 use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::Selection;
-use crate::model::nav::Form;
-use crate::model::projects::{ProjectFilter, project_chip};
+use crate::model::projects::ProjectFilter;
 use crate::model::text::span;
 
-use super::decide::decide_bar;
-use super::evidence::artifacts;
-use super::live_files;
-use super::view::{
-    AcceptanceView, Body, ButtonStyle, CandidateGroup, CandidateRow, DetailView, Header, LogView,
-    Notice, PageView, ReportView, VerdictView, button, chip, effective_layout, layouts, tabs,
-    verdict_view,
-};
-use super::{Action, State, Tab};
+use super::Action;
+use super::view::{AcceptanceView, Body, ButtonStyle, LogView, Notice, ReportView, button};
 
 pub(super) fn review_ref(task: &Id) -> DetailRef {
     DetailRef::Review {
@@ -47,7 +38,7 @@ pub(super) fn file_ref(task: &Id, path: &str) -> DetailRef {
 
 /// Where a candidate waits: on the owner, or on automated verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Stage {
+pub(super) enum Stage {
     YourVerdict,
     Verifying,
 }
@@ -65,7 +56,7 @@ fn awaits_verdict(feed: &Feed, task: &Task) -> bool {
 /// A board row is a candidate while it waits on the owner's verdict (corrald's open review
 /// item, or the board's needs-you group with a recorded candidate SHA and a finished run), or
 /// on gate, review or landing with a recorded candidate SHA.
-fn stage(feed: &Feed, task: &Task) -> Option<Stage> {
+pub(super) fn stage(feed: &Feed, task: &Task) -> Option<Stage> {
     if awaits_verdict(feed, task) {
         return Some(Stage::YourVerdict);
     }
@@ -214,167 +205,7 @@ pub(super) fn when(at: &str, feed: &Feed) -> String {
     crate::model::work::when(at, feed)
 }
 
-fn stage_word(mark: Mark) -> &'static str {
-    match mark {
-        Mark::Done => "✓",
-        Mark::Active => "running",
-        Mark::Fail => "✗",
-        Mark::Stale => "stale",
-        Mark::Next => "pending",
-        Mark::Na => "—",
-    }
-}
-
-fn candidate_row(
-    feed: &Feed,
-    task: &Task,
-    chosen: Option<&Id>,
-    filter: &ProjectFilter,
-) -> CandidateRow {
-    let waiting_on_you = stage(feed, task) == Some(Stage::YourVerdict);
-    let troubled = task.rail[..3]
-        .iter()
-        .any(|step| matches!(step.mark, Mark::Fail | Mark::Stale));
-    let mut state = format!(
-        "gate {} · review {}",
-        stage_word(task.rail[1].mark),
-        stage_word(task.rail[2].mark)
-    );
-    if waiting_on_you {
-        state.push_str(" · you");
-    }
-    CandidateRow {
-        project_chip: project_chip(feed, filter, task.project.as_deref()),
-        task: task.id.to_string(),
-        title: task.title.clone(),
-        state,
-        hue: if troubled {
-            Hue::Held
-        } else if waiting_on_you {
-            Hue::You
-        } else {
-            Hue::Corral
-        },
-        identity: vec![
-            span(match task.rail[0].sha7.as_deref() {
-                Some(sha) => format!("{} · {sha}", task.id),
-                None => task.id.to_string(),
-            })
-            .mono()
-            .dim(),
-        ],
-        selected: chosen == Some(&task.id),
-        action: Action::Pick(task.id.clone()),
-    }
-}
-
-fn candidate_groups(
-    feed: &Feed,
-    chosen: Option<&Id>,
-    filter: &ProjectFilter,
-) -> Vec<CandidateGroup> {
-    let all = candidates_filtered(feed, filter);
-    let group = |label, hue, wanted| {
-        let rows: Vec<CandidateRow> = all
-            .iter()
-            .filter(|task| stage(feed, task) == Some(wanted))
-            .map(|task| candidate_row(feed, task, chosen, filter))
-            .collect();
-        (!rows.is_empty()).then(|| CandidateGroup {
-            label,
-            count: u32::try_from(rows.len()).unwrap_or(u32::MAX),
-            hue,
-            rows,
-        })
-    };
-    [
-        group("Your verdict", Hue::You, Stage::YourVerdict),
-        group("Verifying", Hue::Corral, Stage::Verifying),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
-}
-
-fn verdict_mark(verdict: &str) -> Mark {
-    match verdict.to_ascii_lowercase().as_str() {
-        "pass" | "approve" | "approved" => Mark::Done,
-        "fail" | "changes" | "request_changes" | "request-changes" | "escalate" | "rejected" => {
-            Mark::Fail
-        }
-        "running" => Mark::Active,
-        _ => Mark::Next,
-    }
-}
-
-fn verdict_row(verdict: &ReviewVerdict, feed: &Feed, phone: bool) -> VerdictView {
-    let text = match verdict.text.as_deref().filter(|text| !text.is_empty()) {
-        Some(text) => format!("{} · {text}", verdict.verdict),
-        None => verdict.verdict.clone(),
-    };
-    let time = verdict
-        .at
-        .as_deref()
-        .map(|at| when(at, feed))
-        .unwrap_or_default();
-    verdict_view(
-        phone,
-        &verdict.by,
-        short(&verdict.sha),
-        &time,
-        verdict_mark(&verdict.verdict),
-        &text,
-        verdict.stale,
-    )
-}
-
-fn header(shown: &Shown, phone: bool) -> Header {
-    let id = shown.id();
-    let sha = shown.sha().map(short).unwrap_or("unknown");
-    let mut ident = id.to_string();
-    if let Some(run) = shown.run() {
-        ident.push_str(" · ");
-        ident.push_str(run);
-    }
-    let metadata = if phone {
-        vec![span(format!("{ident} · {sha}")).mono().dim()]
-    } else {
-        let mut meta = vec![span(format!("{ident} · candidate {sha}")).mono()];
-        if let Some(review) = shown.review {
-            let (added, deleted) = review.files.iter().fold((0u64, 0u64), |(a, d), file| {
-                (a + u64::from(file.added), d + u64::from(file.deleted))
-            });
-            let count = review.files.len();
-            meta.push(span(format!(
-                " base {} · {count} file{} · +{added} −{deleted}",
-                review.base.as_deref().map(short).unwrap_or("unknown"),
-                if count == 1 { "" } else { "s" },
-            )));
-        }
-        meta
-    };
-    let mut chips = Vec::new();
-    if let Some(review) = shown.review.filter(|review| !review.state.is_empty()) {
-        chips.push(chip(
-            review.state.replace('_', " "),
-            if review.approvable {
-                Hue::You
-            } else {
-                Hue::Neutral
-            },
-        ));
-    }
-    if shown.superseded() {
-        chips.push(chip("newer candidate", Hue::Held));
-    }
-    Header {
-        title: shown.task.title.clone(),
-        metadata,
-        chips,
-    }
-}
-
-fn notice(shown: &Shown) -> Option<Notice> {
+pub(super) fn notice(shown: &Shown) -> Option<Notice> {
     let refresh = || Some(button("Refresh", Action::Refresh, ButtonStyle::Quiet));
     let cache = shown.review_cache;
     let error = cache.and_then(|cache| cache.error.as_ref());
@@ -424,7 +255,7 @@ fn notice(shown: &Shown) -> Option<Notice> {
     })
 }
 
-fn report(review: &ReviewDetail, id: &Id, sha: &str) -> Body {
+pub(super) fn report(review: &ReviewDetail, id: &Id, sha: &str) -> Body {
     let paragraphs: Vec<String> = review
         .report
         .as_deref()
@@ -468,7 +299,7 @@ fn report(review: &ReviewDetail, id: &Id, sha: &str) -> Body {
     })
 }
 
-fn log(review: &ReviewDetail, sha: &str) -> Body {
+pub(super) fn log(review: &ReviewDetail, sha: &str) -> Body {
     if review.gate_log_tail.is_empty() {
         return Body::Notice("No gate log is recorded for this candidate.".into());
     }
@@ -497,195 +328,6 @@ fn log(review: &ReviewDetail, sha: &str) -> Body {
             short(sha)
         ),
     }
-}
-
-fn detail(state: &State, feed: &Feed, shown: &Shown, env: Env, width: f32) -> DetailView {
-    let phone = env.form == Form::Phone;
-    let specs: &[(Tab, &str)] = if phone {
-        &[
-            (Tab::Diff, "Diff"),
-            (Tab::Report, "Report"),
-            (Tab::Shot, "Artifacts"),
-            (Tab::Log, "Log"),
-        ]
-    } else {
-        &[
-            (Tab::Diff, "Diff"),
-            (Tab::Report, "Report"),
-            (Tab::Shot, "Artifacts"),
-            (Tab::Log, "Gate log"),
-        ]
-    };
-    let sha = shown.sha().unwrap_or_default();
-    let body = match shown.review {
-        None => Body::Notice(match notice(shown) {
-            Some(notice) => notice.text,
-            None => "Loading the candidate's review detail…".into(),
-        }),
-        Some(review) => match state.tab {
-            Tab::Diff => Body::Diff(live_files::diff(
-                state,
-                feed,
-                shown,
-                review,
-                effective_layout(state, env, width),
-                env,
-            )),
-            Tab::Report => report(review, shown.id(), sha),
-            Tab::Shot => artifacts(state, feed, shown.id(), review, env),
-            Tab::Log => log(review, sha),
-        },
-    };
-    let mut verdicts: Vec<VerdictView> = shown
-        .review
-        .map(|review| {
-            review
-                .verdicts
-                .iter()
-                .map(|verdict| verdict_row(verdict, feed, phone))
-                .collect()
-        })
-        .unwrap_or_default();
-    if let Some(review) = shown.review {
-        verdicts.splice(
-            0..0,
-            review.gates.iter().map(|gate| {
-                let text = gate
-                    .text
-                    .as_deref()
-                    .filter(|text| !text.is_empty())
-                    .map_or_else(
-                        || gate.verdict.clone(),
-                        |text| format!("{} · {text}", gate.verdict),
-                    );
-                let time = gate
-                    .at
-                    .as_deref()
-                    .map(|at| when(at, feed))
-                    .unwrap_or_default();
-                verdict_view(
-                    phone,
-                    &gate.by,
-                    short(&gate.sha),
-                    &time,
-                    verdict_mark(&gate.verdict),
-                    &text,
-                    gate.stale,
-                )
-            }),
-        );
-    }
-    if let Some(review) = shown.review.filter(|review| review.approvable) {
-        let sha = review
-            .candidate_sha
-            .as_deref()
-            .map(short)
-            .unwrap_or("unknown");
-        verdicts.push(verdict_view(
-            phone,
-            "you",
-            sha,
-            "",
-            Mark::Next,
-            "your verdict",
-            false,
-        ));
-    }
-    DetailView {
-        header: header(shown, phone),
-        notice: if shown.review.is_some() {
-            notice(shown)
-        } else {
-            None
-        },
-        verdict_heading: if phone {
-            "Verdicts"
-        } else {
-            "Verdicts · bound to candidate SHA"
-        },
-        verdict_binding: phone.then_some("bound to SHA"),
-        verdicts_empty: (shown.review.is_some() && verdicts.is_empty())
-            .then_some("No verdicts are recorded for this candidate yet."),
-        verdicts,
-        tabs: tabs(state, specs),
-        layouts: layouts(state, env),
-        body,
-    }
-}
-
-/// The served Review at `width`. `focus` is the candidate a phone page was pushed for and
-/// bypasses list filtering; without it, show the root's selection in scope, else its first candidate.
-pub fn live_page_filtered(
-    state: &State,
-    feed: &Feed,
-    selection: &Selection,
-    focus: Option<&Id>,
-    env: Env,
-    width: f32,
-    filter: &ProjectFilter,
-) -> PageView {
-    let phone = env.form == Form::Phone;
-    let task = match focus {
-        Some(id) => feed.board.task(id),
-        None => selected_filtered(selection, feed, filter),
-    };
-    let shown = task.map(|task| Shown::of(feed, task));
-    let chosen = shown.as_ref().map(Shown::id);
-    let candidates = candidate_groups(feed, chosen, filter);
-    let empty = match (&shown, focus) {
-        (Some(_), _) => None,
-        (None, Some(id)) => Some(format!(
-            "{id} is no longer on the board, so its candidate cannot be shown."
-        )),
-        (None, None) if !feed.board.complete => Some("Waiting for the board…".into()),
-        (None, None) => Some(
-            "No candidates are waiting. A task appears here once its run records a candidate."
-                .into(),
-        ),
-    };
-    let stale = env.conn.refuses()
-        || feed.link != Link::Up
-        || shown
-            .as_ref()
-            .and_then(|shown| shown.review_cache)
-            .is_some_and(|cache| cache.stale);
-    PageView {
-        title: shown
-            .as_ref()
-            .map_or_else(|| "Review".into(), |shown| shown.id().to_string()),
-        phone,
-        stale,
-        conn: env.conn,
-        candidates,
-        candidate_note: None,
-        detail: shown
-            .as_ref()
-            .map(|shown| detail(state, feed, shown, env, width)),
-        empty,
-        decide: decide_bar(state, feed, shown.as_ref(), env),
-    }
-}
-
-/// The served candidate list alone, for the phone's Review destination.
-pub fn candidate_list_filtered(
-    feed: &Feed,
-    selection: &Selection,
-    filter: &ProjectFilter,
-) -> (Vec<CandidateGroup>, Option<String>) {
-    let groups = candidate_groups(
-        feed,
-        selected_filtered(selection, feed, filter).map(|task| &task.id),
-        filter,
-    );
-    let empty = groups.is_empty().then(|| {
-        if feed.board.complete {
-            "No candidates are waiting. A task appears here once its run records a candidate."
-                .to_owned()
-        } else {
-            "Waiting for the board…".to_owned()
-        }
-    });
-    (groups, empty)
 }
 
 #[cfg(test)]
@@ -761,9 +403,10 @@ mod tests {
             .map(|task| task.id.as_str())
             .collect();
         assert_eq!(listed, ["T-2"]);
-        let groups = candidate_groups(&feed, None, &ProjectFilter::All);
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].label, "Your verdict");
-        assert_eq!(groups[0].rows[0].task, "T-2");
+        let verdict = feed
+            .board
+            .task(&Id::new("T-2"))
+            .and_then(|task| stage(&feed, task));
+        assert_eq!(verdict, Some(Stage::YourVerdict));
     }
 }

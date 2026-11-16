@@ -110,7 +110,7 @@ pub fn head(
 /// edge, on its last line. Once the page has scrolled past [`COLLAPSE_AFTER`] the title folds to
 /// the 17 pt bold of a navigation bar and the head tightens, giving the rows the room; it opens
 /// again back at the top (the shell resets the scroll on every tab or page change).
-fn phone_head(title: SharedString, actions: Vec<AnyElement>) -> AnyElement {
+pub(super) fn phone_head(title: SharedString, actions: Vec<AnyElement>) -> AnyElement {
     let collapsed = computed(|| page_phone::page_scroll().with(|s| s.offset > COLLAPSE_AFTER));
     let title = text(title)
         .test_id("page-title")
@@ -643,7 +643,7 @@ fn meta_row(form: Form, meta: Vec<AnyElement>) -> AnyElement {
 }
 
 /// Actions in a row at the trailing edge; in a terminal `gap` Cells apart.
-fn actions_row(form: Form, actions: Vec<AnyElement>, gap: f32) -> AnyElement {
+pub(super) fn actions_row(form: Form, actions: Vec<AnyElement>, gap: f32) -> AnyElement {
     if form == Form::Terminal {
         return view()
             .flex_row()

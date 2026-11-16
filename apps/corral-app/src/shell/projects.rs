@@ -1,8 +1,8 @@
-//! The sidebar's PROJECTS section on desktop and in a terminal: under the destinations, a row per
-//! configured project (its name, then what needs the owner, what runs and what is open) and an
-//! Unassigned row while tasks without a project exist. A project row opens its Project page and
-//! stays selected while that page shows; Unassigned opens Now scoped to those tasks. The section
-//! is absent while corrald lists no project.
+//! The sidebar's Projects section on desktop and in a terminal: under the destinations, a row per
+//! configured project (its name, then what waits on the owner and what is open, as bare figures
+//! whose hints say them in full) and an Unassigned row while tasks without a project exist. A
+//! project row opens its Project page and stays selected while that page shows; Unassigned opens
+//! Now scoped to those tasks. The section is absent while corrald lists no project.
 
 use nsh_core::prelude::*;
 
@@ -12,6 +12,7 @@ use crate::screens::projects::open_entry;
 use crate::state::AppState;
 use crate::ui::atoms::nav_row_icon;
 use crate::ui::icons::Icon;
+use crate::ui::kit::hint::tip;
 use crate::ui::kit::marks::{hue_fill, hue_ink};
 use crate::ui::term::{self, cells};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
@@ -59,7 +60,7 @@ pub fn section(app: AppState) -> AnyElement {
     })
 }
 
-/// The section's name: small capitals on the shell, quiet words in a terminal.
+/// The section's name (`.sh`): quiet words on the shell and in a terminal.
 fn heading(app: AppState) -> AnyElement {
     if app.form == Form::Terminal {
         return view()
@@ -67,16 +68,14 @@ fn heading(app: AppState) -> AnyElement {
             .child(term::quiet(PROJECTS_HEADING))
             .into_element();
     }
-    text(PROJECTS_HEADING.to_uppercase())
+    text(PROJECTS_HEADING)
         .role(AccessibilityRole::Header)
         .number_of_lines(1u32)
         .pt(px(16.0))
         .pb(px(4.0))
-        .px(px(8.0))
+        .px(px(9.0))
         .font_family(FONT_TEXT)
-        .text_size(px(10.5))
-        .font_weight(FontWeight::SEMIBOLD)
-        .letter_spacing(px(0.6))
+        .text_size(px(11.5))
         .text_color(color(Token::ShellInk2))
         .into_element()
 }
@@ -110,17 +109,17 @@ fn row(app: AppState, entries: Memo<Vec<ProjectEntry>>, id: String) -> AnyElemen
     )
 }
 
-/// The figures after a project's name: what needs the owner as a badge, what runs after a dot
-/// in the worker colour, and what is open, quiet; each only when it is known and above zero.
-/// The row's name carries them in words for assistive technology, so they are hidden from it.
+/// The figures after a project's name (`.nav .cnt`): what waits on the owner in the needs-you
+/// colour while anything does, then what is open, quiet; each only when the daemon reports it,
+/// each with its sentence as its hint. The row's name carries them in words for assistive
+/// technology, so they are hidden from it.
 fn figures(form: Form, entry: &ProjectEntry) -> AnyElement {
-    let needs = entry.needs_me.filter(|n| *n > 0);
-    let running = entry.running.filter(|n| *n > 0);
-    let open = entry.open.filter(|n| *n > 0);
+    let needs = entry.needs_me.filter(|n| *n > 0).zip(entry.needs_hint());
+    let open = entry.open.zip(entry.open_hint());
     if form == Form::Terminal {
         let column = |content: Option<AnyElement>| {
             view()
-                .w(cells(2.0))
+                .w(cells(3.0))
                 .flex_row()
                 .justify_end()
                 .children(content)
@@ -130,23 +129,16 @@ fn figures(form: Form, entry: &ProjectEntry) -> AnyElement {
             .flex_row()
             .flex_shrink_0()
             .accessibility_elements_hidden(true)
-            .child(column(needs.map(|n| {
-                text(n.to_string())
+            .child(column(needs.map(|(n, hint)| {
+                let figure = text(n.to_string())
                     .font_weight(FontWeight::BOLD)
-                    .text_color(color(Token::You))
-                    .into_element()
+                    .text_color(color(Token::You));
+                tip(form, figure, hint.into()).into_element()
             })))
             .child(term::space(1.0))
-            .child(column(running.map(|n| {
-                text(format!("●{n}"))
-                    .text_color(hue_ink(Hue::Worker))
-                    .into_element()
-            })))
-            .child(term::space(1.0))
-            .child(column(open.map(|n| {
-                text(n.to_string())
-                    .text_color(color(Token::Ink))
-                    .into_element()
+            .child(column(open.map(|(n, hint)| {
+                let figure = text(n.to_string()).text_color(color(Token::Ink));
+                tip(form, figure, hint.into()).into_element()
             })))
             .child(term::space(1.0))
             .into_element();
@@ -156,45 +148,27 @@ fn figures(form: Form, entry: &ProjectEntry) -> AnyElement {
             .number_of_lines(1u32)
             .font_family(FONT_MONO)
             .tabular_nums()
-            .text_size(px(11.0))
+            .text_size(px(11.5))
     };
     view()
         .flex_row()
         .items_center()
         .flex_shrink_0()
-        .gap(px(7.0))
+        .gap(px(10.0))
         .accessibility_elements_hidden(true)
-        .children(needs.map(|n| {
-            view()
-                .h(px(16.0))
+        .children(needs.map(|(n, hint)| {
+            let face = figure(n)
+                .font_weight(FontWeight::BOLD)
+                .text_color(on_shell(hue_ink(Hue::You)));
+            tip(form, face, hint.into()).into_element()
+        }))
+        .children(open.map(|(n, hint)| {
+            let face = figure(n)
                 .min_w(px(16.0))
-                .px(px(5.0))
-                .rounded(px(8.0))
-                .items_center()
-                .justify_center()
-                .bg(on_shell(hue_ink(Hue::You)))
-                .child(
-                    figure(n)
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(on_shell(color(Token::BtnInk))),
-                )
-                .into_element()
+                .text_right()
+                .text_color(color(Token::ShellInk2));
+            tip(form, face, hint.into()).into_element()
         }))
-        .children(running.map(|n| {
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(3.0))
-                .child(
-                    view()
-                        .size(px(5.0))
-                        .rounded(px(2.5))
-                        .bg(on_shell(hue_ink(Hue::Worker))),
-                )
-                .child(figure(n).text_color(on_shell(hue_ink(Hue::Worker))))
-                .into_element()
-        }))
-        .children(open.map(|n| figure(n).text_color(color(Token::ShellInk2)).into_element()))
         .into_element()
 }
 

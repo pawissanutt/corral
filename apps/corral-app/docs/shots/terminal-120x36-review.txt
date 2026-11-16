@@ -1,36 +1,36 @@
- ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+ ◉ Corral  /preview/corral │ ● healthy                                                         Mon 16 Nov 10:44  sample
 ╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
-│ Autopilot                    ││Your verdict 1 ──────────┤ T-868 · R1 · candidate 85b45e1e                            ┃
-│ independent work continues   ││▌ ● T-868 · 85b45e1e     │ base main · 5 files · +334 −28                             ┃
-├──────────────────────────────┤│    host-queue-ledger    │ host-queue-ledger                                          ┃
-│  Inbox                 5   i ││    gate ✓ · review ✓ ·… ├─────────────────────────────────────────────────────────── ┃
-│  Now                       n ││Verifying 3 ─────────────┤ VERDICTS · BOUND TO CANDIDATE SHA ───────────────────────  ┃
-│  Changes              12   . ││  ◐ T-890 · 1751bd2      │ ◌ gate   f34f3df6  04:45 fail …  stale · older candidate   ┃
-│  Plans                 6   p ││    pm-bounded-read-cont…│ ✓ gate   85b45e1e  08:26 pass · quick tier · receipt…      ┃
-│  Agents                7   a ││    quick gate running   │ ✓ review 85b45e1e  22:40 approve · R1-review2 · notes…     ┃
-│▌ Review                3   r ││  ◐ T-894 · 6b36916      │ ○ you    85b45e1e        your verdict                      ┃
-│  Timeline                  t ││    api-connections      ├─────────────────────────────────────────────────────────── ┃
-│  Usage                     u ││    gate running         │ Diff · 5 files  Report  Screenshot  Gate log               ┃
-│  Settings                  , ││  ◆ T-867 · 5949a4b      ├─────────────────────────────────────────────────────────── ┃
-├──────────────────────────────┤│    queue-contract-core  │                                                            ┃
-│  Ask                       / ││    gate stale · re-gate │ packages/corral-… lines illustrative Ask about this hunk   ┃
-│  Go to                    ^K ││ T-868 here is a replay  │ @@ -212,9 +212,9 @@ describe("cross-lane paging")          │
-│                              ││ of its 2026-11-08       │  212  212     const lane = await privateHerdr({ plugins:   │
-│                              ││ review; the rest follow │  213      -   const inputs = 256;                          │
-│                              ││ the snapshot.           │       213 +   const inputs = 128;                          │
-│                              ││                         │  ╭──────────────────────────────────────────────────────╮  │
-│                              ││                         │  │ reviewer · pi-sol · R1-review2 · on 85b45e1e         │  │
-│                              ││                         │  │ Fixture-only change: 256 → 128 inputs. Every         │  │
-│                              ││                         │  │ assertion, the 512 ring and the production           │  │
-│                              ││                         │  │ event/frame bounds are unchanged; the original red   │  │
-│                              ││                         │  │ on f34f3df6 stays in history.                        │  │
-│                              ││                         │  │ Reply or add a line comment as owner…             c  │  │
-│                              ││                         │  ╰──────────────────────────────────────────────────────╯  │
-│                              ││                         │  214  214     for (let i = 0; i < inputs; i++) await       │
-│                              ││                         │  215  215     const events = await readAll(lane, { page:   │
-│                              ││                         ├────────────────────────────────────────────────────────────┤
-│                              ││                         │  Approve 85b45e1e    Request changes                       │
-│                              ││                         │    Verdicts apply to 85b45e1e only; a new candidate makes… │
-│                              ││                         │                        actor=owner · via=app:pawis-desktop │
-╰─ This device pawis-desktop ──╯╰─────────────────────────┴────────────────────────────────────────────────────────────╯
-  s  split │  i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t   u   ,  Settings │  /  Ask  ^K  Go to
+│ Mode                         ││ Review  ●1 ◐3                                                                        │
+│ assist                       │├──────────────────────────────────────────────────────────────────────────────────────┤
+├──────────────────────────────┤│ Project All corral 2 mitigraph 1 mitiplay Unassigned                                 │
+│  Inbox                 3   i ││Your verdict 1 ───────────────────┤  ready for verdict  T-868 R1 85b45e1  corral  ▤1  │
+│  Now                   3   n ││▌T-868  host-qu… ready for verdict│ +1 −1                                             │
+│  Changes                   . ││In verification 3 ────────────────┤ host-queue-ledger                                 │
+│  Plans                 1   p ││ T-867  queue-c… gate stale corral│  Brief   Diff   Gate log   Report                 │
+│  Builds                    b ││ T-890  pm-bounded-r… gate running├───────────────────────────────────────────────────┤
+│  Agents                    a ││ T-894  api-connecti… gate running│ Ready to land?                                    │
+│▌ Review                1   r ││                                  │ ✓ Gate passed 85b45e1                             │
+│  Timeline                  t ││                                  │ ✓ Review approves 85b45e1                         │
+│  Usage                     u ││                                  │  review · pi-sol                                  │
+│  Settings                  , ││                                  │  Preview · candidate-bound reviewer record        │
+├──────────────────────────────┤│                                  │ ○ Your verdict 85b45e1                            │
+│ Projects                     ││                                  │                                                   │
+│  corral                2  40 ││                                  │ What changed 1                                    │
+│  mitigraph             1  27 ││                                  │ ▸ cross-lane.test.ts …ckages/corral-pi/test +1 −1 │
+│  mitiplay                  0 ││                                  │                                                   │
+│  Unassigned                  ││                                  ├───────────────────────────────────────────────────┤
+├──────────────────────────────┤│                                  │ Asked for                                     2/5 │
+│  Ask                       / ││                                  │                                                   │
+│  Go to                    ^K ││                                  │ Base        0123456789abcdef                      │
+│                              ││                                  │ Run         R1                                    │
+│                              ││                                  │ Session     T-868                                 │
+│                              ││                                  │                                                   │
+│                              ││                                  │  Open session                                     │
+│                              ││                                  │  Record verdict for T-868                         │
+│                              ││                                  │                                                   │
+│                              ││                                  │                                                   │
+│                              ││                                  ├───────────────────────────────────────────────────┤
+│                              ││                                  │  Approve 85b45e1    Request    Ask    Discard     │
+│                              ││                                  │ actor=owner · via=app:Preview desktop             │
+╰─ This device Preview desktop ╯╰──────────────────────────────────┴───────────────────────────────────────────────────╯
+  s  split  .  actions │  i  Inbox  n  Now  .  Changes  p   b   a  Agents  r   t   u   ,  Settings │  /  Ask  ^K  Go to
