@@ -215,10 +215,10 @@ pub(crate) fn unfinished(head: &TaskHead) -> bool {
         || corral_core::capacity::head_committed(head)
 }
 
-/// Explicit owner designation before dispatch/enqueue. It changes scheduling, not authority.
+/// Explicit owner or PM designation before dispatch/enqueue. Changes scheduling, not authority.
 /// Existing lanes are retained by all ordinary launch/retry/review paths.
 pub fn designate_adhoc(ctx: &crate::Ctx, id: &str) -> anyhow::Result<()> {
-    crate::require_automation_owner(&ctx.store, &crate::command::Invoker::process())?;
+    crate::require_operator(&ctx.store, &crate::command::Invoker::process())?;
     ctx.store.check_runtime()?;
     anyhow::ensure!(
         ctx.store.config.limits.capacity.is_some(),

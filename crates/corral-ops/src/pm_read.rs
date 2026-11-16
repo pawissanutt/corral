@@ -134,6 +134,12 @@ pub fn format_action(action: &PmAction) -> String {
         action.recommended,
         if action.requires_owner {
             " (owner required)"
+        } else if action
+            .options
+            .iter()
+            .any(|option| option.id == action.recommended && option.pm_runs)
+        {
+            " (PM runs directly)"
         } else {
             ""
         }

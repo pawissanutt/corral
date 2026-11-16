@@ -24,7 +24,7 @@ fn launch_next(ctx: &Ctx, id: &str) -> Result<()> {
 }
 
 #[test]
-fn renewed_continuation_charges_third_before_ipc_and_refuses_fourth() {
+fn pm_renewed_continuation_charges_third_before_ipc_and_refuses_fourth() {
     let _clock = FixedClock::new();
     let (_root, mut ctx, id) = fixture();
     ctx.store.config.routing.repair = Some(policy(2));
@@ -45,15 +45,32 @@ fn renewed_continuation_charges_third_before_ipc_and_refuses_fourth() {
         2
     );
     let renewal = corral_core::RepairRenewal {
-        id: "fixture-owner-confirmation".into(),
+        id: "fixture-pm-renewal".into(),
         previous_digest: exhausted.digest().unwrap(),
         reason: "one corrective continuation".into(),
         approved_by: "owner".into(),
         at: ctx.store.now(),
     };
-    ctx.store
-        .renew_repair_allowance(&id, renewal, policy(1), "general", None)
-        .unwrap();
+    let mut invoker = crate::command::Invoker::process();
+    invoker.owner_action = None;
+    invoker.caller.actor = Some(corral_protocol::cmd::ActorName::Pm);
+    invoker.caller.cwd = Some(ctx.store.root().to_string_lossy().into_owned());
+    invoker.caller.env = corral_protocol::cmd::CallerEnv {
+        corral_pm: Some("1".into()),
+        ai_agent: Some("pi".into()),
+        ..Default::default()
+    };
+    let renewed = repair_renew(&ctx, &id, renewal, policy(1), &invoker).unwrap();
+    assert_eq!(
+        renewed
+            .active()
+            .unwrap()
+            .renewal
+            .as_ref()
+            .unwrap()
+            .approved_by,
+        "pm"
+    );
     launch_next(&ctx, &id).unwrap();
     // Inspect the committed charge at exactly the boundary where pane_run could start.
     let at_ipc = repair_status(&ctx, &id).unwrap().unwrap();

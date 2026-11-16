@@ -154,7 +154,10 @@ fn frozen(ctx: &Ctx) -> Ctx {
 fn pm_next_heads_match_the_full_task_hold_observation() {
     // Given a held task whose old observation is computed from the full record.
     let (_root, ctx) = fixture();
-    let task = ctx.store.create("Held", None, Status::Ready, "").unwrap();
+    let task = ctx
+        .store
+        .create("Held", Some("app"), Status::Ready, "")
+        .unwrap();
     let full = ctx
         .store
         .update(&task.id, |task| {
@@ -169,7 +172,10 @@ fn pm_next_heads_match_the_full_task_hold_observation() {
     let mut expected = corral_ops::pm_card(
         &corral_ops::PmObservation::Owner {
             task: full.id.clone(),
-            reason: "Task has an explicit dispatch hold; owner clearance is required.".into(),
+            reason: format!(
+                "Task has a dispatch hold; the PM can run corral queue add {}.",
+                full.id
+            ),
         },
         command_prefix,
     );

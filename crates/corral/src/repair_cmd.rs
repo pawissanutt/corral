@@ -23,7 +23,7 @@ pub enum RepairCmd {
         id: String,
         #[arg(long)]
         file: PathBuf,
-        /// Explicit owner investigation, required to revise an earlier attribution
+        /// Explicit owner or PM investigation, required to revise an earlier attribution
         #[arg(long)]
         owner: bool,
     },
@@ -36,7 +36,7 @@ pub enum RepairCmd {
     /// Consume the single PM diagnosis allowance and return the full history
     Diagnose {
         id: String,
-        /// Explicit owner request in Assist; unavailable to PM/agent entry points
+        /// Explicit owner or PM request in Assist; unavailable to worker/assistant entry points
         #[arg(long)]
         owner: bool,
     },
@@ -46,7 +46,7 @@ pub enum RepairCmd {
         #[arg(long)]
         file: PathBuf,
     },
-    /// Explicit owner-approved allowance renewal, bound to the prior ledger digest
+    /// Explicit owner or PM allowance renewal, bound to the prior ledger digest
     Renew {
         id: String,
         #[arg(long)]

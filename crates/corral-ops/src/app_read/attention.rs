@@ -31,7 +31,7 @@ pub(super) fn append(ctx: &Ctx, rows: &mut Vec<InboxRow>) -> Result<()> {
             if !matches!(
                 condition.class,
                 WaitClass::OwnerDecision | WaitClass::PmAction
-            ) && condition.responsible != Responsible::Owner
+            ) && !matches!(condition.responsible, Responsible::Owner | Responsible::Pm)
             {
                 continue;
             }

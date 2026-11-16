@@ -283,7 +283,7 @@ pub fn diagnose(
 ) -> Result<GateTriage> {
     let id = Store::normalize_id(id)?;
     if owner {
-        crate::require_automation_owner(&ctx.store, invoker)?;
+        crate::require_operator(&ctx.store, invoker)?;
     }
     let _pilot = ctx
         .store
@@ -312,7 +312,7 @@ pub fn diagnose(
     }
     ensure!(
         entry.diagnoses.is_empty() || owner,
-        "diagnosis already recorded; a changed attribution requires explicit owner investigation"
+        "diagnosis already recorded; a changed attribution requires explicit owner or PM investigation"
     );
     if report.retry {
         ensure!(
@@ -331,7 +331,7 @@ pub fn diagnose(
         );
         ensure!(
             state.diagnostic_attempt.is_none() || owner,
-            "single diagnostic retry already consumed; another bounded investigation requires explicit owner evidence"
+            "single diagnostic retry already consumed; another bounded investigation requires explicit owner or PM evidence"
         );
         if owner {
             state.diagnostic_attempt = None;
@@ -350,7 +350,7 @@ pub fn diagnose(
         state.retry_requested = true;
     }
     entry.diagnoses.push(report.clone());
-    // A changed owner attribution must be validated again; an old PASS cannot explain a
+    // A changed operator attribution must be validated again; an old PASS cannot explain a
     // newly unknown/mixed/flaky episode or an unchanged candidate defect.
     entry.resolved_by = None;
     state.retry_requested = report.retry;

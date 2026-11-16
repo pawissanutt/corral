@@ -1,6 +1,6 @@
 //! Code-only escalation policy; never permission to execute a card.
 //!
-//! Routine allow-list (live `pm_next`/workset producers still project owner permissions):
+//! Routine allow-list (live producers classify owner-only decisions separately from delegation):
 //!
 //! | Kind | Placement and justification |
 //! |---|---|
@@ -8,8 +8,8 @@
 //! | Gate | Starts the configured gate, never interprets or waives its result. |
 //! | Review | Starts independent review, never accepts its verdict or lands. |
 //! | Wait | Plain observation/resumption wait, with no board effect. |
+//! | Owner, Question, AgentQuestion, OwnerQuestion | Only explicitly owner-required choices are owner-only. |
 //! | ReviewInFlight | Not validated: a review/landing barrier, not a plain wait. |
-//! | Owner, Question, AgentQuestion, OwnerQuestion | Owner/question decisions always escalate. |
 //! | LessonsDistill, GateLog, StaleVerdict, EvidenceOnly, LoadFailure, Diagnosis | Repair or interpretation is not validated routine work. |
 //! | IdeaPromotion, Land, Inbox | Scoping, acceptance, or free-form coordination is not validated routine work. |
 //!
@@ -79,13 +79,6 @@ pub fn escalate(card: &PmAction, ctx: &EscalationContext<'_>) -> Escalation {
     use EscalationReason::*;
     let mut reasons = Vec::new();
     if card.requires_owner
-        || matches!(
-            card.kind,
-            PmActionKind::Owner
-                | PmActionKind::Question
-                | PmActionKind::AgentQuestion
-                | PmActionKind::OwnerQuestion
-        )
         || card.options.iter().any(|o| {
             o.requires_owner && (Some(o.id.as_str()) == ctx.choice || o.id == card.recommended)
         })

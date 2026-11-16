@@ -268,7 +268,7 @@ impl Board {
                         task: task.into(),
                         reason: detail["reason"]
                             .as_str()
-                            .unwrap_or("owner attention; exact question unrecorded")
+                            .unwrap_or("PM inspection; exact question unrecorded")
                             .into(),
                     },
                 );

@@ -51,6 +51,8 @@ impl WaitClass {
     }
 }
 
+/// The PM resolves routine stops inside approved projects. Owner responsibility is
+/// reserved for explicit owner decisions, not missing executor delegation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Responsible {
@@ -124,7 +126,7 @@ pub struct Condition {
 }
 
 impl Condition {
-    /// Human label for the party that can remove this stopping condition.
+    /// Human label for the party that can remove this stop, independent of executor authority.
     pub fn unblocker(&self) -> String {
         match self.responsible {
             Responsible::Owner => "Owner".into(),

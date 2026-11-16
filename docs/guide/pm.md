@@ -35,7 +35,35 @@ wakes; do not blindly retry uncertain delivery with a new ID. Continue independe
 until complete or a named wait, using the shared bounded continuation mechanism rather
 than a new polling loop. Quiet progress does not require repeated owner summaries.
 
-### Exact authority difference from the generic PM
+### PM authority
+
+The PM operates the board inside its approved projects and is the default unblocker:
+a stuck task waits for the PM, not the owner, unless its resolution is on the owner-only
+list. The same text reaches every PM through the `[corral-policy]` message
+(`PM_AUTHORITY` in `crates/corral-ops/src/pm_policy.rs`) and the Pi role context.
+
+| Owner-only | Why |
+|---|---|
+| Paid or live-provider spend beyond the configured budget | Money |
+| Credentials and privacy | Secrets |
+| Discard, dropping a task with a live branch, lost-run recovery | Destroys unfinished work |
+| Admitting a project, `automation confirm`, `mode autopilot`, `mode turbo`, owner parks, owner-stopped runs, scope exclusions | Scope and priority |
+| `owner_only` and `permission` questions | Asked of the owner by kind |
+| Waiving independent review | Removes a check |
+
+Everything else the PM runs itself and records in a task comment: dispatch and queue
+changes, gates, review starts, send-backs, landing after a passing configured gate and an
+independent approval, plan verdicts, hold and dispatch-hold release, its own parks, stale
+queued consent (`corral dispatch <id>`), `corral mode resume`, `corral repair renew`,
+gate-failure attribution, capacity and ad-hoc reserve changes, and follow-up tasks.
+A PM shell (`CORRAL_PM=1`) passes the operator guard on those commands; worker, reviewer
+and assistant shells do not.
+
+Two authorities stay separate. Corral's executor (`corral pm act <id>`, autopilot) acts only
+on what the effective operating policy delegates: a pause or a missing grant stops it. The
+PM is not stopped by either: a card option with `requires_owner: false` and `pm_runs: true`
+has no action ID and is run by the PM through the CLI. `requires_owner: true` now means the
+owner-only list, nothing else.
 
 Pi's typed tools cover scoped reads, question answer/escalate/cancel, inbox claim/resolve,
 reply/comment, backlog/idea capture and board actions. Prefer `corral_action` over `bash`
@@ -44,29 +72,24 @@ for the routine board path:
 - `act` takes the action ID from an executable `corral_next`/`corral_brief` card command
   (`... pm act <id> --json`) and runs it exactly as `corral pm act` does: the ID is
   recomputed against fresh policy, scope, hold and task identity, then executed by the
-  project-scoped executor. It covers every option the effective policy already makes
-  executable: dispatch and idea promotion, gate and re-gate, review start, repair diagnosis
-  and send-back, plan review, and accept, land or plan acceptance only where an owner
-  grant covers them.
-  Owner-required options never receive an ID. The result is `progressed` or `waiting` with
-  the task's status; a stale or no-longer-authorized ID is a stored `stale_revision`
-  refusal, final for that ID: re-read `corral_next`.
+  project-scoped executor. The result is `progressed` or `waiting` with the task's status;
+  a stale or no-longer-delegated ID is a stored `stale_revision` refusal, final for that
+  ID: re-read `corral_next`.
 - `park` is the PM-authored `corral attention park`: reason, machine-checkable
   `resume_when` checks, optional resume action and a 1h-7d review interval (default 24h).
   It never replaces an owner park.
 - `attend` records handling of one current attention key (`corral attention attend`, 30m
   next check); a stale key is refused.
 
-Each action is refused before any effect when its task lies outside the PM's approved
+Each typed action is refused before any effect when its task lies outside the PM's approved
 projects, and is receipt-backed: replaying a request returns the stored result and runs
-nothing. Everything else the owner can run (queueing, `--owner` plan verdicts and
-acceptance, forced moves, config, sync) the Pi PM still runs through `bash` and the
-corral CLI when an explicit owner instruction or a standing owner rule covers it, and
-reports afterwards. It prefers the board's own executor and acts directly when that
-executor stalls or Corral's machinery blocks approved work. It asks the owner only for
-decisions that are truly theirs (undecided scope or priority, paid spend, credentials,
-privacy, destructive actions on unfinished work). Handoffs and board reads never confer
-fresh owner authority.
+nothing. Handoffs and board reads never confer authority on the owner-only list.
+
+A red integration base is fixed at once. A worker fixes a mechanical failure the base
+already has (formatter output, a lint fix the tool names, a size-ceiling split) in a
+separate `baseline:` commit, which review treats as in scope when it only restores the
+failing check. Otherwise the PM files a `red-main` task and dispatches it, or commits
+formatter or generated output on the base itself.
 
 ### Recording a gate diagnosis without a terminal handoff
 
@@ -75,10 +98,12 @@ failed gate. Its `diagnosis` names the failed `attempt`, `class`, `explanation`
 and attached artifact paths in `evidence`; `red_base` also requires a verified
 baseline receipt. This is distinct from the bounded coding-repair diagnosis pass.
 
-The tool records the diagnosis directly when current delegated authority permits
-it. Otherwise it saves an exact proposal and the host asks the owner in the same
-pane. The host, not the PM model, records the answer. Approval applies only to
-that report and candidate state; it does not add the task to the automation grant.
+The PM's report is recorded directly, also while automation is paused, the task is
+held or it lies outside the automation grant, and a new report revises the PM's earlier
+attribution of the same attempt. For an assistant the tool records directly when current
+delegated authority permits it; otherwise it saves an exact proposal and the host asks
+the owner in the same pane. The host, not the model, records the answer. Approval applies
+only to that report and candidate state; it does not add the task to the automation grant.
 No UI or cancellation leaves a pending proposal, never implied consent. A
 replayed or uncertain request must not prompt the owner again automatically.
 
@@ -283,7 +308,7 @@ The daemon, or the board/sync worker when no daemon owns the loop, owns automati
 ### Opt-in corral-pi PM
 
 OmO remains the default PM. Selecting a `corral-pi` PM profile opts into a
-different tool loadout, not additional authority. The Pi PM is bound to one
+different tool loadout with the same authority. The Pi PM is bound to one
 approved project scope, separately from worker and reviewer runs. Its typed
 read tools provide brief, next, task, question and evidence readback; its
 receipted mutations answer, escalate or cancel a question, reply, comment or
@@ -309,9 +334,9 @@ not a whole-board sync or `pm_workset`.
 
 The PM may answer a pending question of any kind, escalated ones included, with
 a cited basis inside the approved write scope and acceptance; the owner can
-supersede a PM answer. Owner answers, deadlines, acceptance and authority changes are not PM
-tools. This role has no shell, edit, MCP or skills, including after reload or
-session replacement. These are tool boundaries, not an OS sandbox.
+supersede a PM answer. Owner answers and deadlines are not typed PM tools; the
+rest of the PM's authority runs through `bash` and the corral CLI. These are tool
+boundaries, not an OS sandbox.
 
 Pi PM tools never call sync, `pm act` or `pm_workset`. Keep `corral daemon run`
 running, or keep a board open when no daemon is installed. Readback and a
@@ -417,8 +442,8 @@ Equal-priority tasks retain creation order, with task ID as a stable tie-breaker
 | Situation | Default |
 |---|---|
 | Pass event disagrees with its attempt log | Re-gate; require the final configured command, complete command receipts, unchanged log digest and exactly one terminal `corral gate: pass` |
-| Verdict binds an old HEAD or integration base | Send the worker the code-written rebase, gate and fresh review plan: the full gate, or on a reduced-tier run its tier through `corral gate <id> --wait`, with out-of-scope and expected failures reported rather than fixed |
-| Harness question remains pending while herdr reports working | Blocked; show the exact question to the owner |
+| Verdict binds an old HEAD or integration base | Send the worker the code-written rebase, gate and fresh review plan: the full gate, or on a reduced-tier run its tier through `corral gate <id> --wait`, with base-inherited mechanical failures fixed in a `baseline:` commit and other out-of-scope and expected failures reported rather than fixed |
+| Harness question remains pending while herdr reports working | Blocked; the PM answers it, or shows the exact question to the owner when its kind is owner-only |
 | Evidence-only finding and identical commit range-diff | Acting-owner acceptance, never automatic acceptance |
 | Test failed under load | Request a recorded isolated rerun; file a separate flake bug only after an isolated pass |
 | Idle slots and empty Backlog/Ready | Ask the owner which idea, if any, to promote |
@@ -464,11 +489,10 @@ a pass. Preserve both logs and use event-based test synchronization.
 Dispatch checks global/project slot limits and dependencies and refuses Ideas.
 Landing checks fresh candidate identities and refuses a peer review still in
 flight, holding peer task locks while it advances the repository. A PM card
-never recommends approval of a failed configured gate. Existing explicit owner
-overrides of completed check outcomes remain available; a card is not that
-authorization. Git and the candidate gate retain conflict and size guards.
-The PM role forbids editing project code; it is not an operating-system
-sandbox for an agent with arbitrary shell access.
+never recommends approval of a failed configured gate. Git and the candidate
+gate retain conflict and size guards. The PM leaves project code to workers,
+apart from formatter or generated output on a red base; the role is not an
+operating-system sandbox for an agent with arbitrary shell access.
 
 ## Replay and compare models
 

@@ -21,28 +21,28 @@ fn each_escalation_reason_and_routine_case() {
             0,
             Some("wait"),
             false,
-            vec![OwnerOnly, UnvalidatedClass],
+            vec![UnvalidatedClass],
         ),
         (
             Some(PmActionKind::Question),
             0,
             Some("wait"),
             false,
-            vec![OwnerOnly, UnvalidatedClass],
+            vec![UnvalidatedClass],
         ),
         (
             Some(PmActionKind::AgentQuestion),
             0,
             Some("wait"),
             false,
-            vec![OwnerOnly, UnvalidatedClass],
+            vec![UnvalidatedClass],
         ),
         (
             Some(PmActionKind::OwnerQuestion),
             0,
             Some("wait"),
             false,
-            vec![OwnerOnly, UnvalidatedClass],
+            vec![UnvalidatedClass],
         ),
         (
             Some(PmActionKind::Diagnosis),
@@ -101,6 +101,7 @@ fn each_escalation_reason_and_routine_case() {
         label: String::new(),
         command: String::new(),
         requires_owner: true,
+        pm_runs: false,
     });
     assert!(
         !escalate(
@@ -148,6 +149,7 @@ fn digest_excludes_prose_but_binds_ordered_closed_choices_and_recommendation() {
         label: String::new(),
         command: String::new(),
         requires_owner: false,
+        pm_runs: false,
     });
     let ordered = shadow_digest(&card);
     card.options.swap(0, 1);

@@ -167,7 +167,7 @@ fn pending_plan_without_reviewer_appears_in_blocked_filter() {
 
 #[test]
 fn escalation_remains_blocked_while_working_worker_does_not() {
-    // Given a genuine working worker and another run escalated to the owner.
+    // Given a genuine working worker and another run the executor escalated.
     let (tmp, store) = fixture();
     let escalated = store
         .create("Owner decision", None, Status::NeedsMe, "")
@@ -188,10 +188,10 @@ fn escalation_remains_blocked_while_working_worker_does_not() {
         .unwrap();
     // When the real CLI filters Blocked.
     let rows = cli(tmp.path(), &["list", "--status", "blocked", "--json"]);
-    // Then only the stopped run is included, with owner responsibility.
+    // Then only the stopped run is included, and the PM is its unblocker.
     assert_eq!(rows.as_array().unwrap().len(), 1);
     assert_eq!(rows[0]["id"], "T-002");
     assert_eq!(rows[0]["status"], "needs_me");
     assert_eq!(rows[0]["blocked"]["kind"], "escalation");
-    assert_eq!(rows[0]["blocked"]["responsible"], "owner");
+    assert_eq!(rows[0]["blocked"]["responsible"], "pm");
 }

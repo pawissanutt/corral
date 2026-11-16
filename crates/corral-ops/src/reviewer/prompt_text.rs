@@ -181,6 +181,8 @@ fn gate_contract_section(contract: &crate::review_packet::ReviewGateContract) ->
          Judge the candidate against this tier and module scope. Do not run or demand another \
          tier, the full gate or whole-repository evidence. Record failures outside the module \
          scope, and the expected failures above, as non-blocking notes or follow-up proposals. \
+         A `baseline:` commit is in scope when it only restores a gate check the integration base \
+         already fails and changes no behavior; anything more in it is a finding. \
          A failure inside the declared scope that is not an expected failure stays blocking.\n",
         contract.tier,
         contract.source,

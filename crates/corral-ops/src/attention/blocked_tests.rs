@@ -253,27 +253,20 @@ fn escalation_silent_turn_and_launch_failure_are_blocked() {
         let stopped = corral_core::attention::blocked(&task, &a).unwrap();
         assert_eq!(stopped.kind, reason);
         assert_eq!(stopped.since, Some(at()));
-        assert_eq!(
-            stopped.unblocker(),
-            if reason == "escalation" {
-                "Owner"
-            } else {
-                "PM"
-            }
-        );
+        assert_eq!(stopped.unblocker(), "PM");
     }
 }
 
 #[test]
-fn plan_review_refusal_is_owner_authority_not_pm_recovery() {
+fn plan_review_refusal_requires_explicit_pm_action_not_executor_authority() {
     // Given a missing reviewer whose operating grant is stale.
     let task = plan();
-    // When the frozen policy refuses PlanReview, then owner authority takes precedence.
+    // When automatic PlanReview is refused, the PM can inspect and run it explicitly.
     let a = assessment(&task, &[], &[Action::PlanReview]);
     let stopped = corral_core::attention::blocked(&task, &a).unwrap();
     assert_eq!(stopped.kind, "authority_blocked");
-    assert_eq!(stopped.responsible, Responsible::Owner);
-    assert_eq!(stopped.unblocker(), "Owner");
+    assert_eq!(stopped.responsible, Responsible::Pm);
+    assert_eq!(stopped.unblocker(), "PM");
 }
 
 fn aggregate() -> Task {
@@ -368,10 +361,10 @@ fn aggregate_missing_reviewer_preserves_stale_authority_refusal() {
     let task = aggregate();
     // When the current frozen policy refuses aggregate recovery.
     let a = assessment(&task, &[], &[Action::AcceptAggregate]);
-    // Then it cannot advertise an authorized PM continuation.
+    // Then it advertises PM responsibility without delegating executor authority.
     let stopped = corral_core::attention::blocked(&task, &a).unwrap();
     assert_eq!(stopped.kind, "authority_blocked");
-    assert_eq!(stopped.responsible, Responsible::Owner);
+    assert_eq!(stopped.responsible, Responsible::Pm);
     assert_eq!(
         stopped.resume[0].expected.as_deref(),
         Some("AcceptAggregate")
@@ -498,7 +491,7 @@ fn stale_prepared_authorization_stops_otherwise_authorized_plan_pilot() {
     assert_eq!(stopped.kind, "authority_blocked");
     assert_eq!(stopped.reason_code, "authority_blocked");
     assert_eq!(stopped.since, Some(since));
-    assert_eq!(stopped.responsible, Responsible::Owner);
+    assert_eq!(stopped.responsible, Responsible::Pm);
     assert_eq!(stopped.resume[0].expected.as_deref(), Some("PlanReview"));
     assert!(a.progress.is_none());
 }
@@ -654,6 +647,6 @@ fn review_escalation_has_concrete_condition_without_fallback() {
     let a = assessment(&task, &[], &[]);
     let stopped = corral_core::attention::blocked(&task, &a).unwrap();
     assert_eq!(stopped.kind, "escalation");
-    assert_eq!(stopped.responsible, Responsible::Owner);
+    assert_eq!(stopped.responsible, Responsible::Pm);
     assert_eq!(a.conditions.len(), 1);
 }

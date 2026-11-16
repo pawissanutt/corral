@@ -22,7 +22,7 @@ pub(super) fn observation(ctx: &Ctx, task: &Task) -> Result<Option<PmObservation
                     run.state,
                     run.pending_reply
                         .as_deref()
-                        .unwrap_or("Planner needs owner input.")
+                        .unwrap_or("The PM inspects the planner's input request.")
                 ),
             }),
         );

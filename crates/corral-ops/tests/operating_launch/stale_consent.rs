@@ -223,7 +223,7 @@ fn meaningful_change_leaves_owner_planning_one_blocked_hold_until_an_explicit_ow
         for _ in 0..4 {
             corral_ops::sync_at(&fx.fresh(), now()).unwrap();
         }
-        // Then nothing submits, at most one refusal is logged, and one owner hold is Blocked.
+        // Then nothing submits, at most one refusal is logged, and one PM-resolvable hold is Blocked.
         let case = format!("retained={retained}");
         assert!(fx.records("submissions.jsonl").is_empty(), "{case}");
         assert!(
@@ -231,7 +231,7 @@ fn meaningful_change_leaves_owner_planning_one_blocked_hold_until_an_explicit_ow
             "{case}"
         );
         let (kind, responsible, _) = blocked(&fx, &id);
-        assert_eq!(responsible, "owner", "{case} {kind}");
+        assert_eq!(responsible, "pm", "{case} {kind}");
         let record = fx.ctx.store.authorized_submission(&approval.id).unwrap();
         assert_eq!(record.authorization, approval, "{case}");
         assert_ne!(

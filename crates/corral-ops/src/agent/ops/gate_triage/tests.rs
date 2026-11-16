@@ -220,89 +220,87 @@ fn unchanged(s: &Fixture, before: &corral_core::Task, credit: &GateTriage) {
 
 #[test]
 fn t956_in_chat_confirmation_unblocks_full_repair_without_grant_retry_or_launch() {
-    for assistant in [false, true] {
-        let s = fixture(assistant, false);
-        let before = s.fx.ctx.store.get(&s.task).unwrap();
-        let credit = status(&s.fx.ctx, &s.task).unwrap();
-        assert!(
-            check_retry(
-                &s.fx.ctx.store,
-                &s.task,
-                Some(&s.quick),
-                &s.quick.sha,
-                Some("full-B")
-            )
-            .is_err()
-        );
-        let proposed = ts::committed(&propose(&s, "attribution", &s.report)).result;
-        assert_eq!(proposed["outcome"], "proposed");
-        assert_eq!(
-            proposed["diagnosis"],
-            serde_json::to_value(&s.report).unwrap()
-        );
-        unchanged(&s, &before, &credit);
-        assert!(
-            status(&s.fx.ctx, &s.task).unwrap().failures[0]
-                .diagnoses
-                .is_empty()
-        );
-        assert!(matches!(
-            propose(&s, "attribution", &s.report),
-            CallResponse::Receipt { replayed: true, .. }
-        ));
-        let (request, payload) = decision(&s, &proposed, true);
-        let recorded = ts::committed(&send(&s, &s.host, &request, payload.clone()));
-        assert_eq!(recorded.result["outcome"], "recorded");
-        unchanged(&s, &before, &credit);
-        assert!(require_pass(&s.fx.ctx.store, &s.task, Some(&s.failed)).is_err());
-        assert!(matches!(
-            send(&s, &s.host, &request, payload),
-            CallResponse::Receipt { replayed: true, .. }
-        ));
-        assert!(
-            !check_retry(
-                &s.fx.ctx.store,
-                &s.task,
-                Some(&s.quick),
-                &s.quick.sha,
-                Some("full-B")
-            )
-            .unwrap()
-        );
-        admit(
+    let s = fixture(true, false);
+    let before = s.fx.ctx.store.get(&s.task).unwrap();
+    let credit = status(&s.fx.ctx, &s.task).unwrap();
+    assert!(
+        check_retry(
             &s.fx.ctx.store,
             &s.task,
             Some(&s.quick),
             &s.quick.sha,
-            "full-B",
+            Some("full-B")
         )
-        .unwrap();
-        require_pass(&s.fx.ctx.store, &s.task, Some(&s.quick)).unwrap();
-        let state = observe(&s.fx.ctx.store, &s.task, &s.quick).unwrap();
-        assert!(
-            state.failures[0].resolved_by.is_none(),
-            "quick B must not clear full A"
-        );
-        assert!(
-            crate::operating::require(
-                &s.fx.ctx.store,
-                &s.fx.ctx.store.head(&s.task).unwrap(),
-                OperatingActionKind::Gate
-            )
-            .is_err()
-        );
-        let full = gate("pass", &s.quick.sha, "full-B");
-        require_pass(&s.fx.ctx.store, &s.task, Some(&full)).unwrap();
-        let state = observe(&s.fx.ctx.store, &s.task, &full).unwrap();
-        assert_eq!(state.failures[0].resolved_by.as_ref(), Some(&full));
-        assert_eq!(state.failures[0].gate.result, GateResult::Fail);
-        assert_eq!(state.diagnostic_history, ["quick-B"]);
-    }
+        .is_err()
+    );
+    let proposed = ts::committed(&propose(&s, "attribution", &s.report)).result;
+    assert_eq!(proposed["outcome"], "proposed");
+    assert_eq!(
+        proposed["diagnosis"],
+        serde_json::to_value(&s.report).unwrap()
+    );
+    unchanged(&s, &before, &credit);
+    assert!(
+        status(&s.fx.ctx, &s.task).unwrap().failures[0]
+            .diagnoses
+            .is_empty()
+    );
+    assert!(matches!(
+        propose(&s, "attribution", &s.report),
+        CallResponse::Receipt { replayed: true, .. }
+    ));
+    let (request, payload) = decision(&s, &proposed, true);
+    let recorded = ts::committed(&send(&s, &s.host, &request, payload.clone()));
+    assert_eq!(recorded.result["outcome"], "recorded");
+    unchanged(&s, &before, &credit);
+    assert!(require_pass(&s.fx.ctx.store, &s.task, Some(&s.failed)).is_err());
+    assert!(matches!(
+        send(&s, &s.host, &request, payload),
+        CallResponse::Receipt { replayed: true, .. }
+    ));
+    assert!(
+        !check_retry(
+            &s.fx.ctx.store,
+            &s.task,
+            Some(&s.quick),
+            &s.quick.sha,
+            Some("full-B")
+        )
+        .unwrap()
+    );
+    admit(
+        &s.fx.ctx.store,
+        &s.task,
+        Some(&s.quick),
+        &s.quick.sha,
+        "full-B",
+    )
+    .unwrap();
+    require_pass(&s.fx.ctx.store, &s.task, Some(&s.quick)).unwrap();
+    let state = observe(&s.fx.ctx.store, &s.task, &s.quick).unwrap();
+    assert!(
+        state.failures[0].resolved_by.is_none(),
+        "quick B must not clear full A"
+    );
+    assert!(
+        crate::operating::require(
+            &s.fx.ctx.store,
+            &s.fx.ctx.store.head(&s.task).unwrap(),
+            OperatingActionKind::Gate
+        )
+        .is_err()
+    );
+    let full = gate("pass", &s.quick.sha, "full-B");
+    require_pass(&s.fx.ctx.store, &s.task, Some(&full)).unwrap();
+    let state = observe(&s.fx.ctx.store, &s.task, &full).unwrap();
+    assert_eq!(state.failures[0].resolved_by.as_ref(), Some(&full));
+    assert_eq!(state.failures[0].gate.result, GateResult::Fail);
+    assert_eq!(state.diagnostic_history, ["quick-B"]);
 }
 
 #[test]
 fn delegated_attribution_records_without_confirmation_or_stage_changes() {
-    let s = fixture(false, true);
+    let s = fixture(true, true);
     let before = s.fx.ctx.store.get(&s.task).unwrap();
     let credit = status(&s.fx.ctx, &s.task).unwrap();
     let recorded = ts::committed(&propose(&s, "delegated", &s.report));
@@ -315,8 +313,43 @@ fn delegated_attribution_records_without_confirmation_or_stage_changes() {
 }
 
 #[test]
+fn pm_attribution_records_while_paused_outside_grant_without_stage_changes() {
+    let mut s = fixture(false, false);
+    s.fx.ctx.store.config.automation.paused = true;
+    s.fx.ctx.store.config.dispatch.paused = true;
+    s.fx.ctx.store.config.review.autopilot = Some(false);
+    s.fx.ctx
+        .store
+        .config
+        .automation
+        .scope
+        .exclusions
+        .insert(s.task.clone());
+    s.fx.ctx.store.save_config().unwrap();
+    crate::hold::hold(&s.fx.ctx, &s.task, Some("live stop")).unwrap();
+    let before = s.fx.ctx.store.get(&s.task).unwrap();
+    let credit = status(&s.fx.ctx, &s.task).unwrap();
+    assert_eq!(
+        ts::committed(&propose(&s, "paused", &s.report)).result["outcome"],
+        "recorded"
+    );
+    let mut revised = s.report.clone();
+    revised.class = FailureClass::Unknown;
+    revised.explanation = "Retained evidence revises the earlier attribution".into();
+    assert_eq!(
+        ts::committed(&propose(&s, "revised", &revised)).result["outcome"],
+        "recorded"
+    );
+    unchanged(&s, &before, &credit);
+    assert_eq!(
+        status(&s.fx.ctx, &s.task).unwrap().failures[0].diagnoses,
+        [s.report.clone(), revised]
+    );
+}
+
+#[test]
 fn forged_model_decisions_wrong_digest_and_foreign_session_are_refused() {
-    let s = fixture(false, false);
+    let s = fixture(true, false);
     let proposed = ts::committed(&propose(&s, "attribution", &s.report)).result;
     let (request, payload) = decision(&s, &proposed, true);
     let mut model = s.host.clone();
@@ -376,7 +409,7 @@ fn forged_model_decisions_wrong_digest_and_foreign_session_are_refused() {
 
 #[test]
 fn decline_replay_and_conflicting_answer_never_record_or_reprompt() {
-    let s = fixture(false, false);
+    let s = fixture(true, false);
     let proposed = ts::committed(&propose(&s, "attribution", &s.report)).result;
     let (request, payload) = decision(&s, &proposed, false);
     assert_eq!(
@@ -402,7 +435,7 @@ fn decline_replay_and_conflicting_answer_never_record_or_reprompt() {
 #[test]
 fn stale_candidate_spec_policy_prior_triage_and_live_holds_refuse_confirmation() {
     for change in ["candidate", "spec", "policy", "triage", "hold", "recovery"] {
-        let mut s = fixture(false, false);
+        let mut s = fixture(true, false);
         let proposed = ts::committed(&propose(&s, "attribution", &s.report)).result;
         match change {
             "candidate" => {
@@ -474,7 +507,7 @@ fn stale_candidate_spec_policy_prior_triage_and_live_holds_refuse_confirmation()
 
 #[test]
 fn malformed_evidence_retry_and_holds_refuse_without_proposals() {
-    let s = fixture(false, false);
+    let s = fixture(true, false);
     let mut report = s.report.clone();
     report.evidence = vec!["not-attached".into()];
     assert_eq!(
@@ -501,7 +534,7 @@ fn malformed_evidence_retry_and_holds_refuse_without_proposals() {
 
 #[test]
 fn reattribution_requires_new_bound_owner_confirmation_even_inside_grant() {
-    let s = fixture(false, true);
+    let s = fixture(true, true);
     ts::committed(&propose(&s, "initial", &s.report));
     let mut report = s.report.clone();
     report.class = FailureClass::Unknown;
@@ -531,7 +564,7 @@ fn reattribution_requires_new_bound_owner_confirmation_even_inside_grant() {
 
 #[test]
 fn pending_proposal_can_be_explicitly_revisited_with_fresh_confirmation_only() {
-    let s = fixture(false, false);
+    let s = fixture(true, false);
     let original = ts::committed(&propose(&s, "cancelled-dialog", &s.report)).result;
     let fresh = ts::committed(&propose(&s, "owner-explicitly-revisits", &s.report)).result;
     assert_ne!(fresh["proposal"], original["proposal"]);
@@ -558,47 +591,30 @@ fn pending_proposal_can_be_explicitly_revisited_with_fresh_confirmation_only() {
 }
 
 #[test]
-fn fence_and_hold_races_are_rechecked_inside_the_receipted_commit() {
-    for fence in [false, true] {
-        let s = fixture(false, false);
-        let proposal = ts::committed(&propose(&s, "attribution", &s.report)).result;
-        let (request, payload) = decision(&s, &proposal, true);
-        let store = s.fx.ctx.store.clone();
-        let task = s.task.clone();
-        let container = admission::container_of(&s.host.identity);
-        let generation = s.host.identity.generation;
-        crate::agent::receipts::FAILPOINT.with_borrow_mut(|hook| {
-            *hook = Some(Box::new(move |name| {
-                if name == "agent_admitted_before_commit" {
-                    if fence {
-                        crate::agent::admission::fence_generation(
-                            &store,
-                            &container,
-                            generation,
-                            "owner stopped",
-                        )
-                        .unwrap();
-                    } else {
-                        crate::hold::hold(
-                            &Ctx::from_store(store.clone()),
-                            &task,
-                            Some("racing owner stop"),
-                        )
-                        .unwrap();
-                    }
-                }
-            }));
-        });
-        let response = send(&s, &s.host, &request, payload);
-        crate::agent::receipts::FAILPOINT.with_borrow_mut(|hook| *hook = None);
-        assert_eq!(
-            ts::code(&response),
-            Some(if fence { "agent_fenced" } else { "fixed_rule" })
-        );
-        assert!(
-            status(&s.fx.ctx, &s.task).unwrap().failures[0]
-                .diagnoses
-                .is_empty()
-        );
-    }
+fn a_fence_racing_the_pm_report_is_rechecked_inside_the_receipted_commit() {
+    let s = fixture(false, false);
+    let store = s.fx.ctx.store.clone();
+    let container = admission::container_of(&s.host.identity);
+    let generation = s.host.identity.generation;
+    crate::agent::receipts::FAILPOINT.with_borrow_mut(|hook| {
+        *hook = Some(Box::new(move |name| {
+            if name == "agent_admitted_before_commit" {
+                crate::agent::admission::fence_generation(
+                    &store,
+                    &container,
+                    generation,
+                    "owner stopped",
+                )
+                .unwrap();
+            }
+        }));
+    });
+    let response = propose(&s, "attribution", &s.report);
+    crate::agent::receipts::FAILPOINT.with_borrow_mut(|hook| *hook = None);
+    assert_eq!(ts::code(&response), Some("agent_fenced"), "{response:?}");
+    assert!(
+        status(&s.fx.ctx, &s.task).unwrap().failures[0]
+            .diagnoses
+            .is_empty()
+    );
 }

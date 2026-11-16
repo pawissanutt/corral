@@ -13,6 +13,14 @@ fn fixture() -> Result<(tempfile::TempDir, Ctx)> {
 fn owner_attention_counts_exclude_pm_moves_and_unscheduled_backlog() -> Result<()> {
     let (_root, ctx) = fixture()?;
     let owner = ctx.store.create("owner move", None, Status::NeedsMe, "")?;
+    ctx.store.update(&owner.id, |task| {
+        task.runs.push(serde_json::from_value(serde_json::json!({
+            "id":"R1", "agent":"fixture", "worktree":"/unused", "branch":"fixture",
+            "base":"main", "base_sha":"base", "started":"2026-11-01T00:00:00Z",
+            "ended":"2026-11-01T00:01:00Z", "outcome":"stopped"
+        }))?);
+        Ok(())
+    })?;
     let pm = ctx.store.create("pm move", None, Status::Running, "")?;
     let backlog = ctx
         .store

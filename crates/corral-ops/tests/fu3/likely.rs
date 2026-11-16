@@ -82,7 +82,7 @@ pub(super) fn shortlist_variant(scale: usize, similar: bool) -> WorkSnapshot {
     });
     // Then inventory and branch preconditions hold before the counters are read.
     fixture.state_preconditions(&state);
-    assert_eq!(action.kind, PmActionKind::IdeaPromotion);
+    assert_eq!(action.kind, PmActionKind::IdeaPromotion, "{action:?}");
     assert_eq!(action.shortlist, expected_shortlist);
     assert_eq!(
         action.shortlist[0].compared_tasks,

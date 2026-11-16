@@ -386,11 +386,11 @@ fn s21_safe_rejections_retry_exactly_and_uncertain_evidence_sends_nothing_on_all
         deliver(&ctx, recipient, &transport, None).unwrap();
         pass(0);
         let unsafe_row = condition(&fx, recipient, &unsafe_message);
-        // Then it offers owner recovery or inspection, never retry, and retry sends nothing.
+        // Then it offers explicit recovery or inspection, never retry, and retry sends nothing.
         assert_eq!(unsafe_row.kind, "delivery_uncertain", "{recipient:?}");
         let offered = unsafe_row.next_action.command.clone().unwrap_or_default();
         assert!(!offered.contains("inbox retry"), "{offered}");
-        assert!(unsafe_row.next_action.requires_owner || offered.contains("inspect-retry"));
+        assert!(offered.contains("inbox recover") || offered.contains("inspect-retry"));
         assert!(corral_ops::delivery::retry(&ctx.store, recipient, unsafe_message.seq).is_err());
         assert_eq!(
             transport.sent_to(recipient),

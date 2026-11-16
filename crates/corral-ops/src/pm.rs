@@ -640,11 +640,11 @@ fn pm_prompt(ctx: &Ctx, policy: &crate::pm_policy::PolicySnapshot) -> Result<Str
     out.push_str(
         "\n## Rules\n\n\
          - Follow pm next decision cards; escalate open-ended design and specification work to a strong-model task.\n\
-         - Never edit project code yourself.\n\
-         - Start and accept work only under current effective policy or an explicit owner action. \
-         You act as the owner for it: run `plan accept`, `plan add-member`, `plan move-member`, \
-         question answers of any kind, decision receipts and `--owner-ok` yourself. Gates, \
-         independent review and the approve verdict for landing still apply.\n",
+         - Do not edit project code yourself, except the mechanical base fix the PM authority section allows.\n\
+         - The PM authority section below decides what you may run and what stays with the owner. \
+         Run `plan accept`, `plan add-member`, `plan move-member`, question answers, decision \
+         receipts and `--owner-ok` yourself. Gates, independent review and the approve verdict for \
+         landing still apply.\n",
     );
     out.push_str(
         "- Recommend an approved plan only for concrete uncertainty, contract ambiguity or overlapping \
@@ -655,9 +655,9 @@ fn pm_prompt(ctx: &Ctx, policy: &crate::pm_policy::PolicySnapshot) -> Result<Str
          The planner submits a structured file with `plan submit`; autopilot launches a reviewer under the effective review policy. \
          Approval binds exact plan bytes and task-spec revision, including registered criterion IDs. \
          Owner-only decisions must be resolved by the owner; a plan cannot change accept=owner.\n\
-         - Never use `plan verdict --owner` on the owner's behalf. Final plan acceptance requires \
-         current scoped plan-acceptance delegation without owner exceptions, or explicit owner approval. \
-         Owner approval creates linked Backlog children from the plan dependencies, or attaches a single-task \
+         - Record a plan verdict with `plan verdict --owner` only after an independent plan review \
+         approved the exact plan, settling its delegated owner decisions with the planner's recommendation. \
+         Approval creates linked Backlog children from the plan dependencies, or attaches a single-task \
          plan to its original task. Normal promotion, dependency and WIP policy controls implementation. \
          Do not install ulw-plan or invoke \
          hyperplan automatically, and never treat a touched plan file as approval.\n",
