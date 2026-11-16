@@ -14,19 +14,23 @@ import type { CorralOp, RoleModule, UpstreamTool } from "../types.ts";
 import { assistantShellRefusal } from "./guard.ts";
 import { ownerActionTool } from "./owner-action.ts";
 import { installWriteGuard } from "./paths.ts";
+import { assistantPlanReviewTool, assistantPlanTool } from "./planning.ts";
 
 import { ideaFileTool } from "./idea-file.ts";
 export const CONTRACT_ASSET = "assets/assistant-contract.md";
 export const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "grep", "find", "ls", "bash"];
 const LOOKUP = receiptLookupTool();
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission", "idea_file", "gate_triage", ...memoryTools.map((tool) => tool.op)];
+const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission", "idea_file", "gate_triage",
+  ...memoryTools.map((tool) => tool.op), "assistant_plan", "assistant_plan_review"];
+// Local design and advisory review; publication and review grant no execution consent.
+const WORKFLOW = [assistantPlanTool, assistantPlanReviewTool];
 
 export function assistantRole(root: string): RoleModule {
   return {
     role: "assistant",
     upstreamTools: UPSTREAM,
     corralOps: OPS,
-    tools: (context) => [LOOKUP, ownerActionTool, gateTriageTool, ...memoryTools,
+    tools: (context) => [LOOKUP, ownerActionTool, gateTriageTool, ...memoryTools, ...WORKFLOW,
       ...(context.todo === true ? [sessionTodoTool] : []), ...(context.daemonHosted ? [ideaFileTool] : [])],
     contract: (context) => {
       const contract = `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n`

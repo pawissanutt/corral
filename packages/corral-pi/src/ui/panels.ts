@@ -79,6 +79,8 @@ export interface NativePanelsOptions {
   readonly sidebarKey?: SidebarKey;
   /** Where the build controller appends transcript marks; absent outside build sessions or before the host wires it. */
   readonly marks?: MarkSink;
+  /** Opens the same native /handoff sheet; the selection inside it is the only consent. */
+  readonly handoff?: (ui: ExtensionUIContext) => Promise<void>;
 }
 /** Views a tool row's clickable label can open by name; `plan` is the sidebar's Plan tab. */
 export type PanelView = "chat" | "agents" | "changes" | "task" | "proof" | "artifacts" | "inbox" | "usage" | "board" | "plan";
@@ -1101,6 +1103,9 @@ export class NativePanels implements PanelSurface {
       action("model", "app.model.select", "Select model", this.nativeKeys?.("app.model.select") ?? "", () => this.nativeAction?.("app.model.select")),
       action("model", "app.thinking.cycle", "Cycle effort", this.nativeKeys?.("app.thinking.cycle") ?? "", () => this.nativeAction?.("app.thinking.cycle"),
         () => !this.snapshot()?.effortAvailable ? "this model has no effort levels" : ready()),
+      ...(this.options.handoff ? [action("workspace", "/handoff", "Hand off or take back this work…", "/handoff", async () => {
+        if (this.ui) await this.options.handoff?.(this.ui);
+      })] : []),
       panel("workspace", "project", "Show files from another project…"),
       panel("workspace", "refresh", taskBound ? "Reread proof, usage and files" : "Reread files"),
       action("workspace", "sidebar.focus", "Sidebar: focus, then the next tab", "F6", () => this.sidebarKey()),

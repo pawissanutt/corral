@@ -142,6 +142,7 @@ pub fn journal(
                 command: None,
                 answers: None,
                 request: format!("app:{key}"),
+                binding: None,
             },
         );
         INPUTS.save(

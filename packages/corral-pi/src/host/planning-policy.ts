@@ -9,6 +9,8 @@ export interface WorkflowExpected {
 }
 export interface PlanningState {
   readonly phase: string;
+  /** Executing under a recorded current-revision Implement here grant: local scratch work. */
+  readonly open?: boolean;
   readonly expected?: WorkflowExpected;
   readonly boundary?: {
     readonly activities: readonly { readonly id: string; readonly tool: string; readonly uncertain: boolean }[];
@@ -48,12 +50,13 @@ export function planningState(snapshot: unknown): PlanningState {
     throw new Error("planning recovery required: invalid workflow");
   }
   const owner = state.owner as { kind?: string } | undefined;
-  // No artifact reference is itself execution authority. The later scoped execution consumer
-  // must verify exact T-743 evidence/assumptions; until then executing resumes fenced.
+  // No plan artifact is itself execution authority: only the recorded Implement here grant
+  // (corral's native current-revision choice) opens an executing scope.
   const effective = owner?.kind === "board" ? "board_owned" : owner?.kind === "local" ? phase : "recovering";
   const plan = state.current_plan as { revision?: number } | null | undefined;
   return { phase: effective, expected: { workflow: state.workflow, state_revision: Number(state.state_revision),
     authority_epoch: Number(state.authority_epoch), plan_revision: plan?.revision ?? null },
+    ...(effective === "executing" && root.execution_open === true ? { open: true } : {}),
     ...(state.boundary ? { boundary: state.boundary as PlanningState["boundary"] } : {}) };
 }
 
@@ -75,7 +78,7 @@ export class PlanningPolicy {
   }) {}
 
   snapshot(): PlanningState { return this.state; }
-  get restricted(): boolean { return this.fenced || !["ordinary", "closed"].includes(this.state.phase); }
+  get restricted(): boolean { return this.fenced || !(["ordinary", "closed"].includes(this.state.phase) || this.state.open); }
   visible(name: string): boolean { return !this.restricted || READS.has(name) || Object.hasOwn(BOOKKEEPING, name); }
   refusal(name: string, input: Record<string, unknown> = {}): string | undefined {
     return this.restricted && !planningBookkeeping(name, input)
@@ -94,7 +97,7 @@ export class PlanningPolicy {
     if (old && (!next.expected || next.expected.authority_epoch < old.authority_epoch)) {
       throw new Error("planning recovery required: authority readback regressed");
     }
-    if (next.expected?.authority_epoch !== old?.authority_epoch || !["ordinary", "closed"].includes(next.phase)) this.port.fence();
+    if (next.expected?.authority_epoch !== old?.authority_epoch || !(["ordinary", "closed"].includes(next.phase) || next.open)) this.port.fence();
     this.state = next;
   }
   private ordered<T>(action: () => Promise<T>): Promise<T> {

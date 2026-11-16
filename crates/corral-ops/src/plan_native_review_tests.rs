@@ -223,6 +223,7 @@ fn exact_source(
                     command: None,
                     answers: None,
                     request: "fixture-review-source".into(),
+                    binding: None,
                 },
             );
             workflow::prepare_entry(&ctx.store, &session, c, &input.id)?;

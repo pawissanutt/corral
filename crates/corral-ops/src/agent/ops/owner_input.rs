@@ -33,6 +33,16 @@ struct Payload {
     command: Option<String>,
     #[serde(default)]
     answers: Option<String>,
+    /// Choice only: the `DecisionBinding` digest the owner's selection was made against.
+    #[serde(default)]
+    binding: Option<String>,
+}
+
+fn hex64(text: &str) -> bool {
+    text.len() == 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn bad(reason: impl Into<String>) -> anyhow::Error {
@@ -67,11 +77,7 @@ fn validate(envelope: &Envelope, payload: &Payload) -> Result<()> {
             "owner input text must be 1..{OWNER_INPUT_TEXT_MAX} bytes"
         )));
     }
-    let hex = payload.sha256.len() == 64
-        && payload
-            .sha256
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    let hex = hex64(&payload.sha256);
     if !hex || (!payload.truncated && payload.sha256 != paths::sha256_hex(payload.text.as_bytes()))
     {
         return Err(bad(
@@ -79,9 +85,22 @@ fn validate(envelope: &Envelope, payload: &Payload) -> Result<()> {
         ));
     }
     let answers = payload.answers.as_deref();
+    // Only a Choice carries a binding; it is never ordinary text and never a confirmation.
+    if payload.binding.is_some() != (payload.source == OwnerInputSource::Choice) {
+        return Err(bad(
+            "only a native choice carries a binding, and every native choice carries one",
+        ));
+    }
     match (payload.source, payload.command.as_deref()) {
         (OwnerInputSource::Pane, None) if answers.is_none() => Ok(()),
         (OwnerInputSource::Dialog, None) if answers.is_none() && !payload.truncated => Ok(()),
+        (OwnerInputSource::Choice, None)
+            if answers.is_none()
+                && !payload.truncated
+                && payload.binding.as_deref().is_some_and(hex64) =>
+        {
+            Ok(())
+        }
         (OwnerInputSource::Confirmation, Some(command))
             if matches!(payload.text.as_str(), "y" | "n")
                 && !command.is_empty()
@@ -103,7 +122,7 @@ fn validate(envelope: &Envelope, payload: &Payload) -> Result<()> {
 /// the same ID; nothing else is logged.
 pub(crate) fn journal(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     let payload: Payload = serde_json::from_value(envelope.payload.clone()).map_err(|_| {
-        bad("malformed owner_input payload; expected fields: kind, source, text, sha256, truncated?, command?, answers?")
+        bad("malformed owner_input payload; expected fields: kind, source, text, sha256, truncated?, command?, answers?, binding?")
     })?;
     validate(envelope, &payload)?;
     let session = envelope.identity.assistant.clone().unwrap_or_default();
@@ -126,6 +145,7 @@ pub(crate) fn journal(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         command: payload.command,
         answers: payload.answers,
         request: envelope.request_id.clone(),
+        binding: payload.binding,
     };
     receipts::commit_assistant(ctx, &admitted, move |assistant| {
         require_interactive(assistant, envelope.identity.generation)?;

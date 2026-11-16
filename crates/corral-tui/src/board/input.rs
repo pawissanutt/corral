@@ -62,6 +62,103 @@ impl BoardView {
         }
     }
 
+    /// Take-back (`W`) or save (`K`) of a transferred card through the SAME owner services
+    /// the CLI and assistant use. Binds the card's contract revision as last loaded; a
+    /// changed task refuses as stale instead of acting on newer state.
+    pub(super) fn transfer_card(&mut self, ctx: &Ctx, take_back: bool) -> Action {
+        use corral_ops::assistant::workflow::handoff::{owner, status};
+        let Some(t) = self.selected_task().filter(|t| status::transfer_fenced(t)) else {
+            return Action::Toast(Toast::new(
+                Tone::Info,
+                "No handoff on this card",
+                "W/K apply only to work handed off from an assistant",
+            ));
+        };
+        let id = t.id.clone();
+        let contract = match corral_core::TaskRef::contract_revision(t) {
+            Ok(c) => c,
+            Err(e) => {
+                return Action::Toast(Toast::new(
+                    Tone::Bad,
+                    "Handoff unavailable",
+                    format!("{e:#}"),
+                ));
+            }
+        };
+        let outcome = if take_back {
+            owner::take_back(ctx, &id, &contract).and_then(|r| Ok(serde_json::to_string(&r)?))
+        } else {
+            owner::save(ctx, &id, &contract).map(|_| "Saved for later · Held".to_string())
+        };
+        self.refresh(ctx);
+        match outcome {
+            Ok(text) => Action::Toast(Toast::new(
+                Tone::Info,
+                if take_back {
+                    format!("{id} returning to assistant")
+                } else {
+                    format!("{id} saved")
+                },
+                text,
+            )),
+            Err(e) => Action::Toast(Toast::new(
+                Tone::Bad,
+                format!("{id}: nothing changed"),
+                format!("{e:#}"),
+            )),
+        }
+    }
+
+    /// Goal-aware continuation of a handed-off card (`N` continue planning, `U` review
+    /// this plan, `T` take over and finish) through the SAME preview/start services. Plan
+    /// scopes never offer implementation; the preview pins the current revision.
+    pub(super) fn continue_card(&mut self, ctx: &Ctx, key: char) -> Action {
+        use corral_ops::assistant::workflow::handoff::{Goal, continuation, owner, status};
+        let Some(t) = self.selected_task().filter(|t| status::transfer_fenced(t)) else {
+            return Action::Toast(Toast::new(
+                Tone::Info,
+                "No handoff on this card",
+                "N/U/T apply only to work handed off from an assistant",
+            ));
+        };
+        let id = t.id.clone();
+        // The same cached canonical projection the card and its menu show, with its pin.
+        let shown = self.handoffs.get(&id);
+        let plan_only = shown.is_some_and(|r| r.plan_only);
+        let pin = shown.and_then(|r| r.pin.clone());
+        let goal = match (key, plan_only) {
+            ('N', true) => Goal::PlanContinue,
+            ('U', true) => Goal::PlanReviewOnly,
+            ('T', false) => Goal::ImplementationShip,
+            _ => {
+                return Action::Toast(Toast::new(
+                    Tone::Info,
+                    format!("{id}: not offered"),
+                    if plan_only {
+                        "Plan scope: N continue planning or U review this plan; never implementation"
+                    } else {
+                        "Implementation scope: T take over and finish"
+                    },
+                ));
+            }
+        };
+        let outcome = continuation::preview_pinned(ctx, pin.as_ref(), &id, goal)
+            .and_then(|choice| owner::start(ctx, &choice, &choice.digest()?));
+        self.refresh(ctx);
+        match outcome {
+            Ok(task) => Action::Toast(Toast::new(
+                Tone::Info,
+                format!("{id} continuing"),
+                status::project(ctx, &task).map_or_else(|| "Started".into(), |r| r.label),
+            )),
+            Err(e) => Action::Toast(Toast::new(
+                Tone::Bad,
+                format!("{id}: nothing changed"),
+                format!("{e:#}"),
+            )),
+        }
+    }
+
     pub(super) fn board_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
         let ncols = self.columns().len();
         let status = self.selected_task().map(|t| t.status);
@@ -127,6 +224,9 @@ impl BoardView {
                 }
             },
             KeyCode::Char('H') => return self.move_card(ctx, false),
+            KeyCode::Char('W') => return self.transfer_card(ctx, true),
+            KeyCode::Char('K') => return self.transfer_card(ctx, false),
+            KeyCode::Char(c @ ('N' | 'U' | 'T')) => return self.continue_card(ctx, c),
             KeyCode::Char('L') => return self.move_card(ctx, true),
             KeyCode::Char('X') => {
                 if let Some(task) = self

@@ -59,6 +59,7 @@ import { askUserEnabled, askUserTool } from "./ask-user.ts";
 import { PendingQuestions, QUESTION_ENTRY } from "./pending-questions.ts";
 import { OwnerAskMirror } from "./owner-ask-mirror.ts";
 import { recordQuestionOwnerInput } from "./question-owner-input.ts";
+import { runHandoff, type History, selectHistory } from "./handoff.ts";
 import { OwnerQuestionUi } from "../ui/owner-questions.ts";
 import { registerCacheStats } from "../ui/cache-stats.ts";
 import { type HerdrLifecycle, answeredKeys } from "./herdr.ts";
@@ -550,6 +551,7 @@ export class HostSession {
       readHistory: request => options.client.history(request),
       readTranscript: id => this.readAgentTranscript(id),
       ...(options.identity.task ? { readTask: () => options.client.taskSnapshot() } : {}),
+      ...(options.identity.role === "assistant" ? { handoff: (ui: Sdk.ExtensionUIContext) => this.handoffSheet(ui, true) } : {}),
     });
     this.unsubscribePanels = this.panels ? options.events.on(event => {
       if (event.kind === "terminal_input" && typeof event.input_sequence === "number" && event.input_sequence >= this.terminalInputSequence) {
@@ -1045,7 +1047,36 @@ export class HostSession {
     if (this.planning?.snapshot().expected) await this.planReviews?.recover();
   }
 
-  /** Internal integration seam. Public entry/choice UI is deliberately not exposed here. */
+  /** The current branch's visible user/assistant text through its leaf checkpoint, bounded. */
+  /** The one native /handoff path, from the slash command or the action palette. */
+  private async handoffSheet(ui: Sdk.ExtensionUIContext, hasUI: boolean): Promise<void> {
+    if (!this.bound) { ui.notify("corral: handoff needs a bound session; nothing changed", "warning"); return; }
+    try {
+      const { text, level } = await runHandoff({ client: this.options.client, events: this.options.events,
+        generation: this.options.identity.generation, sessionId: () => this.sessionId(),
+        turn: () => this.currentTurn(), ui, hasUI,
+        after: async () => { await this.planning?.refresh(); this.session.setActiveToolsByName([...this.initialTools]); },
+        history: () => this.visibleHistory() });
+      ui.notify(`corral: ${text}`, level);
+    } catch (error) {
+      ui.notify(`corral: handoff refused: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  }
+  private visibleHistory(): History | undefined {
+    const manager = this.session.sessionManager;
+    const visible: { role: "user" | "assistant"; text: string }[] = [];
+    for (const entry of manager.getBranch()) {
+      const m = (entry as { type: string; message?: { role?: string; content?: unknown } }).message;
+      if (entry.type !== "message" || (m?.role !== "user" && m?.role !== "assistant")) continue;
+      const text = typeof m.content === "string" ? m.content : Array.isArray(m.content)
+        ? m.content.map((p: { type?: string; text?: string }) => p.type === "text" ? p.text ?? "" : "").join("") : "";
+      if (text.trim()) visible.push({ role: m.role, text });
+    }
+    const leaf = manager.getLeafId();
+    return leaf ? selectHistory(this.sessionId() || "session", leaf, visible) : undefined;
+  }
+
+  /** Host-authenticated planning entry, reached from /plan with a journaled owner request. */
   async enterPlanning(input: string): Promise<PlanningState> {
     if (!this.planning || !this.bound) throw new Error("planning requires a bound assistant");
     requireVerifiedPlanningDrain(this.assistantShell?.verifiedDrain === true); // before the mode/fence changes
@@ -1497,6 +1528,32 @@ export class HostSession {
       const { exit, board } = this.buildControls;
       pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { if (!this.panels?.finish()) exit.open(); } });
       if (board) pi.registerCommand("board", { description: "Refresh this build session's board tasks", handler: async () => { await board.refresh(); this.panels?.showBoard(); } });
+    }
+    if (this.options.identity.role === "assistant") {
+      // Explicit opt-in planning: the owner's request is journaled as genuine pane input, then
+      // the existing host-authenticated entry drains effects. Source stays unchanged until a
+      // separate current-revision Implement here choice in /handoff.
+      pi.registerCommand("plan", {
+        description: "Plan this request without changing source; choose Implement here in /handoff later",
+        handler: async (args, ctx) => {
+          const text = String(args ?? "").trim();
+          if (!text) { ctx.ui.notify("corral: /plan <what to design>; ordinary messages stay ordinary", "info"); return; }
+          if (!this.bound) { ctx.ui.notify("corral: planning needs a bound session; nothing changed", "warning"); return; }
+          try {
+            const id = await this.journalOwnerInput("pane", text);
+            if (id === undefined) throw new Error("the request could not be journaled");
+            const state = await this.enterPlanning(id);
+            ctx.ui.notify(`corral: planning (${state.phase}); source is unchanged until you choose Implement here in /handoff`, "info");
+            pi.sendUserMessage(ownerInputText(text, id));
+          } catch (error) {
+            ctx.ui.notify(`corral: planning refused: ${error instanceof Error ? error.message : String(error)}`, "error");
+          }
+        },
+      });
+      pi.registerCommand("handoff", {
+        description: "Show who is responsible for this work and hand it off or take it back (owner selection only)",
+        handler: async (_args, ctx) => this.handoffSheet(ctx.ui, ctx.hasUI),
+      });
     }
     if (this.exportable()) {
       pi.registerCommand(EXPORT_COMMAND, {

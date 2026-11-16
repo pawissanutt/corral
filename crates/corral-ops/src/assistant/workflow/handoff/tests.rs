@@ -257,6 +257,7 @@ pub(super) fn planning(f: &mut ts::Fx) -> (String, AssistantContainer, Expected)
                     command: None,
                     answers: None,
                     request: "ev-1-1".into(),
+                    binding: None,
                 },
             );
             super::super::prepare_entry(&f.ctx.store, &session, c, &input.id)?;

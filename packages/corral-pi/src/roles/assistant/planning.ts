@@ -1,5 +1,5 @@
-// Assistant workflow protocol foundation. Intentionally NOT installed in the ordinary role
-// loadout and no /plan command: the execution boundary and choice experience must land first.
+// Assistant workflow protocol. The design and local-review tools are in the assistant loadout;
+// /plan enters planning and Implement here (/handoff) is the only execution choice.
 // Model-callable schemas never contain host-only drain/result/answer publication actions.
 import { Type } from "typebox";
 import type { CorralOp, CorralToolSpec } from "../types.ts";

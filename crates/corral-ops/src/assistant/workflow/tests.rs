@@ -1,5 +1,7 @@
 #[path = "boundary_tests.rs"]
 mod boundary_tests;
+#[path = "implement_tests.rs"]
+mod implement_tests;
 #[path = "review_tests.rs"]
 mod review_tests;
 
@@ -110,6 +112,7 @@ impl Fixture {
                         command: None,
                         answers: None,
                         request: "ev-1-1".into(),
+                        binding: None,
                     },
                 );
                 prepare_entry(&self.fx.ctx.store, &self.session, container, &input.id)?;
@@ -437,15 +440,24 @@ fn assistant_workflow_pages_large_utf8_and_history_with_bounded_receipts() {
 fn assistant_workflow_closed_schemas_role_generation_and_lifecycle_fail_closed() {
     let f = Fixture::new();
     let before = f.container();
-    for (op, payload) in [
-        (
+    assert_eq!(
+        ts::code(&f.send(
             "assistant_plan",
-            json!({"action": "enter", "input": "ev-1-1"}),
-        ),
-        ("assistant_handoff", json!({"action": "read"})),
-    ] {
-        assert_eq!(ts::code(&f.send(op, op, payload)), Some("op_unavailable"));
-    }
+            "assistant_plan",
+            json!({"action": "enter", "input": "ev-1-1"})
+        )),
+        Some("op_unavailable")
+    );
+    // Read is a projection only: an ordinary session stays ordinary, nothing changes.
+    assert_eq!(
+        ts::committed(&f.send(
+            "handoff-read",
+            "assistant_handoff",
+            json!({"action": "read"})
+        ))
+        .result["label"],
+        json!("Ordinary assistant work")
+    );
     assert_eq!(
         ts::committed(&f.send(
             "review-read",
