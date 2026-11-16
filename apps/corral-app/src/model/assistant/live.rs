@@ -812,14 +812,7 @@ pub fn live_agents(state: &State, feed: &Feed, can_send: bool) -> Agents {
         .values()
         .filter(|row| row.kind != AssistantKind::Quick || Some(row.id.as_str()) != current)
         .collect();
-    sessions.sort_by_key(|row| {
-        std::cmp::Reverse(
-            row.id
-                .strip_prefix("A-")
-                .and_then(|n| n.parse::<u64>().ok())
-                .unwrap_or(0),
-        )
-    });
+    sessions.sort_by_key(|row| std::cmp::Reverse(session_number(&row.id).unwrap_or(0)));
     let rows: Vec<SessionRow> = sessions
         .iter()
         .map(|row| {
