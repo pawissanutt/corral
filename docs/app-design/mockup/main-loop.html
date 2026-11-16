@@ -1,0 +1,1243 @@
+<!doctype html>
+<html lang="en" class="t-dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Corral · main loop proposal</title>
+<!-- Brand fonts ship beside this file; without them the page falls back to system fonts. -->
+<link rel="stylesheet" href="css/fonts.css">
+<style>
+:root{
+  --font:"Atkinson Hyperlegible Next",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"Atkinson Hyperlegible Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --ease:cubic-bezier(.16,1,.3,1);
+}
+.t-dark{
+  color-scheme:dark;
+  --bg:oklch(.195 .012 240);--sunk:oklch(.17 .012 240);--surface:oklch(.225 .013 240);--surface-2:oklch(.255 .014 240);
+  --shell:oklch(.155 .022 238);--shell-ink:oklch(.86 .012 238);--shell-ink-2:oklch(.70 .016 238);--shell-sel:oklch(.255 .035 238);--shell-rule:oklch(.27 .02 238);
+  --rule:oklch(.29 .012 240);--rule-2:oklch(.36 .014 240);
+  --ink:oklch(.94 .006 240);--ink-2:oklch(.80 .010 240);--ink-3:oklch(.72 .012 240);--ink-4:oklch(.66 .012 240);
+  --sel:oklch(.275 .03 240);--hover:oklch(.24 .016 240);--focus:oklch(.86 .09 215);--selection:oklch(.86 .09 215/.35);
+  --primary:oklch(.93 .006 240);--primary-ink:oklch(.18 .012 240);
+  --you:oklch(.76 .15 58);--you-bg:oklch(.29 .06 58);--corral:oklch(.74 .12 278);--corral-bg:oklch(.27 .05 278);
+  --worker:oklch(.78 .10 200);--worker-bg:oklch(.27 .04 200);--held:oklch(.84 .13 92);--held-bg:oklch(.29 .05 92);
+  --fail:oklch(.70 .18 25);--fail-bg:oklch(.28 .07 25);--ok:oklch(.78 .13 152);--ok-bg:oklch(.27 .05 152);
+  --shade:oklch(0 0 0/.55);
+}
+.t-light{
+  color-scheme:light;
+  --bg:oklch(.977 .003 230);--sunk:oklch(.955 .005 230);--surface:oklch(.995 .002 230);--surface-2:oklch(.945 .006 230);
+  --shell:oklch(.27 .035 240);--shell-ink:oklch(.95 .008 238);--shell-ink-2:oklch(.80 .02 238);--shell-sel:oklch(.36 .045 238);--shell-rule:oklch(.36 .035 240);
+  --rule:oklch(.89 .007 235);--rule-2:oklch(.80 .01 235);
+  --ink:oklch(.21 .02 245);--ink-2:oklch(.36 .02 245);--ink-3:oklch(.44 .018 245);--ink-4:oklch(.51 .014 245);
+  --sel:oklch(.925 .02 238);--hover:oklch(.955 .008 238);--focus:oklch(.50 .14 245);--selection:oklch(.50 .14 245/.25);
+  --primary:oklch(.24 .025 245);--primary-ink:oklch(.98 .004 240);
+  --you:oklch(.52 .16 50);--you-bg:oklch(.95 .04 60);--corral:oklch(.50 .16 278);--corral-bg:oklch(.95 .03 278);
+  --worker:oklch(.50 .10 215);--worker-bg:oklch(.95 .025 205);--held:oklch(.51 .12 80);--held-bg:oklch(.95 .05 92);
+  --fail:oklch(.53 .19 27);--fail-bg:oklch(.95 .035 25);--ok:oklch(.50 .13 152);--ok-bg:oklch(.95 .035 152);
+  --shade:oklch(.2 .02 240/.25);
+}
+
+*{box-sizing:border-box;margin:0;scrollbar-width:thin;scrollbar-color:var(--rule-2) transparent}
+html,body{height:100%}
+body{font:13px/1.45 var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;overflow:hidden;caret-color:var(--focus)}
+::selection{background:var(--selection)}
+:focus-visible{outline:2px solid var(--focus);outline-offset:1px;border-radius:4px}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+a{color:inherit;text-decoration:none}
+ul,ol{list-style:none;padding:0}
+h1,h2,h3{font-weight:650;text-wrap:balance}
+code,.mono{font-family:var(--mono);font-size:.93em}
+svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+
+/* state hues: colour carries state only */
+.st{color:var(--ink-4)}
+.h-you,.t-you{color:var(--you)}.h-corral,.t-corral{color:var(--corral)}.h-worker,.t-worker{color:var(--worker)}
+.h-held,.t-held{color:var(--held)}.h-fail,.t-fail{color:var(--fail)}.h-ok,.t-ok{color:var(--ok)}.h-dim,.t-dim{color:var(--ink-3)}
+.t-ink{color:var(--ink)}
+
+/* shell */
+.app{display:grid;grid-template:36px minmax(0,1fr)/var(--side-w,208px) minmax(0,1fr);height:100%}
+.app.folded{--side-w:52px}
+.titlebar{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:0 10px 0 14px;background:var(--shell);color:var(--shell-ink);border-bottom:1px solid var(--shell-rule);font-size:12px;white-space:nowrap;min-width:0;overflow:hidden}
+.titlebar>:not(.hl):not(.sp){flex:none}
+.brand{display:flex;align-items:center;gap:8px;font-weight:650;font-size:13px}
+.titlebar .path,.titlebar .dim{color:var(--shell-ink-2)}
+.hl{display:flex;align-items:center;gap:6px;color:var(--shell-ink)}
+.hl i{width:6px;height:6px;border-radius:50%;background:oklch(.78 .13 152)}
+.sp{flex:1}
+.sample{border:1px solid oklch(.84 .13 92/.55);color:oklch(.84 .13 92);border-radius:4px;padding:1px 6px;font-family:var(--mono);font-size:11px}
+.tb{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border-radius:5px;color:var(--shell-ink);font-weight:600;transition:background .15s}
+.tb:hover,.tb[aria-pressed=true]{background:var(--shell-sel)}
+
+/* the surface stays terse; a tooltip says the rest on hover, keyboard focus or long-press */
+#tip{position:fixed;z-index:80;max-width:300px;padding:6px 9px;border:1px solid var(--rule-2);border-radius:6px;background:var(--surface-2);color:var(--ink);box-shadow:0 8px 24px -8px var(--shade);font-size:12.5px;line-height:1.4;pointer-events:none}
+#tip[hidden]{display:none}
+#tip.on{animation:tipin .14s var(--ease)}
+@keyframes tipin{from{opacity:0;translate:0 3px}}
+:not(button):not(a)[data-tip]{cursor:help}
+button [data-tip],a [data-tip]{cursor:inherit}
+.tok{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.tok svg{width:14px;height:14px}
+.tok b{font:600 12.5px var(--mono)}
+.stats{display:flex;align-items:center;gap:16px;flex:1;min-width:0;flex-wrap:wrap}
+.stats .tok svg{width:15px;height:15px}
+.stats .tok b{font-size:14px}
+.stats .more{font:600 13px var(--mono);color:var(--you);text-decoration:underline dotted;text-underline-offset:3px}
+.mline{display:none}
+
+.side{background:var(--shell);color:var(--shell-ink);display:flex;flex-direction:column;gap:2px;padding:10px 8px;border-right:1px solid var(--shell-rule);min-height:0;overflow:auto}
+.ws{padding:4px 8px 10px;display:flex;align-items:flex-start;gap:6px}
+.ws b{display:block;font-size:13.5px}
+.ws small{color:var(--shell-ink-2);font-size:11.5px;line-height:1.3;display:block}
+.ws .tb{margin-left:auto;padding:0 4px}
+.nav{display:flex;align-items:center;gap:10px;height:30px;padding:0 9px;border-radius:6px;color:var(--shell-ink-2);font-weight:500;transition:background .15s,color .15s}
+a.nav:hover{background:oklch(1 0 0/.05);color:var(--shell-ink)}
+.nav.on{background:var(--shell-sel);color:oklch(.97 .005 238);font-weight:650}
+.nav.off{opacity:.55;cursor:default}
+.nav .cnt{margin-left:auto;font:11.5px var(--mono)}
+.nav .cnt+.cnt{margin-left:10px;min-width:16px;text-align:right}
+.nav .tag{display:none;width:24px;height:22px;border:1px solid var(--shell-rule);border-radius:5px;align-items:center;justify-content:center;font:600 11px var(--mono)}
+#side-projects{display:flex;flex-direction:column;gap:2px}
+.sh{display:flex;justify-content:space-between;padding:2px 9px 4px;font-size:11.5px;color:var(--shell-ink-2)}
+.nav .cnt.you{color:oklch(.76 .15 58);font-weight:700}
+.nav kbd{font:11px var(--mono);color:var(--shell-ink-2);width:10px;text-align:center}
+.nav .cnt+kbd{margin-left:0}.nav .lbl+kbd{margin-left:auto}
+.side hr{border:0;border-top:1px solid var(--shell-rule);margin:8px 6px}
+.dev{margin-top:auto;padding:10px 8px 2px;border-top:1px solid var(--shell-rule);font-size:11.5px;color:var(--shell-ink-2);line-height:1.5}
+.dev b{color:var(--shell-ink)}
+.dev .mono{font-size:1em}
+.app.folded .side .lbl,.app.folded .side .cnt,.app.folded .side kbd,.app.folded .ws div,.app.folded .dev,.app.folded .sh,.app.folded #side-projects svg{display:none}
+.app.folded .nav .tag{display:flex}
+.app.folded .nav{justify-content:center;padding:0}
+.app.folded .ws{justify-content:center;padding:4px 0 10px}.app.folded .ws .tb{margin:0}
+
+/* page frame */
+#view{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.phead{display:flex;align-items:baseline;gap:6px 16px;flex-wrap:wrap;padding:14px 20px 12px;border-bottom:1px solid var(--rule)}
+.phead h1{font-size:18px;letter-spacing:-.01em}
+.lede{color:var(--ink-2);font-size:13.5px;flex:1;min-width:240px}
+.lnk{color:inherit;font:inherit;text-decoration:underline;text-decoration-color:var(--rule-2);text-underline-offset:3px}
+.lnk:hover{text-decoration-color:currentColor}
+.lnk.plain{text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.lnk.plain svg{width:12px;height:12px;transition:transform .15s}
+.lnk.plain svg.rot{transform:rotate(90deg)}
+.scope{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:7px 20px;border-bottom:1px solid var(--rule)}
+.pc{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border:1px solid var(--rule);border-radius:12px;color:var(--ink-2);font-size:12px;white-space:nowrap;transition:background .15s,border-color .15s,color .15s}
+.pc:hover{background:var(--hover);color:var(--ink)}
+.pc[aria-pressed=true]{background:var(--sel);border-color:var(--rule-2);color:var(--ink);font-weight:650}
+.pc b{color:var(--you);font:700 11.5px var(--mono)}
+.split{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 380px}
+.split.one{grid-template-columns:minmax(0,1fr)}
+.split.s-agents{grid-template-columns:minmax(0,1fr) 448px}
+.split.s-agents:not(.has-sel){grid-template-columns:minmax(0,1fr)}
+.split.three{grid-template-columns:280px minmax(0,1fr) 372px}
+.split.s-review{grid-template-columns:272px minmax(0,1fr) 300px}
+.split.no-aside{grid-template-columns:272px minmax(0,1fr)}
+.col{min-height:0;min-width:0;overflow:auto}
+.col.fx{display:flex;flex-direction:column;overflow:hidden}
+.scroll{flex:1;min-height:0;overflow:auto}
+.aside,.plist+.main{border-left:1px solid var(--rule)}
+.aside.enter>*{animation:swap .22s var(--ease)}
+@keyframes swap{from{opacity:0;transform:translateX(6px)}}
+
+/* buttons, chips, segmented */
+.btn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border:1px solid var(--rule-2);border-radius:6px;background:var(--surface);font-weight:600;font-size:12.5px;white-space:nowrap;transition:background .15s,border-color .15s}
+.btn:hover{background:var(--surface-2)}
+.btn.pri{background:var(--primary);color:var(--primary-ink);border-color:transparent}
+.btn.pri:hover{background:color-mix(in oklch,var(--primary) 88%,var(--bg))}
+.btn.q{border-color:transparent;background:none;color:var(--ink-2)}
+.btn.q:hover{background:var(--hover);color:var(--ink)}
+.btn.sm{height:24px;padding:0 8px;font-size:12px}
+.btn.ic{padding:0;width:24px;justify-content:center}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.chip{display:inline-flex;align-items:center;gap:4px;height:19px;padding:0 6px;border-radius:4px;font-size:11.5px;font-weight:650;white-space:nowrap;background:var(--surface-2);color:var(--ink-2)}
+.chip.c-you{color:var(--you);background:var(--you-bg)}.chip.c-corral{color:var(--corral);background:var(--corral-bg)}
+.chip.c-worker{color:var(--worker);background:var(--worker-bg)}.chip.c-held{color:var(--held);background:var(--held-bg)}
+.chip.c-ok{color:var(--ok);background:var(--ok-bg)}
+.seg{display:inline-flex;border:1px solid var(--rule-2);border-radius:6px;padding:2px;gap:2px}
+.seg button{height:22px;padding:0 9px;border-radius:4px;font-weight:600;font-size:12px;color:var(--ink-3);transition:background .15s,color .15s;white-space:nowrap}
+.seg button:hover{color:var(--ink)}
+.seg button[aria-pressed=true]{background:var(--surface-2);color:var(--ink)}
+.seg button[disabled]{opacity:.45;cursor:not-allowed}
+
+/* rail: every mark keeps its shape, the stage in play names itself */
+.track{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+.track .ln{width:8px;height:1px;background:var(--rule-2)}
+.track .st{display:inline-flex;align-items:center;gap:4px}
+.track .st svg{width:14px;height:14px}
+.track .s-done{color:var(--ink-3)}
+.track b{font-weight:650;font-size:12px}
+
+/* Now */
+.loop{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin:14px 20px 2px;border:1px solid var(--rule);border-radius:8px;background:var(--surface)}
+.loop a{position:relative;display:flex;align-items:center;gap:10px;height:36px;padding:0 14px;border-left:1px solid var(--rule);transition:background .15s}
+.loop a:first-child{border-left:0;border-radius:8px 0 0 8px}.loop a:last-child{border-radius:0 8px 8px 0}
+.loop a:hover{background:var(--hover)}
+.loop a+a::before{content:"";position:absolute;left:-5px;top:50%;width:8px;height:8px;border-top:1px solid var(--rule-2);border-right:1px solid var(--rule-2);background:var(--surface);transform:translateY(-50%) rotate(45deg)}
+.loop>a>b{font-weight:650;margin-right:auto}
+.loop .nil{color:var(--ink-4)}
+.gh{display:flex;align-items:baseline;gap:8px;padding:20px 20px 6px;font-size:13px;font-weight:650;border-bottom:1px solid var(--rule)}
+.gh .n{font:12px var(--mono);color:var(--ink-3);font-weight:400}
+.gh small{margin-left:auto;display:inline-flex;align-items:center;gap:12px;font-weight:400;color:var(--ink-3);font-size:12px}
+.ask{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;padding:0 20px 0 0;border-bottom:1px solid var(--rule);transition:background .15s}
+.ask:hover{background:var(--hover)}.ask.sel{background:var(--sel)}
+.askmain{display:grid;grid-template-columns:14px 50px minmax(0,1fr) 36px;gap:10px;align-items:center;height:38px;padding:0 0 0 20px;width:100%}
+.askmain.wp{grid-template-columns:14px 50px 60px minmax(0,1fr) 36px}
+.askmain .dot{display:flex}
+.askmain .dot svg{width:14px;height:14px}
+.askmain .q{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.askmain .id,.askmain .pj,.askmain .age{color:var(--ink-3);font-size:12px}
+.askmain .age{font-family:var(--mono);text-align:right}
+.row{display:grid;grid-template-columns:12px 52px minmax(120px,1fr) 150px 36px 50px;gap:10px;align-items:center;width:100%;height:38px;padding:0 20px;border-bottom:1px solid var(--rule);transition:background .15s}
+.row.wp{grid-template-columns:12px 52px 60px minmax(120px,1fr) 150px 36px 50px}
+.row.cl{grid-template-columns:12px 52px minmax(120px,1fr) 150px 96px}
+.row.cl.wp{grid-template-columns:12px 52px 60px minmax(120px,1fr) 150px 96px}
+.row .pj,.pr .pj{color:var(--ink-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pr .pj{grid-column:1;grid-row:2;align-self:center}
+.row .stw{display:flex;align-items:center;gap:6px;color:var(--ink-2);font-size:12.5px}
+.row .stw svg{width:14px;height:14px}
+.row .when{text-align:right;color:var(--ink-3);font-size:12px}
+.pager{display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid var(--rule);color:var(--ink-3);font-size:12px}
+.row:hover{background:var(--hover)}.row.sel{background:var(--sel)}
+.row .id,.row .age,.row .cost{color:var(--ink-3);font-size:12px}
+.row .age,.row .cost{text-align:right}
+.row .ttl{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .nowt{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .dl svg{width:10px;height:10px;display:block}
+.wrow{display:flex;align-items:center;gap:18px;padding:9px 20px;border-bottom:1px solid var(--rule);color:var(--ink-2)}
+
+/* side column */
+.sec{padding:14px 18px;border-bottom:1px solid var(--rule)}
+.sec>h3{font-size:12px;color:var(--ink-3);margin-bottom:8px;display:flex;gap:8px;align-items:baseline}
+.sec>h3 small{margin-left:auto;font-weight:400;font-size:11.5px}
+.phd{padding:14px 18px 12px;border-bottom:1px solid var(--rule)}
+.phd .r1{display:flex;align-items:center;gap:8px;color:var(--ink-3);font-size:12px;min-height:24px}
+.phd .r1 .btn{margin-left:auto}
+.phd h2{font-size:16px;margin:4px 0 3px;letter-spacing:-.005em}
+.phd .meta{color:var(--ink-3);font-size:12px}
+.phd .seg{margin-top:10px}
+.stages{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
+.stages div{border-top:2px solid var(--rule);padding:8px 8px 0 0}
+.stages .cur{border-top-color:currentColor}
+.stages small{display:block;color:var(--ink-3);font-size:11.5px}
+.stages b{display:flex;align-items:center;gap:5px;font-weight:650;color:var(--ink)}
+.stages .cur b{color:inherit}
+.stages code{display:block;color:var(--ink-3);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.steps li{display:flex;gap:8px;padding:3px 0;color:var(--ink-2)}
+.steps li svg{margin-top:1px}
+.steps .s-done{color:var(--ink)}.steps .s-next{color:var(--ink-3)}
+.steps .s-now span,.steps .s-you span{color:var(--ink);font-weight:600}
+.facts{display:grid;grid-template-columns:78px minmax(0,1fr);gap:6px 10px}
+.facts dt{color:var(--ink-3)}
+.acts{display:flex;gap:8px;flex-wrap:wrap}
+.callout{border:1px solid color-mix(in oklch,var(--you) 55%,transparent);background:var(--you-bg);border-radius:8px;padding:10px 12px;display:grid;gap:8px;justify-items:start}
+.callout p{color:color-mix(in oklch,var(--you) 35%,var(--ink))}
+.callout b{color:var(--you)}
+.dg li{display:grid;grid-template-columns:16px 50px minmax(0,1fr) auto;gap:8px;padding:6px 0;align-items:start}
+.dg li+li{border-top:1px solid var(--rule)}
+.dg svg{margin-top:1px}
+.dg .id,.dg time{font:12px var(--mono);color:var(--ink-3);padding-top:1px}
+.dg p{color:var(--ink-2)}
+.evl li{display:grid;grid-template-columns:40px 50px minmax(0,1fr);gap:8px;padding:3px 0;color:var(--ink-2)}
+.evl time,.evl .id{font:12px var(--mono);color:var(--ink-3)}
+.opt{border:1px solid var(--rule-2);border-radius:8px;padding:10px 12px;margin-top:8px;background:var(--surface)}
+.opt h4{font-size:13px;font-weight:650;display:flex;gap:8px;align-items:center}
+.opt dl{display:grid;grid-template-columns:64px minmax(0,1fr);gap:3px 8px;margin:6px 0 8px;font-size:12.5px;color:var(--ink-2)}
+.opt dt{color:var(--ink-3)}
+
+/* Agents */
+.rh,.ar{display:grid;grid-template-columns:92px 52px minmax(110px,1fr) minmax(150px,1.5fr) 118px;gap:12px;align-items:center;padding:0 20px;width:100%}
+.s-agents:not(.has-sel) .rh,.s-agents:not(.has-sel) .ar{grid-template-columns:92px 52px 64px minmax(150px,1fr) minmax(220px,1.6fr) 118px 100px 44px 50px}
+.s-agents.has-sel .c-wide{display:none}
+.rh{height:30px;color:var(--ink-3);font-size:11.5px;border-bottom:1px solid var(--rule);position:sticky;top:0;background:var(--bg);z-index:1}
+.ar{height:40px;border-bottom:1px solid var(--rule);transition:background .15s}
+.ar:hover{background:var(--hover)}.ar.sel{background:var(--sel)}
+.ar .id{font:12px var(--mono);color:var(--ink-3)}
+.ar .ttl{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ar .doing{display:flex;align-items:center;gap:8px;min-width:0;color:var(--ink-2)}
+.ar .doing .tx{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ar .doing .bar{flex:none;width:56px;margin:0}
+.ar .r{text-align:right}
+.ar .c-wide{color:var(--ink-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar{display:block;height:3px;border-radius:2px;background:var(--rule);margin-top:5px;max-width:220px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--corral);border-radius:2px}
+.strip{display:flex;align-items:flex-end;gap:2px;height:16px}
+.strip i{width:4px;height:2px;border-radius:1px;background:var(--rule-2)}
+.strip .v1{height:6px;background:var(--ink-4);opacity:.7}.strip .v2{height:11px;background:var(--ink-4);opacity:.85}.strip .v3{height:16px;background:var(--ink-4)}
+.strip .tip{background:currentColor;opacity:1;animation:breathe 2.4s ease-in-out infinite}
+@keyframes breathe{50%{opacity:.45}}
+.strip.big{height:28px;gap:3px}
+.strip.big i{width:auto;flex:1}.strip.big .v1{height:10px}.strip.big .v2{height:19px}.strip.big .v3{height:28px}
+.axis{display:flex;justify-content:space-between;color:var(--ink-4);font-size:11.5px;margin-top:4px}
+.subh{display:flex;align-items:baseline;gap:8px;padding:22px 20px 6px;font-size:13px;font-weight:650;border-bottom:1px solid var(--rule)}
+.subh small{color:var(--ink-3);font-weight:400;font-size:12px}
+.subh .btn{margin-left:auto}
+.srow{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:12px;align-items:center;width:100%;height:38px;padding:0 20px;border-bottom:1px solid var(--rule);transition:background .15s}
+.srow b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button.srow:hover{background:var(--hover)}
+.srow .id,.srow time{font:12px var(--mono);color:var(--ink-3)}
+.btn[aria-disabled=true],.seg button[aria-disabled=true]{opacity:.5;cursor:not-allowed}
+.log li{display:grid;grid-template-columns:40px minmax(0,1fr);gap:10px;padding:8px 0}
+.log li+li{border-top:1px solid var(--rule)}
+.log time{font:12px var(--mono);color:var(--ink-3);padding-top:1px}
+.log p{color:var(--ink);max-width:62ch}
+.log .sys p,.log .you p{color:var(--ink-2)}
+.log .who{font-size:11.5px;color:var(--ink-3);display:block}
+.log details{margin-top:6px}
+.log summary{cursor:pointer;color:var(--ink-3);font-size:12px;list-style:none;display:inline-flex;gap:6px;align-items:center;border-radius:4px}
+.log summary::-webkit-details-marker{display:none}
+.log summary svg{width:12px;height:12px;transition:transform .15s}
+.log details[open] summary svg{transform:rotate(90deg)}
+.log summary:hover{color:var(--ink)}
+.term{background:var(--sunk);border:1px solid var(--rule);border-radius:6px;padding:10px 12px;font:12.5px/1.6 var(--mono);white-space:pre;overflow:auto;color:var(--ink-2)}
+.log .term{margin-top:6px;font-size:12px}
+.term.full{margin:14px 18px;min-height:340px}
+.term .ok{color:var(--ok)}.term .cmd{color:var(--worker)}.term .dim{color:var(--ink-4)}
+.tcap{padding:0 18px 14px;color:var(--ink-3);font-size:12px}
+.composer{display:flex;gap:8px;align-items:center;padding:12px 18px;border-top:1px solid var(--rule)}
+.composer input{flex:1;min-width:0;height:32px;padding:0 10px;border:1px solid var(--rule-2);border-radius:6px;background:var(--surface);color:var(--ink);font:inherit}
+.composer input::placeholder{color:var(--ink-4)}
+.composer input:focus-visible{outline-offset:0}
+.composer.none{color:var(--ink-3);font-size:12px}
+
+/* Plans, Review lists */
+.plist .gh{padding:16px 16px 6px}
+.pr{display:grid;grid-template-columns:60px minmax(0,1fr);gap:2px 8px;width:100%;padding:9px 16px;border-bottom:1px solid var(--rule);transition:background .15s}
+.pr:hover{background:var(--hover)}.pr.sel{background:var(--sel)}
+.pr .id{font:12px var(--mono);color:var(--ink-3);padding-top:1px}
+.pr .ttl{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pr .ln2{grid-column:2;color:var(--ink-3);font-size:12px;display:flex;gap:8px;align-items:center;white-space:nowrap;overflow:hidden}
+.pr .ln2 svg{width:12px;height:12px}
+.segs{display:inline-flex;gap:2px}
+.segs i{width:12px;height:5px;border-radius:1px;background:var(--rule-2)}
+.segs .s-you{background:var(--you)}.segs .s-stale{background:var(--held)}.segs .s-now{background:var(--corral)}.segs .s-run{background:var(--worker)}.segs .s-done{background:var(--ok)}
+.dhead{padding:16px 20px 14px;border-bottom:1px solid var(--rule)}
+.dhead .r1{display:flex;gap:8px;align-items:center;color:var(--ink-3);font-size:12px;flex-wrap:wrap}
+.dhead h2{font-size:19px;letter-spacing:-.01em;margin:6px 0 4px;max-width:34ch}
+.dhead p{color:var(--ink-2);font-size:13.5px;max-width:70ch}
+.dhead .tabs{margin-top:12px}
+.blk{padding:16px 20px}
+.blk>h3{font-size:12px;color:var(--ink-3);margin-bottom:10px;display:flex;gap:8px;align-items:baseline}
+.blk>h3 small{font-weight:400}
+.graph{position:relative;display:flex;gap:48px;align-items:center;overflow-x:auto;padding:4px 2px 8px}
+.graph svg.edges{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+.graph svg.edges path{fill:none;stroke:var(--rule-2);stroke-width:1.25}
+.layer{display:flex;flex-direction:column;gap:12px}
+.mcard{display:grid;gap:3px;width:236px;padding:10px 12px;border:1px solid var(--rule-2);border-radius:8px;background:var(--surface);transition:border-color .15s,background .15s;position:relative;z-index:1}
+.mcard:hover{border-color:var(--ink-4)}
+.mcard.sel{border-color:var(--ink);background:var(--sel)}
+.mcard.you{border-color:color-mix(in oklch,var(--you) 60%,transparent);background:var(--you-bg)}
+.mcard.you.sel{border-color:var(--you)}
+.mcard .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.mcard .id{font:12px var(--mono);color:var(--ink-3)}
+.mcard .ttl{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.phd .toks,.scope .seg{margin-left:auto}
+.phd .toks{display:inline-flex;gap:12px}
+.gnote{color:var(--ink-3);font-size:12px;margin-top:10px}
+.pathl>li{display:grid;grid-template-columns:18px minmax(0,1fr);gap:8px;padding:0 0 14px;position:relative}
+.pathl>li:not(:last-child)::before{content:"";position:absolute;left:7.5px;top:20px;bottom:2px;width:1px;background:var(--rule-2)}
+.pathl>li>svg{margin-top:1px}
+.pathl h4{font-size:13px;font-weight:650}
+.pathl .s-next h4{color:var(--ink-2);font-weight:600}
+.pathl p{color:var(--ink-2);font-size:12.5px}
+.pathl ul{margin-top:6px;display:grid;gap:6px}
+.pathl ul li{display:grid;grid-template-columns:16px minmax(0,1fr);gap:6px;font-size:12.5px;color:var(--ink-2)}
+.pathl ul li svg{width:14px;height:14px;margin-top:2px}
+.warn{display:grid;grid-template-columns:16px minmax(0,1fr);gap:8px;margin-top:6px;padding:8px 10px;border-radius:6px;background:var(--held-bg);color:color-mix(in oklch,var(--held) 45%,var(--ink));font-size:12.5px}
+.warn svg{color:var(--held);margin-top:1px}
+.pathl ul li>div,.warn>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.doc{padding:6px 20px 24px;max-width:76ch}
+.doc h3{font-size:12px;color:var(--ink-3);margin:18px 0 6px}
+.doc p,.doc li{font-size:13.5px;line-height:1.55;color:var(--ink)}
+.doc ul{display:grid;gap:5px}
+.doc li{padding-left:14px;position:relative}
+.doc li::before{content:"";position:absolute;left:2px;top:.62em;width:4px;height:4px;border-radius:50%;background:var(--ink-4)}
+.chainl li{display:grid;grid-template-columns:18px minmax(0,1fr);gap:8px;padding:5px 0;color:var(--ink-2)}
+.chainl b{color:var(--ink);font-weight:600}
+.vd li{padding:8px 0}
+.vd li+li{border-top:1px solid var(--rule)}
+.vd .h{display:flex;gap:6px;align-items:center;font-weight:650}
+.vd p{color:var(--ink-2);font-size:12.5px;margin-top:3px}
+.vd .old{opacity:.75}
+.decide{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 20px;border-top:1px solid var(--rule);background:var(--bg)}
+.empty{color:var(--ink-3);padding:6px 0;max-width:60ch}
+.empty.pad{padding:16px 20px}
+
+/* Review */
+.ready>li{display:grid;grid-template-columns:18px minmax(0,1fr);gap:10px;padding:0 0 16px;position:relative}
+.ready>li:not(:last-child)::before{content:"";position:absolute;left:7.5px;top:20px;bottom:2px;width:1px;background:var(--rule-2)}
+.ready h4{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13.5px;font-weight:650}
+.ready h4 code{font-weight:400;color:var(--ink-3)}
+.ready blockquote{margin-top:8px;padding:8px 12px;border:1px solid var(--rule-2);border-radius:6px;background:var(--surface);max-width:68ch;line-height:1.5}
+.ready blockquote small{display:block;color:var(--ink-3);font-size:12px;margin-bottom:2px}
+.fl{border:1px solid var(--rule);border-radius:8px;overflow:hidden}
+.fr{display:grid;grid-template-columns:16px auto minmax(0,1fr) auto;gap:10px;align-items:center;width:100%;height:36px;padding:0 12px;transition:background .15s}
+.fl>div+div{border-top:1px solid var(--rule)}
+.fr:hover{background:var(--hover)}
+.fr>svg{color:var(--ink-3);transition:transform .15s}
+.fr[aria-expanded=true]>svg{transform:rotate(90deg)}
+.fr .p{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12.5px var(--mono)}
+.fr .d{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
+.fr .pm{font:12px var(--mono);white-space:nowrap}
+.fbody{padding:2px 12px 4px;background:var(--bg)}
+.hunk{border:1px solid var(--rule);border-radius:6px;overflow:hidden;margin:8px 0 12px;font:12px/1.65 var(--mono)}
+.hh{background:var(--surface);color:var(--ink-3);padding:3px 10px;border-bottom:1px solid var(--rule)}
+.dfl{display:grid;grid-template-columns:42px 42px 18px minmax(0,1fr)}
+.dfl span{color:var(--ink-4);text-align:right;padding-right:8px;user-select:none}
+.dfl span.sg{text-align:center;padding:0}
+.dfl code{font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;padding-right:8px}
+.dfl.del{background:var(--fail-bg)}.dfl.add{background:var(--ok-bg)}
+.dfl.del .sg{color:var(--fail)}.dfl.add .sg{color:var(--ok)}
+.sp2{display:grid;grid-template-columns:1fr 1fr}
+.sp2 .dfl{grid-template-columns:42px 18px minmax(0,1fr)}
+.sp2 .dfl:nth-child(even){border-left:1px solid var(--rule)}
+.sp2 .dfl.void{background:var(--sunk)}
+.cmt{font:13px/1.5 var(--font);margin:8px 12px 8px 54px;padding:8px 12px;border:1px solid var(--rule-2);border-radius:6px;background:var(--surface);max-width:70ch}
+.cmt small{display:block;color:var(--ink-3);font-size:12px}
+.dtools{display:flex;align-items:center;gap:10px;padding:12px 20px 0}
+.fh{display:flex;gap:10px;align-items:baseline;margin-top:14px;font:12.5px var(--mono);flex-wrap:wrap}
+
+/* notes drawer, toast */
+#notes{position:fixed;top:36px;right:0;bottom:0;width:min(400px,100%);z-index:40;background:var(--surface);border-left:1px solid var(--rule-2);box-shadow:-18px 0 40px -18px var(--shade);overflow:auto;padding:16px 20px 28px;animation:swap .22s var(--ease)}
+#notes[hidden]{display:none}
+#notes h2{font-size:15px;display:flex;align-items:center}
+#notes h2 .btn{margin-left:auto}
+#notes h3{font-size:12px;color:var(--ink-3);margin:18px 0 6px}
+#notes li{position:relative;padding:3px 0 3px 14px;color:var(--ink-2);line-height:1.5}
+#notes li::before{content:"";position:absolute;left:2px;top:.75em;width:4px;height:4px;border-radius:50%;background:var(--ink-4)}
+#notes li b{color:var(--ink);font-weight:650}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:60;background:var(--primary);color:var(--primary-ink);padding:8px 14px;border-radius:8px;font-weight:600;box-shadow:0 10px 30px -10px var(--shade);max-width:min(560px,92vw);transition:opacity .2s,translate .2s var(--ease)}
+#toast.off{opacity:0;translate:0 8px;pointer-events:none}
+#toast code{font-weight:500}
+
+/* narrower windows: the side column yields first, then the sidebar folds, then it becomes a tab bar */
+@media (max-width:1180px){
+  .split,.split.s-agents,.split.s-agents:not(.has-sel){grid-template-columns:minmax(0,1fr);overflow:auto;align-content:start}
+  .split.three,.split.s-review,.split.no-aside{grid-template-columns:260px minmax(0,1fr)}
+  .split>.col{overflow:visible;min-height:auto}
+  .titlebar .path{display:none}
+  .split>.col.fx{display:block}
+  .split.three>.aside{grid-column:2}
+  .split>.aside{border-left:0;border-top:1px solid var(--rule)}
+  .three>.aside{border-left:1px solid var(--rule)}
+  .split.has-sel>.aside{position:fixed;top:36px;right:0;bottom:0;width:min(460px,100%);z-index:20;overflow:auto;background:var(--bg);border-left:1px solid var(--rule-2);border-top:0;box-shadow:-18px 0 40px -18px var(--shade)}
+  .split.has-sel>.aside.fx{display:flex}
+  .s-agents .c-wide{display:none}
+  .s-agents:not(.has-sel) .rh,.s-agents:not(.has-sel) .ar{grid-template-columns:92px 52px minmax(110px,1fr) minmax(150px,1.5fr) 118px}
+  .decide{position:sticky;bottom:0}
+}
+@media (max-width:900px){
+  .app{--side-w:52px}
+  .side .lbl,.side .cnt,.side kbd,.ws div,.dev,.ws .tb,.sh,#side-projects svg{display:none}
+  .nav .tag{display:flex}
+  .nav{justify-content:center;padding:0}
+  .sample{display:none}
+  .split.three,.split.s-review,.split.no-aside{grid-template-columns:minmax(0,1fr)}
+  .split.three>.aside{grid-column:1}
+  .plist+.main,.three>.aside{border-left:0;border-top:1px solid var(--rule)}
+  .graph{flex-direction:column;align-items:stretch;gap:12px}
+  .graph svg.edges{display:none}
+  .mcard{width:100%}
+}
+@media (max-width:640px){
+  .app{grid-template:36px minmax(0,1fr) 52px/minmax(0,1fr)}
+  .side{grid-row:3;flex-direction:row;justify-content:space-around;align-items:center;padding:0 6px;border-right:0;border-top:1px solid var(--shell-rule);overflow:visible}
+  .side .ws,.side hr,.side .nav.off,#side-projects{display:none}
+  .scope{flex-wrap:nowrap;overflow-x:auto;padding:7px 14px}
+  .pc{flex:none;height:32px}
+  .scope .seg{flex:none}
+  .side .nav{flex:1;flex-direction:column;gap:1px;height:44px;font-size:11px}
+  .side .nav .lbl{display:block}
+  .tb .lbl,.loop,#clock{display:none}
+  .row{height:auto;padding:8px 14px;grid-template-columns:12px auto minmax(0,1fr) auto;grid-template-areas:"dl id ttl age" ". trk trk cost" ". now now pj";gap:3px 8px}
+  .row .dl{grid-area:dl}.row .id{grid-area:id}.row .ttl{grid-area:ttl}.row .age{grid-area:age}.row .cost{grid-area:cost}.row .trk{grid-area:trk}.row .nowt{grid-area:now}
+  .row.wp,.row.cl,.row.cl.wp{grid-template-columns:12px auto minmax(0,1fr) auto}
+  .row.cl{grid-template-areas:"dl id ttl when" ". stw stw pj" ". now now now"}
+  .row .pj{grid-area:pj;text-align:right}.row .stw{grid-area:stw}.row .when{grid-area:when}
+  .mline{display:block}
+  .ask{grid-template-columns:1fr;padding:0 14px 10px;gap:0}
+  .askmain,.askmain.wp{height:auto;padding:10px 0 8px;grid-template-columns:14px auto minmax(0,1fr) auto;grid-template-areas:"dot id pj age" ". q q q" ". m m m";gap:3px 8px}
+  .askmain .dot{grid-area:dot}.askmain .id{grid-area:id}.askmain .pj{grid-area:pj}.askmain .age{grid-area:age}.askmain .q{grid-area:q;white-space:normal}
+  .askmain .mline{grid-area:m;color:var(--ink-2);font-size:12.5px}
+  .ask>.btn{justify-self:start;margin-left:24px}
+  .rh{display:none}
+  .ar,.s-agents:not(.has-sel) .ar{height:auto;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"st ttl id" "dn dn dn" "ac ac ac";padding:10px 14px;gap:4px 10px}
+  .ar .c-st{grid-area:st}.ar .ttl{grid-area:ttl}.ar .id{grid-area:id}.ar .doing{grid-area:dn}.ar .c-act{grid-area:ac}
+  .ar .doing .tx{white-space:normal}
+  .gh,.subh,.wrow,.phead,.blk,.dhead,.decide{padding-left:14px;padding-right:14px}
+  #toast{bottom:64px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="m-done" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></symbol>
+  <symbol id="m-now" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/><path d="M8 3a5 5 0 0 0 0 10z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="m-fail" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></symbol>
+  <symbol id="m-stale" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" stroke-dasharray="2 2.2"/></symbol>
+  <symbol id="m-next" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/></symbol>
+  <symbol id="m-you" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="currentColor"/></symbol>
+  <symbol id="m-na" viewBox="0 0 16 16"><circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-queue" viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></symbol>
+  <symbol id="i-park" viewBox="0 0 16 16"><path d="M6 4v8M10 4v8"/></symbol>
+  <symbol id="i-project" viewBox="0 0 16 16"><path d="M2.5 4.5h4L8 6h5.5v6.5h-11z"/></symbol>
+  <symbol id="i-logo" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 16 16"><path d="M2.5 9.5l2-6h7l2 6v3h-11z"/><path d="M2.5 9.5h3l1 1.5h3l1-1.5h3"/></symbol>
+  <symbol id="i-now" viewBox="0 0 16 16"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/></symbol>
+  <symbol id="i-changes" viewBox="0 0 16 16"><path d="M8 2.5l5.5 10h-11z"/></symbol>
+  <symbol id="i-plans" viewBox="0 0 16 16"><circle cx="4" cy="4" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="12" cy="8" r="1.5"/><path d="M5.5 4H8c1.5 0 2.5 1.5 2.9 2.7M5.5 12H8c1.5 0 2.5-1.5 2.9-2.7"/></symbol>
+  <symbol id="i-agents" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6.5l2 1.5-2 1.5M8.5 10H11"/></symbol>
+  <symbol id="i-review" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M8 3v10M4.5 6H6M4.5 8.5H6M10 6h1.5M10 8.5h1.5"/></symbol>
+  <symbol id="i-timeline" viewBox="0 0 16 16"><path d="M3 4h6M5 8h8M3 12h5"/></symbol>
+  <symbol id="i-usage" viewBox="0 0 16 16"><path d="M3 11.5a5 5 0 1 1 10 0M8 11.5l2.5-3.5"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 16 16"><path d="M2.5 5h6M11.5 5h2M2.5 11h2M7.5 11h6"/><circle cx="10" cy="5" r="1.5"/><circle cx="6" cy="11" r="1.5"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 16 16"><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 16 16"><path d="M6 3.5l4.5 4.5L6 12.5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2.5l5.5 10h-11z"/><path d="M8 6.5v3M8 11.2h.01"/></symbol>
+  <symbol id="i-side" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10"/></symbol>
+  <symbol id="i-theme" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 0 0 11z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-note" viewBox="0 0 16 16"><path d="M4 2.5h5.5L12 5v8.5H4z"/><path d="M6 7.5h4M6 10h4"/></symbol>
+  <symbol id="i-delta" viewBox="0 0 16 16"><path d="M8 3.5l5 9H3z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-send" viewBox="0 0 16 16"><path d="M8 13V3.5M4 7.5l4-4 4 4"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 16 16"><path d="M6 2.5h4l-.5 4 2 2.5h-7l2-2.5zM8 9v4.5"/></symbol>
+</svg>
+
+<div class="app" id="app">
+  <header class="titlebar">
+    <span class="brand"><svg class="i"><use href="#i-logo"/></svg>Corral</span>
+    <span class="mono path">~/miti-workspace/corral</span>
+    <span class="hl" id="health" tabindex="0" data-tip="corrald healthy · herdr-core ok · herdr-tui ok · PM live · reached directly over loopback"><i></i>healthy</span>
+    <span class="sp"></span>
+    <time class="mono" id="clock"></time>
+    <span class="sample" tabindex="0" data-tip="Sample data from the board snapshot of 2026-11-07 22:12. Activity traces, agent sentences, step text, code lines, option costs and per-project counts are illustrative.">sample</span>
+    <button class="tb" data-a="notes" aria-pressed="false" id="btn-notes"><svg class="i"><use href="#i-note"/></svg><span class="lbl">Design notes</span></button>
+    <button class="tb" data-a="theme" aria-label="Switch between dark and light" data-tip="Dark or light" id="btn-theme"><svg class="i"><use href="#i-theme"/></svg></button>
+  </header>
+
+  <nav class="side" aria-label="Destinations">
+    <div class="ws"><div><b>corral</b><small data-tip="Autopilot: independent work continues without you.">Autopilot</small></div>
+      <button class="tb" data-a="fold" aria-label="Fold sidebar" data-tip="Fold or unfold the sidebar" id="btn-fold"><svg class="i"><use href="#i-side"/></svg></button></div>
+    <span class="nav off" aria-disabled="true" data-tip="Unchanged; not part of this proposal"><svg class="i"><use href="#i-inbox"/></svg><span class="lbl">Inbox</span><span class="cnt you">5</span><kbd>i</kbd></span>
+    <a class="nav" href="#now" id="nav-now"><svg class="i"><use href="#i-now"/></svg><span class="lbl">Now</span><span class="cnt you">3</span><kbd>n</kbd></a>
+    <a class="nav" href="#plans" id="nav-plans"><svg class="i"><use href="#i-plans"/></svg><span class="lbl">Plans</span><span class="cnt">6</span><kbd>p</kbd></a>
+    <a class="nav" href="#agents" id="nav-agents"><svg class="i"><use href="#i-agents"/></svg><span class="lbl">Agents</span><span class="cnt">8</span><kbd>a</kbd></a>
+    <a class="nav" href="#review" id="nav-review"><svg class="i"><use href="#i-review"/></svg><span class="lbl">Review</span><span class="cnt">4</span><kbd>r</kbd></a>
+    <hr>
+    <span class="nav off" aria-disabled="true" data-tip="Unchanged; not part of this proposal"><svg class="i"><use href="#i-changes"/></svg><span class="lbl">Changes</span><span class="cnt">12</span><kbd>.</kbd></span>
+    <span class="nav off" aria-disabled="true" data-tip="Unchanged; not part of this proposal"><svg class="i"><use href="#i-timeline"/></svg><span class="lbl">Timeline</span><kbd>t</kbd></span>
+    <span class="nav off" aria-disabled="true" data-tip="Unchanged; not part of this proposal"><svg class="i"><use href="#i-usage"/></svg><span class="lbl">Usage</span><kbd>u</kbd></span>
+    <span class="nav off" aria-disabled="true" data-tip="Unchanged; not part of this proposal"><svg class="i"><use href="#i-settings"/></svg><span class="lbl">Settings</span><kbd>,</kbd></span>
+    <div id="side-projects"></div>
+    <div class="dev" data-tip="This device. Actions sign as via=app:pawis-desktop."><b>pawis-desktop</b></div>
+  </nav>
+
+  <main id="view" aria-live="off"></main>
+</div>
+<aside id="notes" hidden aria-label="Design notes"></aside>
+<div id="toast" class="off" role="status" aria-live="polite"></div>
+<noscript><p style="padding:24px">This proposal renders its four screens with JavaScript.</p></noscript>
+
+<script>
+"use strict";
+const $=(s,r=document)=>r.querySelector(s);
+const h=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const ic=(n,c="")=>`<svg class="i ${c}" aria-hidden="true"><use href="#${n}"/></svg>`;
+const MARK={done:"m-done",now:"m-now",fail:"m-fail",stale:"m-stale",next:"m-next",you:"m-you"};
+const WORD={done:"done",now:"now",fail:"failed",stale:"stale",next:"next",you:"waits on you"};
+const STAGES=["run","gate","review","land"];
+
+/* ---------- sample data: board snapshot 2026-11-07 22:12; summaries, activity and step text illustrative ---------- */
+const T={
+  "T-868":{title:"host-queue-ledger",plan:"T-870",hue:"you",rail:{run:"you",gate:"next",review:"next",land:"next"},sub:{run:"R1 · pi-sol xhigh",gate:"after run",review:"after gate",land:"main"},
+    now:"waits on your answer · restore policy",age:"3h",cost:null,agent:"w868",changed:true,meta:"pi-sol xhigh · on workstation · started 18:58",
+    steps:[["done","Verify Pi 1.5.0 metadata, refresh frozen deps"],["done","Stable queue identities + lifecycle journal"],["you","Restore policy on stock/plain paths"],["next","Bridge queue_state / queue_withdraw"],["next","Rebase, quick gate, attach proof"]],
+    next:"You answer T-868/R1/Q1",you:"q-868",needs:"T-701 done · T-867 not yet",unblocks:"–"},
+  "T-890":{title:"pm-bounded-read-contract",plan:"T-893",hue:"corral",rail:{run:"done",gate:"now",review:"next",land:"next"},sub:{run:"R1 · pi-sol xhigh",gate:"1751bd2",review:"after gate",land:"main"},
+    now:"quick gate · 412 of 980 tests",age:"9m",cost:"$3.90",agent:"g890",changed:true,meta:"pi-sol xhigh · on workstation · started 19:31",
+    steps:[["done","Read plan, inspect scope/read contracts"],["done","Shared bounded projection + CLI/native adapters"],["done","Verify live paging, byte caps, compatibility"],["now","Commit, rebase, gate and attach proof"]],
+    next:"Corral: quick gate finishes, then independent review",needs:"T-885 done",unblocks:"T-891"},
+  "T-894":{title:"api-connections",plan:"T-898",hue:"corral",rail:{run:"done",gate:"now",review:"next",land:"next"},sub:{run:"R1 · pi-sol xhigh",gate:"6b36916",review:"after gate",land:"main"},
+    now:"gate · compiling corral-tui",age:"6m",cost:"$18",agent:"g894",changed:true,meta:"pi-sol xhigh · on workstation · started 19:33",
+    next:"Corral: gate finishes, then independent review"},
+  "T-867":{title:"queue-contract-core",plan:"T-870",hue:"held",rail:{run:"done",gate:"stale",review:"next",land:"next"},sub:{run:"R1 · pi-sol xhigh",gate:"5949a4b",review:"after gate",land:"main"},
+    now:"base moved · re-gate queued",age:"7m",cost:"$1.83",agent:"w867",changed:true,meta:"pi-sol xhigh · on workstation · started 20:40",
+    next:"Corral: re-gate 5949a4b on the new base",unblocks:"T-868 · T-869"},
+  "T-871":{title:"annotation-service",plan:"T-874",hue:"worker",rail:{run:"now",gate:"next",review:"next",land:"next"},sub:{run:"R1 · pi-sol xhigh",gate:"after run",review:"after gate",land:"main"},
+    now:"working · step 1 of 3",age:"55m",cost:"$3.29",agent:"w871",changed:true,meta:"pi-sol xhigh · on workstation · started 21:17",next:"Worker: finish step 1 of 3"},
+  "T-854":{title:"Co-work C3: save, take over, take back",plan:null,hue:"worker",rail:{run:"now",gate:"next",review:"next",land:"next"},sub:{run:"pi-sol xhigh",gate:"after run",review:"after gate",land:"main"},
+    now:"working · publication",age:"1h",cost:"$7.56",agent:"w854",changed:false,meta:"pi-sol xhigh · Herdr TUI (legacy) · started 01:10",next:"Worker: publication tests"},
+  "T-869":{title:"inbox-queue-ops",plan:"T-870",hue:"dim",rail:{run:"next",gate:"next",review:"next",land:"next"},sub:{run:"after T-867",gate:"after run",review:"after gate",land:"main"},
+    now:"ready · starts after T-867",age:"–",cost:null,meta:"not started",next:"Corral: admit once T-867 lands",needs:"T-867 not yet"},
+};
+const ASKS=[
+  {key:"q-868",kind:"Question",id:"T-868",title:"Restore policy: pane-origin input only, or all origins?",cons:"Holds step 3 of host-queue-ledger. The worker carries on with the ledger meanwhile.",age:"3h",btn:"Answer",
+    by:"worker T-868 asked 19:12 · escalated by the PM 19:14 · owner only · blocking",
+    opts:[{t:"Pane-origin input only",rec:true,then:"Only input typed in the pane is restored after a restart.",un:"Step 3 of T-868, then T-869.",cost:"No extra work."},
+          {t:"All origins",then:"App and CLI input is restored as well.",un:"Step 3 after the bridge work (step 4) moves first.",cost:"More scope in this run."}]},
+  {key:"p-885",kind:"Plan",id:"T-885",title:"Accept plan P2: PM supervisor evolution",cons:"Reviewer approves. Accepting publishes 3 members; the first can start at once.",age:"10h",btn:"Review plan",go:"T-885",
+    by:"plan T-885 · revision P2 · reviewed 12:10"},
+  {key:"q-7",kind:"PM asks",id:"Q7",title:"T-852 repair budget: re-gate again or park?",cons:"T-852's gate went stale at 22:03. The PM holds it until you answer.",age:"12m",btn:"Answer",
+    by:"PM · generation 14 · drafted on its last wake"},
+];
+const DIGEST=[
+  ["T-867","held","stale","Gate went stale on 5949a4b because the base moved. Re-gate is queued.","22:05",2,"gate stale"],
+  ["T-852","held","stale","Gate went stale on af7a6dc.","22:03",1,"gate stale"],
+  ["T-868","you","you","The worker replied in your thread on T-868/R1/Q1.","21:59",1,"worker replied"],
+  ["T-866","ok","done","Landed on main: queue-ledger-retention.","20:12",1,"landed"],
+  ["T-894","corral","now","Worker finished; gate started on 6b36916.","22:06",2,"gate started"],
+  ["T-890","corral","now","Worker finished after checkpoints 2 and 3; quick gate started on 1751bd2.","22:03",4,"quick gate started"],
+  ["T-871","worker","now","Worker started on pi-sol xhigh.","21:17",1,"worker started"],
+];
+const EVENTS=[["22:06","T-894","gate started on 6b36916"],["22:05","T-867","gate went stale on 5949a4b (base moved)"],["22:03","T-890","quick gate started on 1751bd2"],["22:03","T-852","gate went stale on af7a6dc"],["21:59","T-868","worker replied in thread on T-868/R1/Q1"],["21:17","T-871","worker started · pi-sol xhigh"],["21:11","T-890","checkpoint 3 captured"],["20:40","T-867","worker started · pi-sol xhigh"],["20:32","T-890","checkpoint 2 captured"],["19:33","T-894","worker started · pi-sol xhigh"],["19:31","T-890","worker started · pi-sol xhigh"]];
+EVENTS.splice(9,0,["20:12","T-866","landed on main · queue-ledger-retention"]);
+/* Closed: id, title, canonical status, hours since it closed, plan, goal; newest first, served a page at a time. */
+const CLOSED=[["T-866","queue-ledger-retention","done",2,"T-701","Bounded host queue ledger"],["T-864","pm-read-cache-warmup","dropped",5,"T-893","PM reads stay bounded"],
+  ["T-862","Co-work C0: completion engine spike","done",26,"T-851",null],["T-859","annotation-service-prototype","dropped",50,null,"Owner annotations on runs"],
+  ["T-857","api-connections-retry-budget","done",76,"T-898",null],["T-848","gate-runner-sandbox","done",170,null,null]];
+const CLOSED_PAGE=4;
+const closedWhen=hrs=>hrs<24?hrs+"h ago":new Date(Date.now()-hrs*36e5).toLocaleDateString(undefined,{month:"short",day:"numeric"});
+
+const AG=[
+  {id:"a7",kind:"assistant",role:"assistant",ref:"A-7",pin:true,title:"Quick thread",hue:"dim",label:"answered",
+    brief:"Filed your idea as T-903",doing:"Filed your caching idea as T-903 after checking for duplicates.",sub:"assistant A-7 · pinned quick thread",
+    act:[0,0,0,0,0,0,0,0,0,1,2,1,0,0,0,0,0,0,0,0],last:"quiet 9m",since:"14:02",cost:null,profile:"pi-sol xhigh",runtime:"daemon-hosted",pane:null,reply:"Message the assistant…",
+    log:[{t:"22:11",say:"Your caching idea is filed as T-903. I checked duplicates first: nothing covers receipt reuse after a base move.",tools:["3 reads · filed T-903",'<span class="cmd">read</span>  corral show T-867 · T-870 · gate receipts\n<span class="cmd">file</span>  T-903 Gate: reuse receipts for unchanged crates after a base move']},
+         {t:"22:11",you:"why is T-867 stale, and what's blocking T-870? we should cache gate receipts so a base move does not re-run everything"}],
+    noterm:"Daemon-hosted assistants have no terminal"},
+  {id:"w868",kind:"worker",role:"worker",ref:"T-868",title:"host-queue-ledger",hue:"you",label:"needs you",task:"T-868",
+    brief:"Waiting on your answer",doing:"Waits on your answer to T-868/R1/Q1. It keeps building the ledger meanwhile.",sub:"worker on T-868 · step 3 of 5",
+    act:[1,2,1,0,1,2,3,2,1,1,0,1,2,2,1,0,1,2,1,1],last:"38s ago",since:"18:58",cost:null,profile:"pi-sol xhigh",runtime:"herdr-core",pane:"w12C:p2",reply:"Message worker T-868…",ask:"q-868",
+    log:[{t:"19:40",say:"I can implement the ledger and other controls independently while awaiting this decision.",tools:["1 edit · bridge/queue.ts +88 −3",'<span class="cmd">Edit</span>  packages/corral-pi/src/bridge/queue.ts   +88 −3']},
+         {t:"19:12",ask:"Asked you T-868/R1/Q1: restore policy, pane-origin input only or all origins? The PM escalated it at 19:14."},
+         {t:"19:08",say:"Stable identities are in: q-g<generation>-<bind>-<counter>. Lifecycle entries persist before any queue mutation.",tools:["2 tool calls · host/queue.ts +41 −6 · 16 tests pass",'<span class="cmd">Edit</span>  packages/corral-pi/src/host/queue.ts   +41 −6\n<span class="cmd">Bash</span>  bun test test/queue-host.test.ts\n  ✓ withdraw targets one identity\n  ✓ start race: started persists before drain\n  ✓ replay returns stored outcome\n<span class="ok">  16 pass · 0 fail · 1.64s</span>']},
+         {t:"18:59",say:"Verifying installed Pi package metadata is 1.5.0 and refreshing its frozen dependencies in this worktree.",tools:["2 tool calls · install ok 6.2s · read patch, 612 lines",'<span class="cmd">Bash</span>  bun install --frozen-lockfile   <span class="ok">ok 6.2s</span>\n<span class="cmd">Read</span>  packages/corral-pi/patches/@earendil-works%2Fpi-coding-agent@1.5.0.patch   612 lines']},
+         {t:"18:58",sys:"Run R1 admitted on pi-sol xhigh · governed by T-701@P2 · write scope 20 paths · herdr-core pane w12C:p2"}],
+    term:'<span class="cmd">Edit</span>  packages/corral-pi/src/host/queue.ts\n      +41 -6\n<span class="cmd">Ask</span>   T-868/R1/Q1 restore policy\n<span class="dim">      owner only · blocking · escalated by PM</span>\n<span class="cmd">Edit</span>  packages/corral-pi/src/bridge/queue.ts\n      +88 -3\n<span class="cmd">Bash</span>  bun test test/queue-host.test.ts\n  ✓ withdraw targets one identity\n  ✓ start race: started persists before drain\n  ✓ replay returns stored outcome\n<span class="ok">      16 pass</span>\n\n<span class="dim">waiting on T-868/R1/Q1 · ledger work continues</span>\n▍'},
+  {id:"w867",kind:"worker",role:"worker",ref:"T-867",title:"queue-contract-core",hue:"held",label:"idle · stale",task:"T-867",
+    brief:"Idle; candidate went stale",doing:"Idle. Its candidate 5949a4b went stale when the base moved; Corral re-gates it without the worker.",sub:"worker on T-867 · run finished",
+    act:[2,1,2,3,2,1,2,1,1,2,1,2,0,0,0,0,0,0,0,0],last:"quiet 8m",since:"20:40",cost:"$1.83",profile:"pi-sol xhigh",runtime:"herdr-core",pane:"w12C:p1",reply:"Message worker T-867…",
+    log:[{t:"22:05",sys:"Gate result: stale. The base moved under candidate 5949a4b; a re-gate is queued."},{t:"22:05",say:"Worker idle; candidate 5949a4b is handed to the gate."}],
+    term:'worker idle · candidate 5949a4b\ngate result: stale (base moved)\n▍'},
+  {id:"w871",kind:"worker",role:"worker",ref:"T-871",title:"annotation-service",hue:"worker",label:"working",task:"T-871",
+    brief:"Editing annot/record.rs",doing:"Editing crates/corral-core/src/annot/record.rs; cargo check on corral-core passes.",sub:"worker on T-871 · step 1 of 3",
+    act:[0,1,2,2,1,2,3,2,2,1,2,3,3,2,1,2,2,3,2,2],last:"4s ago",since:"21:17",cost:"$3.29",profile:"pi-sol xhigh",runtime:"herdr-core",pane:"w14A:p1",reply:"Message worker T-871…",
+    log:[{t:"22:11",say:"Record type is in and corral-core still builds.",tools:["2 tool calls · record.rs +118 −4 · cargo check ok 14.8s",'<span class="cmd">Edit</span>  crates/corral-core/src/annot/record.rs   +118 −4\n<span class="cmd">Bash</span>  cargo check -p corral-core   <span class="ok">ok 14.8s</span>']},
+         {t:"21:17",sys:"Run admitted on pi-sol xhigh · herdr-core pane w14A:p1"}],
+    term:'<span class="cmd">Edit</span>  crates/corral-core/src/annot/record.rs\n      +118 -4\n<span class="cmd">Bash</span>  cargo check -p corral-core\n<span class="ok">      ok 14.8s</span>\n▍'},
+  {id:"w854",kind:"worker",role:"worker",ref:"T-854",title:"Co-work C3: save, take over, take back",hue:"worker",label:"working",task:"T-854",
+    brief:"Running cowork::publish tests",doing:"Running the cowork::publish tests; 9 are in flight.",sub:"worker on T-854 · publication",
+    act:[1,1,2,1,2,2,1,2,3,2,1,1,2,2,1,2,2,1,2,1],last:"snapshot 20s ago",snap:true,since:"01:10",cost:"$7.56",profile:"pi-sol xhigh",runtime:"Herdr TUI (legacy)",pane:"w15B:p1",reply:"Message worker T-854…",
+    log:[{t:"22:11",say:"Publication path edited; running its tests.",tools:["2 tool calls · cowork/publish.rs +64 −12 · 9 tests running",'<span class="cmd">Edit</span>  crates/corral-ops/src/cowork/publish.rs   +64 −12\n<span class="cmd">Bash</span>  cargo test -p corral-ops cowork::publish\n      running 9 tests']}],
+    term:'<span class="cmd">Edit</span>  crates/corral-ops/src/cowork/publish.rs\n      +64 -12\n<span class="cmd">Bash</span>  cargo test -p corral-ops cowork::publish\n      running 9 tests'},
+  {id:"g890",kind:"gate",role:"gate",ref:"T-890",title:"Quick gate on 1751bd2",hue:"corral",label:"gating",task:"T-890",
+    brief:"nextest 412 / 980",doing:"nextest corral-ops: 412 of 980 passed, none failed.",prog:.42,sub:"gate for T-890 · pm-bounded-read-contract",
+    act:[0,0,0,0,0,0,0,0,0,0,0,2,3,3,2,3,3,3,3,3],last:"1s ago",since:"22:03",cost:null,profile:"scripts/gate.sh",runtime:"herdr-core",pane:"g:T-890",
+    log:[{t:"22:04",sys:"Build finished: corral-ops, corral-tui in 41.2s. nextest started on corral-ops."},{t:"22:03",sys:"scripts/gate.sh --tier quick started on 1751bd2."}],
+    term:'<span class="cmd">$ scripts/gate.sh --tier quick</span>\n  build     corral-ops corral-tui   41.2s\n  nextest   corral-ops  412/980\n<span class="ok">    PASS</span>  pm_workset::bounded_page\n<span class="ok">    PASS</span>  pm_workset::byte_cap_trims\n<span class="ok">    PASS</span>  pm_next::keyset_live_update\n    ....  read_view::scope_paging\n▍'},
+  {id:"g894",kind:"gate",role:"gate",ref:"T-894",title:"Gate on 6b36916",hue:"corral",label:"gating",task:"T-894",
+    brief:"Compiling corral-tui",doing:"Compiling. corral-ops and corral-pi-host are built; corral-tui is next.",sub:"gate for T-894 · api-connections",
+    act:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,3,2,2,3],last:"2s ago",since:"22:06",cost:null,profile:"scripts/gate.sh",runtime:"herdr-core",pane:"g:T-894",
+    log:[{t:"22:06",sys:"scripts/gate.sh started on 6b36916."}],
+    term:'<span class="cmd">$ scripts/gate.sh</span>\n   Compiling corral-ops\n   Compiling corral-pi-host\n   Compiling corral-tui\n▍'},
+  {id:"pm",kind:"pm",role:"PM",ref:"PM",title:"Supervisor · generation 14",hue:"dim",label:"waiting",
+    brief:"Waiting for the T-894 gate",doing:"Waits for the T-894 gate result. On its last wake it synced 3 changes and drafted the T-852 budget question for you.",sub:"workspace PM · wakes on the T-894 gate",
+    act:[0,0,2,1,0,0,0,0,0,0,2,2,1,0,0,0,0,1,2,0],last:"woke 2m ago",since:"21:40",cost:null,profile:"pi-sol xhigh",runtime:"herdr-core",pane:"pm:p0",reply:"Message the PM…",
+    log:[{t:"22:10",say:"Synced 3 changes. Drafted the T-852 budget question for the owner (PM/Q7). Idle until the T-894 gate reports.",tools:["2 tool calls · corral pm next --bounded",'<span class="cmd">wake</span>  sync tick · 3 changes\n<span class="cmd">read</span>  corral pm next --bounded\n<span class="cmd">note</span>  T-852 budget question drafted (PM/Q7)\n<span class="cmd">idle</span>  next wake on gate result']}],
+    term:'<span class="cmd">wake</span>  sync tick · 3 changes\n<span class="cmd">read</span>  corral pm next --bounded\n<span class="cmd">note</span>  T-852 budget question drafted (PM/Q7)\n<span class="cmd">idle</span>  next wake on gate result\n▍'},
+];
+const AFILT=[["all","All"],["worker","Workers"],["gate","Gates"],["pm","PM"],["assistant","Assistant"]];
+
+const PL={
+  "T-885":{group:"await",rev:"P2",title:"PM supervisor evolution: bounded reads, warm-context episodes",line:"P2 · reviewer approves",kind:"await",
+    head:'<b class="t-you">Waits for your acceptance.</b> Reviewer approves P2.'},
+  "T-870":{group:"exec",you:true,title:"Pi input: stable queue item lifecycle, editing, cancellation",line:"0 of 3 · waits on you",segs:["stale","you","next"],
+    head:'<b class="t-you">T-868 waits on your answer.</b> 0 of 3 landed.',
+    layers:[["T-867"],["T-868","T-869"]],edges:[["T-867","T-868"],["T-867","T-869"]],
+    path:[{m:"done",h:"Design accepted",d:"Accepted earlier; delivers to main."},
+      {m:"now",h:"Members · 0 of 3",d:"0 of 3 members have landed.",items:[["you","you","T-868 waits on your answer to T-868/R1/Q1.",{label:"Answer",a:"askFromPlan",v:"q-868"},"T-868 · your answer"],["stale","held","T-867 went stale on 5949a4b; the re-gate is queued.",null,"T-867 · gate stale"],["next","dim","T-869 is ready and starts after T-867.",null,"T-869 · after T-867"]]},
+      {m:"next",h:"Aggregate verify",warn:"15 of 15 acceptance scenarios are not mapped to any member, so final verify has no owner.",act:"Ask the PM to map them"},
+      {m:"next",h:"Final acceptance",d:"Yours, once aggregate verify passes."}]},
+  "T-893":{group:"exec",title:"PM supervisor evolution: bounded reads, warm-context episodes",line:"0 of 3 · gating",segs:["now","next","next"],
+    head:"0 of 3 landed. Nothing needs you.",
+    layers:[["T-890"]],edges:[],more:2,
+    path:[{m:"done",h:"Design accepted",d:"P2 accepted 19:12; 3 members published."},
+      {m:"now",h:"Members · 0 of 3",d:"0 of 3 members have landed.",items:[["now","corral","T-890 is in its quick gate on 1751bd2.",null,"T-890 · quick gate"]]},
+      {m:"next",h:"Aggregate verify",warn:"6 of 6 acceptance scenarios are not mapped to any member.",act:"Ask the PM to map them"},
+      {m:"next",h:"Final acceptance",d:"Yours, once aggregate verify passes."}]},
+  "T-898":{group:"exec",title:"Anthropic + OpenAI API connections, usage and quota",line:"0 of 4 · gating",segs:["now","next","next","next"],
+    head:"0 of 4 landed. Nothing needs you.",
+    layers:[["T-894"]],edges:[],more:3,
+    path:[{m:"done",h:"Design accepted"},{m:"now",h:"Members · 0 of 4",d:"0 of 4 members have landed.",items:[["now","corral","T-894 is in its gate on 6b36916.",null,"T-894 · gate"]]},
+      {m:"next",h:"Aggregate verify",warn:"7 of 7 acceptance scenarios are not mapped to any member.",act:"Ask the PM to map them"},{m:"next",h:"Final acceptance",d:"Yours, once aggregate verify passes."}]},
+  "T-874":{group:"exec",title:"Pi review annotations: durable candidate comments",line:"0 of 3 · worker running",segs:["run","next","next"],
+    head:"0 of 3 landed. Nothing needs you.",
+    layers:[["T-871"]],edges:[],more:2,
+    path:[{m:"done",h:"Design accepted"},{m:"now",h:"Members · 0 of 3",d:"0 of 3 members have landed.",items:[["now","worker","T-871 has a worker on step 1 of 3.",null,"T-871 · step 1 of 3"]]},
+      {m:"next",h:"Aggregate verify",warn:"12 of 12 acceptance scenarios are not mapped to any member.",act:"Ask the PM to map them"},{m:"next",h:"Final acceptance",d:"Yours, once aggregate verify passes."}]},
+  "T-385":{group:"idle",rev:"P5",title:"Design: reliable task progress and PM visibility",line:"no tracker published",segs:[],
+    head:"Approved; no tracker published.",
+    layers:[],edges:[],
+    path:[{m:"done",h:"Design approved",d:"P5, 4 approvals."},{m:"next",h:"Members",d:"No tracker published yet."},{m:"next",h:"Aggregate verify"},{m:"next",h:"Final acceptance"}]},
+};
+const PLG=[["await","Awaiting your acceptance","you"],["exec","Executing","corral"],["idle","Approved, not started","dim"]];
+const DOC=[["Problem",["The PM owner and agent need a bounded and consistent view of current responsibilities; operational continuity should not depend on an ever-growing conversation."]],
+  ["Goal",["Deliver a bounded first wave of PM information and lifecycle visibility improvements, while reviewing a longer-term hybrid supervisor design without authorizing it wholesale."]],
+  ["Changes",["A bounded common semantic read contract for PM CLI and native tools, with scope-specific rendering and complete detail access.","Existing attention, inbox, question, wait and receipt records as one read-only obligation view; no second scheduler or task database.","Measure the improved loop and document an evidence-gated warm-context episode pilot for later review."],1],
+  ["Keeps",["One logical PM, current conversation lifetime, existing sync and wake ownership, current deterministic executors.","Current scope checks, owner authority, receipts, candidate identities, gates, independent review and landing checks."],1],
+  ["Not doing",["No fresh model session per event or mandatory conversation rollover.","No new daemon, scheduler, obligation database, memory engine or manager hierarchy.","No provider/model change, paid evaluation, recurring model job or background reflection."],1]];
+
+const RV={
+  "T-868":{group:"you",title:"host-queue-ledger",cand:"85b45e1e",round:"R1",stat:"base main · 5 files · +334 −28",line:"ready for verdict",replay:true,
+    ready:[{m:"done",h:"Gate passed",c:"85b45e1e",d:"Quick tier at 08:26, receipt 77b8a3c1.",old:"An earlier candidate, f34f3df6, failed at 04:45: the cross-lane paging fixture overflowed (256 inputs gave 528 events against a 512 ring). That verdict is stale and stays in history."},
+      {m:"done",h:"Review approves",c:"85b45e1e",d:"Independent review by pi-sol, R1-review2, 22:40, notes c4328f8e.",quote:["reviewer · pi-sol","Fixture-only change: 256 → 128 inputs. Every assertion, the 512 ring and the production event/frame bounds are unchanged; the original red on f34f3df6 stays in history."]},
+      {m:"you",h:"Your verdict",d:"Bound to 85b45e1e. A new candidate makes every verdict above stale."}],
+    files:[
+      {p:"packages/corral-pi/test/cross-lane.test.ts",a:1,d:1,desc:"fixture inputs 256 → 128",
+        hunks:[{head:'@@ -212,9 +212,9 @@ describe("cross-lane paging")',rows:[["c",212,212,"  const lane = await privateHerdr({ plugins: false });"],["-",213,null,"  const inputs = 256;"],["+",null,213,"  const inputs = 128;"],
+          ["#","reviewer · pi-sol · R1-review2 · on 85b45e1e","Fixture-only change: 256 → 128 inputs. Every assertion, the 512 ring and the production event/frame bounds are unchanged; the original red on f34f3df6 stays in history."],
+          ["c",214,214,"  for (let i = 0; i < inputs; i++) await submit(lane, i);"],["c",215,215,"  const events = await readAll(lane, { page: 64 });"],["c",216,216,"  expect(events.length).toBeGreaterThan(256);"]]}]},
+      {p:"packages/corral-pi/patches/@earendil-works%2Fpi-coding-agent@1.5.0.patch",a:9,d:4,desc:"clearQueue takes restore options",
+        hunks:[{head:"@@ -1959,13 +1990,18 @@ class AgentSession",rows:[["c",1990,1990,"   * @returns Object with steering and followUp arrays"],["c",1991,1991,"   */"],
+          ["-",1992,null,"  clearQueue() {"],["-",1993,null,"      const steering = [...this._steeringMessages];"],["-",1994,null,"      const followUp = [...this._followUpMessages];"],["-",1995,null,"      this.agent.clearAllQueues();"],
+          ["+",null,1992,"  clearQueue(options) {"],["+",null,1993,"      const steering = [], followUp = [];"],["+",null,1994,"      for (const message of this.agent.getQueuedMessages()) {"],["+",null,1995,"          const tag = this._queueTags.get(message);"],["+",null,1996,"          const restored = options?.restore && tag"],["+",null,1997,"              ? this._queueObserver.restoreInput(tag) : undefined;"],["+",null,1998,"          if (options?.restore && restored === undefined) continue;"],["+",null,1999,"          this.agent.removeQueuedMessage(message);"],["+",null,2000,"          (message.steering ? steering : followUp).push(message);"]]}]},
+      {p:"packages/corral-pi/src/host/queue.ts",a:41,d:6,desc:"stable queue identities, journal first"},
+      {p:"packages/corral-pi/src/bridge/queue.ts",a:88,d:3,desc:"bridge queue_state / queue_withdraw"},
+      {p:"packages/corral-pi/test/queue-host.test.ts",a:195,d:14,desc:"withdraw, start race, replay tests"}],
+    asked:[["done","Verify Pi 1.5.0 metadata, refresh frozen deps"],["done","Stable queue identities + lifecycle journal"],["done","Restore policy on stock/plain paths"],["done","Bridge queue_state / queue_withdraw"],["done","Rebase, quick gate, attach proof"]],
+    scope:"All 5 files are inside the run's write scope (20 paths).",lands:"main, by Corral, after your approval and a fresh confirm.",
+    log:'<span class="cmd">$ scripts/gate.sh --tier quick</span>          candidate 85b45e1e\n  fmt        <span class="ok">ok</span>\n  clippy     <span class="ok">ok</span>   touched targets\n  bun test   <span class="ok">ok</span>   packages/corral-pi   16 pass\n  nextest    <span class="ok">ok</span>   touched crates\n  receipt    77b8a3c1   08:26'},
+  "T-890":{group:"verify",title:"pm-bounded-read-contract",cand:"1751bd2",round:"R1",stat:"base main",line:"quick gate running",
+    ready:[{m:"now",h:"Quick gate running",c:"1751bd2",d:"nextest corral-ops: 412 of 980 passed, none failed."},{m:"next",h:"Independent review",d:"Starts when the gate passes."},{m:"next",h:"Your verdict",d:"Not needed yet."}]},
+  "T-894":{group:"verify",title:"api-connections",cand:"6b36916",round:"R1",stat:"base main",line:"gate running",
+    ready:[{m:"now",h:"Gate running",c:"6b36916",d:"Compiling corral-tui."},{m:"next",h:"Independent review",d:"Starts when the gate passes."},{m:"next",h:"Your verdict",d:"Not needed yet."}]},
+  "T-867":{group:"verify",title:"queue-contract-core",cand:"5949a4b",round:"R1",stat:"base main",line:"gate stale",hue:"held",
+    ready:[{m:"stale",h:"Gate stale",c:"5949a4b",d:"The base moved at 22:05. Corral re-gates the same candidate on the new base."},{m:"next",h:"Independent review",d:"Starts when the gate passes."},{m:"next",h:"Your verdict",d:"Not needed yet."}]},
+};
+const RVG=[["you","Your verdict","you"],["verify","In verification","corral"]];
+
+const NOTES={
+  now:{today:["A 2×2 dock. Three of the four panes repeat another destination: the inspector, the Changes feed and the Agents tails.","The list that answers the page's question gets a quarter of the window; Queued 23 folds away.","Live shows five lines of gate output at 12 px. It proves something is running and nothing else.","The rail is four unlabeled marks under <b>R G V L</b>; you decode it per row."],
+    change:["<b>One list, one side column.</b> No terminal on this page.","<b>The loop band</b> says where work sits: plan, run, gate, review, land. Each cell links to its destination.","<b>Needs-you rows carry the ask</b> as a sentence, what it holds up, and the button. Selecting one lets you answer in the side column.","<b>The rail names its live stage</b> (run, gate stale, …). Marks keep their shapes.","<b>Since your last visit is grouped per task</b>: 12 events read as 7 lines, trouble first. The raw list is one click away.","Selecting a task swaps the side column to its story; Esc brings the digest back."],
+    needs:["Nothing new for rows. The digest groups existing change events by task."]},
+  agents:{today:["Each tile gives more than half its area to a four-line tail in 12 px mono.","A tail can't say whether an agent is stuck, slow or fine, and you can't compare eight of them.","Eight tiles fill 1440×900; twenty would need scrolling just to find the one that needs you.","State, the agent's own words and the reason it waits are three small lines above the tail."],
+    change:["<b>A roster</b>, one row per session. The quick thread stays pinned first; the rest sort by who needs attention.","<b>Doing now is a sentence</b>: the agent's last message, or the gate's count with a bar.","<b>Activity replaces the tail</b>: tool calls per minute over 20 minutes, plus time since the last output. Quiet agents are visible at a glance.","<b>The side column is the readable size</b>: steps, what it said and did (tool calls folded), and the reply field.","<b>Terminal is a tab</b> in that column at full height. Open session still leads to the full transcript."],
+    needs:["<code>AgentRow</code> has <code>now</code>, <code>since</code> and <code>tail</code>. It needs <code>last_output_at</code>, per-minute activity buckets, and the step position the task already tracks.","Legacy Herdr TUI panes give snapshots, so their activity is sampled; the row says so."]},
+  plans:{today:["Stepper, warning banner, member graph, blocker list and inspector each restate “0/3”.","Three columns; the third is the same inspector as Now.","Member cards are about 170 px wide: an id, a truncated title and four marks.","The warning about unmapped criteria sits above the graph with no action attached."],
+    change:["<b>A headline sentence</b> under the title says what holds the plan up and whether it is you.","<b>Members are readable cards</b> with the same named rail and now-line as the Now list, laid out by dependency.","<b>Path to done</b> merges stepper, warning and blockers into one ordered list. Each blocking line carries its own action.","Selecting a member swaps Path to done for the same task story used on Now.","<b>Awaiting acceptance</b>: the document at reading measure; the side column lists what accepting publishes and what the reviewer said."],
+    needs:["Nothing new. Large plans keep the layer-strip fallback from the current design."]},
+  review:{today:["The page opens on a raw diff. The question is “is this safe to land”, and the diff is the last thing that answers it.","Verdicts are a table of SHAs and times; the reviewer's finding is buried next to line 213.","The stale fail has the same weight as the current pass.","Approve sits under the fold of a long diff, with its conditions in small print."],
+    change:["<b>Brief first.</b> Readiness reads as a chain of sentences: gate, independent review with the reviewer's note quoted, then your verdict.","<b>Stale history folds</b> under the verdict it preceded.","<b>What changed</b> lists files with a one-line description; each expands to its diff in place.","<b>Diff is a tab</b> for the full unified or side-by-side view with inline comments.","The side column answers “did it do what was asked” and “did it stay in scope”. The decision bar never scrolls away."],
+    needs:["A one-line description per file from the worker's report; without it the row shows the path and counts only.","A scope result: changed files against the run's write scope."]},
+};
+NOTES.now.change.push("<b>Project scope bar.</b> Each chip carries its own waits-on-you count, so a scope never hides where you are needed; the sentence above says what waits outside it.",
+  "<b>Group by project</b> turns the same rows into one block per project, headed by its counts and linking to its page.",
+  "<b>Closed</b> folds at the bottom as it does today: done and dropped tasks, a page at a time. The Land cell and the digest say what landed since you looked.");
+NOTES.now.needs.push("Closed pages filtered by project on the daemon. Today a filtered page can come back empty while older pages still match.");
+NOTES.agents.change.push("<b>Project scope reaches Agents.</b> A session takes its task's project; the PM and assistants serve the whole workspace and stay listed in every scope.");
+NOTES.agents.needs.push("<code>FilterScreen</code> has no Agents entry yet. The project comes from the session's task, so no new wire field is needed.");
+NOTES.plans.change.push("<b>Project scope bar</b> as on Now. Under All each plan names its project.");
+NOTES.review.change.push("<b>Project scope bar</b> as on Now. Under All each candidate names its project.");
+NOTES.project={today:["On the app-multi-project branch the Project page opens on four counters, then lists tasks, plans and builds as ids and titles.","That makes it a second, weaker Now: no rail, no ask, nothing you can decide from.","Sidebar rows carry three bare numbers per project."],
+  change:["<b>The same parts as Now, scoped</b>: the loop band, needs-you rows with their buttons, named rails.","<b>Plans and sessions as rows</b> that open their destination, which rescopes if the record would be hidden.","<b>Facts in the side column</b> (path, PM scope, autopilot grant) above this project's own since-last-visit digest.","<b>Sidebar rows</b> show what waits on you, then the open count under a caption. Folded, a project is a two-letter tag.","Screen scopes stay independent, as built. Links out of a scoped view carry the scope with them."],
+  needs:["Nothing beyond <code>projects.v1</code>. Builds and burn-up stay as built and are not redrawn here."]};
+
+/* ---------- state ---------- */
+const S={page:"now",project:null,pf:{now:"all",plans:"all",agents:"all",review:"all"},group:"state",closed:false,cpage:0,now:null,agent:"w868",aview:"summary",afilt:"all",plan:"T-870",member:null,review:"T-868",rtab:"brief",split:false,open:{f0:true},queue:false,events:false,notes:false};
+if(innerWidth<=1180)S.agent=null;
+
+/* ---------- projects (projects.v1): one workspace, several projects, one scope per screen ---------- */
+const PROJ=[
+  {id:"corral",tag:"co",path:"~/miti-workspace/corral",pm:true,auto:true,open:40,running:2,queued:14,parked:22},
+  {id:"mitigraph",tag:"mg",path:"~/miti-workspace/mitigraph",pm:true,auto:false,open:21,running:2,queued:8,parked:10},
+  {id:"mitiplay",tag:"mp",path:"~/miti-workspace/mitiplay",pm:false,auto:false,open:0,running:0,queued:0,parked:0},
+];
+const PMAP={"T-868":"corral","T-890":"corral","T-867":"corral","T-869":"corral","T-852":"corral","T-885":"corral","T-870":"corral","T-893":"corral","T-385":"corral","T-866":"corral","T-864":"corral","T-848":"corral",
+  "T-894":"mitigraph","T-871":"mitigraph","T-854":"mitigraph","T-898":"mitigraph","T-874":"mitigraph","T-862":"mitigraph","T-859":"mitigraph","T-857":"mitigraph"};
+const pOf=id=>PMAP[id]||null;
+const inScope=(f,id)=>f==="all"||(f==="unassigned"?!pOf(id):pOf(id)===f);
+const askTask=a=>a.key==="q-7"?"T-852":a.id;
+const pl=(n,one,many)=>n===1?"1 "+one:n+" "+many;
+const pLabel=f=>f==="unassigned"?"Unassigned":f;
+const pLink=id=>pOf(id)?`<button class="lnk" data-a="goProject" data-v="${pOf(id)}">${pOf(id)}</button>`:"<span>unassigned</span>";
+const tip=x=>x?` data-tip="${h(x)}"`:"";
+/* A count is an icon and a number; its tooltip says what is counted. */
+const tok=(icon,n,hue,t)=>`<span class="tok${hue?" t-"+hue:""}"${tip(t)}>${ic(icon)}<b>${n}</b></span>`;
+function needs(page,f){
+  if(page==="now")return ASKS.filter(a=>inScope(f,askTask(a))).length;
+  if(page==="plans")return Object.keys(PL).filter(id=>inScope(f,id)&&(PL[id].group==="await"||PL[id].you)).length;
+  if(page==="agents")return AG.filter(a=>a.hue==="you"&&a.task&&inScope(f,a.task)).length;
+  return Object.keys(RV).filter(id=>inScope(f,id)&&RV[id].group==="you").length;
+}
+function scopeBar(page,trail=""){
+  const f=S.pf[page],opts=[["all","All","Every project in this workspace"],...PROJ.map(p=>[p.id,p.id,`${p.open} open · ${p.running} running${p.pm?"":" · outside the PM's scope"}`]),["unassigned","Unassigned","Tasks filed without a project"]];
+  return `<div class="scope" role="group" aria-label="Project scope of this screen">${opts.map(([k,l,t])=>{const n=k==="all"?0:needs(page,k);
+    return `<button class="pc" data-a="pf" data-v="${page}:${k}" data-k="pf-${k}" aria-pressed="${f===k}" id="seg-project-${k}"${tip((n?pl(n,"waits","wait")+" on you · ":"")+t)}>${l}${n?`<b>${n}</b>`:""}</button>`;}).join("")}${trail}</div>`;
+}
+
+/* ---------- shared pieces ---------- */
+function track(t){
+  const r=t.rail,cur=STAGES.find(s=>r[s]!=="done"&&r[s]!=="next");
+  const lab={stale:" stale",fail:" failed",you:" · you"};
+  return `<span class="track" role="img" aria-label="${STAGES.map(s=>s+" "+WORD[r[s]]).join(", ")}">`+STAGES.map((s,i)=>
+    `${i?'<i class="ln"></i>':""}<span class="st s-${r[s]}${s===cur?" h-"+t.hue:""}">${ic(MARK[r[s]])}${s===cur?`<b>${s}${lab[r[s]]||""}</b>`:""}</span>`).join("")+`</span>`;
+}
+const steps=list=>`<ul class="steps">${list.map(([m,x])=>`<li class="s-${m}">${ic(MARK[m],m==="you"?"t-you":m==="now"?"t-worker":"")}<span>${h(x)}</span></li>`).join("")}</ul>`;
+function strip(a,big){
+  return `<span class="strip${big?" big":""} h-${a.hue==="dim"?"ok":a.hue}" role="img" aria-label="Activity over the last 20 minutes; ${h(a.last)}">`+a.act.map((v,i)=>`<i class="v${v}${i===19&&v&&!a.snap?" tip":""}"></i>`).join("")+`</span>`;
+}
+function taskPanel(id,closeAct){
+  const t=T[id],cur=STAGES.find(s=>t.rail[s]!=="done"&&t.rail[s]!=="next");
+  const a=AG.find(x=>x.id===t.agent),ask=ASKS.find(x=>x.key===t.you);
+  return `<div class="phd"><div class="r1"><span class="mono">${id}</span>${pLink(id)}${t.plan?`<span>plan ${t.plan}</span>`:""}${t.changed?`<span class="chip">changed since 18:40</span>`:""}
+      <button class="btn q sm ic" data-a="${closeAct}" data-v="" aria-label="Close ${id}">${ic("i-close")}</button></div>
+    <h2>${h(t.title)}</h2><p class="meta">${h(t.meta)}</p></div>
+  <div class="sec"><div class="stages">${STAGES.map(s=>`<div class="${s===cur?"cur h-"+t.hue:""}"><small>${s}</small><b>${ic(MARK[t.rail[s]])}${WORD[t.rail[s]]}</b><code>${h(t.sub[s])}</code></div>`).join("")}</div></div>
+  ${ask?`<div class="sec"><div class="callout"><p><b>Waits on you.</b> ${h(ask.title)}</p><button class="btn pri sm" data-a="selNowGo" data-v="${ask.key}">Answer</button></div></div>`:""}
+  ${a?`<div class="sec"><h3>Doing now<small>${h(a.last)}</small></h3><p>${h(a.doing)}</p></div>`:""}
+  ${t.steps?`<div class="sec"><h3>Progress<small>${t.steps.filter(s=>s[0]==="done").length}/${t.steps.length}</small></h3>${steps(t.steps)}</div>`:""}
+  <div class="sec"><dl class="facts"><dt>Next</dt><dd>${h(t.next)}</dd>${t.needs?`<dt>Needs</dt><dd>${h(t.needs)}</dd>`:""}${t.unblocks?`<dt>Unblocks</dt><dd>${h(t.unblocks)}</dd>`:""}<dt>Cost</dt><dd class="mono">${t.cost||"–"}</dd></dl></div>
+  <div class="sec"><div class="acts">${a?`<button class="btn" data-a="goAgent" data-v="${a.id}">${ic("i-agents")}Open session</button>`:""}<button class="btn" data-a="toast" data-v="Ask opens with ${id} attached. Ask is unchanged in this proposal.">${ic("i-chat")}Ask about this</button></div></div>`;
+}
+
+/* ---------- Now ---------- */
+function nowData(f){
+  const p=PROJ.find(x=>x.id===f);
+  return {asks:ASKS.filter(a=>inScope(f,askTask(a))),ver:["T-890","T-894","T-867"].filter(id=>inScope(f,id)),pro:["T-871","T-854"].filter(id=>inScope(f,id)),
+    q:f==="all"?23:p?p.queued:1,pk:f==="all"?32:p?p.parked:0};
+}
+function loop(f,d){
+  const aw=d.asks.filter(a=>a.kind==="Plan").length,ex=Object.keys(PL).filter(id=>inScope(f,id)&&PL[id].group==="exec").length,qs=d.asks.filter(a=>a.kind==="Question").length;
+  const run=d.ver.filter(id=>T[id].rail.gate==="now").length,stale=d.ver.length-run,last=CLOSED.find(x=>x[2]==="done"&&inScope(f,x[0])),nil='<span class="nil">–</span>';
+  const c=(to,name,t,toks)=>`<a href="#${to}" data-a="goScoped" data-v="${to}"><b${tip(t)}>${name}</b>${toks||nil}</a>`;
+  return `<nav class="loop" aria-label="Where work sits in the loop">`+
+    c("plans","Plan","Plans in design or executing. Opens Plans in this scope.",(aw?tok("m-you",aw,"you",pl(aw,"plan awaits","plans await")+" your acceptance"):"")+(ex?tok("m-now",ex,"corral",pl(ex,"plan is","plans are")+" executing"):""))+
+    c("agents","Run","Work with a worker. Opens Agents in this scope.",(qs?tok("m-you",qs,"you",pl(qs,"worker waits","workers wait")+" on your answer"):"")+(d.pro.length?tok("m-now",d.pro.length,"worker",pl(d.pro.length,"worker is","workers are")+" producing"):""))+
+    c("review","Gate","Candidates at the gate. Opens Review in this scope.",(run?tok("m-now",run,"corral",pl(run,"gate is","gates are")+" running"):"")+(stale?tok("m-stale",stale,"held",pl(stale,"gate","gates")+" went stale; the re-gate is queued"):""))+
+    c("review","Review","Candidates with the independent reviewer or waiting for your verdict. None right now.","")+
+    `<a href="#now" data-a="showClosed" data-v=""><b${tip("Landing on main. Opens Closed.")}>Land</b>${last?tok("m-done",closedWhen(last[3]).replace(" ago",""),"dim",`Last landed ${closedWhen(last[3])}: ${last[0]} ${last[1]}`):nil}</a></nav>`;
+}
+const gh=(name,n,hue,hint,right)=>`<h2 class="gh"><span class="t-${hue}"${tip(hint)}>${name}</span><span class="n">${n}</span>${right?`<small>${right}</small>`:""}</h2>`;
+const KIND={Question:["i-chat","A worker asks."],Plan:["i-plans","A plan awaits your acceptance."],"PM asks":["i-chat","The PM asks."]};
+function askRow(a,proj,act="selNow"){
+  return `<div class="ask${S.now===a.key&&act==="selNow"?" sel":""}"><button class="askmain${proj?" wp":""}" data-a="${act}" data-v="${a.key}" data-k="now-${a.key}" id="inbox-${a.key}"${tip(KIND[a.kind][1]+" "+a.cons)}>
+    <span class="dot">${ic(KIND[a.kind][0],"t-you")}</span><span class="mono id">${a.id}</span>${proj?`<span class="pj">${pOf(askTask(a))}</span>`:""}<span class="q">${h(a.title)}</span><span class="mline">${h(a.cons)}</span><span class="age">${a.age}</span></button>
+    <button class="btn${a.go?"":" pri"} sm" data-a="${a.go?"goPlan":act}" data-v="${a.go||a.key}">${a.btn}</button></div>`;
+}
+function taskRow(id,proj,act="selNow"){
+  const t=T[id];
+  return `<button class="row${proj?" wp":""}${S.now===id&&act==="selNow"?" sel":""}" data-a="${act}" data-v="${id}" data-k="now-${id}" id="task-${id}">
+    <span class="dl"${t.changed?tip("Changed since 18:40"):""}>${t.changed?ic("i-delta","t-dim"):""}</span><span class="mono id">${id}</span>${proj?`<span class="pj">${pOf(id)||"–"}</span>`:""}<span class="ttl">${h(t.title)}</span>
+    <span class="trk"${tip(t.now)}>${track(t)}</span><span class="mline nowt${t.hue==="held"?" t-held":""}">${h(t.now)}</span><span class="mono age"${tip("Time in this stage")}>${t.age}</span><span class="mono cost"${tip(t.cost?"Spent so far":"No cost recorded")}>${t.cost||"–"}</span></button>`;
+}
+function digest(f){
+  const dg=DIGEST.filter(x=>inScope(f,x[0])),ev=EVENTS.filter(x=>inScope(f,x[1])),stale=dg.filter(x=>x[2]==="stale").length,landed=dg.filter(x=>x[2]==="done").length;
+  const since=`<span${tip("What changed since your last visit at 18:40, one line per task, trouble first")}>Since 18:40</span>`;
+  if(!dg.length)return `<div class="phd"><div class="r1">${since}</div><h2>Nothing changed</h2></div>`;
+  return `<div class="phd"><div class="r1">${since}<span class="toks">${landed?tok("m-done",landed,"ok",pl(landed,"task","tasks")+" landed"):""}${stale?tok("m-stale",stale,"held",pl(stale,"gate","gates")+" went stale"):""}${tok("i-changes",ev.length,"dim",pl(ev.length,"event","events")+" on "+pl(dg.length,"task","tasks"))}</span></div></div>
+  <div class="sec"><ul class="dg">${dg.map(([id,hue,m,x,t,n,s])=>`<li${tip(x+(n>1?` (${n} events)`:""))}>${ic(MARK[m],"t-"+hue)}<span class="id">${id}</span><p>${s}</p><time>${t}</time></li>`).join("")}</ul></div>
+  <div class="sec"><button class="btn q sm" data-a="tog" data-v="events" aria-expanded="${S.events}">${ic("i-chev")}${S.events?"Hide":"All"} ${ev.length} events</button>
+    ${S.events?`<ul class="evl" style="margin-top:8px">${ev.map(([t,id,x])=>`<li><time>${t}</time><span class="id">${id}</span><span>${h(x)}</span></li>`).join("")}</ul>`:""}</div>`;
+}
+function askPanel(key){
+  const a=ASKS.find(x=>x.key===key);
+  return `<div class="phd"><div class="r1"><span class="chip c-you">needs you</span><span>${a.kind} · <span class="mono">${a.id}</span> · ${a.age}</span>${pLink(askTask(a))}
+      <button class="btn q sm ic" data-a="selNow" data-v="" aria-label="Close">${ic("i-close")}</button></div>
+    <h2>${h(a.title)}</h2><p class="meta">${h(a.by)}</p></div>
+  <div class="sec"><p>${h(a.cons)}</p>
+  ${a.opts?a.opts.map((o,i)=>`<div class="opt"><h4>${i+1}. ${h(o.t)}${o.rec?'<span class="chip">worker recommends</span>':""}</h4>
+      <dl><dt>Then</dt><dd>${h(o.then)}</dd><dt>Unblocks</dt><dd>${h(o.un)}</dd><dt>Costs</dt><dd>${h(o.cost)}</dd></dl>
+      <button class="btn ${o.rec?"pri":""} sm" data-a="toast" data-v="Sample only. This would answer T-868/R1/Q1 with option ${i+1}; one answer wins across devices.">Answer ${i+1}</button></div>`).join(""):""}</div>
+  <div class="sec"><div class="acts">${a.go?`<button class="btn pri" data-a="goPlan" data-v="${a.go}">Review plan</button>`:
+    `<button class="btn" data-a="toast" data-v="The full handover sheet lives in Inbox, unchanged in this proposal.">Open full handover</button>`}
+    ${a.id==="T-868"?`<button class="btn" data-a="goAgent" data-v="w868">${ic("i-agents")}Open session</button>`:""}</div></div>`;
+}
+function statsNow(f,d,page){
+  const n=d.asks.length,mv=d.ver.length+d.pro.length,stale=d.ver.filter(id=>T[id].rail.gate==="stale").length,out=ASKS.length-n;
+  return `<div class="stats">`+tok("m-you",n,n?"you":"dim",n?pl(n,"thing waits","things wait")+" on you":"Nothing waits on you")+
+    tok("m-now",mv,"corral",mv?`${pl(mv,"task is","tasks are")} moving: ${d.ver.length} in verification, ${d.pro.length} with a worker`:"Nothing is moving")+
+    (stale?tok("m-stale",stale,"held",`${pl(stale,"gate","gates")} went stale and ${stale===1?"re-gates on its":"re-gate on their"} own`):"")+
+    (page&&out?`<button class="more" data-a="pf" data-v="${page}:all"${tip(`${pl(out,"more waits","more wait")} on you in other projects. Shows every project.`)}>+${out}</button>`:"")+`</div>`;
+}
+const emptyScope=f=>{const p=PROJ.find(x=>x.id===f);
+  return `<p class="empty pad">${p&&!p.open?`${p.id} is not managed yet${p.pm?"":" and sits outside the PM's scope"}. Ask to file work for it; tasks, plans and builds filed for this project show here.`:"Nothing is in the loop for this scope."}</p>`;};
+function waiting(d,f){
+  if(!d.q&&!d.pk)return "";
+  return gh("Waiting",d.q+d.pk,"dim","Not in the loop yet")+`<div class="wrow">${tok("i-queue",d.q,"",`${d.q} queued. ${f==="all"||f==="corral"?"Next up: T-891 after T-890 lands, then T-869 after T-867.":f==="unassigned"?"T-883 names no project.":"Admitted as slots free up."}`)}${tok("i-park",d.pk,"",`${d.pk} parked. Nothing parked since your last visit.`)}</div>`;
+}
+function closedSection(f,act="selNow"){
+  const all=CLOSED.filter(c=>inScope(f,c[0])),last=all.find(c=>c[2]==="done"),proj=f==="all";
+  const head=`<h2 class="gh"><button class="lnk plain" data-a="tog" data-v="closed" data-k="closed" aria-expanded="${S.closed}" id="btn-closed"${tip("Done and dropped tasks, newest first, a page at a time")}>${ic("i-chev",S.closed?"rot":"")}<span class="t-dim">Closed</span></button><span class="n">${all.length}</span>${last?`<small>${tok("m-done",closedWhen(last[3]).replace(" ago",""),"",`Last landed ${closedWhen(last[3])}: ${last[0]} ${last[1]}`)}</small>`:""}</h2>`;
+  if(!S.closed)return head;
+  if(!all.length)return head+`<p class="empty pad">No closed tasks${proj?"":" in "+pLabel(f)}.</p>`;
+  const pages=Math.ceil(all.length/CLOSED_PAGE),pg=Math.min(S.cpage,pages-1);
+  return head+all.slice(pg*CLOSED_PAGE,(pg+1)*CLOSED_PAGE).map(([id,title,st,hrs,plan,goal])=>{const served=[plan&&"plan "+plan,goal].filter(Boolean).join(" · ");
+    return `<button class="row cl${proj?" wp":""}${S.now===id&&act==="selNow"?" sel":""}" data-a="${act}" data-v="${id}" data-k="now-${id}" id="task-${id}">
+      <span class="dl"></span><span class="mono id">${id}</span>${proj?`<span class="pj">${pOf(id)||"–"}</span>`:""}<span class="ttl">${h(title)}</span>
+      <span class="stw"${tip(served?"Served "+served:"")}>${ic(st==="done"?"m-done":"m-na",st==="done"?"t-ok":"t-dim")}${st}</span>${served?`<span class="mline nowt">${h(served)}</span>`:""}<span class="mono when">${closedWhen(hrs)}</span></button>`;}).join("")+
+    `<div class="pager"><button class="btn sm" data-a="cpage" data-v="0" ${pg?"":'aria-disabled="true"'} id="btn-closed-newest">Newest</button><button class="btn sm" data-a="cpage" data-v="${pg+1}" ${pg>=pages-1?'aria-disabled="true"':""} id="btn-closed-older">Older</button>
+      <span class="mono"${tip(pg>=pages-1&&pg?"No older closed tasks":"Newest first, a page at a time")}>${pg+1} / ${pages}</span></div>`;
+}
+function closedPanel(id){
+  const [,title,st,hrs,plan,goal]=CLOSED.find(c=>c[0]===id),done=st==="done";
+  return `<div class="phd"><div class="r1"><span class="chip${done?" c-ok":""}">${st}</span><span class="mono">${id}</span>${pLink(id)}
+      <button class="btn q sm ic" data-a="selNow" data-v="" aria-label="Close ${id}">${ic("i-close")}</button></div>
+    <h2>${h(title)}</h2><p class="meta">Closed ${closedWhen(hrs)}. Off the board and read-only.</p></div>
+  <div class="sec"><div class="stages">${STAGES.map(s=>`<div><small>${s}</small><b>${ic(done?"m-done":"m-na")}${done?"done":"not reached"}</b></div>`).join("")}</div></div>
+  <div class="sec"><dl class="facts"><dt>Outcome</dt><dd>${done?"Passed its gate and independent review, then landed on main.":"Dropped before it landed. Its run is kept."}</dd><dt>Plan</dt><dd>${plan||"–"}</dd><dt>Goal</dt><dd>${h(goal||"–")}</dd></dl></div>
+  <div class="sec"><div class="acts"><button class="btn" data-a="toast" data-v="Opens the read-only task page with its report and run history, as today.">Open task</button><button class="btn" data-a="toast" data-v="Ask opens with ${id} attached. Ask is unchanged in this proposal.">${ic("i-chat")}Ask about this</button></div></div>`;
+}
+function nowByState(f,d){
+  const proj=f==="all";
+  return (d.asks.length?gh("Needs you",d.asks.length,"you","Questions and acceptances only you can settle")+d.asks.map(a=>askRow(a,proj)).join(""):"")+
+    (d.ver.length?gh("Corral",d.ver.length,"corral","Corral is verifying these: gating, reviewing or landing. Nothing for you to do.")+d.ver.map(id=>taskRow(id,proj)).join(""):"")+
+    (d.pro.length?gh("Workers",d.pro.length,"worker","Workers are producing these")+d.pro.map(id=>taskRow(id,proj)).join(""):"")+
+    (d.asks.length+d.ver.length+d.pro.length?"":emptyScope(f))+waiting(d,f);
+}
+function nowByProject(f){
+  return (f==="all"?[...PROJ.map(p=>p.id),"unassigned"]:[f]).map(p=>{
+    const d=nowData(p),n=d.asks.length,mv=d.ver.length+d.pro.length;
+    return `<h2 class="gh">${p==="unassigned"?"<span>Unassigned</span>":`<button class="lnk" data-a="goProject" data-v="${p}">${p}</button>`}
+      <small>${n?tok("m-you",n,"you",pl(n,"waits","wait")+" on you"):""}${tok("m-now",mv,mv?"corral":"",`${mv} moving`)}${tok("i-queue",d.q,"",`${d.q} queued`)}${tok("i-park",d.pk,"",`${d.pk} parked`)}</small></h2>`+
+      d.asks.map(a=>askRow(a,false)).join("")+[...d.ver,...d.pro].map(id=>taskRow(id,false)).join("")+(n+mv?"":emptyScope(p));
+  }).join("");
+}
+function pgNow(){
+  const f=S.pf.now,d=nowData(f),sel=S.now,isAsk=ASKS.some(a=>a.key===sel);
+  const group=`<div class="seg" role="group" aria-label="Group rows by">${[["state","Actor","Group by who acts next"],["project","Project","Group by project"]].map(([k,l,t])=>`<button data-a="group" data-v="${k}" aria-pressed="${S.group===k}" id="seg-group-${k}"${tip(t)}>${l}</button>`).join("")}</div>`;
+  return `<header class="phead"><h1 id="page-title">Now</h1>${statsNow(f,d,f==="all"?"":"now")}</header>${scopeBar("now",group)}
+  <div class="split s-now${sel?" has-sel":""}">
+    <section class="col main" data-scroll="now-main">${loop(f,d)}
+      ${S.group==="project"?nowByProject(f):nowByState(f,d)}${closedSection(f)}
+    </section>
+    <aside class="col aside" data-scroll="now-aside" aria-label="${sel?"Selection":"Since your last visit"}">${sel?(isAsk?askPanel(sel):CLOSED.some(c=>c[0]===sel)?closedPanel(sel):taskPanel(sel,"selNow")):digest(f)}</aside>
+  </div>`;
+}
+
+/* ---------- Project page ---------- */
+function pgProject(){
+  const p=PROJ.find(x=>x.id===S.project);
+  if(!p)return `<header class="phead"><h1 id="page-title">Project not found</h1><p class="lede">corrald does not list a project named “${h(S.project)}”. It may have been removed from the workspace configuration.</p></header><div class="split one"></div>`;
+  const d=nowData(p.id),plans=Object.keys(PL).filter(id=>pOf(id)===p.id),ags=AG.filter(a=>a.task&&pOf(a.task)===p.id);
+  return `<header class="phead"><h1 id="page-title">${p.id}</h1>${statsNow(p.id,d)}
+      <div class="acts"><button class="btn" data-a="goScoped" data-v="now" id="btn-open-now">Open in Now</button><button class="btn" data-a="toast" data-v="Ask opens with project ${p.id} attached, so filed ideas land in it. Ask is unchanged in this proposal." id="btn-ask"${tip("Ask about this project; filed ideas land in it")}>${ic("i-chat")}Ask</button></div></header>
+  <div class="split s-now">
+    <section class="col main" data-scroll="pj-main">${loop(p.id,d)}
+      ${d.asks.length?gh("Needs you",d.asks.length,"you")+d.asks.map(a=>askRow(a,false,"selNowGo")).join(""):""}
+      ${d.ver.length?gh("Corral",d.ver.length,"corral","Corral is verifying these")+d.ver.map(id=>taskRow(id,false,"selNowGo")).join(""):""}
+      ${d.pro.length?gh("Workers",d.pro.length,"worker","Workers are producing these")+d.pro.map(id=>taskRow(id,false,"selNowGo")).join(""):""}
+      ${d.asks.length+d.ver.length+d.pro.length?"":emptyScope(p.id)}
+      ${plans.length?gh("Plans",plans.length,"ink")+plans.map(id=>`<button class="srow" data-a="goPlan" data-v="${id}" data-k="pj-${id}"${tip(PL[id].line)}><span class="id">${id}</span><b>${h(PL[id].title)}</b>${PL[id].group==="await"||PL[id].you?'<span class="chip c-you">needs you</span>':"<span></span>"}</button>`).join(""):""}
+      ${ags.length?gh("Sessions",ags.length,"ink")+ags.map(a=>`<button class="srow" data-a="goAgent" data-v="${a.id}" data-k="pj-${a.id}"${tip(a.doing+" "+a.last+".")}><span class="id">${a.ref}</span><b>${h(a.title)}</b><span class="chip c-${a.hue}">${a.label}</span></button>`).join(""):""}
+      ${waiting(d,p.id)}${closedSection(p.id,"selNowGo")}
+    </section>
+    <aside class="col aside" data-scroll="pj-aside" aria-label="Project facts">
+      <div class="sec"><dl class="facts"><dt>Path</dt><dd class="mono">${p.path}</dd><dt>PM</dt><dd${tip(p.pm?"The workspace PM's approved scope includes this project.":"The workspace PM's approved scope does not include this project.")}>${p.pm?"in scope":"out of scope"}</dd>
+        <dt>Autopilot</dt><dd${tip(p.auto?"An active autopilot grant names this project.":"No autopilot grant names this project.")}>${p.auto?"on":"off"}</dd>
+        <dt>Open</dt><dd class="mono"${tip("Tasks that are neither done nor dropped")}>${p.open}</dd><dt>Running</dt><dd class="mono"${tip("Open tasks with a live worker session")}>${p.running}</dd></dl></div>
+      ${digest(p.id)}</aside>
+  </div>`;
+}
+
+/* ---------- Agents ---------- */
+function agentRow(a){
+  return `<button class="ar${S.agent===a.id?" sel":""}" data-a="selAgent" data-v="${a.id}" data-k="ag-${a.id}" id="agent-${a.id}">
+    <span class="c-st"><span class="chip c-${a.hue}">${a.label}</span></span><span class="id">${h(a.ref)}</span><span class="c-wide">${a.task?pOf(a.task):"workspace"}</span>
+    <span class="ttl"${tip(a.sub)}>${a.pin?ic("i-pin","t-dim")+" ":""}${h(a.title)}</span>
+    <span class="doing"${tip(a.doing)}><span class="tx">${h(a.brief)}</span>${a.prog?`<span class="bar"><i style="width:${a.prog*100}%"></i></span>`:""}</span>
+    <span class="c-act"${tip(`${a.last} · tool calls per minute over the last 20 minutes`)}>${strip(a)}</span>
+    <span class="c-wide">${h(a.last)}</span><span class="r mono c-wide">${a.since}</span><span class="r mono c-wide">${a.cost||"–"}</span></button>`;
+}
+function agentPanel(a){
+  const ask=ASKS.find(x=>x.key===a.ask),t=a.task&&T[a.task];
+  const logItem=e=>`<li class="${e.sys?"sys":e.you?"you":""}"><time>${e.t}</time><div>${e.sys?`<span class="who">Corral</span><p>${h(e.sys)}</p>`:e.you?`<span class="who">you</span><p>${h(e.you)}</p>`:e.ask?`<p class="t-you">${h(e.ask)}</p>`:`<p>${h(e.say)}</p>`}
+    ${e.tools?`<details><summary>${ic("i-chev")}${h(e.tools[0])}</summary><div class="term">${e.tools[1]}</div></details>`:""}</div></li>`;
+  const body=S.aview==="term"&&a.term
+    ?`<div class="term full" tabindex="0" aria-label="Terminal of ${h(a.ref)}">${a.term}</div><p class="tcap">${a.snap?"Snapshot, 20 s old. Herdr TUI (legacy) refreshes; it does not stream.":"Live from "+h(a.pane)+". Tail is illustrative."} Raw keys need Admin and a fresh proof.</p>`
+    :`${ask?`<div class="sec"><div class="callout"><p><b>Waits on you.</b> ${h(ask.title)}</p><button class="btn pri sm" data-a="askFromAgent" data-v="${ask.key}">Answer</button></div></div>`:""}
+      <div class="sec"><h3>Doing now<small>${h(a.last)}</small></h3><p>${h(a.doing)}</p>${a.prog?`<span class="bar" style="max-width:none"><i style="width:${a.prog*100}%"></i></span>`:""}
+        <div style="margin-top:12px">${strip(a,true)}<div class="axis"><span>20 min ago</span><span>tool calls per minute</span><span>now</span></div></div></div>
+      ${t&&t.steps?`<div class="sec"><h3>Steps<small>${t.steps.filter(s=>s[0]==="done").length}/${t.steps.length}</small></h3>${steps(t.steps)}</div>`:""}
+      <div class="sec"><h3>What it said and did<small>newest first</small></h3><ul class="log">${a.log.map(logItem).join("")}</ul></div>`;
+  return `<div class="phd"><div class="r1"><span class="chip c-${a.hue}">${a.label}</span><span class="mono">${h(a.role)} · ${h(a.ref)}</span>${a.task?pLink(a.task):"<span>workspace</span>"}
+      <button class="btn q sm ic" data-a="selAgent" data-v="" aria-label="Close ${h(a.ref)}">${ic("i-close")}</button></div>
+    <h2>${h(a.title)}</h2><p class="meta mono">${[a.profile,a.runtime,a.pane,"since "+a.since,a.cost].filter(Boolean).map(h).join(" · ")}</p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px"><div class="seg" style="margin:0"><button data-a="aview" data-v="summary" aria-pressed="${S.aview!=="term"||!a.term}">Summary</button><button data-a="aview" data-v="term" aria-pressed="${S.aview==="term"&&!!a.term}" ${a.term?"":`disabled title="${h(a.noterm)}"`}>Terminal</button></div>
+      <button class="btn q sm" data-a="toast" data-v="Opens the full transcript page, unchanged in this proposal.">Open session</button></div></div>
+  <div class="scroll" data-scroll="ag-aside">${body}</div>
+  ${a.reply?`<form class="composer" data-form="reply"><input aria-label="${h(a.reply)}" placeholder="${h(a.reply)}"><button class="btn pri" type="submit">${ic("i-send")}Send</button></form>`
+    :`<div class="composer none">A gate takes no messages. Talk to the task's worker or the PM.</div>`}`;
+}
+function pgAgents(){
+  const f=S.pf.agents,proj=f==="all",scoped=AG.filter(x=>!x.task||inScope(f,x.task)),own=scoped.filter(x=>x.task),list=scoped.filter(x=>S.afilt==="all"||x.kind===S.afilt),a=list.find(x=>x.id===S.agent);
+  const n=k=>k==="all"?scoped.length:scoped.filter(x=>x.kind===k).length,base=proj?scoped:own;
+  const you=base.filter(x=>x.hue==="you").length,idle=base.filter(x=>x.hue==="held").length;
+  return `<header class="phead"><h1 id="page-title">Agents</h1><div class="stats">${tok("i-agents",base.length,"dim",proj?`${scoped.length} sessions on workstation`:`${own.length?pl(own.length,"session works","sessions work"):"No session works"} on ${pLabel(f)} tasks. The PM and assistants serve the whole workspace and stay listed.`)}${you?tok("m-you",you,"you",pl(you,"session waits","sessions wait")+" on you"):""}${idle?tok("m-stale",idle,"held",pl(idle,"session sits","sessions sit")+" idle on a stale candidate"):""}</div>
+    <div class="seg" role="group" aria-label="Filter by role">${AFILT.map(([k,l])=>`<button data-a="afilt" data-v="${k}" aria-pressed="${S.afilt===k}" id="seg-role-${k}">${l} ${n(k)}</button>`).join("")}</div></header>${scopeBar("agents")}
+  <div class="split s-agents${a?" has-sel":""}">
+    <section class="col main" data-scroll="ag-main">
+      <div class="rh" aria-hidden="true"><span>State</span><span>ID</span><span class="c-wide">Project</span><span>Session</span><span>Doing now</span><span>Activity</span><span class="c-wide">Last output</span><span class="c-wide" style="text-align:right">Since</span><span class="c-wide" style="text-align:right">Cost</span></div>
+      ${list.map(x=>agentRow(x)).join("")}
+      <h2 class="subh"><span${tip("Named assistant sessions. 1 of 5 is in this sample.")}>Assistant sessions</span><small>5</small><button class="btn sm" data-a="toast" data-v="New session is unchanged in this proposal.">New session</button></h2>
+      <div class="srow"${tip("Live since 21:02 · pane w15C:p2 · corral pi --task T-854 · $2.18")}><span class="id">A-15</span><b>T-854 co-work check</b><span class="chip c-ok">live</span></div>
+      <h2 class="subh"><span${tip("Ideas the assistant filed from chat. 1 of 4 is in this sample.")}>Filed from chat</span><small>4</small></h2>
+      <div class="srow"${tip("Filed by assistant A-7 from the quick thread")}><span class="id">T-903</span><b>Gate: reuse receipts for unchanged crates after a base move</b><time>22:11</time></div>
+    </section>
+    ${a?`<aside class="col aside fx" aria-label="${h(a.title)}">${agentPanel(a)}</aside>`:""}
+  </div>`;
+}
+
+/* ---------- Plans ---------- */
+function planList(ids,proj){
+  return PLG.map(([g,name,hue])=>{
+    const gids=ids.filter(id=>PL[id].group===g);
+    return gids.length?gh(name,gids.length,hue)+gids.map(id=>{const p=PL[id],fr=p.line.match(/^(\d+) of (\d+)/),st=p.you?["m-you","you"]:p.segs&&p.segs[0]==="run"?["m-now","worker"]:["m-now","corral"];
+      return `<button class="pr${S.plan===id?" sel":""}" data-a="selPlan" data-v="${id}" data-k="pl-${id}" id="plan-${id}"${tip(p.title+" · "+p.line)}><span class="id">${id}</span><span class="ttl">${h(p.title)}</span>
+        ${proj?`<span class="pj">${pOf(id)}</span>`:""}<span class="ln2">${p.segs&&p.segs.length?`<span class="segs" aria-hidden="true">${p.segs.map(s=>`<i class="s-${s}"></i>`).join("")}</span>`:""}${fr?`<span class="mono">${fr[1]}/${fr[2]}</span>${ic(st[0],"t-"+st[1])}`:`<span class="${g==="await"?"t-you":""}">${h(p.line)}</span>`}</span></button>`;}).join(""):"";
+  }).join("");
+}
+const mk=(m,hue)=>ic(MARK[m],hue?"t-"+hue:m==="you"?"t-you":m==="now"?"t-corral":m==="done"?"t-ink":"t-dim");
+function pathToDone(p){
+  return `<div class="phd"><h2${tip("What stands between this plan and main")}>Path to done</h2></div>
+  <div class="sec"><ol class="pathl">${p.path.map(s=>`<li class="s-${s.m}">${mk(s.m)}<div><h4${tip(s.d)}>${h(s.h)}</h4>
+    ${s.items?`<ul>${s.items.map(([m,hue,x,act,short])=>`<li>${mk(m,hue)}<div><span class="${hue==="you"?"t-you":hue==="held"?"t-held":""}"${tip(x)}>${h(short)}</span>${act?`<button class="btn pri sm" data-a="${act.a}" data-v="${act.v}">${act.label}</button>`:""}</div></li>`).join("")}</ul>`:""}
+    ${s.warn?`<div class="warn"${tip(s.warn)}>${ic("i-warn")}<div><span>${s.warn.match(/^\d+ of \d+/)[0].replace(" of ","/")} unmapped</span><button class="btn sm" data-a="toast" data-v="Sample only. This would send the PM a message with the plan attached."${tip("Ask the PM to map these scenarios to members")}>Ask PM</button></div></div>`:""}</div></li>`).join("")}</ol></div>`;
+}
+function planExec(id,p){
+  const card=t=>{const x=T[t];return `<button class="mcard${x.hue==="you"?" you":""}${S.member===t?" sel":""}" data-node="${t}" data-a="selMember" data-v="${t}" data-k="mem-${t}" id="task-${t}"${tip(x.now)}>
+    <span class="top"><span class="id">${t}</span>${track(x)}</span><span class="ttl">${h(x.title)}</span></button>`;};
+  return `<section class="col main" data-scroll="pl-main">
+    <div class="dhead"><div class="r1"><span class="chip c-${p.group==="exec"?"corral":""}"${tip("Delivers to main")}>${p.group==="exec"?"executing":"not started"}</span><span class="mono">${id}${p.rev?" · "+p.rev:""}</span>${pLink(id)}</div>
+      <h2>${h(p.title)}</h2><p>${p.head}</p></div>
+    <div class="blk"><h3><span${tip("Laid out by dependency, left to right")}>Members</span></h3>
+      ${p.layers.length?`<div class="graph"><svg class="edges" aria-hidden="true"></svg>${p.layers.map(l=>`<div class="layer">${l.map(card).join("")}</div>`).join("")}</div>
+        ${p.more?`<p class="gnote"><span${tip(`${p.more} more members are not in the sample`)}>+${p.more}</span></p>`:""}`
+      :`<p class="empty">No members yet. They appear once the plan's tracker is published.</p>`}</div>
+  </section>
+  <aside class="col aside" data-scroll="pl-aside" aria-label="${S.member?"Member":"Path to done"}">${S.member?taskPanel(S.member,"selMember"):pathToDone(p)}</aside>`;
+}
+function planAwait(id,p){
+  return `<section class="col main fx">
+    <div class="scroll" data-scroll="pl-main"><div class="dhead"><div class="r1"><span class="chip c-you">needs you</span><span class="mono"${tip("Reviewed 12:10")}>${id} · ${p.rev}</span>${pLink(id)}</div>
+      <h2>${h(p.title)}</h2><p>${p.head}</p></div>
+    <article class="doc">${DOC.map(([t,items,ul])=>`<h3>${t}</h3>${ul?`<ul>${items.map(x=>`<li>${h(x)}</li>`).join("")}</ul>`:`<p>${h(items[0])}</p>`}`).join("")}</article></div>
+    <div class="decide"><button class="btn pri" data-a="toast" data-v="Sample only. Runs corral plan accept T-885 --rev P2 after a fresh confirm on this device."${tip("Bound to revision P2. Asks for a fresh confirm, then publishes 3 members.")}>Accept P2</button>
+      <button class="btn" data-a="toast" data-v="Sample only. Request changes sends your note back to the planner.">Request changes</button>
+      <button class="btn q" data-a="toast" data-v="Sample only. Opens the P1 → P2 document diff."${tip("What changed between revisions P1 and P2")}>Diff</button></div>
+  </section>
+  <aside class="col aside" data-scroll="pl-aside" aria-label="What you are accepting">
+    <div class="phd"><h2${tip("Accepting publishes these members; the first can start at once")}>Publishes 3 members</h2></div>
+    <div class="sec"><ol class="chainl"><li>${mk("next")}<b${tip("Can start at once")}>pm-bounded-read-contract</b></li><li>${mk("next")}<b${tip("After pm-bounded-read-contract")}>pm-obligation-read-view</b></li><li>${mk("next")}<b${tip("After pm-obligation-read-view")}>pm-read-costs-and-guidance</b></li></ol></div>
+    <div class="sec"><h3${tip("Verdicts are bound to a plan revision")}>Reviewer</h3><ul class="vd">
+      <li><div class="h"${tip("pi-sol · 12:10")}>${mk("done")}P2 · approve</div><p>F1 and F2 addressed. No blocking defect. Approval is for owner consideration only.</p></li>
+      <li class="old"><div class="h"${tip("pi-sol · 10:33 · superseded. Direction sound; two read-contract decisions (F1 pagination/fairness, F2) unresolved.")}>${mk("stale","held")}P1 · changes</div></li></ul></div>
+  </aside>`;
+}
+function pgPlans(){
+  const f=S.pf.plans,ids=Object.keys(PL).filter(id=>inScope(f,id));
+  if(!ids.includes(S.plan)){S.plan=ids[0]||null;S.member=null;}
+  const p=S.plan&&PL[S.plan],aw=ids.filter(id=>PL[id].group==="await").length,ex=ids.filter(id=>PL[id].group==="exec").length,hold=ids.filter(id=>PL[id].you).length;
+  return `<header class="phead"><h1 id="page-title">Plans</h1><div class="stats">${tok("m-you",aw+hold,aw+hold?"you":"dim",[aw?pl(aw,"plan waits","plans wait")+" for your acceptance":"",hold?pl(hold,"plan holds","plans hold")+" on your answer":""].filter(Boolean).join("; ")||"No plan needs you")}${tok("m-now",ex,"corral",ex?pl(ex,"plan is","plans are")+" executing":"No plan is executing")}</div></header>${scopeBar("plans")}
+  ${p?`<div class="split three${S.member?" has-sel":""}"><nav class="col plist" data-scroll="pl-list" aria-label="Plans">${planList(ids,f==="all")}</nav>${p.kind==="await"?planAwait(S.plan,p):planExec(S.plan,p)}</div>`
+    :`<div class="split one"><section class="col main"><p class="empty pad">No plan names ${pLabel(f)}. A plan shows here once one of its members is filed for this project.</p></section></div>`}`;
+}
+function drawEdges(){
+  const g=$(".graph");if(!g)return;const p=PL[S.plan],svg=$("svg.edges",g),r=g.getBoundingClientRect();let d="";
+  for(const [a,b] of p.edges){const A=$(`[data-node="${a}"]`,g),B=$(`[data-node="${b}"]`,g);if(!A||!B)continue;
+    const ra=A.getBoundingClientRect(),rb=B.getBoundingClientRect(),x1=ra.right-r.left+g.scrollLeft,y1=ra.top+ra.height/2-r.top,x2=rb.left-r.left+g.scrollLeft,y2=rb.top+rb.height/2-r.top,mx=(x1+x2)/2;
+    d+=`M${x1} ${y1}C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`;}
+  svg.innerHTML=`<path d="${d}"/>`;
+}
+
+/* ---------- Review ---------- */
+function diffRows(rows){
+  const line=(cls,nums,sg,x)=>`<div class="dfl ${cls}">${nums.map(n=>`<span>${n??""}</span>`).join("")}<span class="sg">${sg}</span><code>${h(x)}</code></div>`;
+  const cmt=r=>`<div class="cmt"><small>${h(r[1])}</small>${h(r[2])}</div>`;
+  if(!S.split)return rows.map(r=>r[0]==="#"?cmt(r):line(r[0]==="-"?"del":r[0]==="+"?"add":"",[r[1],r[2]],r[0]==="c"?"":r[0]==="-"?"−":"+",r[3])).join("");
+  let out="",i=0;const flush=pairs=>{if(pairs)out+=`<div class="sp2">${pairs}</div>`;};let buf="";
+  while(i<rows.length){const r=rows[i];
+    if(r[0]==="#"){flush(buf);buf="";out+=cmt(r);i++;continue;}
+    if(r[0]==="c"){buf+=line("",[r[1]],"",r[3])+line("",[r[2]],"",r[3]);i++;continue;}
+    const dels=[],adds=[];while(i<rows.length&&rows[i][0]==="-")dels.push(rows[i++]);while(i<rows.length&&rows[i][0]==="+")adds.push(rows[i++]);
+    for(let k=0;k<Math.max(dels.length,adds.length);k++){const d=dels[k],a=adds[k];
+      buf+=(d?line("del",[d[1]],"−",d[3]):line("void",[""],"",""))+(a?line("add",[a[2]],"+",a[3]):line("void",[""],"",""));}
+  }
+  flush(buf);return out;
+}
+const fileDiff=f=>f.hunks?f.hunks.map(k=>`<div class="hunk"><div class="hh">${h(k.head)}</div>${diffRows(k.rows)}</div>`).join(""):`<p class="empty">Hunks for this file are not in the sample.</p>`;
+const pm=f=>`<span class="pm"><span class="t-ok">+${f.a}</span> <span class="t-fail">−${f.d}</span></span>`;
+const baseName=p=>p.split("/").pop();
+function reviewMain(id,r){
+  if(S.rtab==="diff")return `<div class="dtools"><div class="seg" role="group" aria-label="Diff layout"><button data-a="split" data-v="" aria-pressed="${!S.split}">Unified</button><button data-a="split" data-v="1" aria-pressed="${S.split}">Side by side</button></div></div>
+    <div class="blk" style="padding-top:0">${r.files.map(f=>`<div class="fh"><b${tip(f.p)}>${h(baseName(f.p))}</b>${pm(f)}</div>${fileDiff(f)}`).join("")}</div>`;
+  if(S.rtab==="log")return `<div class="blk"><div class="term">${r.log}</div></div>`;
+  return `<div class="blk"><h3>Ready to land?</h3><ol class="ready">${r.ready.map(s=>`<li>${mk(s.m,s.m==="stale"?"held":"")}<div><h4><span${tip(s.d)}>${h(s.h)}</span>${s.c?`<code>${s.c}</code>`:""}${s.old?tok("m-stale",1,"held",s.old):""}</h4>
+      ${s.quote?`<blockquote><small>${h(s.quote[0])}</small>${h(s.quote[1])}</blockquote>`:""}</div></li>`).join("")}</ol></div>
+    ${r.files?`<div class="blk" style="padding-top:0"><h3><span${tip("One line per file, from the worker's report")}>What changed</span><small>${r.files.length}</small></h3><div class="fl">${r.files.map((f,i)=>`<div><button class="fr" data-a="tog" data-v="f${i}" data-k="f${i}" aria-expanded="${!!S.open["f"+i]}">${ic("i-chev")}<span class="p"${tip(f.p)}>${h(baseName(f.p))}</span><span class="d">${h(f.desc)}</span>${pm(f)}</button>${S.open["f"+i]?`<div class="fbody">${fileDiff(f)}</div>`:""}</div>`).join("")}</div></div>`
+      :`<div class="blk" style="padding-top:0"><h3>What changed</h3><p class="empty">Fills in when the gate passes.</p></div>`}`;
+}
+function pgReview(){
+  const f=S.pf.review,ids=Object.keys(RV).filter(id=>inScope(f,id));
+  if(!ids.includes(S.review)){S.review=ids[0]||null;S.rtab="brief";}
+  const you=ids.filter(id=>RV[id].group==="you").length,ver=ids.length-you;
+  const head=`<header class="phead"><h1 id="page-title">Review</h1><div class="stats">${tok("m-you",you,you?"you":"dim",you?pl(you,"candidate waits","candidates wait")+" for your verdict":"No candidate waits for your verdict")}${ver?tok("m-now",ver,"corral",pl(ver,"candidate is","candidates are")+" still being verified; nothing for you to do"):""}</div></header>${scopeBar("review")}`;
+  if(!S.review)return head+`<div class="split one"><section class="col main"><p class="empty pad">No candidate in ${pLabel(f)}. One shows here when a run hands its work to the gate.</p></section></div>`;
+  const r=RV[S.review],mine=r.group==="you",tabs=[["brief","Brief"],["diff","Diff"],["log","Gate log"]];
+  const aside=S.rtab==="brief"&&r.asked,wait="Opens when the gate and the independent review are in";
+  const list=RVG.map(([g,name,hue])=>{const gids=ids.filter(id=>RV[id].group===g);
+    return gids.length?gh(name,gids.length,hue)+gids.map(id=>{const x=RV[id];return `<button class="pr${S.review===id?" sel":""}" data-a="selReview" data-v="${id}" data-k="rv-${id}" id="review-${id}"${tip(x.replay?"Shown as a replay of its 2026-11-08 review":"")}><span class="id">${id}</span><span class="ttl">${h(x.title)}</span>
+      ${f==="all"?`<span class="pj">${pOf(id)}</span>`:""}<span class="ln2"><span class="${x.hue==="held"?"t-held":g==="you"?"t-you":""}">${h(x.line)}</span></span></button>`;}).join(""):"";}).join("");
+  return `${head}
+  <div class="split three ${aside?"s-review":"no-aside"}"><nav class="col plist" data-scroll="rv-list" aria-label="Candidates">${list}</nav>
+    <section class="col main fx">
+      <div class="dhead"><div class="r1">${mine?'<span class="chip c-you">your verdict</span>':`<span class="chip c-${r.hue==="held"?"held":"corral"}">${r.hue==="held"?"gate stale":"verifying"}</span>`}<span class="mono"${tip(`Task ${S.review}, round ${r.round}, candidate ${r.cand}, base main`)}>${S.review} · ${r.round} · ${r.cand}</span>${pLink(S.review)}
+          ${r.files?tok("i-note",r.files.length,"",pl(r.files.length,"file","files")+" changed")+`<span class="mono"><span class="t-ok">+${r.files.reduce((s,x)=>s+x.a,0)}</span> <span class="t-fail">−${r.files.reduce((s,x)=>s+x.d,0)}</span></span>`:""}</div>
+        <h2>${h(r.title)}</h2>
+        <div class="seg tabs" role="group" aria-label="Review views">${tabs.map(([k,l])=>{const off=k!=="brief"&&!r.files;return `<button data-a="rtab" data-v="${k}" aria-pressed="${S.rtab===k}"${off?' aria-disabled="true"'+tip("Opens when the gate passes"):""} id="seg-review-${k}">${l}</button>`;}).join("")}</div></div>
+      <div class="scroll" data-scroll="rv-main">${reviewMain(S.review,r)}</div>
+      <div class="decide">${mine?`<button class="btn pri" data-a="toast" data-v="Sample only. Approving ${r.cand} asks for a fresh confirm, then Corral lands it on main."${tip(`Applies to ${r.cand} only; a new candidate makes verdicts stale. Asks for a fresh confirm, then Corral lands it on main.`)}>Approve ${r.cand}</button>
+          <button class="btn" data-a="toast" data-v="Sample only. Request changes returns the candidate to the worker with your note.">Request changes</button>
+          <button class="btn q" data-a="toast" data-v="Ask opens with this candidate attached. Ask is unchanged in this proposal."${tip("Ask about this candidate")}>${ic("i-chat")}Ask</button>`
+        :`<button class="btn pri" aria-disabled="true"${tip(wait)}>Approve ${r.cand}</button><button class="btn" aria-disabled="true"${tip(wait)}>Request changes</button>`}</div>
+    </section>
+    ${aside?`<aside class="col aside" data-scroll="rv-aside" aria-label="Asked for and scope">
+      <div class="sec"><h3>Asked for<small>${r.asked.length}/${r.asked.length}</small></h3>${steps(r.asked)}</div>
+      <div class="sec"><dl class="facts"><dt>Scope</dt><dd${tip(r.scope)}>in scope</dd><dt>Lands</dt><dd${tip(r.lands)}>main</dd></dl></div>
+      <div class="sec"><div class="acts"><button class="btn sm" data-a="goAgent" data-v="w868">${ic("i-agents")}Open session</button></div></div></aside>`:""}
+  </div>`;
+}
+
+/* ---------- notes, toast, render ---------- */
+const TITLES={now:"Now",plans:"Plans",agents:"Agents",review:"Review"};
+const pageTitle=()=>S.page==="project"?S.project:TITLES[S.page];
+function notes(){
+  const n=NOTES[S.page],ul=a=>`<ul>${a.map(x=>`<li>${x}</li>`).join("")}</ul>`;
+  $("#notes").innerHTML=`<h2>${S.page==="project"?"Project page":TITLES[S.page]}: design notes<button class="btn q sm ic" data-a="notes" aria-label="Close design notes">${ic("i-close")}</button></h2>
+    <h3>What is wrong today</h3>${ul(n.today)}<h3>What this proposal changes</h3>${ul(n.change)}<h3>What it needs from the daemon</h3>${ul(n.needs)}`;
+}
+function sideProjects(){
+  return `<hr><div class="sh">Projects</div>`+PROJ.map(p=>{const n=ASKS.filter(a=>pOf(askTask(a))===p.id).length,on=S.page==="project"&&S.project===p.id,say=`${n?pl(n,"waits","wait")+" on you · ":""}${p.open} open · ${p.running} running${p.pm?"":" · outside the PM's scope"}`;
+    return `<a class="nav${on?" on":""}" href="#project/${p.id}" id="project-${p.id}"${on?' aria-current="page"':""} aria-label="${p.id}: ${say}"${tip(p.id+": "+say)}>${ic("i-project")}<span class="tag" aria-hidden="true">${p.tag}</span><span class="lbl">${p.id}</span>${n?`<span class="cnt you">${n}</span>`:""}<span class="cnt">${p.open}</span></a>`;}).join("")+
+    `<a class="nav" href="#now" data-a="goUnassigned" data-v="" id="filter-unassigned" aria-label="Unassigned: 1 open"${tip("1 task filed without a project. Opens Now scoped to it.")}>${ic("i-project")}<span class="tag" aria-hidden="true">–</span><span class="lbl">Unassigned</span><span class="cnt">1</span></a>`;
+}
+let toastT;
+function toast(msg){const t=$("#toast");t.textContent=msg;t.classList.remove("off");clearTimeout(toastT);toastT=setTimeout(()=>t.classList.add("off"),4200);}
+const PAGES={now:pgNow,plans:pgPlans,agents:pgAgents,review:pgReview,project:pgProject};
+let lastPage,lastPanel;
+function render(){
+  hideTip();
+  const k=document.activeElement&&document.activeElement.dataset&&document.activeElement.dataset.k,sc={};
+  if(lastPage===S.page)document.querySelectorAll("[data-scroll]").forEach(e=>sc[e.dataset.scroll]=e.scrollTop);
+  $("#view").innerHTML=PAGES[S.page]();
+  document.querySelectorAll("[data-scroll]").forEach(e=>{if(sc[e.dataset.scroll])e.scrollTop=sc[e.dataset.scroll];});
+  if(k){const el=document.querySelector(`[data-k="${k}"]`);if(el)el.focus({preventScroll:true});}
+  for(const p of ["now","plans","agents","review"]){const n=$("#nav-"+p);n.classList.toggle("on",p===S.page);p===S.page?n.setAttribute("aria-current","page"):n.removeAttribute("aria-current");}
+  $("#side-projects").innerHTML=sideProjects();
+  document.title=`${pageTitle()} · Corral main loop proposal`;
+  $("#notes").hidden=!S.notes;$("#btn-notes").setAttribute("aria-pressed",S.notes);if(S.notes)notes();
+  if(S.page==="plans")drawEdges();
+  const panel=[S.page,S.now,S.agent,S.aview,S.plan,S.member,S.review,S.rtab].join("|"),as=$(".aside");
+  if(as&&panel!==lastPanel)as.classList.add("enter");
+  lastPanel=panel;lastPage=S.page;
+}
+function go(p){
+  if(p.startsWith("project/")){S.page="project";S.project=decodeURIComponent(p.slice(8));}else S.page=PAGES[p]&&p!=="project"?p:"now";
+  const hash="#"+(S.page==="project"?"project/"+S.project:S.page);
+  if(location.hash!==hash)history.replaceState(null,"",hash);render();
+}
+/* An explicitly opened record must be visible: a scope that would hide it widens to All. */
+const reveal=(page,id)=>{if(id&&!inScope(S.pf[page],id))S.pf[page]="all";};
+const curScope=()=>S.page==="project"?S.project:S.pf[S.page];
+
+const ACT={
+  selNow:v=>{S.now=v||null;render();},
+  selNowGo:v=>{const a=ASKS.find(x=>x.key===v);reveal("now",a?askTask(a):v);if(CLOSED.some(c=>c[0]===v))S.closed=true;S.now=v;go("now");},
+  goPlan:v=>{reveal("plans",v);S.plan=v;S.member=null;go("plans");},
+  goAgent:v=>{reveal("agents",AG.find(x=>x.id===v).task);S.agent=v;S.aview="summary";S.afilt="all";go("agents");},
+  askFromAgent:v=>ACT.selNowGo(v),
+  askFromPlan:v=>ACT.selNowGo(v),
+  goProject:v=>go("project/"+v),
+  goUnassigned:()=>{S.pf.now="unassigned";S.now=null;go("now");},
+  goScoped:v=>{S.pf[v]=curScope();if(v==="now")S.now=null;go(v);},
+  showClosed:()=>{S.pf.now=curScope();S.closed=true;S.cpage=0;S.now=null;go("now");const b=$("#btn-closed");if(b){b.scrollIntoView({block:"start"});b.focus({preventScroll:true});}},
+  pf:v=>{const [page,k]=v.split(":");S.pf[page]=k;if(page==="now"){S.now=null;S.cpage=0;}if(page==="agents"&&S.agent){const a=AG.find(x=>x.id===S.agent);if(a.task&&!inScope(k,a.task))S.agent=null;}render();},
+  group:v=>{S.group=v;render();},
+  cpage:v=>{S.cpage=+v;render();},
+  selAgent:v=>{S.agent=v||null;S.aview="summary";render();},
+  aview:v=>{S.aview=v;render();},
+  afilt:v=>{S.afilt=v;render();},
+  selPlan:v=>{S.plan=v;S.member=null;render();},
+  selMember:v=>{S.member=S.member===v?null:(v||null);render();},
+  selReview:v=>{S.review=v;S.rtab="brief";render();},
+  rtab:v=>{S.rtab=v;render();},
+  split:v=>{S.split=!!v;render();},
+  tog:v=>{if(v==="events"||v==="closed")S[v]=!S[v];else S.open[v]=!S.open[v];if(v==="closed")S.cpage=0;render();},
+  toast:v=>toast(v),
+  notes:()=>{S.notes=!S.notes;render();},
+  theme:()=>{const r=document.documentElement,d=r.classList.toggle("t-light");r.classList.toggle("t-dark",!d);},
+  fold:()=>{const a=$("#app"),f=a.classList.toggle("folded");$("#btn-fold").setAttribute("aria-label",f?"Unfold sidebar":"Fold sidebar");if(S.page==="plans")drawEdges();},
+};
+document.addEventListener("click",e=>{const el=e.target.closest("[data-a]");if(!el||el.disabled||el.getAttribute("aria-disabled")==="true")return;if(el.tagName==="A")e.preventDefault();ACT[el.dataset.a](el.dataset.v,el);});
+document.addEventListener("submit",e=>{e.preventDefault();const i=$("input",e.target);if(i&&i.value.trim()){toast("Sample only. Your message would arrive as owner input in that session.");i.value="";}});
+const ORDER={now:()=>{const d=nowData(S.pf.now);return [...d.asks.map(a=>a.key),...d.ver,...d.pro];},agents:()=>AG.filter(a=>(!a.task||inScope(S.pf.agents,a.task))&&(S.afilt==="all"||a.kind===S.afilt)).map(a=>a.id),
+  plans:()=>Object.keys(PL).filter(id=>inScope(S.pf.plans,id)),review:()=>Object.keys(RV).filter(id=>inScope(S.pf.review,id))};
+const SELKEY={now:"now",agents:"agent",plans:"plan",review:"review"};
+document.addEventListener("keydown",e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;
+  const pg={n:"now",p:"plans",a:"agents",r:"review"}[e.key];
+  if(pg){go(pg);return;}
+  if(e.key==="Escape"){if(S.notes)S.notes=false;else if(S.page==="now")S.now=null;else if(S.page==="agents")S.agent=null;else if(S.page==="plans")S.member=null;render();return;}
+  if((e.key==="j"||e.key==="k")&&ORDER[S.page]){const ids=ORDER[S.page](),key=SELKEY[S.page],i=ids.indexOf(S[key]),n=Math.max(0,Math.min(ids.length-1,i+(e.key==="j"?1:-1)));if(!ids.length)return;
+    S[key]=ids[i<0?0:n];if(S.page==="plans")S.member=null;if(S.page==="review")S.rtab="brief";render();
+    const el=document.querySelector(".sel");if(el)el.scrollIntoView({block:"nearest"});}
+});
+
+/* ---------- tooltips: hover and keyboard focus; long-press where there is no hover ---------- */
+const tipEl=document.body.appendChild(document.createElement("div"));tipEl.id="tip";tipEl.setAttribute("role","tooltip");tipEl.hidden=true;
+let tipFor=null,tipWait=null,tipT=0,tipHid=0,pressT=0,pressed=false;
+function showTip(el,x){
+  if(!el.isConnected)return;
+  tipWait=null;tipFor=el;tipEl.textContent=el.dataset.tip;tipEl.hidden=false;tipEl.classList.add("on");
+  const r=el.getBoundingClientRect(),w=tipEl.offsetWidth,ht=tipEl.offsetHeight,cx=r.width>260?(x??r.left+130):r.left+r.width/2;
+  let y=r.top-ht-6;if(y<42)y=r.bottom+6;
+  tipEl.style.left=Math.max(8,Math.min(innerWidth-w-8,cx-w/2))+"px";tipEl.style.top=y+"px";
+  el.setAttribute("aria-describedby","tip");
+}
+function hideTip(){
+  clearTimeout(tipT);tipWait=null;if(!tipFor)return;
+  tipFor.removeAttribute("aria-describedby");tipFor=null;tipEl.hidden=true;tipEl.classList.remove("on");tipHid=Date.now();
+}
+document.addEventListener("mouseover",e=>{
+  if(pressed)return;
+  const el=e.target.closest("[data-tip]");
+  if(el===tipFor||(el&&el===tipWait))return;
+  hideTip();
+  if(el){tipWait=el;const x=e.clientX;tipT=setTimeout(()=>showTip(el,x),Date.now()-tipHid<500?60:350);}
+});
+document.documentElement.addEventListener("mouseleave",hideTip);
+document.addEventListener("focusin",e=>{
+  const t=e.target;if(!t.matches(":focus-visible"))return;
+  const el=t.matches("[data-tip]")?t:t.querySelector(".trk[data-tip],.doing[data-tip]")||t.querySelector("[data-tip]");
+  hideTip();if(el)showTip(el);
+});
+document.addEventListener("focusout",hideTip);
+document.addEventListener("keydown",e=>{if(e.key==="Escape")hideTip();},true);
+document.addEventListener("scroll",hideTip,true);
+document.addEventListener("click",e=>{if(pressed){e.preventDefault();e.stopPropagation();}else hideTip();},true);
+document.addEventListener("touchstart",e=>{hideTip();const el=e.target.closest("[data-tip]");if(el)pressT=setTimeout(()=>{pressed=true;showTip(el,e.touches[0].clientX);},450);},{passive:true});
+document.addEventListener("touchmove",()=>clearTimeout(pressT),{passive:true});
+document.addEventListener("touchend",()=>{clearTimeout(pressT);if(pressed)setTimeout(()=>{pressed=false;},400);},{passive:true});
+document.addEventListener("contextmenu",e=>{if(pressed)e.preventDefault();});
+for(const k of ["now","agents","plans","review","project"])NOTES[k].change.push("<b>Terse surface, full sentences on demand.</b> A count is an icon and a number; hover or keyboard focus says the rest. Touch has no hover, so long-press shows the same tooltip and phone rows keep one explanatory line.");
+addEventListener("hashchange",()=>go(location.hash.slice(1)));
+addEventListener("resize",()=>{if(S.page==="plans")drawEdges();});
+const tick=()=>{const d=new Date();$("#clock").textContent=d.toLocaleDateString(undefined,{month:"short",day:"numeric"})+" "+d.toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit",hour12:false});};
+tick();setInterval(tick,20000);
+go(location.hash.slice(1)||"now");
+if(document.fonts)document.fonts.ready.then(()=>{if(S.page==="plans")drawEdges();});
+</script>
+</body>
+</html>
