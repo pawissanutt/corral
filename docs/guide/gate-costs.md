@@ -98,12 +98,41 @@ stale or missing report prints nothing, and compile, lint and Pi failures print 
 
 Each installed Darwin target is checked with `cargo check --workspace --all-targets`.
 This is Rust/cfg coverage, not native compilation or linking. Only these invocations use
-`LIBSQLITE3_SYS_USE_PKG_CONFIG=1` and command-line Cargo `links` overrides for `zstd` and
-`ring_core_0_17_14_`: SQLite still copies its bundled Rust bindings, zstd uses checked-in
-bindings, and ring 0.17.14 generates no Rust or Rust cfg/env inputs. No Apple SDK is needed
-for these checks. Re-audit that contract when upgrading native dependencies (ring's `links`
-key is versioned). Never persist these overrides in Cargo config or use them for builds/tests;
-real builds still require the platform's native toolchain. See the [T-956 audit](../records/T-956-darwin-ring.md).
+`LIBSQLITE3_SYS_USE_PKG_CONFIG=1` and command-line Cargo `links` overrides:
+
+| Native crate (`links` key) | Rust-only contract |
+| --- | --- |
+| SQLite (environment variable, not a build-script override) | Its linked build path still copies bundled Rust bindings into `OUT_DIR`; replacing the build script would lose those bindings. |
+| zstd-sys (`zstd`), libz-sys 1.1.33 (`z`), libnghttp2-sys 0.1.13 (`nghttp2`) | Checked-in Rust bindings; generated headers/pkg-config files are C-only. |
+| ring 0.17.14 (`ring_core_0_17_14_`) | Only native link directives; no generated Rust or Rust cfg/env inputs. |
+| openssl-sys 0.9.118 (`openssl`) | Handwritten bindings with the current features (no `bindgen`, BoringSSL or AWS-LC). Supply `openssl`, the cumulative `ossl*` cfgs through `ossl350`, and matching `version_number`/`conf` metadata. |
+| curl-sys 0.4.91+curl-8.22.0 (`curl`) | Checked-in bindings; preserve `libcurl_vendored`, `link_libnghttp2`, `link_libz`, `link_openssl` cfgs and `static=1` metadata, matching the resolved static-curl/http2/ssl features. |
+
+The OpenSSL profile is system-installed **OpenSSL 3.5.0 LTS**, version number
+`30500000` (hex), with SSLv3 methods disabled (`OPENSSL_NO_SSL3_METHOD`) and the other
+detected APIs enabled. This is a supported macOS OpenSSL installation, not Apple's
+LibreSSL or a Linux library probe: the current dependency tree uses system OpenSSL
+(no `openssl-src`/vendored feature), and 3.5 provides a maintained LTS API profile.
+The `rustc-cfg` list reproduces `openssl-sys`'s `build/cfgs.rs` for that version,
+including its `osslconf` value. `DEP_OPENSSL_VERSION_NUMBER` and `DEP_OPENSSL_CONF`
+let `openssl` 0.10.82 derive the same API cfgs; LibreSSL/BoringSSL/AWS-LC metadata
+must remain absent. `curl` 0.4.51 reads the version and `DEP_CURL_STATIC`, retaining
+certificate probing without legacy OpenSSL initialization. `isahc` 1.8.3's build
+script only exports its own enabled features and reads no `DEP_CURL_*` metadata.
+
+Do not invent include/root paths: `DEP_Z_INCLUDE`, `DEP_NGHTTP2_ROOT` and
+`DEP_OPENSSL_INCLUDE` are only used to compile curl's C sources, whose script is
+also overridden. No current Rust consumer needs those headers or curl's generated
+C headers/pkg-config files. None of the overridden crates requires generated Rust
+in this feature profile; SQLite is deliberately the exception handled by its own
+build script.
+
+No Apple SDK is needed for these checks. Re-audit the resolved features, generated
+files and cfg/metadata consumers on native dependency upgrades, especially the
+versioned ring `links` key, the OpenSSL version/cfg/conf profile, and curl's
+static/http2/ssl contract. Never persist these overrides in Cargo config or use
+them for builds/tests; real builds still require the platform's native toolchain.
+See also the original [T-956 ring audit](../records/T-956-darwin-ring.md).
 
 ## Host nightly slow lane
 

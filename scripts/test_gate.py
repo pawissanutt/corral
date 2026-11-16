@@ -40,6 +40,30 @@ def semantic_args(args: list[str]) -> list[str]:
     if args[:2] == ["nextest", "list"] and "--ignore-default-filter" in args:
         args[args.index("-E") + 1] = "<exception selection>"
     return args
+
+
+def darwin_check_args(target: str) -> list[str]:
+    overrides = (
+        "zstd.rustc-link-lib=[]",
+        "ring_core_0_17_14_.rustc-link-lib=[]",
+        "openssl.rustc-link-lib=[]",
+        "openssl.rustc-cfg=['openssl','ossl101','ossl102','ossl102f','ossl102h',"
+        "'ossl110','ossl110f','ossl110g','ossl110h','ossl111','ossl111b','ossl111c',"
+        "'ossl111d','ossl300','ossl320','ossl330','ossl340','ossl350',"
+        "'osslconf=\"OPENSSL_NO_SSL3_METHOD\"']",
+        "openssl.version_number='30500000'",
+        "openssl.conf='OPENSSL_NO_SSL3_METHOD'",
+        "z.rustc-link-lib=[]",
+        "nghttp2.rustc-link-lib=[]",
+        "curl.rustc-link-lib=[]",
+        "curl.rustc-cfg=['libcurl_vendored','link_libnghttp2','link_libz','link_openssl']",
+        "curl.static='1'",
+    )
+    return ["check", "--workspace", "--all-targets", "--target", target,
+            *(arg for override in overrides
+              for arg in ("--config", f"target.{target}.{override}"))]
+
+
 STARTERS: Final = (
     "e2e.sh", "screenshots.sh", "tui-drive.sh", "tui-drive-autopilot.sh",
     "tui-drive-cards.sh", "tui-drive-dispatch.sh", "tui-drive-pins.sh",
@@ -521,9 +545,7 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
                 ]
                 checks = [e for e in entries if e["args"][0] == "check"]
                 self.assertEqual([e["args"] for e in checks], [
-                    ["check", "--workspace", "--all-targets", "--target", target,
-                     "--config", f"target.{target}.zstd.rustc-link-lib=[]",
-                     "--config", f"target.{target}.ring_core_0_17_14_.rustc-link-lib=[]"]
+                    darwin_check_args(target)
                     for target in installed
                 ])
                 for entry in checks:
@@ -556,13 +578,10 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
         for entry in entries:
             if entry["args"][0] == "check":
                 target = entry["args"][entry["args"].index("--target") + 1]
-                # SQLite still copies bundled bindings in its linked build path;
-                # zstd/ring need no generated Rust or build-script cfg/env output.
+                # Preserve each native crate's Rust cfg/metadata contract while
+                # SQLite still copies bundled bindings in its linked build path.
                 self.assertEqual(entry["sqlite_pkg_config"], "1")
-                self.assertEqual(entry["args"][-4:], [
-                    "--config", f"target.{target}.zstd.rustc-link-lib=[]",
-                    "--config", f"target.{target}.ring_core_0_17_14_.rustc-link-lib=[]",
-                ])
+                self.assertEqual(entry["args"], darwin_check_args(target))
             else:
                 # No override may reach native lint/test/build or docs commands.
                 self.assertEqual(entry["sqlite_pkg_config"], "0")
@@ -575,9 +594,7 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
         for target in targets:
             with self.subTest(target=target):
                 (self.repo / "commands.jsonl").unlink(missing_ok=True)
-                command = (f"check --workspace --all-targets --target {target}"
-                           + f" --config target.{target}.zstd.rustc-link-lib=[]"
-                           + f" --config target.{target}.ring_core_0_17_14_.rustc-link-lib=[]")
+                command = " ".join(darwin_check_args(target))
                 # When the gate reaches the failed cross-check:
                 result = self.gate(PATH=path, INSTALLED_TARGETS="\n".join(targets),
                                    FAIL_COMMAND="cargo:" + command)

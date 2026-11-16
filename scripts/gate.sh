@@ -256,10 +256,15 @@ end_step
 
 # Reuse installed Darwin standard libraries; this checks all Rust (including macOS
 # cfg paths), not native linking. Do not download targets during a review gate.
-# Skip only native C/assembly work: SQLite's linked path still copies its bundled
-# Rust bindings; zstd has checked-in bindings; ring 0.17.14 emits only native link
-# directives (no generated Rust, cfg or env). Cargo can override the latter scripts
-# without changing Rust/cfg coverage. Re-audit ring's versioned links key on upgrades.
+# Skip native C/assembly only: SQLite's linked path still copies bundled Rust
+# bindings; zstd, zlib and nghttp2 have checked-in Rust; ring 0.17.14 emits only
+# native link directives. openssl-sys 0.9.118 uses handwritten bindings (no bindgen
+# feature); reproduce its system OpenSSL 3.5.0 LTS cfg/version/conf for openssl and
+# curl. curl-sys 0.4.91 has checked-in Rust: retain static-curl/http2/ssl cfg and
+# static metadata so curl still enables certificate probing. Header/root metadata
+# is C-only and its sole consumer (curl-sys) is also overridden; isahc needs none.
+# Re-audit cfg/metadata/features on native dependency upgrades, especially ring's
+# versioned links key and the openssl-sys/openssl and curl-sys/curl contracts.
 # These command-local overrides must never reach a build/test command: real builds
 # still compile and link the native libraries with the platform's toolchain.
 if ((!darwin_touched)); then
@@ -270,11 +275,20 @@ elif command -v rustup >/dev/null 2>&1; then
   for target in aarch64-apple-darwin x86_64-apple-darwin; do
     if [[ $'\n'"$installed_targets"$'\n' == *$'\n'"$target"$'\n'* ]]; then
       begin_step "cargo check --workspace --all-targets --target $target"
-      printf 'Rust-only check: skipping SQLite/zstd/ring native compilation (no Apple SDK required).\n'
+      printf 'Rust-only check: skipping SQLite/zstd/ring/OpenSSL/zlib/nghttp2/curl native compilation (no Apple SDK required).\n'
       LIBSQLITE3_SYS_USE_PKG_CONFIG=1 python3 scripts/gate_timer.py compile \
         "$CORRAL_TEST_BUDGET_STATE" "$target" -- bash scripts/cargo.sh check --workspace --all-targets --target "$target" \
         --config "target.$target.zstd.rustc-link-lib=[]" \
-        --config "target.$target.ring_core_0_17_14_.rustc-link-lib=[]"
+        --config "target.$target.ring_core_0_17_14_.rustc-link-lib=[]" \
+        --config "target.$target.openssl.rustc-link-lib=[]" \
+        --config "target.$target.openssl.rustc-cfg=['openssl','ossl101','ossl102','ossl102f','ossl102h','ossl110','ossl110f','ossl110g','ossl110h','ossl111','ossl111b','ossl111c','ossl111d','ossl300','ossl320','ossl330','ossl340','ossl350','osslconf=\"OPENSSL_NO_SSL3_METHOD\"']" \
+        --config "target.$target.openssl.version_number='30500000'" \
+        --config "target.$target.openssl.conf='OPENSSL_NO_SSL3_METHOD'" \
+        --config "target.$target.z.rustc-link-lib=[]" \
+        --config "target.$target.nghttp2.rustc-link-lib=[]" \
+        --config "target.$target.curl.rustc-link-lib=[]" \
+        --config "target.$target.curl.rustc-cfg=['libcurl_vendored','link_libnghttp2','link_libz','link_openssl']" \
+        --config "target.$target.curl.static='1'"
       end_step
     else
       printf '\nSkipping %s check (install with: rustup target add %s).\n' "$target" "$target"
