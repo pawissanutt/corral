@@ -316,7 +316,8 @@ pub fn login_with_options(
         usize::from(api.key_file.is_some()) + usize::from(api.status) + usize::from(api.logout);
     if is_api && actions != 1 {
         bail!(
-            "usage_error: API login requires exactly one of --key-file <protected-0600-file>, --status or --logout; key presence does not authorize paid requests"
+            "usage_error: rerun with --provider {} and exactly one of --key-file <protected-0600-file>, --status or --logout; key presence does not authorize paid requests",
+            chosen.id
         );
     }
     if !is_api && actions != 0 {
@@ -333,7 +334,7 @@ pub fn login_with_options(
         Err(_) => None,
     };
     let assets = login_assets(explicit, &root)?;
-    if is_api && !has_module(&assets, "src/auth/api-key.ts") {
+    if is_api && !api_login_supported(&assets, chosen.id) {
         bail!("assets_outdated: installed host lacks API key setup; run `corral agent install`");
     }
     let range = read_compat(&assets)?.range;
@@ -360,7 +361,23 @@ pub fn login_with_options(
     let dir = auth_dir(&root);
     ensure_auth_dir(&dir)?;
     let program = command.get_program().to_owned();
-    login_arguments(&mut command, &dir, chosen.id, api);
+    let key_path = api
+        .key_file
+        .map(|path| -> Result<_> {
+            if path.is_absolute() {
+                Ok(path.to_path_buf())
+            } else {
+                Ok(std::env::current_dir()
+                    .context("resolving key file relative to current directory")?
+                    .join(path))
+            }
+        })
+        .transpose()?;
+    let resolved_api = ApiLoginOptions {
+        key_file: key_path.as_deref(),
+        ..*api
+    };
+    login_arguments(&mut command, &dir, chosen.id, &resolved_api);
     let status = command
         .current_dir(&assets)
         .status()
@@ -387,6 +404,14 @@ pub fn login_with_options(
             stored.dir.display()
         ),
     }
+}
+
+fn api_login_supported(assets: &Path, connection: &str) -> bool {
+    std::fs::read(assets.join("compat.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("connections")?.as_array().cloned())
+        .is_some_and(|connections| connections.iter().any(|id| id.as_str() == Some(connection)))
 }
 
 // Only the protected file path crosses argv; Rust never reads the key.
@@ -419,6 +444,19 @@ mod tests {
 
     fn chmod(path: &Path, mode: u32) {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn api_login_requires_host_connection_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!api_login_supported(tmp.path(), "anthropic-api"));
+        std::fs::write(
+            tmp.path().join("compat.json"),
+            r#"{"connections":["openai-api"]}"#,
+        )
+        .unwrap();
+        assert!(!api_login_supported(tmp.path(), "anthropic-api"));
+        assert!(api_login_supported(tmp.path(), "openai-api"));
     }
 
     #[test]
