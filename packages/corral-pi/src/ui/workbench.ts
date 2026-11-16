@@ -178,6 +178,8 @@ export interface WorkbenchOptions {
   readonly onFocusMain?: () => void;
   readonly cwd: string; readonly snapshot: () => PanelSnapshot | null;
   readonly changed: () => void; readonly canInteract: () => boolean;
+  /** A dialog or overlay holds the keys: transcripts keep a paused reader's position under it. */
+  readonly modal?: () => boolean;
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
   readonly readHistory?: HistoryRead;
   readonly projectDir?: string;
@@ -715,7 +717,7 @@ export class NativeWorkbench {
   }
   mount(transcript: Component, presentation?: () => InteractiveChatPresentation): Component {
     this.chatPresentation = presentation;
-    if (transcript instanceof ScrollView) { this.transcript = transcript; this.watch = new TranscriptWatch(transcript); }
+    if (transcript instanceof ScrollView) { this.transcript = transcript; this.watch = new TranscriptWatch(transcript, this.options.modal); }
     const terminal = this.options.terminal;
     this.changes = new ChangesView({ model: () => this.changesModel(), click: event => this.options.canInteract() && plainClick(event),
       focus: () => { this.focusMain(); this.options.changed(); }, step: delta => void this.selectRelative(delta),
@@ -730,7 +732,7 @@ export class NativeWorkbench {
       click: event => this.options.canInteract() && plainClick(event), focus: () => { this.focusMain(); this.options.changed(); },
       back: () => this.openAgents(), answer: (key: string) => this.agentAction("answer", key) });
     if (this.agentKey !== undefined) this.conversation.restore(this.agentKey);
-    this.childWatch = new TranscriptWatch(this.conversation.scroll);
+    this.childWatch = new TranscriptWatch(this.conversation.scroll, this.options.modal);
     // Task, Proof, lifecycle, Usage, Artifacts and Inbox draw from their first column: `inset` puts them one cell in, as the frame is.
     this.evidenceScroll = new ScrollView(inset({ render: width => this.renderEvidence(width), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;

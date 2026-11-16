@@ -1,4 +1,5 @@
 // Locate a label on the final frame of a captured PTY log: prints {"row","col"} (zero-based) or null.
+// The needle `--lines` prints the final frame's rows instead.
 import { readFileSync } from "node:fs";
 import { ScreenModel } from "./screen.ts";
 
@@ -7,4 +8,4 @@ if (!file || !cols || !rows || !needle) throw new Error("usage: screen-find <log
 const raw = readFileSync(file, "latin1");
 // The caller passes only output written since the last resize to this geometry.
 const screen = new ScreenModel(Number(cols), Number(rows)).sync([Buffer.from(raw, "latin1").toString("utf8")]);
-process.stdout.write(JSON.stringify(screen.find(needle) ?? null));
+process.stdout.write(JSON.stringify(needle === "--lines" ? screen.lines() : screen.find(needle) ?? null));

@@ -19,6 +19,20 @@ test("new rows count only while the reader is not following, and End's jump resu
   expect(jumpLabel(0, undefined)).toContain("Jump to latest message");
 });
 
+test("a dialog over the transcript never moves a paused reader, even when the reply grows under it", () => {
+  const transcript = new ScrollView(new Text(rows(50), 0, 0), { follow: "end" });
+  let modal = false;
+  new TranscriptWatch(transcript, () => modal);
+  transcript.updateLayout(50, 10, noop); transcript.scrollBy(-20);
+  expect(transcript.scrollTop).toBe(20);
+  // The dialog lays the transcript out in a viewport that fits it all, then the reply streams on.
+  modal = true;
+  transcript.updateLayout(50, 50, noop); transcript.updateLayout(55, 10, noop);
+  modal = false;
+  transcript.updateLayout(55, 10, noop);
+  expect([transcript.scrollTop, transcript.isFollowingEnd]).toEqual([20, false]);
+});
+
 test("the unread mark sets once an entry is added behind another view, clears when Chat opens, and never renders hidden history", () => {
   // Pi's shape: a document holding the chat container, which holds one component per entry.
   const chat = new Container(), document = new Container();

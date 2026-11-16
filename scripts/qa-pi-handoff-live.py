@@ -97,28 +97,50 @@ try:
     assert (tasks(), choices()) == before == ([], 0), (tasks(), choices())
     frame('cancelled')
 
-    # A composer draft survives the overlay: open it from F2 over the draft, switch to the short
-    # 52x14 layout, navigate and type inside it, cancel; no keystroke leaks, nothing changes.
+    # Streaming and a competing overlay at 52x14. A reply streams its first part and holds; the
+    # owner scrolls back (reading position) and types a draft, opens the sheet from F2 over it,
+    # moves and types inside it while the reply finishes, then cancels. Every screen is replayed
+    # at 52x14 from that resize, so it observes the real short layout.
     draft = 'keep this draft'
-    mark = len(log); os.write(master, draft.encode())
-    until(lambda: has(draft, after=mark), 'draft typed')
+    short = len(log); resize(52, 14)
+    def settle(seconds=1.0):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end: pump(0.1)
+    def screen(name):
+        settle(); (out / (name + '.ansi')).write_bytes(bytes(log[short:]))
+        return json.loads(ok(['bun', '--no-env-file', str(package / 'test/support/screen-find.ts'), str(out / (name + '.ansi')), '52', '14', '--lines'], cwd=repo))
+    def composer(lines): return next((l for l in lines if '│ ›' in l), '')
+    def reading(lines): return [l for l in lines[2:] if 'Jump to latest' in l or 'new row' in l or 'STREAM_HOLD_1' in l]
+    mark = len(log); os.write(master, b'STREAM_HOLD_1 summarise the plan\r')
+    until(lambda: has('Streaming first part', after=mark), 'reply streaming', 60)
+    os.write(master, b'\x1b[5~')
+    for ch in draft.encode(): os.write(master, bytes([ch])); time.sleep(0.02)
+    before = screen('short-before')
+    assert draft in composer(before) and any('Jump to latest' in l for l in before) and 'writing' in ''.join(before), before
     mark = len(log); os.write(master, b'\x1bOQ')
     until(lambda: has('filter actions', after=mark), 'F2 palette')
     for ch in b'hand off': os.write(master, bytes([ch])); time.sleep(0.05)
     until(lambda: has('this work', after=mark), 'palette filtered')
     time.sleep(0.3); os.write(master, b'\r')
-    until(lambda: has('Save plan for later', after=mark), 'sheet from the palette')
-    resize(52, 14); os.write(master, b'\x1b[B'); time.sleep(0.15); os.write(master, b'zz'); time.sleep(0.3)
-    frame('overlay-52-short')
-    os.write(master, b'\x1b'); time.sleep(2)  # the sheet's own cancel; a fresh redraw below proves it closed
-    redraw = len(log); resize(140, 46)
-    until(lambda: has('ASSISTANT', 'Message', after=redraw), 'full redraw at 140x46'); frame('draft-preserved')
-    geometry = redraw  # later pointer lookups replay from this full 140x46 redraw
-    (out / 'segment.ansi').write_bytes(bytes(log[redraw:]))
-    def on_screen(label): return json.loads(ok(['bun', '--no-env-file', str(package / 'test/support/screen-find.ts'), str(out / 'segment.ansi'), '140', '46', label], cwd=repo))
-    assert on_screen('› ' + draft) and not on_screen(draft + 'z') and not on_screen('Context for the next session'), 'draft or overlay state'
+    until(lambda: has('next steps', after=mark), 'sheet from the palette', 60)
+    os.write(master, b'\x1b[B'); time.sleep(0.15); os.write(master, b'zz')
+    sheet = screen('short-sheet'); assert any('Context for the next session' in l for l in sheet), sheet
+    (work / 'release-stream-1').write_text('')
+    until(lambda: 'idle' in screen('short-released')[0], 'reply finished under the sheet', 30)
+    os.write(master, b'\x1b'); time.sleep(2)
+    after = screen('short-after')
+    assert not any('Context for the next session' in l for l in after), after
+    assert composer(after) == composer(before), (composer(before), composer(after))
+    assert reading(after) and 'Streaming done' not in ''.join(after), ('reading position moved', before, after)
+    os.write(master, b'!'); typed = screen('short-typed')
+    assert draft + '!' in composer(typed), typed  # keys return to the composer
     assert (tasks(), choices()) == ([], 0), (tasks(), choices())
+    os.write(master, b'\x1b[1;5F'); settle(0.5)  # Ctrl+End: End edits the draft
+    assert any('Streaming done' in l for l in screen('short-latest')), 'reply completed'
     os.write(master, b'\x15'); time.sleep(0.3)
+    geometry = len(log); resize(140, 46)
+    until(lambda: has('ASSISTANT', 'Message', after=geometry), 'full redraw at 140x46')
+    preserved = dict(geometry='52x14', composer=composer(after).strip('│ ').strip(), before=before, sheet=sheet, after=after)
 
     # Plan sheet rows: three contexts, Preview context, then Save plan for later.
     mark = len(log); os.write(master, b'/handoff\r')
@@ -239,7 +261,7 @@ try:
     frame('shipped')
     os.write(master, b'\x1b'); time.sleep(0.3)
     os.write(master, b'\x15\x04'); until(lambda: b'\x1b[?1049l' in log, 'terminal restored'); proc.wait(timeout=15)
-    result = dict(status='PASS', production_entrypoint='src/host/main.ts', generation=fixture['generation'],
+    result = dict(status='PASS', preserved=preserved, production_entrypoint='src/host/main.ts', generation=fixture['generation'],
                   control_plane=corral, provider='offline fixture auth; no paid model requests', task=task['id'],
                   saved=dict(status=shown.get('status'), dispatch_hold=shown.get('dispatch_hold')),
                   returned=dict(status=returned.get('status'), dispatch_hold=returned.get('dispatch_hold'), assistant_phase='planning'),
@@ -251,7 +273,7 @@ try:
                   checks=['real store: plan r4 with completed local review of r3 reads stale (current r4), advisory only',
                           'renders at 140, 80, 52 columns and 52x14 short height',
                           'Escape: no task, no choice input',
-                          'composer draft typed, sheet opened from F2 over it, 52x14 navigation and typed keys inside, Escape: draft intact, no leaked keys, no task or choice',
+                          '52x14, screens replayed at 52x14 from the resize: a reply streams and holds; owner scrolls back and types a draft; F2 opens the sheet over it; Down and typed keys inside; the reply completes under the sheet; Escape: sheet closed, draft identical, reading position unchanged above the new reply, next key reaches the composer, no task or choice; Ctrl+End shows the completed reply',
                           'Preview context: read-only package preview (archived vs loaded, native fork no); no task, no choice',
                           'keyboard Save plan for later: one bound choice, one held task with no run, via native Local',
                           'board PTY (same store): first-run tour modal swallows N (no effect); keyboard N on the held card admits exactly one plan continuation (label Board continuing plan, same task); right-click card menu Work on this here by pointer returns it: assistant planning, task held, no new scratch',
