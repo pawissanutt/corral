@@ -363,7 +363,8 @@ export class HostSession {
   /** How the bound host is attached: InteractiveMode in its pane, or headless (T-577). */
   private attached: "interactive" | "headless" | undefined;
   private guidance: Guidance = { skillPaths: [], promptPaths: [], contextFiles: [] };
-  private readonly settings: ReturnType<typeof restrictedSettings> & ReturnType<typeof compactionSettings>;
+  private readonly settings: ReturnType<typeof restrictedSettings> & ReturnType<typeof compactionSettings>
+    & { readonly followUpMode: "all" };
   private summaryRequest: SummaryRequest | undefined;
   private readonly controls: HostControls;
   private readonly hooks: Hooks | undefined;
@@ -773,6 +774,9 @@ export class HostSession {
     this.settings = {
       ...restrictedSettings(), ...compactionSettings(options.capabilities, options.guidance),
       enableSkillCommands: options.capabilities?.enabled.includes("skills") === true && options.guidance !== undefined,
+      // Everything queued by the time the agent would stop arrives as one batch: a backlog of
+      // envelopes and notices is read together, not one run per item. Steering stays one per turn.
+      followUpMode: "all",
     };
     try {
       this.controls = parseControls(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
