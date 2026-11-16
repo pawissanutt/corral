@@ -9,6 +9,7 @@ use crate::model::Form;
 use crate::model::agents::{Action, More, Section};
 use crate::model::board::LineKind;
 use crate::model::review::NumberedLine;
+use crate::screens::markdown::markdown;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
@@ -16,7 +17,6 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::super::run;
-use super::prose;
 
 /// Recorded text and diff code: 11.5 pt at a 17 pt line.
 const CODE: f32 = 11.5;
@@ -148,7 +148,7 @@ pub(super) fn sections(app: AppState, sections: &[Section]) -> AnyElement {
 
 fn section(app: AppState, part: &Section) -> AnyElement {
     match part {
-        Section::Prose(markdown) => prose::markdown(app, markdown, false),
+        Section::Prose(words) => markdown(app, words, false),
         Section::Text { label, text: body } => view()
             .min_w(px(0.0))
             .child(small(app, label.clone(), Token::Ink3).mb(px(3.0)))

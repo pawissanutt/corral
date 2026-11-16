@@ -58,8 +58,8 @@ pub struct PmReply {
 /// Content inside an assistant reply, in its original order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Body {
-    /// Prose with every inline reference already linked.
-    Paragraph(Rich),
+    /// Assistant-written Markdown, laid out as the terminal UI does.
+    Markdown(String),
     /// Numbered paragraphs.
     Ordered(Vec<Rich>),
     /// Owner-command class and receipt.

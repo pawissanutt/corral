@@ -8,6 +8,7 @@ pub mod agents;
 pub mod assistant;
 pub mod changes;
 pub mod inbox;
+pub(crate) mod markdown;
 pub mod now;
 pub mod plans;
 pub mod review;

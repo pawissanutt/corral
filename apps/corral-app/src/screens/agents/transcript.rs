@@ -22,6 +22,7 @@ use crate::model::Form;
 use crate::model::agents::{Action, Fill, Message, MessageItem, Note, QuestionCard, Transcript};
 use crate::model::hue::Hue;
 use crate::model::text::{Rich, span};
+use crate::screens::markdown::provide_styles;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::marks::{dot, hue_fill, hue_ink};
@@ -133,7 +134,7 @@ fn disclaimer(app: AppState, note: &Option<Note>) -> Option<AnyElement> {
 /// at the mockup's measure; the phone uses the full width with 16 pt sides.
 pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
     let form = app.form;
-    prose::provide_styles(app);
+    provide_styles(app);
     let mut next = 0;
     let mut messages = Vec::new();
     for message in transcript.messages.iter().chain(&transcript.live) {
