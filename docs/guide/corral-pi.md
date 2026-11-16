@@ -1094,23 +1094,14 @@ and PM roles. Reinstall to include a newly added role in an older managed instal
 
 ## Credentials
 
-`corral agent login` runs interactively, in your own pane, once per provider you use. On a
-terminal it first shows a picker:
-
-```
-Log in a model provider for corral-pi
-> OpenAI Codex (ChatGPT Plus/Pro)   [logged in]
-  Anthropic Claude (Pro/Max)        [not logged in]
-↑/↓ move · Enter select · q cancel
-```
-
-The arrow keys or j/k move, Enter selects, and q or Esc cancels with exit status 130 and writes
-nothing. Each row's state comes from the credential file's metadata; its contents are never read.
+`corral agent login` sets up credentials in your own pane. On a terminal it offers a provider
+picker: arrow keys or j/k move, Enter selects, and q or Esc cancels with exit status 130 and
+writes nothing. Each row's state comes from credential file metadata; its contents are never read.
 `corral agent login --provider openai-codex` or `--provider anthropic` skips the picker. Without
 a terminal on stdin, `corral agent login` without `--provider` exits with a usage error instead
 of prompting.
 
-The selected provider's Pi subscription OAuth flow then runs from the installed
+For a subscription, the selected provider's Pi OAuth flow runs from the installed
 `src/auth/login.ts`: for OpenAI Codex (ChatGPT Plus/Pro) a browser or device-code login, for
 Anthropic Claude (Pro/Max) a browser login or a copy-code login for a headless pane. Each
 provider's credential is its own file in `$XDG_DATA_HOME/corral/corral-pi/auth/`:
@@ -1145,6 +1136,30 @@ a missing login or incompatible model leaves the current selection unchanged. Ea
 its own guarded transport (Claude model traffic still belongs only to its subprocess lane).
 Workers, reviewers, Bedrock and local-inference sessions keep their launch provider.
 Corral records the active provider and model on each turn, not just on the initial launch.
+
+### Metered API keys
+
+For the separate OpenAI and Anthropic platform API connections, put the literal key in an
+owner-owned regular file with mode `0600`, then supply the file path (not the key) to login:
+
+```sh
+corral agent login --provider openai-api --key-file /path/to/protected-key-file
+corral agent login --provider anthropic-api --key-file /path/to/protected-key-file
+corral agent login --provider openai-api --status
+corral agent login --provider openai-api --logout
+```
+
+Choose exactly one of `--key-file`, `--status` or `--logout` per invocation; the latter two
+also work for `anthropic-api`. Setup reads the protected file and stores the key separately in
+`auth/openai-api.json` or `auth/anthropic-api.json` under the corral-pi data directory, with a
+`0700` auth directory and `0600` credential file. Remove the input file securely when it is no
+longer needed. Never put the key itself in command arguments or environment variables.
+Logout removes that connection's stored credential, leaving other connections unchanged.
+
+These are **metered** API connections, separate from subscription OAuth. Storing a key or
+checking its presence does not authorize paid requests or grant spending consent. Paid use
+requires the explicit policy and finite spending approval described below; direct API starts
+without a prepared continuation remain refused.
 
 ### Paid continuation after subscription quota
 

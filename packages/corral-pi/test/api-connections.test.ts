@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { CONNECTIONS, connectionRules, resolveConnection } from "../src/auth/connections.ts";
 import { apiKeyCommand, installApiKey } from "../src/auth/api-key.ts";
 import { FileCredentialStore } from "../src/auth/store.ts";
@@ -98,6 +99,29 @@ for (const connection of ["anthropic-api", "openai-api"] as const) test(`${conne
     else process.env.XDG_DATA_HOME = previousXdg;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("offline login entry stores, reports and removes a protected API key without disclosing it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "corral-api-login-"));
+  try {
+    const input = join(dir, "input");
+    const auth = join(dir, "auth");
+    writeFileSync(input, KEY, { mode: 0o600 });
+    const run = (...args: string[]) => spawnSync(process.execPath, ["src/auth/login.ts", "--auth-dir", auth, "--connection", "anthropic-api", ...args], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    const check = (result: ReturnType<typeof run>, code: number, text: string) => {
+      const output = result.stdout.toString() + result.stderr.toString();
+      expect(result.status).toBe(code);
+      expect(output).toContain(text);
+      expect(output).not.toContain(KEY);
+    };
+    chmodSync(input, 0o644);
+    check(run("--key-file", input), 1, "refused");
+    chmodSync(input, 0o600);
+    check(run("--key-file", input), 0, "stored");
+    check(run("--status"), 0, "present");
+    check(run("--logout"), 0, "removed");
+    check(run("--status"), 0, "absent");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("API boundary rejects OAuth, command inputs, unsafe files, foreign endpoints and stale bindings", async () => {

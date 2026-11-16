@@ -35,7 +35,7 @@ pub struct Provider {
     pub label: &'static str,
 }
 
-pub const PROVIDERS: [Provider; 3] = [
+pub const PROVIDERS: [Provider; 5] = [
     Provider {
         id: "openai-codex",
         vendor: "openai",
@@ -50,6 +50,16 @@ pub const PROVIDERS: [Provider; 3] = [
         id: "amazon-bedrock",
         vendor: "amazon-bedrock",
         label: "Amazon Bedrock (AWS profile, metered)",
+    },
+    Provider {
+        id: "openai-api",
+        vendor: "openai",
+        label: "OpenAI API key (metered)",
+    },
+    Provider {
+        id: "anthropic-api",
+        vendor: "anthropic",
+        label: "Anthropic API key (metered)",
     },
 ];
 
@@ -278,6 +288,22 @@ pub fn login_with_aws(
     provider: Option<&str>,
     aws: &AwsLoginOptions<'_>,
 ) -> Result<()> {
+    login_with_options(start, provider, aws, &ApiLoginOptions::default())
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ApiLoginOptions<'a> {
+    pub key_file: Option<&'a Path>,
+    pub status: bool,
+    pub logout: bool,
+}
+
+pub fn login_with_options(
+    start: &Path,
+    provider: Option<&str>,
+    aws: &AwsLoginOptions<'_>,
+    api: &ApiLoginOptions<'_>,
+) -> Result<()> {
     use std::io::IsTerminal;
     if (aws.profile.is_some() || aws.region.is_some()) && provider != Some("amazon-bedrock") {
         bail!("usage_error: --aws-profile and --region require --provider amazon-bedrock");
@@ -285,6 +311,17 @@ pub fn login_with_aws(
     let root = data_root()?;
     let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
     let chosen = choose_provider(&root, provider, terminal, pick_on_terminal)?;
+    let is_api = matches!(chosen.id, "openai-api" | "anthropic-api");
+    let actions =
+        usize::from(api.key_file.is_some()) + usize::from(api.status) + usize::from(api.logout);
+    if is_api && actions != 1 {
+        bail!(
+            "usage_error: API login requires exactly one of --key-file <protected-0600-file>, --status or --logout; key presence does not authorize paid requests"
+        );
+    }
+    if !is_api && actions != 0 {
+        bail!("usage_error: --key-file, --status and --logout require an API provider");
+    }
     if chosen.id == "amazon-bedrock" {
         let home = std::env::var_os("HOME").context("credentials_unavailable: HOME is not set")?;
         super::aws_profile::login(&root, Path::new(&home), aws.profile, aws.region, terminal)?;
@@ -296,6 +333,9 @@ pub fn login_with_aws(
         Err(_) => None,
     };
     let assets = login_assets(explicit, &root)?;
+    if is_api && !has_module(&assets, "src/auth/api-key.ts") {
+        bail!("assets_outdated: installed host lacks API key setup; run `corral agent install`");
+    }
     let range = read_compat(&assets)?.range;
     let mut command = match compiled_host(&assets) {
         Some(host) => {
@@ -320,16 +360,16 @@ pub fn login_with_aws(
     let dir = auth_dir(&root);
     ensure_auth_dir(&dir)?;
     let program = command.get_program().to_owned();
+    login_arguments(&mut command, &dir, chosen.id, api);
     let status = command
-        .arg("--auth-dir")
-        .arg(&dir)
-        .arg("--provider")
-        .arg(chosen.id)
         .current_dir(&assets)
         .status()
         .with_context(|| format!("running {}", Path::new(&program).display()))?;
     if !status.success() {
         bail!("corral agent login did not complete ({status})");
+    }
+    if is_api {
+        return Ok(());
     }
     let stored = provider_status(&root, chosen.id);
     match (stored.present, stored.problem) {
@@ -349,6 +389,28 @@ pub fn login_with_aws(
     }
 }
 
+// Only the protected file path crosses argv; Rust never reads the key.
+fn login_arguments(
+    command: &mut std::process::Command,
+    dir: &Path,
+    provider: &str,
+    api: &ApiLoginOptions<'_>,
+) {
+    command.arg("--auth-dir").arg(dir);
+    if matches!(provider, "openai-api" | "anthropic-api") {
+        command.arg("--connection").arg(provider);
+        if let Some(file) = api.key_file {
+            command.arg("--key-file").arg(file);
+        } else if api.status {
+            command.arg("--status");
+        } else {
+            command.arg("--logout");
+        }
+    } else {
+        command.arg("--provider").arg(provider);
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
@@ -357,6 +419,48 @@ mod tests {
 
     fn chmod(path: &Path, mode: u32) {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn api_routes_only_file_paths_and_actions_and_has_independent_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        credential(tmp.path(), "anthropic-api.json");
+        assert!(provider_status(tmp.path(), "anthropic-api").present);
+        assert!(!provider_status(tmp.path(), "anthropic").present);
+        for (options, expected) in [
+            (
+                ApiLoginOptions {
+                    key_file: Some(Path::new("/protected/input")),
+                    ..Default::default()
+                },
+                vec!["--key-file", "/protected/input"],
+            ),
+            (
+                ApiLoginOptions {
+                    status: true,
+                    ..Default::default()
+                },
+                vec!["--status"],
+            ),
+            (
+                ApiLoginOptions {
+                    logout: true,
+                    ..Default::default()
+                },
+                vec!["--logout"],
+            ),
+        ] {
+            let mut command = std::process::Command::new("host");
+            login_arguments(&mut command, Path::new("/auth"), "anthropic-api", &options);
+            let args: Vec<_> = command
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            let mut wanted = vec!["--auth-dir", "/auth", "--connection", "anthropic-api"];
+            wanted.extend(expected);
+            assert_eq!(args, wanted);
+            assert_eq!(command.get_envs().count(), 0);
+        }
     }
 
     #[test]

@@ -47,8 +47,17 @@ pub(crate) enum AgentCmd {
     /// Provision the corral-owned Pi credentials with one interactive owner login
     Login {
         /// Provider to log in; without it a terminal shows an arrow-key picker
-        #[arg(long, value_parser = ["openai-codex", "anthropic", "amazon-bedrock"])]
+        #[arg(long, value_parser = ["openai-codex", "anthropic", "amazon-bedrock", "openai-api", "anthropic-api"])]
         provider: Option<String>,
+        /// Owner-only 0600 file containing a literal API key (never the key itself)
+        #[arg(long, conflicts_with_all = ["status", "logout"])]
+        key_file: Option<PathBuf>,
+        /// Report API connection credential presence without authorizing spending
+        #[arg(long, conflicts_with = "logout")]
+        status: bool,
+        /// Remove only the selected API connection credential
+        #[arg(long)]
+        logout: bool,
         /// Named AWS profile for Amazon Bedrock (never ambient credentials)
         #[arg(long)]
         aws_profile: Option<String>,
@@ -174,12 +183,20 @@ pub fn run(start: &Path, args: AgentArgs, entry: &Entry) -> Result<()> {
             provider,
             aws_profile,
             region,
-        } => match corral_ops::agent::credentials::login_with_aws(
+            key_file,
+            status,
+            logout,
+        } => match corral_ops::agent::credentials::login_with_options(
             start,
             provider.as_deref(),
             &corral_ops::agent::credentials::AwsLoginOptions {
                 profile: aws_profile.as_deref(),
                 region: region.as_deref(),
+            },
+            &corral_ops::agent::credentials::ApiLoginOptions {
+                key_file: key_file.as_deref(),
+                status,
+                logout,
             },
         ) {
             Err(error) if error.is::<corral_ops::agent::credentials::LoginCancelled>() => {
