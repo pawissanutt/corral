@@ -517,9 +517,13 @@ fn board_continuation_refuses_a_card_that_changed_after_it_was_shown() {
     let (f, _, prepared) = setup(Goal::PlanContinue);
     let loaded = commit(&f, &prepared, true);
     let stale = |shown: &continuation::Pin| {
-        let error = continuation::preview_pinned(&f.ctx, Some(shown), &loaded.id, Goal::PlanContinue)
-            .unwrap_err();
-        assert!(format!("{error:#}").contains("handoff_stale_choice"), "{error:#}");
+        let error =
+            continuation::preview_pinned(&f.ctx, Some(shown), &loaded.id, Goal::PlanContinue)
+                .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("handoff_stale_choice"),
+            "{error:#}"
+        );
     };
     // The spec is edited after the board loaded the card: N/U/T must not act on newer work.
     let shown = continuation::pin(&f.ctx, &loaded.id).unwrap();
@@ -536,8 +540,8 @@ fn board_continuation_refuses_a_card_that_changed_after_it_was_shown() {
     // Transfer-only change: another surface starts the shown Saved card; contract and plan
     // are equal, but the stale display must not bind the newer disposition.
     let shown = continuation::pin(&f.ctx, &loaded.id).unwrap();
-    let choice = continuation::preview_pinned(&f.ctx, Some(&shown), &loaded.id, Goal::PlanContinue)
-        .unwrap();
+    let choice =
+        continuation::preview_pinned(&f.ctx, Some(&shown), &loaded.id, Goal::PlanContinue).unwrap();
     continuation::start(&f.ctx, &choice, &choice.digest().unwrap(), instruction()).unwrap();
     let current = continuation::pin(&f.ctx, &loaded.id).unwrap();
     assert_eq!(

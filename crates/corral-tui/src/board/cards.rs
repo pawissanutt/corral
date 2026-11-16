@@ -604,7 +604,11 @@ pub(crate) fn card_lines(
     // A projected handoff label replaces the bare "asst" marker; waived review stays visible.
     let cowork = match (&t.cowork, extra.handoff.is_some()) {
         (Some(_), handoff) if corral_core::TaskFieldsRef::review_waived(t) => {
-            if handoff { "no-review " } else { "asst no-review " }
+            if handoff {
+                "no-review "
+            } else {
+                "asst no-review "
+            }
         }
         (Some(_), false) => "asst ",
         _ => "",

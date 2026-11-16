@@ -235,24 +235,28 @@ fn implement_here_revalidates_source_and_reconciles_one_granted_scratch_after_in
     assert_eq!(state["execution_open"], false);
     f.no_tasks();
 
-    // Recovery creates exactly the granted scratch, once.
+    // The interruption left Git's half: the granted branch exists, unregistered. Sync's
+    // handoff recovery (the production restart path) adopts it; nothing repairs Git first.
     std::fs::remove_file(&blocker).unwrap();
     let w = c.workflow.unwrap().current;
     let grant =
         crate::assistant::workflow::handoff::native_implement::grant(&f.fx.ctx.store, &w).unwrap();
-    let _ = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&repo)
-        .args([
-            "branch",
-            "-D",
-            &format!("corral/{}/{}", f.session, grant.scratch),
-        ])
-        .output();
+    // A crash between `git worktree add` and registration leaves exactly this.
+    let branch = format!("corral/{}/{}", f.session, grant.scratch);
+    let path = repo
+        .join(".worktrees")
+        .join(format!("{}-{}", f.session, grant.scratch));
+    corral_git::worktree_add(&repo, &path, &branch, &grant.base).unwrap();
     let ctx = &f.fx.ctx;
-    let first = crate::assistant::workflow::handoff::native_implement::reconcile(ctx, &f.session)
-        .unwrap()
-        .unwrap();
+    // Work the grant did not create is never adopted; the cause stays indexed.
+    std::fs::write(path.join("foreign"), b"x").unwrap();
+    crate::assistant::workflow::handoff::recovery::reconcile(ctx).unwrap();
+    assert!(scratches(&f).is_empty());
+    std::fs::remove_file(path.join("foreign")).unwrap();
+    crate::assistant::workflow::handoff::recovery::reconcile(ctx).unwrap();
+    crate::assistant::workflow::handoff::recovery::reconcile(ctx).unwrap();
+    let first = scratches(&f).remove(0);
+    assert_eq!(first.path, path);
     let again = crate::assistant::workflow::handoff::native_implement::reconcile(ctx, &f.session)
         .unwrap()
         .unwrap();

@@ -317,14 +317,18 @@ fn dirty_saved_seed_returns_exact_layers_and_branch_without_residual_intent() {
         Goal::ImplementationPrepare,
     )
     .unwrap_err();
-    assert!(format!("{error:#}").contains("handoff_stale_choice"), "{error:#}");
+    assert!(
+        format!("{error:#}").contains("handoff_stale_choice"),
+        "{error:#}"
+    );
     std::fs::remove_file(&extra).unwrap();
     let next = continuation::preview_pinned(
         &f.ctx,
         Some(&shown),
         &running.id,
         Goal::ImplementationPrepare,
-    ).unwrap();
+    )
+    .unwrap();
     let resumed =
         continuation::start(&f.ctx, &next, &next.digest().unwrap(), instruction()).unwrap();
     assert!(

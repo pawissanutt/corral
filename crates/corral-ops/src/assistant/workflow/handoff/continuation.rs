@@ -46,7 +46,10 @@ pub struct Pin {
 impl Pin {
     fn choice(self, goal: Goal) -> Result<Choice> {
         let plan = match goal {
-            Goal::PlanReviewOnly => self.review.map(|r| r.map_err(anyhow::Error::msg)).transpose()?,
+            Goal::PlanReviewOnly => self
+                .review
+                .map(|r| r.map_err(anyhow::Error::msg))
+                .transpose()?,
             _ => self.plan,
         };
         ensure!(

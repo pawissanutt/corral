@@ -22,8 +22,8 @@ use crate::git_watch::{GitChanges, GitTarget, GitWatch, stat_fingerprint};
 mod attention;
 mod parts;
 mod plan;
-pub use parts::gauges;
 use crate::assistant::workflow::handoff::status::Responsibility as Handoff;
+pub use parts::gauges;
 #[cfg(test)]
 mod tests;
 
@@ -495,7 +495,8 @@ impl ClassicCache {
         });
         // Responsibility carries the code pin of a continuation, so worktree changes count.
         let handoffs = (full || !changed.is_empty() || !plan.git.tasks.is_empty()).then(|| {
-            let dirty = |t: &Task| full || changed.contains(&t.id) || plan.git.tasks.contains(&t.id);
+            let dirty =
+                |t: &Task| full || changed.contains(&t.id) || plan.git.tasks.contains(&t.id);
             parts::per_task(&tasks, &self.handoffs, "classic.handoffs", dirty, |task| {
                 parts::handoff(read, task)
             })
