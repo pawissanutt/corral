@@ -2,6 +2,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 pub mod artifact;
+pub mod closed;
 pub mod filing;
 pub mod plan;
 pub mod question;
@@ -11,6 +12,7 @@ pub mod task;
 pub mod timeline;
 pub mod usage;
 pub use artifact::*;
+pub use closed::*;
 pub use filing::*;
 pub use plan::*;
 pub use question::*;
@@ -76,6 +78,10 @@ pub enum DetailRef {
     Filings {
         before: Option<u64>,
     },
+    /// Closed tasks, newest first; `before` is a page's opaque `older` anchor.
+    Closed {
+        before: Option<String>,
+    },
     #[serde(other)]
     Other,
 }
@@ -116,6 +122,7 @@ pub enum DetailBody {
     UsageSeries(UsageSeries),
     Artifact(ArtifactPage),
     Filings(FilingsPage),
+    Closed(ClosedPage),
     #[serde(other, deserialize_with = "skip_body")]
     Other,
 }

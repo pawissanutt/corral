@@ -1980,6 +1980,81 @@
         ],
         "type": "string"
       },
+      "ClosedPage": {
+        "properties": {
+          "older": {
+            "description": "Opaque exclusive `before` anchor for the next older page, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rows": {
+            "description": "Most recently updated first, ties by task number descending; at most\nCLOSED_PAGE_MAX rows.",
+            "items": {
+              "$ref": "#/components/schemas/ClosedTask"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Exact count of closed tasks, independent of the requested anchor; None when the\ndaemon cannot count it without reading closed history.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "type": "object"
+      },
+      "ClosedTask": {
+        "properties": {
+          "goal": {
+            "description": "At most 80 Unicode scalar values.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "Canonical status: `done` or `dropped`.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated": {
+            "description": "Last canonical update, RFC 3339: the list's order key, normally the closing change.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "updated"
+        ],
+        "type": "object"
+      },
       "CmdError": {
         "properties": {
           "code": {
@@ -2873,6 +2948,22 @@
           },
           {
             "properties": {
+              "body": {
+                "$ref": "#/components/schemas/ClosedPage"
+              },
+              "kind": {
+                "const": "closed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
               "kind": {
                 "const": "other",
                 "type": "string"
@@ -3155,6 +3246,25 @@
               },
               "kind": {
                 "const": "filings",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Closed tasks, newest first; `before` is a page's opaque `older` anchor.",
+            "properties": {
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "closed",
                 "type": "string"
               }
             },
@@ -14048,11 +14158,21 @@
           "name": "before",
           "required": false,
           "schema": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             ]
           }
         },
@@ -14177,6 +14297,10 @@
               },
               {
                 "const": "filings",
+                "type": "string"
+              },
+              {
+                "const": "closed",
                 "type": "string"
               },
               {

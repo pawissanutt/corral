@@ -217,6 +217,22 @@ impl ReadView for FakeView {
                 });
                 self.page(found.into_iter(), &page)
             }
+            HeadQuery::RecentByStatusBefore {
+                status,
+                updated,
+                num,
+            } => {
+                let mut found: Vec<_> = heads
+                    .filter(|head| head.header.fields.status == *status)
+                    .filter(|head| (head.header.fields.updated, head.header.num) < (*updated, *num))
+                    .cloned()
+                    .collect();
+                found.sort_by(|a, b| {
+                    (b.header.fields.updated, b.header.num)
+                        .cmp(&(a.header.fields.updated, a.header.num))
+                });
+                self.page(found.into_iter(), &page)
+            }
             HeadQuery::UnreleasedPanes => self.page(
                 self.state
                     .tasks

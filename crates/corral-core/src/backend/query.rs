@@ -58,6 +58,12 @@ pub enum HeadQuery {
     RecentByStatus {
         status: String,
     },
+    /// One status strictly older than `(updated, num)` in descending index order.
+    RecentByStatusBefore {
+        status: String,
+        updated: jiff::Timestamp,
+        num: super::rows::TaskNum,
+    },
     /// Tasks whose unpaused dashboard schedule is due by `now` (`tasks_dashboard_due`), by
     /// number.
     DashboardDue {

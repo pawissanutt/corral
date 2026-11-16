@@ -94,3 +94,25 @@ fn hot_queries_do_not_scan_terminal_tasks_or_unmatched_history() {
         "history-sized SQL work despite bounded decoded output"
     );
 }
+
+#[test]
+fn closed_status_seek_does_not_walk_newer_history_with_tied_timestamps() {
+    let costs = [2, 8].map(|history| {
+        let view = fixture(history);
+        cost(|| {
+            let page = view
+                .heads(
+                    &HeadQuery::RecentByStatusBefore {
+                        status: "done".into(),
+                        updated: Timestamp::UNIX_EPOCH,
+                        num: TaskNum(3),
+                    },
+                    PageReq::first(1),
+                )
+                .unwrap();
+            assert_eq!(page.items[0].header.num, TaskNum(2));
+            assert!(page.next.is_none());
+        })
+    });
+    assert_eq!(costs[0], costs[1], "closed seek scanned newer history");
+}

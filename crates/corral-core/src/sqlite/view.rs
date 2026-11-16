@@ -353,6 +353,29 @@ impl ReadView for SqliteView {
                 vec![Sql::Text(status.clone())],
                 head_query,
             ),
+            HeadQuery::RecentByStatusBefore {
+                status,
+                updated,
+                num,
+            } => self.page(
+                &page,
+                &format!(
+                    "SELECT {cols} FROM tasks INDEXED BY tasks_status_updated \
+                     WHERE status = ?1 AND updated = ?2 AND num < ?3 \
+                     UNION ALL \
+                     SELECT {cols} FROM tasks INDEXED BY tasks_status_updated \
+                     WHERE status = ?1 AND updated < ?2 \
+                     ORDER BY updated DESC, num DESC"
+                ),
+                // Separate ranges let SQLite seek the implicit rowid within timestamp ties;
+                // a tuple inequality only seeks updated, then walks all newer tied rows.
+                vec![
+                    Sql::Text(status.clone()),
+                    Sql::Text(ts(*updated)),
+                    Sql::Integer(int(num.0).or_view()?),
+                ],
+                head_query,
+            ),
             HeadQuery::DashboardDue { now } => self.page(
                 &page,
                 &format!(
