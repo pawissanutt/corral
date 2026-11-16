@@ -71,12 +71,15 @@ pub fn refuse_pm(invoker: &Invoker, what: &str) -> Result<()> {
 }
 
 /// Config namespaces that hold acceptance, reviewer, gate and project rules. Whole
-/// namespaces, not single keys: a nested table or a reviewer route moves the same rules.
+/// namespaces, not single keys: a nested table or a reviewer route moves the same rules,
+/// and so does replacing the `routing` or `dispatch` table that contains them.
 pub fn owner_only_config_key(parts: &[&str]) -> bool {
     matches!(
         parts,
         ["review", ..]
             | ["projects", ..]
+            | ["routing"]
+            | ["dispatch"]
             | ["dispatch", "ready_projects", ..]
             | [
                 "routing",
