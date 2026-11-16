@@ -416,8 +416,14 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
         .collect()
 }
 
-/// Resolves selection through the same pure command table that produced the displayed row.
+/// Resolves selection through the same pure command table that produced the displayed row. A
+/// closed palette runs nothing: the phone's sheet keeps its command mounted, its field focused,
+/// while it slides out, and on the web one Enter reaches the command twice (the field's return,
+/// then the command's own Enter binding), which would run the row again (a toggle undoes itself).
 fn run(app: AppState, id: &str, query: &str) {
+    if !app.nav.with_untracked(|nav| nav.is_open(Overlay::Palette)) {
+        return;
+    }
     let record = untracked(|| palette_record(app));
     let action = app.feed.with_untracked(|feed| {
         palette_model::run(
