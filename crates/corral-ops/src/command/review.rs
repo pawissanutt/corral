@@ -13,7 +13,7 @@ impl Verb for ReviewCommand {
                     &sha,
                     crate::ApproveStrategy::Rebase,
                     true,
-                    false,
+                    cx.invoker,
                 )?;
                 cx.out.line(format_args!("{line}"));
             }

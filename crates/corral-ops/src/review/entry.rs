@@ -34,22 +34,16 @@ pub fn approve_as(
     approve_owner(ctx, id, strategy, remove_worktree, keep_branch, None, pm)
 }
 
-/// Manual owner approval bound to the candidate shown by an authenticated app.
+/// Manual approval bound to the candidate the caller was shown. The authenticated app is the
+/// owner; a PM invoker reaching this through the command registry keeps the PM bar.
 pub fn approve_checked(
     ctx: &Ctx,
     id: &str,
     sha: &str,
     strategy: ApproveStrategy,
     remove_worktree: bool,
-    keep_branch: bool,
+    invoker: &crate::command::Invoker,
 ) -> Result<String> {
-    approve_owner(
-        ctx,
-        id,
-        strategy,
-        remove_worktree,
-        keep_branch,
-        Some(sha),
-        false,
-    )
+    let pm = pm_landing::caller(invoker);
+    approve_owner(ctx, id, strategy, remove_worktree, false, Some(sha), pm)
 }
