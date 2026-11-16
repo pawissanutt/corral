@@ -7,7 +7,7 @@ use crate::board::{BoardCursor, BoardDelta};
 
 use crate::assistant::ThreadEntry;
 use crate::rows::{
-    AgentRow, AssistantRow, BuildRow, InboxRow, PlanRow, SettingsSnapshot, UsageRow,
+    AgentRow, AssistantRow, BuildRow, InboxRow, PlanRow, ProjectRow, SettingsSnapshot, UsageRow,
 };
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -18,6 +18,7 @@ pub enum Topic {
     Inbox,
     Plans,
     Builds,
+    Projects,
     Agents,
     Assistant,
     Usage,
@@ -73,6 +74,10 @@ pub enum SubDelta {
     Builds {
         #[serde(flatten)]
         delta: RowsDelta<BuildRow>,
+    },
+    Projects {
+        #[serde(flatten)]
+        delta: RowsDelta<ProjectRow>,
     },
     Agents {
         #[serde(flatten)]

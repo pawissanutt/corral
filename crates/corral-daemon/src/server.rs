@@ -246,6 +246,7 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
                     Topic::Inbox
                         | Topic::Plans
                         | Topic::Builds
+                        | Topic::Projects
                         | Topic::Agents
                         | Topic::Assistant
                         | Topic::Usage

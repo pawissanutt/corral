@@ -15,6 +15,8 @@ pub const INBOX_V1: &str = "inbox.v1";
 pub const CHANGES_V1: &str = "changes.v1";
 pub const PLANS_V1: &str = "plans.v1";
 pub const BUILDS_V1: &str = "builds.v1";
+/// Configured workspace projects (`Topic::Projects`) and `PlanRow.projects`.
+pub const PROJECTS_V1: &str = "projects.v1";
 pub const AGENTS_V1: &str = "agents.v1";
 pub const SESSION_V1: &str = "session.v1";
 pub const SESSION_FLEET_V1: &str = "session.fleet.v1";

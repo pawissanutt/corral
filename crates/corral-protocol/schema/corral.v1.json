@@ -7133,6 +7133,14 @@
             "minimum": 0,
             "type": "integer"
           },
+          "projects": {
+            "default": [],
+            "description": "Distinct projects of the plan's member tasks, sorted; empty when no member names one.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "rev": {
             "format": "uint64",
             "minimum": 0,
@@ -7758,6 +7766,68 @@
         },
         "required": [
           "profile"
+        ],
+        "type": "object"
+      },
+      "ProjectRow": {
+        "description": "One configured project of the workspace (`Topic::Projects`, `projects.v1`). A complete\nempty page means the workspace has no project management: no board work, PM off.",
+        "properties": {
+          "autopilot": {
+            "description": "Whether an active autopilot grant names this project.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Configuration key; the identity tasks reference in `project`.",
+            "type": "string"
+          },
+          "in_pm_scope": {
+            "description": "Whether the workspace PM's approved scope includes this project.",
+            "type": "boolean"
+          },
+          "needs_me": {
+            "description": "Open owner-attention items for this project's tasks.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "open": {
+            "description": "Tasks that are neither done nor dropped.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Workspace-relative path when inside the workspace, otherwise absolute.",
+            "type": "string"
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "review": {
+            "description": "Open tasks awaiting review.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "running": {
+            "description": "Open tasks with a live worker session.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "open",
+          "running",
+          "review",
+          "needs_me",
+          "in_pm_scope",
+          "autopilot",
+          "rev"
         ],
         "type": "object"
       },
@@ -11382,6 +11452,47 @@
               },
               "rows": {
                 "items": {
+                  "$ref": "#/components/schemas/ProjectRow"
+                },
+                "type": "array"
+              },
+              "topic": {
+                "const": "projects",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One bounded page in flight; `left` contains removed row IDs.",
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "items": {
                   "$ref": "#/components/schemas/AgentRow"
                 },
                 "type": "array"
@@ -12963,6 +13074,7 @@
           "inbox",
           "plans",
           "builds",
+          "projects",
           "agents",
           "assistant",
           "usage",
@@ -13970,7 +14082,8 @@
             9,
             10,
             11,
-            12
+            12,
+            13
           ]
         },
         {
@@ -14004,7 +14117,8 @@
             9,
             10,
             11,
-            12
+            12,
+            13
           ]
         },
         {
@@ -14027,7 +14141,7 @@
             "type": "array"
           },
           "x-required-in": [
-            11
+            12
           ]
         },
         {
@@ -14090,7 +14204,8 @@
             7,
             8,
             9,
-            10
+            10,
+            11
           ]
         },
         {
@@ -14125,7 +14240,8 @@
             9,
             10,
             11,
-            12
+            12,
+            13
           ]
         },
         {
@@ -14179,6 +14295,12 @@
               },
               {
                 "items": {
+                  "$ref": "#/components/schemas/ProjectRow"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
                   "$ref": "#/components/schemas/AgentRow"
                 },
                 "type": "array"
@@ -14219,7 +14341,8 @@
             7,
             8,
             9,
-            10
+            10,
+            11
           ]
         },
         {
@@ -14229,9 +14352,9 @@
             "type": "string"
           },
           "x-required-in": [
-            10,
             11,
-            12
+            12,
+            13
           ]
         },
         {
@@ -14289,6 +14412,10 @@
               },
               {
                 "const": "builds",
+                "type": "string"
+              },
+              {
+                "const": "projects",
                 "type": "string"
               },
               {
