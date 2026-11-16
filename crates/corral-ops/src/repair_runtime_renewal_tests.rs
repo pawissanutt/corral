@@ -71,6 +71,19 @@ fn pm_renewed_continuation_charges_third_before_ipc_and_refuses_fourth() {
             .approved_by,
         "pm"
     );
+    // A second PM renewal is the owner's, whatever its size.
+    let again = corral_core::RepairRenewal {
+        id: "fixture-pm-renewal-again".into(),
+        previous_digest: renewed.digest().unwrap(),
+        reason: "another continuation".into(),
+        approved_by: "owner".into(),
+        at: ctx.store.now(),
+    };
+    let refused = repair_renew(&ctx, &id, again, policy(1), &invoker).unwrap_err();
+    assert!(
+        refused.to_string().contains("pm_renewal_refused"),
+        "{refused:#}"
+    );
     launch_next(&ctx, &id).unwrap();
     // Inspect the committed charge at exactly the boundary where pane_run could start.
     let at_ipc = repair_status(&ctx, &id).unwrap().unwrap();

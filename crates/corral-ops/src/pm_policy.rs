@@ -119,7 +119,7 @@ priority (admitting a project, promoting an Idea, `automation confirm`, `mode au
 `mode turbo`, resuming a paused policy, owner parks, owner-stopped runs, scope exclusions); landing \
 where `accept = \"owner\"` is set; overriding a failed gate or a reviewer's changes verdict; \
 re-arming a consumed diagnostic retry; recovering an uncertain delivery (`inbox recover`); \
-config for acceptance, reviewer, gate or project admission; `owner_only` and `permission` \
+config under `review`, `projects`, reviewer routing or project admission; `owner_only` and `permission` \
 questions; waiving independent review.\n\n\
 Checks stay: never act as the independent reviewer, never invent a receipt or evidence, and read \
 the receipt of an uncertain effect before repeating it.\n\n\

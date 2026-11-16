@@ -50,7 +50,7 @@ list. The same text reaches every PM through the `[corral-policy]` message
 | Admitting a project, promoting an Idea, `automation confirm`, `mode autopilot`, `mode turbo`, resuming a paused policy, owner parks, owner-stopped runs, scope exclusions | Scope and priority |
 | Landing where `accept = "owner"` is set; overriding a failed gate or a reviewer's changes verdict; re-arming a consumed diagnostic retry | Overrides a check |
 | Recovering an uncertain delivery (`corral inbox recover`) | May replay a message |
-| Config for acceptance, reviewer, gate or project admission | Moves the rules above |
+| Config under `review`, `projects`, reviewer routing (`routing.reviewer_rules`, `reviewer_by_vendor`, `review_profiles`) and `dispatch.ready_projects` | Moves the rules above |
 | `owner_only` and `permission` questions | Asked of the owner by kind |
 | Waiving independent review | Removes a check |
 

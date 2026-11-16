@@ -25,29 +25,37 @@ fn approve(root: &Path, pm: bool) -> Output {
         .unwrap()
 }
 
-#[test]
-fn pm_shell_cannot_land_where_acceptance_is_explicitly_the_owners() {
-    // Given a completed candidate whose task sets accept = "owner".
+/// A completed candidate in Review; `review` is its run's review record, if any.
+fn candidate(
+    accept: Option<Accept>,
+    review: Option<serde_json::Value>,
+) -> (tempfile::TempDir, Store) {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let task = store.create("Reviewed", None, Status::Review, "").unwrap();
-    let run: Run = serde_json::from_value(json!({
+    let mut run = json!({
         "id":"R1", "agent":"generic", "harness":"generic",
         "worktree":tmp.path(), "branch":"corral/T-001", "base":"main", "base_sha":"fixture",
         "started":"2026-10-29T01:00:00Z", "ended":"2026-10-29T01:10:00Z", "outcome":"done"
-    }))
-    .unwrap();
+    });
+    if let Some(review) = review {
+        run["review"] = review;
+    }
+    let run: Run = serde_json::from_value(run).unwrap();
     store
         .update(&task.id, |task| {
             task.runs.push(run);
-            task.review = Some(Accept::Owner);
+            task.review = accept;
             Ok(())
         })
         .unwrap();
-    // When the PM's shell and then the owner's run the landing command.
-    let pm = approve(tmp.path(), true);
-    let owner = approve(tmp.path(), false);
-    // Then only the PM is stopped by the landing fence, before anything is carried or landed.
+    (tmp, store)
+}
+
+/// The PM's shell is stopped by the landing fence; the owner's is not, on the same candidate.
+fn only_the_pm_is_fenced(tmp: &Path, store: &Store) {
+    let pm = approve(tmp, true);
+    let owner = approve(tmp, false);
     let refused = String::from_utf8_lossy(&pm.stderr);
     assert!(!pm.status.success(), "{refused}");
     assert!(refused.contains("pm_landing_refused"), "{refused}");
@@ -56,4 +64,23 @@ fn pm_shell_cannot_land_where_acceptance_is_explicitly_the_owners() {
         "the owner keeps the override path"
     );
     assert_eq!(store.get("T-001").unwrap().status, Status::Review);
+}
+
+#[test]
+fn pm_shell_cannot_land_where_acceptance_is_explicitly_the_owners() {
+    let (tmp, store) = candidate(Some(Accept::Owner), None);
+    only_the_pm_is_fenced(tmp.path(), &store);
+}
+
+#[test]
+fn pm_shell_cannot_land_over_a_changes_verdict_policy_did_not_require() {
+    // Given no configured reviewer, but a review that was run anyway and asked for changes.
+    let (tmp, store) = candidate(
+        None,
+        Some(json!({
+            "reviewer":"fixture", "verdict":"changes", "sha":"fixture",
+            "at":"2026-10-29T01:20:00Z"
+        })),
+    );
+    only_the_pm_is_fenced(tmp.path(), &store);
 }

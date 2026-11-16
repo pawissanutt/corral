@@ -70,25 +70,20 @@ pub fn refuse_pm(invoker: &Invoker, what: &str) -> Result<()> {
     Ok(())
 }
 
-/// Config keys whose change admits a project, moves acceptance or removes a check.
+/// Config namespaces that hold acceptance, reviewer, gate and project rules. Whole
+/// namespaces, not single keys: a nested table or a reviewer route moves the same rules.
 pub fn owner_only_config_key(parts: &[&str]) -> bool {
-    matches!(parts, ["dispatch", "ready_projects"])
-        || parts
-            .iter()
-            .rposition(|part| *part == "review")
-            .is_some_and(|at| {
-                matches!(
-                    parts.get(at + 1).copied(),
-                    None | Some(
-                        "accept"
-                            | "plan_accept"
-                            | "reviewer"
-                            | "gate"
-                            | "gate_tiers"
-                            | "tier_policy"
-                    )
-                )
-            })
+    matches!(
+        parts,
+        ["review", ..]
+            | ["projects", ..]
+            | ["dispatch", "ready_projects", ..]
+            | [
+                "routing",
+                "reviewer_rules" | "reviewer_by_vendor" | "review_profiles",
+                ..
+            ]
+    )
 }
 
 pub(crate) fn require_owner_entry(store: &Store, cwd: &Path, agent: bool, pm: bool) -> Result<()> {
