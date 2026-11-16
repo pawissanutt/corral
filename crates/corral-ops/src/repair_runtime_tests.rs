@@ -402,7 +402,13 @@ fn diagnosis_is_bounded_non_coding_and_only_recorded_owner_renewal_creates_an_al
     .unwrap();
     assert!(repair_diagnose(&ctx, &id).is_err());
     let workset = crate::pm_workset(&ctx).unwrap();
-    assert!(workset.decisions.iter().any(|d| d.task == id));
+    // The proposal is the PM's to act on: it may renew once, replan or defer.
+    assert!(
+        workset
+            .pm_runs
+            .iter()
+            .any(|card| card.task.as_ref() == Some(&id))
+    );
     assert!(
         workset
             .actions

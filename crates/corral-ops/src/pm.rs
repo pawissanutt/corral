@@ -642,9 +642,9 @@ fn pm_prompt(ctx: &Ctx, policy: &crate::pm_policy::PolicySnapshot) -> Result<Str
          - Follow pm next decision cards; escalate open-ended design and specification work to a strong-model task.\n\
          - Do not edit project code yourself, except the mechanical base fix the PM authority section allows.\n\
          - The PM authority section below decides what you may run and what stays with the owner. \
-         Run `plan accept`, `plan add-member`, `plan move-member`, question answers, decision \
-         receipts and `--owner-ok` yourself. Gates, independent review and the approve verdict for \
-         landing still apply.\n",
+         Run `plan accept`, `plan add-member`, `plan move-member`, question answers and decision \
+         receipts yourself. Gates, independent review and the approve verdict for landing still \
+         apply.\n",
     );
     out.push_str(
         "- Recommend an approved plan only for concrete uncertainty, contract ambiguity or overlapping \

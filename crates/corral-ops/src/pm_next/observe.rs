@@ -99,6 +99,17 @@ pub(crate) fn with_admission(
                     .any(|condition| condition.kind == "project_not_allowed")
         }) {
             Some("Project is not admitted; admitting new project scope needs the owner.")
+        } else if ctx
+            .store
+            .config
+            .automation
+            .scope
+            .exclusions
+            .contains(&task.id)
+        {
+            Some(
+                "Task is explicitly excluded from the automation scope; lifting that needs the owner.",
+            )
         } else {
             None
         };
@@ -557,7 +568,10 @@ fn review_observation(ctx: &Ctx, task: &Task, run: &Run, tasks: &[Task]) -> Resu
     if let Some(blocker) = landing_blocker(ctx, task, run, &policy, &repair, promotable)? {
         return Ok(blocker);
     }
-    Ok(PmObservation::ReadyToLand { task: id.clone() })
+    Ok(PmObservation::ReadyToLand {
+        task: id.clone(),
+        owner_accepts: ctx.store.config.explicit_owner_acceptance(task, false),
+    })
 }
 
 /// `promotable`: promotion already validated the evidence against the approval it carries.

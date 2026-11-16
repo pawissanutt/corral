@@ -104,7 +104,19 @@ pub(super) fn conditions_with_runs(
     runs: impl FnOnce(&mut Vec<Condition>),
 ) {
     let out = &mut assessment.conditions;
-    if task.status == Status::Idea || (task.status == Status::Backlog && !task.queued) {
+    // Promoting an Idea is a priority decision and stays with the owner.
+    if task.status == Status::Idea {
+        out.push(wait(
+            task,
+            now,
+            "not_scheduled",
+            WaitClass::NotScheduled,
+            Responsible::Owner,
+            "No execution is scheduled".into(),
+        ));
+        return;
+    }
+    if task.status == Status::Backlog && !task.queued {
         let mut condition = wait(
             task,
             now,
@@ -603,13 +615,30 @@ fn review(
         return;
     }
     let stage = run.autopilot.as_ref();
+    // An explicit `accept = "owner"` setting keeps acceptance with the owner; the
+    // resolved default does not.
+    let owner_accepts = task.review == Some(Accept::Owner)
+        || n.config.review.accept == Some(Accept::Owner)
+        || task
+            .project
+            .as_ref()
+            .and_then(|key| n.config.projects.get(key))
+            .is_some_and(|project| project.review.accept == Some(Accept::Owner));
     if let Some(blocked) = stage.filter(|stage| stage.stage == AutoStage::Blocked) {
         let mut condition = row(
             task,
             now,
             "landing_blocked",
-            WaitClass::PmAction,
-            Responsible::Pm,
+            if owner_accepts {
+                WaitClass::ExternalOperation
+            } else {
+                WaitClass::PmAction
+            },
+            if owner_accepts {
+                Responsible::Owner
+            } else {
+                Responsible::Pm
+            },
             (Some(blocked.at.to_string()), Some(blocked.at)),
             blocked
                 .reason
@@ -619,8 +648,10 @@ fn review(
         condition
             .resume
             .push(check("landing_precondition", &task.id, None, false));
-        condition.next_action.command = Some(format!("corral approve {} --merge ff", task.id));
-        condition.next_action.description = "Resolve the landing precondition, then land only after a passing gate and independent approval".into();
+        if !owner_accepts {
+            condition.next_action.command = Some(format!("corral approve {} --merge ff", task.id));
+            condition.next_action.description = "Resolve the landing precondition, then land only after a passing gate and independent approval".into();
+        }
         a.conditions.push(condition);
         return;
     }
@@ -632,15 +663,7 @@ fn review(
             .as_ref()
             .map(|review| review.at)
             .or_else(|| stage.map(|stage| stage.at));
-        // An explicit `accept = "owner"` setting keeps acceptance with the owner; the
-        // resolved default does not.
-        let owner = task.review == Some(Accept::Owner)
-            || n.config.review.accept == Some(Accept::Owner)
-            || task
-                .project
-                .as_ref()
-                .and_then(|key| n.config.projects.get(key))
-                .is_some_and(|project| project.review.accept == Some(Accept::Owner));
+        let owner = owner_accepts;
         let mut condition = row(
             task,
             now,

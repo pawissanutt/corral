@@ -125,7 +125,11 @@ fn landed_dependency_without_receipt_is_not_reported_as_live_work() {
     assert_eq!(dependency["satisfied"], true);
     assert_eq!(next["task"], "T-001");
     assert_eq!(next["requires_owner"], false);
-    assert!(next["command"].as_str().unwrap().contains("show"));
+    // The missing receipt is collected by a sync, which the card names for this board.
+    assert!(
+        next["command"].as_str().unwrap().ends_with(" sync"),
+        "{next}"
+    );
 }
 
 #[test]

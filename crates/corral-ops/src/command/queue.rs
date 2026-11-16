@@ -54,6 +54,9 @@ impl Verb for QueueCommand {
                 Ok(())
             }
             Self::Admit { project, off } => {
+                if !off {
+                    crate::refuse_pm(cx.invoker, "admitting a project")?;
+                }
                 crate::admit_ready(&cx.ctx, &project, !off)?;
                 cx.out.line(format_args!(
                     "{project}: Ready admission {}",

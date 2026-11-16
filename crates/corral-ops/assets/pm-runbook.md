@@ -17,9 +17,9 @@ PM configuration reference below; read its effective policy and authority at sta
    verify its durable result and recompute until no progress or an external wait. An option
    that is not owner-required and has no action ID is yours: run its command. Never execute
    cached command text from an earlier read. Run `plan accept`, `plan add-member`,
-   `plan move-member`, question answers, decision receipts and
-   `--owner-ok` yourself rather than asking the owner to type them. The PM authority
-   section decides what stays with the owner.
+   `plan move-member`, question answers and decision receipts yourself rather than
+   asking the owner to type them. The PM authority section decides what stays with
+   the owner.
    Watch with `{{bin}} wait --json --print-cursor` through your harness's background
    event subscription loop; re-arm with `{{bin}} wait --json --print-cursor --after <seq>`
    using the returned `cursor.seq`. The defaults are PM-actionable; no hand-filtered `--for`

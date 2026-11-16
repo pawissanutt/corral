@@ -53,6 +53,19 @@ fn column_spot(text: &str, title: &str) -> (u16, u16) {
     (x + 3, 35)
 }
 
+/// A card's own spot, from its hit region. The operating header can name a task
+/// too, so the first textual match for an id is not necessarily the card.
+fn card_spot(app: &App, text: &str, id: &str) -> (u16, u16) {
+    let rect = app
+        .hits
+        .iter()
+        .find_map(|(rect, hit)| {
+            matches!(hit, crate::Hit::Card(card) if card == id).then_some(*rect)
+        })
+        .unwrap_or_else(|| panic!("no hit region for card {id}\n{text}"));
+    find(text, usize::from(rect.y), id)
+}
+
 fn status(fx: &crate::board::tests::Fixture, id: &str) -> Status {
     fx.ctx.store.get(id).unwrap().status
 }
@@ -83,13 +96,13 @@ fn click_selects_and_double_click_or_second_click_opens() {
     assert!(corral_ops::review_info(&fx.ctx, "T-006").is_ok());
     let (mut app, now) = board_app(&fx);
     let text = render(&mut app);
-    let t3 = find_any(&text, "T-003");
+    let t3 = card_spot(&app, &text, "T-003");
     click(&mut app, t3);
     let text = render(&mut app);
     assert_eq!(selected(&text), "T-003", "click selects\n{text}");
     assert_eq!(app.stack.len(), 1, "a first click does not open");
 
-    let t2 = find_any(&text, "T-002");
+    let t2 = card_spot(&app, &text, "T-002");
     now.set(now.get() + Duration::from_secs(2));
     click(&mut app, t2);
     now.set(now.get() + Duration::from_millis(200));
@@ -99,7 +112,7 @@ fn click_selects_and_double_click_or_second_click_opens() {
     assert_eq!(app.stack.len(), 1);
 
     let text = render(&mut app);
-    let t6 = find_any(&text, "T-006");
+    let t6 = card_spot(&app, &text, "T-006");
     now.set(now.get() + Duration::from_secs(2));
     click(&mut app, t6);
     assert_eq!(app.stack.len(), 1);
@@ -262,7 +275,7 @@ fn drag_moves_dispatches_or_cancels() {
     let fx = seeded();
     let (mut app, now) = board_app(&fx);
     let text = render(&mut app);
-    let t2 = find_any(&text, "T-002");
+    let t2 = card_spot(&app, &text, "T-002");
     let ready = column_spot(&text, "Ready");
     down(&mut app, t2);
     app.handle_mouse(mouse(MouseEventKind::Drag(LEFT), t2.0 + 2, t2.1));
@@ -277,7 +290,7 @@ fn drag_moves_dispatches_or_cancels() {
     term.draw(|f| app.draw(f)).unwrap();
     let buf = term.backend().buffer();
     let running = column_spot(&text, "Running");
-    let t6 = find_any(&text, "T-006");
+    let t6 = card_spot(&app, &text, "T-006");
     assert_eq!(buf[(ready.0 - 3, 10)].fg, theme::GREEN, "legal: Ready");
     assert_eq!(buf[(running.0 - 3, 10)].fg, theme::GREEN, "legal: Running");
     assert_eq!(
@@ -293,7 +306,7 @@ fn drag_moves_dispatches_or_cancels() {
     );
 
     let text = render(&mut app);
-    let t3 = find_any(&text, "T-003");
+    let t3 = card_spot(&app, &text, "T-003");
     let running = column_spot(&text, "Running");
     down(&mut app, t3);
     app.handle_mouse(mouse(MouseEventKind::Drag(LEFT), running.0, running.1));
@@ -311,7 +324,7 @@ fn drag_moves_dispatches_or_cancels() {
     app.handle_key(code(KeyCode::Esc));
 
     let text = render(&mut app);
-    let t1 = find_any(&text, "T-001");
+    let t1 = card_spot(&app, &text, "T-001");
     let ready = column_spot(&text, "Ready");
     down(&mut app, t1);
     app.handle_mouse(mouse(MouseEventKind::Drag(LEFT), ready.0, ready.1));

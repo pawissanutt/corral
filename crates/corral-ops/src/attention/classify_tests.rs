@@ -210,7 +210,7 @@ fn first_tracked_rejection_offers_an_executable_exact_recipient_retry() {
                 assert_eq!(retried.recipient, message.recipient);
                 assert_ne!(retried.id, message.id);
             } else {
-                assert_eq!(row.responsible, Responsible::Pm);
+                assert_eq!(row.responsible, Responsible::Owner);
                 assert_eq!(
                     row.next_action.command,
                     Some(format!("corral inbox inspect-retry {}", message.id))
@@ -243,7 +243,7 @@ fn earlier_uncertainty_survives_resend_then_rejection_on_every_recipient() {
         fail(&inbox, &second);
         let rows = classify(&store, &store.get(&id).unwrap(), &recipients, false);
         let row = message_row(&rows, &message.id);
-        assert_eq!(row.responsible, Responsible::Pm);
+        assert_eq!(row.responsible, Responsible::Owner);
         assert!(row.reason.contains("Uncertain"));
         assert_eq!(
             row.next_action.command,
@@ -271,7 +271,7 @@ fn terminal_only_cancelled_is_visible_and_attempted_terminal_labels_stay_manual(
                 let rows = classify(&store, &store.get(&id).unwrap(), &recipients, false);
                 let row = message_row(&rows, &message.id);
                 if attempted {
-                    assert_eq!(row.responsible, Responsible::Pm);
+                    assert_eq!(row.responsible, Responsible::Owner);
                     assert_eq!(
                         row.next_action.command,
                         Some(format!("corral inbox inspect-retry {}", message.id))
@@ -329,7 +329,7 @@ fn pending_or_unknown_history_never_uses_latest_rejection_as_proof() {
 }
 
 #[test]
-fn open_live_uncertainty_has_only_supported_pm_recovery_commands() {
+fn open_live_uncertainty_has_only_supported_owner_recovery_commands() {
     for recipient_index in 0..4 {
         for conflicted in [false, true] {
             let (_root, store, id, recipients) = fixture();
@@ -349,7 +349,7 @@ fn open_live_uncertainty_has_only_supported_pm_recovery_commands() {
             let task = store.get(&id).unwrap();
             let rows = classify(&store, &task, &recipients, false);
             let row = message_row(&rows, &message.id);
-            assert_eq!(row.responsible, Responsible::Pm);
+            assert_eq!(row.responsible, Responsible::Owner);
             assert_eq!(
                 row.next_action.command,
                 Some(format!("corral inbox recover {} --resend", inbox.key()))
@@ -606,7 +606,7 @@ fn unattempted_replacement_preserves_safe_rejected_only_proof() {
 }
 
 #[test]
-fn held_delivery_waits_for_transport_and_offers_exact_recipient_flush() {
+fn held_delivery_waits_for_transport_with_owner_only_exact_recipient_flush() {
     for recipient_index in 0..4 {
         let (_root, store, id, recipients) = fixture();
         let inbox = Inbox::new(&store, recipients[recipient_index].clone()).unwrap();
@@ -627,7 +627,7 @@ fn held_delivery_waits_for_transport_and_offers_exact_recipient_flush() {
             row.next_action.command,
             Some(format!("corral inbox flush {}", inbox.key()))
         );
-        assert!(!row.next_action.requires_owner);
+        assert!(row.next_action.requires_owner);
     }
 }
 
@@ -651,7 +651,7 @@ fn a_nonopen_uncertain_publication_never_advertises_recover() {
         assert!(inbox.state().unwrap().open_envelope.is_none());
         let rows = classify(&store, &store.get(&id).unwrap(), &recipients, false);
         let row = message_row(&rows, &message.id);
-        assert_eq!(row.responsible, Responsible::Pm);
+        assert_eq!(row.responsible, Responsible::Owner);
         assert_eq!(
             row.next_action.command,
             Some(format!("corral inbox inspect-retry {}", message.id))
@@ -660,7 +660,7 @@ fn a_nonopen_uncertain_publication_never_advertises_recover() {
 }
 
 #[test]
-fn cancelled_pending_attempt_requires_pm_inspection_not_blind_retry() {
+fn cancelled_pending_attempt_is_owner_disposition_not_pm_retry() {
     for recipient_index in 0..4 {
         let (_root, store, id, recipients) = fixture();
         let inbox = Inbox::new(&store, recipients[recipient_index].clone()).unwrap();
@@ -677,7 +677,7 @@ fn cancelled_pending_attempt_requires_pm_inspection_not_blind_retry() {
             .unwrap();
         let rows = classify(&store, &store.get(&id).unwrap(), &recipients, false);
         let row = message_row(&rows, &message.id);
-        assert_eq!(row.responsible, Responsible::Pm);
+        assert_eq!(row.responsible, Responsible::Owner);
         assert_eq!(
             row.next_action.command,
             Some(format!("corral inbox inspect-retry {}", message.id))

@@ -24,6 +24,7 @@ pub use discard::{discard, discard_with_decision, discard_with_options};
 mod finish;
 use finish::{finish_task, refuse_open_questions_head, save_finish};
 mod owner;
+mod pm_landing;
 mod snapshot_diff;
 pub use owner::awaiting_owner;
 
@@ -464,6 +465,11 @@ fn approve_owner(
         bail!("gate_stale: rebase onto current main and run the gate once on the new base");
     }
     crate::recovery::require_ordinary_approval(ctx, id)?;
+    let pm = pm_landing::caller();
+    if pm {
+        // Refuse before a verdict is carried or the base is touched; landing rechecks in-lock.
+        pm_landing::require(ctx, &ctx.store, id, &ctx.store.head(id)?)?;
+    }
     crate::verdict_carry::prepare_approval(ctx, id, strategy)?;
     approve_landed_inner(
         ctx,
@@ -472,7 +478,7 @@ fn approve_owner(
         remove_worktree,
         keep_branch,
         None,
-        (None, expected_sha),
+        (None, expected_sha, pm),
     )
     .map(|(_, line)| line)
 }
@@ -493,7 +499,7 @@ pub(crate) fn approve_landed(
         remove_worktree,
         keep_branch,
         expected,
-        (None, None),
+        (None, None, false),
     )
 }
 
@@ -507,7 +513,15 @@ pub(crate) fn approve_recovery(
         .store
         .try_lock(&format!("autopilot-{id}"))?
         .context("approval already in progress")?;
-    approve_landed_inner(ctx, id, strategy, false, true, None, (Some(recovery), None))
+    approve_landed_inner(
+        ctx,
+        id,
+        strategy,
+        false,
+        true,
+        None,
+        (Some(recovery), None, false),
+    )
 }
 
 fn approve_landed_inner(
@@ -517,7 +531,7 @@ fn approve_landed_inner(
     remove_worktree: bool,
     keep_branch: bool,
     expected: Option<&CandidateIdentity>,
-    (recovery, expected_owner_sha): (Option<&corral_core::RecoveryRecord>, Option<&str>),
+    (recovery, expected_owner_sha, pm): (Option<&corral_core::RecoveryRecord>, Option<&str>, bool),
 ) -> Result<(String, String)> {
     ctx.store.check_runtime()?;
     // `approved` is logged after the merge; record when this approval began.
@@ -595,6 +609,9 @@ fn approve_landed_inner(
             store, t, corral_core::OperatingActionKind::Accept, expected.is_some(),
         )?;
         crate::operating::require_completion(t)?;
+        if pm {
+            pm_landing::require(ctx, store, id, t)?;
+        }
         // Ordinary explicit owner overrides retain their non-policy-PASS semantics.
         // Automatic landing and versioned completion instructions never waive triage.
         if expected.is_some() || t.cowork_run().and_then(|cowork| cowork.completion.as_ref()).is_some() {

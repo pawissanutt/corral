@@ -78,6 +78,9 @@ pub enum PmObservation {
     },
     ReadyToLand {
         task: String,
+        /// The project or task explicitly sets `accept = "owner"`.
+        #[serde(default)]
+        owner_accepts: bool,
     },
     Dispatch {
         task: String,
@@ -160,7 +163,7 @@ impl PmObservation {
             | Self::RepairDiagnosis { task, .. }
             | Self::GateNeeded { task }
             | Self::ReviewNeeded { task }
-            | Self::ReadyToLand { task }
+            | Self::ReadyToLand { task, .. }
             | Self::Dispatch { task }
             | Self::PlanDecision { task, .. }
             | Self::AgentQuestion { task, .. }
@@ -318,14 +321,15 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             PmActionKind::EvidenceOnly,
             Some(task.clone()),
             "The finding concerns evidence only; range-diff shows identical commits.",
-            "The PM resolves the evidence finding; fresh gate and independent approval still apply.",
+            "Acting owner explicitly accepts the evidence; fresh gate and review identities still apply.",
             vec![finding.clone(), range_diff.clone()],
             vec![
+                // The reviewer asked for changes: landing over that verdict is the owner's call.
                 option(
                     "accept_owner",
-                    "Land with PM authority after gate and independent approval",
+                    "Ask the acting owner to accept",
                     format!("{bin} approve {} --merge ff", q(task)),
-                    false,
+                    true,
                 ),
                 option(
                     "independent_review",
@@ -459,11 +463,15 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             )],
         ),
         Blocked { task, condition } => {
-            let command = condition
-                .next_action
-                .command
-                .clone()
-                .unwrap_or_else(|| format!("{bin} show {} --json", q(task)));
+            // Attention names the verb; the card names this board's executable and root.
+            let command = condition.next_action.command.as_deref().map_or_else(
+                || format!("{bin} show {} --json", q(task)),
+                |command| {
+                    command
+                        .strip_prefix("corral ")
+                        .map_or_else(|| command.to_owned(), |verb| format!("{bin} {verb}"))
+                },
+            );
             let requires_owner = condition.next_action.requires_owner;
             let pm_action = condition.responsible == corral_core::Responsible::Pm;
             let id = if requires_owner {
@@ -485,16 +493,22 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
                 why: format!("Blocked: {}", condition.reason),
                 command: command.clone(),
                 verify: condition.next_action.description.clone(),
-                evidence: vec![
-                    format!("unblocks: {}", condition.unblocker()),
-                    format!(
-                        "blocked since: {}",
-                        condition
-                            .since
-                            .map_or_else(|| "unknown".into(), |at| at.to_string())
-                    ),
-                    format!("resume checks: {}", condition.resume.len()),
-                ],
+                // An explicit owner-only stop has no resume checks: its reason is the evidence
+                // the owner's banner shows.
+                evidence: if condition.kind == "owner_decision" {
+                    vec![condition.reason.clone()]
+                } else {
+                    vec![
+                        format!("unblocks: {}", condition.unblocker()),
+                        format!(
+                            "blocked since: {}",
+                            condition
+                                .since
+                                .map_or_else(|| "unknown".into(), |at| at.to_string())
+                        ),
+                        format!("resume checks: {}", condition.resume.len()),
+                    ]
+                },
                 options: vec![option(
                     id,
                     "Inspect the blocker and resume checks",
@@ -533,7 +547,10 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
                 false,
             )],
         ),
-        ReadyToLand { task } => (
+        ReadyToLand {
+            task,
+            owner_accepts,
+        } => (
             PmActionKind::Land,
             Some(task.clone()),
             "Fresh checks passed and no review is in flight.",
@@ -541,9 +558,13 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             vec![],
             vec![option(
                 "accept_owner",
-                "Land with PM authority after gate and independent approval",
+                if *owner_accepts {
+                    "Request owner acceptance"
+                } else {
+                    "Land with PM authority after gate and independent approval"
+                },
                 format!("{bin} approve {} --merge ff", q(task)),
-                false,
+                *owner_accepts,
             )],
         ),
         Dispatch { task } => (

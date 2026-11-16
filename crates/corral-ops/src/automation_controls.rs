@@ -31,8 +31,11 @@ pub fn require_automation_owner(store: &Store, invoker: &Invoker) -> Result<()> 
     require_owner_entry(store, &cwd, agent, pm)
 }
 
-/// Admit the owner or the workspace PM, never a worker or assistant claiming the PM marker.
-/// PM authority does not extend into current or historical agent run worktrees.
+/// Admit the owner or the workspace PM. This is a tool boundary, not a sandbox: the PM is
+/// recognised by `CORRAL_PM=1`, an assistant shell is refused by its own marker, and a worker
+/// is refused while it stays inside a run worktree. No launch path exports the worker
+/// markers checked here yet, so a worker that leaves its worktree and sets the PM marker
+/// passes, exactly as it already passed `attention::guard` and `park`.
 pub fn require_operator(store: &Store, invoker: &Invoker) -> Result<()> {
     let env = &invoker.caller.env;
     let workspace_pm = invoker.pm_marker()
@@ -56,6 +59,36 @@ pub fn require_operator(store: &Store, invoker: &Invoker) -> Result<()> {
         require_automation_owner(store, invoker)
     }
     .context("operation requires the owner or the PM")
+}
+
+/// Owner-only items with no other fence: refuse the PM's own shell by its marker.
+pub fn refuse_pm(invoker: &Invoker, what: &str) -> Result<()> {
+    ensure!(
+        invoker.owner_action.is_some() || !invoker.pm_marker(),
+        "owner_only: {what} is the owner's decision, not the PM's"
+    );
+    Ok(())
+}
+
+/// Config keys whose change admits a project, moves acceptance or removes a check.
+pub fn owner_only_config_key(parts: &[&str]) -> bool {
+    matches!(parts, ["dispatch", "ready_projects"])
+        || parts
+            .iter()
+            .rposition(|part| *part == "review")
+            .is_some_and(|at| {
+                matches!(
+                    parts.get(at + 1).copied(),
+                    None | Some(
+                        "accept"
+                            | "plan_accept"
+                            | "reviewer"
+                            | "gate"
+                            | "gate_tiers"
+                            | "tier_policy"
+                    )
+                )
+            })
 }
 
 pub(crate) fn require_owner_entry(store: &Store, cwd: &Path, agent: bool, pm: bool) -> Result<()> {

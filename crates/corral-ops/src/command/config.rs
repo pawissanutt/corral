@@ -85,6 +85,9 @@ impl Verb for ConfigCommand {
                         "use corral mode for operating policy changes; activation requires an exact finite preview and explicit confirmation"
                     );
                 }
+                if crate::owner_only_config_key(&parts) {
+                    crate::refuse_pm(cx.invoker, &key)?;
+                }
                 let whole_review = parts.as_slice() == ["review"];
                 let whole_capacity = parts.as_slice() == ["limits", "capacity"];
                 cx.ctx.store.edit_config_layer_from(ConfigLayer::Workspace, ConfigSource::SettingsUi, |doc| {

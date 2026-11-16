@@ -47,17 +47,23 @@ list. The same text reaches every PM through the `[corral-policy]` message
 | Paid or live-provider spend beyond the configured budget | Money |
 | Credentials and privacy | Secrets |
 | Discard, dropping a task with a live branch, lost-run recovery | Destroys unfinished work |
-| Admitting a project, `automation confirm`, `mode autopilot`, `mode turbo`, owner parks, owner-stopped runs, scope exclusions | Scope and priority |
+| Admitting a project, promoting an Idea, `automation confirm`, `mode autopilot`, `mode turbo`, resuming a paused policy, owner parks, owner-stopped runs, scope exclusions | Scope and priority |
+| Landing where `accept = "owner"` is set; overriding a failed gate or a reviewer's changes verdict; re-arming a consumed diagnostic retry | Overrides a check |
+| Recovering an uncertain delivery (`corral inbox recover`) | May replay a message |
+| Config for acceptance, reviewer, gate or project admission | Moves the rules above |
 | `owner_only` and `permission` questions | Asked of the owner by kind |
 | Waiving independent review | Removes a check |
 
 Everything else the PM runs itself and records in a task comment: dispatch and queue
-changes, gates, review starts, send-backs, landing after a passing configured gate and an
-independent approval, plan verdicts, hold and dispatch-hold release, its own parks, stale
-queued consent (`corral dispatch <id>`), `corral mode resume`, `corral repair renew`,
-gate-failure attribution, capacity and ad-hoc reserve changes, and follow-up tasks.
-A PM shell (`CORRAL_PM=1`) passes the operator guard on those commands; worker, reviewer
-and assistant shells do not.
+changes, gates, review starts, send-backs, plan verdicts, hold and dispatch-hold release,
+its own parks, stale queued consent (`corral dispatch <id>`), gate-failure attribution, one
+`corral repair renew` per task up to the starter allowance, capacity and ad-hoc reserve
+changes, and follow-up tasks. It lands with `corral approve <id> --merge ff` only on a
+passing configured gate and a fresh independent approval; the command refuses a PM shell
+otherwise. A PM shell (`CORRAL_PM=1`) passes the operator guard on `repair renew`,
+`repair diagnose --owner`, `repair triage --owner` and the ad-hoc capacity designation.
+These are tool boundaries, not a sandbox: assistant shells are refused by their marker and
+workers while they stay in a run worktree; worker launches do not yet export a marker.
 
 Two authorities stay separate. Corral's executor (`corral pm act <id>`, autopilot) acts only
 on what the effective operating policy delegates: a pause or a missing grant stops it. The

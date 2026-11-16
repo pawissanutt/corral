@@ -23,6 +23,12 @@ fn lifecycle() -> Fixture {
             task.runs.clear();
             task.status_since = Some(now - SignedDuration::from_secs(1000));
         }
+        if task.id == "T-005" {
+            // The PM resolves an ordinary stop; only an owner-stopped run is the owner's decision.
+            if let Some(run) = task.runs.last_mut() {
+                run.outcome = Some(corral_core::RunOutcome::Stopped);
+            }
+        }
         if task.id == "T-006" {
             task.infra_wait = Some(InfraWait {
                 version: 1,

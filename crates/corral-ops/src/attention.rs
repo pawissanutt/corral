@@ -493,13 +493,23 @@ fn ready(
             .and_then(|plan| plan.authorization.as_ref())
             .is_some();
     if !explicit && !n.allows(task, action) {
+        // An explicit scope exclusion is the owner's decision; a missing grant is not.
+        let excluded = n.config.automation.scope.exclusions.contains(&task.id);
         let mut condition = wait(
             task,
             now,
             "outside_grant",
             WaitClass::Hold,
-            Responsible::Pm,
-            "Task is outside the automatic grant; the PM can run this step explicitly".into(),
+            if excluded {
+                Responsible::Owner
+            } else {
+                Responsible::Pm
+            },
+            if excluded {
+                "Task is explicitly excluded from the automation scope".into()
+            } else {
+                "Task is outside the automatic grant; the PM can run this step explicitly".into()
+            },
         );
         condition.resume.push(check(
             "authority_granted",
@@ -507,18 +517,20 @@ fn ready(
             Some(format!("{action:?}")),
             false,
         ));
-        condition.next_action.command = Some(format!(
-            "corral dispatch {}{}",
-            task.id,
-            if action == Action::Plan {
-                " --plan"
-            } else {
-                ""
-            }
-        ));
-        condition.next_action.description =
-            "Run the step explicitly through the corral CLI without expanding the automation grant"
-                .into();
+        if !excluded {
+            condition.next_action.command = Some(format!(
+                "corral dispatch {}{}",
+                task.id,
+                if action == Action::Plan {
+                    " --plan"
+                } else {
+                    ""
+                }
+            ));
+            condition.next_action.description =
+                "Run the step explicitly through the corral CLI without expanding the automation grant"
+                    .into();
+        }
         waits.push(condition);
     }
     let credit = usize::from(phases.dispatch_credit);
