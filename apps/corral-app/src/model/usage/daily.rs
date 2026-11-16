@@ -18,8 +18,8 @@ fn day_label(day: &str, period: Period) -> String {
 
 pub(super) fn costs(input: &Inputs) -> Costs {
     let title = match input.period {
-        Period::Month => "Cost per day · 30 days (UTC days)",
-        Period::Today | Period::Week => "Cost per day · 7 days (UTC days)",
+        Period::Month => "Cost per day · 30 days",
+        Period::Today | Period::Week => "Cost per day · 7 days",
     }
     .to_owned();
     let Some(series) = input.series else {
@@ -28,10 +28,14 @@ pub(super) fn costs(input: &Inputs) -> Costs {
             legend: vec![],
             bars: vec![],
             note: None,
-            empty: input
-                .series_error
-                .is_none()
-                .then(|| "Loading daily costs from corrald…".into()),
+            empty: Some(
+                if input.series_error.is_some() {
+                    "Daily costs unavailable."
+                } else {
+                    "Loading daily costs from corrald…"
+                }
+                .into(),
+            ),
         };
     };
     let mut notes: Vec<String> = completeness_label(&series.completeness)

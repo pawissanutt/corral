@@ -1,5 +1,5 @@
 //! The profile table at the narrow desktop width where a long profile name used to run into the
-//! window figure beside it.
+//! column beside it.
 
 use std::time::Duration;
 
@@ -8,11 +8,8 @@ use nsh_core::{Points, Size};
 use nsh_engine::{EngineConfig, Root};
 use nsh_testing::{Headless, LayoutNode, MemoryStorage};
 
-/// The synthetic feed's longest profile name, wider than the profile column at 900 points, and
-/// the window its usage row records. The provider cells above the table name the same profile
-/// and window as separate quota facts, so the lookup stays inside the table.
+/// The synthetic feed's longest profile name, wider than the profile column at 900 points.
 const PROFILE: &str = "fallback · pi-sol";
-const WINDOW: &str = "5 h";
 const TABLE: &str = "usage-profiles";
 
 fn text_of(node: &LayoutNode) -> Option<&str> {
@@ -32,7 +29,7 @@ fn inside(nodes: &[LayoutNode], node: &LayoutNode, id: &str) -> bool {
 }
 
 #[test]
-fn long_profile_name_stays_out_of_the_window_column_at_900_points() {
+fn long_profile_name_stays_out_of_the_next_column_at_900_points() {
     let mut config = EngineConfig::new(Root::of::<crate::App>());
     config.viewport = Size::new(Points(900.0), Points(600.0));
     config.environment.os = Os::Linux;
@@ -54,22 +51,24 @@ fn long_profile_name_stays_out_of_the_window_column_at_900_points() {
         .iter()
         .find(|node| text_of(node) == Some(PROFILE) && inside(&nodes, node, TABLE))
         .expect("the long profile name is in the profile table");
-    let (top, bottom) = (
+    let (left, top, bottom) = (
+        profile.bounds.origin.x.0,
         profile.bounds.origin.y.0,
         profile.bounds.origin.y.0 + profile.bounds.size.height.0,
     );
-    let window = nodes
+    let next = nodes
         .iter()
-        .filter(|node| text_of(node) == Some(WINDOW) && inside(&nodes, node, TABLE))
-        .find(|node| {
+        .filter(|node| text_of(node).is_some() && inside(&nodes, node, TABLE))
+        .filter(|node| {
             let y = node.bounds.origin.y.0;
-            y < bottom && y + node.bounds.size.height.0 > top
+            node.bounds.origin.x.0 > left && y < bottom && y + node.bounds.size.height.0 > top
         })
-        .expect("the profile's window figure is on its row");
-    let profile_right = profile.bounds.origin.x.0 + profile.bounds.size.width.0;
+        .map(|node| node.bounds.origin.x.0)
+        .fold(f32::INFINITY, f32::min);
+    assert!(next.is_finite(), "the profile's row has a figure after it");
+    let profile_right = left + profile.bounds.size.width.0;
     assert!(
-        profile_right <= window.bounds.origin.x.0,
-        "profile name ends at {profile_right}, past the window figure at {}",
-        window.bounds.origin.x.0
+        profile_right <= next,
+        "profile name ends at {profile_right}, past the next column at {next}"
     );
 }

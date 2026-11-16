@@ -6,6 +6,7 @@ mod daily;
 mod live;
 mod quota;
 mod totals;
+mod window;
 
 pub use completeness::completeness_label;
 pub use live::{Inputs, page as live_page, series_request};
@@ -63,8 +64,10 @@ pub const PROFILE_TITLE: &str = "By profile · current window";
 pub const SESSION_TITLE: &str = "By session";
 /// Session table column labels.
 pub const SESSION_HEADERS: [&str; 5] = ["Session", "Working on", "Profile", "Tokens", "Cost"];
-/// The share meter's marker, as a percentage.
-pub const SHARE_MARKER_PERCENT: u32 = 80;
+/// Heading over a provider's quota observations.
+pub const QUOTA_TITLE: &str = "Quota source";
+/// Said for a fact corral does not hold.
+pub const UNKNOWN: &str = "unknown";
 
 /// Usage band for a provider or a profile meter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,11 +102,12 @@ fn money(value: f64) -> String {
     }
 }
 
-/// Samples of a window's use (fractions) with one tick label per sample.
+/// Samples of a window's use (fractions) at their local times of day (hours since midnight,
+/// ascending).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chart {
     pub series: Vec<f32>,
-    pub ticks: Vec<String>,
+    pub hours: Vec<f32>,
     pub label: String,
 }
 
@@ -134,7 +138,7 @@ pub struct BandChart {
     /// 90 to 100 and 70 to 90 percent zones, in that order.
     pub zones: [Zone; 2],
     pub vertical_labels: Vec<AxisLabel>,
-    /// Every third tick label.
+    /// Whole hours, evenly stepped across the samples' span.
     pub hour_labels: Vec<AxisLabel>,
     pub line: Vec<Point>,
     /// Series closed to the zero baseline for an area renderer.
@@ -143,33 +147,47 @@ pub struct BandChart {
     pub accessibility_label: String,
 }
 
-/// Project a window's samples and threshold bands into the requested chart dimensions.
+/// Hour labels the chart holds at most, so they never crowd one another.
+const HOUR_LABELS: f32 = 6.0;
+/// The plot's left gutter (for the band labels) and right margin (for the last hour label).
+const PLOT_LEFT: f32 = 22.0;
+const PLOT_RIGHT: f32 = 10.0;
+
+/// Project a window's samples and threshold bands into the requested chart dimensions. Samples
+/// sit at their times, so a missing hour shows as a longer segment, not a squeezed axis; the
+/// hour labels step evenly over whole hours; the band labels mark the 70 and 90 edges, as far
+/// apart as the bands are tall.
 pub fn band_chart(chart: &Chart, width: f32, height: f32) -> BandChart {
-    let plot_width = width - 26.0;
-    let count = chart.series.len();
-    let x = |i: usize| {
-        22.0 + if count > 1 {
-            i as f32 / (count - 1) as f32 * plot_width
-        } else {
-            0.0
-        }
+    let plot_width = (width - PLOT_LEFT - PLOT_RIGHT).max(0.0);
+    let (start, end) = match (chart.hours.first(), chart.hours.last()) {
+        (Some(&first), Some(&last)) => (first.floor(), last.ceil().max(first.floor() + 1.0)),
+        _ => (0.0, 1.0),
     };
+    let span = end - start;
+    let x = |hour: f32| PLOT_LEFT + (hour - start) / span * plot_width;
     let y = |v: f32| 4.0 + (1.0 - v.clamp(0.0, 1.0)) * (height - 26.0);
     let zones = [
         Zone {
             level: Level::Bad,
-            origin: Point { x: 22.0, y: y(1.0) },
+            origin: Point {
+                x: PLOT_LEFT,
+                y: y(1.0),
+            },
             width: plot_width,
             height: y(0.9) - y(1.0),
         },
         Zone {
             level: Level::Warn,
-            origin: Point { x: 22.0, y: y(0.9) },
+            origin: Point {
+                x: PLOT_LEFT,
+                y: y(0.9),
+            },
             width: plot_width,
             height: y(0.7) - y(0.9),
         },
     ];
-    let vertical_labels = [("90", 0.95, 3.0), ("70", 0.8, 3.0), ("0", 0.0, 0.0)]
+    // Baselines a third of a label's height under each edge, so the figure centres on it.
+    let vertical_labels = [("90", 0.9, 3.0), ("70", 0.7, 3.0), ("0", 0.0, 0.0)]
         .into_iter()
         .map(|(text, at, lift)| AxisLabel {
             text: text.to_owned(),
@@ -179,24 +197,28 @@ pub fn band_chart(chart: &Chart, width: f32, height: f32) -> BandChart {
             },
         })
         .collect();
-    let hour_labels = chart
-        .ticks
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| i % 3 == 0)
-        .map(|(i, text)| AxisLabel {
-            text: text.clone(),
-            position: Point {
-                x: x(i),
-                y: height - 2.0,
-            },
+    let step = (span / HOUR_LABELS).ceil().max(1.0);
+    let steps = (span / step).floor() as u32;
+    let hour_labels = (0..=steps)
+        .map(|k| {
+            let hour = start + k as f32 * step;
+            AxisLabel {
+                text: format!("{:02}", (hour as u32) % 24),
+                position: Point {
+                    x: x(hour),
+                    y: height - 2.0,
+                },
+            }
         })
         .collect();
     let line: Vec<Point> = chart
         .series
         .iter()
-        .enumerate()
-        .map(|(i, &v)| Point { x: x(i), y: y(v) })
+        .zip(&chart.hours)
+        .map(|(&v, &hour)| Point {
+            x: x(hour),
+            y: y(v),
+        })
         .collect();
     let last = line.last().copied();
     let mut area = line.clone();
@@ -221,11 +243,14 @@ pub fn band_chart(chart: &Chart, width: f32, height: f32) -> BandChart {
     }
 }
 
-/// One provider cell, also used as the basis of a stacked phone block and a terminal line.
+/// One provider: the desktop card, the phone's stacked block and the terminal's gauge line.
+/// Every window fact (window, use, headroom, reset) comes from one quota observation, the first
+/// of `quotas`, so the header can never call unknown what the details under it know.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderView {
     pub id: String,
     pub label: String,
+    /// "5 h window", or "window unknown".
     pub window: String,
     /// The big figure: window use, or the period's cost when no quota is known.
     pub big: String,
@@ -235,21 +260,23 @@ pub struct ProviderView {
     pub big_label: &'static str,
     /// Fraction of the window used, when known.
     pub used: Option<f32>,
-    pub headroom: String,
-    /// Provider threshold, used for headroom and profile meters.
+    /// The 70/90 band of `used`; `Level::None` when use is unknown.
     pub level: Level,
-    /// Desktop reset sentence, empty when unknown.
-    pub resets: String,
-    /// Phone reset sentence.
-    pub phone_resets: String,
-    /// Cost line and optional weekly-cap line.
+    /// The observation in words: "34 of 100 used · 66 left · resets 20:39", or what is missing.
+    pub quota_line: String,
+    /// The observation records the window as exhausted.
+    pub exhausted: bool,
+    /// Headroom alone, for the terminal's gauge line: "66 left", "exhausted", "quota unknown".
+    pub headroom: String,
+    /// "today ~$22.70 · 7 days ~$141", with its qualifiers.
     pub costs: String,
+    /// Today's window samples; absent when corral recorded fewer than two.
     pub chart: Option<Chart>,
-    /// Said in the chart's place when there is nothing to chart.
-    pub chart_missing: Option<&'static str>,
     pub profiles: Vec<PhoneProfile>,
-    pub quotas: Vec<QuotaView>,
+    /// Where the quota facts come from, the header's observation first.
+    pub quotas: Vec<QuotaLine>,
 }
+
 /// One provider quota observation; unavailable facts are explicitly unknown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaView {
@@ -266,24 +293,14 @@ pub struct QuotaView {
     pub completeness: Option<String>,
 }
 
-pub const QUOTA_TITLE: &str = "Quota";
-pub const UNKNOWN: &str = "unknown";
-
-impl QuotaView {
-    pub fn facts(&self) -> [(&'static str, &str); 10] {
-        [
-            ("Profile", &self.profile),
-            ("Source", &self.source),
-            ("Scope", &self.scope),
-            ("Window", &self.window),
-            ("Used", &self.used),
-            ("Limit", &self.limit),
-            ("Headroom", &self.headroom),
-            ("Resets", &self.resets_at),
-            ("Observed", &self.observed_at),
-            ("Exhausted", &self.exhausted),
-        ]
-    }
+/// One quota observation as a single quiet provenance line: its profile, its amounts (for every
+/// observation but the header's, whose amounts the card already shows), source, scope and when
+/// it was observed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaLine {
+    pub text: String,
+    pub exhausted: bool,
+    pub completeness: Option<String>,
 }
 
 /// A profile line inside a phone provider block.
@@ -298,15 +315,17 @@ pub struct ProfileRow {
     /// Provider label on the first row only.
     pub provider: String,
     pub profile: String,
-    pub window: String,
     /// Meter fill as a percentage; None when the share is unknown.
     pub share_percent: Option<u32>,
+    /// "34%", or [`UNKNOWN`].
+    pub share: String,
     /// Meter level follows provider use, not profile use.
     pub level: Level,
-    pub today: String,
-    pub today_note: Option<String>,
-    /// Provider headroom on the first row only.
-    pub headroom: String,
+    /// The period's cost.
+    pub cost: String,
+    pub cost_note: Option<String>,
+    /// Provider headroom on the first row only; [`UNKNOWN`] when corral holds none.
+    pub headroom: Option<String>,
 }
 /// One stacked daily cost bar: segment widths in percent of the track, in legend order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,14 +346,29 @@ pub struct Costs {
     /// Coverage or retained-series status; independent of whether bars exist.
     pub note: Option<String>,
 }
-/// One session's recorded tokens and cost.
+/// One session's recorded tokens and cost; `None` is a fact corral does not hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRow {
     pub session: String,
+    /// "role · task", or "role · title".
     pub what: String,
-    pub profile: String,
-    pub tokens: String,
-    pub cost: String,
+    pub profile: Option<String>,
+    pub tokens: Option<String>,
+    pub cost: Option<String>,
+}
+
+impl SessionRow {
+    /// Profile, tokens and cost in one line, for a form with no table: unknowns said as such.
+    pub fn summary(&self) -> String {
+        format!(
+            "{} · {} · {}",
+            self.profile.as_deref().unwrap_or("profile unknown"),
+            self.tokens
+                .as_deref()
+                .map_or_else(|| format!("tokens {UNKNOWN}"), |t| format!("{t} tokens")),
+            self.cost.as_deref().unwrap_or("cost unknown"),
+        )
+    }
 }
 /// The whole page.
 #[derive(Debug, Clone, PartialEq)]
@@ -342,26 +376,51 @@ pub struct Page {
     pub providers: Vec<ProviderView>,
     /// Said when no provider has recorded usage.
     pub providers_empty: Option<&'static str>,
-    pub profile_headers: [&'static str; 6],
+    pub profile_headers: [&'static str; 5],
     pub profiles: Vec<ProfileRow>,
     pub costs: Costs,
-    /// Live only: per-session tokens and cost.
-    pub sessions: Option<Vec<SessionRow>>,
+    /// Per-session tokens and cost, costliest first.
+    pub sessions: Vec<SessionRow>,
     pub sessions_note: Option<String>,
+    /// One short line on where the figures come from.
     pub disclaimer: &'static str,
-    pub phone_disclaimer: &'static str,
-    /// Deduplicated live read errors; render once above the content.
+    /// Deduplicated read errors; render once above the content.
     pub notices: Vec<String>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Level, level};
+    use super::{Chart, Level, band_chart, level};
 
     #[test]
     fn usage_thresholds_do_not_shift_at_band_edges() {
         assert_eq!(level(0.69), Level::None);
         assert_eq!(level(0.70), Level::Warn);
         assert_eq!(level(0.90), Level::Bad);
+    }
+
+    /// The 90 and 70 labels were drawn about two points apart, and hour labels came from every
+    /// third sample, so a missing hour left a gap ("14 15 _ 17 18").
+    #[test]
+    fn chart_axis_labels_neither_overlap_nor_skip_hours() {
+        let chart = Chart {
+            series: vec![0.2, 0.4, 0.5, 0.6, 0.8],
+            hours: vec![14.0, 15.0, 15.5, 17.0, 18.25],
+            label: String::new(),
+        };
+        let drawn = band_chart(&chart, 380.0, 104.0);
+        let bands: Vec<f32> = drawn.vertical_labels.iter().map(|l| l.position.y).collect();
+        assert!(
+            bands.windows(2).all(|pair| pair[1] - pair[0] >= 12.0),
+            "{bands:?}"
+        );
+        let xs: Vec<f32> = drawn.hour_labels.iter().map(|l| l.position.x).collect();
+        let gaps: Vec<f32> = xs.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        assert!(
+            gaps.iter().all(|gap| (gap - gaps[0]).abs() < 0.01),
+            "{xs:?}"
+        );
+        let hours: Vec<&str> = drawn.hour_labels.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(hours, ["14", "15", "16", "17", "18", "19"]);
     }
 }

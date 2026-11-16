@@ -1,6 +1,7 @@
 use super::{change, put, stamp};
 use crate::model::daemon::Feed;
 use corral_protocol::{app::*, board::CostBasis, detail::*, rows::*};
+use jiff::ToSpan;
 
 pub(super) fn coverage(feed: &Feed, rows: u64) -> UsageCompleteness {
     UsageCompleteness {
@@ -49,7 +50,7 @@ pub(super) fn populate(feed: &mut Feed) {
             "openai-subscription",
             "OpenAI · subscription",
             "pi-sol xhigh",
-            0.78,
+            78.0,
             61.2,
             318.4,
         ),
@@ -57,7 +58,7 @@ pub(super) fn populate(feed: &mut Feed) {
             "anthropic-subscription",
             "Anthropic · subscription",
             "pi-opus high",
-            0.34,
+            34.0,
             22.7,
             141.0,
         ),
@@ -65,7 +66,7 @@ pub(super) fn populate(feed: &mut Feed) {
             "openai-api",
             "OpenAI · API (metered)",
             "fallback · pi-sol",
-            0.21,
+            21.0,
             8.4,
             29.9,
         ),
@@ -74,20 +75,18 @@ pub(super) fn populate(feed: &mut Feed) {
     .enumerate()
     {
         let completeness = coverage(feed, 30);
+        let resets_at = stamp(feed, feed.now.saturating_add(6360 + index as u64 * 1200));
         feed.usage.insert(
             id.into(),
             UsageRow {
                 id: id.into(),
                 connection: connection.into(),
                 profile: Some(profile.into()),
-                window: Some("5 h rolling · preview".into()),
-                used: Some(used * 100.0),
+                window: Some("5 h".into()),
+                used: Some(used),
                 limit: Some(100.0),
                 limit_basis: LimitBasis::Declared,
-                resets_at: Some(stamp(
-                    feed,
-                    feed.now.saturating_add(6360 + index as u64 * 1200),
-                )),
+                resets_at: Some(resets_at.clone()),
                 today_usd: Some(today),
                 week_usd: Some(week),
                 cost_basis: Some(CostBasis::Estimated),
@@ -95,12 +94,12 @@ pub(super) fn populate(feed: &mut Feed) {
                 week_completeness: completeness.clone(),
                 quotas: vec![UsageQuota {
                     source: "Preview · synthetic allowance".into(),
-                    scope: Some(id.into()),
+                    scope: Some("account".into()),
                     window: Some("5 h".into()),
-                    used: Some(used * 100.0),
+                    used: Some(used),
                     limit: Some(100.0),
-                    headroom: Some((1.0 - used) * 100.0),
-                    resets_at: Some(stamp(feed, feed.now.saturating_add(6360))),
+                    headroom: Some(100.0 - used),
+                    resets_at: Some(resets_at),
                     observed_at: Some(stamp(feed, feed.now)),
                     exhausted: Some(false),
                     completeness,
@@ -109,7 +108,7 @@ pub(super) fn populate(feed: &mut Feed) {
             },
         );
     }
-    for period in ["today", "week", "month"] {
+    for period in ["today", "7d", "week", "30d", "month"] {
         let _ = detail(
             feed,
             &DetailRef::UsageSeries {
@@ -154,12 +153,17 @@ pub(super) fn populate(feed: &mut Feed) {
     );
 }
 
-fn day(feed: &Feed, seconds: u64) -> String {
-    let timestamp = stamp(feed, seconds);
-    if let (Some(zone), Ok(timestamp)) = (&feed.time_zone, timestamp.parse::<jiff::Timestamp>()) {
-        timestamp.to_zoned(zone.clone()).date().to_string()
-    } else {
-        timestamp[..10].into()
+/// Keep today's cost and the seven daily costs equal to the fixture row's subtotals.
+fn daily_cost(row: &UsageRow, offset: u64) -> Option<f64> {
+    match offset {
+        0 => row.today_usd,
+        1..=6 => row
+            .week_usd
+            .zip(row.today_usd)
+            .map(|(week, today)| (week - today) * (7 - offset) as f64 / 21.0),
+        _ => row
+            .week_usd
+            .map(|week| week / 7.0 * (0.8 + (offset % 5) as f64 * 0.1)),
     }
 }
 
@@ -168,21 +172,34 @@ pub(super) fn detail(feed: &mut Feed, target: &DetailRef) -> Result<bool, String
         DetailRef::UsageSeries { period } => {
             let days = match period.as_str() {
                 "today" => 1,
-                "week" => 7,
-                "month" => 30,
+                "7d" | "week" => 7,
+                "30d" | "month" => 30,
                 _ => return Err(format!("Unknown preview usage period {period}")),
             };
+            let now = stamp(feed, feed.now)
+                .parse::<jiff::Timestamp>()
+                .map_err(|error| format!("Preview usage time: {error}"))?
+                .to_zoned(feed.time_zone.clone().unwrap_or(jiff::tz::TimeZone::UTC));
+            let today = now.date();
+            let start = now
+                .start_of_day()
+                .map_err(|error| format!("Preview usage day: {error}"))?
+                .timestamp()
+                .as_second();
+            let elapsed = u64::try_from(now.timestamp().as_second() - start)
+                .unwrap_or_default()
+                .min(5 * 3600);
             let providers = feed
                 .usage
                 .values()
                 .map(|row| ProviderSeries {
-                    id: row.id.clone(),
+                    id: row.connection.clone(),
                     points: (0..12)
-                        .map(|hour| UsagePoint {
-                            at: stamp(feed, feed.now.saturating_sub((11 - hour) * 3600)),
-                            used: row.used.map(|used| used * (hour + 1) as f64 / 12.0),
+                        .map(|sample| UsagePoint {
+                            at: stamp(feed, feed.now.saturating_sub((11 - sample) * elapsed / 11)),
+                            used: row.used.map(|used| used * (sample + 1) as f64 / 12.0),
                             limit: row.limit,
-                            cost_usd: row.today_usd.map(|cost| cost * (hour + 1) as f64 / 12.0),
+                            cost_usd: row.today_usd.map(|cost| cost * (sample + 1) as f64 / 12.0),
                             cost_basis: Some(CostBasis::Estimated),
                             completeness: coverage(feed, 1),
                         })
@@ -191,24 +208,27 @@ pub(super) fn detail(feed: &mut Feed, target: &DetailRef) -> Result<bool, String
                 .collect();
             let days = (0..days)
                 .rev()
-                .map(|offset| UsageDay {
-                    day: day(feed, feed.now.saturating_sub(offset * 86400)),
-                    by_profile: feed
-                        .usage
-                        .values()
-                        .map(|row| ProfileUsage {
-                            profile: row.profile.clone().unwrap_or_default(),
-                            connection: row.connection.clone(),
-                            cost_usd: row
-                                .today_usd
-                                .map(|cost| cost * (1.0 - (offset % 5) as f64 * 0.1)),
-                            cost_basis: Some(CostBasis::Estimated),
-                            tokens: Some(12000 + offset * 100),
-                            completeness: coverage(feed, 1),
-                        })
-                        .collect(),
+                .map(|offset| {
+                    Ok(UsageDay {
+                        day: today
+                            .checked_sub((offset as i64).days())
+                            .map_err(|error| format!("Preview usage date: {error}"))?
+                            .to_string(),
+                        by_profile: feed
+                            .usage
+                            .values()
+                            .map(|row| ProfileUsage {
+                                profile: row.profile.clone().unwrap_or_default(),
+                                connection: row.connection.clone(),
+                                cost_usd: daily_cost(row, offset),
+                                cost_basis: row.cost_basis,
+                                tokens: Some(12000 + offset * 100),
+                                completeness: coverage(feed, 1),
+                            })
+                            .collect(),
+                    })
                 })
-                .collect();
+                .collect::<Result<Vec<_>, String>>()?;
             DetailBody::UsageSeries(UsageSeries {
                 providers,
                 days,

@@ -1,11 +1,11 @@
 //! Terminal bars drawn in Cells: the provider window gauge with its 70 and 90 percent zones, the
-//! profile share meter with its marker, and the stacked daily cost bar. Each Cell's glyph says
-//! what it is without colour (filled or empty, below or inside a zone, which cost), and colour
-//! repeats it where the terminal has colour. Neighbouring Cells of one look are one text.
+//! profile share meter, and the stacked daily cost bar. Each Cell's glyph says what it is
+//! without colour (filled or empty, below or inside a zone, which cost), and colour repeats it
+//! where the terminal has colour. Neighbouring Cells of one look are one text.
 
 use nsh_core::prelude::*;
 
-use crate::model::usage::{Level, SHARE_MARKER_PERCENT, level};
+use crate::model::usage::{Level, level};
 use crate::ui::tokens::{Token, color};
 
 /// One Cell's look.
@@ -19,9 +19,8 @@ const USED_BAD: Look = ('▓', Token::Fail);
 const ROOM_CLEAR: Look = ('·', Token::Ink3);
 const ROOM_WARN: Look = ('░', Token::Held);
 const ROOM_BAD: Look = ('▒', Token::Fail);
-/// The share meter's empty Cells and its marker.
+/// The share meter's empty Cells.
 const SHARE_EMPTY: Look = ('·', Token::Ink3);
-const SHARE_MARKER: Look = ('┊', Token::Ink3);
 
 /// The cost bar's segments in legend order: the OpenAI and Anthropic subscriptions and the
 /// metered API (`var(--ink-2)`, `var(--ink-4)`, `var(--held)` in the mockup).
@@ -46,26 +45,17 @@ pub fn gauge(used: f32, cells: usize) -> AnyElement {
     runs(&looks)
 }
 
-/// The profile share meter (`.meter`): `share` percent of `cells` filled in the provider's
-/// level, the rest dotted, the model's marker Cell at [`SHARE_MARKER_PERCENT`].
+/// The profile share meter: `share` percent of `cells` filled in the provider's level, the
+/// rest dotted.
 pub fn meter(share: u32, provider_level: Level, cells: usize) -> AnyElement {
     let fill = match provider_level {
         Level::None => USED_CLEAR,
         Level::Warn => USED_WARN,
         Level::Bad => USED_BAD,
     };
-    let filled = share_cells(share, cells);
-    let marker = share_cells(SHARE_MARKER_PERCENT, cells).min(cells.saturating_sub(1));
+    let filled = share_cells(share, cells).min(cells);
     let looks = (0..cells)
-        .map(|at| {
-            if at < filled {
-                fill
-            } else if at == marker {
-                SHARE_MARKER
-            } else {
-                SHARE_EMPTY
-            }
-        })
+        .map(|at| if at < filled { fill } else { SHARE_EMPTY })
         .collect::<Vec<_>>();
     runs(&looks)
 }

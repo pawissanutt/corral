@@ -1,27 +1,27 @@
-//! corral's recorded usage as the Usage page: provider cells grouped by connection, the profile
+//! corral's recorded usage as the Usage page: provider cards grouped by connection, the profile
 //! table, cost per day from the usage series, and per-session tokens and cost. Costs say whether
-//! the provider reported them or corral estimated them (`~`); quota, share and headroom appear
-//! only when corral holds a quota fact and are otherwise "unknown", never a guessed band.
+//! the provider reported them or corral estimated them (`~`). A card's window, use, headroom and
+//! reset all come from one quota observation (`window::header`); without one they are said to be
+//! unknown, never a guessed band.
 
 use std::collections::BTreeMap;
 
 use corral_protocol::board::CostBasis;
-use corral_protocol::detail::{DetailRef, UsageQuota, UsageSeries};
+use corral_protocol::detail::{DetailRef, UsageSeries};
 use corral_protocol::rows::{AgentRow, AssistantRow, UsageRow};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
 use super::totals::Sum;
 use super::{
-    Chart, Level, Page, Period, PhoneProfile, ProfileRow, ProviderView, SessionRow, USED_LABEL,
-    completeness_label, level, percent, quota,
+    Chart, Level, Page, Period, PhoneProfile, ProfileRow, ProviderView, SessionRow, UNKNOWN,
+    USED_LABEL, completeness_label, level, percent, quota, window,
 };
 
 /// Sessions listed at most, costliest first.
 const SESSION_LIMIT: usize = 20;
-const LIVE_DISCLAIMER: &str = "Costs are corral's records: reported by the provider, or ~ estimated from token counts. Window share, headroom and resets show only where corral holds a provider quota fact; otherwise they are unknown.";
-const LIVE_PHONE_DISCLAIMER: &str =
-    "~ estimated from tokens · quota unknown unless corral records it.";
+const DISCLAIMER: &str =
+    "~ marks costs estimated from token counts; quota facts show only where corral records them.";
 
 /// The usage series to request: seven days carry today's samples and the week's daily costs.
 pub fn series_request(period: Period) -> DetailRef {
@@ -113,31 +113,15 @@ fn period_note(sum: &Sum, input: &Inputs) -> Option<String> {
     }
 }
 
-fn local_clock(at: Timestamp, tz: &TimeZone) -> String {
-    let local = at.to_zoned(tz.clone());
-    format!("{:02}:{:02}", local.hour(), local.minute())
+/// A profile's name, or that corral recorded none.
+fn profile_name(row: &UsageRow) -> String {
+    row.profile
+        .clone()
+        .unwrap_or_else(|| "no profile recorded".into())
 }
 
-fn resets(quota: Option<&UsageQuota>, now: Timestamp, tz: &TimeZone) -> (String, String) {
-    let Some(at) = quota
-        .and_then(|quota| quota.resets_at.as_deref())
-        .and_then(|at| at.parse::<Timestamp>().ok())
-    else {
-        return ("reset unknown".into(), "reset unknown".into());
-    };
-    let minutes = (at.as_second() - now.as_second()).max(0) / 60;
-    let phone = if minutes < 24 * 60 {
-        format!("{}h {:02}m", minutes / 60, minutes % 60)
-    } else {
-        local_clock(at, tz)
-    };
-    (
-        format!("resets at {}", local_clock(at, tz)),
-        format!("resets {phone}"),
-    )
-}
-
-/// Today's local window samples of `connection`, as fractions of its limit.
+/// Today's local window samples of `connection`, as fractions of its limit at their local hours
+/// of the day, in time order.
 fn chart(
     series: Option<&UsageSeries>,
     connection: &str,
@@ -146,7 +130,7 @@ fn chart(
     now: Timestamp,
 ) -> Option<Chart> {
     let today = now.to_zoned(tz.clone()).date();
-    let (values, ticks): (Vec<f32>, Vec<String>) = series?
+    let mut samples: Vec<(f32, f32)> = series?
         .providers
         .iter()
         .filter(|provider| provider.id == connection)
@@ -158,9 +142,14 @@ fn chart(
                 (Some(used), Some(limit)) if limit > 0.0 => (used / limit) as f32,
                 _ => return None,
             };
-            (local.date() == today).then(|| (fraction, format!("{:02}", local.hour())))
+            let hour = f32::from(local.hour())
+                + f32::from(local.minute()) / 60.0
+                + f32::from(local.second()) / 3600.0;
+            (local.date() == today).then_some((hour, fraction))
         })
-        .unzip();
+        .collect();
+    samples.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (hours, values): (Vec<f32>, Vec<f32>) = samples.into_iter().unzip();
     let coverage = series.and_then(|series| completeness_label(&series.completeness));
     (values.len() >= 2).then(|| Chart {
         label: format!(
@@ -171,7 +160,7 @@ fn chart(
                 .unwrap_or_default()
         ),
         series: values,
-        ticks,
+        hours,
     })
 }
 
@@ -183,13 +172,12 @@ fn tokens(count: u64) -> String {
     }
 }
 
-fn session_cost(value: Option<f64>, basis: Option<CostBasis>) -> (f64, String) {
-    if value.is_none() {
-        return (0.0, "unknown".into());
-    }
-    let mut sum = Sum::default();
-    sum.add(value, basis);
-    (sum.total, sum.label())
+fn session_cost(value: Option<f64>, basis: Option<CostBasis>) -> (f64, Option<String>) {
+    value.map_or((0.0, None), |_| {
+        let mut sum = Sum::default();
+        sum.add(value, basis);
+        (sum.total, Some(sum.label()))
+    })
 }
 
 fn sessions(input: &Inputs) -> (Vec<SessionRow>, Option<String>) {
@@ -209,8 +197,8 @@ fn sessions(input: &Inputs) -> (Vec<SessionRow>, Option<String>) {
                     Some(task) => format!("{} · {task}", agent.role),
                     None => format!("{} · {}", agent.role, agent.title),
                 },
-                profile: agent.profile.clone().unwrap_or_else(|| "unknown".into()),
-                tokens: agent.tokens.map_or_else(|| "unknown".into(), tokens),
+                profile: agent.profile.clone(),
+                tokens: agent.tokens.map(tokens),
                 cost,
             },
         ));
@@ -231,11 +219,8 @@ fn sessions(input: &Inputs) -> (Vec<SessionRow>, Option<String>) {
             SessionRow {
                 session: assistant.id.clone(),
                 what: format!("assistant · {}", assistant.title),
-                profile: assistant
-                    .profile
-                    .clone()
-                    .unwrap_or_else(|| "unknown".into()),
-                tokens: "unknown".into(),
+                profile: assistant.profile.clone(),
+                tokens: None,
                 cost,
             },
         ));
@@ -273,16 +258,10 @@ pub fn page(input: &Inputs) -> Page {
     let mut providers = Vec::new();
     let mut profiles = Vec::new();
     for (connection, rows) in &connections {
-        let quota_fact = rows
-            .iter()
-            .flat_map(|(row, _)| &row.quotas)
-            .filter(|fact| fact.source != "unknown" && fact.scope.as_deref() == Some("account"))
-            .max_by(|a, b| a.observed_at.cmp(&b.observed_at));
-        let used = quota_fact.and_then(quota::fraction);
+        let header = window::header(rows.iter().map(|(row, _)| *row));
+        let fact = header.map(|(_, fact)| fact);
+        let used = fact.and_then(quota::fraction);
         let provider_level = used.map_or(Level::None, level);
-        let window = quota_fact
-            .and_then(|quota| quota.window.clone())
-            .unwrap_or_else(|| "window unknown".into());
         let mut period = Sum::default();
         let mut today = Sum::default();
         let mut week = Sum::default();
@@ -291,30 +270,25 @@ pub fn page(input: &Inputs) -> Page {
             today.add_total(row.today_usd, row.cost_basis, &row.today_completeness);
             week.add_total(row.week_usd, row.cost_basis, &row.week_completeness);
         }
-        let (resets, phone_resets) = resets(quota_fact, now, input.tz);
-        let headroom = quota_fact.and_then(|quota| quota.headroom).map_or_else(
-            || "quota unknown".into(),
-            |value| format!("{value} headroom"),
-        );
-        let mut quotas: Vec<_> = rows
-            .iter()
-            .flat_map(|(row, _)| {
-                row.quotas
-                    .iter()
-                    .map(move |fact| quota::view(fact, row.profile.as_deref(), input.tz))
-            })
+        let mut quotas: Vec<_> = header
+            .map(|(row, fact)| window::line(row, fact, false, now, input.tz))
+            .into_iter()
             .collect();
-        if quotas.is_empty() {
-            quotas.push(quota::unknown());
+        for (row, _) in rows {
+            for other in &row.quotas {
+                if !fact.is_some_and(|fact| std::ptr::eq(fact, other)) {
+                    quotas.push(window::line(row, other, true, now, input.tz));
+                }
+            }
         }
         let chart = chart(input.series, connection, connection, input.tz, now);
         providers.push(ProviderView {
             id: (*connection).to_owned(),
             label: (*connection).to_owned(),
-            window: window.clone(),
+            window: window::window(fact),
             big: used.map_or_else(|| period.figure(), |used| format!("{}%", percent(used))),
             big_note: if used.is_some() {
-                quota_fact.and_then(|fact| completeness_label(&fact.completeness))
+                fact.and_then(|fact| completeness_label(&fact.completeness))
             } else {
                 period_note(&period, input)
             },
@@ -324,22 +298,19 @@ pub fn page(input: &Inputs) -> Page {
                 period_word(input.period)
             },
             used,
-            headroom,
             level: provider_level,
-            resets,
-            phone_resets,
+            quota_line: fact
+                .map_or_else(window::missing, |fact| window::amounts(fact, now, input.tz)),
+            exhausted: fact.is_some_and(|fact| fact.exhausted == Some(true)),
+            headroom: window::headroom(fact),
             costs: format!("today {} · 7 days {}", today.label(), week.label()),
-            chart_missing: chart.is_none().then_some("no window samples recorded"),
             chart,
             profiles: rows
                 .iter()
                 .map(|(row, cost)| {
                     let cost = period_label(cost, input);
                     PhoneProfile {
-                        name: row
-                            .profile
-                            .clone()
-                            .unwrap_or_else(|| "no profile recorded".into()),
+                        name: profile_name(row),
                         detail: match quota(row) {
                             Some(share) => format!("{}% · {cost}", percent(share)),
                             None => cost,
@@ -351,30 +322,20 @@ pub fn page(input: &Inputs) -> Page {
         });
         for (i, (row, cost)) in rows.iter().enumerate() {
             let share = quota(row).map(percent);
+            let first = i == 0;
             profiles.push(ProfileRow {
-                provider: if i == 0 {
+                provider: if first {
                     (*connection).to_owned()
                 } else {
                     String::new()
                 },
-                profile: row
-                    .profile
-                    .clone()
-                    .unwrap_or_else(|| "no profile recorded".into()),
-                window: row
-                    .quotas
-                    .first()
-                    .and_then(|quota| quota.window.clone())
-                    .unwrap_or_else(|| "unknown".into()),
+                profile: profile_name(row),
                 share_percent: share,
+                share: share.map_or_else(|| UNKNOWN.to_owned(), |share| format!("{share}%")),
                 level: provider_level,
-                today: cost.figure(),
-                today_note: period_note(cost, input),
-                headroom: row
-                    .quotas
-                    .first()
-                    .and_then(|quota| quota.headroom)
-                    .map_or_else(|| "unknown".into(), |value| value.to_string()),
+                cost: cost.figure(),
+                cost_note: period_note(cost, input),
+                headroom: first.then(|| quota::number(fact.and_then(|fact| fact.headroom))),
             });
         }
     }
@@ -394,7 +355,6 @@ pub fn page(input: &Inputs) -> Page {
         profile_headers: [
             "Provider",
             "Profile",
-            "Window",
             "Share of window",
             match input.period {
                 Period::Today => "Today",
@@ -405,10 +365,9 @@ pub fn page(input: &Inputs) -> Page {
         ],
         profiles,
         costs: super::daily::costs(input),
-        sessions: Some(sessions),
+        sessions,
         sessions_note,
-        disclaimer: LIVE_DISCLAIMER,
-        phone_disclaimer: LIVE_PHONE_DISCLAIMER,
+        disclaimer: DISCLAIMER,
         notices: notices(input),
     }
 }
@@ -440,7 +399,7 @@ fn notices(input: &Inputs) -> Vec<String> {
         (Some(rows), Some(series)) if rows != series => format!("{rows}; daily costs: {series}"),
         (Some(error), _) | (_, Some(error)) => error.to_owned(),
     };
-    vec![format!("Usage unavailable: {text}")]
+    vec![format!("Couldn't read usage: {text}")]
 }
 
 #[cfg(test)]
@@ -555,10 +514,10 @@ mod tests {
         };
         let both = build(assistants.iter().collect());
         let agents_only = build(vec![]);
-        let rows = both.sessions.as_deref().unwrap_or_default();
+        let rows = &both.sessions;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].session, "A-1");
-        assert_eq!(rows[0].tokens, tokens(30));
+        assert_eq!(rows[0].tokens, Some(tokens(30)));
         assert_eq!(
             rows[0].cost,
             session_cost(Some(0.0), Some(CostBasis::Reported)).1
