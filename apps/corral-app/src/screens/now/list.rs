@@ -1,9 +1,9 @@
 //! "Who acts next": the grouped list of the model (`work::GroupedList`) in each form's rows, built
 //! from the feed's board. On desktop and phone a task row is the kit's; the collapsed queued line
 //! is this list's own, laid in the same columns. The list measures its width once, and its own
-//! head and rows give way as the kit's task rows do (`rows::task_columns`). It is the
-//! destination's keyboard list (`AppState::list_keys`), and a row the keyboard selects scrolls
-//! into its panel's view.
+//! head and rows give way as the kit's task rows do (`rows::task_columns`). The Closed section
+//! follows the groups on every form. It is the destination's keyboard list
+//! (`AppState::list_keys`), and a row the keyboard selects scrolls into its panel's view.
 
 use nsh_core::prelude::*;
 
@@ -18,13 +18,14 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::cells;
+use super::closed::closed_section;
 use super::parts::{press, press_id, pressable, quiet};
 use super::verbs::{row_record, with_menu};
 
 const RING: f32 = 2.0;
 
 /// The desktop and terminal list: corrald's word on a board it cannot keep current, with its
-/// Retry, the stale board's `as of` chip, the column head, the groups.
+/// Retry, the stale board's `as of` chip, the column head, the groups, then the Closed section.
 pub(super) fn list(app: AppState) -> AnyElement {
     let form = app.form;
     let source = computed(move || {
@@ -65,6 +66,7 @@ pub(super) fn list(app: AppState) -> AnyElement {
             })
         }))
         .child(rows(app, source, columns))
+        .child(closed_section(app))
         .into_element()
 }
 
@@ -250,7 +252,7 @@ fn groups(
 
 /// `row`, scrolled into its panel's view whenever it becomes the selected one, so a selection
 /// the keyboard moves never leaves the viewport. A row already in view stays where it is.
-fn revealing(selected: Memo<bool>, row: AnyElement) -> AnyElement {
+pub(super) fn revealing(selected: Memo<bool>, row: AnyElement) -> AnyElement {
     let handle = element_ref();
     effect(move || {
         if selected.get() {

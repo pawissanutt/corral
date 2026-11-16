@@ -11,7 +11,9 @@ pub use keys::{key_legend_live, list_keys_live};
 use corral_protocol::rows::PlanState;
 
 use crate::model::daemon::Feed;
-use crate::model::{DataState, Destination, Form, Live, Rich, SettingsSection, ThemeChoice, span};
+use crate::model::{
+    DataState, Destination, Form, Id, Live, Rich, SettingsSection, ThemeChoice, span,
+};
 
 /// Search field placeholder shared by every palette form.
 pub const PALETTE_PLACEHOLDER: &str = "Go to, open a task id, answer, accept…";
@@ -244,6 +246,18 @@ pub fn commands(
         None,
         Action::ResetNow,
     ));
+    if live {
+        // One row for both directions: the palette reads no Now state, and either word finds it.
+        rows.push(row(
+            "closed:toggle",
+            "Now",
+            "Show or hide closed tasks",
+            None,
+            Action::Work(crate::model::work::Press::Closed(
+                crate::model::work::ClosedPress::Toggle,
+            )),
+        ));
+    }
     if preview {
         rows.extend(demo_rows().into_iter().filter(|row| match form {
             Form::Phone => matches!(row.action, Action::Share | Action::Lock),
@@ -391,8 +405,28 @@ fn live_verbs(rows: &mut Vec<Command>, feed: &Feed, record: Option<&crate::model
     );
 }
 
-/// Records the daemon served: board tasks, plans, agent sessions, assistant threads.
+/// The task a query names whole (`T-123`, either case of the prefix), spelled as corrald does.
+fn task_id(query: &str) -> Option<Id> {
+    let number = query
+        .strip_prefix("T-")
+        .or_else(|| query.strip_prefix("t-"))?;
+    (!number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| Id::from(format!("T-{number}")))
+}
+
+/// Records the daemon served: board tasks, plans, agent sessions, assistant threads. A whole
+/// task id the board does not list (a closed task) opens by id, from its detail.
 fn live_open(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
+    if let Some(id) = task_id(query).filter(|id| feed.board.task(id).is_none()) {
+        let live = Live::Task(id);
+        rows.push(row(
+            format!("live:{}:{}", live.kind().slug(), live.id()),
+            "Open",
+            format!("Open {}", live.id()),
+            None,
+            Action::OpenLive(live),
+        ));
+    }
     push_live(
         rows,
         "Open",

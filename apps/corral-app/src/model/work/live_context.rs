@@ -144,10 +144,14 @@ pub fn daemon_live(state: &State, feed: &Feed, selected: &Selection, form: Form)
         };
     }
     let task = daemon_selection(state, selected, feed, form);
-    let tail = task.and_then(|task| task_tail(feed, task));
-    let selected_note = match (task, &tail) {
+    let off_board = super::off_board(selected, feed);
+    let tail = match task {
+        Some(task) => task_tail(feed, task),
+        None => off_board.and_then(|id| super::live_task::tail_for(feed, id, None)),
+    };
+    let selected_note = match (task.map(|task| &task.id).or(off_board), &tail) {
         (None, _) => Some(Notice::Quiet(super::EMPTY_BOARD)),
-        (Some(task), None) => detail_note(feed, &task.id).map(|note| Notice::Said(note.text)),
+        (Some(id), None) => detail_note(feed, id).map(|note| Notice::Said(note.text)),
         (Some(_), Some(tail)) if tail.lines.is_empty() => Some(Notice::Quiet(NO_TAIL)),
         (Some(_), Some(_)) => None,
     };
@@ -187,10 +191,13 @@ pub struct LivePlan {
 
 /// The plan of a task: the board's, or the detail's plan position.
 pub fn task_plan(feed: &Feed, task: &crate::model::daemon::Task) -> Option<Id> {
-    task.plan
-        .as_deref()
+    plan_of(feed, &task.id, task.plan.as_deref())
+}
+
+fn plan_of(feed: &Feed, id: &str, board: Option<&str>) -> Option<Id> {
+    board
         .or_else(|| {
-            loaded_task(feed, &task.id)?
+            loaded_task(feed, id)?
                 .plan_context
                 .as_ref()
                 .map(|position| position.plan.as_str())
@@ -200,7 +207,13 @@ pub fn task_plan(feed: &Feed, task: &crate::model::daemon::Task) -> Option<Id> {
 
 /// The plan graph hand-off for a task, on the dock or the phone's task page.
 pub fn task_plan_context(feed: &Feed, task: &crate::model::daemon::Task) -> LivePlan {
-    let plan = task_plan(feed, task);
+    plan_context(feed, &task.id, task.plan.as_deref())
+}
+
+/// The plan graph hand-off for a task by id; `board` is its board row's plan, absent for a
+/// task off the board.
+pub fn plan_context(feed: &Feed, id: &Id, board: Option<&str>) -> LivePlan {
+    let plan = plan_of(feed, id, board);
     LivePlan {
         heading: plan
             .as_ref()
@@ -209,7 +222,7 @@ pub fn task_plan_context(feed: &Feed, task: &crate::model::daemon::Task) -> Live
             .is_none()
             .then_some(Notice::Quiet("Not part of a plan.")),
         action: plan.clone().map(|plan| Press::Open(Live::Plan(plan))),
-        member: Some(task.id.clone()),
+        member: Some(id.clone()),
         plan,
     }
 }
@@ -226,8 +239,17 @@ pub fn daemon_plan(state: &State, feed: &Feed, selected: &Selection, form: Form)
     if let Some(notice) = board_notice(feed) {
         return quiet(notice);
     }
-    match daemon_selection(state, selected, feed, form) {
-        Some(task) => task_plan_context(feed, task),
+    if let Some(task) = daemon_selection(state, selected, feed, form) {
+        return task_plan_context(feed, task);
+    }
+    // A task off the board has a plan only once its detail says so.
+    match super::off_board(selected, feed) {
+        Some(id) if loaded_task(feed, id).is_some() => plan_context(feed, id, None),
+        Some(id) => quiet(
+            detail_note(feed, id).map_or(Notice::Quiet(super::INSPECTOR_LOADING), |note| {
+                Notice::Said(note.text)
+            }),
+        ),
         None => quiet(Notice::Quiet(super::EMPTY_BOARD)),
     }
 }

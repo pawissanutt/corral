@@ -58,6 +58,7 @@ that has the same names fails with E0659. Import app items by name (`use crate::
 | [INFERENCE] NSH has no blur or animated gradient. The decide bar uses the plain page colour and the loading skeleton pulses opacity instead. | read, `src/ui/kit/page.rs` `bar`, `src/ui/kit/notice.rs` `skeleton`; absence of APIs not established |
 | Canvas drawings can take stroke and fill colours from the canvas view. Usage sets adaptive colours on its canvas layers so the chart follows light and dark appearance. | read, `src/screens/usage/chart.rs` `layers` |
 | **Web input names:** NSH 0.5.0 puts `aria-label` on the wrapper, not the inner input. The placeholder names the web input; settings fields therefore repeat their label as placeholder and put hints beneath. Pairing codes are not numeric, so a number-pad keyboard is unsuitable. | source finding DW-16 in SettingsFirstRun handoff; `src/screens/settings/parts.rs`, `enrolment.rs` |
+| **Web disclosure state:** the web renderer drops `aria-expanded` when `expanded` is `false` (`updateAria` in `nsh.js` removes any attribute whose value is `false`), so a folded disclosure such as `btn-closed` or `btn-waits` exposes no collapsed state; only the open state reaches screen readers. Still present in 0.5.1. | read, `nsh-platform-web-0.5.0/web/nsh.js` and 0.5.1 `updateAria` |
 
 ## Storage
 

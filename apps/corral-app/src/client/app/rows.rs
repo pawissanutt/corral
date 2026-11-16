@@ -292,6 +292,7 @@ impl AppState {
 fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> bool {
     match target {
         DetailRef::Filings { .. } => matches!(topic, Topic::Board | Topic::Assistant),
+        DetailRef::Closed { .. } => topic == Topic::Board,
         DetailRef::Question { key } => topic == Topic::Inbox && changed.contains(key),
         DetailRef::Attachment { entry, .. } => topic == Topic::Thread && changed.contains(entry),
         DetailRef::Task { id } => topic == Topic::Board && changed.contains(id),
@@ -315,6 +316,7 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
 pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
     match target {
         DetailRef::Filings { .. } => matches!(topic, Topic::Board | Topic::Assistant),
+        DetailRef::Closed { .. } => topic == Topic::Board,
         DetailRef::Question { .. } => topic == Topic::Inbox,
         DetailRef::Attachment { .. } => topic == Topic::Thread,
         DetailRef::Task { .. }

@@ -70,6 +70,7 @@ pub(super) fn content(app: AppState, inspector: &Inspector) -> AnyElement {
             &[(0.3, 10.0), (0.6, 18.0), (1.0, 60.0)],
         ),
         Inspector::Quiet(words) => return quiet(app, *words),
+        Inspector::Unavailable(reason) => note(app, reason),
         Inspector::LiveStory(story) => live_story(app, story),
         Inspector::LiveEvidence(evidence) => live_evidence(app, evidence),
         Inspector::LiveSession(session) => live_session(app, session),

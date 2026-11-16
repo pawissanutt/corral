@@ -28,11 +28,11 @@ NSH Storage keys: `corral.destination`, `corral.settings`, `corral.theme`, `corr
 - `src/client/{durable,durable_native,durable_web}.rs`: acknowledged revision-checked storage; `outbox.rs`: per-namespace drafts/messages/commands/tombstones; `offline.rs`: credential-checked stale bootstrap snapshots.
 - `src/client/app/{local,devices,scopes,terminal}.rs`: local persistence lifecycle, authority/device operations, scoped subscriptions and terminal windows; `src/client/web/{identity,lifecycle,keystore,push,push_runtime}.rs`: browser identity, Forget, storage and opt-in Web Push/service-worker bridge.
 - `src/model/hue.rs`, `text.rs`, `effect.rs`: semantic colours, rich text, environment and reducer effects.
-- `src/model/nav.rs`, `health.rs`, `commands.rs`: navigation, health and palette commands; `src/model/preview.rs`, `preview/`: pure synthetic feed/sample simulation through the live models, never a client executor.
+- `src/model/nav.rs`, `health.rs`, `commands.rs`: navigation, health and palette commands; `src/model/preview.rs`, `preview/`: pure synthetic feed/sample simulation through the live models, never a client executor; `preview/closed.rs` supplies sample closed tasks.
 - `src/model/disconnected.rs`: honest empty shell snapshot, without sample facts.
 - `src/model/commands/keys.rs`: focused-list bindings and shared terminal legends; `src/model/settings/{qr,authority,connect,push}.rs`: pairing QR, authority editor, first-run instructions and push preferences.
 - `src/model/board/`: shared board snapshot, tasks, changes and review hunk.
-- `src/model/inbox/`, `work/`, `plans/`, `timeline/`, `agents/`, `usage/`, `review/`, `settings/`, `assistant/`: domain reducers and view logic; `work` covers Now and Changes. Sample preview uses the same live reducers/routes/screens, not separate per-screen fixture behavior.
+- `src/model/inbox/`, `work/`, `plans/`, `timeline/`, `agents/`, `usage/`, `review/`, `settings/`, `assistant/`: domain reducers and view logic; `work` covers Now and Changes. `work/closed.rs` models the paged done/dropped list via `DetailRef::Closed`, gated on `closed.v1`; `work/task_page.rs` builds the read-only off-board task view from `TaskDetail` and the phone task page model. Sample preview uses the same live reducers/routes/screens, not separate per-screen fixture behavior.
 - `src/state.rs`, `src/state/`: `AppState`, signals, effect dispatch and persistence; `keys.rs` routes focused-list/global keys, `confirmation.rs` owns preview/proof lifecycle, `devices.rs` dispatches device effects and `sidebar.rs` owns sidebar preference.
 - `src/state/source.rs`: selects daemon/preview feed and assistant interaction state without copying retained caches; `src/state/preview.rs`: handles local sample effects and the real clock. Delayed draft/subscription cleanup stays bound to its original source.
 - `src/ui/kit/`: shared pieces every screen is built from, including marks, rows, page scaffolds, notices, tables and overlays.
@@ -43,7 +43,7 @@ NSH Storage keys: `corral.destination`, `corral.settings`, `corral.theme`, `corr
 - `src/shell/`: desktop, phone and terminal shells; `src/shell/phone/nav.rs` owns phone page stacks/navigation.
 - `src/shell/lock.rs`: explicitly labelled phone lock-screen push illustration.
 - `src/os_integration.rs`, `src/os_integration/tray.rs`: native desktop global Ask shortcut, close-to-hide and tray recovery/Quit; not installed for browser/terminal/headless targets.
-- `src/screens/`: destination renderers and page routing; look in the destination's module and its subdirectory for its screen.
+- `src/screens/`: destination renderers and page routing; look in the destination's module and its subdirectory for its screen. `src/screens/now/closed.rs` renders the Closed section at the bottom of the Now list.
 - `tests/shell.rs`: headless shell tests.
 - `theme.json`, `nsh.json`: theme and app configuration.
 

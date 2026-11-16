@@ -83,6 +83,8 @@ pub enum Inspector {
     LiveSession(super::LiveSession),
     /// One quiet line in place of content: no board, nothing on it, an unenrolled device.
     Quiet(&'static str),
+    /// A task opened by id whose detail corrald cannot serve: its reason, in its hue.
+    Unavailable(super::DetailNote),
 }
 
 /// One delivery stage of the selected task.

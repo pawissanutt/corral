@@ -422,22 +422,25 @@ pub(super) fn graph(app: AppState) -> AnyElement {
     dynamic(move || context.with(|context| live_graph(app, context)))
 }
 
-/// A live plan hand-off: the heading and the Plans screen's live graph, or why there is none.
+/// A live plan hand-off: the heading and the plan's body, or why there is none.
 pub(super) fn live_graph(app: AppState, context: &work::LivePlan) -> AnyElement {
+    graph_frame(app)
+        .children(
+            context
+                .plan
+                .is_some()
+                .then(|| graph_heading(app, context.heading.clone(), context.action.clone())),
+        )
+        .child(plan_body(app, context))
+        .into_element()
+}
+
+/// What a plan section holds under its heading: the Plans screen's live graph, or why there is
+/// none.
+pub(super) fn plan_body(app: AppState, context: &work::LivePlan) -> AnyElement {
     match &context.plan {
-        Some(plan) => graph_frame(app)
-            .child(graph_heading(
-                app,
-                context.heading.clone(),
-                context.action.clone(),
-            ))
-            .child(crate::screens::plans::live_graph(
-                app,
-                plan.clone(),
-                context.member.clone(),
-            ))
-            .into_element(),
-        None => graph_frame(app)
+        Some(plan) => crate::screens::plans::live_graph(app, plan.clone(), context.member.clone()),
+        None => view()
             .children(
                 context
                     .empty

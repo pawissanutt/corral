@@ -5,7 +5,7 @@ Corral is a Rust app built on [NSH 0.5.1](https://nsh.dev), with desktop, web, p
 Destinations:
 
 - **Inbox**: items needing attention and a question handover with evidence and answers.
-- **Now**: the workspace, task details and plan graph. **Changes** shows changes since the last visit.
+- **Now**: the workspace, task details and plan graph. **Changes** shows changes since the last visit. Closed tasks appear in the collapsed Closed section at the bottom of Now.
 - **Plans**: plan lists, details, review and graphs.
 - **Agents**: the agent wall, sessions, quick thread and filed chat records.
 - **Review**: a candidate replay, verdicts, evidence and diff.
@@ -139,6 +139,8 @@ verdict, question escalate/cancel/deadline, route/focus/move, mode off and permi
 where the selected record, capability and authority allow them. Unavailable actions retain
 their refusal reason. Review uses Unified below about 1100 pt of content width; wider
 views offer side-by-side.
+
+Opening a task that is not on the board from Changes, plans, dependencies or the palette's `Open T-<n>` shows it read-only from its detail.
 
 The Upcoming bucket includes ideas, backlog and ready tasks, and Worker runs in progress
 includes any run that has not ended, which may be idle or waiting; each row retains its
