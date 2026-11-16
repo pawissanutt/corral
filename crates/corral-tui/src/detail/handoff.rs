@@ -8,6 +8,14 @@ use super::DetailView;
 use crate::{Action, Toast, Tone, View};
 
 impl DetailView {
+    /// The handoff controls a transferred task offers, as keys and clickable hints.
+    pub(super) fn handoff_hints(&self) -> Vec<(&'static str, &'static str)> {
+        match self.handoff.is_some() && status::transfer_fenced(&self.task) {
+            true => vec![("W", "work on this here"), ("K", "save for later")],
+            false => Vec::new(),
+        }
+    }
+
     pub(super) fn transfer_key(&mut self, ctx: &Ctx, take_back: bool) -> Action {
         if !status::transfer_fenced(&self.task) {
             return Action::Toast(Toast::new(

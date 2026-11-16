@@ -436,10 +436,8 @@ fn blocked_card_menu_opens_recover_by_keyboard_and_mouse_and_cancel_has_no_effec
     );
 }
 
-#[test]
-fn handed_off_card_take_over_by_key_and_by_menu_click_reach_the_same_handler() {
-    // Given a transfer-fenced card (no readable transfer journal: the service must refuse).
-    let fx = seeded();
+/// T-002 as a transfer-fenced card whose transfer journal is unreadable: services refuse.
+fn fence(fx: &crate::board::tests::Fixture) {
     fx.ctx
         .store
         .update("T-002", |task| {
@@ -461,6 +459,13 @@ fn handed_off_card_take_over_by_key_and_by_menu_click_reach_the_same_handler() {
             Ok(())
         })
         .unwrap();
+}
+
+#[test]
+fn handed_off_card_take_over_by_key_and_by_menu_click_reach_the_same_handler() {
+    // Given a transfer-fenced card (no readable transfer journal: the service must refuse).
+    let fx = seeded();
+    fence(&fx);
     let (mut app, _) = board_app(&fx);
     app.handle_key(code(KeyCode::Char('r')));
     let text = render(&mut app);
@@ -483,4 +488,30 @@ fn handed_off_card_take_over_by_key_and_by_menu_click_reach_the_same_handler() {
     let task = fx.ctx.store.get("T-002").unwrap();
     assert_eq!(task.status, Status::Backlog);
     assert!(task.runs.is_empty());
+}
+
+#[test]
+fn task_detail_overview_offers_work_here_by_key_and_by_click_through_the_same_handler() {
+    // Given the default overview of a handed-off task.
+    let fx = seeded();
+    fence(&fx);
+    let (mut app, _) = board_app(&fx);
+    app.handle_key(code(KeyCode::Char('r')));
+    let text = render(&mut app);
+    click(&mut app, find_any(&text, "T-002"));
+    app.handle_key(code(KeyCode::Enter));
+    let text = render(&mut app);
+    assert!(text.contains("[W] work on this here"), "{text}");
+    // When the owner presses W, then clicks the visible control.
+    app.toasts.clear();
+    app.handle_key(crate::board::tests::key('W'));
+    let by_key: Vec<_> = app.toasts.iter().map(|(t, _)| t.title.clone()).collect();
+    app.toasts.clear();
+    let text = render(&mut app);
+    click(&mut app, find_any(&text, "[W] work on this here"));
+    let by_click: Vec<_> = app.toasts.iter().map(|(t, _)| t.title.clone()).collect();
+    // Then both reach the take-back service, which refuses this card without effects.
+    assert_eq!(by_key, vec!["T-002: nothing changed".to_string()]);
+    assert_eq!(by_click, by_key);
+    assert!(fx.ctx.store.get("T-002").unwrap().runs.is_empty());
 }

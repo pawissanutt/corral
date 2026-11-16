@@ -75,6 +75,7 @@ impl DetailView {
         } else if self.task.status.holds_slot() {
             hints.push(("a", "open agent"));
         }
+        hints.extend(self.handoff_hints());
         if self.plan.enabled {
             hints.push(("8", "plan / children"));
         }
@@ -348,6 +349,9 @@ impl DetailView {
                 self.set_tab(0, ctx);
                 self.show_live = true;
                 Action::None
+            }
+            KeyCode::Char(c @ ('W' | 'K')) if self.handoff.is_some() => {
+                self.transfer_key(ctx, c == 'W')
             }
             KeyCode::Char('*') => crate::shelf::toggle(ctx, &self.task.id),
             KeyCode::Char(c @ '1'..='8') => {
