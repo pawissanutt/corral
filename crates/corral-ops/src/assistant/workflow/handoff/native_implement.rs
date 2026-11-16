@@ -1,6 +1,8 @@
 //! Native "Implement here": the owner's current-revision choice that ends planning and opens
 //! scratch work for a ready plan's declared scope. Bound like every native choice; the plan
 //! artifact alone never grants execution, and this is never shipping consent.
+use std::path::Path;
+
 use anyhow::{Context as _, Result, ensure};
 use corral_core::assistant::AssistantContainer;
 use corral_core::assistant::AssistantScratch;
@@ -183,7 +185,40 @@ pub fn granted(store: &Store, session: &str, container: &AssistantContainer) -> 
         .any(|s| s.slug == g.scratch && s.project == g.scope.project && s.base == g.base))
 }
 
-/// Finish an interrupted Implement here: create exactly the granted scratch, or return it.
+/// Unfinished Implement here choices by session: written before the grant settles, removed once
+/// its scratch is recorded. Sync's handoff recovery rolls each one forward.
+const WORK: &str = "assistant-implement-work";
+
+fn lock(ctx: &Ctx, session: &str) -> Result<Option<corral_core::StoreLock>> {
+    ctx.store.try_lock(&format!("implement-{session}"))
+}
+
+/// Sync's roll-forward of interrupted Implement here choices. It only completes a grant the
+/// owner's consumed choice already recorded, never a new choice; a refusal stays indexed with
+/// its named cause, and execution stays fenced until the granted scratch is recorded.
+pub(crate) fn recover(ctx: &Ctx) -> Result<()> {
+    for row in ctx.store.record_rows(WORK)? {
+        let session = row.doc["session"]
+            .as_str()
+            .context("decode unfinished implement index")?
+            .to_owned();
+        let Some(_held) = lock(ctx, &session)? else {
+            continue; // The choosing call is still running and reconciles itself.
+        };
+        match reconcile(ctx, &session) {
+            Ok(_) => ctx.store.delete_record(WORK, &row.key)?,
+            Err(error) => ctx.store.save_record(
+                WORK,
+                &row.key,
+                &json!({"session": session, "error": format!("{error:#}")}),
+            )?,
+        }
+    }
+    Ok(())
+}
+
+/// Finish an interrupted Implement here: create exactly the granted scratch, adopt the one an
+/// interruption left between Git creation and registration, or return the recorded one.
 pub fn reconcile(ctx: &Ctx, session: &str) -> Result<Option<AssistantScratch>> {
     let c = ctx.store.get_assistant_container(session)?;
     let Some(index) = &c.workflow else {
@@ -203,15 +238,83 @@ pub fn reconcile(ctx: &Ctx, session: &str) -> Result<Option<AssistantScratch>> {
         );
         return Ok(Some(s.clone()));
     }
-    let scratch = crate::assistant::scratch::create(
-        ctx,
-        session,
-        &g.scope.project,
-        Some(&g.scratch),
-        Some(&g.base),
-    )
-    .context("implement_recovery: the granted scratch could not be created")?;
-    Ok(Some(scratch))
+    let repo = ctx
+        .store
+        .project_path(&g.scope.project)?
+        .canonicalize()
+        .context("implement_recovery: resolve the granted project")?;
+    let branch = format!("corral/{session}/{}", g.scratch);
+    let path = repo
+        .join(".worktrees")
+        .join(format!("{session}-{}", g.scratch));
+    let tip = corral_git::rev_sha(&repo, &format!("refs/heads/{branch}^{{commit}}")).ok();
+    if tip.is_none() && !path.exists() {
+        return crate::assistant::scratch::create(
+            ctx,
+            session,
+            &g.scope.project,
+            Some(&g.scratch),
+            Some(&g.base),
+        )
+        .map(Some)
+        .context("implement_recovery: the granted scratch could not be created");
+    }
+    adopt(ctx, session, &g, &repo, &branch, &path, tip).map(Some)
+}
+
+/// Adopt only what this grant's own creation could have left: its branch still at the granted
+/// base and, when present, a clean registered worktree of that branch. Anything else refuses.
+fn adopt(
+    ctx: &Ctx,
+    session: &str,
+    g: &Grant,
+    repo: &Path,
+    branch: &str,
+    path: &Path,
+    tip: Option<String>,
+) -> Result<AssistantScratch> {
+    const FOREIGN: &str = "implement_recovery_unsupported: the granted scratch identity holds work this grant did not create";
+    ensure!(tip.as_deref() == Some(g.base.as_str()), FOREIGN);
+    if path.exists() {
+        let at = |args: &[&str]| -> Result<String> {
+            Ok(String::from_utf8(super::git::git(path, args, None)?)?
+                .trim()
+                .to_owned())
+        };
+        let top = at(&["rev-parse", "--show-toplevel"]).context(FOREIGN)?;
+        ensure!(
+            Path::new(&top).canonicalize()? == path.canonicalize()?
+                && at(&["symbolic-ref", "HEAD"])? == format!("refs/heads/{branch}")
+                && at(&["rev-parse", "HEAD^{commit}"])? == g.base
+                && corral_git::is_clean(path)?,
+            FOREIGN
+        );
+    } else {
+        corral_git::worktree_add(repo, path, branch, &g.base)
+            .context("implement_recovery: check out the granted branch")?;
+    }
+    let scratch = AssistantScratch {
+        slug: g.scratch.clone(),
+        project: g.scope.project.clone(),
+        path: path.to_path_buf(),
+        branch: branch.to_owned(),
+        base: g.base.clone(),
+        created: corral_core::clock::now(),
+        kind: crate::assistant::scratch::SPIKE.into(),
+        bytes: None,
+        measured_at: None,
+    };
+    ctx.store.update_assistant(session, |s| {
+        ensure!(
+            s.ended.is_none() && !s.scratch.iter().any(|x| x.slug == scratch.slug),
+            "scratch_exists: {session} ended or recorded {} concurrently",
+            scratch.slug
+        );
+        s.scratch.push(scratch.clone());
+        s.linked_scratch = Some(scratch.slug.clone());
+        Ok(())
+    })?;
+    Ok(scratch)
 }
 
 pub(super) fn run(
@@ -258,6 +361,11 @@ pub(super) fn run(
         evidence: evidence.clone(),
         ships: false,
     };
+    // Indexed before the grant settles: an interruption after this leaves sync a roll-forward.
+    let _held = lock(ctx, session)?.context("handoff_busy: implementation recovery is running")?;
+    let key = crate::verification::digest(session.as_bytes());
+    ctx.store
+        .save_record(WORK, &key, &json!({"session": session}))?;
     ctx.store.settle_assistant_container(session, |c, _| {
         let index = c.workflow.as_mut().context("workflow missing")?;
         let now = &index.current;
@@ -278,6 +386,7 @@ pub(super) fn run(
     })?;
     crate::agent::failpoint("native_implement_granted");
     let scratch = reconcile(ctx, session)?.context("implement: grant missing after settle")?;
+    ctx.store.delete_record(WORK, &key)?;
     Ok(
         json!({"action":"implement","plan_revision":revision,"scratch":scratch.slug,
         "path":scratch.path,"ships":false}),
