@@ -103,3 +103,29 @@ fn desktop_and_terminal_never_offer_phone_only_demos() {
         );
     }
 }
+
+#[test]
+fn palette_offers_a_task_id_the_board_does_not_list() {
+    let feed = Feed::default();
+    let opens = Action::OpenLive(Live::Task("T-404".into()));
+    for data in [DataState::Daemon, DataState::Fixture] {
+        let rows = filtered(" t-404 ", true, data, &feed, None, Form::Desktop);
+        let row = rows.iter().find(|row| row.action == opens).unwrap();
+        assert_eq!(
+            run(&row.id, " t-404 ", true, data, &feed, None, Form::Desktop),
+            Some(opens.clone())
+        );
+    }
+    assert!(
+        !filtered(
+            "t-404",
+            true,
+            DataState::Disconnected,
+            &feed,
+            None,
+            Form::Desktop
+        )
+        .iter()
+        .any(|row| row.action == opens)
+    );
+}

@@ -27,10 +27,13 @@ pub fn list_keys_live(destination: Destination, top: Option<&Live>) -> &'static 
     }
 }
 
-/// The daemon-mode terminal key hints of the destination or the live page on top.
+/// The daemon-mode terminal key hints of the destination or the live page on top. `off_board`:
+/// Now's selection is a task the board does not list (a closed one), whose detail already shows
+/// beside the list, so Enter has no session to offer.
 pub fn key_legend_live(
     destination: Destination,
     top: Option<&Live>,
+    off_board: bool,
 ) -> Vec<(&'static str, &'static str)> {
     match (destination, top) {
         (_, Some(Live::Question(_))) => {
@@ -39,12 +42,14 @@ pub fn key_legend_live(
         (_, Some(Live::Session(_))) => vec![("`", "transcript/terminal")],
         (_, Some(Live::Thread(_))) => Vec::new(),
         (Destination::Inbox, _) => vec![("j k", "move"), ("Enter", "open"), ("1-9", "choose")],
-        (Destination::Now, _) => vec![
-            ("j k", "move"),
-            ("Enter", "session"),
-            ("]", "next tab"),
-            (".", "actions"),
-        ],
+        (Destination::Now, _) => {
+            let mut legend = vec![("j k", "move")];
+            if !off_board {
+                legend.push(("Enter", "session"));
+            }
+            legend.extend([("]", "next tab"), (".", "actions")]);
+            legend
+        }
         (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member")],
         (Destination::Review, _) => vec![("s", "split"), (".", "actions")],
         _ => Vec::new(),

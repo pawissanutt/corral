@@ -20,13 +20,19 @@ impl AppState {
             request => request,
         };
         let key = detail_key(&request.target);
-        let mut retired = if matches!(&request.target, DetailRef::Filings { .. }) {
+        // One page of a paged list is shown at a time, so a new page retires its siblings.
+        let paged = matches!(
+            &request.target,
+            DetailRef::Filings { .. } | DetailRef::Closed { .. }
+        );
+        let mut retired = if paged {
+            let list = std::mem::discriminant(&request.target);
             feed.with_untracked(|feed| {
                 feed.details
                     .iter()
                     .filter(|(cached_key, cache)| {
                         cached_key.as_str() != key.as_str()
-                            && matches!(&cache.target, DetailRef::Filings { .. })
+                            && std::mem::discriminant(&cache.target) == list
                     })
                     .map(|(cached_key, _)| (cached_key.clone(), None))
                     .collect::<Vec<_>>()
@@ -48,7 +54,8 @@ impl AppState {
                     operation.value = None;
                     operation.error = Some(ClientError {
                         code: "superseded".into(),
-                        message: "A different filings page replaced this detail request.".into(),
+                        message: "A different page of this list replaced this detail request."
+                            .into(),
                     });
                 }
             }
@@ -474,3 +481,7 @@ mod artifact_tests {
 #[cfg(test)]
 #[path = "filings_tests.rs"]
 mod filings_tests;
+
+#[cfg(test)]
+#[path = "closed_tests.rs"]
+mod closed_tests;

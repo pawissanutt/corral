@@ -475,8 +475,14 @@ fn fits() -> impl Iterator<Item = Fit> {
 /// The key line for what is in view. While Ask's field has the keys, letters typed go into it:
 /// the line gives the composer's own keys and Go to, the one chord that still reaches past it.
 /// Otherwise the keys of the page in view (when the model gives it any and the destination is
-/// served), the destinations, then Ask and Go to.
-fn line(destination: Destination, live: Option<Live>, served: bool, typing: bool) -> Line {
+/// served), the destinations, then Ask and Go to. `off_board`: Now's selection is off the board.
+fn line(
+    destination: Destination,
+    live: Option<Live>,
+    served: bool,
+    typing: bool,
+    off_board: bool,
+) -> Line {
     let go_to = Entry::new(PALETTE_CHORD, PALETTE_LABEL, KEEP_GO_TO);
     if typing {
         return Line {
@@ -490,7 +496,7 @@ fn line(destination: Destination, live: Option<Live>, served: bool, typing: bool
         };
     }
     let legend = if served {
-        key_legend_live(destination, live.as_ref())
+        key_legend_live(destination, live.as_ref(), off_board)
     } else {
         Vec::new()
     };
@@ -567,14 +573,25 @@ impl Line {
 /// When the grid is short of room the names give way one by one, then whole groups, as
 /// [`fits`] orders them; a key's cap is never cut.
 fn key_line(app: AppState, typing: Memo<bool>) -> AnyElement {
-    let route = computed(move || (app.destination(), app.live_page(), app.data.get()));
+    let route = computed(move || {
+        let selection = app.selection();
+        let off_board = app
+            .feed
+            .with(|feed| crate::model::work::off_board(&selection, feed).is_some());
+        (
+            app.destination(),
+            app.live_page(),
+            app.data.get(),
+            off_board,
+        )
+    });
     dynamic(move || {
         let room = term::columns();
-        let (destination, live, data) = route.get();
+        let (destination, live, data, off_board) = route.get();
         // An unserved destination answers no keys of its own; disconnected, none is served.
         let served = data != DataState::Disconnected
             && app.available(destination) == crate::model::Availability::Ready;
-        let line = line(destination, live, served, typing.get());
+        let line = line(destination, live, served, typing.get(), off_board);
         let (fit, count) = line.layout(room);
         let mut row = view()
             .h(term::rows(1.0))
@@ -626,7 +643,7 @@ mod tests {
         ];
         for (destination, live) in views {
             for typing in [false, true] {
-                let line = line(destination, live.clone(), true, typing);
+                let line = line(destination, live.clone(), true, typing, false);
                 for room in 20..=240 {
                     let (fit, count) = line.layout(room);
                     assert!(

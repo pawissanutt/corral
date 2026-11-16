@@ -11,7 +11,7 @@ use crate::model::daemon::{self, Feed, Link};
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
 use crate::model::text::{Rich, span};
-use crate::model::{Live, Selection};
+use crate::model::{Id, Live, Selection};
 
 use super::{
     Button, ButtonKind, Dependency, EMPTY_BOARD, GroupKey, Inspector, NO_BOARD, NowTab, Press,
@@ -177,6 +177,9 @@ pub fn daemon_inspector(state: &State, feed: &Feed, selected: &Selection, form: 
             Link::Connecting | Link::Up => Inspector::Loading,
         };
     }
+    if let Some(id) = super::off_board(selected, feed) {
+        return super::off_board_inspector(state, feed, id, state.now_tab, form);
+    }
     let Some(task) = daemon_selection(state, selected, feed, form) else {
         return Inspector::Quiet(EMPTY_BOARD);
     };
@@ -193,14 +196,14 @@ pub fn task_inspector(
 ) -> Inspector {
     match tab {
         NowTab::Story => Inspector::LiveStory(Box::new(live_story(state, feed, task, form))),
-        NowTab::Evidence => Inspector::LiveEvidence(live_evidence(feed, task)),
+        NowTab::Evidence => Inspector::LiveEvidence(live_evidence(feed, &task.id)),
         NowTab::Session => Inspector::LiveSession(live_session(feed, task)),
     }
 }
 
-/// A stage's detail: its candidate sha and how long ago it reached its state.
-fn stage(task: &daemon::Task, index: usize, now: u64) -> Stage {
-    let step = &task.rail[index];
+/// A stage's detail: its candidate sha and how long ago it reached its state; an active stage
+/// takes the hue of whoever acts on it.
+pub(super) fn stage(step: &daemon::Step, index: usize, now: u64, actor: Actor) -> Stage {
     let active = step.mark == Mark::Active;
     let detail = [
         step.sha7.clone().unwrap_or_default(),
@@ -216,7 +219,7 @@ fn stage(task: &daemon::Task, index: usize, now: u64) -> Stage {
         word: stage_word(step.mark),
         detail,
         active,
-        hue: match (active, index, daemon_actor(task.group)) {
+        hue: match (active, index, actor) {
             (false, _, _) => Hue::Neutral,
             (true, 0, Actor::You) => Hue::You,
             (true, 0, _) => Hue::Worker,
@@ -260,8 +263,13 @@ fn attention_kinds(keys: &[String]) -> String {
     kinds.join(", ")
 }
 
-/// The task's run line: `R2 · pi-sol · gpt-5 high · started 18:40`.
-fn run_text(detail: Option<&TaskDetail>, task: &daemon::Task, feed: &Feed) -> Rich {
+/// The task's run line: `R2 · pi-sol · gpt-5 high · started 18:40`, or, before the detail
+/// arrives, the board row's agent.
+pub(super) fn run_text(
+    detail: Option<&TaskDetail>,
+    agent: Option<&daemon::Agent>,
+    feed: &Feed,
+) -> Rich {
     if let Some(run) = detail.and_then(|detail| detail.run.as_ref()) {
         let mut text = vec![span(run.id.clone()).mono()];
         let model = [run.model.as_deref(), run.effort.as_deref()]
@@ -283,7 +291,7 @@ fn run_text(detail: Option<&TaskDetail>, task: &daemon::Task, feed: &Feed) -> Ri
         }
         return text;
     }
-    let Some(agent) = &task.agent else {
+    let Some(agent) = agent else {
         return Vec::new();
     };
     let mut text = vec![span(agent.role.clone())];
@@ -297,7 +305,7 @@ fn run_text(detail: Option<&TaskDetail>, task: &daemon::Task, feed: &Feed) -> Ri
 }
 
 /// The status of this device's last command on the task.
-fn sent_line(state: &State, feed: &Feed, task: &str) -> Option<SentLine> {
+pub(super) fn sent_line(state: &State, feed: &Feed, task: &str) -> Option<SentLine> {
     let sent = state.sent_for(task)?;
     let status = act::status(feed, &sent.key);
     let (words, hue) = match &status {
@@ -327,17 +335,12 @@ fn sent_line(state: &State, feed: &Feed, task: &str) -> Option<SentLine> {
 }
 
 /// Shared table controls, including the same disabled reasons shown in row menus.
-fn verbs(
-    state: &State,
-    feed: &Feed,
-    task: &daemon::Task,
-    _detail: Option<&TaskDetail>,
-) -> Vec<Button> {
+pub(super) fn verbs(state: &State, feed: &Feed, id: &Id) -> Vec<Button> {
     let waiting = state
-        .sent_for(&task.id)
+        .sent_for(id)
         .and_then(|sent| act::status(feed, &sent.key))
         .is_some_and(|status| status.uncertain());
-    super::record_verbs(feed, &Record::Task(task.id.clone()))
+    super::record_verbs(feed, &Record::Task(id.clone()))
         .into_iter()
         .map(|verb| {
             let mut button = Button::new(verb.label, verb.press, ButtonKind::Ghost)
@@ -355,8 +358,32 @@ fn verbs(
 /// Open session, Ask about this and Review candidate, in the mockup's order and wording; the
 /// phone's shorter labels.
 pub fn task_buttons(feed: &Feed, task: &daemon::Task, phone: bool) -> Vec<Button> {
+    // Only a recorded candidate can be reviewed: the run's head in the task detail, or a
+    // candidate sha on the board's gate or review stage. A stage's mark alone says nothing.
+    let candidate = loaded_task(feed, &task.id)
+        .and_then(|detail| detail.run.as_ref()?.head.as_ref())
+        .is_some()
+        || task.rail[1..=2].iter().any(|step| step.sha7.is_some());
+    record_buttons(
+        &task.id,
+        task_session(feed, task),
+        Some(task.rev),
+        candidate,
+        phone,
+    )
+}
+
+/// Open session (when the task has one), Ask about this at the revision shown, and Review
+/// candidate (when one is recorded).
+pub(super) fn record_buttons(
+    id: &Id,
+    session: Option<Id>,
+    rev: Option<u64>,
+    candidate: bool,
+    phone: bool,
+) -> Vec<Button> {
     let mut buttons = Vec::new();
-    if let Some(session) = task_session(feed, task) {
+    if let Some(session) = session {
         buttons.push(Button::new(
             if phone { "Session" } else { "Open session" },
             Press::Open(Live::Session(session)),
@@ -370,21 +397,15 @@ pub fn task_buttons(feed: &Feed, task: &daemon::Task, phone: bool) -> Vec<Button
     buttons.push(Button::new(
         "Ask about this",
         Press::Ask {
-            about: Live::Task(task.id.clone()),
-            rev: Some(task.rev),
+            about: Live::Task(id.clone()),
+            rev,
         },
         ButtonKind::Ghost,
     ));
-    // Only a recorded candidate can be reviewed: the run's head in the task detail, or a
-    // candidate sha on the board's gate or review stage. A stage's mark alone says nothing.
-    let candidate = loaded_task(feed, &task.id)
-        .and_then(|detail| detail.run.as_ref()?.head.as_ref())
-        .is_some()
-        || task.rail[1..=2].iter().any(|step| step.sha7.is_some());
     if candidate {
         buttons.push(Button::new(
             if phone { "Review" } else { "Review candidate" },
-            Press::Open(Live::Review(task.id.clone())),
+            Press::Open(Live::Review(id.clone())),
             if phone {
                 ButtonKind::Ghost
             } else {
@@ -393,6 +414,94 @@ pub fn task_buttons(feed: &Feed, task: &daemon::Task, phone: bool) -> Vec<Button
         ));
     }
     buttons
+}
+
+/// The detail's facts in display order: what the task needs (each id opening its task), its
+/// hold and park, its plan position and its canonical status.
+pub(super) fn detail_facts(
+    detail: &TaskDetail,
+    feed: &Feed,
+    facts: &mut Vec<(&'static str, Fact)>,
+) {
+    let needs: Vec<Dependency> = detail
+        .dependencies
+        .iter()
+        .map(|dependency| Dependency {
+            id: dependency.id.clone(),
+            mark: if dependency.satisfied {
+                Mark::Done
+            } else {
+                Mark::Next
+            },
+            show_mark: true,
+            action: Press::Open(Live::Task(dependency.id.as_str().into())),
+        })
+        .collect();
+    facts.push((
+        "Needs",
+        if needs.is_empty() {
+            Fact::Text(vec![span("nothing")])
+        } else {
+            Fact::Tasks(needs)
+        },
+    ));
+    if let Some(hold) = &detail.hold {
+        facts.push(("Held", Fact::Text(hold_text(hold, feed))));
+    }
+    if let Some(park) = &detail.park {
+        facts.push(("Parked", Fact::Text(hold_text(park, feed))));
+    }
+    if let Some(position) = &detail.plan_context {
+        facts.push((
+            "Plan",
+            Fact::Text(vec![
+                span(position.plan.clone()).mono(),
+                span(format!(
+                    " · layer {} of {} · {}/{} landed",
+                    position.layer, position.layers, position.landed, position.total
+                )),
+            ]),
+        ));
+    }
+    facts.push(("Status", Fact::Text(vec![span(detail.status.clone())])));
+}
+
+/// `· plan T-885`, opening the plan.
+pub(super) fn plan_link(plan: &str) -> (String, Press) {
+    (
+        format!("· plan {plan}"),
+        Press::Open(Live::Plan(plan.into())),
+    )
+}
+
+/// The changed-since-visit chip, when the changes feed holds an unseen event for the task.
+pub(super) fn changed_chip(feed: &Feed, id: &str) -> Option<String> {
+    let since = feed
+        .seen
+        .as_ref()
+        .and_then(|seen| seen.at.as_deref())
+        .map(|at| stamp(at, feed));
+    super::unseen_tasks(feed).contains(id).then(|| match since {
+        Some(since) if !since.is_empty() => format!("▲ changed since {since}"),
+        _ => "▲ changed since your last visit".to_owned(),
+    })
+}
+
+/// The detail's recorded progress, and its own words if corrald gives any.
+pub(super) fn progress(detail: Option<&TaskDetail>) -> (Option<Progress>, Option<String>) {
+    let Some(progress) = detail.and_then(|detail| detail.progress.as_ref()) else {
+        return (None, None);
+    };
+    let (done, total) = (progress.completed as usize, progress.total as usize);
+    (
+        Some(Progress {
+            label: "Progress",
+            done,
+            total,
+            figure: format!("{done}/{total}"),
+        }),
+        progress.text.clone(),
+    )
 }
 
 /// Build the selected daemon task's story.
@@ -429,47 +538,7 @@ pub fn live_story(state: &State, feed: &Feed, task: &daemon::Task, form: Form) -
     }
 
     if let Some(detail) = detail {
-        let needs: Vec<Dependency> = detail
-            .dependencies
-            .iter()
-            .map(|dependency| Dependency {
-                id: dependency.id.clone(),
-                mark: if dependency.satisfied {
-                    Mark::Done
-                } else {
-                    Mark::Next
-                },
-                show_mark: true,
-                action: Press::Open(Live::Task(dependency.id.as_str().into())),
-            })
-            .collect();
-        facts.push((
-            "Needs",
-            if needs.is_empty() {
-                Fact::Text(vec![span("nothing")])
-            } else {
-                Fact::Tasks(needs)
-            },
-        ));
-        if let Some(hold) = &detail.hold {
-            facts.push(("Held", Fact::Text(hold_text(hold, feed))));
-        }
-        if let Some(park) = &detail.park {
-            facts.push(("Parked", Fact::Text(hold_text(park, feed))));
-        }
-        if let Some(position) = &detail.plan_context {
-            facts.push((
-                "Plan",
-                Fact::Text(vec![
-                    span(position.plan.clone()).mono(),
-                    span(format!(
-                        " · layer {} of {} · {}/{} landed",
-                        position.layer, position.layers, position.landed, position.total
-                    )),
-                ]),
-            ));
-        }
-        facts.push(("Status", Fact::Text(vec![span(detail.status.clone())])));
+        detail_facts(detail, feed, &mut facts);
     } else if let Some(reason) = &task.held_reason {
         facts.push((
             "Held",
@@ -477,7 +546,7 @@ pub fn live_story(state: &State, feed: &Feed, task: &daemon::Task, form: Form) -
         ));
     }
 
-    let run = run_text(detail, task, feed);
+    let run = run_text(detail, task.agent.as_ref(), feed);
     if !run.is_empty() {
         facts.push((
             if detail.and_then(|detail| detail.run.as_ref()).is_some() {
@@ -512,35 +581,21 @@ pub fn live_story(state: &State, feed: &Feed, task: &daemon::Task, form: Form) -
             .and_then(|detail| detail.plan_context.as_ref())
             .map(|position| position.plan.clone())
     });
-    let since = feed
-        .seen
-        .as_ref()
-        .and_then(|seen| seen.at.as_deref())
-        .map(|at| stamp(at, feed));
-    let changed = super::unseen_tasks(feed)
-        .contains(task.id.as_str())
-        .then(|| match since {
-            Some(since) if !since.is_empty() => format!("▲ changed since {since}"),
-            _ => "▲ changed since your last visit".to_owned(),
-        });
     let mut actions = if form == Form::Phone {
         Vec::new()
     } else {
         task_buttons(feed, task, false)
     };
-    actions.extend(verbs(state, feed, task, detail));
+    actions.extend(verbs(state, feed, &task.id));
+    let (progress, progress_note) = progress(detail);
+    let actor = daemon_actor(task.group);
     LiveStory {
         id: task.id.to_string(),
         title: detail.map_or_else(|| task.title.clone(), |detail| detail.title.clone()),
         who: standing.who,
         who_hue: standing.hue,
-        plan: plan.map(|plan| {
-            (
-                format!("· plan {plan}"),
-                Press::Open(Live::Plan(plan.as_str().into())),
-            )
-        }),
-        changed,
+        plan: plan.as_deref().map(plan_link),
+        changed: changed_chip(feed, &task.id),
         summary: task
             .goal
             .clone()
@@ -549,21 +604,9 @@ pub fn live_story(state: &State, feed: &Feed, task: &daemon::Task, form: Form) -
         body: detail
             .map(|detail| detail.body_excerpt.clone())
             .filter(|body| !body.trim().is_empty()),
-        stages: std::array::from_fn(|index| stage(task, index, feed.now)),
-        progress: detail
-            .and_then(|detail| detail.progress.as_ref())
-            .map(|progress| {
-                let (done, total) = (progress.completed as usize, progress.total as usize);
-                Progress {
-                    label: "Progress",
-                    done,
-                    total,
-                    figure: format!("{done}/{total}"),
-                }
-            }),
-        progress_note: detail
-            .and_then(|detail| detail.progress.as_ref())
-            .and_then(|progress| progress.text.clone()),
+        stages: std::array::from_fn(|index| stage(&task.rail[index], index, feed.now, actor)),
+        progress,
+        progress_note,
         facts,
         actions,
         note: detail_note(feed, &task.id),
@@ -571,9 +614,9 @@ pub fn live_story(state: &State, feed: &Feed, task: &daemon::Task, form: Form) -
     }
 }
 
-/// Build the selected daemon task's artifact list.
-pub fn live_evidence(feed: &Feed, task: &daemon::Task) -> LiveEvidence {
-    let detail = loaded_task(feed, &task.id);
+/// Build a task's artifact list from its detail.
+pub fn live_evidence(feed: &Feed, id: &str) -> LiveEvidence {
+    let detail = loaded_task(feed, id);
     let rows: Vec<(String, String)> = detail
         .map(|detail| {
             detail
@@ -590,34 +633,39 @@ pub fn live_evidence(feed: &Feed, task: &daemon::Task) -> LiveEvidence {
         })
         .unwrap_or_default();
     LiveEvidence {
-        title: format!("Evidence for {}", task.id),
+        title: format!("Evidence for {id}"),
         empty: (detail.is_some() && rows.is_empty()).then_some(NO_ARTIFACTS),
         rows,
-        note: detail_note(feed, &task.id),
+        note: detail_note(feed, id),
     }
 }
 
 /// The task's log tail as corrald captured it: read-only, labelled with its capture time.
 pub fn task_tail(feed: &Feed, task: &daemon::Task) -> Option<Tail> {
-    let detail = loaded_task(feed, &task.id)?;
-    let agent = feed
+    tail_for(feed, &task.id, task.agent.as_ref())
+}
+
+/// A task's captured log tail by id; `agent` is its board row's, absent off the board.
+pub(super) fn tail_for(feed: &Feed, id: &Id, agent: Option<&daemon::Agent>) -> Option<Tail> {
+    let detail = loaded_task(feed, id)?;
+    let row = feed
         .agents
         .values()
-        .find(|row| row.task.as_deref() == Some(task.id.as_str()));
+        .find(|row| row.task.as_deref() == Some(id.as_str()));
     let as_of = feed
-        .detail(&task_ref(&task.id))
+        .detail(&task_ref(id))
         .and_then(|cache| cache.pages.last())
         .map(|page| ago(&page.as_of, feed))
         .filter(|age| !age.is_empty());
-    let pane = agent
+    let pane = row
         .and_then(|row| row.pane.clone())
         .unwrap_or_else(|| "−".into());
-    let runtime = agent
+    let runtime = row
         .and_then(|row| row.runtime.clone())
-        .or_else(|| task.agent.as_ref()?.runtime.clone())
+        .or_else(|| agent?.runtime.clone())
         .unwrap_or_default();
     Some(Tail {
-        id: task.id.to_string(),
+        id: id.to_string(),
         pane,
         runtime,
         label: as_of.map_or_else(|| "log tail".into(), |age| format!("log tail · {age} ago")),
@@ -625,20 +673,26 @@ pub fn task_tail(feed: &Feed, task: &daemon::Task) -> Option<Tail> {
         illustrative: None,
         lines: detail.log_tail.iter().map(TailLine::new).collect(),
         cursor: false,
-        action: task_session(feed, task).map(|session| Press::Open(Live::Session(session))),
+        action: super::served::session_for(feed, id, agent)
+            .map(|session| Press::Open(Live::Session(session))),
     })
 }
 
 /// Build the selected daemon task's Session tab.
 pub fn live_session(feed: &Feed, task: &daemon::Task) -> LiveSession {
-    let detail = loaded_task(feed, &task.id);
-    let tail = task_tail(feed, task).filter(|tail| !tail.lines.is_empty());
-    let run = run_text(detail, task, feed);
+    session_tab(feed, &task.id, task.agent.as_ref())
+}
+
+/// A task's Session tab by id; `agent` is its board row's, absent off the board.
+pub(super) fn session_tab(feed: &Feed, id: &Id, agent: Option<&daemon::Agent>) -> LiveSession {
+    let detail = loaded_task(feed, id);
+    let tail = tail_for(feed, id, agent).filter(|tail| !tail.lines.is_empty());
+    let run = run_text(detail, agent, feed);
     LiveSession {
         description: "Structured transcript in its session; below, the run's latest log lines as corrald captured them.",
-        open: task_session(feed, task).map(|session| {
+        open: super::served::session_for(feed, id, agent).map(|session| {
             Button::new(
-                format!("Open {} session", task.id),
+                format!("Open {id} session"),
                 Press::Open(Live::Session(session)),
                 ButtonKind::Primary,
             )
@@ -652,6 +706,6 @@ pub fn live_session(feed: &Feed, task: &daemon::Task) -> LiveSession {
         },
         run,
         tail,
-        note: detail_note(feed, &task.id),
+        note: detail_note(feed, id),
     }
 }

@@ -1,6 +1,7 @@
 //! Explicit, ephemeral preview: canonical daemon DTOs and local command simulation only.
 //! The caller supplies the clock; this module never contacts a daemon or persists anything.
 mod actions;
+mod closed;
 mod content;
 mod control;
 mod effects;
@@ -102,6 +103,7 @@ pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::T
         SETTINGS_V1,
         ASSISTANT_V1,
         FILINGS_V1,
+        CLOSED_V1,
         ACT_V1,
         DEVICE_V1,
         corral_protocol::BOARD_V1,
@@ -126,6 +128,7 @@ pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::T
     sessions::populate(&mut feed);
     content::refresh_plans(&mut feed);
     history::populate(&mut feed);
+    closed::populate(&mut feed);
     feed.synced = Some(feed.clock.clone());
     feed
 }
@@ -162,7 +165,10 @@ pub(super) fn put(feed: &mut Feed, target: DetailRef, body: DetailBody) {
 
 /// Full local records serve all ordinary details; range-dependent projections are built on demand.
 pub fn detail(feed: &mut Feed, target: &DetailRef) -> Result<(), String> {
-    if history::detail(feed, target)? || feed.detail(target).is_some() {
+    if history::detail(feed, target)?
+        || closed::page(feed, target)?
+        || feed.detail(target).is_some()
+    {
         return Ok(());
     }
     Err(format!(

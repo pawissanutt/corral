@@ -90,6 +90,11 @@ impl AppState {
             *count = count.saturating_sub(1);
             if *count == 0 {
                 self.retained.pins.remove(&key);
+                // Only Now's open Closed section reads a Closed page, and a kept one is
+                // refetched on every board change; folding, paging or leaving drops it.
+                if matches!(target, DetailRef::Closed { .. }) {
+                    self.evict_detail(feed, &key);
+                }
             }
         }
         self.trim_retained(feed);

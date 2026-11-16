@@ -7,6 +7,7 @@
 //! `low_tab` and `ctx_tab`, and the user's tab choices go back to it.
 
 mod cells;
+mod closed;
 mod context;
 pub(crate) mod feed;
 mod inspector;
@@ -315,8 +316,24 @@ fn dock(
             let shown = computed(move || {
                 layout.with(|arranged| layout::displayed(arranged).contains(&key.as_str()))
             });
-            frame(app, panel.id.as_str(), shown)
+            let panel = frame(app, panel.id.as_str(), shown);
+            if form == Form::Terminal {
+                pinned(panel)
+            } else {
+                panel
+            }
         })
+        .into_element()
+}
+
+/// A terminal's dock panel, out of the flow of the one-cell grid the dock lays it in and pinned to
+/// the cell's edges. A terminal grid's row is its content's height, never less: in flow, a panel
+/// would grow with its content past the group, which clips it, and its scroll view would have
+/// nothing to scroll (no scrollbar, no wheel, no row revealed below the fold). Pinned, it has the
+/// group's height, as the panes give it theirs.
+fn pinned(panel: AnyElement) -> AnyElement {
+    view()
+        .child(view().absolute().inset(px(0.0)).flex_col().child(panel))
         .into_element()
 }
 
@@ -501,9 +518,9 @@ fn frame(app: AppState, key: &str, shown: Memo<bool>) -> AnyElement {
             },
         );
     }
-    // The dock lays the panel out as a one-cell grid, which would give a second child (the
-    // terminal's line) a row of its own and leave the scroll view its content's height: the
-    // panel is the cell's one child, a column filling it.
+    // On desktop the dock lays the panel out as a one-cell grid, which would give a second child
+    // (a line) a row of its own and leave the scroll view its content's height: the panel is the
+    // cell's one child, a column filling it. A terminal's dock holds it in `pinned` instead.
     view()
         .flex_1()
         .min_h(px(0.0))

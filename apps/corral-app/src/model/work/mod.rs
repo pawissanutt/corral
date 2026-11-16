@@ -1,3 +1,4 @@
+mod closed;
 mod data;
 mod inspector;
 mod list;
@@ -7,6 +8,7 @@ mod live_task;
 mod served;
 mod served_facts;
 mod standing;
+mod task_page;
 mod verb_build;
 mod verb_forms;
 mod verbs;
@@ -22,6 +24,7 @@ mod verb_tests;
 pub const INSPECTOR_LOADING: &str = "Loading task…";
 pub const VERB_MENU_LABEL: &str = "Actions";
 
+pub use closed::*;
 pub use data::*;
 pub use inspector::*;
 pub use list::*;
@@ -31,6 +34,7 @@ pub use live_task::*;
 pub use served::*;
 pub use served_facts::*;
 pub use standing::*;
+pub use task_page::*;
 pub use views::*;
 pub use when::*;
 
@@ -193,6 +197,8 @@ pub struct State {
     pub composer: Option<VerbComposer>,
     /// The selected record's keyboard-opened action menu.
     pub menu: Option<Record>,
+    /// Now's Closed section, read from corrald on request.
+    pub closed: ClosedState,
 }
 
 impl Default for State {
@@ -210,6 +216,7 @@ impl Default for State {
             sent: Vec::new(),
             composer: None,
             menu: None,
+            closed: ClosedState::default(),
         }
     }
 }
@@ -264,6 +271,8 @@ pub enum Press {
     Older(u64),
     /// Reopen the failed board subscription.
     RetryBoard,
+    /// The Closed section's toggle and pager.
+    Closed(ClosedPress),
 }
 
 impl From<Action> for Press {
@@ -379,6 +388,7 @@ impl State {
                 after: None,
                 limit: CHANGES_PER_PAGE,
             })],
+            Press::Closed(press) => self.closed.press(press),
         }
     }
 
