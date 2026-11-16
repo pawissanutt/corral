@@ -692,6 +692,9 @@ pub fn repair_renew(
     renewal.approved_by = invoker.decision_author(&ctx.store)?.into();
     let _actor = ctx.store.attribute(invoker.resolve(&ctx.store)?.0);
     let id = Store::normalize_id(id)?;
+    if invoker.pm_marker() || renewal.approved_by == "pm" {
+        require_pm_renewal_bound(ctx, &id, &renewal, &policy)?;
+    }
     let head = ctx.store.head(&id)?;
     ensure!(
         head.launch.is_none(),
@@ -712,6 +715,47 @@ pub fn repair_renew(
             .get(&run.agent)
             .and_then(|p| p.escalate_to.clone()),
     )
+}
+
+/// A PM renewal is bounded: the starter allowance at most, and once per task. A larger or
+/// repeated allowance is the owner's.
+fn require_pm_renewal_bound(
+    ctx: &Ctx,
+    id: &str,
+    renewal: &corral_core::RepairRenewal,
+    policy: &corral_core::RepairPolicy,
+) -> Result<()> {
+    let corral_core::RepairPolicy::V1 {
+        current_profile_limit,
+        stronger_profile_limit,
+        overall_limit,
+        ..
+    } = policy;
+    let corral_core::RepairPolicy::V1 {
+        current_profile_limit: current,
+        stronger_profile_limit: stronger,
+        overall_limit: overall,
+        ..
+    } = corral_core::RepairPolicy::approved_starter_policy();
+    ensure!(
+        *current_profile_limit <= current
+            && *stronger_profile_limit <= stronger
+            && *overall_limit <= overall,
+        "pm_renewal_refused: a PM renewal cannot exceed the starter allowance ({current}+{stronger} rounds, {overall} overall); a larger one needs the owner"
+    );
+    let renewed = ctx.store.repair_ledger(id)?.is_some_and(|ledger| {
+        ledger.allowances.iter().any(|allowance| {
+            allowance
+                .renewal
+                .as_ref()
+                .is_some_and(|prior| prior.approved_by == "pm" && prior.id != renewal.id)
+        })
+    });
+    ensure!(
+        !renewed,
+        "pm_renewal_refused: the PM already renewed this task once; another allowance needs the owner"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

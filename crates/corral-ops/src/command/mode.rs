@@ -25,7 +25,7 @@ impl Verb for ModeCommand {
                 cx.ctx.store.config = cx.ctx.store.pause_operating_policy(true)?;
             }
             Self::Resume {} => {
-                crate::require_operator(&cx.ctx.store, cx.invoker)?;
+                crate::require_automation_owner(&cx.ctx.store, cx.invoker)?;
                 cx.ctx.store.config = cx.ctx.store.pause_operating_policy(false)?;
             }
             Self::Turbo { off } => {

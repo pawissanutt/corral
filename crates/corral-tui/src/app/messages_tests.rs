@@ -266,6 +266,8 @@ fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_b
         let (after, cards) = capture(&mut app, width, height);
         // A failed projection deliberately replaces these two cards' attention rows
         // with the unavailable header. Every other cell in every card must survive.
+        // Both stops are the PM's to resolve (an ordinary stop and a dispatch hold), so
+        // the removed rows must name the PM as unblocker, not the owner.
         for id in ["T-005", "T-006"] {
             let task = fx.ctx.store.get(id).unwrap();
             let condition =
@@ -276,8 +278,8 @@ fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_b
             let removed = rows.drain(2..2 + count).collect::<Vec<_>>();
             let row = removed.last().unwrap();
             assert!(
-                row.contains("By Owner"),
-                "expected attention row for {id}: {row}"
+                row.contains("By PM") && !row.contains("By Owner"),
+                "expected attention row naming the PM for {id}: {row}"
             );
         }
         assert_eq!(cards, expected_cards, "unaffected cards remain intact");

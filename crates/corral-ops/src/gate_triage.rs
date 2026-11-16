@@ -329,11 +329,14 @@ pub fn diagnose(
             report.class != FailureClass::Candidate,
             "candidate defects require repair, not diagnostic reruns"
         );
+        // Revising an attribution is the operator's; re-arming the single diagnostic retry
+        // is the owner's alone, or a label could buy reruns until one is green.
+        let rearm = owner && !invoker.pm_marker();
         ensure!(
-            state.diagnostic_attempt.is_none() || owner,
-            "single diagnostic retry already consumed; another bounded investigation requires explicit owner or PM evidence"
+            state.diagnostic_attempt.is_none() || rearm,
+            "single diagnostic retry already consumed; another bounded investigation requires explicit owner evidence"
         );
-        if owner {
+        if rearm {
             state.diagnostic_attempt = None;
         }
         if report.class == FailureClass::RedBase {

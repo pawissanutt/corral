@@ -90,7 +90,10 @@ pub struct PmWorkset {
     pub status: OperatingStatus,
     pub progress: ScopedProgress,
     pub actions: Vec<PmExecutable>,
+    /// Owner decisions only: what the owner's board and status count.
     pub decisions: Vec<PmDecision>,
+    /// Cards the PM runs itself through the CLI because the executor is not delegated.
+    pub pm_runs: Vec<PmAction>,
     pub waits: Vec<PmAction>,
     /// Open and claimed PM inbox items, oldest first.
     pub inbox: Vec<PmAction>,
@@ -281,6 +284,7 @@ fn project_snapshot(
     let _decisions_span = corral_core::timing::span("pm.decisions");
     let mut actions = Vec::new();
     let mut decisions = Vec::new();
+    let mut pm_runs = Vec::new();
     let mut waits = Vec::new();
     for mut observation in observations {
         if let crate::PmObservation::AutomaticWait { task, condition } = &mut observation
@@ -299,7 +303,11 @@ fn project_snapshot(
         let Some(task) = task else {
             // Workspace recommendations do not acquire executor delegation.
             // Their owner-only flag was classified by the card, not by missing scope.
-            decisions.extend(crate::pm_decisions::workspace_decision(ctx, action)?);
+            if action.requires_owner {
+                decisions.extend(crate::pm_decisions::workspace_decision(ctx, action)?);
+            } else if action.options.iter().any(|option| option.pm_runs) {
+                pm_runs.push(action);
+            }
             continue;
         };
         if has_operating_scope
@@ -310,12 +318,18 @@ fn project_snapshot(
         }
         project_permissions(&mut action, &policy);
         // The PM runs what the executor refused; the card carries that exact refusal.
+        // A failed lookup is evidence too: it must not abort the whole board read.
         if task.current_run().is_some()
             && action.options.iter().any(|option| option.pm_runs)
             && let Some(head) = heads.iter().find(|head| head.id == task.id)
-            && let Some(reason) = crate::automation_status::automation_blocker_head(ctx, head)?
         {
-            action.evidence.insert(0, reason);
+            match crate::automation_status::automation_blocker_head(ctx, head) {
+                Ok(Some(reason)) => action.evidence.insert(0, reason),
+                Ok(None) => {}
+                Err(error) => action
+                    .evidence
+                    .insert(0, format!("Executor refusal unavailable: {error:#}")),
+            }
         }
         if matches!(
             action.kind,
@@ -395,8 +409,10 @@ fn project_snapshot(
                 action: selected,
             });
         }
-        if action.requires_owner || action.options.iter().any(|option| option.pm_runs) {
+        if action.requires_owner {
             decisions.push(decision(ctx, task, action)?);
+        } else if action.options.iter().any(|option| option.pm_runs) {
+            pm_runs.push(action);
         }
     }
     crate::pm_decisions::merge_pending(ctx, &mut decisions)?;
@@ -500,23 +516,17 @@ fn project_snapshot(
             ));
         }
     }
-    // A card the PM runs itself is listed with the decisions but is not an owner wait.
-    let owner_waits = |task: Option<&str>| {
-        decisions.iter().any(|decision| {
-            decision.action.requires_owner && task.is_none_or(|id| decision.task == id)
-        })
-    };
     let independent_work_continues = !actions.is_empty()
-        || decisions.iter().any(|d| !d.action.requires_owner)
+        || !pm_runs.is_empty()
         || tasks.iter().any(|task| {
             policy.tasks.contains_key(&task.id)
                 && task.holds_dispatch_slot()
-                && !owner_waits(Some(&task.id))
+                && !decisions.iter().any(|d| d.task == task.id)
                 && !assessments
                     .iter()
                     .any(|row| row.task == task.id && row.blocked.is_some())
         });
-    let status = if owner_waits(None) || policy.paused || !progress.missing.is_empty() {
+    let status = if !decisions.is_empty() || policy.paused || !progress.missing.is_empty() {
         OperatingStatus::NeedsYourDecision
     } else if progress.total > 0 && progress.accepted == progress.total && blockers.is_empty() {
         OperatingStatus::Complete
@@ -533,6 +543,7 @@ fn project_snapshot(
     let next = actions
         .first()
         .map(|a| a.action.clone())
+        .or_else(|| pm_runs.first().cloned())
         .or_else(|| {
             decisions
                 .iter()
@@ -573,6 +584,7 @@ fn project_snapshot(
         progress,
         actions,
         decisions,
+        pm_runs,
         waits,
         inbox,
         assessments,

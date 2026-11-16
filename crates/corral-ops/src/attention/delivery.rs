@@ -157,10 +157,9 @@ fn project(
                 description: if delivery.task_reply {
                     "Resend the existing pending reply to the current live worker or planner".into()
                 } else {
-                    "Inspect the named reviewer and resolve delivery through the inbox workflow"
-                        .into()
+                    "Inspect the named reviewer and choose an explicit owner disposition".into()
                 },
-                requires_owner: false,
+                requires_owner: !delivery.task_reply,
                 recipient: Some(key.clone()),
             };
             condition.resume.push(check(
@@ -344,6 +343,8 @@ fn entry_condition(
     let mut machine_checkable = true;
     if entry.retry_claimed_at.is_some() {
         kind = "delivery_retry_pending";
+        responsible = Responsible::Owner;
+        class = WaitClass::OwnerDecision;
         reason = format!(
             "{id} has a retry claim; successor {:?} has no verified publication in the bounded header",
             entry.retry_successor
@@ -352,7 +353,7 @@ fn entry_condition(
         description =
             "Inspect this claimed retry and its successor; do not replay the predecessor".into();
         resume =
-            "The exact successor is committed and published, or the PM resolves the obligation";
+            "The exact successor is committed and published, or the owner disposes the obligation";
     } else if entry.publication_gap {
         kind = "delivery_publication_gap";
         reason = format!("{id} has a committed identity but its message file is missing");
@@ -363,6 +364,8 @@ fn entry_condition(
         resume = "Committed publication is repaired or explicitly disposed";
         machine_checkable = false;
         if let RetryHistory::Barred { first } = &evidence.history {
+            responsible = Responsible::Owner;
+            class = WaitClass::OwnerDecision;
             reason.push_str(&format!("; retry barred by first witness {first:?}"));
         }
     } else if entry.observed.is_some() {
@@ -378,7 +381,8 @@ fn entry_condition(
             "Wait for the matching report; clear capacity or indexing debt before new messages"
                 .into()
         } else {
-            "Use the reviewer watchdog or inspect the recipient; do not replay this message".into()
+            "Use the reviewer watchdog or explicit owner recovery; do not replay this message"
+                .into()
         };
         resume = "Recipient produces the matching report or verdict, or ends";
     } else if let Some(terminal) = entry.terminal {
@@ -392,6 +396,8 @@ fn entry_condition(
         description = "Inspect the exact message and choose an explicit disposition".into();
         resume = "Obligation is safely retried, explicitly disposed, superseded, completed, or recipient ends";
         if let RetryHistory::Barred { first } = &evidence.history {
+            responsible = Responsible::Owner;
+            class = WaitClass::OwnerDecision;
             reason.push_str(&format!("; retry barred by first witness {first:?}"));
         } else if terminal != TerminalState::Failed
             && (matches!(evidence.history, RetryHistory::RejectedOnly { .. })
@@ -402,9 +408,9 @@ fn entry_condition(
                     .as_ref()
                     .is_some_and(|delivery| delivery.attempt.is_some()))
         {
-            reason.push_str(
-                "; the PM inspects attempted Cancelled/Abandoned messages before disposition",
-            );
+            responsible = Responsible::Owner;
+            class = WaitClass::OwnerDecision;
+            reason.push_str("; attempted Cancelled/Abandoned messages require owner disposition");
         } else if incomplete(entry) {
             kind = "delivery_evidence_incomplete";
             reason.push_str("; cumulative delivery evidence is incomplete");
@@ -418,6 +424,9 @@ fn entry_condition(
                     "Fix the known cause, then retry this exact message to its original recipient"
                         .into();
             }
+        } else {
+            responsible = Responsible::Owner;
+            class = WaitClass::OwnerDecision;
         }
     } else if matches!(
         current,
@@ -428,6 +437,8 @@ fn entry_condition(
         } else {
             "delivery_uncertain"
         };
+        responsible = Responsible::Owner;
+        class = WaitClass::OwnerDecision;
         reason = format!(
             "{id} has {current:?} delivery; cumulative history is {:?}",
             evidence.history
@@ -439,25 +450,25 @@ fn entry_condition(
         if open {
             command = Some(format!("corral inbox recover {key} --resend"));
             description = format!(
-                "The PM acknowledges duplicate_possible with --resend, or chooses corral inbox recover {key} --abandon"
+                "Owner acknowledges duplicate_possible with --resend, or chooses corral inbox recover {key} --abandon"
             );
         } else {
             command = Some(inspect.clone());
-            description =
-                "The PM inspects the exact message; no open live envelope permits recover".into();
+            description = "Inspect the exact message and choose owner recovery; no open live envelope permits recover".into();
         }
         machine_checkable = false;
-        resume = "The PM chooses an explicit disposition, message is observed, completed, or recipient ends";
+        resume = "Owner chooses an explicit disposition, message is observed, completed, or recipient ends";
     } else if current == Some(DeliveryState::Held) && !delivery.orphaned {
         kind = "delivery_held";
-        reason = format!("{id} is held by the external transport");
-        // The transport holds it: a wait, which the PM may end by flushing this recipient.
         responsible = Responsible::External;
         class = WaitClass::ExternalOperation;
+        reason = format!("{id} is held by the external transport");
         command = Some(format!("corral inbox flush {key}"));
-        description = "Wait for observation, or the PM may flush this exact recipient".into();
+        description = "Wait for observation, or the owner may flush this exact recipient".into();
     } else if delivery.orphaned {
         kind = "delivery_orphaned";
+        responsible = Responsible::Owner;
+        class = WaitClass::OwnerDecision;
         reason = format!("{id} belongs to a live recipient whose agent is known gone");
         command = Some(inspect.clone());
         description = "Inspect the exact message and existing run recovery choices".into();
@@ -501,7 +512,7 @@ fn entry_condition(
     condition.next_action = NextAction {
         command,
         description,
-        requires_owner: false,
+        requires_owner: responsible == Responsible::Owner || kind == "delivery_held",
         recipient: Some(key.into()),
     };
     condition.resume.push(check(

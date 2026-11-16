@@ -58,7 +58,11 @@ def main() -> None:
     environment["CORRAL_HERDR_SESSION"] = "never-contacted"
     cli(root, environment, "init")
     cli(root, environment, "new", "Held", "-p", "app", "--ready", "--origin", "pm")
-    cli(root, environment, "queue", "remove", "T-001")
+    # An owner park makes the stop an owner decision; a bare dispatch hold is the PM's.
+    cli(
+        root, environment, "attention", "park", "T-001",
+        "--reason", "Owner hold", "--resume-when", "status:T-001=done",
+    )
     state = json.loads(cli(root, environment, "pm", "next", "--json"))
     decision = state["workset"]["decisions"][0]["id"]
     args = [
@@ -113,7 +117,7 @@ def main() -> None:
     print(f"AFTER PRESENT: decision_pending={pending}", flush=True)
     assert not pending, "presentation resurrected an answered decision"
     task = json.loads(cli(root, environment, "show", "T-001", "--json"))
-    assert task["dispatch_hold"] and not task.get("runs")
+    assert task.get("park") and not task.get("runs")
     # The Rust caller reopens canonical records and checks the exact answer.
     print(json.dumps({"decision": decision}), flush=True)
     signal.alarm(0)

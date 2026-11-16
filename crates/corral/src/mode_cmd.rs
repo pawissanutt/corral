@@ -38,7 +38,7 @@ pub(crate) enum ModeCmd {
     },
     /// Stop new automatic actions without interrupting agents or receipt collection
     Pause,
-    /// Owner or PM: resume the existing matching grant; never expands or refreshes its scope
+    /// Resume the existing matching grant; never expands or refreshes its scope
     Resume,
     /// Land, accept plans and repair without owner stops or round limits until `--off`
     Turbo {

@@ -117,7 +117,7 @@ pub(super) fn barrier(observations: &mut [PmObservation]) {
         .collect();
     if !reviews.is_empty() {
         for observation in observations {
-            if let PmObservation::ReadyToLand { task } = observation {
+            if let PmObservation::ReadyToLand { task, .. } = observation {
                 *observation = PmObservation::ReviewInFlight {
                     task: task.clone(),
                     reviews: reviews.clone(),
@@ -140,7 +140,10 @@ pub(super) fn replay(events: &[Event]) -> Result<Vec<PmReplayStep>> {
             });
         }
         for task in &board.ready {
-            observations.push(PmObservation::ReadyToLand { task: task.clone() });
+            observations.push(PmObservation::ReadyToLand {
+                task: task.clone(),
+                owner_accepts: false,
+            });
         }
         barrier(&mut observations);
         let action = pm_select(&observations, "corral");

@@ -80,11 +80,12 @@ fn pm_next_and_brief_are_single_json_readbacks_without_writes() {
 
 #[test]
 fn pm_presentation_and_owner_answer_use_separate_persisted_operations() {
-    // Given a workspace decision without a fabricated worker run.
+    // Given an owner-only workspace decision without a fabricated worker run: the owner
+    // excluded the held task from automation.
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(temp.path().join("app/.git")).unwrap();
     corral(temp.path(), &["init"]);
-    let store = corral_core::Store::open(temp.path()).unwrap();
+    let mut store = corral_core::Store::open(temp.path()).unwrap();
     let task = store
         .create("Held", Some("app"), corral_core::Status::Ready, "Finite")
         .unwrap();
@@ -94,6 +95,13 @@ fn pm_presentation_and_owner_answer_use_separate_persisted_operations() {
             Ok(())
         })
         .unwrap();
+    store
+        .config
+        .automation
+        .scope
+        .exclusions
+        .insert(task.id.clone());
+    store.save_config().unwrap();
     let next: serde_json::Value =
         serde_json::from_slice(&corral(temp.path(), &["pm", "next", "--json"]).stdout).unwrap();
     let decision = next["workset"]["decisions"][0]["id"].as_str().unwrap();
@@ -123,8 +131,7 @@ fn pm_presentation_and_owner_answer_use_separate_persisted_operations() {
     }
     let pending: serde_json::Value =
         serde_json::from_slice(&corral(temp.path(), &["pm", "brief", "--json"]).stdout).unwrap();
-    // A dispatch hold is the PM's to clear, so it is not an owner wait.
-    assert_eq!(pending["operating"]["status"], "working");
+    assert_eq!(pending["operating"]["status"], "needs_your_decision");
     assert_eq!(
         pending["operating"]["decisions"][0]["presentation"]["confirmed"],
         true

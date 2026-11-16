@@ -78,6 +78,9 @@ pub fn run(start: &Path, cmd: ConfigCmd, entry: &crate::entry::Entry) -> Result<
                     "use `corral mode` for operating policy changes; activation requires an exact finite preview and explicit confirmation"
                 );
             }
+            if corral_ops::owner_only_config_key(&parts) {
+                corral_ops::refuse_pm(entry.invoker(), &key)?;
+            }
             let layer = if user {
                 ConfigLayer::User
             } else {

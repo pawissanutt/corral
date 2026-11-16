@@ -257,7 +257,8 @@ fn uncertain_presentation_survives_reopen_without_becoming_an_answer() {
 
 #[test]
 fn owner_resolution_is_explicit_and_never_clears_the_underlying_hold() {
-    // Given a held task with no worker run to host a portable obligation.
+    // Given a held task the owner excluded from automation, with no worker run to host a
+    // portable obligation.
     let mut fx = Fx::new();
     let task = fx.task("owner disposition", Status::Ready);
     fx.ctx
@@ -268,9 +269,17 @@ fn owner_resolution_is_explicit_and_never_clears_the_underlying_hold() {
         })
         .unwrap();
     fx.grant(&[&task.id]);
-    let workset = corral_ops::pm_workset(&fx.ctx).unwrap();
+    let mut store = corral_core::Store::open(fx.ctx.store.root()).unwrap();
+    store
+        .config
+        .automation
+        .scope
+        .exclusions
+        .insert(task.id.clone());
+    store.save_config().unwrap();
+    let workset = corral_ops::pm_workset(&fx.fresh()).unwrap();
     let question = workset.decisions.first().unwrap();
-    corral_ops::pm_present(&fx.ctx, &question.id, "owner-pane:held", true, now()).unwrap();
+    corral_ops::pm_present(&fx.fresh(), &question.id, "owner-pane:held", true, now()).unwrap();
     // When the owner gives an actual disposition, rather than a transport acknowledgement.
     corral_ops::pm_resolve(&fx.fresh(), &question.id, "Keep this task held").unwrap();
     // Then the answer persists without pretending that a hold was lifted or work accepted.
@@ -513,9 +522,7 @@ fn promotion_options_authorize_each_target_in_mixed_auto_and_suggest_projects() 
     // Then only the exact scoped task has a bound automatic command.
     assert!(!first.requires_owner);
     assert!(first.command.contains(" pm act "));
-    assert!(!other.requires_owner);
-    assert!(other.pm_runs, "unscoped command: {}", other.command);
-    assert!(!other.command.contains(" pm act "));
+    assert!(other.requires_owner, "unscoped command: {}", other.command);
     assert!(
         state
             .actions
