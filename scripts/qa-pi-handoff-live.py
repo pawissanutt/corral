@@ -186,10 +186,13 @@ try:
         buntil(lambda: 'skip tour' in btext()[-400:], 'first-run tour', 30)
         os.write(bmaster, b'N'); time.sleep(1); assert held() is True, 'key leaked through the tour modal'
         os.write(bmaster, b'\x1b'); buntil(lambda: 'skip tour' not in btext()[-400:], 'tour closed', 30)
-        def plan_runs(): return len(json.loads(ok([corral, 'show', task['id'], '--json'], cwd=work, env=owner_env)).get('plan_runs') or [])
+        def shown(): return json.loads(ok([corral, 'show', task['id'], '--json'], cwd=work, env=owner_env))
+        def plan_runs(): return len(shown().get('plan_runs') or [])
         assert '▌ '+task['id'] in btext() and plan_runs() == 0, 'the only card is selected; nothing started'
         os.write(bmaster, b'N')
-        buntil(lambda: plan_runs() == 1, 'board N admitted the plan continuation', 60)
+        # Admission is canonical: unheld and out of Backlog; the planner itself starts when capacity allows.
+        buntil(lambda: shown().get('status') != 'backlog' and 'Board continuing' in btext(), 'board N admitted the plan continuation', 60)
+        assert plan_runs() <= 1
         buntil(lambda: 'continuing' in btext(), 'board label after N', 30)
         (out / 'board-continued.ansi').write_bytes(blog)
         assert len(tasks()) == 1 and choices() == 1, (tasks(), choices())
@@ -276,7 +279,7 @@ try:
                           '52x14, screens replayed at 52x14 from the resize: a reply streams and holds; owner scrolls back and types a draft; F2 opens the sheet over it; Down and typed keys inside; the reply completes under the sheet; Escape: sheet closed, draft identical, reading position unchanged above the new reply, next key reaches the composer, no task or choice; Ctrl+End shows the completed reply',
                           'Preview context: read-only package preview (archived vs loaded, native fork no); no task, no choice',
                           'keyboard Save plan for later: one bound choice, one held task with no run, via native Local',
-                          'board PTY (same store): first-run tour modal swallows N (no effect); keyboard N on the held card admits exactly one plan continuation (label Board continuing plan, same task); right-click card menu Work on this here by pointer returns it: assistant planning, task held, no new scratch',
+                          'board PTY (same store): first-run tour modal swallows N (no effect); keyboard N on the held card admits the plan continuation (out of Backlog, label Board continuing plan, at most one planner, same task); right-click card menu Work on this here by pointer returns it: assistant planning, task held, no new scratch',
                           'pointer click on Implement here (current r4) consumes a third choice: executing, one scratch, no task, no ship',
                           '/plan from pane input re-enters planning; app HEAD and task count unchanged',
                           'take-back: scratch identities identical before and after',
