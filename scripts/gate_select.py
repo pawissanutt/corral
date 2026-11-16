@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass, field
@@ -82,14 +83,26 @@ def load_context(path: str) -> dict[str, Any]:
 def plan(path: str) -> None:
     context = load_context(path)
     packages: list[str] = []
+    metadata = json.loads(subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+        check=True, capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout)
+    members = set(metadata["workspace_members"])
+    member_dirs = {Path(pkg["manifest_path"]).parent.resolve() for pkg in metadata["packages"]
+                   if pkg["id"] in members}
+    skipped: set[tuple[str, Path]] = set()
     workspace = False
     for changed in context["changed_paths"]:
         if changed in WORKSPACE_INPUTS or changed.startswith(".cargo/"):
             workspace = True
             continue
         owner = owning_package(changed)
-        if owner is not None and owner[0] not in packages:
-            packages.append(owner[0])
+        if owner is not None:
+            if owner[1].resolve() not in member_dirs:
+                skipped.add(owner)
+            elif owner[0] not in packages:
+                packages.append(owner[0])
+    for name, directory in sorted(skipped):
+        print(f"Skipping separate/non-member Cargo package {name} ({directory}) in quick root checks", file=sys.stderr)
     tests = context["tests"]
     selection = " or ".join(f"({test})" for test in tests) if tests else "all()"
     print(f"packages=({' '.join(map(shlex.quote, sorted(packages)))})")

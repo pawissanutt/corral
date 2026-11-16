@@ -109,6 +109,23 @@ class SelectTests(unittest.TestCase):
         return {key: shlex.split(value)[0] for key, value in values.items()}, \
             result.stderr.splitlines()
 
+    def test_plan_excludes_separate_workspace_packages(self) -> None:
+        (self.repo / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/*"]\nresolver = "2"\n')
+        for name in ("alpha", "tool"):
+            manifest = self.repo / f"crates/{name}/Cargo.toml"
+            manifest.write_text(manifest.read_text() + 'version = "0.1.0"\nedition = "2021"\n')
+        app = self.repo / "apps/corral-app"
+        (app / "src").mkdir(parents=True)
+        (app / "Cargo.toml").write_text('[package]\nname = "nsh-app-corral"\nversion = "0.1.0"\n[workspace]\n')
+        (app / "src/lib.rs").write_text("")
+        context = {"schema_version": 1, "tests": [], "expected_failures": [],
+                   "changed_paths": ["apps/corral-app/src/lib.rs", "crates/alpha/src/a.rs"]}
+        (self.repo / "context.json").write_text(json.dumps(context))
+        result = subprocess.run([sys.executable, str(SELECT), "plan", "context.json"],
+                                cwd=self.repo, capture_output=True, text=True, check=True)
+        self.assertIn("packages=(alpha)", result.stdout)
+        self.assertIn("nsh-app-corral", result.stderr)
+
     def test_a_changed_module_selects_its_unit_tests_and_the_targets_that_name_it(self) -> None:
         # (changed path, run filter, note, selected, remaining)
         cases = [
