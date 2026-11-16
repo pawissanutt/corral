@@ -578,7 +578,14 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             };
             println!(
                 "{}",
-                corral_ops::approve(&open(&root)?, &id, strategy, !keep_worktree, keep_branch)?
+                corral_ops::approve_as(
+                    &open(&root)?,
+                    &id,
+                    strategy,
+                    !keep_worktree,
+                    keep_branch,
+                    entry.invoker(),
+                )?
             );
             Ok(())
         }

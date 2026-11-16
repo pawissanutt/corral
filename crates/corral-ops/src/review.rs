@@ -21,6 +21,8 @@ mod display;
 use display::{short, truncate_lines};
 mod discard;
 pub use discard::{discard, discard_with_decision, discard_with_options};
+mod entry;
+pub use entry::{approve, approve_as, approve_checked};
 mod finish;
 use finish::{finish_task, refuse_open_questions_head, save_finish};
 mod owner;
@@ -408,34 +410,6 @@ pub(crate) fn landing_gate_passed<T: TaskRef + ?Sized>(
 
 pub(crate) use crate::recovery::{require_manual_receipts, review_needed};
 
-/// From Review, or Needs me after an autopilot escalation. FastForward/Rebase: `corral_git::land(project repo,
-/// worktree, branch, base, ...)`; then, when `remove_worktree`, `worktree_remove`. Always releases the task's
-/// owned herdr panes and empty workspaces. KeepBranch: no git changes, optional worktree removal. Status Done, logs
-/// "approved" with the new sha. Deletes the merged branch after successful worktree removal unless `keep_branch`
-/// is set. The review policy can disable worktree removal. Branch deletion failures are warnings only.
-/// Returns a one-line human summary ("rebased corral/T-042 onto main at 1a2b3c4; worktree removed; branch deleted").
-pub fn approve(
-    ctx: &Ctx,
-    id: &str,
-    strategy: ApproveStrategy,
-    remove_worktree: bool,
-    keep_branch: bool,
-) -> Result<String> {
-    approve_owner(ctx, id, strategy, remove_worktree, keep_branch, None)
-}
-
-/// Manual owner approval bound to the candidate shown by an authenticated app.
-pub fn approve_checked(
-    ctx: &Ctx,
-    id: &str,
-    sha: &str,
-    strategy: ApproveStrategy,
-    remove_worktree: bool,
-    keep_branch: bool,
-) -> Result<String> {
-    approve_owner(ctx, id, strategy, remove_worktree, keep_branch, Some(sha))
-}
-
 fn approve_owner(
     ctx: &Ctx,
     id: &str,
@@ -443,6 +417,7 @@ fn approve_owner(
     remove_worktree: bool,
     keep_branch: bool,
     expected_sha: Option<&str>,
+    pm: bool,
 ) -> Result<String> {
     ctx.store.check_runtime()?;
     let _lock = ctx
@@ -465,10 +440,9 @@ fn approve_owner(
         bail!("gate_stale: rebase onto current main and run the gate once on the new base");
     }
     crate::recovery::require_ordinary_approval(ctx, id)?;
-    let pm = pm_landing::caller();
     if pm {
-        // Refuse before a verdict is carried or the base is touched; landing rechecks in-lock.
-        pm_landing::require(ctx, &ctx.store, id, &ctx.store.head(id)?)?;
+        // Refuse an override before anything is carried; landing rechecks the full bar in-lock.
+        pm_landing::preflight(ctx, &ctx.store, &ctx.store.head(id)?)?;
     }
     crate::verdict_carry::prepare_approval(ctx, id, strategy)?;
     approve_landed_inner(

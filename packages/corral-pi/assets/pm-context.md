@@ -111,8 +111,8 @@ recovery); project scope and priority (admitting a project, promoting an Idea,
 `automation confirm`, `mode autopilot`, `mode turbo`, resuming a paused policy, owner parks,
 owner-stopped runs, scope exclusions); landing where `accept = "owner"` is set; overriding a
 failed gate or a reviewer's changes verdict; re-arming a consumed diagnostic retry; recovering
-an uncertain delivery (`inbox recover`); config for acceptance, reviewer, gate or project
-admission; `owner_only` and `permission` questions; waiving independent review.
+an uncertain delivery (`inbox recover`); config under `review`, `projects`, reviewer routing
+or project admission; `owner_only` and `permission` questions; waiving independent review.
 
 Checks stay: never approve a failed configured gate, never act as the independent reviewer,
 never invent a receipt or evidence, and read the receipt of an uncertain effect before
