@@ -19,6 +19,7 @@ import yaml
 
 REPO = Path(__file__).resolve().parent.parent
 OLD_HASH = 'aba46287e1c97797341abf3e8ed6add6643a7b1ea54366e842edcfa53e572fff'
+PINNED_V1 = Path.home()/'.local/share/corral-bench/t253-2026-10-22/corral-0.3.0'
 # Execute the actual helper from the embedded Python, not a duplicate test parser.
 source = (REPO/'scripts/storage-bench.sh').read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
 module = ast.parse(source)
@@ -87,7 +88,10 @@ class Frontmatter(unittest.TestCase):
 
 class MigrationExport(unittest.TestCase):
     def test_migrated_retry_vectors_equal_pinned_v1_list(self):
-        before = ARGS.before.resolve(strict=True)
+        # The pinned v1 binary lives outside the repository (docs/guide/storage-cutover.md).
+        if ARGS.before is None and not PINNED_V1.exists():
+            self.skipTest(f'pinned corral-0.3.0 is absent at {PINNED_V1}; pass --before to supply it')
+        before = (ARGS.before or PINNED_V1).resolve(strict=True)
         after = ARGS.after.resolve(strict=True)
         self.assertEqual(hashlib.sha256(before.read_bytes()).hexdigest(), OLD_HASH)
         with tempfile.TemporaryDirectory(prefix='corral-export-regression-') as tmp:
@@ -142,8 +146,7 @@ class MigrationExport(unittest.TestCase):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--before', type=Path,
-                        default=Path.home()/'.local/share/corral-bench/t253-2026-10-22/corral-0.3.0')
+    parser.add_argument('--before', type=Path)
     parser.add_argument('--after', type=Path, default=REPO/'target/debug/corral')
     ARGS, remaining = parser.parse_known_args()
     unittest.main(argv=[__file__, *remaining])

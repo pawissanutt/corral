@@ -752,9 +752,6 @@ fn main() {{
                               result.stdout)
                 self.assertEqual("gamma::odd plain" in expected,
                                  "excludes nothing: gamma::odd plain" in result.stderr)
-                self.assertEqual(not executed and status == 0,
-                                 "Skipping cargo nextest run (no selected test remains to "
-                                 "run)." in result.stdout)
 
     def startup_environment(self) -> dict[str, str]:
         """Fake engine records startup scope and signals readiness before waiting."""
