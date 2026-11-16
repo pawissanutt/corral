@@ -430,6 +430,11 @@ impl Driver {
                     }
                 });
                 match result {
+                    // Nothing can be sent or received before the Noise transport exists;
+                    // flushing here failed every connection still opening when a tick landed.
+                    Ok(()) if !matches!(conn.stage, Stage::Transport) => {
+                        self.connection = Some(conn);
+                    }
                     Ok(()) => match self.process_events(&mut conn, now).await {
                         Ok(Action::Keep) => self.connection = Some(conn),
                         Ok(Action::Stop) => {}
