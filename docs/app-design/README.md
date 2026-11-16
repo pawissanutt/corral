@@ -48,6 +48,14 @@ one answered decision does not imply that every pending decision was answered.
 Usage, daily costs, Timeline and burn-up return bounded partial results with completeness,
 coverage and unpriced-data notes rather than discarding an entire oversized read. Provider
 failures remain explicit; unavailable quota limits, usage, windows and headroom stay unknown.
+Usage accounting keeps rebuildable full-history UTC-day summaries in the validated cache
+root (`usage-v1`). Task revisions and transcript file identities invalidate saved totals;
+pricing overrides and catalog versions invalidate estimates. Closed transcript files are
+folded incrementally without a row cap. Only live files are scanned with independent
+per-session/PM bounds, so transcript volume cannot suppress task costs. Copied/resumed
+responses retain collector deduplication, and undated usage stays undated. Missing,
+unreadable or incompatible cache files rebuild from source; incomplete live scans still
+report partial coverage. Removing this cache never removes accounting evidence.
 Burn-up scopes cover workspace, project and plan and remain cumulative over real task
 creation/landing events; the Timeline date range does not narrow their totals.
 

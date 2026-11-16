@@ -5,6 +5,7 @@ use corral_core::UsageEntry;
 use corral_protocol::board::CostBasis;
 use corral_protocol::detail::UsageCompleteness;
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 
 use super::{DAY, budget::Budget};
 
@@ -62,6 +63,7 @@ impl Aggregate {
     pub(super) fn merge(&mut self, other: &Self) {
         self.future |= other.future;
         let coverage = &other.budget.coverage;
+        self.budget.coverage.scanned_rows = self.budget.coverage.scanned_rows.saturating_add(coverage.scanned_rows);
         if coverage.partial {
             self.budget
                 .partial(coverage.reason.as_deref().unwrap_or("partial_source"));
@@ -81,6 +83,33 @@ impl Aggregate {
             }
         }
     }
+
+    /// Saved totals cover all UTC days. Projection never invents dates for legacy usage.
+    pub(super) fn window(&self, cutoff: Timestamp) -> Self {
+        let first_day = cutoff.as_second().div_euclid(DAY);
+        let mut result = Self::new(usize::MAX);
+        result.future = self.future;
+        result.budget.admit(self.budget.coverage.scanned_rows as usize);
+        if self.budget.coverage.partial {
+            result.budget.partial(self.budget.coverage.reason.as_deref().unwrap_or("partial_source"));
+        }
+        for at in [self.budget.first, self.budget.last].into_iter().flatten() {
+            result.budget.observe(at);
+        }
+        for (key, days) in &self.groups {
+            for (day, total) in days {
+                if day.is_some_and(|day| day < first_day) {
+                    continue;
+                }
+                result.budget.coverage.unpriced_entries += total.unpriced;
+                if day.is_none() {
+                    result.budget.coverage.undated_entries += total.count;
+                }
+                result.groups.entry(key.clone()).or_default().insert(*day, total.clone());
+            }
+        }
+        result
+    }
 }
 
 fn valid_cost(entry: &UsageEntry) -> Option<(f64, bool)> {
@@ -96,7 +125,7 @@ fn valid_cost(entry: &UsageEntry) -> Option<(f64, bool)> {
         })
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct Total {
     usd: f64,
     priced: u64,
@@ -172,5 +201,44 @@ impl Total {
 
     pub(super) fn entries(&self) -> u64 {
         self.count
+    }
+}
+
+/// JSON cannot encode tuple map keys; persist a compact sequence of attributed day buckets.
+#[derive(Serialize, Deserialize)]
+pub(super) struct Saved {
+    groups: Vec<(Key, Vec<(Option<i64>, Total)>)>,
+    first: Option<Timestamp>,
+    last: Option<Timestamp>,
+}
+
+impl Saved {
+    pub(super) fn valid(&self, now: Timestamp) -> bool {
+        !self.last.is_some_and(|at| at > now)
+            && !self.first.zip(self.last).is_some_and(|(first, last)| first > last)
+            && self.groups.iter().all(|(_, days)| days.iter().all(|(_, total)| {
+                total.usd.is_finite() && total.usd >= 0.0
+                    && total.priced <= total.count && total.unpriced <= total.count
+            }))
+    }
+    pub(super) fn new(facts: &Aggregate) -> Self {
+        Self {
+            groups: facts.groups.iter().map(|(key, days)| {
+                (key.clone(), days.iter().map(|(day, total)| (*day, total.clone())).collect())
+            }).collect(),
+            first: facts.budget.first,
+            last: facts.budget.last,
+        }
+    }
+
+    pub(super) fn restore(&self, cutoff: Timestamp) -> Aggregate {
+        let mut facts = Aggregate::new(usize::MAX);
+        facts.groups = self.groups.iter().map(|(key, days)| {
+            (key.clone(), days.iter().cloned().collect())
+        }).collect();
+        for at in [self.first, self.last].into_iter().flatten() {
+            facts.budget.observe(at);
+        }
+        facts.window(cutoff)
     }
 }

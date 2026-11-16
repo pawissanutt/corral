@@ -112,6 +112,8 @@ pub(crate) struct UsageReadCoverage {
     pub partial: bool,
     pub reason: Option<&'static str>,
     remaining: Option<usize>,
+    observational: bool,
+    unlimited_bytes: bool,
 }
 
 impl UsageReadCoverage {
@@ -121,6 +123,8 @@ impl UsageReadCoverage {
             partial: false,
             reason: None,
             remaining: max,
+            observational: false,
+            unlimited_bytes: false,
         }
     }
 
@@ -138,30 +142,13 @@ impl UsageReadCoverage {
     }
 }
 
-/// Fold a bounded, response-deduplicated prefix without assembling a Usage/vector
-/// copy. Existing CLI/settlement callers retain their complete collection policy.
-pub(crate) fn collect_state_bounded(
-    state: &AgentRunState,
-    model: Option<&str>,
-    store: &Store,
-    max_rows: usize,
-    mut visit: impl FnMut(UsageEntry),
-) -> Result<UsageReadCoverage> {
-    let (entries, coverage) = collect_entries_map(state, model, store, false, Some(max_rows))?;
-    for mut entry in entries.into_values() {
-        entry.usage.reprice(&store.config);
-        visit(entry.usage);
-    }
-    Ok(coverage)
-}
-
 pub(crate) fn collect_entries(
     state: &AgentRunState,
     model: Option<&str>,
     store: &Store,
     complete: bool,
 ) -> Result<Vec<CostUsageEntry>> {
-    let (entries, _) = collect_entries_map(state, model, store, complete, None)?;
+    let (entries, _) = collect_entries_map(state, model, store, complete)?;
     let mut entries: Vec<_> = entries.into_values().collect();
     for entry in &mut entries {
         entry.usage.reprice(&store.config);
@@ -180,70 +167,21 @@ fn collect_entries_map(
     model: Option<&str>,
     store: &Store,
     complete: bool,
-    max_rows: Option<usize>,
 ) -> Result<CollectedEntries> {
-    // Generations that resumed a file are read once; copies deduplicate by response key.
-    let retired = match &state.retired {
-        Some(_) if state.binding.role == AgentRole::Pm => pm_state::retired_generations(store)?,
-        _ => Vec::new(),
-    };
-    let mut bound: Vec<(u32, &Path, &str)> = state
-        .generations
-        .iter()
-        .filter_map(|g| {
-            let b = g.bound.as_ref()?;
-            Some((g.n, b.session_file.as_path(), b.session_id.as_str()))
-        })
-        .chain(
-            retired
-                .iter()
-                .filter_map(|r| Some((r.n, r.session_file.as_deref()?, r.session_id.as_deref()?))),
-        )
-        .collect();
-    bound.sort_by_key(|(n, ..)| *n);
-    let mut files: BTreeMap<&Path, (&str, Option<&str>)> = BTreeMap::new();
-    for (_, file, session_id) in bound {
-        files.entry(file).or_insert((session_id, model));
-    }
-    for session in &state.usage_sessions {
-        if state.generation(session.generation).is_none()
-            && !state.generation_retired(session.generation)
-        {
-            bail!(
-                "usage session references absent generation {}",
-                session.generation
-            );
-        }
-        files
-            .entry(session.session_file.as_path())
-            .or_insert((session.session_id.as_str(), session.model.as_deref()));
-    }
-    if files.is_empty() {
+    let inputs = read::inputs(state, model, store)?;
+    if inputs.files.is_empty() {
         bail!("no bound Pi session");
     }
-    let bindings: BTreeMap<_, _> = retired
-        .iter()
-        .filter_map(|r| r.connection.clone().map(|b| (r.n, b)))
-        .chain(
-            state
-                .generations
-                .iter()
-                .filter_map(|g| g.connection.clone().map(|b| (g.n, b))),
-        )
-        .collect();
-    for binding in bindings.values() {
-        binding.validate()?;
-    }
     let mut entries = BTreeMap::new();
-    let mut coverage = UsageReadCoverage::new(max_rows);
-    for (path, (session_id, model)) in files {
+    let mut coverage = UsageReadCoverage::new(None);
+    for (path, input) in &inputs.files {
         read_session_with_turns(
             path,
-            session_id,
-            model,
+            &input.session,
+            input.model.as_deref(),
             &mut entries,
             complete,
-            &bindings,
+            &inputs.bindings,
             &mut coverage,
         )?;
         if coverage.partial {
@@ -359,7 +297,8 @@ fn read_session_with_turns(
     {
         bail!("Pi session {display} is not a regular file");
     }
-    let mut reader = BufReader::new(file.take(SESSION_MAX_BYTES + 1));
+    let byte_limit = if coverage.unlimited_bytes { u64::MAX } else { SESSION_MAX_BYTES + 1 };
+    let mut reader = BufReader::new(file.take(byte_limit));
     let mut session_id = bound_session.to_owned();
     let mut model = run_model.map(str::to_owned);
     let mut provider = None;
@@ -380,8 +319,8 @@ fn read_session_with_turns(
         if !coverage.admit() {
             break;
         }
-        if read > SESSION_MAX_BYTES {
-            if coverage.remaining.is_some() {
+        if !coverage.unlimited_bytes && read > SESSION_MAX_BYTES {
+            if coverage.observational {
                 coverage.partial = true;
                 coverage.reason = Some("transcript_byte_limit");
                 break;
@@ -395,7 +334,7 @@ fn read_session_with_turns(
                     "Pi session {display} has an incomplete trailing line; usage snapshot is incomplete"
                 );
             }
-            if coverage.remaining.is_some() {
+            if coverage.observational {
                 coverage.partial = true;
                 coverage.reason = Some("incomplete_transcript_tail");
             }
@@ -543,3 +482,6 @@ fn read_session_with_turns(
 #[cfg(test)]
 #[path = "usage_tests.rs"]
 mod tests;
+
+#[path = "usage_read.rs"]
+pub(crate) mod read;

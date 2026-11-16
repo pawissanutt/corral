@@ -1,9 +1,7 @@
 //! Read-only, bounded accounting rollups; row limits produce explicit partial evidence.
 //! Periods are UTC calendar windows. Undated usage never receives a fabricated day.
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::PathBuf;
-use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use corral_core::backend::{PageReq, RecordQuery, RowQuery, TaskOrder, TaskPart, TaskQuery};
@@ -23,6 +21,8 @@ mod aggregate;
 use super::read_budget as budget;
 #[path = "usage_quota.rs"]
 mod quota;
+#[path = "usage_rollup.rs"]
+mod rollup;
 use aggregate::{Aggregate, Total};
 
 const PAGE: u32 = 256;
@@ -32,15 +32,6 @@ const DAY: i64 = 86_400;
 
 type Snapshot = Arc<Aggregate>;
 
-#[derive(Default)]
-struct Cached {
-    tasks: BTreeMap<String, (u64, Snapshot)>,
-    snapshot: Option<(u64, i64, Instant, Snapshot)>,
-}
-
-// Cache rollups, not response rows. Unchanged task revisions need no history replay.
-static CACHE: LazyLock<Mutex<VecDeque<(PathBuf, Cached)>>> =
-    LazyLock::new(|| Mutex::new(VecDeque::new()));
 
 fn canonical_entry(usage: &Usage) -> UsageEntry {
     UsageEntry {
@@ -83,38 +74,20 @@ fn add_usage(
 fn add_state(
     ctx: &Ctx,
     facts: &mut Aggregate,
-    state: &corral_core::agent::AgentRunState,
+    source: rollup::Source<'_>,
     fallback: Option<Usage>,
-    profile: Option<String>,
     cutoff: Timestamp,
     now: Timestamp,
 ) {
-    let coverage = crate::agent::usage::collect_state_bounded(
-        state,
-        None,
-        &ctx.store,
-        facts.budget.remaining(),
-        |entry| {
-            let connection = entry
-                .connection
-                .map(|connection| connection.id().to_owned())
-                .unwrap_or_default();
-            facts.add(connection, profile.clone(), entry, cutoff, now);
-        },
-    );
-    match coverage {
-        Ok(coverage) => {
-            facts.budget.admit(coverage.scanned_rows);
-            if coverage.partial {
-                facts
-                    .budget
-                    .partial(coverage.reason.unwrap_or("partial_transcript"));
-            }
-        }
+    let profile = source.profile.clone();
+    let state = source.state;
+    match rollup::state(ctx, source, cutoff, now, facts.budget.remaining()) {
+        Ok(source) => facts.merge(&source),
         Err(_) => {
             if let Some(usage) = fallback {
                 add_usage(facts, usage, profile, cutoff, now);
-            } else if !state.generations.is_empty() || !state.usage_sessions.is_empty() {
+            }
+            if !state.generations.is_empty() || !state.usage_sessions.is_empty() {
                 facts.budget.partial("usage_source_unavailable");
             }
         }
@@ -156,7 +129,7 @@ fn task_facts(
                 let profile = run
                     .profile
                     .or_else(|| (!run.agent.is_empty()).then_some(run.agent));
-                owners.insert(owner, (profile, connection, run.usage, false));
+                owners.insert(owner, (profile, connection, run.model, run.usage, false));
             }
             match found.next {
                 Some(next) => page.after = Some(next),
@@ -180,12 +153,20 @@ fn task_facts(
                 .rsplit_once('/')
                 .context("invalid canonical usage owner key")?
                 .0;
-            let (profile, connection, _, has_entries) = owners
+            let (profile, connection, model, _, has_entries) = owners
                 .get_mut(owner)
                 .context("usage entry has no run owner")?;
             *has_entries = true;
-            let entry: UsageEntry =
+            let mut entry: UsageEntry =
                 serde_json::from_value(row.doc).context("decoding canonical usage entry")?;
+            entry.model = entry.model.or_else(|| model.clone());
+            if entry.model.is_some() {
+                entry.reprice(&ctx.store.config);
+            }
+            if entry.model.is_none() && entry.reported_usd.is_none() {
+                entry.estimated_usd = None;
+                entry.unpriced_tokens = entry.total_tokens();
+            }
             let connection = entry
                 .connection
                 .map(|connection| connection.id().to_owned())
@@ -197,61 +178,38 @@ fn task_facts(
             None => break,
         }
     }
-    for (_, (profile, connection, usage, has_entries)) in owners {
+    for (_, (profile, connection, model, usage, has_entries)) in owners {
         if !has_entries && let Some(usage) = usage {
             // An aggregate-only run has no billing instant; preserve that uncertainty.
-            facts.add(
-                connection,
-                profile,
-                UsageEntry {
-                    input: usage.input,
-                    output: usage.output,
-                    cache_read: usage.cache_read,
-                    cache_write: usage.cache_write,
-                    reported_usd: usage.reported_usd.or(usage.cost_usd),
-                    estimated_usd: usage.estimated_usd,
-                    unpriced_tokens: usage.unpriced_tokens,
-                    ..UsageEntry::default()
-                },
-                cutoff,
-                now,
-            );
+            let mut entry = UsageEntry {
+                model,
+                input: usage.input,
+                output: usage.output,
+                cache_read: usage.cache_read,
+                cache_write: usage.cache_write,
+                reported_usd: usage.reported_usd.or(usage.cost_usd),
+                ..UsageEntry::default()
+            };
+            if entry.model.is_some() || entry.reported_usd.is_none() {
+                entry.reprice(&ctx.store.config);
+            }
+            facts.add(connection, profile, entry, cutoff, now);
         }
     }
     Ok(facts)
 }
 
 fn facts(ctx: &Ctx, now: Timestamp) -> Result<Snapshot> {
+    facts_with_limit(ctx, now, MAX_ROWS)
+}
+
+fn facts_with_limit(ctx: &Ctx, now: Timestamp, max_rows: usize) -> Result<Snapshot> {
     let day = now.as_second().div_euclid(DAY);
     let cutoff = Timestamp::from_second((day - 29) * DAY).context("computing usage window")?;
     let view = ctx.store.view()?;
-    let seq = view.seq().0;
-    let mut cache = CACHE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let key = ctx.store.dir().to_path_buf();
-    let index = cache.iter().position(|(path, _)| *path == key);
-    let mut cached = index
-        .and_then(|index| cache.remove(index))
-        .map(|(_, cached)| cached)
-        .unwrap_or_default();
-    if let Some((saved_seq, saved_day, at, snapshot)) = &cached.snapshot
-        && *saved_seq == seq
-        && *saved_day == day
-        && at.elapsed() < Duration::from_secs(2)
-    {
-        let snapshot = Arc::clone(snapshot);
-        cache.push_back((key, cached));
-        return Ok(snapshot);
-    }
-    if cached
-        .snapshot
-        .as_ref()
-        .is_some_and(|(saved, saved_day, _, _)| *saved > seq || *saved_day != day)
-    {
-        cached.tasks.clear();
-    }
-    let mut all = Aggregate::new(MAX_ROWS);
+    let mut all = Aggregate::new(usize::MAX);
+    // Source budgets are independent: transcript history can never hide task accounting.
+    let mut records = budget::Budget::new(max_rows);
     #[derive(Deserialize)]
     struct SessionRecord {
         session: corral_core::assistant::AssistantSession,
@@ -266,7 +224,7 @@ fn facts(ctx: &Ctx, now: Timestamp) -> Result<Snapshot> {
             .records(&query, page.clone())
             .context("reading assistant accounting records")?;
         for row in found.items {
-            if !all.budget.admit(1) {
+            if !records.admit(1) {
                 break 'sessions;
             }
             let record: SessionRecord =
@@ -280,26 +238,32 @@ fn facts(ctx: &Ctx, now: Timestamp) -> Result<Snapshot> {
                 continue;
             }
             let container = ctx.store.get_assistant_container(&record.session.id)?;
+            let mut session = Aggregate::new(max_rows);
+            session.budget.admit(1);
             add_state(
                 ctx,
-                &mut all,
-                &container.state,
+                &mut session,
+                rollup::Source {
+                    key: &format!("assistant:{}", record.session.id),
+                    state: &container.state,
+                    ended: record.session.ended.is_some(),
+                    profile: Some(record.session.profile),
+                },
                 record.session.usage,
-                Some(record.session.profile),
                 cutoff,
                 now,
             );
-            if all.budget.exhausted() {
-                break 'sessions;
-            }
+            all.merge(&session);
         }
         match found.next {
             Some(next) => page.after = Some(next),
             None => break,
         }
     }
-    if !all.budget.exhausted()
-        && let Some(pm) = corral_core::agent::pm_state::load_selected(
+    if records.coverage.partial {
+        all.budget.partial("assistant_session_limit");
+    }
+    if let Some(pm) = corral_core::agent::pm_state::load_selected(
             &ctx.store,
             &corral_core::agent::pm_state::Selection::default()
                 .family("generations")
@@ -307,7 +271,9 @@ fn facts(ctx: &Ctx, now: Timestamp) -> Result<Snapshot> {
         )?
     {
         // Historical PM generations have no frozen profile; today's config is not evidence.
-        add_state(ctx, &mut all, &pm.state, None, None, cutoff, now);
+        let mut facts = Aggregate::new(max_rows);
+        add_state(ctx, &mut facts, rollup::Source { key: "pm", state: &pm.state, ended: false, profile: None }, None, cutoff, now);
+        all.merge(&facts);
     }
     let query = TaskQuery {
         statuses: Vec::new(),
@@ -315,12 +281,9 @@ fn facts(ctx: &Ctx, now: Timestamp) -> Result<Snapshot> {
         order: TaskOrder::UpdatedDesc,
     };
     let mut page = PageReq::first(PAGE);
-    let mut seen = BTreeSet::new();
+    let pricing = rollup::pricing(ctx)?;
     let mut count = 0;
     'tasks: loop {
-        if all.budget.exhausted() {
-            break;
-        }
         let found = view
             .tasks(&query, page.clone())
             .context("reading recent usage task index")?;
@@ -333,45 +296,28 @@ fn facts(ctx: &Ctx, now: Timestamp) -> Result<Snapshot> {
                 break 'tasks;
             }
             count += 1;
-            seen.insert(header.id.clone());
-            let saved = cached
-                .tasks
-                .get(&header.id)
-                .filter(|(rev, _)| *rev == header.rev);
-            let task = match saved {
-                Some((_, task)) => Arc::clone(task),
-                None => Arc::new(task_facts(
-                    ctx,
-                    header.num,
-                    cutoff,
-                    now,
-                    all.budget.remaining(),
-                )?),
+            let key = format!("task:{}", header.id);
+            let identity = rollup::fingerprint(&(header.rev, header.fields.updated, &pricing))?;
+            let task = match rollup::load::<aggregate::Saved>(ctx, &key, &identity).filter(|saved| saved.valid(now)) {
+                Some(saved) => saved.restore(cutoff),
+                None => {
+                    // Compact canonical accounting, not transcript replay. A revision is
+                    // a complete immutable snapshot, rebuilt when any run usage changes.
+                    let task = task_facts(ctx, header.num, Timestamp::MIN, now, usize::MAX)?;
+                    if !task.budget.coverage.partial && !task.future {
+                        rollup::save(ctx, &key, &identity, &aggregate::Saved::new(&task));
+                    }
+                    task.window(cutoff)
+                }
             };
-            if !all.budget.admit(task.budget.coverage.scanned_rows as usize) {
-                break 'tasks;
-            }
             all.merge(&task);
-            if !task.budget.coverage.partial && !task.future {
-                cached.tasks.insert(header.id, (header.rev, task));
-            }
-            if all.budget.exhausted() {
-                break 'tasks;
-            }
         }
         match found.next {
             Some(next) => page.after = Some(next),
             None => break,
         }
     }
-    cached.tasks.retain(|id, _| seen.contains(id));
-    let all = Arc::new(all);
-    cached.snapshot = Some((seq, day, Instant::now(), Arc::clone(&all)));
-    cache.push_back((key, cached));
-    while cache.len() > 4 {
-        cache.pop_front();
-    }
-    Ok(all)
+    Ok(Arc::new(all))
 }
 
 fn day_string(day: i64) -> Result<String> {
@@ -534,3 +480,11 @@ pub(super) fn usage_series(ctx: &Ctx, period: &str) -> Result<DetailBody> {
 #[cfg(test)]
 #[path = "usage_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "usage_rollup_tests.rs"]
+mod rollup_tests;
+
+#[cfg(test)]
+#[path = "usage_persistence_tests.rs"]
+mod persistence_tests;
