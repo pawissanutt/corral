@@ -186,12 +186,12 @@ try:
         buntil(lambda: 'skip tour' in btext()[-400:], 'first-run tour', 30)
         os.write(bmaster, b'N'); time.sleep(1); assert held() is True, 'key leaked through the tour modal'
         os.write(bmaster, b'\x1b'); buntil(lambda: 'skip tour' not in btext()[-400:], 'tour closed', 30)
-        def shown(): return json.loads(ok([corral, 'show', task['id'], '--json'], cwd=work, env=owner_env))
-        def plan_runs(): return len(shown().get('plan_runs') or [])
+        def card(): return json.loads(ok([corral, 'show', task['id'], '--json'], cwd=work, env=owner_env))
+        def plan_runs(): return len(card().get('plan_runs') or [])
         assert '▌ '+task['id'] in btext() and plan_runs() == 0, 'the only card is selected; nothing started'
         os.write(bmaster, b'N')
         # Admission is canonical: unheld and out of Backlog; the planner itself starts when capacity allows.
-        buntil(lambda: shown().get('status') != 'backlog' and 'Board continuing' in btext(), 'board N admitted the plan continuation', 60)
+        buntil(lambda: card().get('status') != 'backlog' and 'Board continuing' in btext(), 'board N admitted the plan continuation', 60)
         assert plan_runs() <= 1
         buntil(lambda: 'continuing' in btext(), 'board label after N', 30)
         (out / 'board-continued.ansi').write_bytes(blog)
