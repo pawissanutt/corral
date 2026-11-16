@@ -143,8 +143,9 @@ fn assist_reports_blocked_review_once_and_confirmation_resumes_it() {
     assert_eq!(fx.events("automation_blocked"), 1);
     assert_eq!(fx.events("gate_started"), 0);
     let action = corral_ops::pm_next(&fx.ctx).unwrap();
-    // The executor is not delegated, so the PM runs the gate itself and sees why.
-    assert_eq!(action.kind, corral_ops::PmActionKind::Gate, "{action:?}");
+    // The executor is not delegated, so the PM gets the stop with the executor's refusal.
+    assert_eq!(action.kind, corral_ops::PmActionKind::Owner, "{action:?}");
+    assert!(!action.requires_owner, "{action:?}");
     assert!(action.evidence.contains(&reason), "{action:?}");
     assert!(
         action

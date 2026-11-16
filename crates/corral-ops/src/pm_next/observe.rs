@@ -235,6 +235,20 @@ pub(crate) fn with_admission(
                 });
                 continue;
             }
+            // An undelegated executor leaves the next step to the PM. Reading its refusal is
+            // cheap; verifying every candidate on each board read is not.
+            let task_head = heads
+                .iter()
+                .find(|head| head.id == task.id)
+                .context("observed task head missing")?;
+            if let Some(reason) = crate::automation_status::automation_blocker_head(ctx, task_head)?
+            {
+                out.push(PmObservation::Owner {
+                    task: task.id.clone(),
+                    reason,
+                });
+                continue;
+            }
             if task.awaiting_owner() {
                 match review_observation(ctx, task, run, &tasks) {
                     Ok(observation) => out.push(observation),

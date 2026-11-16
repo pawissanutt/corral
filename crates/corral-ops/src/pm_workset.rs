@@ -317,20 +317,6 @@ fn project_snapshot(
             continue;
         }
         project_permissions(&mut action, &policy);
-        // The PM runs what the executor refused; the card carries that exact refusal.
-        // A failed lookup is evidence too: it must not abort the whole board read.
-        if task.current_run().is_some()
-            && action.options.iter().any(|option| option.pm_runs)
-            && let Some(head) = heads.iter().find(|head| head.id == task.id)
-        {
-            match crate::automation_status::automation_blocker_head(ctx, head) {
-                Ok(Some(reason)) => action.evidence.insert(0, reason),
-                Ok(None) => {}
-                Err(error) => action
-                    .evidence
-                    .insert(0, format!("Executor refusal unavailable: {error:#}")),
-            }
-        }
         if matches!(
             action.kind,
             PmActionKind::ReviewInFlight | PmActionKind::Wait
