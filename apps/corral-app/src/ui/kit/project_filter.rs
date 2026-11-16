@@ -62,7 +62,7 @@ fn bar(app: AppState, screen: FilterScreen, trailing: Trailing) -> AnyElement {
     // and keeps the pressed one focused.
     let shape = computed(move || {
         app.feed.with(|feed| {
-            projects::chips(feed, &ProjectFilter::All, screen)
+            projects::chips(feed, &app.project_filter(screen), screen)
                 .into_iter()
                 .map(|chip| (chip.label, chip.filter))
                 .collect::<Vec<_>>()

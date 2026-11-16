@@ -551,7 +551,7 @@ pub fn explicit_record_filter(
         return None;
     }
     let projects = match live {
-        Live::Task(id) => feed.board.task(id)?.project.as_slice(),
+        Live::Task(id) | Live::Review(id) => feed.board.task(id)?.project.as_slice(),
         Live::Build(id) => feed.builds.get(id)?.project.as_slice(),
         Live::Plan(id) if feed.capable(corral_protocol::PROJECTS_V1) => {
             feed.plans.get(id)?.projects.as_slice()
@@ -670,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn explicitly_opening_a_hidden_plan_reveals_its_project_and_requested_detail() {
+    fn explicitly_opening_hidden_plans_and_reviews_reveals_their_requested_records() {
         use crate::model::projects::{FilterScreen, Filters, ProjectFilter};
         use corral_protocol::rows::{PlanRow, PlanState, ProjectRow};
 
@@ -716,6 +716,34 @@ mod tests {
                 },
             );
         }
+        feed.board.apply_batch(
+            1,
+            vec![crate::model::daemon::Task {
+                id: "T-2".into(),
+                title: "Review B".into(),
+                project: Some("B".into()),
+                plan: None,
+                goal: None,
+                group: crate::model::daemon::Group::Other,
+                rail: std::array::from_fn(|_| crate::model::daemon::Step {
+                    mark: crate::model::board::Mark::Next,
+                    sha7: None,
+                    at: None,
+                }),
+                now: "review".into(),
+                now_code: "review".into(),
+                age_since: None,
+                since: None,
+                held_reason: None,
+                questions: 0,
+                attention: vec![],
+                agent: None,
+                cost: None,
+                cost_estimated: false,
+                rev: 1,
+            }],
+            &[],
+        );
         for form in [Form::Desktop, Form::Terminal, Form::Phone] {
             let mut filters = Filters::default();
             filters.set(
@@ -734,6 +762,22 @@ mod tests {
                 crate::model::plans::current_plan_filtered(&nav.selection, &feed, &filter),
                 Some("T-2".into()),
             );
+            assert_eq!(explicit_record_filter(&feed, &filters, &live), None);
+            filters.set(
+                "store",
+                FilterScreen::Review,
+                ProjectFilter::Project("A".into()),
+            );
+            let live = Live::Review("T-2".into());
+            let (screen, filter) = explicit_record_filter(&feed, &filters, &live).unwrap();
+            assert_eq!(screen, FilterScreen::Review);
+            filters.set("store", screen, filter);
+            nav.open_live(live.clone(), form);
+            assert_eq!(
+                filters.get("store", FilterScreen::Review, &feed),
+                ProjectFilter::Project("B".into()),
+            );
+            assert_eq!(nav.selection.review.as_deref(), Some("T-2"));
             assert_eq!(explicit_record_filter(&feed, &filters, &live), None);
         }
     }
