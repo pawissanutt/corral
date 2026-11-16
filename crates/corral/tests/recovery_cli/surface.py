@@ -9,7 +9,7 @@ class Board:
     def __init__(self, fixture, mouse):
         self.f, self.mouse = fixture, mouse
         self.t = Terminal([BIN, "--root", str(fixture.root), "board"], fixture.root,
-                          fixture.ev / ("mouse" if mouse else "keyboard"))
+                          fixture.ev / ("mouse" if mouse else "keyboard"), framed=True)
         t = self.t
         t.contains("Skip tour")
         t.click("Skip tour") if mouse else t.key("esc")
@@ -75,8 +75,14 @@ class Board:
             self.t.text(char)
             typed += char
             tail = typed[-16:]
-            self.t.wait(lambda: any(label in line and tail in line
-                                   for line in self.t.screen.text().splitlines()), f"echo {label}")
+            visible = lambda: any(label.ljust(10) in line for line in self.t.screen.text().splitlines())
+            echoed = lambda: any(label in line and tail in line for line in self.t.screen.text().splitlines())
+            self.t.wait(lambda: echoed() or (self.mouse and not visible()), f"echo or reflow {label}")
+            if self.mouse and not visible():
+                # Header/footer reflow can reduce the body after a background update. A mouse
+                # user scrolls the same focused field back into view; retain the exact echo check.
+                self.find_mouse(label.ljust(10))
+            self.t.wait(echoed, f"echo {label}")
 
     def open_recovery(self):
         if self.mouse:
@@ -109,7 +115,9 @@ class Board:
             t.contains("[Continue…]")
             if self.mouse:
                 self.click("use-reviewer")
+                t.contains("[use-reviewer]")
                 self.click("gpt-astra")
+                t.wait(lambda: re.search(r"▸\s+reviewer", t.screen.text()), "reviewer mouse focus")
             else:
                 self.focus("Action")
                 t.key("left")  # accept-plan -> use-reviewer
@@ -143,13 +151,34 @@ class Board:
         t.capture("accept-confirm-80x24" if accept else "review-confirm-80x24")
         self.wide("Confirm owner recovery")
         t.capture("accept-confirm-120x40" if accept else "review-confirm-120x40")
-        if self.mouse:
-            t.click("[Confirm recovery]")
-        else:
-            # Confirmation defaults to Cancel; Tab explicitly selects Confirm.
-            t.key("tab")
-            t.key("enter")
-        t.wait(lambda: "owner recovery applied" in t.screen.text(), "applied recovery")
+        before = len(self.f.history())
+        def applied():
+            records = self.f.history()
+            return len(records) == before + 1 and records[-1]["outcomes"][-1]["state"] == "applied"
+        for confirmation in range(2):
+            if self.mouse:
+                t.click("[Confirm recovery]")
+            else:
+                # Confirmation defaults to Cancel; Tab explicitly selects Confirm.
+                t.key("tab")
+                t.key("enter")
+            t.wait(lambda: applied() or "[Continue…]" in t.screen.text(), "applied or stale-refreshed recovery")
+            if applied():
+                break
+            assert "changed" in t.screen.text() and "proposal" in t.screen.text(), t.screen.text()
+            assert len(self.f.history()) == before, "stale confirmation persisted an operation"
+            t.capture("stale-confirmation")
+            # Real fixture-owner interaction with the refreshed proposal, not a replay of the
+            # old confirmation. The reason stays, but Continue and Confirm are explicit again.
+            if self.mouse:
+                t.click("[Continue…]")
+            else:
+                t.key("tab")
+                t.key("enter")
+            t.contains("Confirm owner recovery")
+            t.capture("fresh-confirmation")
+        assert applied(), "recovery did not apply after fresh explicit confirmation"
+        t.wait(lambda: f"Recover {self.f.id}" not in t.screen.text(), "applied sheet closed")
         t.capture("accept-applied" if accept else "review-applied")
         t.resize(80, 24)
         t.wait(lambda: "Recover…" in t.screen.text() or "recover…" in t.screen.text(), "recovery entry remains reachable")

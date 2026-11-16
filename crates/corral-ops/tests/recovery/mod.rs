@@ -2,6 +2,7 @@ use super::*;
 use std::path::PathBuf;
 
 mod code;
+mod concurrency;
 mod external;
 mod landing;
 mod planning;
