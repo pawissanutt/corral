@@ -142,6 +142,32 @@ pub struct PlanRow {
     pub members_landed: u32,
     pub blockers: Vec<String>,
     pub accepted_at: Option<String>,
+    /// Distinct projects of the plan's member tasks, sorted; empty when no member names one.
+    #[serde(default)]
+    pub projects: Vec<String>,
+    pub rev: u64,
+}
+
+/// One configured project of the workspace (`Topic::Projects`, `projects.v1`). A complete
+/// empty page means the workspace has no project management: no board work, PM off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectRow {
+    /// Configuration key; the identity tasks reference in `project`.
+    pub id: String,
+    /// Workspace-relative path when inside the workspace, otherwise absolute.
+    pub path: String,
+    /// Tasks that are neither done nor dropped.
+    pub open: u32,
+    /// Open tasks with a live worker session.
+    pub running: u32,
+    /// Open tasks awaiting review.
+    pub review: u32,
+    /// Open owner-attention items for this project's tasks.
+    pub needs_me: u32,
+    /// Whether the workspace PM's approved scope includes this project.
+    pub in_pm_scope: bool,
+    /// Whether an active autopilot grant names this project.
+    pub autopilot: bool,
     pub rev: u64,
 }
 

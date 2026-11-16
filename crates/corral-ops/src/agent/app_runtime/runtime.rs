@@ -276,8 +276,15 @@ fn connect(ctx: &Ctx, runtime: &mut Runtime) -> Result<bool> {
 
 fn context(ctx: &Ctx, message: &corral_core::assistant::threads::Message) -> Result<String> {
     let mut text = String::new();
+    if let Some(project) = super::project_context(ctx, &message.context) {
+        text.push_str(&format!(
+            "Owner's current project: {}. Use this as the default project for any Idea or task you file unless the owner explicitly says otherwise.\n",
+            serde_json::to_string(project)?
+        ));
+    }
     for reference in &message.context {
         match reference.kind.as_str() {
+            "project" => {}
             "task" => {
                 let brief = crate::assistant::task_brief(&ctx.store, &reference.id)?;
                 text.push_str(&excerpt(&brief, 4 * 1024));
@@ -703,3 +710,7 @@ pub fn shutdown(ctx: &Ctx, runtime: &mut Runtime) -> Result<()> {
     ctx.store
         .set_app_thread_state_unless(&runtime.session, "stopping", None, &["paused", "ended"])
 }
+
+#[cfg(test)]
+#[path = "project_tests.rs"]
+mod project_tests;

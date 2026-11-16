@@ -15,6 +15,7 @@ mod changes;
 mod closed;
 mod paging;
 mod plans;
+mod projects;
 mod question_context;
 mod questions;
 mod read_budget;
@@ -61,6 +62,7 @@ pub fn attention_snapshot(ctx: &Ctx) -> Result<corral_protocol::rows::AttentionS
     ctx.read_step(|ctx| Ok(attention::snapshot(questions::inbox_rows(ctx)?)))
 }
 rows!(plans_rows, plans, PlanRow);
+rows!(projects_rows, projects, ProjectRow);
 rows!(agents_rows, agents, AgentRow);
 rows!(assistant_rows, agents, AssistantRow);
 rows!(usage_rows, usage, UsageRow);

@@ -52,6 +52,13 @@ pub fn plans_rows(ctx: &Ctx) -> Result<Vec<PlanRow>> {
                 .as_ref()
                 .and_then(|(_, p)| p.approval.as_ref())
                 .map(|approval| approval.at.to_string()),
+            projects: members
+                .iter()
+                .filter_map(|member| member.project.as_deref())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             rev: 0,
         };
         row.rev = revision(&row)?;

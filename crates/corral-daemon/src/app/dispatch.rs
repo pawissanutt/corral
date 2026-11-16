@@ -60,6 +60,7 @@ pub(crate) fn capability(shared: &Shared, cap: &str) -> bool {
         | app::CHANGES_V1
         | app::PLANS_V1
         | app::BUILDS_V1
+        | app::PROJECTS_V1
         | app::AGENTS_V1
         | app::SESSION_V1
         | app::SESSION_FLEET_V1
@@ -86,6 +87,7 @@ pub(crate) fn allowed_topic(topic: wire::subscription::Topic) -> bool {
             | Topic::Inbox
             | Topic::Plans
             | Topic::Builds
+            | Topic::Projects
             | Topic::Agents
             | Topic::Assistant
             | Topic::Usage

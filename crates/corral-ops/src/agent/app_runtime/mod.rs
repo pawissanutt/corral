@@ -59,6 +59,14 @@ pub(crate) fn excerpt(text: &str, max: usize) -> String {
     text[..end].to_owned()
 }
 
+pub(super) fn project_context<'a>(ctx: &Ctx, refs: &'a [ContextRef]) -> Option<&'a str> {
+    refs.iter()
+        .find(|reference| {
+            reference.kind == "project" && ctx.store.config.projects.contains_key(&reference.id)
+        })
+        .map(|reference| reference.id.as_str())
+}
+
 pub(crate) fn owner_context(ctx: &Ctx, device: &AuthenticatedDevice) -> Result<Ctx> {
     let mut attributed = ctx.clone();
     attributed.store = ctx.store.reattributed();
@@ -171,6 +179,7 @@ pub fn send(ctx: &Ctx, device: &AuthenticatedDevice, request: &AssistantSend) ->
             context: request
                 .context
                 .iter()
+                .filter(|c| c.kind != "project" || ctx.store.config.projects.contains_key(&c.id))
                 .map(|c| ContextRef {
                     kind: c.kind.clone(),
                     id: c.id.clone(),

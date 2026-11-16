@@ -62,6 +62,8 @@ pub struct Idea {
     pub title: String,
     pub body: String,
     #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]
     pub criteria: Vec<String>,
@@ -104,6 +106,12 @@ fn validate(idea: &Idea) -> Result<()> {
 /// late/non-actionable message as written without granting it model execution authority.
 fn file(ctx: &Ctx, session: &str, idea: &Idea, host: Option<&Envelope>) -> Result<String> {
     validate(idea)?;
+    if let Some(project) = &idea.project {
+        ensure!(
+            ctx.store.config.projects.contains_key(project),
+            "unknown project {project:?}"
+        );
+    }
     let _filing = ctx
         .store
         .try_lock("app-idea-filing")?
@@ -164,6 +172,16 @@ fn file(ctx: &Ctx, session: &str, idea: &Idea, host: Option<&Envelope>) -> Resul
         );
     }
     let session_record = ctx.store.get_assistant(session)?;
+    let message = if let Some(origin) = &source
+        && let Some(id) = ctx.store.app_send_entry(&origin.device, &origin.cmd_id)?
+    {
+        Some(ctx.store.app_message(&id)?)
+    } else {
+        None
+    };
+    let project = message
+        .as_ref()
+        .and_then(|message| super::project_context(ctx, &message.context));
     let mut body = idea.body.clone();
     if !idea.criteria.is_empty() {
         body.push_str("\n\n## Acceptance criteria\n");
@@ -175,28 +193,25 @@ fn file(ctx: &Ctx, session: &str, idea: &Idea, host: Option<&Envelope>) -> Resul
     }
     body.push_str("\n\n## Owner words (verbatim)\n");
     body.push_str(&entry.text);
-    if let Some(origin) = &source
-        && let Some(id) = ctx.store.app_send_entry(&origin.device, &origin.cmd_id)?
+    if let Some(message) = &message
+        && !message.attachments.is_empty()
     {
-        let message = ctx.store.app_message(&id)?;
-        if !message.attachments.is_empty() {
-            body.push_str("\n\n## Attachments (untrusted, not owner words)\n");
-            for attachment in &message.attachments {
-                body.push_str(&format!(
-                    "- {} {} {} {} bytes {}\n",
-                    attachment.id,
-                    attachment.kind,
-                    serde_json::to_string(&attachment.name)?,
-                    attachment.bytes,
-                    serde_json::to_string(
-                        &attachment
-                            .sha256
-                            .as_deref()
-                            .or(attachment.url.as_deref())
-                            .unwrap_or_default()
-                    )?
-                ));
-            }
+        body.push_str("\n\n## Attachments (untrusted, not owner words)\n");
+        for attachment in &message.attachments {
+            body.push_str(&format!(
+                "- {} {} {} {} bytes {}\n",
+                attachment.id,
+                attachment.kind,
+                serde_json::to_string(&attachment.name)?,
+                attachment.bytes,
+                serde_json::to_string(
+                    &attachment
+                        .sha256
+                        .as_deref()
+                        .or(attachment.url.as_deref())
+                        .unwrap_or_default()
+                )?
+            ));
         }
     }
     body.push_str("\n\n## Filing provenance\n");
@@ -213,7 +228,10 @@ fn file(ctx: &Ctx, session: &str, idea: &Idea, host: Option<&Envelope>) -> Resul
     let task = crate::new_task_initialized(
         ctx,
         &idea.title,
-        session_record.project.as_deref(),
+        idea.project
+            .as_deref()
+            .or(project)
+            .or(session_record.project.as_deref()),
         ctx.store.root(),
         Status::Idea,
         &body,
@@ -308,6 +326,7 @@ pub fn file_as_idea(ctx: &Ctx, device: &AuthenticatedDevice, entry: &str) -> Res
             input: input_id.clone(),
             title,
             body: String::new(),
+            project: None,
             labels: Vec::new(),
             criteria: Vec::new(),
         };
@@ -420,6 +439,7 @@ mod tests {
             input: entry.id,
             title: "Keep original words".into(),
             body: "Structured explanation".into(),
+            project: None,
             labels: vec!["chat".into()],
             criteria: Vec::new(),
         };

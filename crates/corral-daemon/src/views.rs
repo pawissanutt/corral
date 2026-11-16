@@ -16,8 +16,8 @@ pub(crate) use rows::Rows;
 
 const QUEUE: usize = 32;
 const POLL: Duration = Duration::from_millis(500);
-/// Agent tails and the ended-session window move without a store write, so a watched agents
-/// topic is read again at this interval even when the store is unchanged.
+/// Agent tails, grant expiry and assessed attention can change without a store write,
+/// so watched agents/projects topics are read again even when the store is unchanged.
 const OUTSIDE_STORE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -37,6 +37,7 @@ impl Key {
             Topic::Settings => 5,
             Topic::Thread => 6,
             Topic::Builds => 7,
+            Topic::Projects => 8,
             _ => return Err(anyhow!("unsupported app topic")),
         };
         let scope = if topic == Topic::Thread {
@@ -66,6 +67,7 @@ impl Key {
             4 => Topic::Usage,
             5 => Topic::Settings,
             7 => Topic::Builds,
+            8 => Topic::Projects,
             _ => Topic::Thread,
         }
     }
@@ -86,7 +88,8 @@ struct Entry {
 
 impl Entry {
     fn overdue(&self, key: &Key) -> bool {
-        key.topic() == Topic::Agents && self.read.is_none_or(|at| at.elapsed() >= OUTSIDE_STORE)
+        matches!(key.topic(), Topic::Agents | Topic::Projects)
+            && self.read.is_none_or(|at| at.elapsed() >= OUTSIDE_STORE)
     }
 }
 
