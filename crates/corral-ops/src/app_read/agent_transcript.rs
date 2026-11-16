@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::{replay, short};
+use super::{activity, replay, short};
 use crate::Ctx;
 
 const WINDOW: u64 = 128 * 1024;
@@ -372,12 +372,15 @@ pub(super) fn messages_with_words(
 }
 
 /// The complete lines in the last `window` bytes of a recorded file.
-fn end_window(path: &Path, window: u64) -> Result<Vec<u8>> {
+fn end_window(path: &Path, window: u64) -> Result<(Vec<u8>, Option<jiff::Timestamp>)> {
     let mut file = open(path)?;
-    let len = file
-        .metadata()
-        .context("reading recorded output size")?
-        .len();
+    let meta = file.metadata().context("reading recorded output size")?;
+    let captured_at = meta
+        .modified()
+        .context("reading recorded output capture time")
+        .ok()
+        .and_then(|at| jiff::Timestamp::try_from(at).ok());
+    let len = meta.len();
     let start = len.saturating_sub(window);
     file.seek(SeekFrom::Start(start))
         .context("seeking recorded output tail")?;
@@ -392,7 +395,7 @@ fn end_window(path: &Path, window: u64) -> Result<Vec<u8>> {
             .map_or(bytes.len(), |n| n + 1);
         bytes.drain(..first);
     }
-    Ok(bytes)
+    Ok((bytes, captured_at))
 }
 
 /// One display line: no terminal escape sequences or control characters, bounded, or nothing
@@ -499,11 +502,13 @@ fn entry_lines(value: &Value) -> Vec<String> {
     }
 }
 
-/// What a session did last, oldest line first. One bounded window is read from the end and
-/// only the entries the lines come from are decoded; an entry larger than the window, or one
-/// still being written, contributes nothing.
-pub(super) fn tail(path: &Path) -> Result<Vec<String>> {
-    let bytes = end_window(path, WINDOW)?;
+/// What a session did last, oldest line first, and timestamps from the same bounded read.
+/// Entries larger than the window or still being written contribute nothing. Every complete
+/// timestamped event in this window is counted, even after the four display lines are full;
+/// older minutes can undercount in busy sessions (see `activity::Records`).
+pub(super) fn tail(path: &Path, now: jiff::Timestamp) -> Result<activity::Output> {
+    let (bytes, _) = end_window(path, WINDOW)?;
+    let mut records = activity::Records::new(now);
     let mut lines = Vec::new();
     for entry in bytes
         .split_inclusive(|b| *b == b'\n')
@@ -513,20 +518,42 @@ pub(super) fn tail(path: &Path) -> Result<Vec<String>> {
         let Ok(value) = serde_json::from_slice::<Value>(entry) else {
             continue;
         };
-        lines.extend(entry_lines(&value).into_iter().rev());
-        if lines.len() >= TAIL_LINES {
-            break;
+        if let Some(at) = event_at(&value) {
+            records.observe(at);
+        }
+        if lines.len() < TAIL_LINES {
+            lines.extend(entry_lines(&value).into_iter().rev());
         }
     }
     lines.truncate(TAIL_LINES);
     lines.reverse();
-    Ok(lines)
+    Ok(records.finish(lines))
+}
+
+/// Match replay's top-level/string and nested/millisecond timestamp forms without
+/// allocating the full session message (tool results can contain large item lists).
+fn event_at(value: &Value) -> Option<jiff::Timestamp> {
+    if matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("session" | "context_edit" | "session_info")
+    ) {
+        return None;
+    }
+    let body = value.get("message").unwrap_or(value);
+    let timestamp = value.get("timestamp").or_else(|| body.get("timestamp"))?;
+    if let Some(text) = timestamp.as_str() {
+        text.parse().ok()
+    } else {
+        timestamp
+            .as_i64()
+            .and_then(|ms| jiff::Timestamp::from_millisecond(ms).ok())
+    }
 }
 
 /// The last lines a running gate wrote to its registered scratch log.
-pub(super) fn gate_tail(ctx: &Ctx, task: &str, run: &str) -> Result<Vec<String>> {
+pub(super) fn gate_tail(ctx: &Ctx, task: &str, run: &str) -> Result<activity::Output> {
     let path = crate::gate::gate_paths(ctx, task, run).log;
-    let bytes = end_window(&path, LOG_TAIL_WINDOW)?;
+    let (bytes, captured_at) = end_window(&path, LOG_TAIL_WINDOW)?;
     let text = String::from_utf8_lossy(&bytes);
     let mut lines: Vec<String> = text
         .lines()
@@ -535,7 +562,12 @@ pub(super) fn gate_tail(ctx: &Ctx, task: &str, run: &str) -> Result<Vec<String>>
         .take(TAIL_LINES)
         .collect();
     lines.reverse();
-    Ok(lines)
+    // Plain gate log lines have no event timestamps; an event rate is unknown.
+    Ok(activity::Output {
+        lines,
+        last_output_at: captured_at.map(|at| at.to_string()),
+        activity: None,
+    })
 }
 
 fn lines(bytes: &[u8]) -> Vec<String> {
@@ -680,10 +712,10 @@ mod tests {
     }
 
     #[test]
-    fn tail_is_the_latest_words_calls_and_failures_in_order() -> Result<()> {
+    fn tail_keeps_latest_lines_and_counts_records_past_display_limit() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("session.jsonl");
-        let entries = [
+        let mut entries = [
             serde_json::json!({"message": {"role": "user", "content": "an earlier prompt"}}),
             serde_json::json!({"message": {"role": "assistant", "content": [
                 {"type": "text", "text": "Checking.\n\nRunning the tests now."},
@@ -699,12 +731,23 @@ mod tests {
                 {"type": "text", "text": "\u{1b}[31mENOENT: no such file\n"},
             ]}}),
         ];
+        let now: jiff::Timestamp = "2026-11-16T12:20:45Z".parse()?;
+        for entry in &mut entries {
+            entry["timestamp"] = serde_json::json!("2026-11-16T12:20:00Z");
+        }
+        // This event lies before the four visible lines, but is the newest timestamp.
+        entries[0]["timestamp"] = serde_json::json!("2026-11-16T12:20:40Z");
+        entries[2].as_object_mut().unwrap().remove("timestamp");
+        entries[2]["message"]["timestamp"] = serde_json::json!(now.as_millisecond() - 10_000);
         let mut text: String = entries.iter().map(|entry| format!("{entry}\n")).collect();
         // An entry still being written has no newline yet and is not shown.
         text.push_str("{\"message\":{\"role\":\"assistant\",\"content\":\"half");
         std::fs::write(&path, text)?;
+        let output = tail(&path, now)?;
+        assert_eq!(output.last_output_at, Some("2026-11-16T12:20:40Z".into()));
+        assert_eq!(output.activity.unwrap().per_minute[19], 5);
         assert_eq!(
-            tail(&path)?,
+            output.lines,
             [
                 "Running the tests now.",
                 "bash cargo test -p x",

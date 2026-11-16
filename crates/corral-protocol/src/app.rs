@@ -27,6 +27,8 @@ pub const SETTINGS_V1: &str = "settings.v1";
 pub const ASSISTANT_V1: &str = "assistant.v1";
 pub const FILINGS_V1: &str = "filings.v1";
 pub const CLOSED_V1: &str = "closed.v1";
+/// `AgentRow.last_output_at`, `activity` and `steps`.
+pub const AGENTS_ACTIVITY_V1: &str = "agents.activity.v1";
 pub const ACT_V1: &str = "act.v1";
 /// Includes the complete JSON-RPC envelope, not only its result.
 pub const APP_CONTROL_MAX: usize = 60 * 1024;
