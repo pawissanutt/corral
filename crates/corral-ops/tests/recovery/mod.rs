@@ -172,16 +172,47 @@ fn confirmation(preview: &RecoveryPreview) -> OwnerConfirmation {
     }
 }
 
+fn observed_checks(
+    checks: &[RecoveryCheckRecord],
+) -> Vec<(RecoveryCheck, RecoveryObservation, CheckDisposition)> {
+    checks
+        .iter()
+        .map(|check| (check.check, check.observed.clone(), check.disposition))
+        .collect()
+}
+
 #[test]
 fn ordinary_same_model_review_is_not_recovery() {
     if isolated("ordinary_same_model_review_is_not_recovery") {
         return;
     }
     let f = Fixture::new(false);
+    let before = f.ctx.store.get(&f.id).unwrap();
+    let digest = crate::plan::policy_digest(&f.ctx.store.config, &before).unwrap();
+    assert_eq!(
+        f.ctx
+            .store
+            .config
+            .review_policy_sources(before.project.as_deref(), before.review)
+            .reviewer,
+        PolicySource::Project
+    );
     let review = crate::plan_review(&f.ctx, &f.id, None).unwrap();
     assert_eq!(review.reviewer, "gpt-sol");
-    assert_eq!(f.callback(&review.id).verdict, Some(Verdict::Approve));
-    crate::plan_verdict(
+    assert_eq!(review.policy_digest, digest);
+    let route = review.route.as_deref().unwrap();
+    assert_eq!(route.profile_source, "project_review_config");
+    assert_eq!(
+        route.independence,
+        ReviewIndependence::SameModelFreshSession
+    );
+    let callback = f.callback(&review.id);
+    assert_eq!(callback.verdict, Some(Verdict::Approve));
+    assert_eq!(
+        callback.notes.as_deref(),
+        Some("Genuine fixture independent review")
+    );
+    let owner = crate::plan_verdict(
         &f.ctx,
         &f.id,
         &crate::PlanVerdict {
@@ -193,6 +224,14 @@ fn ordinary_same_model_review_is_not_recovery() {
     )
     .unwrap();
     let task = f.ctx.store.get(&f.id).unwrap();
+    assert_eq!(task.plans[0].reviews, vec![callback, owner]);
+    let approval = task.plans[0].approval.as_ref().unwrap();
+    assert_eq!(approval.by, "owner");
+    assert_eq!(approval.policy_digest, digest);
+    assert_eq!(
+        approval.policy_digest,
+        crate::plan::policy_digest(&f.ctx.store.reopen().unwrap().config, &task).unwrap()
+    );
     assert!(crate::approved_plan(&f.ctx, &task).unwrap().is_some());
     assert!(records(&f.ctx, &f.id).unwrap().is_empty());
     assert!(!task.dispatch_hold);
@@ -216,6 +255,11 @@ fn family_recovery_binds_launch_callback_owner_acceptance_and_hold() {
     let task = f.ctx.store.get(&f.id).unwrap();
     assert!(crate::plan::policy_digest(&f.ctx.store.config, &task).is_ok());
     assert!(task.plans[0].reviews.is_empty());
+    let plan_before = task.plans[0].clone();
+    let artifacts_before = task.artifacts.clone();
+    let snapshot_before =
+        corral_core::plan_policy::read_plan_snapshot(&f.ctx.store, &plan_before.artifact).unwrap();
+    assert_eq!(snapshot_before, PLAN.as_bytes());
     let config_before = std::fs::read(f.ctx.store.config_path()).unwrap();
     let source_before = std::fs::read(&f.source).unwrap();
     let unrelated = f
@@ -232,14 +276,39 @@ fn family_recovery_binds_launch_callback_owner_acceptance_and_hold() {
         preview.remaining_blockers
     );
     assert_eq!(preview.request.exceptions, input.exceptions);
+    let overridden = vec![
+        (
+            RecoveryCheck::ReviewerFamilyPolicy,
+            RecoveryObservation::Predicate { satisfied: false },
+            CheckDisposition::Overridden,
+        ),
+        (
+            RecoveryCheck::ConfiguredReviewerBinding,
+            RecoveryObservation::Predicate { satisfied: false },
+            CheckDisposition::Overridden,
+        ),
+    ];
+    assert_eq!(observed_checks(&preview.checks), overridden);
     let record = recover_apply(&f.ctx, &preview, &input, Some(confirmation(&preview))).unwrap();
+    assert_eq!(record.preview, preview);
     assert_eq!(
         state(&record).unwrap(),
         RecoveryState::Applied,
         "{:?}",
         record.outcomes
     );
-    assert_eq!(f.callback("PR1").verdict, Some(Verdict::Approve));
+    let launched = f.ctx.store.get(&f.id).unwrap();
+    let review = &launched.plans[0].reviews[0];
+    assert_eq!(review.id, "PR1");
+    assert_eq!(review.reviewer, "gpt-astra");
+    assert_eq!(review.policy_digest, preview.contract_digest);
+    assert!(review.herdr.is_some());
+    let callback = f.callback(&review.id);
+    assert_eq!(callback.verdict, Some(Verdict::Approve));
+    assert_eq!(
+        callback.notes.as_deref(),
+        Some("Genuine fixture independent review")
+    );
     for _ in 0..2 {
         assert!(crate::plan_review::accept_auto(&f.ctx, &f.id, "P1").is_err());
     }
@@ -290,11 +359,50 @@ fn family_recovery_binds_launch_callback_owner_acceptance_and_hold() {
     assert_eq!(task.plan_runs[0].state, PlanRunState::Approved);
     assert!(accepted.outcomes.last().unwrap().after.is_some());
     assert!(crate::approved_plan(&f.ctx, &task).unwrap().is_some());
+    assert_eq!(task.plans[0].artifact, plan_before.artifact);
+    assert_eq!(task.plans[0].document, plan_before.document);
+    assert_eq!(task.plans[0].spec_revision, plan_before.spec_revision);
+    assert_eq!(task.plans[0].run, plan_before.run);
+    assert_eq!(task.plans[0].reviews.len(), 2);
+    assert_eq!(task.plans[0].reviews[0], callback);
+    for artifact in &artifacts_before {
+        assert_eq!(
+            task.artifacts.iter().find(|a| a.path == artifact.path),
+            Some(artifact)
+        );
+    }
+    assert_eq!(
+        corral_core::plan_policy::read_plan_snapshot(&f.ctx.store, &task.plans[0].artifact)
+            .unwrap(),
+        snapshot_before
+    );
     let saved = records(&f.ctx, &f.id).unwrap().pop().unwrap();
     assert_eq!(saved.links.len(), 1);
     let acceptance = saved.links[0].acceptance.as_ref().unwrap();
     assert_eq!(acceptance.acceptance_mode, AcceptanceMode::OwnerRecovery);
     assert!(!acceptance.policy_satisfied);
+    let mut accepted_checks = overridden;
+    accepted_checks.push((
+        RecoveryCheck::IndependentPlanReview,
+        RecoveryObservation::Review {
+            verdict: Some(Verdict::Approve),
+        },
+        CheckDisposition::Satisfied,
+    ));
+    assert_eq!(observed_checks(&accept_preview.checks), accepted_checks);
+    assert_eq!(acceptance.checks, accept_preview.checks);
+    assert_eq!(acceptance.recovery.as_ref(), Some(&reference(&accepted)));
+    assert_eq!(
+        acceptance.reason.as_deref(),
+        Some("One exact fixture exception")
+    );
+    assert_eq!(
+        saved.links[0].receipt,
+        RecoveryReceipt::PlanApproval {
+            plan: "P1".into(),
+            at: task.plans[0].approval.as_ref().unwrap().at,
+        }
+    );
     assert_eq!(
         std::fs::read(f.ctx.store.config_path()).unwrap(),
         config_before
@@ -329,12 +437,20 @@ fn binding_only_preview_and_recovery_model_floor_are_distinct() {
         preview.request.exceptions,
         BTreeSet::from([RecoveryCheck::ConfiguredReviewerBinding])
     );
-    assert!(
-        preview
-            .checks
-            .iter()
-            .any(|c| c.check == RecoveryCheck::ReviewerFamilyPolicy
-                && c.disposition == CheckDisposition::Satisfied)
+    assert_eq!(
+        observed_checks(&preview.checks),
+        vec![
+            (
+                RecoveryCheck::ReviewerFamilyPolicy,
+                RecoveryObservation::Predicate { satisfied: true },
+                CheckDisposition::Satisfied,
+            ),
+            (
+                RecoveryCheck::ConfiguredReviewerBinding,
+                RecoveryObservation::Predicate { satisfied: false },
+                CheckDisposition::Overridden,
+            ),
+        ]
     );
     assert_eq!(
         recover_preview(&f.ctx, &f.id, &input).unwrap().digest,
@@ -394,8 +510,16 @@ fn binding_only_preview_and_recovery_model_floor_are_distinct() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(f.callback("PR1").verdict, Some(Verdict::Approve));
+    let callback = f.callback("PR1");
+    assert_eq!(callback.verdict, Some(Verdict::Approve));
+    assert_eq!(callback.policy_digest, preview.contract_digest);
+    assert_eq!(
+        callback.notes.as_deref(),
+        Some("Genuine fixture independent review")
+    );
     assert!(f.ctx.store.get(&f.id).unwrap().reviewer.is_none());
+    assert!(!f._tmp.path().join("launch-command").exists());
+    assert_eq!(records(&f.ctx, &f.id).unwrap(), vec![record]);
 }
 
 #[test]
@@ -404,11 +528,73 @@ fn ordinary_explicit_binding_escalates_then_task_selection_succeeds() {
         return;
     }
     let f = Fixture::new(false);
+    let config_before = std::fs::read(f.ctx.store.config_path()).unwrap();
     let explicit = crate::plan_review(&f.ctx, &f.id, Some("gpt-astra")).unwrap();
-    assert_eq!(f.callback(&explicit.id).verdict, Some(Verdict::Escalate));
+    assert_eq!(explicit.id, "PR1");
+    assert_eq!(
+        explicit.route.as_deref().unwrap().profile_source,
+        "explicit_override"
+    );
+    let escalated = f.callback(&explicit.id);
+    assert_eq!(escalated.verdict, Some(Verdict::Escalate));
+    assert_eq!(
+        escalated.notes.as_deref(),
+        Some("Genuine fixture independent review\nEscalated: unauthorized reviewer.")
+    );
+    let task = f.ctx.store.get(&f.id).unwrap();
+    assert_eq!(task.plan_runs[0].state, PlanRunState::Escalated);
+    assert!(task.plans[0].approval.is_none());
+    assert!(task.reviewer.is_none());
     crate::reviewer_set(&f.ctx, &f.id, Some("gpt-astra")).unwrap();
+    let selected = f.ctx.store.get(&f.id).unwrap();
+    let digest = crate::plan::policy_digest(&f.ctx.store.config, &selected).unwrap();
+    assert_ne!(digest, explicit.policy_digest);
     let ordinary = crate::plan_review(&f.ctx, &f.id, None).unwrap();
-    assert_eq!(f.callback(&ordinary.id).verdict, Some(Verdict::Approve));
+    assert_eq!(ordinary.id, "PR2");
+    assert_eq!(ordinary.reviewer, "gpt-astra");
+    assert_eq!(ordinary.policy_digest, digest);
+    assert_eq!(
+        ordinary.route.as_deref().unwrap().profile_source,
+        "task_override"
+    );
+    let approved = f.callback(&ordinary.id);
+    assert_eq!(approved.verdict, Some(Verdict::Approve));
+    assert_eq!(
+        approved.notes.as_deref(),
+        Some("Genuine fixture independent review")
+    );
+    let notes = "Owner accepts the ordinary task-selected reviewer";
+    let owner = crate::plan_verdict(
+        &f.ctx,
+        &f.id,
+        &crate::PlanVerdict {
+            plan: "P1",
+            attempt: None,
+            verdict: Verdict::Approve,
+            notes,
+        },
+    )
+    .unwrap();
+    assert_eq!(owner.id, "PR3");
+    assert_eq!(owner.reviewer, "owner");
+    assert_eq!(owner.verdict, Some(Verdict::Approve));
+    assert_eq!(owner.notes.as_deref(), Some(notes));
+    assert_eq!(owner.policy_digest, digest);
+    let task = f.ctx.store.get(&f.id).unwrap();
+    assert_eq!(task.plans[0].reviews, vec![escalated, approved, owner]);
+    let approval = task.plans[0].approval.as_ref().unwrap();
+    assert_eq!(approval.by, "owner");
+    assert_eq!(approval.policy_digest, digest);
+    assert!(crate::approved_plan(&f.ctx, &task).unwrap().is_some());
+    assert_eq!(task.plan_runs[0].state, PlanRunState::Approved);
+    assert_eq!(task.status, Status::Ready);
+    assert_eq!(task.reviewer.as_deref(), Some("gpt-astra"));
+    assert!(!task.dispatch_hold && !task.queued);
+    assert!(task.runs.is_empty());
+    assert_eq!(
+        std::fs::read(f.ctx.store.config_path()).unwrap(),
+        config_before
+    );
     assert!(records(&f.ctx, &f.id).unwrap().is_empty());
 }
 
