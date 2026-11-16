@@ -85,6 +85,7 @@ pub(super) fn command(at: &Frozen, verb: Verb, values: &[String]) -> Result<Comm
         }),
         Verb::Unstick => Command::Task(Task::Unstick { id }),
         Verb::Revert => Command::Task(Task::Revert { id }),
+        Verb::Discard => Command::Review(Review::Discard { id }),
         Verb::PlanCancel => Command::Plan(Plan::Cancel {
             id,
             owner_ok: true,

@@ -56,9 +56,11 @@ pub(super) fn review(feed: &mut Feed, command: &Review) -> Result<(), String> {
         _ => return unsupported(command.verb()),
     };
     let target = DetailRef::Review { task: id.clone() };
-    let Some(DetailBody::Review(mut detail)) =
-        feed.detail(&target).and_then(|cache| cache.body()).cloned()
-    else {
+    let candidate = feed.detail(&target).and_then(|cache| cache.body()).cloned();
+    let Some(DetailBody::Review(mut detail)) = candidate else {
+        if matches!(command, Review::Discard { .. }) {
+            return super::control::discard(feed, id);
+        }
         return Err("Preview candidate not found".into());
     };
     let verdict = match command {
@@ -120,6 +122,9 @@ pub(super) fn review(feed: &mut Feed, command: &Review) -> Result<(), String> {
             row.group = Group::Producing;
         }
         content::save_task(feed, row);
+    }
+    if matches!(command, Review::Discard { .. }) {
+        return super::control::discard(feed, id);
     }
     Ok(())
 }

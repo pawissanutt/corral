@@ -13,6 +13,7 @@ use crate::model::work::{
     Press, Stage,
 };
 use crate::model::{Form, Hue};
+use crate::screens::markdown::{markdown, provide_styles};
 use crate::state::AppState;
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::{hue_ink, mark};
@@ -157,15 +158,9 @@ fn live_story(app: AppState, story: &LiveStory) -> AnyElement {
         }
     }
     if let Some(source) = &story.body {
-        // The canonical Markdown exactly as written: its lines, indentation, link targets and
-        // fenced code all stay; nothing is interpreted. Selectable so it can be copied.
-        out.push(paragraph(
-            app,
-            plain(app, source.clone())
-                .text_color(color(Token::Ink2))
-                .select_text()
-                .into_element(),
-        ));
+        // The task's canonical Markdown, laid out as the transcripts lay out Markdown.
+        provide_styles(app);
+        out.push(paragraph(app, markdown(app, source, false)));
     }
     let rows = story
         .facts

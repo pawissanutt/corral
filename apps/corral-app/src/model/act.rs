@@ -104,6 +104,14 @@ impl Act {
     /// precondition it is bound to. Absent optional arguments are left out.
     pub fn command_rows(&self) -> Vec<(String, String)> {
         let mut rows = vec![("runs".to_owned(), self.command.name().replace('.', " "))];
+        if let Command::Review(cmd::review::ReviewCommand::Discard { id }) = &self.command {
+            rows.push((
+                "effect".to_owned(),
+                format!(
+                    "Drops {id}, discards its current run and removes the run's worktree and branch. Artifacts are kept."
+                ),
+            ));
+        }
         if let Ok(serde_json::Value::Object(mut fields)) = serde_json::to_value(&self.command)
             && let Some(serde_json::Value::Object(args)) = fields.remove("args")
         {
