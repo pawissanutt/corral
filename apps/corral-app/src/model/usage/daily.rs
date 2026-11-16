@@ -1,10 +1,10 @@
-//! Daily bars retain connection/profile identity and qualify every displayed subtotal.
+//! Daily bars retain connection/profile identity; their coverage is the page's one note.
 
 use std::collections::BTreeMap;
 
-use super::live::Inputs;
+use super::live::{Inputs, provider_label};
 use super::totals::Sum;
-use super::{CostBar, Costs, Period, completeness_label};
+use super::{CostBar, Costs, NO_PROFILE, Period, coverage};
 
 fn day_label(day: &str, period: Period) -> String {
     let Ok(date) = day.parse::<jiff::civil::Date>() else {
@@ -38,22 +38,16 @@ pub(super) fn costs(input: &Inputs) -> Costs {
             ),
         };
     };
-    let mut notes: Vec<String> = completeness_label(&series.completeness)
-        .into_iter()
-        .collect();
-    if input.series_stale || input.series_error.is_some() {
-        notes.push("Showing the last series received · stale".into());
-    }
-    let note = (!notes.is_empty()).then(|| notes.join(" · "));
+    let note = (input.series_stale || input.series_error.is_some())
+        .then(|| "Showing the last series corrald sent; it may be out of date.".to_owned());
     let mut totals: BTreeMap<(&str, &str), f64> = BTreeMap::new();
     let mut zero = Sum::default();
     for usage in series.days.iter().flat_map(|day| &day.by_profile) {
         *totals
             .entry((&usage.connection, &usage.profile))
             .or_default() += usage.cost_usd.unwrap_or(0.0);
-        zero.add_total(usage.cost_usd, usage.cost_basis, &usage.completeness);
+        zero.add(usage.cost_usd, usage.cost_basis);
     }
-    zero.qualify(&series.completeness);
     let mut ranked: Vec<_> = totals
         .into_iter()
         .filter(|(_, value)| *value > 0.0)
@@ -61,13 +55,13 @@ pub(super) fn costs(input: &Inputs) -> Costs {
     ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
     if ranked.is_empty() {
         let empty = if series.days.iter().all(|day| day.by_profile.is_empty())
-            && completeness_label(&series.completeness).is_none()
+            && !coverage::incomplete(&series.completeness)
             && !input.series_stale
             && input.series_error.is_none()
         {
             "corral recorded no usage in this period.".into()
         } else {
-            format!("Recorded cost: {}", zero.label())
+            format!("Recorded cost: {}", zero.figure())
         };
         return Costs {
             title,
@@ -88,13 +82,9 @@ pub(super) fn costs(input: &Inputs) -> Costs {
         .map(|(connection, profile)| {
             format!(
                 "{} / {}",
-                if connection.is_empty() {
-                    "unknown connection"
-                } else {
-                    connection
-                },
+                provider_label(connection),
                 if profile.is_empty() {
-                    "no profile recorded"
+                    NO_PROFILE
                 } else {
                     profile
                 },
@@ -111,7 +101,7 @@ pub(super) fn costs(input: &Inputs) -> Costs {
             let mut values = [0.0; 3];
             let mut sum = Sum::default();
             for usage in &day.by_profile {
-                sum.add_total(usage.cost_usd, usage.cost_basis, &usage.completeness);
+                sum.add(usage.cost_usd, usage.cost_basis);
                 let slot = named
                     .iter()
                     .position(|&(connection, profile)| {
@@ -120,7 +110,6 @@ pub(super) fn costs(input: &Inputs) -> Costs {
                     .unwrap_or(2);
                 values[slot] += usage.cost_usd.unwrap_or(0.0);
             }
-            sum.qualify(&series.completeness);
             (values, sum, day_label(&day.day, input.period))
         })
         .collect();
@@ -145,7 +134,6 @@ pub(super) fn costs(input: &Inputs) -> Costs {
                 day,
                 values: widths,
                 total_label: sum.figure(),
-                total_note: sum.contribution_note(),
             }
         })
         .collect();

@@ -97,8 +97,10 @@ Agents, Review, Timeline, Usage, Settings and Ask. Availability depends on negot
 capabilities and device authority; missing facts, provider failures and unsupported operations
 are shown as such. Usage totals, daily costs, Timeline and burn-up retain bounded partial
 results with completeness/scan-coverage notes; incomplete or unpriced totals are not complete
-bills. Quota exhaustion/reset evidence is shown where sourced; unknown limits, usage, windows
-and headroom stay unknown.
+bills. Usage says its coverage once per page, in calendar days, and per provider or profile
+only where that differs. Quota exhaustion/reset evidence is shown where sourced; unknown
+limits, usage, windows and headroom stay unknown: a provider without a quota observation says
+so once, and an unrecorded figure reads `—`.
 
 Browser and native clients have the same authority model. Newly enrolled devices have
 all five flags (`reply`, `act`, `assistant`, `assistant_act`, `admin`), editable per device.

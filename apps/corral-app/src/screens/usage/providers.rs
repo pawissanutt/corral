@@ -1,18 +1,18 @@
-//! One provider's window: the desktop card of the provider grid (`.ucell`), the phone's stacked
+//! One provider's summary: the desktop card of the provider grid (`.ucell`), the phone's stacked
 //! block (`.pband`) and the terminal's gauge line. All words and figures are the model's
-//! `ProviderView`. The card reads top to bottom as one observation: the window's use as the big
-//! figure in its 70/90 band, a meter against those bands, the amounts in words, then the costs
-//! and where the quota facts come from. Without a quota fact the big figure is the period's cost,
-//! there is no meter, and the amounts line says what corral lacks. The band chart appears only
-//! when today's window samples exist; the card is complete without it.
+//! `ProviderView`. With a quota observation the card reads top to bottom as that observation:
+//! the window's use as the big figure in its 70/90 band, a meter against those bands, the amounts
+//! in words, then the costs and where the quota facts come from. Without one the big figure is
+//! the period's cost, the other costs follow, and the card says once, quietly, that no quota is
+//! reported: no meter, no empty track. The band chart appears only when today's window samples
+//! exist; the card is complete without it. The profiles are the table's (desktop, terminal) or
+//! the block's own list (phone), never both.
 
 use nsh_core::prelude::*;
 
-use crate::model::Form;
-use crate::model::usage::{Level, ProviderView};
+use crate::model::usage::{Level, ProviderView, UNKNOWN};
 use crate::screens::usage::cellbar::gauge;
 use crate::screens::usage::chart::chart;
-use crate::screens::usage::costs::qualifier;
 use crate::screens::usage::quotas::quotas;
 use crate::state::AppState;
 use crate::ui::term;
@@ -32,9 +32,42 @@ const BAR_MAX: usize = 40;
 /// Cells between the parts of a terminal line, and the detail lines' indent.
 const GAP_CELLS: usize = 2;
 
-/// The ink of a figure in its band: plain below 70, held from 70, failure from 90.
-fn band_ink(provider_level: Level) -> Token {
-    match provider_level {
+/// The sizes of a form's summary: label, aside, big figure, its words, the lines under it.
+struct Sizes {
+    label: f32,
+    aside: f32,
+    big: f32,
+    big_label: f32,
+    amounts: f32,
+    line: f32,
+    meter: f32,
+}
+
+const DESKTOP: Sizes = Sizes {
+    label: 13.5,
+    aside: 11.5,
+    big: 28.0,
+    big_label: 12.0,
+    amounts: 12.5,
+    line: 12.0,
+    meter: 6.0,
+};
+const PHONE: Sizes = Sizes {
+    label: 15.0,
+    aside: 13.0,
+    big: 30.0,
+    big_label: 13.0,
+    amounts: 14.0,
+    line: 13.0,
+    meter: 8.0,
+};
+
+/// The big figure's ink: plain below 70, held from 70, failure from 90; quiet when unknown.
+fn big_ink(item: &ProviderView) -> Token {
+    if item.big == UNKNOWN {
+        return Token::Ink3;
+    }
+    match item.level {
         Level::None => Token::Ink,
         Level::Warn => Token::Held,
         Level::Bad => Token::Fail,
@@ -42,12 +75,13 @@ fn band_ink(provider_level: Level) -> Token {
 }
 
 /// The amounts line's ink: the failure hue once the window is exhausted, the band's hue once in
-/// a zone, else the secondary ink.
+/// a zone, the secondary ink for a plain observation, the quiet ink when there is none.
 fn amounts_ink(item: &ProviderView) -> Token {
-    match (item.exhausted, item.level) {
-        (true, _) | (false, Level::Bad) => Token::Fail,
-        (false, Level::Warn) => Token::Held,
-        (false, Level::None) => Token::Ink2,
+    match (item.quota_known, item.exhausted, item.level) {
+        (false, _, _) => Token::Ink3,
+        (true, true, _) | (true, false, Level::Bad) => Token::Fail,
+        (true, false, Level::Warn) => Token::Held,
+        (true, false, Level::None) => Token::Ink2,
     }
 }
 
@@ -95,16 +129,92 @@ fn window_meter(item: &ProviderView, height: f32) -> Option<AnyElement> {
     )
 }
 
-/// The band chart when today's samples exist; nothing otherwise.
-fn window_chart(item: &ProviderView, (width, height): (f32, f32)) -> Option<AnyElement> {
-    item.chart
-        .as_ref()
-        .map(|source| chart(source.clone(), width, height))
+/// The label with its aside (the window, or that no provider was recorded) at the trailing edge.
+fn title(item: &ProviderView, sizes: &Sizes, phone: bool) -> AnyElement {
+    view()
+        .flex_row()
+        .items_baseline()
+        .gap(px(8.0))
+        .child(
+            words_text(item.label.clone(), sizes.label, FontWeight::BOLD, Token::Ink)
+                .when(phone, |t| t.role(AccessibilityRole::Header))
+                .number_of_lines(1u32)
+                .flex_shrink(1.0)
+                .min_w(px(0.0)),
+        )
+        .children(item.aside.clone().map(|aside| {
+            words_text(aside, sizes.aside, FontWeight::NORMAL, Token::Ink3)
+                .number_of_lines(1u32)
+                .flex_shrink_0()
+                .ml(auto())
+                .into_element()
+        }))
+        .into_element()
 }
 
-/// A desktop card: the label and window, the big figure in its band with its word, the meter,
-/// the amounts, what keeps the figure from being whole, the chart when there are samples, the
-/// cost line, then where the quota facts come from. `first` leaves out the rule on its left.
+/// The big figure in its band with its words after it, wrapping under it where narrow.
+fn figure(item: &ProviderView, sizes: &Sizes) -> AnyElement {
+    view()
+        .flex_row()
+        .flex_wrap()
+        .items_baseline()
+        .gap_x(px(6.0))
+        .mt(px(8.0))
+        .child(big(item.big.clone(), sizes.big, big_ink(item)))
+        .child(words_text(
+            item.big_label.clone(),
+            sizes.big_label,
+            FontWeight::MEDIUM,
+            Token::Ink3,
+        ))
+        .into_element()
+}
+
+/// Under the figure: with a quota, the meter, the amounts and the costs; without one, the costs
+/// and then, once, that no quota is reported. Then where this provider's coverage differs.
+fn details(item: &ProviderView, sizes: &Sizes) -> Vec<AnyElement> {
+    let amounts = words_text(
+        item.quota_line.clone(),
+        if item.quota_known {
+            sizes.amounts
+        } else {
+            sizes.line
+        },
+        if item.quota_known {
+            FontWeight::MEDIUM
+        } else {
+            FontWeight::NORMAL
+        },
+        amounts_ink(item),
+    )
+    .tabular_nums()
+    .mt(px(6.0))
+    .into_element();
+    let costs = (!item.costs.is_empty()).then(|| {
+        words_text(item.costs.clone(), sizes.line, FontWeight::NORMAL, Token::Ink3)
+            .tabular_nums()
+            .mt(px(6.0))
+            .into_element()
+    });
+    let mut parts = Vec::with_capacity(4);
+    if item.quota_known {
+        parts.extend(window_meter(item, sizes.meter).map(|meter| below(10.0, meter)));
+        parts.push(amounts);
+        parts.extend(costs);
+    } else {
+        parts.extend(costs);
+        parts.push(amounts);
+    }
+    parts.extend(item.note.clone().map(|note| {
+        words_text(note, sizes.line, FontWeight::NORMAL, Token::Ink3)
+            .mt(px(6.0))
+            .into_element()
+    }));
+    parts
+}
+
+/// A desktop card: the label and its aside, the big figure, the details, the chart when there are
+/// samples, then where the quota facts come from. `first` leaves out the rule on its left.
 /// test_id `usage-<provider id>`.
 pub fn desktop_cell(app: AppState, item: &ProviderView, first: bool) -> AnyElement {
     view()
@@ -115,68 +225,25 @@ pub fn desktop_cell(app: AppState, item: &ProviderView, first: bool) -> AnyEleme
         .min_w(px(0.0))
         .px(px(18.0))
         .pt(px(16.0))
-        .pb(px(16.0))
+        .pb(px(18.0))
         .when(!first, |cell| {
             cell.border_l(px(1.0)).border_l_color(color(Token::Rule))
         })
-        .child(
-            view()
-                .flex_row()
-                .items_baseline()
-                .gap(px(8.0))
-                .child(
-                    words_text(item.label.clone(), 13.5, FontWeight::BOLD, Token::Ink)
-                        .number_of_lines(1u32)
-                        .flex_shrink(1.0)
-                        .min_w(px(0.0)),
-                )
-                .child(
-                    words_text(item.window.clone(), 11.5, FontWeight::NORMAL, Token::Ink3)
-                        .number_of_lines(1u32)
-                        .flex_shrink_0()
-                        .ml(auto()),
-                ),
-        )
-        .child(
-            view()
-                .flex_row()
-                .items_baseline()
-                .gap(px(5.0))
-                .mt(px(8.0))
-                .child(big(item.big.clone(), 28.0, band_ink(item.level)))
-                .child(words_text(
-                    item.big_label,
-                    12.0,
-                    FontWeight::MEDIUM,
-                    Token::Ink3,
-                )),
-        )
-        .children(window_meter(item, 6.0).map(|meter| below(10.0, meter)))
-        .child(
-            words_text(
-                item.quota_line.clone(),
-                12.5,
-                FontWeight::MEDIUM,
-                amounts_ink(item),
-            )
-            .tabular_nums()
-            .mt(px(8.0)),
-        )
-        .children(big_note(app, item))
-        .children(window_chart(item, DESKTOP_CHART).map(|chart| below(10.0, chart)))
-        .child(
-            words_text(item.costs.clone(), 12.0, FontWeight::NORMAL, Token::Ink3)
-                .tabular_nums()
-                .mt(px(6.0)),
+        .child(title(item, &DESKTOP, false))
+        .child(figure(item, &DESKTOP))
+        .children(details(item, &DESKTOP))
+        .children(
+            item.chart
+                .as_ref()
+                .map(|source| below(10.0, chart(source.clone(), DESKTOP_CHART.0, DESKTOP_CHART.1))),
         )
         .children(quotas(app, item))
         .into_element()
 }
 
-/// A phone block (`.pband`): the label and window, the big figure in its band, the meter, the
-/// amounts, what keeps the figure from being whole, the chart when there are samples, each
-/// profile with its share and cost, the cost line, then where the quota facts come from.
-/// test_id `usage-<provider id>`.
+/// A phone block (`.pband`): the summary as on the desktop card, then each profile with its
+/// share, cost and unpriced entries, then where the quota facts come from. test_id
+/// `usage-<provider id>`.
 pub fn phone_block(app: AppState, item: &ProviderView) -> AnyElement {
     let profiles = item
         .profiles
@@ -194,7 +261,11 @@ pub fn phone_block(app: AppState, item: &ProviderView) -> AnyElement {
                         .font_family(FONT_MONO)
                         .tabular_nums()
                         .text_size(px(13.0))
-                        .text_color(color(Token::Ink)),
+                        .text_color(color(if profile.named {
+                            Token::Ink
+                        } else {
+                            Token::Ink3
+                        })),
                 )
                 .child(
                     words_text(
@@ -219,66 +290,33 @@ pub fn phone_block(app: AppState, item: &ProviderView) -> AnyElement {
         .pb(px(16.0))
         .border_b(px(1.0))
         .border_color(color(Token::Rule))
-        .child(
-            view()
-                .flex_row()
-                .items_baseline()
-                .gap(px(8.0))
-                .child(
-                    words_text(item.label.clone(), 15.0, FontWeight::BOLD, Token::Ink)
-                        .role(AccessibilityRole::Header)
-                        .flex_shrink(1.0)
-                        .min_w(px(0.0)),
-                )
-                .child(
-                    words_text(item.window.clone(), 13.0, FontWeight::NORMAL, Token::Ink3)
-                        .flex_shrink_0()
-                        .ml(auto()),
-                ),
+        .child(title(item, &PHONE, true))
+        .child(figure(item, &PHONE))
+        .children(details(item, &PHONE))
+        .children(
+            item.chart
+                .as_ref()
+                .map(|source| below(10.0, chart(source.clone(), PHONE_CHART.0, PHONE_CHART.1))),
         )
-        .child(
-            view()
-                .flex_row()
-                .items_baseline()
-                .gap(px(6.0))
-                .mt(px(6.0))
-                .child(big(item.big.clone(), 30.0, band_ink(item.level)))
-                .child(words_text(
-                    item.big_label,
-                    13.0,
-                    FontWeight::MEDIUM,
-                    Token::Ink3,
-                )),
-        )
-        .children(window_meter(item, 8.0).map(|meter| below(10.0, meter)))
-        .child(
-            words_text(
-                item.quota_line.clone(),
-                14.0,
-                FontWeight::MEDIUM,
-                amounts_ink(item),
-            )
-            .tabular_nums()
-            .mt(px(8.0)),
-        )
-        .children(big_note(app, item))
-        .children(window_chart(item, PHONE_CHART).map(|chart| below(10.0, chart)))
         .when(!profiles.is_empty(), |block| {
-            block.child(view().gap(px(4.0)).mt(px(12.0)).children(profiles))
+            block.child(
+                view()
+                    .gap(px(6.0))
+                    .mt(px(12.0))
+                    .pt(px(10.0))
+                    .border_t(px(1.0))
+                    .border_color(color(Token::Rule))
+                    .children(profiles),
+            )
         })
-        .child(
-            words_text(item.costs.clone(), 13.0, FontWeight::NORMAL, Token::Ink3)
-                .tabular_nums()
-                .mt(px(8.0)),
-        )
         .children(quotas(app, item))
         .into_element()
 }
 
 /// A terminal gauge line and its detail: the label (bold, in a fixed column), the big figure
 /// (bold, in its band), the window gauge as wide as `room` Cells allow (blank where use is
-/// unknown, so the columns stay aligned), the headroom; under it, indented, the window and the
-/// amounts, the cost line, what keeps the figure from being whole, then where the quota facts
+/// unknown, so the columns stay aligned), the headroom; under it, indented, the aside, the
+/// amounts and the cost line, where this provider's coverage differs, then where the quota facts
 /// come from, wrapped onto as many lines as `room` needs. test_id `usage-<provider id>`.
 pub fn terminal_line(app: AppState, item: &ProviderView, room: usize) -> AnyElement {
     let headroom_cells = item.headroom.chars().count();
@@ -299,14 +337,13 @@ pub fn terminal_line(app: AppState, item: &ProviderView, room: usize) -> AnyElem
             .flex_shrink_0()
             .into_element(),
     };
-    let details = pack(
-        &[
-            item.window.as_str(),
-            item.quota_line.as_str(),
-            item.costs.as_str(),
-        ],
-        room.saturating_sub(GAP_CELLS),
-    );
+    let mut parts: Vec<&str> = item.aside.as_deref().into_iter().collect();
+    parts.push(item.quota_line.as_str());
+    if !item.costs.is_empty() {
+        parts.push(item.costs.as_str());
+    }
+    parts.extend(item.note.as_deref());
+    let details = pack(&parts, room.saturating_sub(GAP_CELLS));
     let indent = |element: AnyElement| {
         view()
             .pl(term::cells(GAP_CELLS as f32))
@@ -343,7 +380,7 @@ pub fn terminal_line(app: AppState, item: &ProviderView, room: usize) -> AnyElem
                             text(item.big.clone())
                                 .number_of_lines(1u32)
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(color(band_ink(item.level))),
+                                .text_color(color(big_ink(item))),
                         ),
                 )
                 .child(term::space(1.0))
@@ -360,7 +397,6 @@ pub fn terminal_line(app: AppState, item: &ProviderView, room: usize) -> AnyElem
                     .into_element(),
             )
         }))
-        .children(big_note(app, item).map(indent))
         .children(quotas(app, item).map(indent))
         .into_element()
 }
@@ -368,16 +404,6 @@ pub fn terminal_line(app: AppState, item: &ProviderView, room: usize) -> AnyElem
 /// `content` set `top` points under what comes before it.
 fn below(top: f32, content: AnyElement) -> AnyElement {
     view().mt(px(top)).child(content).into_element()
-}
-
-/// What keeps the big figure from being whole (a partial scan, unpriced entries), under it.
-fn big_note(app: AppState, item: &ProviderView) -> Option<AnyElement> {
-    item.big_note.as_deref().map(|line| {
-        view()
-            .when(app.form != Form::Terminal, |v| v.mt(px(4.0)))
-            .child(qualifier(app, line))
-            .into_element()
-    })
 }
 
 /// Lines of at most `room` Cells holding `parts` in order, two Cells apart; a part longer than
@@ -408,7 +434,7 @@ fn words_text(content: impl Into<SharedString>, size: f32, weight: FontWeight, i
         .text_color(color(ink))
 }
 
-/// The big figure (`.ucell .big`): bold, tabular, drawn a little tight, in its band's ink.
+/// The big figure (`.ucell .big`): bold, tabular, drawn a little tight, in its ink.
 fn big(content: String, size: f32, ink: Token) -> Text {
     text(content)
         .flex_shrink_0()
