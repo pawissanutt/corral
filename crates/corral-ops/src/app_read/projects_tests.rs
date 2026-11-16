@@ -67,3 +67,28 @@ fn configured_projects_count_their_tasks_and_plans_name_member_projects() -> Res
     assert!(super::super::projects_rows(&ctx)?.is_empty());
     Ok(())
 }
+
+#[test]
+fn reverted_task_with_completed_run_is_not_in_review() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mut ctx = Ctx::from_store(Store::init(dir.path())?);
+    ctx.store.config.projects.clear();
+    ctx.store.config.projects.insert(
+        "alpha".into(),
+        serde_json::from_value(json!({"path": dir.path()}))?,
+    );
+    ctx.store.save_config()?;
+    let task = ctx
+        .store
+        .create("Reverted", Some("alpha"), Status::Backlog, "")?;
+    ctx.store.update(&task.id, |task| {
+        task.dispatch_hold = true;
+        let mut run = crate::agent::test_support::run("R1", "project-worker");
+        run.outcome = Some(RunOutcome::Done);
+        task.runs.push(run);
+        Ok(())
+    })?;
+
+    assert_eq!(super::super::projects_rows(&ctx)?[0].review, 0);
+    Ok(())
+}

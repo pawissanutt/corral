@@ -153,6 +153,7 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
         },
         &feed,
         &selection,
+        None,
         env(),
         &ProjectFilter::All,
     );
@@ -179,6 +180,7 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
             },
             &feed,
             &selection,
+            None,
             env(),
             &ProjectFilter::All,
         );
@@ -211,6 +213,7 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
         },
         &feed,
         &selection,
+        None,
         env(),
         &ProjectFilter::All,
     );
@@ -225,6 +228,7 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
         },
         &feed,
         &selection,
+        None,
         env(),
         &ProjectFilter::All,
     );
@@ -282,4 +286,98 @@ fn narrow_review_content_is_unified_and_gate_receipts_are_visible() {
             ..
         })
     ));
+}
+
+#[test]
+fn pushed_review_actions_do_not_target_a_candidate_in_the_list_project_filter() {
+    use corral_protocol::cmd::{Command, review::ReviewCommand, task::TaskCommand};
+
+    let mut feed = Feed {
+        link: Link::Up,
+        session: Some(serde_json::from_value(json!({
+            "device": {"id":"d", "name":"device", "platform":"other", "app_version":"test",
+                "enrolled_at":"2026-11-14T00:00:00Z", "revoked_at":null},
+            "authority": {"reply":true,"act":true,"assistant":false,"assistant_act":false,"admin":false},
+            "seen": {"through":0,"at":null}, "server_time":"2026-11-14T00:00:00Z"
+        })).unwrap()),
+        ..Feed::default()
+    };
+    let focused = candidate("head");
+    show(&mut feed, &focused);
+    let mut b = feed.board.task(&focused.task).unwrap().clone();
+    b.project = Some("B".into());
+    let mut a = b.clone();
+    a.id = Id::new("T-2");
+    a.project = Some("A".into());
+    let selection = Selection {
+        review: Some(a.id.clone()),
+        ..Selection::default()
+    };
+    feed.board_received(2, vec![a.clone(), b], &[], true);
+    let filter = ProjectFilter::Project(Id::new("A"));
+    let env = Env {
+        form: Form::Phone,
+        ..env()
+    };
+    let mut state = State::default();
+    let page = live_page_filtered(
+        &state,
+        &feed,
+        &selection,
+        Some(&focused.task),
+        env,
+        400.0,
+        &filter,
+    );
+    assert_eq!(page.title, focused.task.to_string());
+    assert_eq!(
+        selected_filtered(&selection, &feed, &filter).unwrap().id,
+        a.id
+    );
+
+    for action in [Action::Approve, Action::Retry] {
+        let effects =
+            state.apply_live_filtered(action, &feed, &selection, Some(&focused.task), env, &filter);
+        assert!(
+            matches!(&effects[..], [Effect::Act(act)] if matches!(&act.command,
+                Command::Review(ReviewCommand::Approve { id, .. })
+                    | Command::Task(TaskCommand::Retry { id, .. })
+                    if id == focused.task.as_str()
+            ))
+        );
+    }
+    assert_eq!(state.sent.len(), 2);
+    assert!(state.sent.iter().all(|sent| sent.task == focused.task));
+
+    state.apply_live_filtered(
+        Action::Expand("x".into()),
+        &feed,
+        &selection,
+        Some(&focused.task),
+        env,
+        &filter,
+    );
+    assert!(state.expanded.contains(&(focused.task.clone(), "x".into())));
+    assert!(!state.expanded.contains(&(a.id.clone(), "x".into())));
+    state.apply_live_filtered(
+        Action::Expand("x".into()),
+        &feed,
+        &selection,
+        None,
+        env,
+        &filter,
+    );
+    assert!(state.expanded.contains(&(a.id, "x".into())));
+    assert!(
+        state
+            .apply_live_filtered(
+                Action::Retry,
+                &feed,
+                &selection,
+                Some(&Id::new("T-missing")),
+                env,
+                &filter,
+            )
+            .is_empty()
+    );
 }

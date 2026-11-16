@@ -43,10 +43,9 @@ pub(super) fn list(app: AppState) -> AnyElement {
     let as_of = computed(move || app.feed.with(|feed| work::daemon_status(feed).as_of));
     let label = untracked(|| source.with(|list| list.label));
     let (width, columns) = cells::measured(app.form);
-    view()
+    let keyed = view()
         .element_ref(&app.list_keys)
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
-        .pt(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
         .pb(px(if app.form == Form::Terminal {
             0.0
         } else {
@@ -54,7 +53,6 @@ pub(super) fn list(app: AppState) -> AnyElement {
         }))
         .role(AccessibilityRole::List)
         .label(label)
-        .child(project_filter_grouped(app))
         .child(dynamic(move || {
             board
                 .get()
@@ -72,6 +70,13 @@ pub(super) fn list(app: AppState) -> AnyElement {
         }))
         .child(rows(app, source, columns))
         .child(closed_section(app))
+        .into_element();
+    // The chip bar is a sibling above the keyboard list, not inside it: a focused chip keeps
+    // Enter and Space, which the list keys would take to open the selected row.
+    view()
+        .pt(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
+        .child(project_filter_grouped(app))
+        .child(keyed)
         .into_element()
 }
 

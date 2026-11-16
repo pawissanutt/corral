@@ -155,14 +155,18 @@ fn list(app: AppState) -> AnyElement {
             )
             .into_element()
     });
-    view()
+    // The chip bar sits above the keyboard list, not in it: a focused chip keeps Enter and Space.
+    let keyed = view()
         .element_ref(&app.list_keys)
-        .pt(px(if app.form == Form::Desktop { 6.0 } else { 0.0 }))
         .pb(px(if terminal { 0.0 } else { 14.0 }))
         .role(AccessibilityRole::List)
         .label("Builds")
-        .child(project_filter(app, FilterScreen::Builds))
         .child(rows)
+        .into_element();
+    view()
+        .pt(px(if app.form == Form::Desktop { 6.0 } else { 0.0 }))
+        .child(project_filter(app, FilterScreen::Builds))
+        .child(keyed)
         .into_element()
 }
 

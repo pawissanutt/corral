@@ -50,6 +50,18 @@ impl AppState {
         }
     }
 
+    /// Explicit opens and selections must reveal their target before filtered builders read it.
+    pub(super) fn reveal_live(&self, live: &crate::model::Live) {
+        let scope = self.feed.with_untracked(|feed| {
+            self.filters.with_untracked(|filters| {
+                crate::model::nav::explicit_record_filter(feed, filters, live)
+            })
+        });
+        if let Some((screen, filter)) = scope {
+            self.set_project_filter(screen, filter);
+        }
+    }
+
     pub fn now_group(&self) -> NowGroup {
         self.feed.with(|feed| {
             feed.store.as_deref().map_or(NowGroup::State, |store| {

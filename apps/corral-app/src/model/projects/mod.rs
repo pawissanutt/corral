@@ -42,6 +42,7 @@ impl ProjectFilter {
     pub fn resolved(&self, feed: &Feed) -> Self {
         match self {
             Self::Project(id) if !contains_project(feed, id) => Self::All,
+            Self::Unassigned if !has_unassigned(feed) => Self::All,
             _ => self.clone(),
         }
     }

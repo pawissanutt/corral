@@ -64,12 +64,17 @@ pub(super) fn load_changes(app: AppState) {
 pub(super) fn column(app: AppState) -> AnyElement {
     let list = blind(app, inbox::inbox_list_filtered);
     let revealed = stored(None::<String>);
-    let content = view()
+    let keyed = view()
         .element_ref(&app.list_keys)
-        .when(app.form == Form::Desktop, |v| v.pt(px(6.0)).pb(px(14.0)))
+        .when(app.form == Form::Desktop, |v| v.pb(px(14.0)))
         .role(AccessibilityRole::List)
-        .child(project_filter(app, FilterScreen::Inbox))
         .child(live(list, move |list| list_body(app, list, revealed)))
+        .into_element();
+    // The chip bar sits above the keyboard list, not in it: a focused chip keeps Enter and Space.
+    let content = view()
+        .when(app.form == Form::Desktop, |v| v.pt(px(6.0)))
+        .child(project_filter(app, FilterScreen::Inbox))
+        .child(keyed)
         .into_element();
     pane(app, "inbox-list", content)
 }

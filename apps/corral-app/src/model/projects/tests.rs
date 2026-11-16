@@ -68,6 +68,53 @@ fn disappeared_project_filter_cannot_hide_every_row_forever() {
     assert_eq!(filter.resolved(&feed), ProjectFilter::All);
 }
 
+fn unassigned_task() -> crate::model::daemon::Task {
+    use crate::model::daemon::{Group, Step, Task};
+
+    Task {
+        id: "T-1".into(),
+        title: "Task".into(),
+        project: None,
+        plan: None,
+        goal: None,
+        group: Group::Other,
+        rail: std::array::from_fn(|_| Step {
+            mark: crate::model::board::Mark::Next,
+            sha7: None,
+            at: None,
+        }),
+        now: "queued".into(),
+        now_code: "queued".into(),
+        age_since: None,
+        since: None,
+        held_reason: None,
+        questions: 0,
+        attention: vec![],
+        agent: None,
+        cost: None,
+        cost_estimated: false,
+        rev: 1,
+    }
+}
+
+#[test]
+fn vanished_unassigned_scope_falls_back_when_last_task_is_assigned() {
+    let mut feed = Feed::default();
+    feed.capabilities
+        .insert(corral_protocol::PROJECTS_V1.into());
+    feed.projects.insert("corral".into(), project("corral"));
+    let mut task = unassigned_task();
+    feed.board.apply_batch(1, vec![task.clone()], &[]);
+    let filter = ProjectFilter::Unassigned;
+    assert_eq!(filter.resolved(&feed), filter);
+    task.project = Some("corral".into());
+    task.rev = 2;
+    feed.board.apply_batch(2, vec![task], &[]);
+    assert_eq!(filter.resolved(&feed), ProjectFilter::All);
+    assert!(chips(&feed, &filter, FilterScreen::Now).is_empty());
+    assert!(filter.resolved(&feed).matches(Some("corral")));
+}
+
 #[test]
 fn empty_loading_or_legacy_projects_do_not_hide_board_navigation() {
     let mut feed = Feed::default();
@@ -101,6 +148,7 @@ fn persisted_filters_cannot_bleed_across_daemon_stores_or_screens() {
     for id in ["corral", "all", "unassigned"] {
         feed.projects.insert(id.into(), project(id));
     }
+    feed.board.apply_batch(1, vec![unassigned_task()], &[]);
     let mut filters = Filters::default();
     filters.set(
         "/one/.corral",

@@ -8,7 +8,8 @@
 //! pressed one carries the list's selection fill with a rule-2 edge and semibold ink, the others
 //! ink-2 with a hairline edge. Phone: one horizontally scrolling line of 32 pt pills (44 pt
 //! targets) in 13.5 pt, so many projects never wrap the list down; Now's Group toggle sits on a
-//! second line under it, always in view. Terminal: the toggles a Cell
+//! second line under it, always in view. On desktop and in a terminal the toggles wrap onto
+//! further lines within a narrow pane, so none is out of reach. Terminal: the toggles a Cell
 //! apart after a quiet caption; NSH bands the pressed one itself. test ids:
 //! "seg-project-<all|unassigned|project id>" and "seg-group-<state|project>".
 
@@ -168,30 +169,53 @@ fn group_toggle(app: AppState) -> AnyElement {
     labelled(form, GROUP_CAPTION, options)
 }
 
-/// A caption and its toggles, one toolbar for screen readers named by the caption.
+/// A caption and its toggles, one toolbar for screen readers named by the caption. On desktop
+/// and in a terminal the group shrinks to the room it has and its toggles wrap onto further
+/// lines, so a narrow pane (the 280 pt compact list) never pushes a chip out of reach; on the
+/// phone the caller scrolls the line, so the group keeps its natural width.
 fn labelled(form: Form, caption: &'static str, options: Vec<AnyElement>) -> AnyElement {
+    let wraps = form != Form::Phone;
     let words = text(caption)
         .number_of_lines(1u32)
         .flex_shrink_0()
         .text_color(color(Token::Ink3));
     let words = match form {
-        Form::Terminal => words,
-        Form::Desktop | Form::Phone => words
+        Form::Terminal => words.accessibility_elements_hidden(true).into_element(),
+        Form::Phone => words
             .font_family(FONT_TEXT)
-            .text_size(px(if form == Form::Phone { 13.0 } else { 11.5 })),
+            .text_size(px(13.0))
+            .accessibility_elements_hidden(true)
+            .into_element(),
+        // As tall as a pill, so the caption stays level with the first line of toggles.
+        Form::Desktop => view()
+            .h(px(22.0))
+            .flex_shrink_0()
+            .justify_center()
+            .child(
+                words
+                    .font_family(FONT_TEXT)
+                    .text_size(px(11.5))
+                    .accessibility_elements_hidden(true),
+            )
+            .into_element(),
     };
     view()
         .flex_row()
-        .items_center()
-        .flex_shrink_0()
+        .when(wraps, |group| {
+            group.items_start().flex_shrink(1.0).min_w(px(0.0))
+        })
+        .when(!wraps, |group| group.items_center().flex_shrink_0())
         .gap(gap(form))
         .role(AccessibilityRole::Group)
         .label(caption)
-        .child(words.accessibility_elements_hidden(true))
+        .child(words)
         .child(
             toggle_group()
                 .flex_row()
                 .items_center()
+                .when(wraps, |toggles| {
+                    toggles.flex_wrap().flex_shrink(1.0).min_w(px(0.0))
+                })
                 .gap(match form {
                     Form::Terminal => cells(1.0),
                     Form::Desktop => px(4.0),

@@ -613,8 +613,8 @@ fn detail(state: &State, feed: &Feed, shown: &Shown, env: Env, width: f32) -> De
     }
 }
 
-/// The served Review at `width`. `focus` is the candidate a phone page was pushed for; desktop
-/// and terminal show the root's selection, else the first candidate.
+/// The served Review at `width`. `focus` is the candidate a phone page was pushed for and
+/// bypasses list filtering; without it, show the root's selection in scope, else its first candidate.
 pub fn live_page_filtered(
     state: &State,
     feed: &Feed,
