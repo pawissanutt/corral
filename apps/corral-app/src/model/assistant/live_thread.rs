@@ -22,7 +22,6 @@ use crate::model::daemon::{CommandStatus, Feed, Link};
 use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::Live;
-use crate::model::text::span;
 
 /// An owner message's outlined tag from its served state.
 fn tag(state: Option<&WireState>) -> Chip {
@@ -110,12 +109,13 @@ fn tools(lines: &[ToolLine]) -> (Option<String>, Vec<ToolRow>) {
     (Some(summary), rows)
 }
 
-fn paragraphs(text: &str) -> Vec<Body> {
-    text.split("\n\n")
-        .map(str::trim_end)
-        .filter(|block| !block.trim().is_empty())
-        .map(|block| Body::Paragraph(vec![span(block.to_owned())]))
-        .collect()
+/// The assistant's words as one Markdown body; nothing while they are blank.
+fn markdown(text: &str) -> Vec<Body> {
+    if text.trim().is_empty() {
+        Vec::new()
+    } else {
+        vec![Body::Markdown(text.trim_end().to_owned())]
+    }
 }
 
 /// What every assistant message of this thread shares.
@@ -263,7 +263,7 @@ impl Thread<'_> {
             None if entry.card.is_none() => entry.text.as_deref().unwrap_or(""),
             None => "",
         };
-        let mut body = paragraphs(text);
+        let mut body = markdown(text);
         let card = entry.card.as_ref().and_then(|card| self.card(entry, card));
         let filed = matches!(card, Some(Body::Filed(_)));
         let asks = match &entry.card {
@@ -569,7 +569,7 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
                 completion: None,
                 cost_basis: None,
             },
-            paragraphs(&live.text),
+            markdown(&live.text),
         );
         message.at = "now".into();
         thread.turn(

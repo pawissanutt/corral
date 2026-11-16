@@ -4,7 +4,6 @@ use corral_protocol::subscription::LiveText;
 
 use super::{Body, State, ThreadItem, live_chip, live_items};
 use crate::model::daemon::{Feed, Link, ThreadSnapshot};
-use crate::model::text::flat;
 
 fn entry(id: String, kind: EntryKind, text: String) -> ThreadEntry {
     ThreadEntry {
@@ -50,7 +49,7 @@ fn text(message: &super::AssistantMessage) -> String {
         .body
         .iter()
         .filter_map(|body| match body {
-            Body::Paragraph(rich) => Some(flat(rich)),
+            Body::Markdown(words) => Some(words.clone()),
             _ => None,
         })
         .collect::<Vec<_>>()

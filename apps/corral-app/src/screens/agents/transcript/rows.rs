@@ -8,6 +8,7 @@ use nsh_core::prelude::*;
 use crate::model::Form;
 use crate::model::agents::{Card, Divider, Footer, Marker, Picture};
 use crate::model::hue::Hue;
+use crate::screens::markdown::markdown;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::marks::hue_ink;
@@ -16,7 +17,6 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::super::run;
 use super::parts::{disclosure, hidden, pressable, sections, small, state};
-use super::prose;
 
 /// The widest a recorded image is drawn on the desktop, and its shape until it has loaded.
 const PICTURE_MAX: f32 = 480.0;
@@ -180,7 +180,7 @@ pub(super) fn card(app: AppState, card: &Card, n: usize) -> AnyElement {
         .action
         .as_ref()
         .map(|_| format!("data{}", size.unwrap_or_default()));
-    let said = (!card.text.trim().is_empty()).then(|| prose::markdown(app, &card.text, false));
+    let said = (!card.text.trim().is_empty()).then(|| markdown(app, &card.text, false));
     let data = card.open.then(|| sections(app, &card.body));
     let progress = state(app, &card.more, n, false);
     if form == Form::Terminal {

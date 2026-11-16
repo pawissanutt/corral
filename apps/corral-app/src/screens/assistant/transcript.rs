@@ -13,6 +13,7 @@ use crate::model::assistant::{
 };
 use crate::model::board::Mark;
 use crate::model::{Form, Hue, Id, Rich};
+use crate::screens::markdown::{markdown, provide_styles};
 use crate::state::AppState;
 use crate::ui::kit::button::ButtonKind;
 use crate::ui::kit::chip::{chip, illus};
@@ -43,6 +44,7 @@ const HIGHLIGHT: Duration = Duration::from_millis(2400);
 /// and marks it. It is the served thread, its streamed turn and this device's unsent messages.
 pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
     let form = app.form;
+    provide_styles(app);
     let scroller = element_ref();
     let anchor = element_ref();
     let tools_open = signal(None::<String>);
@@ -419,7 +421,7 @@ fn assistant_view(
         body.push(tool_summary(app, summary.clone(), message_data, tools));
     }
     for block in &message_data.body {
-        body.push(body_view(app, block));
+        body.push(body_view(app, block, message_data.streaming));
     }
     if message_data.streaming {
         body.push(caret(app));
@@ -439,9 +441,9 @@ fn assistant_view(
     )
 }
 
-fn body_view(app: AppState, block: &Body) -> AnyElement {
+fn body_view(app: AppState, block: &Body, streaming: bool) -> AnyElement {
     match block {
-        Body::Paragraph(r) => paragraph(app, r),
+        Body::Markdown(words) => written(app, words, streaming),
         Body::Ordered(items) => ordered(app, items),
         Body::Action(card) => cards::action(app, card),
         Body::AskUser(card) => cards::ask_user(app, card),
@@ -451,14 +453,16 @@ fn body_view(app: AppState, block: &Body) -> AnyElement {
     }
 }
 
-/// A paragraph of the answer, its references linked, at most ~70 characters wide on desktop.
-fn paragraph(app: AppState, r: &Rich) -> AnyElement {
-    let holder = view().child(rich(app, r));
-    if app.form == Form::Desktop {
-        holder.max_w(px(MEASURE)).into_element()
-    } else {
-        holder.into_element()
-    }
+/// The answer's Markdown, at most ~70 characters wide on desktop; while it streams, syntax its
+/// end leaves open reads as closed.
+fn written(app: AppState, words: &str, streaming: bool) -> AnyElement {
+    view()
+        .min_w(px(0.0))
+        .when(app.form == Form::Desktop, |holder| {
+            holder.max_w(px(MEASURE))
+        })
+        .child(markdown(app, words, streaming))
+        .into_element()
 }
 
 /// A numbered list (`.aol`): each number in its own column, the entry wrapping beside it.
