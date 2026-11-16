@@ -214,6 +214,9 @@ impl AppState {
                 if walk_failed && !params["after"].is_null() {
                     self.device_walk = None;
                 }
+                // A submission whose reply never arrived may still have run: recover it by id.
+                let uncertain = matches!(method, ACT_SUBMIT | PROMPT_ANSWER)
+                    && error.code == crate::client::core::DEADLINE_EXPIRED;
                 let mut conflict = false;
                 feed.update(|feed| {
                     if let Some(id) = &id {
@@ -240,7 +243,7 @@ impl AppState {
                                 } else {
                                     CommandStatus::Unknown
                                 }
-                            } else if method == ACT_RESULT {
+                            } else if method == ACT_RESULT || uncertain {
                                 CommandStatus::Unknown
                             } else {
                                 error_status(&error)
@@ -269,6 +272,11 @@ impl AppState {
                         feed.registry = Registry::Failed;
                     }
                 });
+                if uncertain {
+                    if let Some(id) = &id {
+                        return Ok(vec![recover(id)]);
+                    }
+                }
                 if method != ACT_RESULT {
                     if let Some(id) = &id {
                         self.settled(feed, id).await;
@@ -691,3 +699,7 @@ mod registry_tests {
 #[cfg(test)]
 #[path = "authority_tests.rs"]
 mod authority_tests;
+
+#[cfg(test)]
+#[path = "submit_deadline_tests.rs"]
+mod submit_deadline_tests;

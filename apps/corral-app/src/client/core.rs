@@ -1,6 +1,7 @@
 use corral_protocol::board::BoardRow;
 use corral_protocol::cmd::{
-    APP_READ_DEADLINE_MS, APP_READ_WAIT_MS, APP_REQUEST_DEADLINE_MS, APP_REQUEST_MARGIN_MS,
+    APP_COMMAND_DEADLINE_MS, APP_READ_DEADLINE_MS, APP_READ_WAIT_MS, APP_REQUEST_DEADLINE_MS,
+    APP_REQUEST_MARGIN_MS,
 };
 use corral_protocol::frame::{Frame, FrameKind};
 #[cfg(test)]
@@ -11,6 +12,9 @@ use corral_protocol::{self as wire, ClientInfo, Health, Hello, Proto, Welcome};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+/// Error code of a reply the client synthesized because corrald's answer never arrived in time;
+/// the request may still have taken effect.
+pub(super) const DEADLINE_EXPIRED: &str = "deadline_expired";
 const MAX_TOPIC_RESET_ERRORS: u8 = 3;
 
 pub(super) enum Event {
@@ -336,7 +340,7 @@ impl Core {
                     ErrorCode::Unavailable,
                     "daemon request deadline expired".into(),
                 )),
-                error_data: None,
+                error_data: Some(serde_json::json!({ "code": DEADLINE_EXPIRED })),
             });
             if pending.closing.is_some() {
                 // A timed-out close still owns the ordered retirement barrier.
@@ -792,6 +796,7 @@ fn request_deadline(method: &str, params: &Value) -> u64 {
             .unwrap_or(0)
             .min(APP_READ_WAIT_MS)
             .saturating_add(APP_REQUEST_MARGIN_MS),
+        wire::app::ACT_SUBMIT | wire::assistant::PROMPT_ANSWER => APP_COMMAND_DEADLINE_MS,
         _ => APP_REQUEST_DEADLINE_MS,
     }
 }

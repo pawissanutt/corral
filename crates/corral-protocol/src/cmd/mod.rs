@@ -44,6 +44,11 @@ pub const APP_REQUEST_DEADLINE_MS: u64 = 5_000;
 pub const APP_REQUEST_MARGIN_MS: u64 = 5_000;
 /// Client deadline for app reads; a read timeout must not disconnect the session.
 pub const APP_READ_DEADLINE_MS: u64 = APP_READ_WAIT_MS + APP_REQUEST_MARGIN_MS;
+/// Daemon wait before a submitted command (`act.submit`, `prompt.answer`) answers `running`.
+pub const APP_COMMAND_WAIT_MS: u64 = 25_000;
+/// Client deadline for command submission: the daemon's command wait plus transport margin, so
+/// a slow command is reported as `running` by corrald instead of expiring on the client.
+pub const APP_COMMAND_DEADLINE_MS: u64 = APP_COMMAND_WAIT_MS + APP_REQUEST_MARGIN_MS;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "family", content = "args", rename_all = "snake_case")]

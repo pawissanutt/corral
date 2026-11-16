@@ -189,8 +189,9 @@ fn rc05_slow_reads_expire_as_correlated_replies_without_killing_the_session() {
         assert_eq!(core.expired(100 + duration), None);
         assert!(matches!(core.next_event(), Some(Event::Reply {
             method: actual, tag: Some(tag), params: actual_params,
-            outcome: Err((ErrorCode::Unavailable, _)), error_data: None,
-        }) if actual == method && tag == "read" && actual_params == params));
+            outcome: Err((ErrorCode::Unavailable, _)), error_data: Some(data),
+        }) if actual == method && tag == "read" && actual_params == params
+            && data["code"] == DEADLINE_EXPIRED));
         assert!(!core.has_pending());
         assert!(core.next_event().is_none());
         receive(

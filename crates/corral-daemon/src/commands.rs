@@ -45,7 +45,7 @@ const WORKERS: usize = 2;
 const QUEUE: usize = 32;
 /// How long a connection waits for its command before answering `running` (or, while it is
 /// still queued, refusing it with `queue_timeout`).
-const REPLY_WAIT: Duration = Duration::from_secs(25);
+const REPLY_WAIT: Duration = Duration::from_millis(corral_protocol::cmd::APP_COMMAND_WAIT_MS);
 const RESULT_WAIT_MAX_MS: u32 = 25_000;
 const OUTPUT_DEADLINE: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(500);
