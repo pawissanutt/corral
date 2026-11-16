@@ -46,7 +46,7 @@ def main() -> int:
     if failed and (repair := os.environ.get('CORRAL_GATE_REPAIR_PROFILE')):
         subprocess.run([sys.executable, 'scripts/gate_repair.py', 'report', repair], check=False)
     if not filters:
-        return int(failed)
+        return result
     # One run at the profile's parallelism: a failure here never stops the other quarantined
     # tests, and each verdict comes from this run's own report. A declared quick selection
     # already ignores the default filter, and nextest rejects a repeated flag.
@@ -68,7 +68,9 @@ def main() -> int:
             print(f"QUARANTINED PASS {label} (fix: {entry['fix']})", flush=True)
         else:
             print(f"QUARANTINED FAIL {label} (fix: {entry['fix']})", flush=True)
-    return int(failed)
+    # An ordinary failure keeps nextest's own status (100 failed tests, 4 empty run); only
+    # a quarantine run that could not report makes a passing ordinary run fail.
+    return result or int(failed)
 
 
 if __name__ == '__main__':

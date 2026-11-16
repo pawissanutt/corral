@@ -23,7 +23,10 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('Timing report unavailable:', result.stderr)
 
-            # A full nonblocking pipe causes a real buffered stdout BlockingIOError.
+            # A full nonblocking pipe causes a real buffered stdout BlockingIOError; an
+            # inherited PYTHONUNBUFFERED would drop the write silently instead.
+            environment = {key: value for key, value in os.environ.items()
+                           if key != 'PYTHONUNBUFFERED'}
             read_fd, write_fd = os.pipe2(os.O_NONBLOCK)
             try:
                 os.write(write_fd, b'x' * fcntl.fcntl(write_fd, fcntl.F_GETPIPE_SZ))
@@ -31,7 +34,8 @@ class ReportTests(unittest.TestCase):
                           "sys.argv = [sys.argv[1], 'report', sys.argv[2]]; "
                           "runpy.run_path(sys.argv[0], run_name='__main__')")
                 result = subprocess.run([sys.executable, '-c', runner, str(script), str(state)],
-                                        stdout=write_fd, stderr=subprocess.PIPE, text=True, check=False)
+                                        stdout=write_fd, stderr=subprocess.PIPE, text=True,
+                                        check=False, env=environment)
             finally:
                 os.close(read_fd)
                 os.close(write_fd)
