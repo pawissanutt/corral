@@ -254,6 +254,51 @@ pub struct AgentRow {
     /// What the owner may do to this session now. The client never infers these.
     #[serde(default)]
     pub controls: SessionControls,
+    /// When the session last produced recorded output, RFC 3339 (`agents.activity.v1`);
+    /// absent when the daemon cannot tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_output_at: Option<String>,
+    /// Recorded events per minute over the last minutes (`agents.activity.v1`); absent
+    /// when the session has no timestamped record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<AgentActivity>,
+    /// The session's own progress steps, in order (`agents.activity.v1`); absent when it
+    /// published none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<Vec<AgentStep>>,
+}
+
+/// How many minutes [`AgentActivity::per_minute`] covers at most.
+pub const AGENT_ACTIVITY_MINUTES: usize = 20;
+/// How many [`AgentStep`]s a row carries at most.
+pub const AGENT_STEPS_MAX: usize = 24;
+
+/// A session's recorded events counted per minute, oldest first. The last bucket is the
+/// minute containing `until`; a quiet minute is zero.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentActivity {
+    /// The instant the buckets were counted at, RFC 3339.
+    pub until: String,
+    /// At most [`AGENT_ACTIVITY_MINUTES`] counts.
+    pub per_minute: Vec<u16>,
+}
+
+/// One step of a session's published progress.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentStep {
+    pub title: String,
+    pub state: AgentStepState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStepState {
+    Pending,
+    InProgress,
+    Done,
+    Dropped,
+    #[serde(other)]
+    Other,
 }
 
 /// One control of a session: offered, or refused with a machine code such as `host_lost`,

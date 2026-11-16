@@ -18,6 +18,8 @@ use jiff::Timestamp;
 use super::{revision, short};
 use crate::Ctx;
 
+#[path = "agent_activity.rs"]
+mod activity;
 #[path = "session_replay.rs"]
 mod replay;
 #[path = "agent_transcript.rs"]
@@ -61,6 +63,9 @@ fn blank(id: String, role: &str, title: &str) -> AgentRow {
         generation: None,
         turn: None,
         controls: Default::default(),
+        last_output_at: None,
+        activity: None,
+        steps: None,
     }
 }
 
@@ -97,6 +102,9 @@ fn progress(value: Option<&corral_core::RunProgress>) -> String {
 }
 
 fn health(row: &mut AgentRow, host: Option<&AgentHostHead>, ended: bool) {
+    if row.steps.is_none() {
+        row.steps = activity::steps(host.and_then(|host| host.todo.as_ref()));
+    }
     if ended {
         row.status = AgentStatus::Ended;
     } else if let Some(host) = host {
@@ -165,6 +173,7 @@ fn run_source(head: &TaskHead, parent: &RunHead, run: &RunHead, reviewer: bool) 
     row.pane = run.herdr.as_ref().map(|pane| pane.pane_id.clone());
     row.since = Some(run.started.to_string());
     row.now = progress(run.progress.as_ref());
+    row.steps = activity::steps(run.progress.as_ref());
     if let Some(text) = &run.blocked_excerpt {
         row.now = short(text, 60);
     }
@@ -239,6 +248,7 @@ fn task_sources(head: &TaskHead, output: &mut Vec<Source>) -> Result<()> {
                 60,
             );
             row.since = Some(gate.at.to_string());
+            row.last_output_at = Some(gate.at.to_string());
             output.push(Source {
                 ended: (row.status == AgentStatus::Ended).then_some(gate.at),
                 row,
@@ -418,6 +428,7 @@ fn assistant_source(ctx: &Ctx, assistant: AssistantRow, tokens: Option<u64>) -> 
     row.generation = Some(container.state.binding.generation).filter(|n| *n != 0);
     row.turn = assistant.turn;
     row.controls = controls;
+    row.steps = activity::steps(container.state.todo.as_ref());
     row.status = match assistant.state {
         AssistantState::Working => AgentStatus::Working,
         AssistantState::Ready => AgentStatus::Live,
@@ -456,6 +467,7 @@ pub fn assistant_rows(ctx: &Ctx) -> Result<Vec<AssistantRow>> {
 /// the last lines of its recorded output. Not a pane inventory, a synthetic list of profiles
 /// or a history: an older session is read by id through its task.
 pub fn agents_rows(ctx: &Ctx) -> Result<Vec<AgentRow>> {
+    let now = ctx.store.now();
     let cutoff = ended_cutoff(ctx);
     let mut sources = Vec::new();
     for head in task_heads(ctx, cutoff)? {
@@ -481,13 +493,14 @@ pub fn agents_rows(ctx: &Ctx) -> Result<Vec<AgentRow>> {
         .map(|mut source| {
             apply_controls(ctx, &mut source)?;
             // A tail that cannot be read leaves the row without one; its other facts stand.
-            source.row.tail = match (&source.transcript, &source.gate) {
-                (Some(path), _) => transcript::tail(path).unwrap_or_default(),
+            let output = match (&source.transcript, &source.gate) {
+                (Some(path), _) => transcript::tail(path, now).unwrap_or_default(),
                 (None, Some((task, run))) if source.row.status == AgentStatus::Gating => {
                     transcript::gate_tail(ctx, task, run).unwrap_or_default()
                 }
-                _ => Vec::new(),
+                _ => activity::Output::default(),
             };
+            output.apply(&mut source.row);
             source.row.rev = revision(&source.row)?;
             Ok(source.row)
         })

@@ -130,8 +130,43 @@
         ],
         "type": "string"
       },
+      "AgentActivity": {
+        "description": "A session's recorded events counted per minute, oldest first. The last bucket is the\nminute containing `until`; a quiet minute is zero.",
+        "properties": {
+          "per_minute": {
+            "description": "At most [`AGENT_ACTIVITY_MINUTES`] counts.",
+            "items": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "until": {
+            "description": "The instant the buckets were counted at, RFC 3339.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "until",
+          "per_minute"
+        ],
+        "type": "object"
+      },
       "AgentRow": {
         "properties": {
+          "activity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentActivity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Recorded events per minute over the last minutes (`agents.activity.v1`); absent\nwhen the session has no timestamped record."
+          },
           "controls": {
             "$ref": "#/components/schemas/SessionControls",
             "default": {
@@ -191,6 +226,13 @@
           "id": {
             "type": "string"
           },
+          "last_output_at": {
+            "description": "When the session last produced recorded output, RFC 3339 (`agents.activity.v1`);\nabsent when the daemon cannot tell.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "machine": {
             "type": [
               "string",
@@ -240,6 +282,16 @@
           },
           "status": {
             "$ref": "#/components/schemas/AgentStatus"
+          },
+          "steps": {
+            "description": "The session's own progress steps, in order (`agents.activity.v1`); absent when it\npublished none.",
+            "items": {
+              "$ref": "#/components/schemas/AgentStep"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "tail": {
             "items": {
@@ -308,6 +360,32 @@
             "type": "string"
           }
         ]
+      },
+      "AgentStep": {
+        "description": "One step of a session's published progress.",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/AgentStepState"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "state"
+        ],
+        "type": "object"
+      },
+      "AgentStepState": {
+        "enum": [
+          "pending",
+          "in_progress",
+          "done",
+          "dropped",
+          "other"
+        ],
+        "type": "string"
       },
       "AnnotationCommand": {
         "oneOf": [

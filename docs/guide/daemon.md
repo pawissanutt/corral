@@ -345,6 +345,13 @@ Topic `classic` (capability `classic.v1`) carries only a change notice for the c
 board frame: epoch, revision, store sequence and time. One notice is in flight until
 `sub.ack`, the latest revision wins, and a different epoch resets the topic.
 
+`agents.activity.v1` adds optional last-output time, bounded twenty-minute recorded-event
+counts and published progress steps to the shared `agents` rows. Like `projects.v1`, it
+is advertised only when offered in HELLO; subscribers share the same optional row fields.
+Counts use only complete records in the existing 128 KiB transcript tail, so busy sessions
+can undercount older minutes. Empty windows omit activity (and its clock); recent windows
+age at most once per minute. Plain gate logs expose capture/attempt time but no event rate.
+
 ## Served reads
 
 The socket's `read.v1` capability serves PM next/brief readouts, the workspace PM
