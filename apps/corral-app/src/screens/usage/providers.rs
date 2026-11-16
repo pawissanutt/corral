@@ -136,11 +136,16 @@ fn title(item: &ProviderView, sizes: &Sizes, phone: bool) -> AnyElement {
         .items_baseline()
         .gap(px(8.0))
         .child(
-            words_text(item.label.clone(), sizes.label, FontWeight::BOLD, Token::Ink)
-                .when(phone, |t| t.role(AccessibilityRole::Header))
-                .number_of_lines(1u32)
-                .flex_shrink(1.0)
-                .min_w(px(0.0)),
+            words_text(
+                item.label.clone(),
+                sizes.label,
+                FontWeight::BOLD,
+                Token::Ink,
+            )
+            .when(phone, |t| t.role(AccessibilityRole::Header))
+            .number_of_lines(1u32)
+            .flex_shrink(1.0)
+            .min_w(px(0.0)),
         )
         .children(item.aside.clone().map(|aside| {
             words_text(aside, sizes.aside, FontWeight::NORMAL, Token::Ink3)
@@ -191,10 +196,15 @@ fn details(item: &ProviderView, sizes: &Sizes) -> Vec<AnyElement> {
     .mt(px(6.0))
     .into_element();
     let costs = (!item.costs.is_empty()).then(|| {
-        words_text(item.costs.clone(), sizes.line, FontWeight::NORMAL, Token::Ink3)
-            .tabular_nums()
-            .mt(px(6.0))
-            .into_element()
+        words_text(
+            item.costs.clone(),
+            sizes.line,
+            FontWeight::NORMAL,
+            Token::Ink3,
+        )
+        .tabular_nums()
+        .mt(px(6.0))
+        .into_element()
     });
     let mut parts = Vec::with_capacity(4);
     if item.quota_known {
@@ -232,11 +242,12 @@ pub fn desktop_cell(app: AppState, item: &ProviderView, first: bool) -> AnyEleme
         .child(title(item, &DESKTOP, false))
         .child(figure(item, &DESKTOP))
         .children(details(item, &DESKTOP))
-        .children(
-            item.chart
-                .as_ref()
-                .map(|source| below(10.0, chart(source.clone(), DESKTOP_CHART.0, DESKTOP_CHART.1))),
-        )
+        .children(item.chart.as_ref().map(|source| {
+            below(
+                10.0,
+                chart(source.clone(), DESKTOP_CHART.0, DESKTOP_CHART.1),
+            )
+        }))
         .children(quotas(app, item))
         .into_element()
 }

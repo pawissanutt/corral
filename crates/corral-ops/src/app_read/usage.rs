@@ -32,7 +32,6 @@ const DAY: i64 = 86_400;
 
 type Snapshot = Arc<Aggregate>;
 
-
 fn canonical_entry(usage: &Usage) -> UsageEntry {
     UsageEntry {
         input: usage.input,
@@ -264,15 +263,26 @@ fn facts_with_limit(ctx: &Ctx, now: Timestamp, max_rows: usize) -> Result<Snapsh
         all.budget.partial("assistant_session_limit");
     }
     if let Some(pm) = corral_core::agent::pm_state::load_selected(
-            &ctx.store,
-            &corral_core::agent::pm_state::Selection::default()
-                .family("generations")
-                .family("usage_sessions"),
-        )?
-    {
+        &ctx.store,
+        &corral_core::agent::pm_state::Selection::default()
+            .family("generations")
+            .family("usage_sessions"),
+    )? {
         // Historical PM generations have no frozen profile; today's config is not evidence.
         let mut facts = Aggregate::new(max_rows);
-        add_state(ctx, &mut facts, rollup::Source { key: "pm", state: &pm.state, ended: false, profile: None }, None, cutoff, now);
+        add_state(
+            ctx,
+            &mut facts,
+            rollup::Source {
+                key: "pm",
+                state: &pm.state,
+                ended: false,
+                profile: None,
+            },
+            None,
+            cutoff,
+            now,
+        );
         all.merge(&facts);
     }
     let query = TaskQuery {
@@ -298,7 +308,9 @@ fn facts_with_limit(ctx: &Ctx, now: Timestamp, max_rows: usize) -> Result<Snapsh
             count += 1;
             let key = format!("task:{}", header.id);
             let identity = rollup::fingerprint(&(header.rev, header.fields.updated, &pricing))?;
-            let task = match rollup::load::<aggregate::Saved>(ctx, &key, &identity).filter(|saved| saved.valid(now)) {
+            let task = match rollup::load::<aggregate::Saved>(ctx, &key, &identity)
+                .filter(|saved| saved.valid(now))
+            {
                 Some(saved) => saved.restore(cutoff),
                 None => {
                     // Compact canonical accounting, not transcript replay. A revision is

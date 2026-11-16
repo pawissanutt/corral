@@ -259,11 +259,7 @@ fn profiles_and_costs(app: AppState, page: &Page, fits: Fit) -> AnyElement {
             view().max_w(px(table_width)).child(table).into_element(),
         )
     });
-    let costs = block(
-        app,
-        page.costs.title.clone(),
-        costs::bars(app, &page.costs),
-    );
+    let costs = block(app, page.costs.title.clone(), costs::bars(app, &page.costs));
     match profiles {
         Some(profiles) if fits == Fit::Beside => view()
             .flex_row()

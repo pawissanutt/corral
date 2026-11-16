@@ -93,7 +93,10 @@ fn partial_coverage_is_said_once_in_days_and_rows_keep_their_unpriced_entries() 
         inputs.period = period;
         let page = page(&inputs);
         let said = page.coverage.as_deref().unwrap();
-        assert!(!said.contains("T05:28") && !said.contains(".427Z"), "{said}");
+        assert!(
+            !said.contains("T05:28") && !said.contains(".427Z"),
+            "{said}"
+        );
         assert!(page.providers.iter().all(|card| card.note.is_none()));
         assert!(page.groups[0].rows[1].gaps.is_some());
         assert_eq!(page.groups[0].rows[0].gaps, None);
@@ -252,7 +255,11 @@ fn unattributed_usage_has_a_title_and_follows_named_providers() {
     let rows = [row("", Some("p"), None), row("b", Some("p"), Some(1.0))];
     let tz = TimeZone::UTC;
     let page = page(&input(rows.iter().collect(), None, &tz));
-    let labels: Vec<&str> = page.providers.iter().map(|card| card.label.as_str()).collect();
+    let labels: Vec<&str> = page
+        .providers
+        .iter()
+        .map(|card| card.label.as_str())
+        .collect();
     assert_eq!(labels, ["b", UNATTRIBUTED]);
     assert!(page.providers.iter().all(|card| !card.id.is_empty()));
 }

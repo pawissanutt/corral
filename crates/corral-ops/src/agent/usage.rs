@@ -297,7 +297,11 @@ fn read_session_with_turns(
     {
         bail!("Pi session {display} is not a regular file");
     }
-    let byte_limit = if coverage.unlimited_bytes { u64::MAX } else { SESSION_MAX_BYTES + 1 };
+    let byte_limit = if coverage.unlimited_bytes {
+        u64::MAX
+    } else {
+        SESSION_MAX_BYTES + 1
+    };
     let mut reader = BufReader::new(file.take(byte_limit));
     let mut session_id = bound_session.to_owned();
     let mut model = run_model.map(str::to_owned);
