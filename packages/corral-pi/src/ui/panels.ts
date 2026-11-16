@@ -226,6 +226,7 @@ export class NativePanels implements PanelSurface {
       terminal: () => this.terminal ? { columns: this.terminal.physical.columns, rows: this.terminal.rows } : undefined,
       onFocusMain: () => { this.sidebar.focused = false; this.queue.focused = false; this.blurDocks(); this.closeKeyDrawer(); },
       canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => this.refresh(),
+      modal: () => !this.disposed && (this.prompts > 0 || this.hasOverlay?.() === true),
       rail: {
         width: () => this.wide && this.terminal ? this.terminal.railWidth : undefined,
         render: (width, height) => this.renderSidebar(width, height),
