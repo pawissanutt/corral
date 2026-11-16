@@ -10,13 +10,14 @@ use crate::model::board::{Actor, Mark, STAGES, daemon_actor, money, stage_word};
 use crate::model::daemon::{self, Feed, Link};
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
+use crate::model::projects::{NowGroup, ProjectFilter};
 use crate::model::text::{Rich, span};
 use crate::model::{Id, Live, Selection};
 
 use super::{
     Button, ButtonKind, Dependency, EMPTY_BOARD, GroupKey, Inspector, NO_BOARD, NowTab, Press,
-    Progress, Record, Stage, State, Tail, TailLine, ago, daemon_selection, group_key, stamp,
-    task_question, task_session, when,
+    Progress, Record, Stage, State, Tail, TailLine, ago, daemon_selection_filtered, group_key,
+    stamp, task_question, task_session, when,
 };
 
 /// The detail reference of a task.
@@ -164,7 +165,14 @@ pub const NO_RUN: &str = "No run for this task yet.";
 pub const NO_TAIL: &str = "No log lines captured for this run.";
 
 /// The inspector in the Daemon state, for the selected task on the board.
-pub fn daemon_inspector(state: &State, feed: &Feed, selected: &Selection, form: Form) -> Inspector {
+pub fn daemon_inspector_filtered(
+    state: &State,
+    feed: &Feed,
+    selected: &Selection,
+    form: Form,
+    filter: &ProjectFilter,
+    grouping: NowGroup,
+) -> Inspector {
     if let Some(line) = feed.device.board_notice() {
         return Inspector::Quiet(line);
     }
@@ -180,7 +188,8 @@ pub fn daemon_inspector(state: &State, feed: &Feed, selected: &Selection, form: 
     if let Some(id) = super::off_board(selected, feed) {
         return super::off_board_inspector(state, feed, id, state.now_tab, form);
     }
-    let Some(task) = daemon_selection(state, selected, feed, form) else {
+    let Some(task) = daemon_selection_filtered(state, selected, feed, form, filter, grouping)
+    else {
         return Inspector::Quiet(EMPTY_BOARD);
     };
     task_inspector(state, feed, task, state.now_tab, form)

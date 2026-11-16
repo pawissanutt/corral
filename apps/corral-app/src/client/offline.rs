@@ -1,6 +1,6 @@
 //! Restart-only hints, never an authenticated transport or a live projection.
 //!
-//! Only complete wire Board/Inbox/Plans/Builds snapshots and Health are retained. Later
+//! Only complete wire Board/Inbox/Plans/Builds/Projects snapshots and Health are retained. Later
 //! complete deltas patch their saved baseline transactionally; partial pages and
 //! deltas without a baseline are not saved. An oversized update fails without
 //! truncating or replacing the last complete snapshot (2 MiB encoded limit).
@@ -19,7 +19,7 @@ use corral_protocol::{
     Health,
     app::AppSession,
     board::BoardRow,
-    rows::{BuildRow, InboxRow, PlanRow},
+    rows::{BuildRow, InboxRow, PlanRow, ProjectRow},
     subscription::SubDelta,
 };
 use nsh_core::prelude::Signal;
@@ -74,6 +74,8 @@ struct Snapshot {
     inbox: Option<TopicRows<InboxRow>>,
     plans: Option<TopicRows<PlanRow>>,
     builds: Option<TopicRows<BuildRow>>,
+    #[serde(default)]
+    projects: Option<TopicRows<ProjectRow>>,
     health: Option<Health>,
 }
 
@@ -85,6 +87,7 @@ impl Default for Snapshot {
             inbox: None,
             plans: None,
             builds: None,
+            projects: None,
             health: None,
         }
     }
@@ -330,7 +333,10 @@ fn cacheable(event: &Event) -> bool {
         Event::Board { .. }
             | Event::Health(_)
             | Event::Rows {
-                delta: SubDelta::Inbox { .. } | SubDelta::Plans { .. } | SubDelta::Builds { .. },
+                delta: SubDelta::Inbox { .. }
+                    | SubDelta::Plans { .. }
+                    | SubDelta::Builds { .. }
+                    | SubDelta::Projects { .. },
                 ..
             }
     )
@@ -388,6 +394,17 @@ fn apply_event(snapshot: &mut Snapshot, event: &Event) -> bool {
             *replacement,
             |row| &row.id,
         ),
+        Event::Rows {
+            delta: SubDelta::Projects { delta },
+            replacement,
+        } if !delta.more => apply_topic(
+            &mut snapshot.projects,
+            delta.epoch,
+            &delta.rows,
+            &delta.left,
+            *replacement,
+            |row| &row.id,
+        ),
         _ => false,
     }
 }
@@ -424,8 +441,9 @@ fn project(feed: Signal<Feed>, marker: &Marker, snapshot: Snapshot) {
         feed.inbox.clear();
         feed.plans.clear();
         feed.builds.clear();
+        feed.projects.clear();
         feed.health = snapshot.health.map(map::health);
-        for topic in ["board", "inbox", "plans", "builds"] {
+        for topic in ["board", "inbox", "plans", "builds", "projects"] {
             feed.topics.remove(topic);
         }
         if let Some(board) = snapshot.board {
@@ -459,6 +477,14 @@ fn project(feed: Signal<Feed>, marker: &Marker, snapshot: Snapshot) {
                 .map(|(id, row)| (Id::new(&id), row))
                 .collect();
             feed.topics.insert("builds".into(), TopicState::default());
+        }
+        if let Some(projects) = snapshot.projects {
+            feed.projects = projects
+                .rows
+                .into_iter()
+                .map(|(id, row)| (Id::new(&id), row))
+                .collect();
+            feed.topics.insert("projects".into(), TopicState::default());
         }
         feed.store = Some(marker.store.clone());
         feed.workspace = std::path::Path::new(&marker.store)

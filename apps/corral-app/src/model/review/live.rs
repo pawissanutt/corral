@@ -13,6 +13,7 @@ use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::Selection;
 use crate::model::nav::Form;
+use crate::model::projects::{ProjectFilter, project_chip};
 use crate::model::text::span;
 
 use super::decide::decide_bar;
@@ -77,24 +78,33 @@ fn stage(feed: &Feed, task: &Task) -> Option<Stage> {
 }
 
 /// Every candidate on the board: the owner's first, then those still verifying.
-pub fn candidates(feed: &Feed) -> Vec<&Task> {
+pub fn candidates_filtered<'a>(feed: &'a Feed, filter: &ProjectFilter) -> Vec<&'a Task> {
+    let filter = filter.resolved(feed);
+    let filter = &filter;
     let tasks = feed.board.tasks();
     let of = move |wanted: Stage| {
         tasks
             .iter()
             .filter(move |task| stage(feed, task) == Some(wanted))
+            .filter(move |task| filter.matches(task.project.as_deref()))
     };
     of(Stage::YourVerdict).chain(of(Stage::Verifying)).collect()
 }
 
 /// The candidate Review shows: the root's selection while the board still lists that task,
 /// otherwise the first candidate.
-pub fn selected<'a>(selection: &Selection, feed: &'a Feed) -> Option<&'a Task> {
+pub fn selected_filtered<'a>(
+    selection: &Selection,
+    feed: &'a Feed,
+    filter: &ProjectFilter,
+) -> Option<&'a Task> {
+    let filter = filter.resolved(feed);
     selection
         .review
         .as_ref()
         .and_then(|id| feed.board.task(id))
-        .or_else(|| candidates(feed).into_iter().next())
+        .filter(|task| filter.matches(task.project.as_deref()))
+        .or_else(|| candidates_filtered(feed, &filter).into_iter().next())
 }
 
 /// The candidate's task row and whatever of its details has arrived.
@@ -215,7 +225,12 @@ fn stage_word(mark: Mark) -> &'static str {
     }
 }
 
-fn candidate_row(feed: &Feed, task: &Task, chosen: Option<&Id>) -> CandidateRow {
+fn candidate_row(
+    feed: &Feed,
+    task: &Task,
+    chosen: Option<&Id>,
+    filter: &ProjectFilter,
+) -> CandidateRow {
     let waiting_on_you = stage(feed, task) == Some(Stage::YourVerdict);
     let troubled = task.rail[..3]
         .iter()
@@ -229,6 +244,7 @@ fn candidate_row(feed: &Feed, task: &Task, chosen: Option<&Id>) -> CandidateRow 
         state.push_str(" · you");
     }
     CandidateRow {
+        project_chip: project_chip(feed, filter, task.project.as_deref()),
         task: task.id.to_string(),
         title: task.title.clone(),
         state,
@@ -252,13 +268,17 @@ fn candidate_row(feed: &Feed, task: &Task, chosen: Option<&Id>) -> CandidateRow 
     }
 }
 
-fn candidate_groups(feed: &Feed, chosen: Option<&Id>) -> Vec<CandidateGroup> {
-    let all = candidates(feed);
+fn candidate_groups(
+    feed: &Feed,
+    chosen: Option<&Id>,
+    filter: &ProjectFilter,
+) -> Vec<CandidateGroup> {
+    let all = candidates_filtered(feed, filter);
     let group = |label, hue, wanted| {
         let rows: Vec<CandidateRow> = all
             .iter()
             .filter(|task| stage(feed, task) == Some(wanted))
-            .map(|task| candidate_row(feed, task, chosen))
+            .map(|task| candidate_row(feed, task, chosen, filter))
             .collect();
         (!rows.is_empty()).then(|| CandidateGroup {
             label,
@@ -595,22 +615,23 @@ fn detail(state: &State, feed: &Feed, shown: &Shown, env: Env, width: f32) -> De
 
 /// The served Review at `width`. `focus` is the candidate a phone page was pushed for; desktop
 /// and terminal show the root's selection, else the first candidate.
-pub fn live_page(
+pub fn live_page_filtered(
     state: &State,
     feed: &Feed,
     selection: &Selection,
     focus: Option<&Id>,
     env: Env,
     width: f32,
+    filter: &ProjectFilter,
 ) -> PageView {
     let phone = env.form == Form::Phone;
     let task = match focus {
         Some(id) => feed.board.task(id),
-        None => selected(selection, feed),
+        None => selected_filtered(selection, feed, filter),
     };
     let shown = task.map(|task| Shown::of(feed, task));
     let chosen = shown.as_ref().map(Shown::id);
-    let candidates = candidate_groups(feed, chosen);
+    let candidates = candidate_groups(feed, chosen, filter);
     let empty = match (&shown, focus) {
         (Some(_), _) => None,
         (None, Some(id)) => Some(format!(
@@ -646,8 +667,16 @@ pub fn live_page(
 }
 
 /// The served candidate list alone, for the phone's Review destination.
-pub fn candidate_list(feed: &Feed, selection: &Selection) -> (Vec<CandidateGroup>, Option<String>) {
-    let groups = candidate_groups(feed, selection.review.as_ref());
+pub fn candidate_list_filtered(
+    feed: &Feed,
+    selection: &Selection,
+    filter: &ProjectFilter,
+) -> (Vec<CandidateGroup>, Option<String>) {
+    let groups = candidate_groups(
+        feed,
+        selected_filtered(selection, feed, filter).map(|task| &task.id),
+        filter,
+    );
     let empty = groups.is_empty().then(|| {
         if feed.board.complete {
             "No candidates are waiting. A task appears here once its run records a candidate."
@@ -722,17 +751,17 @@ mod tests {
             &[],
             true,
         );
-        assert!(candidates(&feed).is_empty());
+        assert!(candidates_filtered(&feed, &ProjectFilter::All).is_empty());
         for (task, state) in [("T-2", InboxState::Open), ("T-3", InboxState::Cancelled)] {
             let row = review_item(task, state);
             feed.inbox.insert(Id::new(&row.id), row);
         }
-        let listed: Vec<&str> = candidates(&feed)
+        let listed: Vec<&str> = candidates_filtered(&feed, &ProjectFilter::All)
             .iter()
             .map(|task| task.id.as_str())
             .collect();
         assert_eq!(listed, ["T-2"]);
-        let groups = candidate_groups(&feed, None);
+        let groups = candidate_groups(&feed, None, &ProjectFilter::All);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].label, "Your verdict");
         assert_eq!(groups[0].rows[0].task, "T-2");

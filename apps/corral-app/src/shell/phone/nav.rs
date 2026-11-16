@@ -27,6 +27,8 @@ pub(super) enum Entry {
     Destination(Destination),
     /// A Settings section opened from the Settings list.
     Section(SettingsSection),
+    /// The project list opened from the More list.
+    Projects,
 }
 
 /// What the shell follows in the model's navigation.
@@ -161,13 +163,15 @@ impl Nav {
     /// The destination on screen: the More destination in the stack, or the tab's own.
     fn shown(self) -> Option<Destination> {
         self.stack
-            .with_untracked(|s| {
-                s.iter().rev().find_map(|e| match e {
-                    Entry::Destination(d) => Some(*d),
-                    Entry::Page(_) | Entry::Section(_) => None,
-                })
-            })
+            .with_untracked(|s| stacked(s))
             .or_else(|| self.tab.get_untracked().destination())
+    }
+
+    /// Tracked [`Self::shown`]: what an assistant workspace's tab, a destination, marks.
+    pub fn showing(self) -> Option<Destination> {
+        self.stack
+            .with(|s| stacked(s))
+            .or_else(|| self.tab.get().destination())
     }
 
     /// The user chose `tab`: its root, with nothing over it, as the mock's tab bar does.
@@ -192,6 +196,11 @@ impl Nav {
         let action = row.action;
         self.app
             .act(self.app.work, move |state, _| state.act(action));
+    }
+
+    /// More's Projects row: the project list over More.
+    pub fn open_projects(self) {
+        self.stack.set(vec![Entry::Projects]);
     }
 
     /// Leaves the page at `depth` and those above it (the header's back, the swipe, Android's
@@ -354,9 +363,17 @@ fn pages_of(entries: &[Entry]) -> Vec<Route> {
         .iter()
         .filter_map(|entry| match entry {
             Entry::Page(page) => Some(page.clone()),
-            Entry::Destination(_) | Entry::Section(_) => None,
+            Entry::Destination(_) | Entry::Section(_) | Entry::Projects => None,
         })
         .collect()
+}
+
+/// The topmost destination a stack shows over its root.
+fn stacked(entries: &[Entry]) -> Option<Destination> {
+    entries.iter().rev().find_map(|e| match e {
+        Entry::Destination(d) => Some(*d),
+        Entry::Page(_) | Entry::Section(_) | Entry::Projects => None,
+    })
 }
 
 /// A stack page's key: its depth and route, so the same route pushed twice is two pages.

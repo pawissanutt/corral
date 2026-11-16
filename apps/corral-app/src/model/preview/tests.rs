@@ -370,16 +370,27 @@ fn disconnected_live_review_approval_refuses_without_a_command_or_confirmation()
         conn: Conn::Healthy,
         form: Form::Desktop,
     };
-    let connected =
-        review::State::default().apply_live(review::Action::Approve, &feed, &selection, env);
+    let all = crate::model::projects::ProjectFilter::All;
+    let connected = review::State::default().apply_live_filtered(
+        review::Action::Approve,
+        &feed,
+        &selection,
+        env,
+        &all,
+    );
     assert!(
         connected
             .iter()
             .any(|effect| matches!(effect, Effect::Act(act) if act.confirm))
     );
     feed.link = Link::Down;
-    let refused =
-        review::State::default().apply_live(review::Action::Approve, &feed, &selection, env);
+    let refused = review::State::default().apply_live_filtered(
+        review::Action::Approve,
+        &feed,
+        &selection,
+        env,
+        &all,
+    );
     assert!(matches!(&refused[..], [Effect::Toast(_)]));
 }
 
@@ -426,4 +437,78 @@ fn preview_plan_and_review_owner_moves_settle_with_their_canonical_records() {
     let counts = AttentionCounts::from_rows(&feed.inbox.values().cloned().collect::<Vec<_>>());
     assert_eq!((counts.total, counts.plans, counts.review), (1, 0, 0));
     assert_eq!(feed.inbox["T-868/R1/Q1"].state, InboxState::Open);
+}
+
+#[test]
+fn preview_projects_include_empty_configuration_and_member_project_unions() {
+    let feed = snapshot();
+    assert!(feed.capabilities.contains(corral_protocol::PROJECTS_V1));
+    let projects = feed
+        .projects
+        .keys()
+        .map(|id| id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(projects, ["corral", "mitigraph", "mitiplay"]);
+    assert_eq!(feed.projects["mitiplay"].open, 0);
+    assert_eq!(
+        feed.board
+            .tasks()
+            .iter()
+            .filter(|task| task.project.is_none())
+            .count(),
+        1
+    );
+    assert_eq!(feed.plans["T-851"].projects, ["corral", "mitigraph"]);
+    assert_eq!(feed.plans["T-874"].projects, ["mitigraph"]);
+    for row in feed.plans.values() {
+        let target = DetailRef::Plan { id: row.id.clone() };
+        let Some(DetailBody::Plan(detail)) = feed.detail(&target).and_then(|cache| cache.body())
+        else {
+            panic!("missing plan detail");
+        };
+        let mut projects = detail
+            .members
+            .iter()
+            .filter_map(|member| feed.board.task(&member.id)?.project.clone())
+            .collect::<Vec<_>>();
+        projects.sort_unstable();
+        projects.dedup();
+        assert_eq!(row.projects, projects);
+    }
+    assert_eq!(
+        feed.builds["B-record-store"].project.as_deref(),
+        Some("corral")
+    );
+    assert_eq!(
+        feed.builds["B-peer-roster"].project.as_deref(),
+        Some("mitigraph")
+    );
+}
+
+#[test]
+fn no_projects_preview_has_complete_empty_work_and_usable_assistant_threads() {
+    let mut feed = feed_no_projects(
+        1_794_744_000,
+        "2026-11-15".into(),
+        "12:00".into(),
+        Some(jiff::tz::TimeZone::UTC),
+    );
+    assert!(feed.capabilities.contains(corral_protocol::PROJECTS_V1));
+    let topic = &feed.topics["projects"];
+    assert!(!topic.loading && !topic.stale && topic.error.is_none());
+    assert!(feed.projects.is_empty());
+    assert!(feed.board.complete);
+    assert!(feed.board.tasks().is_empty());
+    assert!(feed.plans.is_empty() && feed.builds.is_empty() && feed.inbox.is_empty());
+    assert!(feed.agents.is_empty());
+    assert_eq!(feed.health.as_ref().unwrap().pm, PmLevel::Absent);
+    assert_eq!(feed.assistants["A-7"].focus, None);
+    assert!(!feed.threads["quick"].entries.is_empty());
+    let closed = DetailRef::Closed { before: None };
+    detail(&mut feed, &closed).unwrap();
+    let Some(DetailBody::Closed(page)) = feed.detail(&closed).and_then(|cache| cache.body()) else {
+        panic!("missing closed page");
+    };
+    assert!(page.rows.is_empty());
+    assert_eq!(page.total, Some(0));
 }

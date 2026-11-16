@@ -148,6 +148,7 @@ pub(super) fn plans(feed: &mut Feed) {
                 members_landed: 0,
                 blockers: vec![],
                 accepted_at: (!design).then(|| stamp(feed, feed.now.saturating_sub(10800))),
+                projects: member_projects(feed, &members),
                 rev: 1,
             },
         );
@@ -173,6 +174,16 @@ pub(super) fn plans(feed: &mut Feed) {
         }
     }
     refresh_plans(feed);
+}
+
+fn member_projects(feed: &Feed, members: &[PlanMember]) -> Vec<String> {
+    let mut projects: Vec<_> = members
+        .iter()
+        .filter_map(|member| feed.board.task(&member.id)?.project.clone())
+        .collect();
+    projects.sort_unstable();
+    projects.dedup();
+    projects
 }
 
 pub(in crate::model::preview) fn refresh_plans(feed: &mut Feed) {
@@ -243,6 +254,7 @@ pub(in crate::model::preview) fn refresh_plans(feed: &mut Feed) {
                 }
             })
             .collect();
+        let projects = member_projects(feed, &detail.members);
         if let Some(row) = feed.plans.get_mut(&id) {
             row.members_total = detail.members.len() as u32;
             row.members_landed = detail
@@ -251,6 +263,7 @@ pub(in crate::model::preview) fn refresh_plans(feed: &mut Feed) {
                 .filter(|member| member.state == "done")
                 .count() as u32;
             row.blockers = blockers;
+            row.projects = projects;
         }
         if let Some(plan) = feed.plans.get(&id).cloned() {
             let key = format!(

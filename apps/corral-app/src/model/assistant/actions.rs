@@ -67,6 +67,8 @@ pub enum Action {
     ToggleModelMenu,
     /// Remove bounded context.
     Unchip,
+    /// Suppress the active screen's default filing project for this composer.
+    UnchipProject,
     /// Close Ask and clear its chip/list.
     CloseAsk,
     /// Open the quick thread in Agents.

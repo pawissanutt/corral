@@ -4,7 +4,8 @@
 //! rows carry no rail, actor or task commands.
 //!
 //! Everything shown comes from the served feed (corrald's, or the explicitly chosen sample
-//! preview) through `model::builds`: `live_list` for the rows and `detail_of` for the detail.
+//! preview) through `model::builds`: `live_list_filtered` in the screen's own project scope for
+//! the rows and `detail_of` for the detail.
 //! Presses run `builds::reduce`; `live.rs` keeps the shown build's detail loaded and current.
 
 mod detail;
@@ -15,6 +16,7 @@ pub(crate) use detail::line_view;
 use nsh_core::prelude::*;
 
 use crate::model::builds::{self, Action, BuildList, ListNotice, ListRow, ListSection};
+use crate::model::projects::FilterScreen;
 use crate::model::text::span;
 use crate::model::{Form, Hue, Id};
 use crate::screens::PhonePage;
@@ -23,7 +25,8 @@ use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::dot;
 use crate::ui::kit::notice::{empty, error, loading, notice};
 use crate::ui::kit::page::{Width, columns, group_head, pane};
-use crate::ui::kit::rows::{list_row, list_row_tall};
+use crate::ui::kit::project_filter::project_filter;
+use crate::ui::kit::rows::{list_row, list_row_tall, measured, project_chip};
 use crate::ui::kit::text::{dim, rich_small};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
@@ -104,16 +107,18 @@ pub fn live_build_phone(app: AppState, id: Id) -> PhonePage {
 fn content(app: AppState) -> BuildList {
     let env = app.env();
     let selection = app.selection();
+    let filter = app.project_filter(FilterScreen::Builds);
     app.feed
-        .with(|feed| builds::live_list(&selection, feed, env))
+        .with(|feed| builds::live_list_filtered(&selection, feed, env, &filter))
 }
 
 fn press(app: AppState, action: Action) {
     app.run(builds::reduce(action));
 }
 
-/// The grouped list, the destination's keyboard list (`AppState::list_keys`): the loading,
-/// empty, error or stale notice where corrald says so, then each outcome's head and rows.
+/// The grouped list, the destination's keyboard list (`AppState::list_keys`): the project scope,
+/// the loading, empty, error or stale notice where corrald says so, then each outcome's head and
+/// rows.
 fn list(app: AppState) -> AnyElement {
     let terminal = app.form == Form::Terminal;
     let rows = dynamic(move || {
@@ -156,6 +161,7 @@ fn list(app: AppState) -> AnyElement {
         .pb(px(if terminal { 0.0 } else { 14.0 }))
         .role(AccessibilityRole::List)
         .label("Builds")
+        .child(project_filter(app, FilterScreen::Builds))
         .child(rows)
         .into_element()
 }
@@ -184,11 +190,15 @@ fn build_row(app: AppState, row: &ListRow) -> AnyElement {
     let action = row.action.clone();
     let selected = row.selected;
     let id = format!("build-{}", row.id);
+    let label = match &row.project_chip {
+        Some(project) => format!("{}, {project}", row.label),
+        None => row.label.clone(),
+    };
     let on_press = move || press(app, action.clone());
     match app.form {
         Form::Desktop => list_row_tall(
             app,
-            row.label.clone(),
+            label,
             id,
             move || selected,
             on_press,
@@ -196,7 +206,7 @@ fn build_row(app: AppState, row: &ListRow) -> AnyElement {
         ),
         Form::Phone => list_row(
             app,
-            row.label.clone(),
+            label,
             id,
             move || selected,
             on_press,
@@ -204,7 +214,7 @@ fn build_row(app: AppState, row: &ListRow) -> AnyElement {
         ),
         Form::Terminal => list_row(
             app,
-            row.label.clone(),
+            label,
             id,
             move || selected,
             on_press,
@@ -213,7 +223,7 @@ fn build_row(app: AppState, row: &ListRow) -> AnyElement {
     }
 }
 
-/// The title cut to one line, the override chip after it.
+/// The title cut to one line, the project and override chips after it.
 fn title_line(app: AppState, row: &ListRow, size: f32, weight: FontWeight) -> AnyElement {
     let words = text(row.title.clone())
         .flex_shrink(1.0)
@@ -226,14 +236,37 @@ fn title_line(app: AppState, row: &ListRow, size: f32, weight: FontWeight) -> An
     } else {
         words.font_family(FONT_TEXT).text_size(px(size))
     };
-    view()
-        .flex_row()
-        .items_center()
-        .gap(px(6.0))
-        .min_w(px(0.0))
-        .child(words)
-        .children(row.flag.map(|(label, hue)| chip(app, label, hue)))
-        .into_element()
+    let room = signal(0.0_f32);
+    // The override chip beside the project's takes its own room from the title.
+    let reserved = row
+        .flag
+        .map_or(0.0, |(label, _)| label.chars().count() as f32 + 3.0);
+    let tag = row
+        .project_chip
+        .clone()
+        .map(|project| project_chip(app, project, room, reserved));
+    measured(
+        app,
+        view()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .min_w(px(0.0))
+            // A terminal row measures this line, so it takes its width from the cell around it.
+            .when(app.form == Form::Terminal, |line| line.w_full()),
+        room,
+    )
+    .child(words)
+    .children(tag)
+    .children(row.flag.map(|(label, hue)| chip(app, label, hue)))
+    .into_element()
+}
+
+/// The row's quiet project chip, while the list spans projects.
+fn project(app: AppState, row: &ListRow) -> Option<AnyElement> {
+    row.project_chip
+        .clone()
+        .map(|project| chip(app, project, Hue::Neutral))
 }
 
 /// Updated time and cost, in mono; an unknown cost in the quiet ink, never a zero. Each its own
@@ -313,6 +346,7 @@ fn phone_cells(app: AppState, row: &ListRow) -> Vec<AnyElement> {
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(color(Token::Ink)),
         )
+        .children(project(app, row))
         .children(row.flag.map(|(label, hue)| chip(app, label, hue)));
     let mut facts = vec![span(format!("{} · ", row.state)).hue(row.hue)];
     facts.extend(row.facts.iter().cloned());

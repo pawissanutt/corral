@@ -7,6 +7,7 @@ mod control;
 mod effects;
 mod fleet;
 mod history;
+mod projects;
 mod sessions;
 
 use crate::model::daemon::*;
@@ -16,6 +17,63 @@ pub use actions::act;
 pub use effects::{confirmation, effect, operation};
 
 pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZone>) -> Feed {
+    let mut feed = base(now, date, clock, time_zone);
+    content::populate(&mut feed);
+    sessions::populate(&mut feed);
+    content::refresh_plans(&mut feed);
+    history::populate(&mut feed);
+    projects::populate(&mut feed);
+    closed::populate(&mut feed);
+    feed
+}
+
+/// An assistant workspace with a complete, empty project list and no task-management facts.
+pub fn feed_no_projects(
+    now: u64,
+    date: String,
+    clock: String,
+    time_zone: Option<jiff::tz::TimeZone>,
+) -> Feed {
+    let mut feed = base(now, date, clock, time_zone);
+    if let Some(health) = &mut feed.health {
+        health.pm = PmLevel::Absent;
+    }
+    content::settings(&mut feed);
+    sessions::assistant(
+        &mut feed,
+        "A-7",
+        "Quick thread",
+        None,
+        Some("pi-sol xhigh".into()),
+    );
+    let at = stamp(&feed, now);
+    let entry = sessions::entry(
+        "preview-workspace",
+        &at,
+        corral_protocol::assistant::EntryKind::Answer,
+        "Preview · This workspace has no configured projects. Use the assistant to ask questions or discuss ideas; no project work or PM is running.",
+    );
+    for scope in ["quick", "A-7"] {
+        if let Some(thread) = feed.threads.get_mut(scope) {
+            thread
+                .entries
+                .insert(entry.id.clone().into(), entry.clone());
+        }
+    }
+    put(
+        &mut feed,
+        DetailRef::Filings { before: None },
+        DetailBody::Filings(FilingsPage {
+            rows: vec![],
+            total: 0,
+            older: None,
+            newer: None,
+        }),
+    );
+    feed
+}
+
+fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZone>) -> Feed {
     let authority = DeviceAuthority {
         reply: true,
         act: true,
@@ -110,6 +168,7 @@ pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::T
         ACT_V1,
         DEVICE_V1,
         corral_protocol::BOARD_V1,
+        corral_protocol::PROJECTS_V1,
         corral_protocol::cmd::CMD_V1,
         STREAM_TERMINAL_V1,
     ] {
@@ -124,15 +183,12 @@ pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::T
         "usage",
         "settings",
         "board",
+        "projects",
         "thread:quick",
     ] {
         feed.topics.insert(topic.into(), TopicState::default());
     }
-    content::populate(&mut feed);
-    sessions::populate(&mut feed);
-    content::refresh_plans(&mut feed);
-    history::populate(&mut feed);
-    closed::populate(&mut feed);
+    feed.board.apply_batch(0, vec![], &[]);
     feed.synced = Some(feed.clock.clone());
     feed
 }

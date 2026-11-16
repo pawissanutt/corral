@@ -1,7 +1,7 @@
 //! The Inbox destination and a question's focus page by its key. The model resolves every
-//! word, branch and order (`model::inbox`); this module lays it out per form and sends each
-//! control's [`Action`] back through the feed-backed reducer (`State::act_live`), whether the
-//! feed is corrald's or the labelled preview's.
+//! word, branch and order (`model::inbox`); this module lays it out per form, in the Inbox's own
+//! project scope, and sends each control's [`Action`] back through the feed-backed reducer
+//! (`State::act_live_filtered`), whether the feed is corrald's or the labelled preview's.
 //!
 //! Views read the model through memos built from a copy of the state without the typed text
 //! (the alternate answer, the follow-up): typing changes only the decide bar, so the fields
@@ -22,6 +22,7 @@ mod verbs;
 use nsh_core::prelude::*;
 
 use crate::model::inbox::{self, Action, Button, ButtonKind as ModelKind, Src, State};
+use crate::model::projects::{FilterScreen, ProjectFilter};
 use crate::model::{Destination, Env, Form, Hue, Id, Rich};
 use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
@@ -130,8 +131,8 @@ fn phone_page(app: AppState, key: Key) -> PhonePage {
     sheet::load(app, key.clone());
     let title = untracked(|| {
         let env = app.env();
-        with_source(app, |state, src| {
-            inbox::question(state, src, key.as_ref(), env).title
+        with_source(app, |state, src, filter| {
+            inbox::question_filtered(state, src, key.as_ref(), env, filter).title
         })
     });
     let body_key = key.clone();
@@ -305,10 +306,11 @@ fn terminal_panes(
         .into_element()
 }
 
-/// Runs `action` through the feed-backed reducer, then the effects it returns.
+/// Runs `action` through the feed-backed reducer in the Inbox scope, then the effects it returns.
 fn act(app: AppState, action: Action) {
+    let filter = untracked(|| app.project_filter(FilterScreen::Inbox));
     app.reduce(app.inbox, move |state, feed, _selection, env| {
-        state.act_live(action, feed, env)
+        state.act_live_filtered(action, feed, env, &filter)
     });
 }
 
@@ -317,20 +319,25 @@ fn press(app: AppState, action: Action) -> impl Fn() + 'static {
     move || act(app, action.clone())
 }
 
-/// Tracked read of the state over the feed.
-fn with_source<R>(app: AppState, read: impl FnOnce(&State, Src) -> R) -> R {
-    app.feed
-        .with(|feed| app.inbox.with(|state| read(state, Src::Live(feed))))
+/// Tracked read of the state over the feed, with the Inbox's project scope.
+fn with_source<R>(app: AppState, read: impl FnOnce(&State, Src, &ProjectFilter) -> R) -> R {
+    let filter = app.project_filter(FilterScreen::Inbox);
+    app.feed.with(|feed| {
+        app.inbox
+            .with(|state| read(state, Src::Live(feed), &filter))
+    })
 }
 
 /// A memo of a view builder over the state without its typed text (see the module docs).
 fn blind<T: PartialEq + 'static>(
     app: AppState,
-    build: impl Fn(&State, Src, Env) -> T + 'static,
+    build: impl Fn(&State, Src, Env, &ProjectFilter) -> T + 'static,
 ) -> Memo<T> {
     computed(move || {
         let env = app.env();
-        with_source(app, |state, src| build(&state.blind(), src, env))
+        with_source(app, |state, src, filter| {
+            build(&state.blind(), src, env, filter)
+        })
     })
 }
 

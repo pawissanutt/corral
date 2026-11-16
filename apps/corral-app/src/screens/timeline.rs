@@ -10,6 +10,7 @@ mod chart;
 mod scope;
 mod shown;
 
+use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
 use crate::model::text::span;
@@ -492,37 +493,65 @@ fn burnup_section(app: AppState, data: Memo<Shown>) -> AnyElement {
                 .flex_row()
                 .when(form != Form::Terminal, |row| row.pb(px(6.0)))
                 .child(scope::picker(app));
-            let Some(series) = series else {
-                let line = match state {
-                    Status::Loading => "Loading the goal burn-up…".to_owned(),
-                    Status::Failed(_) if alike => "Goal burn-up unavailable.".to_owned(),
-                    Status::Failed(message) => format!("Goal burn-up unavailable: {message}"),
-                    Status::Ready | Status::Stale => {
-                        "corral has recorded no goal changes to plot yet.".to_owned()
-                    }
-                };
-                return view()
-                    .flex_col()
-                    .child(h3(app, "Goal burn-up", None))
-                    .child(scope)
-                    .children(coverage.map(|line| qualifier(app, &line)))
-                    .child(plain(app, line).text_color(color(Token::Ink3)))
-                    .into_element();
-            };
-            let title = series.title.clone();
-            let period = series.period.clone();
-            let drawn = if form == Form::Terminal {
-                cells::burnup(&series)
-            } else {
-                chart::burnup(app, series)
-            };
-            view()
-                .flex_col()
-                .child(h3(app, title, Some(period)))
-                .child(scope)
-                .children(coverage.map(|line| qualifier(app, &line)))
-                .child(drawn)
-                .into_element()
+            burnup_body(
+                app,
+                (series, state, coverage),
+                alike,
+                Some(scope.into_element()),
+            )
         })
     })
+}
+
+/// A goal burn-up of one fixed scope outside the Timeline (a project's page): the same chart and
+/// states as the Timeline's, without its scope menu, requested while shown.
+pub(crate) fn scoped_burnup(app: AppState, request: DetailRef) -> AnyElement {
+    shown::keep_burnup(app, request.clone());
+    let parts = computed(move || shown::burnup_of(app, &request));
+    dynamic(move || {
+        let parts = parts.get();
+        untracked(move || burnup_body(app, parts, false, None))
+    })
+}
+
+/// The burn-up's caption, `scope` under it, how complete corrald's count is and the chart, or
+/// the line that says why there is none.
+fn burnup_body(
+    app: AppState,
+    (series, state, coverage): shown::BurnupParts,
+    alike: bool,
+    scope: Option<AnyElement>,
+) -> AnyElement {
+    let form = app.form;
+    let Some(series) = series else {
+        let line = match state {
+            Status::Loading => "Loading the goal burn-up…".to_owned(),
+            Status::Failed(_) if alike => "Goal burn-up unavailable.".to_owned(),
+            Status::Failed(message) => format!("Goal burn-up unavailable: {message}"),
+            Status::Ready | Status::Stale => {
+                "corral has recorded no goal changes to plot yet.".to_owned()
+            }
+        };
+        return view()
+            .flex_col()
+            .child(h3(app, "Goal burn-up", None))
+            .children(scope)
+            .children(coverage.map(|line| qualifier(app, &line)))
+            .child(plain(app, line).text_color(color(Token::Ink3)))
+            .into_element();
+    };
+    let title = series.title.clone();
+    let period = series.period.clone();
+    let drawn = if form == Form::Terminal {
+        cells::burnup(&series)
+    } else {
+        chart::burnup(app, series)
+    };
+    view()
+        .flex_col()
+        .child(h3(app, title, Some(period)))
+        .children(scope)
+        .children(coverage.map(|line| qualifier(app, &line)))
+        .child(drawn)
+        .into_element()
 }

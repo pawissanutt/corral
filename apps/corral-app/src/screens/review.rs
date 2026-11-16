@@ -1,7 +1,7 @@
 //! Review: the candidate list, the selected candidate with its SHA-bound verdicts, the evidence
-//! tabs and the pinned decide bar. Every word, count and branch comes from `model::review`; this
-//! module lays the model's page out for each form and sends each control's action back through
-//! the feed-backed reducer (`apply_live`).
+//! tabs and the pinned decide bar. Every word, count and branch comes from `model::review`, in
+//! the Review screen's own project scope; this module lays the model's page out for each form and
+//! sends each control's action back through the feed-backed reducer (`apply_live_filtered`).
 //!
 //! Desktop is the mockup's two columns (the 300 pt candidate list, the detail beside it); the
 //! detail measures its own width and asks the model for that width, so the diff falls back to
@@ -24,6 +24,7 @@ use nsh_core::prelude::*;
 
 use crate::model::act;
 use crate::model::daemon::{Feed, Link, Task};
+use crate::model::projects::{FilterScreen, ProjectFilter};
 use crate::model::review::{self, Action, Body, ButtonStyle, DetailView, Layout, PageView, Tab};
 use crate::model::work::{self, Record};
 use crate::model::{Form, Hue, Id, Rich, Selection};
@@ -98,14 +99,30 @@ pub fn live_review_phone(app: AppState, task: Id) -> PhonePage {
     }
 }
 
-/// The model's page for this form at `width` (tracked: state, connection, selection and feed).
+/// The Review screen's own project scope, tracked.
+fn scope(app: AppState) -> ProjectFilter {
+    app.project_filter(FilterScreen::Review)
+}
+
+/// The model's page for this form at `width` (tracked: state, connection, selection, scope and
+/// feed).
 fn page_view(cx: &Ctx, width: f32) -> PageView {
     let app = cx.app;
     let env = app.env();
     let selection = app.selection();
+    let filter = scope(app);
     app.feed.with(|feed| {
-        app.review
-            .with(|state| review::live_page(state, feed, &selection, cx.focus.as_ref(), env, width))
+        app.review.with(|state| {
+            review::live_page_filtered(
+                state,
+                feed,
+                &selection,
+                cx.focus.as_ref(),
+                env,
+                width,
+                &filter,
+            )
+        })
     })
 }
 
@@ -121,8 +138,9 @@ fn act(cx: &Ctx, action: Action) -> impl Fn() + 'static {
             });
         }
         let action = action.clone();
+        let filter = untracked(|| scope(app));
         app.reduce(app.review, move |state, feed, selection, env| {
-            state.apply_live(action, feed, selection, env)
+            state.apply_live_filtered(action, feed, selection, env, &filter)
         });
     }
 }
@@ -140,8 +158,9 @@ fn keep_current(cx: &Ctx) {
         let focus = focus.clone();
         computed(move || {
             let selection = app.selection();
+            let filter = scope(app);
             app.feed.with(|feed| {
-                let task = shown_task(feed, &selection, focus.as_ref())?;
+                let task = shown_task(feed, &selection, focus.as_ref(), &filter)?;
                 let settled = app.review.with(|state| {
                     state
                         .sent
@@ -163,8 +182,10 @@ fn keep_current(cx: &Ctx) {
     });
     let task = computed(move || {
         let selection = app.selection();
+        let filter = scope(app);
         app.feed.with(|feed| {
-            shown_task(feed, &selection, focus.as_ref()).and_then(|task| wanted(feed, task))
+            shown_task(feed, &selection, focus.as_ref(), &filter)
+                .and_then(|task| wanted(feed, task))
         })
     });
     keep_loaded(app, task);
@@ -174,11 +195,16 @@ fn keep_current(cx: &Ctx) {
     );
 }
 
-/// The candidate this page shows: the one it was pushed for, or the selected one.
-fn shown_task<'a>(feed: &'a Feed, selection: &Selection, focus: Option<&Id>) -> Option<&'a Task> {
+/// The candidate this page shows: the one it was pushed for, or the selected one in scope.
+fn shown_task<'a>(
+    feed: &'a Feed,
+    selection: &Selection,
+    focus: Option<&Id>,
+    filter: &ProjectFilter,
+) -> Option<&'a Task> {
     match focus {
         Some(id) => feed.board.task(id),
-        None => review::selected(selection, feed),
+        None => review::selected_filtered(selection, feed, filter),
     }
 }
 
@@ -219,8 +245,9 @@ fn verb_row(cx: &Ctx) -> AnyElement {
     let app = cx.app;
     let verbs = computed(move || {
         let selection = app.selection();
+        let filter = scope(app);
         app.feed.with(|feed| {
-            shown_task(feed, &selection, focus.as_ref())
+            shown_task(feed, &selection, focus.as_ref(), &filter)
                 .map(|task| work::record_verbs(feed, &Record::Review(task.id.clone())))
                 .unwrap_or_default()
         })

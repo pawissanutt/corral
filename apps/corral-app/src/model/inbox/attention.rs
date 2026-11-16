@@ -3,6 +3,7 @@ use corral_protocol::rows::{AttentionActor, AttentionCounts, InboxKind, InboxRow
 
 use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
+use crate::model::projects::ProjectFilter;
 
 /// Canonical open owner moves; PM work never becomes an owner badge.
 pub fn owner_moves(feed: &Feed) -> impl Iterator<Item = &InboxRow> {
@@ -10,12 +11,14 @@ pub fn owner_moves(feed: &Feed) -> impl Iterator<Item = &InboxRow> {
 }
 
 /// Apply the wire classifier without cloning rows or inferring attention from board status.
-pub fn attention_counts(feed: &Feed) -> AttentionCounts {
+pub fn attention_counts_filtered(feed: &Feed, filter: &ProjectFilter) -> AttentionCounts {
+    let filter = filter.resolved(feed);
     let mut counts = AttentionCounts::default();
     for row in feed
         .inbox
         .values()
         .filter(|row| row.kind != InboxKind::PmAction)
+        .filter(|row| filter.matches(row.project.as_deref()))
     {
         let one = AttentionCounts::from_rows(std::slice::from_ref(row));
         counts.total += one.total;
@@ -158,10 +161,18 @@ mod tests {
             plans: 1,
             review: 1,
         };
-        assert_eq!(attention_counts(&feed), expected);
+        assert_eq!(
+            attention_counts_filtered(&feed, &ProjectFilter::All),
+            expected
+        );
         assert_eq!(super::super::ordered(&feed).len(), 3);
         let env = health::daemon_env(&feed, Form::Terminal);
-        let list = super::super::live_list::list(&super::super::State::default(), &feed, env);
+        let list = super::super::live_list::list_filtered(
+            &super::super::State::default(),
+            &feed,
+            env,
+            &ProjectFilter::All,
+        );
         let super::super::InboxList::Ready {
             needs_count, items, ..
         } = list

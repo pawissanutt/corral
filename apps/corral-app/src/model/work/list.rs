@@ -11,6 +11,8 @@ use super::{Button, GroupKey, Press};
 pub struct TaskRow {
     /// Id, title, actor, delta, rail, now, age and cost, resolved for the row.
     pub line: TaskLine,
+    /// Project context when the unfiltered workspace list needs disambiguation.
+    pub project_chip: Option<String>,
     /// Whether the desktop list exposes this as its selected option.
     pub selected: bool,
     /// Select on desktop, push a task or question on phone.
@@ -29,10 +31,10 @@ pub enum Row {
 /// A heading and the list rows beneath it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupView {
-    /// Stable group key.
+    /// State bucket; project sections use Queued and are identified by their heading.
     pub key: GroupKey,
     /// Group heading text.
-    pub label: &'static str,
+    pub label: String,
     /// Header count, including collapsed or omitted sample rows.
     pub count: u32,
     /// State hue of the heading.
@@ -56,7 +58,7 @@ pub struct GroupedList {
     pub loading_rows: usize,
     /// One quiet line instead of the groups: no board yet, or nothing on it.
     pub notice: Option<&'static str>,
-    /// The six source groups, except the desktop Empty projection omits Needs you.
+    /// State buckets, or alphabetical project sections with Unassigned last.
     pub groups: Vec<GroupView>,
 }
 

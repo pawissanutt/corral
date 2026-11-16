@@ -17,6 +17,18 @@ Destinations:
 - **Settings**: device pairing, authority, notifications, profiles and local preferences.
 - **Ask**: one composer for questions, ideas and instructions, addressed to the assistant or PM.
 
+Projects (`projects.v1`): the sidebar (phone: More › Projects) lists the workspace's
+configured projects with open, running and needs-me counts, plus Unassigned when a task
+names no project. A **Project page** shows its tasks, plans, builds and burn-up, with
+Open in Now and Ask about this project. Now, Changes, Plans, Builds, Inbox and Review each
+keep their own project filter; rows show a project chip under All when there are two or
+more projects, and Now can group by project. Ask sends the project in scope as context,
+so the assistant files Ideas there unless told otherwise. A daemon without `projects.v1`
+supplies project names only from task rows, without counts. When the daemon's complete
+project list is empty the workspace has no project management: only Ask, Agents, Usage and
+Settings are offered, and the landing explains how to add a project. The palette offers
+**Preview: no projects** for that state.
+
 Disconnected screens offer **Connect** and **Preview with sample data**. Preview exercises the same live screens and actions with sample data, never the daemon; it is not restored on restart. The UI uses real dates, not the mockup's date. Settings › General › **This device** exposes local preferences even without a connection. The palette (`Ctrl K` or `?`) also offers **Data: fixture**. Its Demo controls include hotkey, share-sheet and lock-screen-push illustrations where mounted; those illustrations do not establish OS integration.
 
 The app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain, not a member of corral's workspace. The [design handoff](../../docs/app-design/README.md) contains the requirements, architecture proposal and runnable mockup, with their authority and implementation-status caveats.
@@ -325,7 +337,7 @@ scale), and Review `s` (split when wide enough).
 
 | Store | Keys / contents |
 |---|---|
-| NSH Storage | `corral.destination`, `corral.settings`, `corral.theme`, `corral.now.layout`, `corral.sidebar`, non-secret `corral.paired` |
+| NSH Storage | `corral.destination`, `corral.settings`, `corral.theme`, `corral.now.layout`, `corral.sidebar`, `corral.filters` (per daemon store: each screen's project filter and Now grouping), non-secret `corral.paired` |
 | Browser IndexedDB `corral-app` v1, `credentials` | `device` (AES-GCM-wrapped credential and non-extractable key), retryable `forget` intent |
 | Browser IndexedDB `corral-local-state` v1 | `records` plus `meta` (`revision`); transactional outbox/offline cache, separate from credentials |
 | Native state directory | `$XDG_STATE_HOME/corral-app/` (fallback `$HOME/.local/state/corral-app/`): private `devices.json`, `durable.json`, retained locks |

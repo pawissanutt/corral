@@ -26,17 +26,38 @@ const CONTROLS: [(Icon, &str); 3] = [
     (Icon::Plans, "Attach a file"),
 ];
 
-/// The context chip (`.achip`) and the note beside it, while a context is attached.
+/// The chips over the draft (`.achip`), each with its note beside it: the default project the
+/// message files under (`btn-unchip-project`), then the record whose brief the assistant gets
+/// (`btn-unchip`). Nothing while neither is attached.
 pub(crate) fn chip_row(app: AppState, built: Memo<Composer>) -> AnyElement {
     let attached = computed(move || built.with(|c| c.chip.clone()));
+    let project = computed(move || built.with(|c| c.project_chip.clone()));
+    let gap = if app.form == Form::Terminal { 0.0 } else { 6.0 };
     dynamic(move || {
-        attached
-            .get()
-            .map(|context| untracked(|| context_chip(app, &context)))
+        let project = project.get();
+        let attached = attached.get();
+        if project.is_none() && attached.is_none() {
+            return None;
+        }
+        untracked(move || {
+            Some(
+                view()
+                    .gap(px(gap))
+                    .children(
+                        project.map(|chip| {
+                            context_chip(app, &chip, Icon::Project, "btn-unchip-project")
+                        }),
+                    )
+                    .children(
+                        attached.map(|chip| context_chip(app, &chip, Icon::Plans, "btn-unchip")),
+                    )
+                    .into_element(),
+            )
+        })
     })
 }
 
-fn context_chip(app: AppState, context: &ContextChip) -> AnyElement {
+fn context_chip(app: AppState, context: &ContextChip, glyph: Icon, remove_id: &str) -> AnyElement {
     let form = app.form;
     let remove = context.remove.action.clone();
     let remove_label = context.remove.label;
@@ -68,7 +89,7 @@ fn context_chip(app: AppState, context: &ContextChip) -> AnyElement {
                 remove_label,
                 ButtonKind::Quiet,
                 ButtonOptions::default(),
-                "btn-unchip",
+                remove_id,
                 move || act(app, remove.clone()),
             ))
             .child(note)
@@ -94,12 +115,12 @@ fn context_chip(app: AppState, context: &ContextChip) -> AnyElement {
                 .bg(color(Token::Surface2))
                 .border_1()
                 .border_color(color(Token::Rule2))
-                .child(icon(Icon::Plans, 13.0, color(Token::Ink2)))
+                .child(icon(glyph, 13.0, color(Token::Ink2)))
                 .child(kind.font_family(FONT_TEXT).text_size(px(size)))
                 .child(name.font_family(FONT_TEXT).text_size(px(size)))
                 .child(close_button(
                     app,
-                    "btn-unchip".into(),
+                    remove_id.into(),
                     remove_label.into(),
                     remove,
                 )),

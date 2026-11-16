@@ -7,9 +7,11 @@ use corral_protocol::cmd::mode::ModeCommand;
 use corral_protocol::rows::{OperatingMode, SettingsSnapshot};
 
 use super::live::grant_on;
-use crate::model::Act;
+use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 use crate::model::id::IdSupply;
+use crate::model::projects::known_projects;
+use crate::model::{Act, Id};
 
 /// One operating-mode change the owner may make from here. corrald's `mode off` is only an alias
 /// of pause, so it is not offered separately.
@@ -151,6 +153,19 @@ pub enum Field {
     MaxNew,
 }
 
+/// Project scope input: known configuration keys, or text only when no list is available.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectPicker {
+    Known(Vec<ProjectOption>),
+    FreeText,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectOption {
+    pub id: Id,
+    pub selected: bool,
+}
+
 /// The grant being written, before corrald previews it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GrantForm {
@@ -203,12 +218,70 @@ impl GrantForm {
         } = value;
     }
 
+    pub fn project_picker(&self, feed: &Feed) -> ProjectPicker {
+        let known = known_projects(feed);
+        if known.is_empty() {
+            return ProjectPicker::FreeText;
+        }
+        let selected = list(&self.projects);
+        ProjectPicker::Known(
+            known
+                .into_iter()
+                .map(|id| ProjectOption {
+                    selected: selected.iter().any(|project| project == id.as_str()),
+                    id,
+                })
+                .collect(),
+        )
+    }
+
+    /// Toggle only a known project; retire stale text scopes when switching to the picker.
+    pub fn toggle_project(&mut self, feed: &Feed, project: Id) {
+        let known = known_projects(feed);
+        if !known.contains(&project) {
+            return;
+        }
+        let mut selected = list(&self.projects);
+        selected.retain(|project| known.iter().any(|id| id.as_str() == project));
+        if selected.iter().any(|id| id == project.as_str()) {
+            selected.retain(|id| id != project.as_str());
+        } else {
+            selected.push(project.to_string());
+        }
+        selected.sort_unstable();
+        selected.dedup();
+        self.projects = selected.join(", ");
+    }
+
+    /// Feed-aware validation prevents a stale free-text scope bypassing the known list.
+    pub fn problem_for(&self, feed: &Feed) -> Option<&'static str> {
+        if let Some(problem) = self.problem() {
+            return Some(problem);
+        }
+        let known = known_projects(feed);
+        if !known.is_empty()
+            && list(&self.projects)
+                .iter()
+                .any(|project| !known.iter().any(|id| id.as_str() == project))
+        {
+            return Some("Choose projects from the current project list.");
+        }
+        None
+    }
+
+    pub fn act_for(&self, feed: &Feed, ids: &mut IdSupply) -> Option<Act> {
+        if self.problem_for(feed).is_some() {
+            return None;
+        }
+        Some(self.grant(ids))
+    }
+
     pub fn power(&self, power: Power) -> bool {
         self.powers[power as usize]
     }
 
-    /// Why the grant cannot be previewed yet; None when it can.
-    pub fn problem(&self) -> Option<&'static str> {
+    /// Why the grant cannot be previewed yet, before the project list is consulted.
+    fn problem(&self) -> Option<&'static str> {
         if list(&self.projects).is_empty()
             && list(&self.tasks).is_empty()
             && list(&self.plans).is_empty()
@@ -224,12 +297,7 @@ impl GrantForm {
         None
     }
 
-    /// The grant as a confirmed canonical command: corrald previews the exact scope, and the
-    /// confirmation carries its automation preview identity.
-    pub fn act(&self, ids: &mut IdSupply) -> Option<Act> {
-        if self.problem().is_some() {
-            return None;
-        }
+    fn grant(&self, ids: &mut IdSupply) -> Act {
         let command = ModeCommand::Autopilot {
             projects: list(&self.projects),
             include_new: self.include_new,
@@ -245,7 +313,7 @@ impl GrantForm {
             confirm: String::new(),
             json: false,
         };
-        Some(Act::new(ids, "Grant autopilot", Command::Mode(command)).confirmed())
+        Act::new(ids, "Grant autopilot", Command::Mode(command)).confirmed()
     }
 }
 
@@ -257,13 +325,78 @@ mod tests {
     fn grant_without_scope_is_never_built() {
         let mut form = GrantForm::default();
         form.powers[Power::Dispatch as usize] = true;
-        assert!(form.act(&mut IdSupply::new("grant-test")).is_none());
+        let feed = Feed::default();
+        assert!(
+            form.act_for(&feed, &mut IdSupply::new("grant-test"))
+                .is_none()
+        );
         form.set(Field::Tasks, "T-1, T-2".into());
-        let act = form.act(&mut IdSupply::new("grant-test")).unwrap();
+        let act = form
+            .act_for(&feed, &mut IdSupply::new("grant-test"))
+            .unwrap();
         let Command::Mode(ModeCommand::Autopilot { tasks, confirm, .. }) = act.command else {
             panic!("autopilot command expected");
         };
         assert_eq!(tasks, ["T-1", "T-2"]);
         assert!(confirm.is_empty());
+    }
+
+    #[test]
+    fn known_project_picker_limits_grants_and_keeps_empty_projects_selectable() {
+        use corral_protocol::rows::ProjectRow;
+
+        let mut feed = Feed::default();
+        feed.capabilities
+            .insert(corral_protocol::PROJECTS_V1.into());
+        for id in ["corral", "mitiplay"] {
+            feed.projects.insert(
+                id.into(),
+                ProjectRow {
+                    id: id.into(),
+                    path: id.into(),
+                    open: 0,
+                    running: 0,
+                    review: 0,
+                    needs_me: 0,
+                    in_pm_scope: false,
+                    autopilot: false,
+                    rev: 1,
+                },
+            );
+        }
+        let mut form = GrantForm {
+            projects: "unknown".into(),
+            ..GrantForm::default()
+        };
+        form.powers[Power::Dispatch as usize] = true;
+        assert!(
+            form.act_for(&feed, &mut IdSupply::new("grant-test"))
+                .is_none()
+        );
+        form.toggle_project(&feed, "mitiplay".into());
+        form.toggle_project(&feed, "corral".into());
+        assert_eq!(form.projects, "corral, mitiplay");
+        let ProjectPicker::Known(options) = form.project_picker(&feed) else {
+            panic!("known project picker expected");
+        };
+        assert_eq!(options.len(), 2);
+        assert!(options.iter().all(|option| option.selected));
+        let act = form
+            .act_for(&feed, &mut IdSupply::new("grant-test"))
+            .unwrap();
+        let Command::Mode(ModeCommand::Autopilot { projects, .. }) = act.command else {
+            panic!("autopilot command expected");
+        };
+        assert_eq!(projects, ["corral", "mitiplay"]);
+        form.toggle_project(&feed, "mitiplay".into());
+        assert_eq!(form.projects, "corral");
+
+        feed.projects.clear();
+        assert_eq!(form.project_picker(&feed), ProjectPicker::FreeText);
+        form.set(Field::Projects, "external-project".into());
+        assert!(
+            form.act_for(&feed, &mut IdSupply::new("grant-test"))
+                .is_some()
+        );
     }
 }

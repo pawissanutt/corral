@@ -10,6 +10,7 @@ use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
 use super::AppState;
+use crate::model::projects::{FilterScreen, NowScope, WorkspaceMode};
 use crate::model::{
     DataState, Destination, Effect, Overlay, builds, commands, inbox, plans, review, work,
 };
@@ -121,6 +122,14 @@ impl AppState {
             return &[];
         }
         let destination = self.destination();
+        if self
+            .nav
+            .with(|nav| matches!(nav.pages.last(), Some(crate::model::Route::Project(_))))
+            || (self.workspace_mode() == WorkspaceMode::AssistantOnly
+                && destination == Destination::Now)
+        {
+            return &[];
+        }
         match self.data.get() {
             DataState::Daemon | DataState::Fixture => self
                 .nav
@@ -177,6 +186,14 @@ impl AppState {
     /// Routes a key to the served destination's live reducer with the feed and selection.
     fn key_live(&self, key: &str) -> Option<Vec<Effect>> {
         let destination = self.nav.with_untracked(|nav| nav.destination);
+        if self
+            .nav
+            .with_untracked(|nav| matches!(nav.pages.last(), Some(crate::model::Route::Project(_))))
+            || (untracked(|| self.workspace_mode()) == WorkspaceMode::AssistantOnly
+                && destination == Destination::Now)
+        {
+            return None;
+        }
         if untracked(|| self.available(destination)) != crate::model::Availability::Ready {
             return None;
         }
@@ -185,21 +202,39 @@ impl AppState {
             .with_untracked(|nav| (nav.live().cloned(), nav.selection.clone()));
         let top = top.as_ref();
         let env = self.env_untracked();
+        let filter = untracked(|| {
+            FilterScreen::of(destination)
+                .map(|screen| self.project_filter(screen))
+                .unwrap_or_default()
+        });
+        let grouping = untracked(|| self.now_group());
         let mut effects = None;
         self.feed.with_untracked(|feed| match destination {
             Destination::Now => self.work.update(|state| {
-                effects = state.key_live(key, top, &selection, feed, env);
+                effects = state.key_live_filtered(
+                    key,
+                    top,
+                    &selection,
+                    feed,
+                    env,
+                    NowScope {
+                        filter: &filter,
+                        grouping,
+                    },
+                );
             }),
             Destination::Inbox => self.inbox.update(|state| {
-                effects = state.key_live(key, top, &selection, feed, env);
+                effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
             }),
             Destination::Plans => self.plans.update(|state| {
-                effects = state.key_live(key, top, &selection, feed, env);
+                effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
             }),
             Destination::Review => self.review.update(|state| {
-                effects = state.key_live(key, top, &selection, feed, env);
+                effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
             }),
-            Destination::Builds => effects = builds::key_live(key, &selection, feed),
+            Destination::Builds => {
+                effects = builds::key_live_filtered(key, &selection, feed, &filter)
+            }
             _ => {}
         });
         effects

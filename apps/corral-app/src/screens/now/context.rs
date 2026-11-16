@@ -16,7 +16,7 @@ use crate::ui::term::{blank, cells};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::feed;
-use super::parts::{press, press_id, quiet};
+use super::parts::{press, press_id, quiet, scope};
 
 const RING: f32 = 2.0;
 const CURSOR_BLINK_MS: f32 = 1100.0;
@@ -160,9 +160,11 @@ pub(super) fn live(app: AppState) -> AnyElement {
     let form = app.form;
     let live = computed(move || {
         let selection = app.selection();
+        let (filter, grouping) = scope(app);
         app.feed.with(|feed| {
-            app.work
-                .with(|state| work::daemon_live(state, feed, &selection, form))
+            app.work.with(|state| {
+                work::daemon_live_filtered(state, feed, &selection, form, &filter, grouping)
+            })
         })
     });
     dynamic(move || {
@@ -327,7 +329,11 @@ fn rows_frame(app: AppState, rows: Vec<AnyElement>) -> AnyElement {
 /// "Since your last visit": the changes past this device's seen cursor, newest first; each
 /// event opens its task.
 pub(super) fn since(app: AppState) -> AnyElement {
-    let since = computed(move || app.feed.with(work::daemon_since));
+    let since = computed(move || {
+        let (filter, _) = scope(app);
+        app.feed
+            .with(|feed| work::daemon_since_filtered(feed, &filter))
+    });
     dynamic(move || {
         since.with(|since| {
             if let Some(notice) = &since.notice {
@@ -349,6 +355,7 @@ pub(super) fn since(app: AppState) -> AnyElement {
 /// "Parked": the board's held and parked tasks.
 pub(super) fn parked(app: AppState) -> AnyElement {
     dynamic(move || {
+        let (filter, _) = scope(app);
         app.feed.with(|feed| {
             if let Some(line) = feed.device.board_notice() {
                 return quiet(app, line);
@@ -361,7 +368,7 @@ pub(super) fn parked(app: AppState) -> AnyElement {
                     view().into_element()
                 };
             }
-            let rows = work::daemon_holds(feed);
+            let rows = work::daemon_holds_filtered(feed, &filter);
             if rows.is_empty() {
                 return quiet(app, work::NOTHING_HELD);
             }
@@ -414,9 +421,11 @@ pub(super) fn graph(app: AppState) -> AnyElement {
     let form = app.form;
     let context = computed(move || {
         let selection = app.selection();
+        let (filter, grouping) = scope(app);
         app.feed.with(|feed| {
-            app.work
-                .with(|state| work::daemon_plan(state, feed, &selection, form))
+            app.work.with(|state| {
+                work::daemon_plan_filtered(state, feed, &selection, form, &filter, grouping)
+            })
         })
     });
     dynamic(move || context.with(|context| live_graph(app, context)))

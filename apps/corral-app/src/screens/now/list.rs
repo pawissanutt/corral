@@ -1,8 +1,9 @@
 //! "Who acts next": the grouped list of the model (`work::GroupedList`) in each form's rows, built
 //! from the feed's board. On desktop and phone a task row is the kit's; the collapsed queued line
 //! is this list's own, laid in the same columns. The list measures its width once, and its own
-//! head and rows give way as the kit's task rows do (`rows::task_columns`). The Closed section
-//! follows the groups on every form. It is the destination's keyboard list
+//! head and rows give way as the kit's task rows do (`rows::task_columns`). Now's project scope
+//! and its Group toggle head the list; the groups are the model's, by state or by project. The
+//! Closed section follows the groups on every form. It is the destination's keyboard list
 //! (`AppState::list_keys`), and a row the keyboard selects scrolls into its panel's view.
 
 use nsh_core::prelude::*;
@@ -13,13 +14,14 @@ use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::notice::{notice, skeleton};
+use crate::ui::kit::project_filter::project_filter_grouped;
 use crate::ui::kit::rows::{TaskColumns, group_header, list_row, task_row};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::cells;
 use super::closed::closed_section;
-use super::parts::{press, press_id, pressable, quiet};
+use super::parts::{press, press_id, pressable, quiet, scope};
 use super::verbs::{row_record, with_menu};
 
 const RING: f32 = 2.0;
@@ -30,9 +32,11 @@ pub(super) fn list(app: AppState) -> AnyElement {
     let form = app.form;
     let source = computed(move || {
         let selection = app.selection();
+        let (filter, grouping) = scope(app);
         app.feed.with(|feed| {
-            app.work
-                .with(|state| work::daemon_list(state, feed, &selection, form))
+            app.work.with(|state| {
+                work::daemon_list_filtered(state, feed, &selection, form, &filter, grouping)
+            })
         })
     });
     let board = computed(move || app.feed.with(|feed| work::daemon_status(feed).banner));
@@ -50,6 +54,7 @@ pub(super) fn list(app: AppState) -> AnyElement {
         }))
         .role(AccessibilityRole::List)
         .label(label)
+        .child(project_filter_grouped(app))
         .child(dynamic(move || {
             board
                 .get()
@@ -91,8 +96,11 @@ pub(super) const GOALS_LABEL: &str = "Goals";
 /// The Goals panel: the goals the board's tasks serve, each narrowing the list to it.
 pub(super) fn goals(app: AppState) -> AnyElement {
     let rows = computed(move || {
-        app.feed
-            .with(|feed| app.work.with(|state| work::daemon_goals(state, feed)))
+        let (filter, _) = scope(app);
+        app.feed.with(|feed| {
+            app.work
+                .with(|state| work::daemon_goals_filtered(state, feed, &filter))
+        })
     });
     dynamic(move || {
         rows.with(|rows| {
@@ -204,7 +212,7 @@ fn groups(
     for group in &list.groups {
         out.push(group_header(
             app,
-            group.label,
+            group.label.clone(),
             Some(group.count),
             group.hue,
             group.detail,
@@ -223,6 +231,7 @@ fn groups(
                     let row = task_row(
                         app,
                         task.line.clone(),
+                        task.project_chip.clone(),
                         move || is_selected(source, &id),
                         move || press(app, action.clone()),
                         test_id,

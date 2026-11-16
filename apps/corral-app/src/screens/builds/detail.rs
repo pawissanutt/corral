@@ -7,6 +7,7 @@
 use nsh_core::prelude::*;
 
 use crate::model::builds::{self, Block, BuildView, Detail, Line, Section};
+use crate::model::projects::FilterScreen;
 use crate::model::text::span;
 use crate::model::{Form, Hue, Id};
 use crate::state::AppState;
@@ -20,14 +21,15 @@ use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
 /// The tracked detail of the shown build: `build` names it (the phone page's); otherwise the
-/// root selection, or the first build listed. None while there is no build at all.
+/// root selection, or the first build the Builds scope lists. None while there is no build.
 fn shown(app: AppState, build: Option<Id>) -> Memo<Option<Detail>> {
     computed(move || {
         let selection = app.selection();
+        let filter = app.project_filter(FilterScreen::Builds);
         app.feed.with(|feed| {
             build
                 .clone()
-                .or_else(|| builds::current_build(&selection, feed))
+                .or_else(|| builds::current_build_filtered(&selection, feed, &filter))
                 .map(|id| builds::detail_of(feed, &id))
         })
     })

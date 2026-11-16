@@ -3,7 +3,7 @@
 use corral_protocol::rows::{InboxKind, InboxRow, InboxState, PlanRow, PlanState};
 
 use super::live::{
-    age, clock, from_this_device, is_open, is_question, ordered, selected, sent_status, target,
+    age, clock, from_this_device, is_open, is_question, selected, sent_status, target,
 };
 use super::live_sheet::{handover, sheet};
 use super::sheet::button;
@@ -17,6 +17,7 @@ use crate::model::daemon::{Feed, Group};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::nav::Destination;
+use crate::model::projects::{ProjectFilter, project_chip};
 use crate::model::text::span;
 use crate::model::{Id, Live};
 
@@ -149,9 +150,6 @@ fn open_meta(_state: &State, feed: &Feed, row: &InboxRow) -> String {
             } else if row.blocking {
                 parts.push("blocking".into());
             }
-            if let Some(project) = &row.project {
-                parts.push(project.clone());
-            }
         }
     }
     if let Some(at) = &row.needed_by {
@@ -166,7 +164,14 @@ fn open_meta(_state: &State, feed: &Feed, row: &InboxRow) -> String {
     parts.join(" · ")
 }
 
-fn item(state: &State, feed: &Feed, row: &InboxRow, chosen: Option<&str>, env: Env) -> NeedYouItem {
+fn item(
+    state: &State,
+    feed: &Feed,
+    row: &InboxRow,
+    chosen: Option<&str>,
+    env: Env,
+    filter: &ProjectFilter,
+) -> NeedYouItem {
     let lead = lead(row);
     let id = record(feed, row);
     let age = age(row.asked_at.as_deref(), feed);
@@ -192,6 +197,7 @@ fn item(state: &State, feed: &Feed, row: &InboxRow, chosen: Option<&str>, env: E
         attention: super::attention_line(row),
         test_id: format!("inbox-{}", row.id),
         lead,
+        project_chip: project_chip(feed, filter, row.project.as_deref()),
         id,
         heading,
         title: row.title.clone(),
@@ -226,14 +232,21 @@ fn change_kind(class: &str) -> ChangeKind {
     }
 }
 
-fn empty_body(feed: &Feed, env: Env) -> String {
+fn empty_body(feed: &Feed, env: Env, filter: &ProjectFilter) -> String {
     if !feed.board.complete {
         return "Nothing in the inbox is waiting on you.".into();
     }
-    let verifying = feed.board.count(Group::Verifying);
-    let producing = feed.board.count(Group::Producing);
+    let count = |group| {
+        feed.board
+            .tasks()
+            .iter()
+            .filter(|task| task.group == group && filter.matches(task.project.as_deref()))
+            .count()
+    };
+    let verifying = count(Group::Verifying);
+    let producing = count(Group::Producing);
     // The Queued group also holds ideas and backlog nobody queued, as Now's "Upcoming" says.
-    let upcoming = feed.board.count(Group::Queued);
+    let upcoming = count(Group::Queued);
     if phone(env) {
         format!(
             "Corral is verifying {verifying} · worker runs in progress {producing} · {upcoming} upcoming."
@@ -268,7 +281,13 @@ fn refresh_error(feed: &Feed, retained: bool) -> Option<Notice> {
 }
 
 /// The served list: needs-you rows in working order, then what changed since the last visit.
-pub fn list(state: &State, feed: &Feed, env: Env) -> InboxList {
+pub(super) fn list_filtered(
+    state: &State,
+    feed: &Feed,
+    env: Env,
+    filter: &ProjectFilter,
+) -> InboxList {
+    let filter = filter.resolved(feed);
     if loading(feed) {
         return InboxList::Loading {
             skeleton_count: if phone(env) { 2 } else { 5 },
@@ -276,16 +295,16 @@ pub fn list(state: &State, feed: &Feed, env: Env) -> InboxList {
             caption: super::LOADING_LIST,
         };
     }
-    let rows = ordered(feed);
+    let rows = super::ordered_filtered(feed, &filter);
     let chosen = selected(&state.desk, &rows).map(|row| row.id.as_str());
     let items: Vec<NeedYouItem> = rows
         .iter()
-        .map(|row| item(state, feed, row, chosen, env))
+        .map(|row| item(state, feed, row, chosen, env, &filter))
         .collect();
     let error = refresh_error(feed, !items.is_empty());
     let empty = (items.is_empty() && error.is_none()).then(|| EmptyState {
         title: "Nothing needs you.",
-        body: empty_body(feed, env),
+        body: empty_body(feed, env, &filter),
         action: Some(button(
             "Open Now",
             Action::Go(Destination::Now),
@@ -305,6 +324,7 @@ pub fn list(state: &State, feed: &Feed, env: Env) -> InboxList {
         .changes
         .values()
         .rev()
+        .filter(|line| crate::model::work::change_matches_project(line, feed, &filter))
         .take(limit)
         .map(|line| {
             let task = line.task.as_deref().filter(|task| !task.is_empty());
@@ -312,6 +332,9 @@ pub fn list(state: &State, feed: &Feed, env: Env) -> InboxList {
                 at: clock(&line.at, feed.now),
                 id: task.unwrap_or_default().to_owned(),
                 kind: change_kind(&line.class),
+                project_chip: task
+                    .and_then(|id| feed.board.task(id))
+                    .and_then(|task| project_chip(feed, &filter, task.project.as_deref())),
                 text: line.text.clone(),
                 test_id: match task {
                     Some(task) => format!("task-{task}"),
@@ -325,12 +348,13 @@ pub fn list(state: &State, feed: &Feed, env: Env) -> InboxList {
             }
         })
         .collect();
-    let unseen = crate::model::work::unseen_count(feed);
+    let unseen = crate::model::work::unseen_count_filtered(feed, &filter);
     InboxList::Ready {
         label: "Inbox",
         error,
         needs_title: "Needs you",
-        needs_count: super::attention_counts(feed).inbox as usize,
+        needs_count: usize::try_from(super::attention_counts_filtered(feed, &filter).inbox)
+            .unwrap_or(usize::MAX),
         items,
         empty,
         since_title: match (&visited, phone(env)) {
@@ -440,14 +464,19 @@ fn item_preview(state: &State, feed: &Feed, row: &InboxRow) -> ItemPreview {
 }
 
 /// The selected row's pane on desktop and terminal.
-pub fn preview(state: &State, feed: &Feed, env: Env) -> InboxPreview {
+pub(super) fn preview_filtered(
+    state: &State,
+    feed: &Feed,
+    env: Env,
+    filter: &ProjectFilter,
+) -> InboxPreview {
     if loading(feed) {
         return InboxPreview::Loading {
             skeleton_count: 3,
             caption: super::LOADING_ITEM,
         };
     }
-    let rows = ordered(feed);
+    let rows = super::ordered_filtered(feed, filter);
     let Some(row) = selected(&state.desk, &rows) else {
         return match refresh_error(feed, false) {
             Some(notice) => InboxPreview::Failed(notice),
@@ -461,7 +490,9 @@ pub fn preview(state: &State, feed: &Feed, env: Env) -> InboxPreview {
     if is_question(row) {
         let key = Id::new(&row.id);
         return match handover(feed, &key) {
-            Handover::Ready => InboxPreview::Question(sheet(state, feed, &key, env, false, false)),
+            Handover::Ready => {
+                InboxPreview::Question(sheet(state, feed, &key, env, false, false, filter))
+            }
             Handover::Loading { caption } => InboxPreview::Loading {
                 skeleton_count: 3,
                 caption,
@@ -494,7 +525,7 @@ mod tests {
         feed.topics.insert("inbox".into(), Default::default());
         let env = crate::model::health::daemon_env(&feed, crate::model::nav::Form::Terminal);
         for expected in [2, 0] {
-            let view = list(&State::default(), &feed, env);
+            let view = list_filtered(&State::default(), &feed, env, &ProjectFilter::All);
             let InboxList::Ready { changes_count, .. } = view else {
                 panic!("inbox topic is loaded");
             };

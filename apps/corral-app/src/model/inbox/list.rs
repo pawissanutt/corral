@@ -13,6 +13,7 @@ pub struct NeedYouItem {
     pub attention: Option<super::AttentionLine>,
     /// The row's test id: `inbox-<key>` for served rows, the fixture's own names otherwise.
     pub test_id: String,
+    pub project_chip: Option<String>,
     /// Lead phrase, also available separately for accessibility.
     pub lead: String,
     /// Record id.
@@ -44,6 +45,7 @@ pub struct FeedRow {
     pub at: String,
     /// The changed task, or empty for workspace-wide changes.
     pub id: String,
+    pub project_chip: Option<String>,
     /// The mark shape.
     pub kind: ChangeKind,
     /// What changed.

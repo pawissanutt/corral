@@ -5,6 +5,7 @@
 pub mod desktop;
 pub mod lock;
 pub mod phone;
+pub mod projects;
 pub mod terminal;
 
 use std::rc::Rc;
@@ -17,7 +18,8 @@ use crate::model::commands::{
     CONFIRM_CANCEL, CONFIRM_CHECK, CONFIRM_EFFECT_HEADING, CONFIRM_SUB, act_confirm_label,
     act_confirm_word,
 };
-use crate::model::{DataState, Form, Hue, SettingsSection, work};
+use crate::model::nav::{NavigationTarget, navigation};
+use crate::model::{DataState, Destination, Form, Hue, SettingsSection, work};
 use crate::state::AppState;
 use crate::ui::kit::overlay::{self, Confirm, Modal};
 use crate::ui::kit::table::steps;
@@ -28,6 +30,20 @@ use crate::ui::tokens::{Token, color};
 /// the last known state (the mock's `.is-stale`). Disconnected shows no earlier state to fade.
 pub fn stale(app: AppState) -> bool {
     app.data.get() != DataState::Disconnected && app.env().conn.refuses()
+}
+
+/// Tracked: the destinations the sidebar and the key line list, in order. An assistant-only
+/// workspace has no board, so its board destinations are left out rather than shown unavailable.
+pub fn destinations(app: AppState) -> Vec<Destination> {
+    app.feed.with(|feed| {
+        navigation(feed)
+            .into_iter()
+            .filter_map(|item| match item.target {
+                NavigationTarget::Destination(destination) => Some(destination),
+                NavigationTarget::Ask | NavigationTarget::Tab(_) => None,
+            })
+            .collect()
+    })
 }
 
 /// A desktop window this narrow or narrower folds the sidebar to its rail of icons, whatever was

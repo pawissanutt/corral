@@ -36,11 +36,9 @@ pub struct ScopeOption {
 pub fn scope_options(state: &State, feed: &Feed) -> Vec<ScopeOption> {
     let mut scopes = BTreeSet::from([BurnupScope::Workspace, state.burnup_scope.clone()]);
     scopes.extend(
-        feed.board
-            .tasks()
-            .iter()
-            .filter_map(|task| task.project.clone())
-            .map(BurnupScope::Project),
+        crate::model::projects::known_projects(feed)
+            .into_iter()
+            .map(|id| BurnupScope::Project(id.to_string())),
     );
     scopes.extend(
         feed.plans

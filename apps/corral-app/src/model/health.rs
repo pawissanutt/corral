@@ -259,12 +259,14 @@ pub fn unavailable_line(feed: &Feed, destination: Destination) -> String {
 
 /// Canonical open owner moves, never inferred from task status or PM work.
 pub fn needs_you(feed: &Feed) -> usize {
-    crate::model::inbox::attention_counts(feed).total as usize
+    crate::model::inbox::attention_counts_filtered(feed, &crate::model::ProjectFilter::All).total
+        as usize
 }
 
 /// Plans waiting for the owner's acceptance.
 pub fn awaiting_plans(feed: &Feed) -> usize {
-    crate::model::inbox::attention_counts(feed).plans as usize
+    crate::model::inbox::attention_counts_filtered(feed, &crate::model::ProjectFilter::All).plans
+        as usize
 }
 
 /// The authenticated name of this device: the daemon's session, else its enrolment.
@@ -442,11 +444,17 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
                 tone: if down { Tone::Warn } else { tone },
             });
         }
-        let (value, tone) = match health.pm {
-            PmLevel::Live => ("live", Tone::Ok),
-            PmLevel::Relaunching => ("relaunching", Tone::Warn),
-            PmLevel::Absent => ("absent", Tone::Fail),
-            PmLevel::Unknown => ("unknown", Tone::Muted),
+        let (value, tone) = if crate::model::WorkspaceMode::of(feed)
+            == crate::model::WorkspaceMode::AssistantOnly
+        {
+            ("off — no projects", Tone::Muted)
+        } else {
+            match health.pm {
+                PmLevel::Live => ("live", Tone::Ok),
+                PmLevel::Relaunching => ("relaunching", Tone::Warn),
+                PmLevel::Absent => ("absent", Tone::Fail),
+                PmLevel::Unknown => ("unknown", Tone::Muted),
+            }
         };
         segments.push(Segment {
             name: "PM".into(),
@@ -477,7 +485,8 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
             },
         ))
     };
-    let attention = crate::model::inbox::attention_counts(feed);
+    let attention =
+        crate::model::inbox::attention_counts_filtered(feed, &crate::model::ProjectFilter::All);
     let count = attention.total;
     let workspace_name = feed.workspace.as_deref().and_then(|path| {
         path.trim_end_matches('/')

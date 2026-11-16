@@ -26,7 +26,7 @@ pub(super) fn scale(feed: &mut Feed) {
             } else {
                 Group::Queued
             };
-            let row = task(
+            let mut row = task(
                 feed,
                 &id,
                 &title,
@@ -40,6 +40,7 @@ pub(super) fn scale(feed: &mut Feed) {
                     _ => "waiting on previous layer",
                 },
             );
+            row.project = Some(if n % 3 == 0 { "mitigraph" } else { "corral" }.into());
             members.push(PlanMember {
                 id: id.clone(),
                 title,
@@ -72,6 +73,7 @@ pub(super) fn scale(feed: &mut Feed) {
             members_landed: 24,
             blockers: vec![],
             accepted_at: None,
+            projects: vec!["corral".into(), "mitigraph".into()],
             rev: 1,
         },
     );

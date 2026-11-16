@@ -6,7 +6,7 @@ use corral_protocol::detail::{QuestionDetail, WaitKind as Waiting};
 use corral_protocol::rows::{InboxKind, InboxRow, InboxState};
 
 use super::live::{
-    Draft, age, can_answer, choice, clock, is_open, ordered, question_detail, question_ref,
+    Draft, age, can_answer, choice, clock, ordered_filtered, question_detail, question_ref,
     question_state, sent_status,
 };
 use super::live_background::background;
@@ -21,6 +21,7 @@ use crate::model::daemon::{Feed, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::nav::Destination;
+use crate::model::projects::ProjectFilter;
 use crate::model::text::span;
 use crate::model::{Id, Live};
 
@@ -437,11 +438,12 @@ fn history(detail: &QuestionDetail, feed: &Feed) -> Vec<HistoryRow> {
 }
 
 /// Open rows other than `key`, in working order, and `key`'s place among the open ones.
-fn neighbours<'a>(feed: &'a Feed, key: &Id) -> (Option<usize>, Vec<&'a InboxRow>) {
-    let open: Vec<&InboxRow> = ordered(feed)
-        .into_iter()
-        .filter(|row| is_open(row))
-        .collect();
+fn neighbours<'a>(
+    feed: &'a Feed,
+    key: &Id,
+    filter: &ProjectFilter,
+) -> (Option<usize>, Vec<&'a InboxRow>) {
+    let open = ordered_filtered(feed, filter);
     let at = open.iter().position(|row| row.id == key.as_str());
     let rest = match at {
         Some(at) => open[at + 1..].iter().chain(&open[..at]).copied().collect(),
@@ -450,8 +452,8 @@ fn neighbours<'a>(feed: &'a Feed, key: &Id) -> (Option<usize>, Vec<&'a InboxRow>
     (at, rest)
 }
 
-fn pager(feed: &Feed, key: &Id) -> String {
-    let (at, rest) = neighbours(feed, key);
+fn pager(feed: &Feed, key: &Id, filter: &ProjectFilter) -> String {
+    let (at, rest) = neighbours(feed, key, filter);
     match at {
         Some(at) => format!("{} of {} needing you", at + 1, rest.len() + 1),
         None if rest.is_empty() => "Nothing else needs you".into(),
@@ -459,8 +461,14 @@ fn pager(feed: &Feed, key: &Id) -> String {
     }
 }
 
-fn next(feed: &Feed, key: &Id, env: Env, kind: ButtonKind) -> Option<super::Button> {
-    let (_, rest) = neighbours(feed, key);
+fn next(
+    feed: &Feed,
+    key: &Id,
+    env: Env,
+    kind: ButtonKind,
+    filter: &ProjectFilter,
+) -> Option<super::Button> {
+    let (_, rest) = neighbours(feed, key, filter);
     let row = rest.first()?;
     let label = if phone(env) && kind == ButtonKind::Ghost {
         "Next".to_owned()
@@ -497,6 +505,7 @@ pub fn sheet(
     env: Env,
     focus: bool,
     with_side: bool,
+    filter: &ProjectFilter,
 ) -> Sheet {
     let Some(detail) = question_detail(feed, key) else {
         return placeholder();
@@ -536,11 +545,11 @@ pub fn sheet(
             .history
             .is_empty()
             .then_some("No earlier attempts or decisions are recorded."),
-        decide: decide(state, feed, key, env),
+        decide: decide(state, feed, key, env, filter),
         back: focus.then(|| button("Inbox", Action::Go(Destination::Inbox), ButtonKind::Quiet)),
-        pager: focus.then(|| pager(feed, key)),
+        pager: focus.then(|| pager(feed, key, filter)),
         next: if focus {
-            next(feed, key, env, ButtonKind::Ghost)
+            next(feed, key, env, ButtonKind::Ghost, filter)
         } else {
             None
         },
@@ -575,7 +584,7 @@ pub fn sheet(
 }
 
 /// The decide bar: answer controls while open, the canonical stamp once settled.
-pub fn decide(state: &State, feed: &Feed, key: &Id, env: Env) -> DecideBar {
+pub fn decide(state: &State, feed: &Feed, key: &Id, env: Env, filter: &ProjectFilter) -> DecideBar {
     let Some(detail) = question_detail(feed, key) else {
         return placeholder().decide;
     };
@@ -587,7 +596,7 @@ pub fn decide(state: &State, feed: &Feed, key: &Id, env: Env) -> DecideBar {
         status,
         QuestionState::Mine | QuestionState::Elsewhere | QuestionState::Closed
     ) {
-        let next = next(feed, key, env, ButtonKind::Primary);
+        let next = next(feed, key, env, ButtonKind::Primary, filter);
         if phone(env) {
             let mut buttons = vec![button(
                 "Back to Inbox",

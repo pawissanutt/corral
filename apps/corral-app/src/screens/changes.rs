@@ -1,11 +1,12 @@
 //! Changes: the durable change lines since this device's last visit with their attribution, a
 //! mark for each kind of event, each event opening its task, then the per-device seen line and
-//! what came before it. The filters narrow it, older pages load on request, and Mark seen moves
-//! this device's own seen cursor.
+//! what came before it. Its own project scope and the filters narrow it, older pages load on
+//! request, and Mark seen moves this device's own seen cursor.
 
 use nsh_core::prelude::*;
 
 use crate::model::Form;
+use crate::model::projects::FilterScreen;
 use crate::model::work::{self, Action, ChangeFilter, Changes};
 use crate::screens::now::feed::{row, seen_line};
 use crate::screens::now::parts::{act, dim_when, model_button, pressable, quiet, stale};
@@ -13,6 +14,7 @@ use crate::state::AppState;
 use crate::ui::kit::button::seg;
 use crate::ui::kit::chip::illus;
 use crate::ui::kit::page::{head, pane};
+use crate::ui::kit::project_filter::project_filter;
 use crate::ui::term;
 
 /// The feed's measure on a wide screen (`.feed` at most 900 pt).
@@ -25,17 +27,23 @@ pub fn screen(app: AppState) -> AnyElement {
     let form = app.form;
     let changes = computed(move || {
         let device = app.device_name();
+        let filter = app.project_filter(FilterScreen::Changes);
         app.feed.with(|feed| {
-            app.work
-                .with(|state| work::live_changes(state, feed, device.as_deref(), form))
+            app.work.with(|state| {
+                work::live_changes_filtered(state, feed, device.as_deref(), form, &filter)
+            })
         })
     });
     let stale = stale(app);
     let body = dim_when(view(), stale)
+        .when(form != Form::Phone, |body| {
+            body.child(project_filter(app, FilterScreen::Changes))
+        })
         .child(dynamic(move || changes.with(|changes| feed(app, changes))))
         .into_element();
     if form == Form::Phone {
         let content = view()
+            .child(project_filter(app, FilterScreen::Changes))
             .child(
                 view()
                     .px(px(16.0))

@@ -12,6 +12,7 @@ use crate::model::board::Mark;
 use crate::model::daemon::{DetailCache, Feed, Link};
 use crate::model::effect::Effect;
 use crate::model::health::capability_availability;
+use crate::model::projects::{ProjectFilter, project_chip};
 use crate::model::{Availability, Form, Hue, Id, Live, Selection};
 
 /// The section's heading.
@@ -85,6 +86,7 @@ impl ClosedState {
 pub struct ClosedRow {
     pub id: Id,
     pub title: String,
+    pub project_chip: Option<String>,
     /// Done is a pass, dropped not applicable: the two differ by shape as well as colour.
     pub mark: Mark,
     pub hue: Hue,
@@ -124,13 +126,19 @@ pub fn closed_offered(feed: &Feed) -> bool {
 
 /// The tasks the open section lists, newest first: the Now list's keys walk them after the
 /// board's rows, and never while the section is folded or shows no rows.
-pub(super) fn closed_ids(closed: &ClosedState, feed: &Feed) -> Vec<Id> {
+pub(super) fn closed_ids_filtered(
+    closed: &ClosedState,
+    feed: &Feed,
+    filter: &ProjectFilter,
+) -> Vec<Id> {
+    let filter = filter.resolved(feed);
     if !closed.expanded || !closed_offered(feed) || !feed.capable(CLOSED_V1) {
         return Vec::new();
     }
     served(feed.detail(&closed.target())).map_or_else(Vec::new, |page| {
         page.rows
             .iter()
+            .filter(|task| filter.matches(task.project.as_deref()))
             .map(|task| Id::from(task.id.as_str()))
             .collect()
     })
@@ -145,13 +153,22 @@ fn served(cache: Option<&DetailCache>) -> Option<&ClosedPage> {
 
 /// Builds the Closed section from the served page of `ClosedState::target`. As with the
 /// board's rows, a phone marks no row selected: a press there pushes the task's own page.
-pub fn closed_view(state: &State, feed: &Feed, selection: &Selection, form: Form) -> ClosedView {
+pub fn closed_view_filtered(
+    state: &State,
+    feed: &Feed,
+    selection: &Selection,
+    form: Form,
+    filter: &ProjectFilter,
+) -> ClosedView {
+    let filter = filter.resolved(feed);
     let closed = &state.closed;
     let cache = feed.detail(&closed.target());
     let page = served(cache);
     // Folding lets the client drop the page, so a folded heading never carries a count: it reads
     // the same whether or not a page happens to still be cached.
-    let total = page.and_then(|page| page.total).filter(|_| closed.expanded);
+    let total = page
+        .and_then(|page| page.total)
+        .filter(|_| closed.expanded && filter == ProjectFilter::All);
     let label = match total {
         Some(total) => format!("{CLOSED_TITLE} tasks, {total}"),
         None => format!("{CLOSED_TITLE} tasks"),
@@ -205,7 +222,8 @@ pub fn closed_view(state: &State, feed: &Feed, selection: &Selection, form: Form
     view.rows = page
         .rows
         .iter()
-        .map(|task| row(feed, task, shown))
+        .filter(|task| filter.matches(task.project.as_deref()))
+        .map(|task| row(feed, task, shown, &filter))
         .collect();
     let stale = cache.is_some_and(|cache| cache.stale);
     // A live link refetches the page on every board change; saying so each time would flicker.
@@ -213,6 +231,8 @@ pub fn closed_view(state: &State, feed: &Feed, selection: &Selection, form: Form
         Some(format!("Updates stopped: {}", error.message))
     } else if stale && feed.link != Link::Up {
         Some("Shown as last received; reconnecting.".into())
+    } else if view.rows.is_empty() && filter != ProjectFilter::All {
+        Some("No closed tasks match this project on this loaded page.".into())
     } else if page.rows.is_empty() && closed.before.is_none() {
         Some("No closed tasks.".into())
     } else if page.rows.is_empty() {
@@ -240,7 +260,7 @@ pub fn closed_view(state: &State, feed: &Feed, selection: &Selection, form: Form
     view
 }
 
-fn row(feed: &Feed, task: &ClosedTask, shown: Option<&Id>) -> ClosedRow {
+fn row(feed: &Feed, task: &ClosedTask, shown: Option<&Id>, filter: &ProjectFilter) -> ClosedRow {
     let id = Id::from(task.id.as_str());
     let (mark, hue) = if task.status == "done" {
         (Mark::Done, Hue::Ok)
@@ -261,6 +281,7 @@ fn row(feed: &Feed, task: &ClosedTask, shown: Option<&Id>) -> ClosedRow {
         action: Press::Open(Live::Task(id.clone())),
         id,
         title: task.title.clone(),
+        project_chip: project_chip(feed, filter, task.project.as_deref()),
         mark,
         hue,
         status: status.into_owned(),
@@ -296,11 +317,17 @@ mod tests {
     }
 
     fn pages(state: &State, feed: &Feed) -> Vec<Option<Press>> {
-        closed_view(state, feed, &Selection::default(), Form::Desktop)
-            .pager
-            .into_iter()
-            .map(|button| button.action)
-            .collect()
+        closed_view_filtered(
+            state,
+            feed,
+            &Selection::default(),
+            Form::Desktop,
+            &ProjectFilter::All,
+        )
+        .pager
+        .into_iter()
+        .map(|button| button.action)
+        .collect()
     }
 
     #[test]
@@ -310,7 +337,13 @@ mod tests {
         serve(&mut feed, None, None);
         let mut state = State::default();
         let heading = |state: &State| {
-            let view = closed_view(state, &feed, &Selection::default(), Form::Desktop);
+            let view = closed_view_filtered(
+                state,
+                &feed,
+                &Selection::default(),
+                Form::Desktop,
+                &ProjectFilter::All,
+            );
             (view.total, view.toggle.label.to_string())
         };
         // A page still cached under a folded section does not leak its count.

@@ -7,11 +7,13 @@ mod labels;
 mod live;
 mod live_act;
 mod live_cards;
+mod live_chips;
 mod live_filings;
 mod live_parts;
 mod live_thread;
 #[cfg(test)]
 mod parts_tests;
+mod project;
 #[cfg(test)]
 mod question_tests;
 mod surfaces;
@@ -27,6 +29,7 @@ pub use live_act::*;
 pub use live_cards::*;
 pub use live_filings::*;
 pub use live_thread::*;
+pub use project::*;
 pub use surfaces::*;
 pub use thread::*;
 pub use views::*;

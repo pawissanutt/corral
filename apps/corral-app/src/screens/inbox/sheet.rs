@@ -60,22 +60,21 @@ struct Want {
 pub(super) fn load(app: AppState, key: Key) {
     let scoped = untracked(|| app.scope());
     let wanted = computed(move || {
-        app.feed.with(|feed| {
-            app.inbox.with(|state| {
-                let shown = inbox::shown_key(state, feed, key.as_ref())?;
-                let rev = feed.inbox.get(shown.as_str()).map(|row| row.rev);
-                let stale = feed
-                    .detail(&inbox::question_ref(&shown))
-                    .is_none_or(|cache| cache.stale && !cache.loading);
-                let context = inbox::question_context_refs(state, feed, &shown);
-                let gets = inbox::question_dependencies(state, feed, &shown);
-                Some(Want {
-                    shown,
-                    rev,
-                    stale,
-                    context,
-                    gets,
-                })
+        with_source(app, |state, src, filter| {
+            let inbox::Src::Live(feed) = src;
+            let shown = inbox::shown_key_filtered(state, feed, key.as_ref(), filter)?;
+            let rev = feed.inbox.get(shown.as_str()).map(|row| row.rev);
+            let stale = feed
+                .detail(&inbox::question_ref(&shown))
+                .is_none_or(|cache| cache.stale && !cache.loading);
+            let context = inbox::question_context_refs(state, feed, &shown);
+            let gets = inbox::question_dependencies(state, feed, &shown);
+            Some(Want {
+                shown,
+                rev,
+                stale,
+                context,
+                gets,
             })
         })
     });
@@ -130,8 +129,11 @@ pub(super) fn gate(
     key: Key,
     build: impl Fn(AppState) -> AnyElement + 'static,
 ) -> AnyElement {
-    let phase =
-        computed(move || with_source(app, |state, src| inbox::handover(state, src, key.as_ref())));
+    let phase = computed(move || {
+        with_source(app, |state, src, filter| {
+            inbox::handover_filtered(state, src, key.as_ref(), filter)
+        })
+    });
     let terminal = app.form == Form::Terminal;
     dynamic(move || {
         let phase = phase.get();
@@ -167,11 +169,11 @@ pub(super) fn gate(
 }
 
 fn sheet_of(app: AppState, key: Key, focus: bool) -> Memo<Sheet> {
-    blind(app, move |state, src, env| {
+    blind(app, move |state, src, env, filter| {
         if focus {
-            inbox::question(state, src, key.as_ref(), env)
+            inbox::question_filtered(state, src, key.as_ref(), env, filter)
         } else {
-            inbox::sheet_desk(state, src, None, env, false)
+            inbox::sheet_desk_filtered(state, src, None, env, false, filter)
         }
     })
 }
@@ -333,8 +335,8 @@ pub(super) fn phone_trailing(app: AppState, key: Key) -> AnyElement {
 fn ask_icon(app: AppState, key: Key) -> AnyElement {
     let ask = computed(move || {
         let env = app.env();
-        with_source(app, |state, src| {
-            inbox::question(state, src, key.as_ref(), env).ask
+        with_source(app, |state, src, filter| {
+            inbox::question_filtered(state, src, key.as_ref(), env, filter).ask
         })
     });
     live(ask, move |ask| {

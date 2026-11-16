@@ -39,7 +39,7 @@ pub(super) fn populate(feed: &mut Feed) {
     builds(feed);
 }
 
-fn settings(feed: &mut Feed) {
+pub(super) fn settings(feed: &mut Feed) {
     let choices: Vec<_> = [
         ("pi-sol xhigh", "gpt-6.1-sol", "xhigh"),
         ("pi-terra high", "gpt-5.6-terra", "high"),
@@ -108,7 +108,7 @@ fn owner_move(
             kind,
             task: Some(task.into()),
             plan: plan.map(str::to_owned),
-            project: Some("corral".into()),
+            project: feed.board.task(task).and_then(|row| row.project.clone()),
             title: title.into(),
             from: "Preview · canonical owner move".into(),
             asked_at: Some(stamp(feed, feed.now.saturating_sub(300))),

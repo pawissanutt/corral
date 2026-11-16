@@ -13,14 +13,15 @@ use crate::model::work::{self, ClosedPress, ClosedRow, ClosedView};
 use crate::model::{Form, Hue, Id};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::mark;
-use crate::ui::kit::rows::{TaskColumns, group_header, list_row};
+use crate::ui::kit::rows::{TaskColumns, group_header, list_row, titled};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
 use super::cells;
 use super::list::revealing;
-use super::parts::{press, pressable, quiet};
+use super::parts::{press, pressable, quiet, scope};
 
 const RING: f32 = 2.0;
 /// The group heading's own vertical padding (`rows::group_header`), so the disclosure chevron
@@ -50,7 +51,8 @@ pub(super) fn press_id(press: &ClosedPress) -> &'static str {
 
 /// The Closed section in the form's look, for the bottom of the Now list on every form, once
 /// the model offers it (`work::closed_offered`: a complete board, even an empty one). It reads
-/// `work::closed_view` itself and fetches the open page when it is missing or stale;
+/// `work::closed_view_filtered` in Now's project scope itself and fetches the open page when it
+/// is missing or stale;
 /// selecting a row restyles it in place, keeping every row (and its focus).
 pub(super) fn closed_section(app: AppState) -> AnyElement {
     let offered = computed(move || app.feed.with(work::closed_offered));
@@ -61,9 +63,11 @@ fn offered_section(app: AppState) -> AnyElement {
     keep_page(app);
     let source = computed(move || {
         let selection = app.selection();
+        let (filter, _) = scope(app);
         app.feed.with(|feed| {
-            app.work
-                .with(|state| work::closed_view(state, feed, &selection, app.form))
+            app.work.with(|state| {
+                work::closed_view_filtered(state, feed, &selection, app.form, &filter)
+            })
         })
     });
     let shape = computed(move || source.with(unselected));
@@ -252,9 +256,13 @@ fn closed_row(
         computed(move || is_selected(source, &id))
     };
     let action = row.action.clone();
+    let label = match &row.project_chip {
+        Some(project) => format!("{}, {project}", row.label),
+        None => row.label.clone(),
+    };
     let row = list_row(
         app,
-        row.label.clone(),
+        label,
         format!("task-{}", row.id),
         move || is_selected(source, &id),
         move || press(app, action.clone()),
@@ -300,14 +308,15 @@ fn desktop_cells(app: AppState, row: &ClosedRow, columns: Memo<TaskColumns>) -> 
         column(px(DESK_DELTA), false, view()).into_element(),
         column(px(DESK_MARK), false, mark(app, row.mark, row.hue)).into_element(),
         column(px(DESK_ID), false, mono(row.id.to_string(), 11.5)).into_element(),
-        text(row.title.clone())
-            .flex_1()
-            .min_w(px(0.0))
-            .truncate()
-            .font_family(FONT_TEXT)
-            .text_size(px(text_size(app.form)))
-            .text_color(color(Token::Ink2))
-            .into_element(),
+        titled(
+            app,
+            text(row.title.clone())
+                .truncate()
+                .font_family(FONT_TEXT)
+                .text_size(px(text_size(app.form)))
+                .text_color(color(Token::Ink2)),
+            row.project_chip.clone(),
+        ),
         status_column(
             px(DESK_STATUS),
             columns,
@@ -355,6 +364,11 @@ fn phone_lines(app: AppState, row: &ClosedRow) -> Vec<AnyElement> {
         .gap(px(8.0))
         // Under the title: past the 12 pt mark column and its 10 pt gap.
         .pl(px(22.0))
+        .children(
+            row.project_chip
+                .clone()
+                .map(|project| chip(app, project, Hue::Neutral)),
+        )
         .child(
             text(row.status.clone())
                 .flex_1()
@@ -388,10 +402,11 @@ fn terminal_cells(app: AppState, row: &ClosedRow, columns: Memo<TaskColumns>) ->
             words(row.id.to_string(), Token::Ink3),
         )
         .into_element(),
-        words(row.title.clone(), Token::Ink2)
-            .flex_1()
-            .min_w(px(0.0))
-            .into_element(),
+        titled(
+            app,
+            words(row.title.clone(), Token::Ink2),
+            row.project_chip.clone(),
+        ),
         status_column(
             term::cells(TERM_STATUS),
             columns,

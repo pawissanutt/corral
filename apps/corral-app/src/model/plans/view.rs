@@ -91,6 +91,8 @@ pub struct MemberSquare {
 pub struct PlanRow {
     /// Plan, tracker or S-900 id.
     pub id: Id,
+    /// Project context, only when the workspace-wide list needs disambiguation.
+    pub project_chip: Option<String>,
     /// Revision retained as data even when the phone omits it from the id label.
     pub rev: Option<String>,
     /// Id plus revision on desktop; id only on phone.

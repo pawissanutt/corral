@@ -9,11 +9,12 @@ use crate::model::board::ChangeKind;
 use crate::model::daemon::{Feed, Link};
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
+use crate::model::projects::{NowGroup, ProjectFilter};
 use crate::model::{Id, Live, Selection};
 
 use super::{
-    FeedRow, LiveTile, NO_TAIL, Press, State, Tail, TailLine, daemon_selection, detail_note,
-    loaded_task, stamp, task_tail,
+    FeedRow, LiveTile, NO_TAIL, Press, State, Tail, TailLine, daemon_selection_filtered,
+    detail_note, loaded_task, stamp, task_tail,
 };
 
 /// The lines a tile shows of an agent's tail.
@@ -134,7 +135,14 @@ fn tile(row: &AgentRow, feed: &Feed) -> LiveTile {
 
 /// The Live dock in the Daemon state: the selected task's captured tail, then a tile for each
 /// agent that has not ended.
-pub fn daemon_live(state: &State, feed: &Feed, selected: &Selection, form: Form) -> LiveNow {
+pub fn daemon_live_filtered(
+    state: &State,
+    feed: &Feed,
+    selected: &Selection,
+    form: Form,
+    filter: &ProjectFilter,
+    grouping: NowGroup,
+) -> LiveNow {
     if let Some(notice) = board_notice(feed) {
         return LiveNow {
             selected: None,
@@ -143,7 +151,7 @@ pub fn daemon_live(state: &State, feed: &Feed, selected: &Selection, form: Form)
             tiles_note: None,
         };
     }
-    let task = daemon_selection(state, selected, feed, form);
+    let task = daemon_selection_filtered(state, selected, feed, form, filter, grouping);
     let off_board = super::off_board(selected, feed);
     let tail = match task {
         Some(task) => task_tail(feed, task),
@@ -228,7 +236,14 @@ pub fn plan_context(feed: &Feed, id: &Id, board: Option<&str>) -> LivePlan {
 }
 
 /// The plan graph dock in the Daemon state.
-pub fn daemon_plan(state: &State, feed: &Feed, selected: &Selection, form: Form) -> LivePlan {
+pub fn daemon_plan_filtered(
+    state: &State,
+    feed: &Feed,
+    selected: &Selection,
+    form: Form,
+    filter: &ProjectFilter,
+    grouping: NowGroup,
+) -> LivePlan {
     let quiet = |notice| LivePlan {
         plan: None,
         member: None,
@@ -239,7 +254,7 @@ pub fn daemon_plan(state: &State, feed: &Feed, selected: &Selection, form: Form)
     if let Some(notice) = board_notice(feed) {
         return quiet(notice);
     }
-    if let Some(task) = daemon_selection(state, selected, feed, form) {
+    if let Some(task) = daemon_selection_filtered(state, selected, feed, form, filter, grouping) {
         return task_plan_context(feed, task);
     }
     // A task off the board has a plan only once its detail says so.
@@ -303,7 +318,12 @@ fn event_kind(line: &ChangeLine) -> ChangeKind {
 
 /// One daemon change as a feed row: its local time, its task (opening it), its words without
 /// the leading task id the row already shows, and corrald's attribution.
-pub fn change_row(line: &ChangeLine, feed: &Feed, unseen: bool) -> FeedRow {
+pub fn change_row_filtered(
+    line: &ChangeLine,
+    feed: &Feed,
+    unseen: bool,
+    filter: &ProjectFilter,
+) -> FeedRow {
     let id = line.task.clone().unwrap_or_default();
     let words = line
         .text
@@ -335,6 +355,13 @@ pub fn change_row(line: &ChangeLine, feed: &Feed, unseen: bool) -> FeedRow {
     };
     FeedRow {
         at: stamp(&line.at, feed),
+        project_chip: line
+            .task
+            .as_deref()
+            .and_then(|id| feed.board.task(id))
+            .and_then(|task| {
+                crate::model::projects::project_chip(feed, filter, task.project.as_deref())
+            }),
         action: line
             .task
             .as_deref()
@@ -392,7 +419,8 @@ pub struct Since {
 }
 
 /// The changes past this device's seen cursor, newest first, each opening its task.
-pub fn daemon_since(feed: &Feed) -> Since {
+pub fn daemon_since_filtered(feed: &Feed, filter: &ProjectFilter) -> Since {
+    let filter = filter.resolved(feed);
     if let Some(notice) = changes_notice(feed) {
         return Since {
             rows: Vec::new(),
@@ -405,8 +433,9 @@ pub fn daemon_since(feed: &Feed) -> Since {
         .range(through.saturating_add(1)..)
         .rev()
         .filter(|(_, line)| owner_relevant(line))
+        .filter(|(_, line)| super::change_matches_project(line, feed, &filter))
         .take(SINCE_ROWS)
-        .map(|(_, line)| change_row(line, feed, true))
+        .map(|(_, line)| change_row_filtered(line, feed, true, &filter))
         .collect();
     Since {
         notice: rows

@@ -9,8 +9,9 @@ use crate::model::inbox::{self, FeedRow};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::{dot, hue_ink, mark};
-use crate::ui::kit::rows::list_row;
+use crate::ui::kit::rows::{list_row, titled};
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
@@ -30,9 +31,16 @@ fn change_mark(app: AppState, kind: ChangeKind) -> AnyElement {
 
 /// A row of the feed. Desktop (`.ev`, 26 pt): time, mark, id, the text in ink while unseen.
 /// Phone (`.prow`, 48 pt): time, id and text on one line, the mark at the end. Terminal: the
-/// kit's one-line row.
+/// kit's one-line row. The project chip follows the text while the feed spans projects.
 pub(super) fn feed_row(app: AppState, row: FeedRow) -> AnyElement {
-    let label = format!("{} {} {}", row.at, row.id, row.text);
+    let label = match &row.project_chip {
+        Some(project) => format!("{} {} {}, {project}", row.at, row.id, row.text),
+        None => format!("{} {} {}", row.at, row.id, row.text),
+    };
+    let project = row
+        .project_chip
+        .clone()
+        .map(|project| chip(app, project, Hue::Neutral));
     let on_press = press(app, row.action.clone());
     match app.form {
         Form::Terminal => list_row(
@@ -45,12 +53,13 @@ pub(super) fn feed_row(app: AppState, row: FeedRow) -> AnyElement {
                 term::quiet(row.at.clone()).flex_shrink_0().into_element(),
                 change_mark(app, row.kind),
                 term::quiet(row.id.clone()).flex_shrink_0().into_element(),
-                text(row.text.clone())
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .truncate()
-                    .text_color(color(Token::Ink))
-                    .into_element(),
+                titled(
+                    app,
+                    text(row.text.clone())
+                        .truncate()
+                        .text_color(color(Token::Ink)),
+                    row.project_chip.clone(),
+                ),
             ],
         ),
         Form::Desktop => view()
@@ -96,6 +105,7 @@ pub(super) fn feed_row(app: AppState, row: FeedRow) -> AnyElement {
                 .min_w(px(0.0))
                 .truncate(),
             )
+            .children(project)
             .into_element(),
         Form::Phone => view()
             .flex_row()
@@ -128,6 +138,7 @@ pub(super) fn feed_row(app: AppState, row: FeedRow) -> AnyElement {
                     .child(words(app, " ", 14.5, Token::Ink))
                     .child(words(app, row.text.clone(), 14.5, Token::Ink)),
             )
+            .children(project)
             .child(
                 view()
                     .w(px(14.0))

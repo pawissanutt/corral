@@ -36,6 +36,8 @@ pub mod nav;
 pub mod plans;
 /// Explicit sample data served through the canonical daemon model.
 pub mod preview;
+/// Configured projects, independent screen scopes and assistant-only workspace views.
+pub mod projects;
 /// Independent review and candidate evidence.
 pub mod review;
 /// A watched session's open turn and continued transcript items.
@@ -63,4 +65,5 @@ pub use nav::{
     AskTarget, Destination, Form, NavState, Overlay, PhoneTab, SettingsSection, SidebarPref,
     ThemeChoice,
 };
+pub use projects::{ProjectFilter, WorkspaceMode};
 pub use text::{Rich, Span, flat, live_task_link, span};

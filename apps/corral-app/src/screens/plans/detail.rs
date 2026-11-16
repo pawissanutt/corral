@@ -11,6 +11,7 @@ use crate::model::plans::{
     DocumentSection, DocumentView, ExecutingView, Header, NoticeView, PipelineStage, PlanningView,
     ProposedRow, ReviewRow, SectionBody,
 };
+use crate::model::projects::FilterScreen;
 use crate::model::text::span;
 use crate::model::{Form, Id};
 use crate::state::AppState;
@@ -83,13 +84,15 @@ fn kind_of(detail: &Detail) -> Kind {
 }
 
 /// The tracked detail of the shown plan, and which variant it is. `plan` names the plan (the
-/// phone page's); otherwise the root selection, or the first plan listed, is shown.
+/// phone page's); otherwise the root selection, or the first plan the Plans scope lists, is shown.
 fn memos(app: AppState, plan: Option<Id>) -> (Memo<Detail>, Memo<Kind>) {
     let detail = computed(move || {
         let env = app.env();
         let shown = plan.clone().or_else(|| {
             let selection = app.selection();
-            app.feed.with(|feed| plans::current_plan(&selection, feed))
+            let filter = app.project_filter(FilterScreen::Plans);
+            app.feed
+                .with(|feed| plans::current_plan_filtered(&selection, feed, &filter))
         });
         app.plans.with(|state| {
             app.feed

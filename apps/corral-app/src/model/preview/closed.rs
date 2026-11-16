@@ -74,7 +74,7 @@ fn task(feed: &Feed, &(id, title, status, hours, plan, goal): &Sample) -> Closed
         title: title.into(),
         status: status.into(),
         updated: stamp(feed, feed.now.saturating_sub(hours * 3600)),
-        project: Some("corral".into()),
+        project: super::projects::sample_project(id).map(str::to_owned),
         plan: plan.map(str::to_owned),
         goal: goal.map(str::to_owned),
     }
@@ -155,6 +155,18 @@ pub(super) fn page(feed: &mut Feed, target: &DetailRef) -> Result<bool, String> 
     let DetailRef::Closed { before } = target else {
         return Ok(false);
     };
+    if feed.projects.is_empty() {
+        put(
+            feed,
+            target.clone(),
+            DetailBody::Closed(ClosedPage {
+                total: Some(0),
+                rows: vec![],
+                older: None,
+            }),
+        );
+        return Ok(true);
+    }
     let start = match before {
         None => 0,
         Some(before) => {

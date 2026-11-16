@@ -14,6 +14,7 @@ use crate::model::inbox::{
     self, Action, EmptyState, InboxList, InboxPreview, ItemPreview, NeedYouItem, Notice,
     PlanPreview,
 };
+use crate::model::projects::FilterScreen;
 use crate::model::work::Record;
 use crate::model::{Effect, Form, Hue, Id, Rich, flat};
 use crate::screens::assistant;
@@ -23,6 +24,7 @@ use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::{dot, hue_ink};
 use crate::ui::kit::notice::{empty, error, loading, notice, skeleton};
 use crate::ui::kit::page::{self, group_head, pane};
+use crate::ui::kit::project_filter::project_filter;
 use crate::ui::kit::text::{h3, rich};
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
@@ -56,27 +58,32 @@ pub(super) fn load_changes(app: AppState) {
     });
 }
 
-/// The desktop and terminal list column: a scrolling pane, rows made again as the model changes.
-/// It is the destination's keyboard list (`AppState::list_keys`).
+/// The desktop and terminal list column: the Inbox's project scope over the rows, in a scrolling
+/// pane, rows made again as the model changes. It is the destination's keyboard list
+/// (`AppState::list_keys`).
 pub(super) fn column(app: AppState) -> AnyElement {
-    let list = blind(app, inbox::inbox_list);
+    let list = blind(app, inbox::inbox_list_filtered);
     let revealed = stored(None::<String>);
     let content = view()
         .element_ref(&app.list_keys)
         .when(app.form == Form::Desktop, |v| v.pt(px(6.0)).pb(px(14.0)))
         .role(AccessibilityRole::List)
+        .child(project_filter(app, FilterScreen::Inbox))
         .child(live(list, move |list| list_body(app, list, revealed)))
         .into_element();
     pane(app, "inbox-list", content)
 }
 
-/// The phone tab root: the large title, then the cards and the feed in one scroll.
+/// The phone tab root: the large title, then the project scope, the cards and the feed in one
+/// scroll.
 pub(super) fn phone(app: AppState) -> AnyElement {
     let title = untracked(|| {
         let env = app.env();
-        with_source(app, |state, src| inbox::inbox(state, src, env).title)
+        with_source(app, |state, src, filter| {
+            inbox::inbox_filtered(state, src, env, filter).title
+        })
     });
-    let list = blind(app, inbox::inbox_list);
+    let list = blind(app, inbox::inbox_list_filtered);
     view()
         .flex_1()
         .min_h(px(0.0))
@@ -86,7 +93,10 @@ pub(super) fn phone(app: AppState) -> AnyElement {
         .child(pane(
             app,
             "inbox-list",
-            live(list, move |list| phone_body(app, list)),
+            view()
+                .child(project_filter(app, FilterScreen::Inbox))
+                .child(live(list, move |list| phone_body(app, list)))
+                .into_element(),
         ))
         .into_element()
 }
@@ -97,7 +107,7 @@ pub(super) fn phone(app: AppState) -> AnyElement {
 /// desktop window), so the handover stacks its bands' parts and keeps the decide bar to one row.
 pub(super) fn preview(app: AppState, compact: bool) -> AnyElement {
     sheet::load(app, None);
-    let shown = blind(app, inbox::inbox_preview);
+    let shown = blind(app, inbox::inbox_preview_filtered);
     let kind = computed(move || shown.with(Kind::of));
     view()
         .flex_1()
@@ -323,10 +333,20 @@ fn row_label(item: &NeedYouItem) -> String {
         item.meta,
         item.age
     );
+    if let Some(project) = &item.project_chip {
+        label = format!("{label}, {project}");
+    }
     if let Some(line) = &item.attention {
         label = format!("{label}, {}: {}", line.whose, line.reason);
     }
     label
+}
+
+/// The item's quiet project chip, while the list spans projects.
+fn project(app: AppState, item: &NeedYouItem) -> Option<AnyElement> {
+    item.project_chip
+        .clone()
+        .map(|project| chip(app, project, Hue::Neutral))
 }
 
 /// A served question's record verbs on its row's context menu; any other row as it is.
@@ -380,6 +400,7 @@ fn row(app: AppState, item: NeedYouItem) -> AnyElement {
         .attention
         .as_ref()
         .map(|line| attention::summary(app, line, 12.0, 1).truncate());
+    let tag = project(app, &item);
     let drawn = view()
         .relative()
         .flex_row()
@@ -425,9 +446,19 @@ fn row(app: AppState, item: NeedYouItem) -> AnyElement {
                 .gap(px(1.0))
                 .child(rich_at(app, &item.heading, 11.5, color(Token::Ink3)).number_of_lines(1u32))
                 .child(
-                    words(app, item.title, 13.0, Token::Ink)
-                        .truncate()
-                        .font_weight(FontWeight::SEMIBOLD),
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .min_w(px(0.0))
+                        .child(
+                            words(app, item.title, 13.0, Token::Ink)
+                                .flex_shrink(1.0)
+                                .min_w(px(0.0))
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD),
+                        )
+                        .children(tag),
                 )
                 .children(move_line)
                 .child(words(app, item.meta, 12.0, Token::Ink3).truncate()),
@@ -439,7 +470,8 @@ fn row(app: AppState, item: NeedYouItem) -> AnyElement {
 
 /// A needs-you row in Cells, on two rows so the title keeps the width: the lead line (lead and
 /// id) quiet above, then the dot, the title taking the room and the age; the attention move on
-/// a third row when corrald records one. A one-Cell bar marks the selected row; NSH bands it.
+/// a third row when corrald records one. A one-Cell bar marks the selected row; NSH bands it. The
+/// project chip is not drawn here (the title keeps the width); the row's label names the project.
 fn terminal_row(
     app: AppState,
     item: NeedYouItem,
@@ -548,7 +580,9 @@ fn card(app: AppState, item: NeedYouItem) -> AnyElement {
                 .items_center()
                 .gap(px(8.0))
                 .child(dot(app, item.hue))
-                .child(rich_at(app, &heading, 12.5, lead_ink).number_of_lines(1u32)),
+                .child(rich_at(app, &heading, 12.5, lead_ink).number_of_lines(1u32))
+                .child(view().flex_1())
+                .children(project(app, &item)),
         )
         .child(
             words(app, item.title, 17.0, Token::Ink)

@@ -13,6 +13,7 @@ use crate::model::Form;
 use crate::model::board::{Actor, TaskLine};
 use crate::model::hue::Hue;
 use crate::state::AppState;
+use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::{actor, delta, hue_ink, rail};
 use crate::ui::term::{cells, hrule};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, row_height, text_size};
@@ -64,6 +65,10 @@ const TERM_RAIL: f32 = 7.0;
 const TERM_NOW: f32 = 22.0;
 const TERM_AGE: f32 = 3.0;
 const TERM_COST: f32 = 5.0;
+
+/// The terminal title's least room beside a project chip: the chip shows only while it leaves
+/// this many Cells (the row's own least is [`TITLE_CELLS`]).
+const TERM_TITLE_WITH_CHIP: f32 = 16.0;
 
 /// The optional columns a row `width` wide holds: points on desktop and phone, whole Cells in a
 /// terminal. Breakpoints (each column with its gap): desktop cost from 374 pt, age from 416 pt,
@@ -121,10 +126,13 @@ pub fn task_columns(form: Form, width: f32) -> TaskColumns {
 /// delta, the now-phrase in its hue and `age · cost`. Terminal: one line of Cells: selection bar,
 /// delta, actor glyph, id, title, rail glyphs, now, age, cost. Desktop and terminal rows measure
 /// their own width and hide the now-phrase, then age, then cost as they narrow
-/// ([`task_columns`]).
+/// ([`task_columns`]). `project` is the row's quiet project chip, after the title on desktop and
+/// terminal (the title gives way first) and leading the phone's second line; a terminal row
+/// shows it only while the title keeps [`TERM_TITLE_WITH_CHIP`] Cells beside it.
 pub fn task_row(
     app: AppState,
     line: TaskLine,
+    project: Option<String>,
     selected: impl Fn() -> bool + 'static,
     on_press: impl Fn() + 'static,
     test_id: impl Into<String>,
@@ -132,11 +140,14 @@ pub fn task_row(
     let form = app.form;
     let width = signal(0.0_f32);
     let columns = computed(move || task_columns(form, in_units(form, width.get())));
-    let label = line.label();
+    let label = match &project {
+        Some(project) => format!("{}, {project}", line.label()),
+        None => line.label(),
+    };
     let content = match form {
-        Form::Desktop => desktop_cells(app, line, columns),
-        Form::Phone => phone_lines(app, line),
-        Form::Terminal => terminal_cells(app, line, columns),
+        Form::Desktop => desktop_cells(app, line, project, columns),
+        Form::Phone => phone_lines(app, line, project),
+        Form::Terminal => terminal_cells(app, line, project, columns),
     };
     let measure = (form != Form::Phone).then_some(width);
     shell(
@@ -207,9 +218,90 @@ fn optional(
         .into_element()
 }
 
+/// A row's title cell: the title filling it, or, with a project chip, the title cut first and
+/// the quiet chip right after it. Any list row whose model carries a `project_chip` uses it. In a
+/// terminal the chip yields to the title ([`project_chip`]).
+pub fn titled(app: AppState, title: Text, project: Option<String>) -> AnyElement {
+    match project {
+        None => title.flex_1().min_w(px(0.0)).into_element(),
+        Some(project) => {
+            let room = signal(0.0_f32);
+            let face = project_chip(app, project, room, 0.0);
+            measured(
+                app,
+                view()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex_row()
+                    .items_center()
+                    .gap(if app.form == Form::Terminal {
+                        cells(1.0)
+                    } else {
+                        px(6.0)
+                    }),
+                room,
+            )
+            .child(title.flex_shrink(1.0).min_w(px(0.0)))
+            .child(face)
+            .into_element()
+        }
+    }
+}
+
+/// Records the width of `container` in `room` (a terminal only), for [`project_chip`]. The
+/// container must take its width from its parent, not from its content, so the chip showing or
+/// hiding never changes it.
+pub fn measured(app: AppState, container: View, room: Signal<f32>) -> View {
+    if app.form == Form::Terminal {
+        container.on_layout(move |frame: &Bounds<Points>| room.set(frame.size.width.0))
+    } else {
+        container
+    }
+}
+
+/// Whether a terminal row's project chip fits: the title keeps at least [`TERM_TITLE_WITH_CHIP`]
+/// Cells beside it. `room` is the width of the [`measured`] container holding title and chip,
+/// `reserved` the Cells its other content takes. Before the first measure it holds.
+pub fn project_fits(project: &str, room: Signal<f32>, reserved: f32) -> Memo<bool> {
+    // The label, a Cell of padding either side and the Cell before it.
+    let need = project.chars().count() as f32 + 3.0 + reserved + TERM_TITLE_WITH_CHIP;
+    computed(move || {
+        let width = room.get();
+        width <= 0.0 || (width / cells(1.0).0).floor() >= need
+    })
+}
+
+/// A row's quiet project chip. In a terminal it shows only while it [`project_fits`]; when it
+/// does not it is out of the row, its gap with it, and hidden from screen readers (the row's
+/// label still names the project). Elsewhere it always shows.
+pub fn project_chip(
+    app: AppState,
+    project: String,
+    room: Signal<f32>,
+    reserved: f32,
+) -> AnyElement {
+    if app.form != Form::Terminal {
+        return chip(app, project, Hue::Neutral);
+    }
+    let fits = project_fits(&project, room, reserved);
+    view()
+        .flex_shrink_0()
+        .flex_row()
+        .items_center()
+        .style_when(move || !fits.get(), |s| s.hidden())
+        .accessibility_elements_hidden(move || !fits.get())
+        .child(chip(app, project, Hue::Neutral))
+        .into_element()
+}
+
 /// `10px 14px 50px minmax(0, 1fr) 64px 150px 34px 46px`, 8 pt apart; now, age and cost as
 /// `columns` holds them.
-fn desktop_cells(app: AppState, line: TaskLine, columns: Memo<TaskColumns>) -> Vec<AnyElement> {
+fn desktop_cells(
+    app: AppState,
+    line: TaskLine,
+    project: Option<String>,
+    columns: Memo<TaskColumns>,
+) -> Vec<AnyElement> {
     let leading = if line.changed {
         delta(app)
     } else {
@@ -236,14 +328,15 @@ fn desktop_cells(app: AppState, line: TaskLine, columns: Memo<TaskColumns>) -> V
         column(DESK_DELTA, leading),
         column(DESK_ACTOR, actor(app, line.actor)),
         column(DESK_ID, mono_cell(line.id, 11.5, id_ink)),
-        text(line.title)
-            .flex_1()
-            .min_w(px(0.0))
-            .truncate()
-            .font_family(FONT_TEXT)
-            .text_size(px(text_size(app.form)))
-            .text_color(title_ink)
-            .into_element(),
+        titled(
+            app,
+            text(line.title)
+                .truncate()
+                .font_family(FONT_TEXT)
+                .text_size(px(text_size(app.form)))
+                .text_color(title_ink),
+            project,
+        ),
         column(DESK_RAIL, rail(app, line.rail)),
         optional(
             px(DESK_NOW),
@@ -276,7 +369,7 @@ fn desktop_cells(app: AppState, line: TaskLine, columns: Memo<TaskColumns>) -> V
 /// Two lines: `id · title · rail` / `Δ now · age · cost`, the second under the title. The title
 /// may take two lines before it is cut: at 16 pt one line holds some 25 characters, too few to
 /// tell like titles apart.
-fn phone_lines(app: AppState, line: TaskLine) -> Vec<AnyElement> {
+fn phone_lines(app: AppState, line: TaskLine, project: Option<String>) -> Vec<AnyElement> {
     let quieter = line.actor == Actor::Queued;
     let now_ink = now_ink(&line);
     let tail = line.meta();
@@ -316,6 +409,7 @@ fn phone_lines(app: AppState, line: TaskLine) -> Vec<AnyElement> {
         // Under the title: past the 12 pt dot column and its 10 pt gap.
         .pl(px(22.0))
         .when(line.changed, |second| second.child(delta(app)))
+        .children(project.map(|project| chip(app, project, Hue::Neutral)))
         .child(
             text(line.now)
                 .flex_1()
@@ -339,7 +433,12 @@ fn phone_lines(app: AppState, line: TaskLine) -> Vec<AnyElement> {
 
 /// One line of Cells: Δ, actor, id (6), title, rail (7), then now (22), age (3) and cost (5) as
 /// `columns` holds them.
-fn terminal_cells(app: AppState, line: TaskLine, columns: Memo<TaskColumns>) -> Vec<AnyElement> {
+fn terminal_cells(
+    app: AppState,
+    line: TaskLine,
+    project: Option<String>,
+    columns: Memo<TaskColumns>,
+) -> Vec<AnyElement> {
     let leading = if line.changed {
         delta(app)
     } else {
@@ -364,12 +463,11 @@ fn terminal_cells(app: AppState, line: TaskLine, columns: Memo<TaskColumns>) -> 
             .flex_shrink_0()
             .child(words(line.id.to_owned(), Token::Ink3))
             .into_element(),
-        text(line.title)
-            .flex_1()
-            .min_w(px(0.0))
-            .truncate()
-            .text_color(color(Token::Ink))
-            .into_element(),
+        titled(
+            app,
+            text(line.title).truncate().text_color(color(Token::Ink)),
+            project,
+        ),
         view()
             .w(cells(TERM_RAIL))
             .flex_shrink_0()

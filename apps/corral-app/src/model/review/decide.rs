@@ -16,10 +16,11 @@ use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::{Live, Selection};
 use crate::model::nav::Form;
+use crate::model::projects::ProjectFilter;
 use crate::model::text::span;
 
 use super::evidence::artifact_ref;
-use super::live::{Shown, file_ref, review_ref, selected, short, task_ref};
+use super::live::{Shown, file_ref, review_ref, selected_filtered, short, task_ref};
 use super::live_files::{draft_key, patch_refusal};
 use super::view::{Button, ButtonStyle, Composer, DecideBar, StatusLine, button};
 use super::{Action, Compose, Intent, Sent, State};
@@ -619,12 +620,14 @@ impl State {
     }
 
     /// Applies a served control's intent with the feed and the root's selection.
-    pub fn apply_live(
+    /// `filter` is the Review screen's own scope, so a pick or a step lands on its rows.
+    pub fn apply_live_filtered(
         &mut self,
         action: Action,
         feed: &Feed,
         selection: &Selection,
         env: Env,
+        filter: &ProjectFilter,
     ) -> Vec<Effect> {
         match &action {
             Action::Tab(tab) => return self.rtab(*tab),
@@ -646,7 +649,7 @@ impl State {
             }
             _ => {}
         }
-        let Some(task) = selected(selection, feed) else {
+        let Some(task) = selected_filtered(selection, feed, filter) else {
             return Vec::new();
         };
         let shown = Shown::of(feed, task);

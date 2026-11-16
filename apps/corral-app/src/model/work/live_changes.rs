@@ -4,9 +4,10 @@
 
 use crate::model::daemon::{Feed, Link};
 use crate::model::nav::Form;
+use crate::model::projects::ProjectFilter;
 
 use super::{
-    Button, ButtonKind, Changes, FeedRow, Press, State, change_row, changes_loading,
+    Button, ButtonKind, Changes, FeedRow, Press, State, change_row_filtered, changes_loading,
     changes_notice, daemon_status, feed_filters, stamp,
 };
 
@@ -38,6 +39,28 @@ pub fn unseen_count(feed: &Feed) -> UnseenCount {
     }
 }
 
+/// Project totals cover loaded changes only; the daemon's unseen total is workspace-wide.
+pub fn unseen_count_filtered(feed: &Feed, filter: &ProjectFilter) -> UnseenCount {
+    let filter = filter.resolved(feed);
+    if filter == ProjectFilter::All {
+        return unseen_count(feed);
+    }
+    let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
+    let count = feed
+        .changes
+        .range((
+            std::ops::Bound::Excluded(through),
+            std::ops::Bound::Unbounded,
+        ))
+        .filter(|(_, line)| super::live_context::owner_relevant(line))
+        .filter(|(_, line)| change_matches_project(line, feed, &filter))
+        .count();
+    UnseenCount {
+        count: u64::try_from(count).unwrap_or(u64::MAX),
+        total: false,
+    }
+}
+
 /// When this device last saw the feed, in local time, if it ever did.
 fn last_visit(feed: &Feed) -> Option<String> {
     feed.seen
@@ -49,7 +72,16 @@ fn last_visit(feed: &Feed) -> Option<String> {
 }
 
 /// Changes for the authenticated device's own cursor; the shell owns back navigation.
-pub fn live_changes(state: &State, feed: &Feed, device: Option<&str>, form: Form) -> Changes {
+/// Resolve attribution only from board tasks. Workspace events and events whose task has
+/// left the board remain visible: missing current metadata is not proof of another project.
+pub fn live_changes_filtered(
+    state: &State,
+    feed: &Feed,
+    device: Option<&str>,
+    form: Form,
+    filter: &ProjectFilter,
+) -> Changes {
+    let filter = filter.resolved(feed);
     let phone = form == Form::Phone;
     let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
     let visit = last_visit(feed);
@@ -61,14 +93,15 @@ pub fn live_changes(state: &State, feed: &Feed, device: Option<&str>, form: Form
         .rev()
         .filter(|line| super::live_context::owner_relevant(line))
         .filter(|line| state.filter.admits_class(&line.class))
+        .filter(|line| change_matches_project(line, feed, &filter))
     {
         if line.seq > through {
-            recent.push(change_row(line, feed, true));
+            recent.push(change_row_filtered(line, feed, true, &filter));
         } else {
-            history.push(change_row(line, feed, false));
+            history.push(change_row_filtered(line, feed, false, &filter));
         }
     }
-    let unseen = unseen_count(feed);
+    let unseen = unseen_count_filtered(feed, &filter);
     let device_words = device.map_or_else(|| "this device".to_owned(), |name| name.to_owned());
     let seen_line = match (&visit, phone) {
         (Some(at), true) => format!("last visit {at}"),
@@ -138,6 +171,19 @@ pub fn live_changes(state: &State, feed: &Feed, device: Option<&str>, form: Form
     }
 }
 
+/// Historical and workspace-wide changes have no reliable current project without a board
+/// task, so preserve them rather than silently dropping events from the retained history.
+pub(crate) fn change_matches_project(
+    line: &corral_protocol::app::ChangeLine,
+    feed: &Feed,
+    filter: &ProjectFilter,
+) -> bool {
+    line.task
+        .as_deref()
+        .and_then(|id| feed.board.task(id))
+        .is_none_or(|task| filter.matches(task.project.as_deref()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,7 +218,8 @@ mod tests {
             at: Some("2026-11-14T09:00:00Z".into()),
         });
         let mut state = State::default();
-        let changes = live_changes(&state, &feed, Some("phone"), Form::Desktop);
+        let all = ProjectFilter::All;
+        let changes = live_changes_filtered(&state, &feed, Some("phone"), Form::Desktop, &all);
         let ids = |rows: &[FeedRow]| rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&changes.recent), ["T-4", "T-3"]);
         assert_eq!(ids(&changes.history), ["T-2", "T-1"]);
@@ -183,7 +230,7 @@ mod tests {
             Some(Press::Seen(4))
         );
         state.filter = ChangeFilter::Verdicts;
-        let changes = live_changes(&state, &feed, None, Form::Desktop);
+        let changes = live_changes_filtered(&state, &feed, None, Form::Desktop, &all);
         assert_eq!(ids(&changes.recent), ["T-4"]);
         assert_eq!(ids(&changes.history), ["T-1"]);
     }
@@ -209,7 +256,13 @@ mod tests {
             at: None,
         });
         feed.changes_unseen = Some((100, 500));
-        let view = live_changes(&State::default(), &feed, None, Form::Terminal);
+        let view = live_changes_filtered(
+            &State::default(),
+            &feed,
+            None,
+            Form::Terminal,
+            &ProjectFilter::All,
+        );
         assert_eq!(view.recent.len(), 2);
         assert_eq!(view.recent[0].kind, MarkKind::Mark(Mark::Fail));
         assert!(view.recent[1].text.contains("backlog"));

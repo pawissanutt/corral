@@ -4,6 +4,7 @@
 
 use nsh_core::prelude::*;
 
+use crate::model::projects::{FilterScreen, NowGroup, ProjectFilter};
 use crate::model::work::{self, Action, Button, Press};
 use crate::model::{Form, Live};
 use crate::state::AppState;
@@ -204,20 +205,28 @@ pub(crate) fn wanted_id(
     Some((id.clone(), rev, needed))
 }
 
+/// Now's own project scope and grouping, tracked: every Now builder reads the list it shows.
+pub(crate) fn scope(app: AppState) -> (ProjectFilter, NowGroup) {
+    (app.project_filter(FilterScreen::Now), app.now_group())
+}
+
 /// The selected task to keep loaded, on the board or off it, tracked.
 pub(crate) fn selected_task(app: AppState) -> Memo<Wanted> {
     let form = app.form;
     computed(move || {
         let selection = app.selection();
+        let (filter, grouping) = scope(app);
         app.feed.with(|feed| {
-            app.work.with(
-                |state| match work::daemon_selection(state, &selection, feed, form) {
+            app.work.with(|state| {
+                match work::daemon_selection_filtered(
+                    state, &selection, feed, form, &filter, grouping,
+                ) {
                     Some(task) => wanted(feed, task),
                     None => {
                         work::off_board(&selection, feed).and_then(|id| wanted_id(feed, id, None))
                     }
-                },
-            )
+                }
+            })
         })
     })
 }

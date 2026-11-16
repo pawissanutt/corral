@@ -18,8 +18,8 @@ use crate::ui::tokens::{Token, color};
 fn decide_model(app: AppState, key: Key) -> Memo<DecideBar> {
     computed(move || {
         let env = app.env();
-        with_source(app, |state, src| {
-            inbox::decide(state, src, key.as_ref(), env)
+        with_source(app, |state, src, filter| {
+            inbox::decide_filtered(state, src, key.as_ref(), env, filter)
         })
     })
 }
