@@ -42,7 +42,6 @@ impl ProjectFilter {
     pub fn resolved(&self, feed: &Feed) -> Self {
         match self {
             Self::Project(id) if !contains_project(feed, id) => Self::All,
-            Self::Unassigned if !has_unassigned(feed) => Self::All,
             _ => self.clone(),
         }
     }
@@ -233,9 +232,11 @@ pub struct FilterChip {
 
 /// Empty means the screen should omit its project chip strip entirely.
 pub fn chips(feed: &Feed, filter: &ProjectFilter, screen: FilterScreen) -> Vec<FilterChip> {
-    if (screen == FilterScreen::Plans && !feed.capable(corral_protocol::PROJECTS_V1))
-        || (!has_multiple_projects(feed) && !has_unassigned(feed))
-    {
+    // Legacy daemons send no plan projects, so the Plans builders ignore any filter there.
+    if screen == FilterScreen::Plans && !feed.capable(corral_protocol::PROJECTS_V1) {
+        return Vec::new();
+    }
+    if *filter == ProjectFilter::All && !has_multiple_projects(feed) && !has_unassigned(feed) {
         return Vec::new();
     }
     let mut chips = vec![FilterChip {
@@ -255,6 +256,14 @@ pub fn chips(feed: &Feed, filter: &ProjectFilter, screen: FilterScreen) -> Vec<F
                 selected: entry.selected,
             }),
     );
+    if *filter == ProjectFilter::Unassigned && !has_unassigned(feed) {
+        chips.push(FilterChip {
+            id: "filter-filter-unassigned".into(),
+            label: "Unassigned".into(),
+            filter: ProjectFilter::Unassigned,
+            selected: true,
+        });
+    }
     chips
 }
 

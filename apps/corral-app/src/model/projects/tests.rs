@@ -98,7 +98,7 @@ fn unassigned_task() -> crate::model::daemon::Task {
 }
 
 #[test]
-fn vanished_unassigned_scope_falls_back_when_last_task_is_assigned() {
+fn unassigned_filter_remains_accessible_when_last_open_task_is_assigned() {
     let mut feed = Feed::default();
     feed.capabilities
         .insert(corral_protocol::PROJECTS_V1.into());
@@ -110,9 +110,18 @@ fn vanished_unassigned_scope_falls_back_when_last_task_is_assigned() {
     task.project = Some("corral".into());
     task.rev = 2;
     feed.board.apply_batch(2, vec![task], &[]);
-    assert_eq!(filter.resolved(&feed), ProjectFilter::All);
-    assert!(chips(&feed, &filter, FilterScreen::Now).is_empty());
-    assert!(filter.resolved(&feed).matches(Some("corral")));
+    assert_eq!(filter.resolved(&feed), filter);
+    let chips = chips(&feed, &filter, FilterScreen::Now);
+    assert!(
+        chips
+            .iter()
+            .any(|chip| chip.filter == ProjectFilter::All && !chip.selected)
+    );
+    assert!(
+        chips
+            .iter()
+            .any(|chip| chip.filter == ProjectFilter::Unassigned && chip.selected)
+    );
 }
 
 #[test]
