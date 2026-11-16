@@ -1,6 +1,6 @@
 # Corral app
 
-Corral is a Rust app built on [NSH 0.5.0](https://nsh.dev), with desktop, web, phone-layout and terminal forms. The crate is `nsh-app-corral` (`0.1.0`); `nsh.json` currently declares package version `1.0.0`, build `1`. These are diagnostic/package versions, not protocol compatibility. The root component is `App`. Normal startup uses live daemon data or shows a disconnected, unknown or unpaired state; sample data is an explicitly selected preview only. See [Live data](#live-data).
+Corral is a Rust app built on [NSH 0.5.1](https://nsh.dev), with desktop, web, phone-layout and terminal forms. The crate is `nsh-app-corral` (`0.1.0`); `nsh.json` currently declares package version `1.0.0`, build `1`. These are diagnostic/package versions, not protocol compatibility. The root component is `App`. Normal startup uses live daemon data or shows a disconnected, unknown or unpaired state; sample data is an explicitly selected preview only. See [Live data](#live-data).
 
 Destinations:
 
@@ -20,7 +20,7 @@ The app lives in the corral repository as `apps/corral-app/`. It is its own Carg
 
 ## Quick start
 
-Install NSH 0.5.0 with `curl -fsSL https://nsh.dev/install.sh | sh`, then run these commands in the project directory:
+Install NSH 0.5.1 with `curl -fsSL https://nsh.dev/install.sh | sh` (or `nsh update`), then run these commands in the project directory:
 
 ```sh
 nsh run --target web
@@ -344,7 +344,7 @@ The build's scripts rendered the packaged web build in headless Chromium with a 
 
 ## Toolchain on this host
 
-NSH installs under `~/.nsh` and is linked at `~/.local/bin/nsh`. NSH 0.5.0 crates require rustc 1.97; `rust-toolchain.toml` pins 1.97.1 and the `wasm32-unknown-unknown` target. Corral itself stays on 1.94.
+NSH installs under `~/.nsh` and is linked at `~/.local/bin/nsh`. NSH 0.5.1 crates require rustc 1.97; `rust-toolchain.toml` pins 1.97.1 and the `wasm32-unknown-unknown` target. Corral itself stays on 1.94.
 
 `.cargo/config.toml` disables the host's crashing global sccache wrapper and sets `CC_wasm32_unknown_unknown` and `AR_wasm32_unknown_unknown` to clang 18 unpacked under `~/.local/opt/llvm18`. This host has no system clang and no sudo. On a machine where `sudo apt install clang llvm` is available, the `[env]` table can be removed.
 

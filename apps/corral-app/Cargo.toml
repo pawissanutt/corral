@@ -18,8 +18,8 @@ path = "src/main.rs"
 required-features = ["desktop"]
 
 [dependencies]
-nsh-core = "0.5.0"
-nsh-base = "0.5.0"
+nsh-core = "0.5.1"
+nsh-base = "0.5.1"
 env_logger = { version = "0.11", optional = true }
 corral-protocol = { path = "../../crates/corral-protocol" }
 serde_json = "1"
@@ -30,8 +30,8 @@ sha2 = "0.10"
 unicode-width = "0.2"
 
 [dev-dependencies]
-nsh-engine = "0.5.0"
-nsh-testing = "0.5.0"
+nsh-engine = "0.5.1"
+nsh-testing = "0.5.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rustix = { version = "1.1", features = ["event", "fs", "net", "process", "system"] }
@@ -47,10 +47,10 @@ futures-channel = "0.3"
 futures-core = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-linux = { version = "0.5.0", optional = true, default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
+nsh-platform-linux = { version = "0.5.1", optional = true, default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { version = "0.5.0", optional = true, default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
+nsh-platform-macos = { version = "0.5.1", optional = true, default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-nsh-platform-windows = { version = "0.5.0", optional = true, default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
+nsh-platform-windows = { version = "0.5.1", optional = true, default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
