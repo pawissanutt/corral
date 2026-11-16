@@ -89,6 +89,7 @@ pub enum Verb {
     NewTask,
     Unstick,
     Revert,
+    Discard,
     PlanCancel,
     Verdict,
     AddMember,
@@ -117,6 +118,7 @@ impl Verb {
             Self::NewTask => "new-task",
             Self::Unstick => "unstick",
             Self::Revert => "revert",
+            Self::Discard => "discard",
             Self::PlanCancel => "plan-cancel",
             Self::Verdict => "verdict",
             Self::AddMember => "add-member",
@@ -145,6 +147,7 @@ impl Verb {
             Self::NewTask => "New task",
             Self::Unstick => "Unstick",
             Self::Revert => "Revert",
+            Self::Discard => "Discard",
             Self::PlanCancel => "Cancel plan",
             Self::Verdict => "Record verdict for",
             Self::AddMember => "Add member to",
@@ -158,6 +161,11 @@ impl Verb {
             Self::ModeOff => "Turn automation off",
             Self::PermissionsRevoke => "Revoke permissions for",
         }
+    }
+    /// Destructive verbs ask for this device's confirmation even where the command's wire class
+    /// alone would send straight away.
+    pub const fn confirms(self) -> bool {
+        matches!(self, Self::Discard)
     }
     pub fn title(self, record: &Record) -> String {
         if matches!(self, Self::NewTask | Self::ModeOff) {
@@ -291,6 +299,7 @@ fn table(record: &Record) -> &'static [Verb] {
             Retry,
             Unstick,
             Revert,
+            Discard,
             Route,
             Focus,
             Move,
@@ -387,6 +396,10 @@ pub(super) fn unavailable(feed: &Feed, record: &Record, verb: Verb) -> Option<St
                 Some("This task has no active process to unstick.")
             }
             Verb::Revert if task.status != "done" => Some("Only a landed task can be reverted."),
+            Verb::Discard if task.status == "done" => {
+                Some("A landed task cannot be discarded; revert it instead.")
+            }
+            Verb::Discard if task.status == "dropped" => Some("This task is already dropped."),
             _ => None,
         };
         return reason.map(str::to_owned);

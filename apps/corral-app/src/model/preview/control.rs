@@ -105,6 +105,32 @@ pub(super) fn revert(feed: &mut Feed, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// `review.discard`: the task is dropped and its run worktree removed; artifacts stay.
+pub(super) fn discard(feed: &mut Feed, id: &str) -> Result<(), String> {
+    let mut row = feed
+        .board
+        .task(id)
+        .cloned()
+        .ok_or("Preview task does not exist")?;
+    if matches!(row.now_code.as_str(), "done" | "dropped") {
+        return Err("A landed or dropped preview task cannot be discarded".into());
+    }
+    row.now_code = "dropped".into();
+    row.group = Group::Other;
+    row.held_reason = None;
+    row.now = "dropped locally · run worktree removed".into();
+    row.rail = content::rail(Group::Other);
+    row.rev += 1;
+    content::save_task(feed, row);
+    sessions::sync_worker(feed, id);
+    task_note(
+        feed,
+        id,
+        "Preview · simulated dropping the task and removing its run worktree; artifacts kept",
+    );
+    Ok(())
+}
+
 pub(super) fn membership(feed: &mut Feed, command: &PlanCommand) -> Result<(), String> {
     let (tracker, member, destination) = match command {
         PlanCommand::AddMember {

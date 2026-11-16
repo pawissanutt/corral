@@ -127,6 +127,11 @@ fn second_action_wave_binds_task_creation_and_candidate_verdict() {
         Command::Task(Task::Revert { id: "T-9".into() })
     );
     assert_eq!(
+        build(&task, Verb::Discard, &[], ActClass::Act),
+        Command::Review(Review::Discard { id: "T-9".into() })
+    );
+    assert!(Verb::Discard.confirms() && !Verb::Revert.confirms());
+    assert_eq!(
         build(
             &at(Record::Plan("T-8".into())),
             Verb::PlanCancel,
@@ -374,4 +379,78 @@ fn action_composer_keeps_text_and_refuses_a_changed_owner_revision() {
     assert!(composer.error.is_some());
     assert_eq!(composer.fields[0].value, "owner's words");
     assert!(state.sent.is_empty());
+}
+
+#[test]
+fn discard_confirms_before_sending_and_is_refused_for_landed_or_dropped_tasks() {
+    use super::{State, task_ref, verbs::unavailable};
+    use crate::model::daemon::{DetailCache, Feed, Link, detail_key};
+    use crate::model::effect::Effect;
+    use corral_protocol::{
+        app::{ACT_V1, AppSession, DeviceAuthority},
+        detail::DetailBody,
+    };
+    use serde_json::json;
+    let feed_with = |status: &str| {
+        let target = task_ref("T-9");
+        let task = serde_json::from_value(json!({
+            "id":"T-9", "owner_revision":"rev", "title":"Task", "status":status, "body_excerpt":"",
+            "stages":[{"glyph":"pending","sha7":null,"at":null},{"glyph":"pending","sha7":null,"at":null},
+                      {"glyph":"pending","sha7":null,"at":null},{"glyph":"pending","sha7":null,"at":null}],
+            "dependencies":[], "progress":null, "owner_next":null, "hold":null, "park":null,
+            "artifacts":[], "run":null, "plan_context":null, "log_tail":[]
+        }))
+        .unwrap();
+        let mut feed = Feed {
+            link: Link::Up,
+            session: Some(AppSession {
+                device: serde_json::from_value(json!({
+                    "id":"device", "name":"Desk", "platform":"native", "app_version":"1",
+                    "enrolled_at":"2026-11-15T00:00:00Z", "revoked_at":null
+                }))
+                .unwrap(),
+                authority: DeviceAuthority {
+                    act: true,
+                    ..DeviceAuthority::default()
+                },
+                seen: Default::default(),
+                server_time: "2026-11-15T00:00:00Z".into(),
+            }),
+            ..Feed::default()
+        };
+        feed.capabilities.insert(ACT_V1.into());
+        feed.details.insert(
+            detail_key(&target),
+            DetailCache {
+                target: target.clone(),
+                pages: vec![],
+                loading: false,
+                stale: false,
+                error: None,
+                merged: Some(DetailBody::Task(task)),
+            },
+        );
+        feed
+    };
+    let record = Record::Task("T-9".into());
+    let feed = feed_with("ready");
+    assert_eq!(unavailable(&feed, &record, Verb::Discard), None);
+    let mut state = State::default();
+    let effects = state.start_verb(record.clone(), Verb::Discard, &feed);
+    let [Effect::Act(act)] = effects.as_slice() else {
+        panic!("discard sends one act: {effects:?}")
+    };
+    assert!(act.confirm, "discard must preview and confirm first");
+    assert_eq!(
+        act.command,
+        Command::Review(Review::Discard { id: "T-9".into() })
+    );
+    assert_eq!(
+        unavailable(&feed_with("done"), &record, Verb::Discard).as_deref(),
+        Some("A landed task cannot be discarded; revert it instead.")
+    );
+    assert_eq!(
+        unavailable(&feed_with("dropped"), &record, Verb::Discard).as_deref(),
+        Some("This task is already dropped.")
+    );
 }
