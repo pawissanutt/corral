@@ -1,10 +1,11 @@
-//! Usage: cost and quota per provider, profile and session, visibility only. Desktop follows the
-//! mockup's `.ugrid` of provider cells over the profile table and the cost-per-day column; the
-//! phone stacks the provider blocks, the cost bars and the note; a terminal draws a gauge line
-//! per provider, the table in columns and the costs as Cell bars. Every word and figure is
-//! `model::usage`'s, built from the selected feed's recorded usage (`shown`) in a daemon session
-//! and the explicit sample preview alike; loading, stale and failed states are said in place.
-//! The period switch runs its reducer.
+//! Usage: cost and quota per provider, profile and session, visibility only. Desktop sets the
+//! provider cards in a ruled grid (`.ugrid`, up to three a row as the width allows) over three
+//! full-width sections: the profile table, cost per day and the sessions; the phone stacks the
+//! provider blocks (with their profiles), the cost bars and the sessions; a terminal draws a
+//! gauge line per provider, the table in columns and the costs as Cell bars. Every word and
+//! figure is `model::usage`'s, built from the selected feed's recorded usage (`shown`) in a
+//! daemon session and the explicit sample preview alike; loading, stale and failed states are
+//! said once, compactly, above the content. The period switch runs its reducer.
 
 mod cellbar;
 mod chart;
@@ -19,13 +20,13 @@ use nsh_core::element::cell_size;
 use nsh_core::prelude::*;
 
 use crate::model::text::span;
-use crate::model::usage::{PROFILE_TITLE, Page, Period, SESSION_TITLE, SUBTITLE, TITLE};
+use crate::model::usage::{PROFILE_TITLE, Period, ProviderView, SESSION_TITLE, SUBTITLE, TITLE};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button, seg};
-use crate::ui::kit::notice::{error, notice};
+use crate::ui::kit::notice::notice;
 use crate::ui::kit::page::{body, head, pane, section};
-use crate::ui::kit::text::{h3, plain};
+use crate::ui::kit::text::{dim, h3};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -35,11 +36,15 @@ use shown::{Shown, Status};
 /// its coverage the same way.
 pub(crate) use costs::qualifier;
 
-/// Below this content width the cost column moves under the table (the mockup's 380 pt column
-/// beside a table that needs about 720).
-const SIDE_BY_SIDE: f32 = 1100.0;
-/// `.cols` second column: 380 pt.
-const COST_COLUMN: f32 = 380.0;
+/// A provider card needs about this much width; the grid holds as many a row as fit, up to
+/// [`CARDS_MAX`].
+const CARD_MIN: f32 = 300.0;
+const CARDS_MAX: usize = 3;
+/// Below this content width the profile and session tables have no room for their columns and
+/// stack as records (a narrow window, or a collapsed sidebar on a small screen).
+const TABLES_MIN: f32 = 760.0;
+/// A terminal below this many Cells lists the sessions as records too.
+const TERM_TABLES_MIN: usize = 64;
 /// One Cell where the surface reports none yet.
 const COLUMN: f32 = 8.0;
 
@@ -71,33 +76,33 @@ fn period_seg(app: AppState) -> AnyElement {
 }
 
 /// Above the content: the rows' loading or stale state, then corrald's read failure said once
-/// (the model folds the rows' and the series' causes into one notice) with its Retry; nothing
-/// when current.
+/// as a compact notice (the model folds the rows' and the series' causes into one line) with its
+/// Retry; nothing when current.
 fn status(app: AppState, current: &Shown) -> Vec<AnyElement> {
     let pad = |element: AnyElement| match app.form {
         Form::Terminal => element,
         Form::Desktop | Form::Phone => view()
             .px(px(18.0))
-            .pt(px(10.0))
+            .pt(px(12.0))
             .child(element)
             .into_element(),
     };
     let state = match current.status {
         Status::Ready => None,
-        Status::Loading => Some(pad(notice(
+        Status::Loading => Some(notice(
             app,
             Hue::Neutral,
             &vec![span("Loading recorded usage from corrald…")],
             None,
-        ))),
-        Status::Stale => Some(pad(notice(
+        )),
+        Status::Stale => Some(notice(
             app,
             Hue::Held,
             &vec![span(
                 "Showing the last usage received; it may be out of date until corrald answers again.",
             )],
             None,
-        ))),
+        )),
     };
     state
         .into_iter()
@@ -109,8 +114,9 @@ fn status(app: AppState, current: &Shown) -> Vec<AnyElement> {
                 "btn-retry-usage",
                 move || shown::retry(app),
             );
-            error(app, &vec![span(line.as_str())], Some(retry))
+            notice(app, Hue::Fail, &vec![span(line.as_str())], Some(retry))
         }))
+        .map(pad)
         .collect()
 }
 
@@ -123,15 +129,57 @@ fn live_body(data: Memo<Shown>, build: impl Fn(&Shown) -> AnyElement + 'static) 
     .into_element()
 }
 
-fn quiet_line(app: AppState, words: impl Into<SharedString>) -> AnyElement {
-    plain(app, words)
-        .text_color(color(Token::Ink3))
+/// A desktop section: its caption over the content, at the page head's 18 pt sides.
+fn block(app: AppState, title: impl Into<SharedString>, content: AnyElement) -> AnyElement {
+    view()
+        .px(px(18.0))
+        .pb(px(10.0))
+        .child(h3(app, title, None))
+        .child(content)
         .into_element()
+}
+
+/// The provider cards, `columns` a row, rules between them and under each row (`.ugrid`). A
+/// short last row keeps its cards at the full rows' width.
+fn grid(app: AppState, providers: &[ProviderView], columns: usize) -> AnyElement {
+    let columns = columns.clamp(1, CARDS_MAX).min(providers.len().max(1));
+    let rows = providers
+        .chunks(columns)
+        .map(|chunk| {
+            let gaps = (chunk.len()..columns).map(|_| {
+                view()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .border_l(px(1.0))
+                    .border_l_color(color(Token::Rule))
+                    .into_element()
+            });
+            view()
+                .flex_row()
+                .border_b(px(1.0))
+                .border_color(color(Token::Rule))
+                .children(
+                    chunk
+                        .iter()
+                        .enumerate()
+                        .map(|(at, item)| providers::desktop_cell(app, item, at == 0))
+                        .collect::<Vec<_>>(),
+                )
+                .children(gaps.collect::<Vec<_>>())
+                .into_element()
+        })
+        .collect::<Vec<_>>();
+    view().children(rows).into_element()
 }
 
 fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
     let width = signal(None::<f32>);
-    let wide = computed(move || width.get().is_none_or(|w| w >= SIDE_BY_SIDE));
+    let columns = computed(move || {
+        width
+            .get()
+            .map_or(CARDS_MAX, |w| ((w / CARD_MIN) as usize).clamp(1, CARDS_MAX))
+    });
+    let compact = computed(move || width.get().is_some_and(|w| w < TABLES_MIN));
     let content = view()
         .on_layout(move |frame: &Bounds<Points>| {
             let measured = Some(frame.size.width.0);
@@ -139,50 +187,10 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
                 width.set(measured);
             }
         })
-        .child(live_body(data, move |shown| {
-            let page = &shown.page;
-            let cells = page
-                .providers
-                .iter()
-                .enumerate()
-                .map(|(at, item)| providers::desktop_cell(app, item, at == 0))
-                .collect::<Vec<_>>();
-            view()
-                .children(status(app, shown))
-                .children(page.providers_empty.map(|line| {
-                    view()
-                        .px(px(18.0))
-                        .pt(px(16.0))
-                        .child(quiet_line(app, line))
-                        .into_element()
-                }))
-                .child(
-                    view()
-                        .flex_row()
-                        .border_b(px(1.0))
-                        .border_color(color(Token::Rule))
-                        .children(cells),
-                )
-                .child(dynamic(move || {
-                    let wide = wide.get();
-                    data.with(|shown| untracked(|| lower(app, &shown.page, wide)))
-                }))
-                .children(page.sessions.as_ref().map(|rows| {
-                    view()
-                        .px(px(18.0))
-                        .pt(px(6.0))
-                        .pb(px(18.0))
-                        .child(h3(app, SESSION_TITLE, None))
-                        .child(sessions::table(app, rows, page.sessions_note.as_deref()))
-                        .into_element()
-                }))
-                .child(
-                    view()
-                        .px(px(18.0))
-                        .pb(px(16.0))
-                        .child(note(app, page.disclaimer)),
-                )
-                .into_element()
+        .child(dynamic(move || {
+            let (columns, compact) = (columns.get(), compact.get());
+            let shown = data.get();
+            untracked(|| desktop_body(app, &shown, columns, compact))
         }))
         .into_element();
     view()
@@ -199,44 +207,51 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
         .into_element()
 }
 
-/// The table and the cost column: side by side (`.cols`, `minmax(0, 1fr) 380px`) when `wide`,
-/// else the costs under the table with a rule between.
-fn lower(app: AppState, page: &Page, wide: bool) -> AnyElement {
-    let table = view()
-        .px(px(18.0))
-        .pt(px(6.0))
-        .pb(px(18.0))
-        .child(h3(app, PROFILE_TITLE, None))
-        .child(profiles::desktop(app, page));
-    let spend = view()
-        .px(px(18.0))
-        .pt(px(6.0))
-        .pb(px(18.0))
-        .child(h3(app, page.costs.title.clone(), None))
-        .child(costs::bars(app, &page.costs));
-    if wide {
-        view()
-            .flex_row()
-            .child(table.flex_1().min_w(px(0.0)))
-            .child(
-                spend
-                    .w(px(COST_COLUMN))
-                    .flex_shrink_0()
-                    .border_l(px(1.0))
-                    .border_l_color(color(Token::Rule)),
-            )
-            .into_element()
-    } else {
-        view()
-            .child(table)
-            .child(spend.border_t(px(1.0)).border_t_color(color(Token::Rule)))
-            .into_element()
-    }
+/// The desktop page: `columns` provider cards a row, then the sections; `compact` (a content
+/// width under [`TABLES_MIN`]) sets the profile and session tables as stacked records.
+fn desktop_body(app: AppState, shown: &Shown, columns: usize, compact: bool) -> AnyElement {
+    let page = &shown.page;
+    view()
+        .children(status(app, shown))
+        .children(page.providers_empty.map(|line| {
+            view()
+                .px(px(18.0))
+                .pt(px(16.0))
+                .child(dim(app, line))
+                .into_element()
+        }))
+        .child(grid(app, &page.providers, columns))
+        .children((!page.profiles.is_empty()).then(|| {
+            let table = if compact {
+                profiles::compact(app, page)
+            } else {
+                profiles::desktop(app, page)
+            };
+            block(app, PROFILE_TITLE, table)
+        }))
+        .child(block(
+            app,
+            page.costs.title.clone(),
+            costs::bars(app, &page.costs),
+        ))
+        .child(block(
+            app,
+            SESSION_TITLE,
+            sessions::table(app, &page.sessions, page.sessions_note.as_deref(), compact),
+        ))
+        .child(
+            view()
+                .px(px(18.0))
+                .pt(px(8.0))
+                .pb(px(18.0))
+                .child(note(app, page.disclaimer)),
+        )
+        .into_element()
 }
 
-/// The phone body: the period switch (`.pseg`, 4 16 8 around it), a block per provider, the
-/// cost bars and the sessions as sections, and the note. It is the page's scroll and keeps the
-/// clearance under the floating Ask button.
+/// The phone body: the period switch (`.pseg`, 4 16 8 around it), a block per provider with its
+/// profiles, the cost bars and the sessions as sections, and the note. It is the page's scroll
+/// and keeps the clearance under the floating Ask button.
 fn phone(app: AppState, data: Memo<Shown>) -> AnyElement {
     let content = view()
         .child(
@@ -259,7 +274,7 @@ fn phone(app: AppState, data: Memo<Shown>) -> AnyElement {
                     view()
                         .px(px(18.0))
                         .py(px(12.0))
-                        .child(quiet_line(app, line))
+                        .child(dim(app, line))
                         .into_element()
                 }))
                 .children(blocks)
@@ -270,21 +285,19 @@ fn phone(app: AppState, data: Memo<Shown>) -> AnyElement {
                     Hue::Neutral,
                     costs::bars(app, &page.costs),
                 ))
-                .children(page.sessions.as_ref().map(|rows| {
-                    section(
-                        app,
-                        Some(SESSION_TITLE.to_owned()),
-                        None,
-                        Hue::Neutral,
-                        sessions::table(app, rows, page.sessions_note.as_deref()),
-                    )
-                }))
+                .child(section(
+                    app,
+                    Some(SESSION_TITLE.to_owned()),
+                    None,
+                    Hue::Neutral,
+                    sessions::table(app, &page.sessions, page.sessions_note.as_deref(), true),
+                ))
                 .child(
                     view()
                         .px(px(18.0))
                         .pt(px(10.0))
                         .pb(px(24.0))
-                        .child(note(app, page.phone_disclaimer)),
+                        .child(note(app, page.disclaimer)),
                 )
                 .into_element()
         }))
@@ -324,51 +337,60 @@ fn terminal(app: AppState, data: Memo<Shown>) -> AnyElement {
         .into_element()
 }
 
-/// The terminal page at `room` Cells: the gauge lines, the table, the cost bars, the sessions,
-/// the note, a blank row between the parts.
+/// The terminal page at `room` Cells: the gauge lines (a blank row between providers), the
+/// table, the cost bars, the sessions, the note, a blank row between the parts.
 fn terminal_content(app: AppState, shown: &Shown, room: usize) -> AnyElement {
     let page = &shown.page;
-    let lines = page
-        .providers
-        .iter()
-        .map(|item| providers::terminal_line(app, item, room))
-        .collect::<Vec<_>>();
+    let mut lines = Vec::with_capacity(page.providers.len() * 2);
+    for (at, item) in page.providers.iter().enumerate() {
+        if at > 0 {
+            lines.push(term::blank());
+        }
+        lines.push(providers::terminal_line(app, item, room));
+    }
     view()
         .children(status(app, shown))
         .child(term::blank())
-        .children(page.providers_empty.map(|line| quiet_line(app, line)))
+        .children(
+            page.providers_empty
+                .map(|line| dim(app, line).into_element()),
+        )
         .children(lines)
-        .child(term::blank())
-        .child(h3(app, PROFILE_TITLE, None))
-        .child(profiles::terminal(app, page, room))
+        .children((!page.profiles.is_empty()).then(|| {
+            view()
+                .child(term::blank())
+                .child(h3(app, PROFILE_TITLE, None))
+                .child(profiles::terminal(app, page, room))
+                .into_element()
+        }))
         .child(term::blank())
         .child(h3(app, page.costs.title.clone(), None))
         .child(costs::terminal(app, &page.costs, room))
-        .children(page.sessions.as_ref().map(|rows| {
-            view()
-                .child(term::blank())
-                .child(h3(app, SESSION_TITLE, None))
-                .child(sessions::table(app, rows, page.sessions_note.as_deref()))
-                .into_element()
-        }))
+        .child(term::blank())
+        .child(h3(app, SESSION_TITLE, None))
+        .child(sessions::table(
+            app,
+            &page.sessions,
+            page.sessions_note.as_deref(),
+            room < TERM_TABLES_MIN,
+        ))
         .child(term::blank())
         .child(note(app, page.disclaimer))
         .child(term::blank())
         .into_element()
 }
 
-/// The long note as a paragraph that wraps: the look of `kit::chip::illus` (italic, ink-4 at
-/// 10.5 pt; italic ink-3 in a terminal), which keeps to one line.
+/// The page's one-line note on where the figures come from, quiet and small; it wraps rather
+/// than clips where the width runs short.
 fn note(app: AppState, content: &'static str) -> AnyElement {
-    let words = text(content).italic();
+    let words = text(content);
     match app.form {
         Form::Terminal => words.text_color(color(Token::Ink3)).into_element(),
         Form::Desktop | Form::Phone => words
             .font_family(FONT_TEXT)
-            .text_size(px(10.5))
-            .line_height(px(15.0))
-            .letter_spacing(px(0.1))
-            .text_color(color(Token::Ink4))
+            .text_size(px(11.5))
+            .line_height(px(16.0))
+            .text_color(color(Token::Ink3))
             .into_element(),
     }
 }

@@ -15,6 +15,74 @@ fn snapshot() -> Feed {
 }
 
 #[test]
+fn preview_usage_accepts_daemon_periods_with_matching_costs_and_quota_samples() {
+    let mut feed = snapshot();
+    for (period, days) in [
+        ("today", 1),
+        ("7d", 7),
+        ("week", 7),
+        ("30d", 30),
+        ("month", 30),
+    ] {
+        let target = DetailRef::UsageSeries {
+            period: period.into(),
+        };
+        detail(&mut feed, &target).unwrap();
+        let Some(DetailBody::UsageSeries(series)) =
+            feed.detail(&target).and_then(|cache| cache.body())
+        else {
+            panic!("missing usage");
+        };
+        assert_eq!(series.days.len(), days);
+        assert_eq!(series.days.last().unwrap().day, feed.date);
+        assert!(!series.completeness.partial);
+        for day in &series.days {
+            assert_eq!(day.by_profile.len(), feed.usage.len());
+            assert!(
+                day.by_profile
+                    .iter()
+                    .all(|usage| usage.cost_usd > Some(0.0))
+            );
+        }
+        for row in feed.usage.values() {
+            let quota = row.quotas.first().unwrap();
+            assert_eq!(quota.scope.as_deref(), Some("account"));
+            assert_eq!(row.window, quota.window);
+            assert_eq!(row.used, quota.used);
+            assert_eq!(row.limit, quota.limit);
+            assert_eq!(row.resets_at, quota.resets_at);
+            assert_eq!(
+                quota.headroom,
+                row.limit.zip(row.used).map(|(limit, used)| limit - used)
+            );
+            let provider = series
+                .providers
+                .iter()
+                .find(|provider| provider.id == row.connection)
+                .unwrap();
+            assert!(provider.points.len() >= 2);
+            assert_eq!(provider.points.last().unwrap().used, row.used);
+            assert!(provider.points.iter().all(|point| point.limit == row.limit));
+            if days >= 7 {
+                let week: f64 = series
+                    .days
+                    .iter()
+                    .rev()
+                    .take(7)
+                    .flat_map(|day| &day.by_profile)
+                    .filter(|usage| {
+                        usage.connection == row.connection
+                            && usage.profile == row.profile.as_deref().unwrap()
+                    })
+                    .filter_map(|usage| usage.cost_usd)
+                    .sum();
+                assert!((week - row.week_usd.unwrap()).abs() < 1e-9);
+            }
+        }
+    }
+}
+
+#[test]
 fn preview_sessions_never_borrow_another_tasks_transcript() {
     let feed = snapshot();
     for agent in feed.agents.values() {
@@ -200,16 +268,6 @@ fn preview_session_operations_settle_under_the_callers_identity() {
         .unwrap();
     assert_eq!(row.focus.as_deref(), Some("T-868"));
     assert!(feed.threads.contains_key(row.id.as_str()));
-    let target = DetailRef::UsageSeries {
-        period: "month".into(),
-    };
-    detail(&mut feed, &target).unwrap();
-    let Some(DetailBody::UsageSeries(series)) = feed.detail(&target).and_then(|cache| cache.body())
-    else {
-        panic!("missing usage");
-    };
-    assert_eq!(series.days.len(), 30);
-    assert!(!series.completeness.partial);
 }
 
 #[test]

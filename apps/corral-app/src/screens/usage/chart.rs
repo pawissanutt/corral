@@ -13,9 +13,10 @@ use nsh_core::prelude::*;
 use crate::model::usage::{BandChart, Chart, Level, Point as ChartPoint, band_chart};
 use crate::ui::tokens::{FONT_MONO, Token, color};
 
-/// `.band-chart .z1`: the held hue at 14 percent; `.z2`: the failure hue at 16 percent.
-const WARN_ZONE: f32 = 0.14;
-const BAD_ZONE: f32 = 0.16;
+/// The 70 to 90 zone in the held hue, the 90 to 100 zone in the failure hue, each strong enough
+/// to read as its own band rather than one faint strip.
+const WARN_ZONE: f32 = 0.22;
+const BAD_ZONE: f32 = 0.30;
 /// `.band-chart .zl`, `.ax`: 9.5 pt mono.
 const AXIS_SIZE: f32 = 9.5;
 /// `.band-chart .ln`: 1.6 pt; `.pt`: a 3 pt dot.
@@ -91,7 +92,7 @@ fn layers(chart: &BandChart) -> AnyElement {
         .into_element()
 }
 
-/// The band labels at the left edge and every third hour centred under its sample, at the
+/// The band labels at the left edge and the evenly stepped hours centred on their times, at the
 /// baselines the model gives.
 fn labels(chart: &BandChart) -> Painter {
     let font = format!("{AXIS_SIZE}px '{FONT_MONO}'");

@@ -13,8 +13,17 @@ pub(super) fn fraction(quota: &UsageQuota) -> Option<f32> {
     }
 }
 
-fn number(value: Option<f64>) -> String {
-    value.map_or_else(|| "unknown".into(), |value| value.to_string())
+pub(super) fn number(value: Option<f64>) -> String {
+    let Some(value) = value.filter(|value| value.is_finite()) else {
+        return "unknown".into();
+    };
+    let mut text = format!("{value:.2}");
+    let end = text.trim_end_matches('0').trim_end_matches('.').len();
+    text.truncate(end);
+    if text == "-0" {
+        text.remove(0);
+    }
+    text
 }
 
 fn instant(at: Option<&str>, tz: &TimeZone) -> String {
@@ -48,18 +57,25 @@ pub(super) fn view(quota: &UsageQuota, profile: Option<&str>, tz: &TimeZone) -> 
     }
 }
 
-pub(super) fn unknown() -> QuotaView {
-    QuotaView {
-        source: "unknown".into(),
-        scope: "unknown".into(),
-        window: "unknown".into(),
-        used: "unknown".into(),
-        limit: "unknown".into(),
-        headroom: "unknown".into(),
-        resets_at: "unknown".into(),
-        observed_at: "unknown".into(),
-        exhausted: "unknown".into(),
-        profile: "no profile recorded".into(),
-        completeness: Some("partial · quota coverage unknown".into()),
+#[cfg(test)]
+mod tests {
+    use super::number;
+
+    #[test]
+    fn quota_numbers_round_float_residue_without_padding() {
+        for (value, expected) in [
+            (Some(65.99999999999999), "66"),
+            (Some(21.999999999999996), "22"),
+            (Some(100.0), "100"),
+            (Some(0.5), "0.5"),
+            (Some(1.234), "1.23"),
+            (Some(1.236), "1.24"),
+            (Some(-0.001), "0"),
+            (None, "unknown"),
+            (Some(f64::NAN), "unknown"),
+            (Some(f64::INFINITY), "unknown"),
+        ] {
+            assert_eq!(number(value), expected);
+        }
     }
 }

@@ -1,5 +1,5 @@
 use super::*;
-use corral_protocol::detail::{ProfileUsage, UsageCompleteness, UsageDay};
+use corral_protocol::detail::{ProfileUsage, UsageCompleteness, UsageDay, UsageQuota};
 use corral_protocol::rows::LimitBasis;
 
 fn coverage() -> UsageCompleteness {
@@ -94,7 +94,7 @@ fn partial_totals_keep_coverage_and_unpriced_contributions_on_every_surface() {
         assert!(page.providers[0].costs.contains("partial"));
         assert!(
             page.profiles[1]
-                .today_note
+                .cost_note
                 .as_deref()
                 .unwrap()
                 .contains("3 unpriced")
@@ -149,7 +149,14 @@ fn failed_or_partial_usage_never_claims_an_empty_store_and_reports_one_cause() {
     assert_eq!(failed.notices.len(), 1);
     assert_eq!(failed.notices[0].matches("scan failed").count(), 1);
     assert!(failed.providers_empty.is_none());
-    assert!(failed.costs.empty.is_none());
+    let stored_nothing = UsageSeries {
+        providers: vec![],
+        days: vec![],
+        completeness: coverage(),
+    };
+    let empty_store = page(&input(vec![], Some(&stored_nothing), &tz));
+    assert!(empty_store.costs.empty.is_some());
+    assert_ne!(failed.costs.empty, empty_store.costs.empty);
     let series = UsageSeries {
         providers: vec![],
         days: vec![],
@@ -186,7 +193,7 @@ fn retained_series_errors_qualify_monthly_costs_as_stale() {
     );
     assert!(
         page.profiles[0]
-            .today_note
+            .cost_note
             .as_deref()
             .unwrap()
             .contains("stale")
@@ -205,18 +212,53 @@ fn exhaustion_observations_do_not_fabricate_numerical_quotas() {
         used: None,
         limit: None,
         headroom: None,
-        resets_at: Some("2026-11-15T20:00:00Z".into()),
-        observed_at: Some("2026-11-15T19:00:00Z".into()),
+        resets_at: Some("2023-11-14T23:00:00Z".into()),
+        observed_at: Some("2023-11-14T22:00:00Z".into()),
         exhausted: Some(true),
         completeness: coverage(),
     });
     let tz = TimeZone::UTC;
     let page = page(&input(vec![&row], None, &tz));
-    let quota = &page.providers[0].quotas[0];
-    assert_eq!(quota.profile, "p");
-    assert_eq!(quota.used, super::super::UNKNOWN);
-    assert_eq!(quota.limit, super::super::UNKNOWN);
-    assert_eq!(quota.headroom, super::super::UNKNOWN);
-    assert_ne!(quota.resets_at, super::super::UNKNOWN);
-    assert_eq!(page.providers[0].used, None);
+    let provider = &page.providers[0];
+    assert_eq!(provider.used, None);
+    assert!(provider.exhausted);
+    // Only the reset clock carries digits; no use, limit or headroom figure is made up.
+    assert!(
+        provider
+            .quota_line
+            .replace("23:00", "")
+            .chars()
+            .all(|c| !c.is_ascii_digit()),
+        "{}",
+        provider.quota_line
+    );
+    assert_eq!(page.profiles[0].headroom.as_deref(), Some(UNKNOWN));
+}
+
+/// The card header once required an account-scoped fact and said "window unknown", "quota
+/// unknown" and "reset unknown" over details listing that very window, use and reset; float
+/// headroom also leaked as `66.00000000000001`.
+#[test]
+fn provider_header_reads_the_quota_its_card_lists() {
+    let mut row = row("a", Some("p"), Some(1.0));
+    row.quotas.push(UsageQuota {
+        source: "provider_api".into(),
+        scope: Some("profile".into()),
+        window: Some("5 h".into()),
+        used: Some(34.0),
+        limit: Some(100.0),
+        headroom: Some(0.66 * 100.0),
+        resets_at: Some("2023-11-14T23:00:00Z".into()),
+        observed_at: Some("2023-11-14T22:00:00Z".into()),
+        exhausted: Some(false),
+        completeness: coverage(),
+    });
+    let tz = TimeZone::UTC;
+    let page = page(&input(vec![&row], None, &tz));
+    let provider = &page.providers[0];
+    assert_eq!(provider.used, Some(0.34));
+    for said in [&provider.window, &provider.quota_line, &provider.headroom] {
+        assert!(!said.contains(UNKNOWN) && !said.contains("66.0"), "{said}");
+    }
+    assert_eq!(page.profiles[0].headroom.as_deref(), Some("66"));
 }

@@ -1,79 +1,88 @@
 //! "By session": each agent or assistant session's recorded tokens and cost, costliest first, in
-//! the device table on desktop and terminal and as two-line records on the phone; the model's
-//! note says what is not listed. test_id "usage-sessions".
+//! the usage table where the width has room for its five columns, else as two-line records (the
+//! phone, a narrow desktop window, a narrow terminal). Facts corral does not hold read "unknown"
+//! in the quiet ink, so known figures stand out; the model's note says what is not listed.
+//! test_id "usage-sessions".
 
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::usage::{SESSION_HEADERS, SessionRow};
+use crate::model::usage::{SESSION_HEADERS, SessionRow, UNKNOWN};
 use crate::state::AppState;
 use crate::ui::kit::page::Width;
-use crate::ui::kit::table::devtable_aligned;
-use crate::ui::kit::text::{mono, plain};
-use crate::ui::tokens::{FONT_TEXT, Token, color};
+use crate::ui::kit::table::utable;
+use crate::ui::kit::text::{dim, mono, plain};
+use crate::ui::tokens::{Token, color};
 
 const WIDTHS: [Width; 5] = [
-    Width::Fixed(110.0),
+    Width::Fixed(120.0),
     Width::Fill,
-    Width::Fixed(130.0),
-    Width::Fixed(72.0),
+    Width::Fixed(150.0),
     Width::Fixed(80.0),
+    Width::Fixed(96.0),
 ];
 const ALIGN_END: [bool; 5] = [false, false, false, true, true];
 
-fn quiet(app: AppState, words: impl Into<SharedString>) -> AnyElement {
-    plain(app, words)
-        .text_color(color(Token::Ink3))
+/// A known fact in the mono figure face, or "unknown" in the quiet ink.
+fn fact(app: AppState, value: Option<&str>) -> AnyElement {
+    match value {
+        Some(value) => mono(app, value.to_owned())
+            .number_of_lines(1u32)
+            .into_element(),
+        None => mono(app, UNKNOWN)
+            .text_color(color(Token::Ink3))
+            .into_element(),
+    }
+}
+
+/// One session as a record: its id and what it works on, then profile, tokens and cost in one
+/// quiet line.
+fn record(app: AppState, row: &SessionRow) -> AnyElement {
+    view()
+        .gap(px(2.0))
+        .child(
+            view()
+                .flex_row()
+                .items_baseline()
+                .gap(px(8.0))
+                .child(
+                    mono(app, row.session.clone())
+                        .number_of_lines(1u32)
+                        .flex_shrink_0(),
+                )
+                .child(
+                    plain(app, row.what.clone())
+                        .number_of_lines(1u32)
+                        .flex_shrink(1.0)
+                        .min_w(px(0.0)),
+                ),
+        )
+        .child(dim(app, row.summary()).tabular_nums())
         .into_element()
 }
 
-/// The session table and its note.
-pub fn table(app: AppState, rows: &[SessionRow], note: Option<&str>) -> AnyElement {
-    let note = note.map(|words| quiet(app, words.to_owned()));
+/// The session table and its note; `records` sets the rows as stacked records instead.
+pub fn table(app: AppState, rows: &[SessionRow], note: Option<&str>, records: bool) -> AnyElement {
+    let note = note.map(|words| dim(app, words.to_owned()).into_element());
     if rows.is_empty() {
         return view()
             .test_id("usage-sessions")
-            .child(quiet(app, "No session has recorded tokens or cost yet."))
+            .gap(px(6.0))
+            .child(dim(app, "No session has recorded tokens or cost yet."))
             .children(note)
             .into_element();
     }
-    let body = if app.form == Form::Phone {
+    let body = if records {
         view()
-            .gap(px(10.0))
-            .children(
-                rows.iter()
-                    .map(|row| {
-                        view()
-                            .gap(px(2.0))
-                            .child(
-                                view()
-                                    .flex_row()
-                                    .items_baseline()
-                                    .gap(px(8.0))
-                                    .child(mono(app, row.session.clone()).flex_shrink_0())
-                                    .child(
-                                        plain(app, row.what.clone())
-                                            .number_of_lines(1u32)
-                                            .flex_shrink(1.0)
-                                            .min_w(px(0.0)),
-                                    ),
-                            )
-                            .child(
-                                text(format!(
-                                    "{} · {} tokens · {}",
-                                    row.profile, row.tokens, row.cost
-                                ))
-                                .font_family(FONT_TEXT)
-                                .text_size(px(13.0))
-                                .text_color(color(Token::Ink3)),
-                            )
-                            .into_element()
-                    })
-                    .collect::<Vec<_>>(),
-            )
+            .gap(px(if app.form == Form::Terminal {
+                0.0
+            } else {
+                12.0
+            }))
+            .children(rows.iter().map(|row| record(app, row)).collect::<Vec<_>>())
             .into_element()
     } else {
-        devtable_aligned(
+        utable(
             app,
             &WIDTHS,
             &SESSION_HEADERS,
@@ -81,13 +90,16 @@ pub fn table(app: AppState, rows: &[SessionRow], note: Option<&str>) -> AnyEleme
             rows.iter()
                 .map(|row| {
                     vec![
-                        mono(app, row.session.clone()).into_element(),
-                        plain(app, row.what.clone())
+                        mono(app, row.session.clone())
                             .number_of_lines(1u32)
                             .into_element(),
-                        mono(app, row.profile.clone()).into_element(),
-                        mono(app, row.tokens.clone()).into_element(),
-                        mono(app, row.cost.clone()).into_element(),
+                        plain(app, row.what.clone())
+                            .number_of_lines(1u32)
+                            .text_color(color(Token::Ink2))
+                            .into_element(),
+                        fact(app, row.profile.as_deref()),
+                        fact(app, row.tokens.as_deref()),
+                        fact(app, row.cost.as_deref()),
                     ]
                 })
                 .collect(),
@@ -95,7 +107,7 @@ pub fn table(app: AppState, rows: &[SessionRow], note: Option<&str>) -> AnyEleme
     };
     view()
         .test_id("usage-sessions")
-        .gap(px(6.0))
+        .gap(px(8.0))
         .child(body)
         .children(note)
         .into_element()
