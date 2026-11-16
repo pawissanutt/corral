@@ -165,7 +165,7 @@ future sends; an already accepted/in-flight content-free notification may still 
 
 The worker is the app's shipped wasm-bindgen JS module, registered with module scope
 inside its own directory, not a root-scope cache/proxy. Host the scripts on the app's
-same origin; a cross-origin `--asset-url` CDN cannot host this worker. Browser/platform
+same origin; a cross-origin CDN set through NSH's asset URL option cannot host this worker. Browser/platform
 restrictions still apply (including installed-web-app requirements on iOS).
 Notifications say only “Corral: Something needs you”; no task ids, titles, text, kinds
 or counts go to the notification service. RFC 8291 ECE encrypts the fixed payload and
