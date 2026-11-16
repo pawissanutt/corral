@@ -123,7 +123,8 @@ fn pm_presentation_and_owner_answer_use_separate_persisted_operations() {
     }
     let pending: serde_json::Value =
         serde_json::from_slice(&corral(temp.path(), &["pm", "brief", "--json"]).stdout).unwrap();
-    assert_eq!(pending["operating"]["status"], "needs_your_decision");
+    // A dispatch hold is the PM's to clear, so it is not an owner wait.
+    assert_eq!(pending["operating"]["status"], "working");
     assert_eq!(
         pending["operating"]["decisions"][0]["presentation"]["confirmed"],
         true

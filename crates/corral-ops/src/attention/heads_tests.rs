@@ -29,8 +29,8 @@ fn rows(
         Some(keyed_status(
             task,
             now,
-            "owner",
-            WaitClass::OwnerDecision,
+            "pm",
+            WaitClass::PmAction,
             "Disposition".into(),
         )),
         authority(task, neighborhood, now, Action::Dispatch),

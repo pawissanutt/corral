@@ -126,7 +126,7 @@ impl RepairLedger {
             Ok(RepairTransition::Diagnose)
         } else {
             Ok(RepairTransition::Owner { reason: h.coding_blocker().unwrap_or(
-                "repair and PM diagnosis budgets exhausted; propose a bounded replan, deferral or explicit owner renewal").into() })
+                "repair and PM diagnosis budgets exhausted; propose a bounded replan, deferral or explicit owner or PM renewal").into() })
         }
     }
 
@@ -159,7 +159,7 @@ impl Store {
             ensure!(
                 ledger.version == previous.version
                     && ledger.allowances.len() == previous.allowances.len(),
-                "new allowance requires explicit owner renewal"
+                "new allowance requires explicit owner or PM renewal"
             );
             let last = previous.allowances.len() - 1;
             ensure!(
@@ -191,7 +191,7 @@ impl Store {
         self.save_record(REPAIR_RUNTIME, task, ledger)
     }
 
-    /// Low-level persistence only: the ops owner-entry guard must run before this call.
+    /// Low-level persistence only: the ops owner/PM operator guard must run before this call.
     /// Approval binds the complete prior ledger; redelivery of the exact action is idempotent.
     pub fn renew_repair_allowance(
         &self,
@@ -221,10 +221,10 @@ impl Store {
                 return Ok(ledger);
             }
             ensure!(
-                renewal.approved_by == "owner"
+                matches!(renewal.approved_by.as_str(), "owner" | "pm")
                     && !renewal.id.trim().is_empty()
                     && !renewal.reason.trim().is_empty(),
-                "explicit owner renewal required"
+                "explicit owner or PM renewal required"
             );
             ensure!(
                 renewal.previous_digest == ledger.digest()?,

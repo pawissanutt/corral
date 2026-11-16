@@ -219,7 +219,7 @@ fn repeated_readbacks_are_write_free_and_empty_scope_is_not_complete() {
         corral_ops::pm_next(&fx.ctx).unwrap();
         corral_ops::pm_health(&fx.ctx).unwrap();
     }
-    // Then permission stays owner-only and there are no presentation or policy writes.
+    // Then automatic authority remains absent and there are no presentation or policy writes.
     assert_eq!(
         before,
         (fx.ctx.store.list().unwrap(), fx.ctx.store.events().unwrap())
@@ -351,6 +351,43 @@ fn shared_status_requires_actual_finite_acceptance_and_exposes_pause() {
 }
 
 #[test]
+fn paused_policy_keeps_verified_landing_pm_runnable_without_an_executor_id() {
+    let mut fx = Fx::new();
+    let task = fx.task("verified manual landing", Status::Ready);
+    fx.grant(&[&task.id]);
+    fx.start(&task.id);
+    fx.done(&task.id, "candidate.txt");
+    corral_ops::sync_at(&fx.fresh(), now()).unwrap();
+    let reviewed = fx.ctx.store.get(&task.id).unwrap();
+    let review = reviewed.current_run().unwrap().review.as_ref().unwrap();
+    corral_ops::verdict_bound(
+        &fx.fresh(),
+        &task.id,
+        corral_core::Verdict::Approve,
+        "Independent approval",
+        Some(&corral_ops::review_callback_token(review).unwrap()),
+    )
+    .unwrap();
+    fx.ctx.store.pause_operating_policy(true).unwrap();
+
+    let state = corral_ops::pm_workset(&fx.fresh()).unwrap();
+    assert_eq!(state.next.kind, PmActionKind::Land);
+    assert!(!state.next.requires_owner);
+    let option = state
+        .next
+        .options
+        .iter()
+        .find(|option| option.id == state.next.recommended)
+        .unwrap();
+    assert!(!option.requires_owner);
+    assert!(option.pm_runs);
+    assert!(option.command.contains(" approve "));
+    assert!(!option.command.contains(" pm act "));
+    assert!(state.actions.is_empty());
+    assert_eq!(fx.ctx.store.get(&task.id).unwrap().status, Status::Review);
+}
+
+#[test]
 fn expired_question_identity_survives_idle_and_working_terminal_samples() {
     // Given a presented portable question.
     let fx = Fx::new();
@@ -476,7 +513,9 @@ fn promotion_options_authorize_each_target_in_mixed_auto_and_suggest_projects() 
     // Then only the exact scoped task has a bound automatic command.
     assert!(!first.requires_owner);
     assert!(first.command.contains(" pm act "));
-    assert!(other.requires_owner, "unscoped command: {}", other.command);
+    assert!(!other.requires_owner);
+    assert!(other.pm_runs, "unscoped command: {}", other.command);
+    assert!(!other.command.contains(" pm act "));
     assert!(
         state
             .actions

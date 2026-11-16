@@ -277,12 +277,14 @@ pub(crate) fn branch_landing(tier: &str, branch: Option<&str>) -> String {
 }
 
 /// The re-gate instruction of a send-back for a run on a reduced tier: the tier, the one
-/// receipted gate, and what is reported instead of fixed. `landing` says who runs the landing tier.
+/// receipted gate, and what is fixed or reported. `landing` says who runs the landing tier.
 pub(crate) fn tier_send_back(tier: &str, gate: &str, landing: &str) -> String {
     format!(
         "Then run `{gate}` once after the final rebase: it runs the {tier} tier, and its receipt is the one autopilot and review reuse. \
-         Fix failures inside the declared module scope that are not expected failures. Report failures outside that scope, and expected failures, \
-         under `Not verified:` and as filed follow-ups instead of fixing them. Do not start, or attach evidence of, a full-tier gate: {landing}."
+         Fix failures inside the declared module scope that are not expected failures. A mechanical failure the integration base already has \
+         (formatter output, a lint fix the tool names, a size-ceiling split) you fix in a separate `baseline:` commit. Report other failures \
+         outside that scope, and expected failures, under `Not verified:` and as filed follow-ups instead of fixing them. \
+         Do not start, or attach evidence of, a full-tier gate: {landing}."
     )
 }
 
@@ -354,9 +356,13 @@ fn worker_gate_section(
          or in addition to `{gate}`, and attach no evidence of such a run.\n\
          - Fix failures inside the module scope that are not expected failures, commit, and repeat \
          from the rebase.\n\
-         - Do not fix a failure outside the module scope, or an expected failure. List it under \
+         - A failure outside the module scope that the integration base already has without your \
+         changes, and whose fix is mechanical (formatter output, a lint fix the tool names, a \
+         size-ceiling split), you fix in a separate commit whose subject starts with `baseline:`. \
+         Name it under `Baseline fixes:` in the summary.\n\
+         - Do not fix any other failure outside the module scope, or an expected failure. List it under \
          `Not verified:` in the summary, file a follow-up with the corral-submit skill, and ask in this \
-         pane when it keeps your tier from passing; only the owner can amend this gate.\n\
+         pane when it keeps your tier from passing; the PM or the owner resolves it.\n\
          - If the gate is refused for capacity, retry it, and ask in this pane if it keeps being refused.\n",
         tier = contract.tier,
         source = contract.source,

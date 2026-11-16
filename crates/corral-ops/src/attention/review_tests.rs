@@ -89,7 +89,7 @@ fn completed_verdicts_require_review_and_changes_also_require_repair() {
                     assert!(a.progress.is_none());
                     assert_eq!(a.conditions.len(), 1);
                     assert_eq!(a.conditions[0].kind, "authority_blocked");
-                    assert_eq!(a.conditions[0].responsible, Responsible::Owner);
+                    assert_eq!(a.conditions[0].responsible, Responsible::Pm);
                     assert_eq!(a.conditions[0].reason, format!("{action:?} refused"));
                     assert_eq!(
                         a.conditions[0].resume[0].expected,

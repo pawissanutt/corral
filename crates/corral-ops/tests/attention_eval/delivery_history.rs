@@ -250,7 +250,7 @@ fn s21_prior_unsafe_attempts_bar_rejected_resends_after_restart_and_fifo_promoti
                         row.next_action.command,
                         Some(format!("corral inbox inspect-retry {}", message.id))
                     );
-                    assert!(row.next_action.requires_owner);
+                    assert!(!row.next_action.requires_owner);
                     let reopened = fx.reopen();
                     assert!(
                         !Inbox::new(&reopened.store, recipient.clone())

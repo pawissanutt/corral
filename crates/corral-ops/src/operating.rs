@@ -105,7 +105,7 @@ fn require_grant_for<T: TaskRef + ?Sized>(
     Ok(())
 }
 
-/// Diagnosis requires current repair scope, not coding eligibility or a new allowance.
+/// Diagnosis requires current repair scope unless explicitly requested by an owner or PM.
 pub(crate) fn require_diagnosis<T: TaskRef + ?Sized>(
     store: &Store,
     task: &T,
@@ -123,10 +123,24 @@ pub(crate) fn require_diagnosis<T: TaskRef + ?Sized>(
     require_recovery(store, task)
 }
 
-/// Attribution-only admission: a missing grant is the sole reason to ask for bounded
-/// confirmation. All live stops and ownership/recovery fences remain hard refusals.
-pub(crate) fn attribution_scope<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<bool> {
+/// Record-only attribution: the PM needs no executor grant or live scheduling admission.
+/// Runtime health, unresolved owner decisions and recovery remain hard fences for everyone.
+pub(crate) fn attribution_scope<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    pm: bool,
+) -> Result<bool> {
     store.check_runtime()?;
+    if let Some(run) = task.current_run_head()? {
+        ensure!(
+            task.open_obligations(&run.id)?.pending_decision().is_none(),
+            "unresolved owner decision"
+        );
+    }
+    require_recovery(store, task)?;
+    if pm {
+        return Ok(true);
+    }
     crate::hold::require_clear(store, task)?;
     corral_core::Park::require_unparked_ref(task)?;
     ensure!(!*task.dispatch_hold(), "task dispatch hold");
@@ -144,15 +158,9 @@ pub(crate) fn attribution_scope<T: TaskRef + ?Sized>(store: &Store, task: &T) ->
         !config.automation.scope.exclusions.contains(task.id()),
         "task is explicitly excluded from the operating scope"
     );
-    if let Some(run) = task.current_run_head()? {
-        ensure!(
-            task.open_obligations(&run.id)?.pending_decision().is_none(),
-            "unresolved owner decision"
-        );
-    }
+    // Assistants retain the ordinary delegated-scope and handoff admission rules.
     transfer::require(store, task, OperatingActionKind::Repair, true)?;
     cowork::validate(task, OperatingActionKind::Repair)?;
-    require_recovery(store, task)?;
     if transfer::explicit(store, task, OperatingActionKind::Repair)?
         || cowork::diagnosis(store, task)?
     {

@@ -179,7 +179,8 @@ fn assert_member_contract(prompt: &str, id: &str) {
         "- Module scope:",
         "- Landing: this member lands on its Plan target `feature/plan` on the quick tier",
         "Run no other tier, no `scripts/gate.sh` and none of the commands above by hand",
-        "Do not fix a failure outside the module scope, or an expected failure.",
+        "you fix in a separate commit whose subject starts with `baseline:`",
+        "Do not fix any other failure outside the module scope, or an expected failure.",
         "`Not verified:`",
         "file a follow-up with the corral-submit skill, and ask in this pane",
     ] {

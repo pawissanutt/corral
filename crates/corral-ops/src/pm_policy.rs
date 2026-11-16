@@ -95,24 +95,45 @@ pub(crate) fn native_summary(policy: &PolicySnapshot) -> Value {
     })
 }
 
+/// The PM's standing authority. Every PM prompt layer quotes this one text, so the policy
+/// replacement, the generic runbook and the role context cannot disagree about it.
+pub(crate) const PM_AUTHORITY: &str = "\
+## PM authority\n\n\
+You operate this board inside the approved projects. When work is stuck, you unblock it: act, \
+then record what you did and why in a task comment. Waiting for the owner is correct only for \
+the owner-only list below.\n\n\
+You may run, through typed tools or the corral CLI: dispatch and queue changes, gate and re-gate, \
+review start, send-back, approve and land after a passing configured gate and an independent \
+approval, plan verdicts and acceptance, hold and dispatch-hold release, your own parks, \
+re-authorizing stale queued consent (`dispatch <id>`), `mode resume`, `repair renew`, gate-failure \
+attribution (`repair triage`, with `--owner` to revise one), capacity and ad-hoc reserve changes, \
+and filing then dispatching follow-up tasks. The policy JSON describes only what Corral's executor \
+does on its own. When the executor refuses a step for a pause or a missing grant, run the explicit \
+command yourself: a card option that is not owner-required and has no action ID is yours to run.\n\n\
+Owner-only, asked once with options and a recommendation while other work continues: paid or \
+live-provider spend beyond the configured budget; credentials and privacy; destructive actions on \
+unfinished work (discard, dropping a task with a live branch, lost-run recovery); project scope and \
+priority (admitting a project, `automation confirm`, `mode autopilot`, `mode turbo`, owner parks, \
+owner-stopped runs, scope exclusions); `owner_only` and `permission` questions; waiving \
+independent review.\n\n\
+Checks stay: never approve a failed configured gate, never act as the independent reviewer, never \
+invent a receipt or evidence, and read the receipt of an uncertain effect before repeating it.\n\n\
+Red integration base: when the base branch itself fails a gate check and blocks candidates, get it \
+fixed now. Tell a blocked worker to fix a mechanical failure in a separate `baseline:` commit, or \
+file a `red-main` task and dispatch it at once. Formatter or generated output you may commit on the \
+base yourself, touching only those files and proving it with the failing gate command.\n";
+
 pub(crate) fn instructions(policy: &PolicySnapshot) -> Result<String> {
     Ok(format!(
         "[corral-policy]\n\n## Effective operating policy replacement\n\n\
-         This replaces conflicting older startup, consent and review-switch instructions. \
-         Only the finite scope and current per-task permissions below delegate automatic work. \
-         Scope labels and configured authority never override refusals, pause, owner exceptions, \
-         unresolved decisions, required gates or independent review. Assist requires explicit \
-         owner action for starts and acceptance. Autopilot does not require renewed routine \
-         consent for currently delegated actions. Never enlarge scope, clear a hold, waive a \
-         check, act as the independent reviewer, or restart workers on a policy wake. \
-         Read fresh brief and next (Pi: corral_brief and corral_next; other harnesses: \
-         `corral pm brief --json` and `corral pm next --json`); recompute after each authorized \
-         action, continuing independent work despite pending questions. Delegation here is to \
-         Corral's executor, not an expansion of a harness's tool authority. Pi PM must not run \
-         pm act, pm workset, sync, dispatch or acceptance: leave routine execution to Corral. \
-         Use the current supported owner entry point when executor authority is missing; do not \
-         ask for routine consent again when it is already delegated. Never replay an old command \
-         from this update.\n\n```json\n{}\n```\n",
+         This replaces conflicting older startup, consent and review-switch instructions. The JSON \
+         below is what Corral's executor may do without you: only its finite scope and current \
+         per-task permissions delegate automatic work, and its refusals, pause, unresolved \
+         decisions, required gates and independent review bind the executor. A policy wake is not \
+         a reason to restart workers or to replay an old command. Read fresh brief and next (Pi: \
+         corral_brief and corral_next; other harnesses: `corral pm brief --json` and \
+         `corral pm next --json`); recompute after each action, continuing independent work \
+         despite pending questions.\n\n{PM_AUTHORITY}\n```json\n{}\n```\n",
         serde_json::to_string_pretty(policy)?
     ))
 }

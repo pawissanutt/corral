@@ -68,8 +68,7 @@ pub(super) fn worker_stop(
                 "{reason}\nFix: run `corral agent install` or update the configured Pi assets, then retry."
             )
         };
-        let mut condition =
-            keyed_status(task, now, "launch_failed", WaitClass::OwnerDecision, reason);
+        let mut condition = keyed_status(task, now, "launch_failed", WaitClass::PmAction, reason);
         condition
             .resume
             .push(check("launch_repaired", &task.id, None, false));
@@ -134,8 +133,8 @@ pub(super) fn project(
             task,
             now,
             "launch_failed",
-            WaitClass::OwnerDecision,
-            Responsible::Owner,
+            WaitClass::PmAction,
+            Responsible::Pm,
             (
                 Some(crate::verification::digest(reason.as_bytes())),
                 Some(*at),
@@ -153,8 +152,8 @@ pub(super) fn project(
             task,
             now,
             "authority_blocked",
-            WaitClass::OwnerDecision,
-            Responsible::Owner,
+            WaitClass::PmAction,
+            Responsible::Pm,
             (
                 Some(crate::verification::digest(reason.as_bytes())),
                 Some(*at),

@@ -120,6 +120,33 @@ pub enum PmObservation {
 }
 
 impl PmObservation {
+    /// Preserve explicit owner-only facts without treating an unclassified stop as one.
+    pub(crate) fn owner_only(task: String, reason: String) -> Self {
+        use corral_core::attention::{Condition, NextAction, Responsible, SinceSource, WaitClass};
+        Self::Blocked {
+            condition: Box::new(Condition {
+                key: None,
+                kind: "owner_decision".into(),
+                class: WaitClass::OwnerDecision,
+                reason_code: "owner_decision".into(),
+                reason,
+                responsible: Responsible::Owner,
+                since: None,
+                since_source: SinceSource::Discovered,
+                age_secs: None,
+                resume: Vec::new(),
+                next_action: NextAction {
+                    command: Some(format!("corral show {task} --json")),
+                    description: "Ask the owner to resolve this explicit owner-only decision"
+                        .into(),
+                    requires_owner: true,
+                    recipient: None,
+                },
+            }),
+            task,
+        }
+    }
+
     pub(crate) fn task(&self) -> Option<&str> {
         match self {
             Self::GateUntrusted { task, .. }
@@ -175,6 +202,10 @@ pub struct PmOption {
     pub label: String,
     pub command: String,
     pub requires_owner: bool,
+    /// The PM runs `command` directly because Corral's executor is not delegated.
+    /// This is not an owner decision and never grants executor authority.
+    #[serde(default)]
+    pub pm_runs: bool,
 }
 
 /// One action or a bounded question digest; recommendations never grant authority.
@@ -201,6 +232,7 @@ fn option(id: &str, label: &str, command: String, requires_owner: bool) -> PmOpt
         label: label.into(),
         command,
         requires_owner,
+        pm_runs: !requires_owner && id != "wait",
     }
 }
 
@@ -286,14 +318,14 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             PmActionKind::EvidenceOnly,
             Some(task.clone()),
             "The finding concerns evidence only; range-diff shows identical commits.",
-            "Acting owner explicitly accepts the evidence; fresh gate and review identities still apply.",
+            "The PM resolves the evidence finding; fresh gate and independent approval still apply.",
             vec![finding.clone(), range_diff.clone()],
             vec![
                 option(
                     "accept_owner",
-                    "Ask the acting owner to accept",
+                    "Land with PM authority after gate and independent approval",
                     format!("{bin} approve {} --merge ff", q(task)),
-                    true,
+                    false,
                 ),
                 option(
                     "independent_review",
@@ -427,11 +459,24 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             )],
         ),
         Blocked { task, condition } => {
-            let command = format!("{bin} show {} --json", q(task));
+            let command = condition
+                .next_action
+                .command
+                .clone()
+                .unwrap_or_else(|| format!("{bin} show {} --json", q(task)));
             let requires_owner = condition.next_action.requires_owner;
-            let id = if requires_owner { "ask_owner" } else { "wait" };
+            let pm_action = condition.responsible == corral_core::Responsible::Pm;
+            let id = if requires_owner {
+                "ask_owner"
+            } else if pm_action {
+                "inspect_resolve"
+            } else {
+                "wait"
+            };
+            // An unclassified stall has no known resolution and keeps its place after
+            // decisions and inbox work; every other PM-resolvable stop is a card to act on.
             return PmAction {
-                kind: if requires_owner {
+                kind: if requires_owner || (pm_action && condition.kind != "unexpected_stall") {
                     PmActionKind::Owner
                 } else {
                     PmActionKind::Wait
@@ -496,9 +541,9 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             vec![],
             vec![option(
                 "accept_owner",
-                "Request owner acceptance",
+                "Land with PM authority after gate and independent approval",
                 format!("{bin} approve {} --merge ff", q(task)),
-                true,
+                false,
             )],
         ),
         Dispatch { task } => (
@@ -509,22 +554,22 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             vec![],
             vec![option(
                 "dispatch_owner",
-                "Request dispatch authorization",
+                "Dispatch with PM authority",
                 format!("{bin} dispatch {}", q(task)),
-                true,
+                false,
             )],
         ),
         Owner { task, reason } => (
             PmActionKind::Owner,
             Some(task.clone()),
-            "This situation needs an owner decision or a strong-model spike.",
-            "The owner resolves the question or files bounded work on a strong profile; the PM does not improvise.",
+            "Corral could not classify this stop; the PM resolves it.",
+            "Inspect the canonical evidence, reply to the worker, send back or re-gate; escalate only owner-only decisions.",
             vec![reason.clone()],
             vec![option(
-                "ask_owner",
-                "Escalate the facts to the owner",
+                "inspect_resolve",
+                "Inspect and resolve with PM authority",
                 format!("{bin} show {} --json", q(task)),
-                true,
+                false,
             )],
         ),
         AgentQuestion { .. } | OwnerQuestion { .. } => {
@@ -548,9 +593,9 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             if *review_ready {
                 choices.push(option(
                     "review_plan",
-                    "Request authorization for a fresh independent plan review",
+                    "Start a fresh independent plan review with PM authority",
                     format!("{bin} plan review {} --json", q(task)),
-                    true,
+                    false,
                 ));
             }
             if *approval_ready {
@@ -603,12 +648,6 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             };
         }
     };
-    // Frozen observations carry no grant. They are recommendations, never
-    // automatic authorization; live worksets project effective permissions.
-    let mut options = options;
-    for choice in &mut options {
-        choice.requires_owner = choice.id != "wait";
-    }
     let first = &options[0];
     PmAction {
         kind,

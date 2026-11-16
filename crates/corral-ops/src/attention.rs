@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
+mod aggregate;
+use aggregate::aggregate;
 #[cfg(test)]
 mod blocked_tests;
 mod classify;
@@ -404,12 +406,23 @@ fn ready(
             now,
             "dispatch_paused",
             WaitClass::Hold,
-            Responsible::Owner,
-            "Dispatch is paused".into(),
+            Responsible::Pm,
+            "Automatic dispatch is paused; the PM can dispatch this task explicitly".into(),
         );
         condition
             .resume
             .push(check("hold_lifted", "dispatch", None, false));
+        condition.next_action.command = Some(format!(
+            "corral dispatch {}{}",
+            task.id,
+            if task.dispatch_plan.as_ref().is_some_and(|plan| plan.plan) {
+                " --plan"
+            } else {
+                ""
+            }
+        ));
+        condition.next_action.description =
+            "Dispatch explicitly without expanding automatic authority".into();
         waits.push(condition);
     }
     if task.dispatch_hold {
@@ -418,12 +431,16 @@ fn ready(
             now,
             "dispatch_hold",
             WaitClass::Hold,
-            Responsible::Owner,
-            "Owner dispatch hold".into(),
+            Responsible::Pm,
+            "Dispatch is held; the PM can queue the task explicitly".into(),
         );
         condition
             .resume
             .push(check("hold_lifted", &task.id, None, false));
+        condition.next_action.command = Some(format!("corral queue add {}", task.id));
+        condition.next_action.description =
+            "Queue the task to clear its dispatch hold without expanding automatic authority"
+                .into();
         waits.push(condition);
     }
     if !n.config.ready_project_allowed(task.project.as_deref()) {
@@ -481,8 +498,8 @@ fn ready(
             now,
             "outside_grant",
             WaitClass::Hold,
-            Responsible::Owner,
-            "Dispatch needs a confirmed task grant or an explicit queued owner start".into(),
+            Responsible::Pm,
+            "Task is outside the automatic grant; the PM can run this step explicitly".into(),
         );
         condition.resume.push(check(
             "authority_granted",
@@ -490,6 +507,18 @@ fn ready(
             Some(format!("{action:?}")),
             false,
         ));
+        condition.next_action.command = Some(format!(
+            "corral dispatch {}{}",
+            task.id,
+            if action == Action::Plan {
+                " --plan"
+            } else {
+                ""
+            }
+        ));
+        condition.next_action.description =
+            "Run the step explicitly through the corral CLI without expanding the automation grant"
+                .into();
         waits.push(condition);
     }
     let credit = usize::from(phases.dispatch_credit);
@@ -588,15 +617,19 @@ fn plan(
             } else {
                 "plan_failed"
             },
-            WaitClass::OwnerDecision,
-            Responsible::Owner,
+            WaitClass::PmAction,
+            Responsible::Pm,
             (Some(format!("{}:{:?}", run.id, run.state)), since),
-            format!("Plan run {} is {:?}", run.id, run.state),
+            format!(
+                "Plan run {} is {:?}; the PM inspects the plan and resolves the stop",
+                run.id, run.state
+            ),
         );
         condition
             .resume
             .push(check("plan_disposition", &run.id, None, false));
         condition.next_action.command = Some(format!("corral plan show {} --json", task.id));
+        condition.next_action.description = "Inspect the plan, reply to the planner or request a fresh plan review; escalate recorded owner decisions".into();
         a.conditions.push(condition);
         return true;
     }
@@ -688,16 +721,17 @@ fn plan(
                     task,
                     now,
                     "plan_awaiting_owner",
-                    WaitClass::OwnerDecision,
-                    Responsible::Owner,
+                    WaitClass::PmAction,
+                    Responsible::Pm,
                     (Some(format!("{}:{}", plan.id, review.id)), Some(review.at)),
-                    "Reviewed plan awaits owner disposition".into(),
+                    "Reviewed plan awaits PM disposition; recorded owner decisions still need owner notes".into(),
                 );
                 condition
                     .resume
                     .push(check("plan_accepted", &plan.id, None, false));
                 condition.next_action.command =
                     Some(format!("corral plan show {} --json", task.id));
+                condition.next_action.description = "Inspect the reviewed plan and resolve routine review or acceptance steps; preserve genuine owner decisions".into();
                 a.conditions.push(condition);
             }
             Some(Verdict::Changes) => {
@@ -722,109 +756,6 @@ fn plan(
             "Independent plan review is pending".into(),
             "recorded",
         ));
-    }
-    true
-}
-
-fn aggregate(
-    task: &TaskHeadFields,
-    phases: &Phases,
-    n: &Neighborhood<'_>,
-    now: Timestamp,
-    a: &mut Assessment,
-) -> bool {
-    if !task.tracker {
-        return false;
-    }
-    let pending = task
-        .children
-        .iter()
-        .filter(|child| {
-            n.task(child)
-                .is_none_or(|task| *task.status() != Status::Done)
-        })
-        .collect::<Vec<_>>();
-    if !pending.is_empty() {
-        let labels = pending
-            .iter()
-            .map(|id| dependency_labels::label(n, id))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut condition = wait(
-            task,
-            now,
-            "aggregate_prerequisite",
-            WaitClass::Prerequisite,
-            Responsible::Executor,
-            format!("Waiting for Plan members: {labels}"),
-        );
-        condition.next_action.recipient = Some(labels);
-        condition.resume.extend(
-            pending
-                .into_iter()
-                .map(|id| check("task_status", id, Some("done".into()), false)),
-        );
-        a.conditions.push(condition);
-        return true;
-    }
-    if let Some(attempt) = phases.aggregate.as_ref() {
-        if let Some(gate) = attempt.gate.as_ref().filter(|gate| gate.holds_slot()) {
-            a.progress = Some(progress(
-                "aggregate_gate",
-                Some(gate.at),
-                "Aggregate gate is running".into(),
-                "recorded",
-            ));
-        } else if let Some(review) = attempt
-            .current_review
-            .as_ref()
-            .filter(|review| review.pending())
-        {
-            a.progress = Some(progress(
-                "aggregate_reviewer",
-                Some(review.requested),
-                "Aggregate independent review is pending".into(),
-                "recorded",
-            ));
-        } else {
-            let since = attempt
-                .current_review
-                .as_ref()
-                .and_then(|review| review.at)
-                .unwrap_or(attempt.started);
-            let mut condition = row(
-                task,
-                now,
-                "aggregate_awaiting_owner",
-                WaitClass::OwnerDecision,
-                Responsible::Owner,
-                (Some(attempt.id.clone()), Some(since)),
-                format!("Aggregate attempt {} awaits disposition", attempt.id),
-            );
-            condition
-                .resume
-                .push(check("aggregate_accepted", &attempt.id, None, false));
-            a.conditions.push(condition);
-        }
-    } else if n.allows(task, Action::AcceptAggregate) {
-        a.progress = Some(progress(
-            "aggregate",
-            task.status_since,
-            "Aggregate verification is pending".into(),
-            "recorded",
-        ));
-    } else {
-        let mut condition = keyed_status(
-            task,
-            now,
-            "aggregate_awaiting_owner",
-            WaitClass::OwnerDecision,
-            "Plan members are complete; aggregate verification needs authorization".into(),
-        );
-        condition
-            .resume
-            .push(check("aggregate_accepted", &task.id, None, false));
-        a.conditions.push(condition);
     }
     true
 }

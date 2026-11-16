@@ -105,14 +105,18 @@ pub(super) fn conditions_with_runs(
 ) {
     let out = &mut assessment.conditions;
     if task.status == Status::Idea || (task.status == Status::Backlog && !task.queued) {
-        out.push(wait(
+        let mut condition = wait(
             task,
             now,
             "not_scheduled",
             WaitClass::NotScheduled,
-            Responsible::Owner,
-            "No execution is scheduled".into(),
-        ));
+            Responsible::Pm,
+            "No execution is scheduled; the PM can queue approved work".into(),
+        );
+        condition.next_action.command = Some(format!("corral dispatch {} --queue", task.id));
+        condition.next_action.description =
+            "Queue approved work for dispatch without expanding project scope".into();
+        out.push(condition);
         return;
     }
     runs(out);
@@ -124,7 +128,7 @@ pub(super) fn conditions_with_runs(
             if held { "infra_hold" } else { "infra_wait" },
             WaitClass::ExternalOperation,
             if held {
-                Responsible::Owner
+                Responsible::Pm
             } else {
                 Responsible::External
             },
@@ -145,9 +149,9 @@ pub(super) fn conditions_with_runs(
             None,
             false,
         ));
-        condition.next_action.command = None;
+        condition.next_action.command = Some(format!("corral show {} --json", task.id));
         condition.next_action.description =
-            "Wait for the Git operation to finish; inspect the marker without deleting it".into();
+            "Inspect the Git operation and retry once its marker clears; do not delete a live operation's marker".into();
         out.push(condition);
     }
     if let Some(episode) = n.availability.get(&task.id) {
@@ -263,17 +267,28 @@ pub(super) fn conditions_with_runs(
                         task,
                         now,
                         "needs_me_other",
-                        WaitClass::OwnerDecision,
+                        if stopped {
+                            WaitClass::OwnerDecision
+                        } else {
+                            WaitClass::PmAction
+                        },
                         if stopped {
                             "Run stopped by owner; the worktree and branch are kept"
                         } else {
-                            "Task needs an owner decision without a more specific recorded condition"
+                            "The PM inspects the stop and chooses a scoped resolution"
                         }
                         .into(),
                     );
                     condition
                         .resume
                         .push(check("owner_disposition", &task.id, None, false));
+                    condition.responsible = if stopped {
+                        Responsible::Owner
+                    } else {
+                        Responsible::Pm
+                    };
+                    condition.next_action.requires_owner = stopped;
+                    condition.next_action.description = "Inspect corral show --json; reply to the worker, send back, re-gate, or escalate only an owner-only decision".into();
                     assessment.conditions.push(condition);
                 }
             }
@@ -318,11 +333,7 @@ pub(super) fn keyed_status(
         now,
         kind,
         class,
-        if class == WaitClass::OwnerDecision {
-            Responsible::Owner
-        } else {
-            Responsible::Pm
-        },
+        Responsible::Pm,
         (
             Some(
                 task.status_since()
@@ -443,16 +454,8 @@ pub(super) fn escalation(
         } else {
             "escalation"
         },
-        if infra {
-            WaitClass::PmAction
-        } else {
-            WaitClass::OwnerDecision
-        },
-        if infra {
-            Responsible::Pm
-        } else {
-            Responsible::Owner
-        },
+        WaitClass::PmAction,
+        Responsible::Pm,
         (Some(stage.at.to_string()), Some(stage.at)),
         reason.into(),
     );
@@ -470,6 +473,9 @@ pub(super) fn escalation(
         );
         condition.next_action.command = Some(format!("corral show {} --json", task.id));
     }
+    if !infra {
+        condition.next_action.description = "Inspect the stop and resolve it through reply, changes or a fresh gate; escalate only owner-only decisions".into();
+    }
     out.push(condition);
 }
 
@@ -483,13 +489,7 @@ pub(super) fn authority(
         return None;
     }
     let reason = n.authority_reason(task, action);
-    let mut condition = keyed_status(
-        task,
-        now,
-        "authority_blocked",
-        WaitClass::OwnerDecision,
-        reason,
-    );
+    let mut condition = keyed_status(task, now, "authority_blocked", WaitClass::PmAction, reason);
     condition.key = Some(ConditionKey(format!(
         "{}/authority_blocked/{}",
         task.id(),
@@ -501,6 +501,7 @@ pub(super) fn authority(
         Some(format!("{action:?}")),
         false,
     ));
+    condition.next_action.description = "Run the required step explicitly through corral dispatch, gate, review-run or approve; this does not expand executor delegation".into();
     Some(condition)
 }
 
@@ -519,7 +520,7 @@ fn review(
             task,
             now,
             "manual_review_open_run",
-            WaitClass::OwnerDecision,
+            WaitClass::PmAction,
             format!("Review contains open worker {}", run.id),
         );
         condition.key = Some(ConditionKey(format!(
@@ -607,8 +608,8 @@ fn review(
             task,
             now,
             "landing_blocked",
-            WaitClass::ExternalOperation,
-            Responsible::Owner,
+            WaitClass::PmAction,
+            Responsible::Pm,
             (Some(blocked.at.to_string()), Some(blocked.at)),
             blocked
                 .reason
@@ -618,6 +619,8 @@ fn review(
         condition
             .resume
             .push(check("landing_precondition", &task.id, None, false));
+        condition.next_action.command = Some(format!("corral approve {} --merge ff", task.id));
+        condition.next_action.description = "Resolve the landing precondition, then land only after a passing gate and independent approval".into();
         a.conditions.push(condition);
         return;
     }
@@ -629,21 +632,47 @@ fn review(
             .as_ref()
             .map(|review| review.at)
             .or_else(|| stage.map(|stage| stage.at));
+        // An explicit `accept = "owner"` setting keeps acceptance with the owner; the
+        // resolved default does not.
+        let owner = task.review == Some(Accept::Owner)
+            || n.config.review.accept == Some(Accept::Owner)
+            || task
+                .project
+                .as_ref()
+                .and_then(|key| n.config.projects.get(key))
+                .is_some_and(|project| project.review.accept == Some(Accept::Owner));
         let mut condition = row(
             task,
             now,
             "owner_accept",
-            WaitClass::OwnerDecision,
-            Responsible::Owner,
+            if owner {
+                WaitClass::OwnerDecision
+            } else {
+                WaitClass::PmAction
+            },
+            if owner {
+                Responsible::Owner
+            } else {
+                Responsible::Pm
+            },
             (
                 Some(since.map_or_else(|| run.id.clone(), |at| at.to_string())),
                 since,
             ),
-            "Verified candidate awaits owner acceptance".into(),
+            if owner {
+                "Verified candidate awaits owner acceptance".into()
+            } else {
+                "Verified candidate awaits PM acceptance after gate and independent approval".into()
+            },
         );
         condition
             .resume
             .push(check("candidate_accepted", &run.id, None, false));
+        if !owner {
+            condition.next_action.command = Some(format!("corral approve {} --merge ff", task.id));
+            condition.next_action.description =
+                "Land after a passing configured gate and fresh independent approval".into();
+        }
         a.conditions.push(condition);
         return;
     }

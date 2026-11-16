@@ -70,17 +70,49 @@ pub(crate) fn with_admission(
         }
         if task.status == Status::Dropped {
             if operating.tasks.contains_key(&task.id) {
-                out.push(PmObservation::Owner {
-                    task: task.id.clone(),
-                    reason: "Dropped task remains a scoped obligation; owner disposition or a scope amendment is required.".into(),
-                });
+                out.push(PmObservation::owner_only(
+                    task.id.clone(),
+                    "Dropped task remains a scoped obligation; an explicit scope amendment needs the owner.".into(),
+                ));
             }
+            continue;
+        }
+        let owner_reason = if task
+            .park
+            .as_ref()
+            .is_some_and(|park| park.by == corral_core::Responsible::Owner)
+        {
+            Some("Task is explicitly parked by the owner.")
+        } else if task
+            .current_run()
+            .is_some_and(|run| run.outcome == Some(corral_core::RunOutcome::Stopped))
+        {
+            Some(
+                "Run was stopped by the owner; retain its work until the owner chooses a disposition.",
+            )
+        } else if assessments.iter().any(|row| {
+            row.task == task.id
+                && row
+                    .assessment
+                    .conditions
+                    .iter()
+                    .any(|condition| condition.kind == "project_not_allowed")
+        }) {
+            Some("Project is not admitted; admitting new project scope needs the owner.")
+        } else {
+            None
+        };
+        if let Some(reason) = owner_reason {
+            out.push(PmObservation::owner_only(task.id.clone(), reason.into()));
             continue;
         }
         if task.dispatch_hold {
             out.push(PmObservation::Owner {
                 task: task.id.clone(),
-                reason: "Task has an explicit dispatch hold; owner clearance is required.".into(),
+                reason: format!(
+                    "Task has a dispatch hold; the PM can run corral queue add {}.",
+                    task.id
+                ),
             });
             continue;
         }
@@ -150,8 +182,7 @@ pub(crate) fn with_admission(
             if run.pending_reply.is_some() || run.stuck.is_some() {
                 out.push(PmObservation::Owner {
                     task: task.id.clone(),
-                    reason: "Unresolved delivery or process recovery requires owner disposition."
-                        .into(),
+                    reason: "The PM inspects unresolved delivery or process state and resolves it without replaying uncertain input.".into(),
                 });
                 continue;
             }
@@ -188,20 +219,8 @@ pub(crate) fn with_admission(
                 out.push(PmObservation::Owner {
                     task: task.id.clone(),
                     reason: run.blocked_excerpt.clone().unwrap_or_else(|| {
-                        "Owner disposition required before further work.".into()
+                        "The PM inspects the canonical stop and resolves approved work.".into()
                     }),
-                });
-                continue;
-            }
-            let task_head = heads
-                .iter()
-                .find(|head| head.id == task.id)
-                .context("observed task head missing")?;
-            if let Some(reason) = crate::automation_status::automation_blocker_head(ctx, task_head)?
-            {
-                out.push(PmObservation::Owner {
-                    task: task.id.clone(),
-                    reason,
                 });
                 continue;
             }
@@ -221,7 +240,8 @@ pub(crate) fn with_admission(
         if task.status == Status::NeedsMe && task.current_run().is_none() {
             out.push(PmObservation::Owner {
                 task: task.id.clone(),
-                reason: "Task needs owner disposition; no current worker run is available.".into(),
+                reason: "The PM inspects the task history; no current worker run is available."
+                    .into(),
             });
             continue;
         }
@@ -306,10 +326,16 @@ fn project_blocked(
                 continue;
             }
             observed = true;
-            if matches!(
-                observation,
-                PmObservation::ReviewInFlight { .. } | PmObservation::AutomaticWait { .. }
-            ) {
+            if (condition.next_action.requires_owner
+                && !matches!(
+                    observation,
+                    PmObservation::Question { .. } | PmObservation::OwnerQuestion { .. }
+                ))
+                || matches!(
+                    observation,
+                    PmObservation::ReviewInFlight { .. } | PmObservation::AutomaticWait { .. }
+                )
+            {
                 *observation = PmObservation::Blocked {
                     task: task.task.clone(),
                     condition: Box::new(condition.clone()),

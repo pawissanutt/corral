@@ -1,5 +1,5 @@
-//! Authenticated, record-only attribution. Proposals are inert; only ordinary delegated
-//! scope or one host decision can append a diagnosis. Neither path queues pipeline work.
+//! Authenticated, record-only attribution. The PM records directly; assistants use delegated
+//! scope or one host decision. No attribution path queues pipeline work.
 use anyhow::{Context, Result, ensure};
 use corral_core::agent::{AgentRole, RESULT_MAX_BYTES, RequestIdentity};
 use corral_core::{Store, TaskFieldsRef as _, TaskRef as _};
@@ -120,7 +120,7 @@ fn scope(ctx: &Ctx, envelope: &Envelope, head: &corral_core::TaskHead) -> Result
             "diagnosis belongs to the current assistant driver"
         );
     }
-    crate::operating::attribution_scope(&ctx.store, head)
+    crate::operating::attribution_scope(&ctx.store, head, envelope.identity.role == AgentRole::Pm)
 }
 
 fn owner_required(state: &GateTriage, report: &GateDiagnosis) -> bool {
@@ -246,7 +246,7 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         let result = match action {
             Action::Propose { diagnosis: report, .. } => {
                 let (run, state) = prepare(ctx, head, &report).map_err(refused)?;
-                if delegated && !owner_required(&state, &report) {
+                if delegated && (envelope.identity.role == AgentRole::Pm || !owner_required(&state, &report)) {
                     record(ctx, &task, state, &report)?
                 } else {
                     let bound = Bound {

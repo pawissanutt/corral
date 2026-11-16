@@ -145,7 +145,7 @@ fn incomplete_retry_claims_never_resolve_or_replay_a_predecessor() {
                 let pending = message_row(&rows, &original.id);
                 assert_eq!(pending.kind, "delivery_retry_pending");
                 assert_eq!(pending.since, Some(original.created));
-                assert_eq!(pending.responsible, Responsible::Owner);
+                assert_eq!(pending.responsible, Responsible::Pm);
                 assert_eq!(
                     pending.next_action.command,
                     Some(format!("corral inbox inspect-retry {}", original.id))

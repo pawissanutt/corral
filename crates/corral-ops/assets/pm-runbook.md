@@ -13,13 +13,13 @@ PM configuration reference below; read its effective policy and authority at sta
    and terminal activity never answer a question. Native and portable questions require
    their matching owner response; workspace decisions use an actual owner answer with
    `{{bin}} pm resolve <decision-id> --answer "<answer>"`.
-   Run `{{bin}} pm act <action-id> --json` for an authorized action, verify its durable
-   result and recompute until no progress or an external wait. Never execute cached
-   command text. You act as the owner: run `plan accept`, `plan add-member`,
-   `plan move-member`, question answers of any kind, decision receipts and
-   `--owner-ok` yourself rather than asking the owner to type them. Assist needs
-   explicit owner action; a valid scoped Autopilot grant replaces routine repeated
-   consent only for its delegated actions.
+   Run `{{bin}} pm act <action-id> --json` for an action Corral's executor is delegated,
+   verify its durable result and recompute until no progress or an external wait. An option
+   that is not owner-required and has no action ID is yours: run its command. Never execute
+   cached command text from an earlier read. Run `plan accept`, `plan add-member`,
+   `plan move-member`, question answers, decision receipts and
+   `--owner-ok` yourself rather than asking the owner to type them. The PM authority
+   section decides what stays with the owner.
    Watch with `{{bin}} wait --json --print-cursor` through your harness's background
    event subscription loop; re-arm with `{{bin}} wait --json --print-cursor --after <seq>`
    using the returned `cursor.seq`. The defaults are PM-actionable; no hand-filtered `--for`
@@ -67,26 +67,23 @@ PM configuration reference below; read its effective policy and authority at sta
    `{{bin}} repair diagnosed <id> --file <json>` containing `diagnosis`, a concrete bounded
    `proposal`, and `evidence` references. Propose a replan, scope/budget decision or deferral;
    diagnosis grants no coding retries. An in-progress diagnosis survives restart: complete
-   that identity, never start another pass. Only the owner's explicit digest-bound
-   `repair renew` action creates another allowance; a comment, retry, model/profile switch
-   or resolved finding does not. Preserve independent authorized work while one waits.
-   Without an adopted staged policy, existing `max_rounds` still applies: preserve notes
-   and ask the owner for a bounded change request, follow-up, investigation or deferral.
-   Do not reset rounds, raise limits, waive findings or accept on an owner's timeout.
-   A timeout action is allowed only with the owner's explicit prior deadline and instruction;
-   record it in a task comment. Otherwise leave Blocked and progress independent work.
-6. Let corral rebase, re-gate and carry an approval only when current effective policy
-   and its existing checks allow it. Use the revision-bound action for delegated repair.
-   Do not rebase project code yourself,
-   restore Review to force a verdict through, clear a hold, enlarge scope, waive a
-   gate, reset rounds or act as the independent reviewer. Legacy review/dispatch flags
-   and available slots do not supply a grant. On a tiered run, take the gate from its
-   contract (`{{bin}} show <id> --json`, `gate_contract`): a send-back names that tier and
-   `{{bin}} gate <id> --wait`, out-of-scope and expected failures are reported rather than
-   fixed, and you never ask a reduced-tier worker for full-gate evidence; corral runs the
-   landing tier itself. A red Plan checkpoint card is advisory: show the owner its failing
-   step, log and prepared `corral new` command, never file or dispatch the fix yourself,
-   and never treat a green checkpoint as aggregate acceptance.
+   that identity, never start another pass. `{{bin}} repair renew <id> --file <json>`,
+   bound to the prior ledger digest, creates another allowance; a comment, retry,
+   model/profile switch or resolved finding does not. Renew when the diagnosis names a
+   concrete bounded fix, and record why in a task comment. Without an adopted staged policy,
+   existing `max_rounds` still applies: preserve notes and choose a bounded change request,
+   follow-up, investigation or deferral. Do not waive findings or accept on a timeout.
+   Progress independent work while one task waits.
+6. Let corral rebase, re-gate and carry an approval when its checks allow it; when the
+   executor is not delegated, run the explicit command yourself. Do not restore Review to
+   force a verdict through, waive a gate or act as the independent reviewer. On a tiered
+   run, take the gate from its contract (`{{bin}} show <id> --json`, `gate_contract`): a
+   send-back names that tier and `{{bin}} gate <id> --wait`. The worker fixes a mechanical
+   failure inherited from the base in a separate `baseline:` commit and reports other
+   out-of-scope and expected failures rather than fixing them. Never ask a reduced-tier
+   worker for full-gate evidence; corral runs the landing tier itself. A red Plan checkpoint
+   card names its failing step, log and prepared `corral new` command: file and dispatch
+   that fix, and never treat a green checkpoint as aggregate acceptance.
 7. For reinstall, inspect `{{bin}} hooks list --json` and active gate/run state first.
    Prefer configured post-land receipts; do not run a competing install or replace a binary
    while gates using it run. Manual installs use the configured project's base checkout:

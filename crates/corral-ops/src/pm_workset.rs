@@ -106,57 +106,8 @@ pub use project_executor::PmDaemonPass;
 pub(crate) use project_executor::act as pm_act_checked;
 mod scope;
 pub(crate) use options::authority;
-use options::{option_authority, option_target};
+use options::{delegated, option_authority, option_target, project_permissions};
 pub(crate) use scope::next_for_projects;
-
-fn project_permissions(action: &mut PmAction, policy: &EffectivePolicy) {
-    for option in &mut action.options {
-        if option.id == "wait" {
-            option.requires_owner = false;
-        } else {
-            option.requires_owner = option_authority(&option.id, action.kind)
-                .zip(option_target(
-                    action.kind,
-                    action.task.as_deref(),
-                    &option.id,
-                ))
-                .is_none_or(|(kind, task)| {
-                    if action.kind == PmActionKind::Diagnosis {
-                        !policy.allows_diagnosis(task)
-                    } else {
-                        !policy.allows(task, kind)
-                    }
-                });
-            if !option.requires_owner {
-                option.label = match option.id.as_str() {
-                    "dispatch_owner" => "Start delegated work".into(),
-                    "accept_owner" => "Accept verified delegated work".into(),
-                    "approve_plan" => "Accept the delegated reviewed plan".into(),
-                    "review_plan" => "Start delegated independent plan review".into(),
-                    _ => option.label.clone(),
-                };
-            }
-        }
-    }
-    action.requires_owner = action
-        .options
-        .iter()
-        .find(|option| option.id == action.recommended)
-        .is_none_or(|option| option.requires_owner);
-    if action.kind == PmActionKind::Owner
-        && let Some(option) = ["approve_plan", "review_plan"].iter().find_map(|id| {
-            action
-                .options
-                .iter()
-                .find(|o| &o.id == id && !o.requires_owner)
-        })
-    {
-        action.recommended = option.id.clone();
-        action.command = option.command.clone();
-        action.requires_owner = false;
-        action.verify = "Inspect the exact plan's fresh review and acceptance using plan show --json; no owner-authored verdict or fabricated decision response is supplied.".into();
-    }
-}
 
 fn decision(ctx: &Ctx, task: &Task, action: PmAction) -> Result<PmDecision> {
     let run = task.current_run();
@@ -346,8 +297,8 @@ fn project_snapshot(
             .as_deref()
             .and_then(|id| tasks.iter().find(|task| task.id == id));
         let Some(task) = task else {
-            // No task-bound authority can arise from a workspace recommendation.
-            action.requires_owner = true;
+            // Workspace recommendations do not acquire executor delegation.
+            // Their owner-only flag was classified by the card, not by missing scope.
             decisions.extend(crate::pm_decisions::workspace_decision(ctx, action)?);
             continue;
         };
@@ -358,6 +309,14 @@ fn project_snapshot(
             continue;
         }
         project_permissions(&mut action, &policy);
+        // The PM runs what the executor refused; the card carries that exact refusal.
+        if task.current_run().is_some()
+            && action.options.iter().any(|option| option.pm_runs)
+            && let Some(head) = heads.iter().find(|head| head.id == task.id)
+            && let Some(reason) = crate::automation_status::automation_blocker_head(ctx, head)?
+        {
+            action.evidence.insert(0, reason);
+        }
         if matches!(
             action.kind,
             PmActionKind::ReviewInFlight | PmActionKind::Wait
@@ -368,7 +327,7 @@ fn project_snapshot(
         let mut executable_options = Vec::new();
         let canonical_action = scope.canonical_action(&action, &bin);
         for option in &action.options {
-            if option.requires_owner {
+            if option.requires_owner || !delegated(&action, option, &policy) {
                 continue;
             }
             let Some(kind) = option_authority(&option.id, action.kind) else {
@@ -436,7 +395,7 @@ fn project_snapshot(
                 action: selected,
             });
         }
-        if action.requires_owner {
+        if action.requires_owner || action.options.iter().any(|option| option.pm_runs) {
             decisions.push(decision(ctx, task, action)?);
         }
     }
@@ -541,16 +500,23 @@ fn project_snapshot(
             ));
         }
     }
+    // A card the PM runs itself is listed with the decisions but is not an owner wait.
+    let owner_waits = |task: Option<&str>| {
+        decisions.iter().any(|decision| {
+            decision.action.requires_owner && task.is_none_or(|id| decision.task == id)
+        })
+    };
     let independent_work_continues = !actions.is_empty()
+        || decisions.iter().any(|d| !d.action.requires_owner)
         || tasks.iter().any(|task| {
             policy.tasks.contains_key(&task.id)
                 && task.holds_dispatch_slot()
-                && !decisions.iter().any(|d| d.task == task.id)
+                && !owner_waits(Some(&task.id))
                 && !assessments
                     .iter()
                     .any(|row| row.task == task.id && row.blocked.is_some())
         });
-    let status = if !decisions.is_empty() || policy.paused || !progress.missing.is_empty() {
+    let status = if owner_waits(None) || policy.paused || !progress.missing.is_empty() {
         OperatingStatus::NeedsYourDecision
     } else if progress.total > 0 && progress.accepted == progress.total && blockers.is_empty() {
         OperatingStatus::Complete

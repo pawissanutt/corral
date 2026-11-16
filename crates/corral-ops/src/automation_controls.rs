@@ -1,4 +1,4 @@
-//! Owner-facing finite grant controls. Attribution flags are not authority.
+//! Owner-only finite grant controls and shared owner/PM operator admission.
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
@@ -29,6 +29,33 @@ pub fn require_automation_owner(store: &Store, invoker: &Invoker) -> Result<()> 
         .cwd()
         .context("reading automation control directory")?;
     require_owner_entry(store, &cwd, agent, pm)
+}
+
+/// Admit the owner or the workspace PM, never a worker or assistant claiming the PM marker.
+/// PM authority does not extend into current or historical agent run worktrees.
+pub fn require_operator(store: &Store, invoker: &Invoker) -> Result<()> {
+    let env = &invoker.caller.env;
+    let workspace_pm = invoker.pm_marker()
+        && invoker.owner_action.is_none()
+        && !invoker.is_app()
+        && [
+            &env.corral_assistant,
+            &env.corral_agent,
+            &env.corral_reviewer,
+            &env.corral_agent_task,
+            &env.corral_task,
+        ]
+        .iter()
+        .all(|value| value.is_none());
+    if workspace_pm {
+        let cwd = invoker
+            .cwd()
+            .context("reading operator control directory")?;
+        require_owner_entry(store, &cwd, false, false)
+    } else {
+        require_automation_owner(store, invoker)
+    }
+    .context("operation requires the owner or the PM")
 }
 
 pub(crate) fn require_owner_entry(store: &Store, cwd: &Path, agent: bool, pm: bool) -> Result<()> {
@@ -132,6 +159,29 @@ mod tests {
             // Then owner controls fail closed.
             assert!(require_owner_entry(&store, root.path(), agent, pm).is_err());
         }
+    }
+
+    #[test]
+    fn operator_admits_workspace_pm_but_not_assistant_or_worker_shells() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        let mut invoker = Invoker::process();
+        invoker.owner_action = None;
+        invoker.caller = corral_protocol::cmd::Caller {
+            cwd: Some(root.path().to_string_lossy().into_owned()),
+            env: corral_protocol::cmd::CallerEnv {
+                corral_pm: Some("1".into()),
+                ai_agent: Some("pi".into()),
+                ..Default::default()
+            },
+            ..invoker.caller
+        };
+        assert!(require_operator(&store, &invoker).is_ok());
+        invoker.caller.env.corral_assistant = Some("A-1".into());
+        assert!(require_operator(&store, &invoker).is_err());
+        invoker.caller.env.corral_assistant = None;
+        invoker.caller.env.corral_agent = Some("worker".into());
+        assert!(require_operator(&store, &invoker).is_err());
     }
 
     #[test]

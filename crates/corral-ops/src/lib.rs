@@ -212,7 +212,7 @@ pub use artifacts::{
     scan_artifacts,
 };
 pub use automation_controls::{
-    agent_entry, automation_confirm, automation_preview, require_automation_owner,
+    agent_entry, automation_confirm, automation_preview, require_automation_owner, require_operator,
 };
 pub use automation_status::{automation_blocker, automation_blocker_head, automation_summary};
 pub use comments::comment;

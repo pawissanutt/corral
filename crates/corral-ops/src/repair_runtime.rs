@@ -565,7 +565,7 @@ pub(crate) fn require_coding<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Re
                 ledger.transition()?,
                 RepairTransition::Current { .. } | RepairTransition::Stronger { .. }
             ),
-            "coding repair allowance exhausted; PM diagnosis or explicit owner renewal required"
+            "coding repair allowance exhausted; PM diagnosis or explicit owner or PM renewal required"
         );
     }
     Ok(())
@@ -580,7 +580,7 @@ pub fn repair_diagnose_owner(
     id: &str,
     invoker: &crate::command::Invoker,
 ) -> Result<RepairLedger> {
-    crate::require_automation_owner(&ctx.store, invoker)?;
+    crate::require_operator(&ctx.store, invoker)?;
     diagnose(ctx, id, true)
 }
 
@@ -684,11 +684,13 @@ pub fn repair_diagnosed(
 pub fn repair_renew(
     ctx: &Ctx,
     id: &str,
-    renewal: corral_core::RepairRenewal,
+    mut renewal: corral_core::RepairRenewal,
     policy: corral_core::RepairPolicy,
     invoker: &crate::command::Invoker,
 ) -> Result<RepairLedger> {
-    crate::require_automation_owner(&ctx.store, invoker)?;
+    crate::require_operator(&ctx.store, invoker)?;
+    renewal.approved_by = invoker.decision_author(&ctx.store)?.into();
+    let _actor = ctx.store.attribute(invoker.resolve(&ctx.store)?.0);
     let id = Store::normalize_id(id)?;
     let head = ctx.store.head(&id)?;
     ensure!(

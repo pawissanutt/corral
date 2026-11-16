@@ -226,7 +226,15 @@ fn escalated_plan_survives_later_failed_planner_in_next_and_brief() {
     let choices = card["options"].as_array().unwrap();
     assert!(choices.iter().any(|o| o["id"] == "review_plan"));
     assert!(!choices.iter().any(|o| o["id"] == "approve_plan"));
-    assert!(choices.iter().all(|o| o["requires_owner"] == true));
+    assert!(
+        choices
+            .iter()
+            .filter(|o| o["id"] != "review_plan")
+            .all(|o| o["requires_owner"] == true)
+    );
+    let review = choices.iter().find(|o| o["id"] == "review_plan").unwrap();
+    assert_eq!(review["requires_owner"], false);
+    assert_eq!(review["pm_runs"], true);
 }
 
 #[test]
@@ -259,7 +267,7 @@ fn reviewed_plan_offers_owner_acceptance_without_performing_it() {
 }
 
 #[test]
-fn failed_planner_without_pending_plan_requires_owner_attention() {
+fn failed_planner_without_pending_plan_requires_pm_attention() {
     // Given failed planning with no submitted plan.
     let (tmp, ctx, id) = fixture();
     ctx.store
@@ -273,7 +281,8 @@ fn failed_planner_without_pending_plan_requires_owner_attention() {
     // Then its actual failure is surfaced rather than losing the task.
     assert_eq!(card["kind"], "owner");
     assert_eq!(card["task"], id);
-    assert_eq!(card["requires_owner"], true);
+    assert_eq!(card["requires_owner"], false);
+    assert_eq!(card["options"][0]["pm_runs"], true);
     assert!(card["evidence"].to_string().contains("exit 1"));
 }
 
@@ -440,7 +449,7 @@ fn current_review_wait_survives_unrelated_terminal_planner() {
 
 #[test]
 fn blocked_active_planner_surfaces_its_question_not_the_old_review() {
-    // Given an active replacement blocked on new owner input.
+    // Given an active replacement blocked on input without a canonical owner-only decision.
     let (tmp, ctx, id) = fixture();
     let question = "Choose the new planner scope.";
     ctx.store
@@ -453,10 +462,11 @@ fn blocked_active_planner_surfaces_its_question_not_the_old_review() {
         .unwrap();
     // When both PM surfaces resolve the latest relevant work.
     let card = readbacks(tmp.path(), &ctx);
-    // Then the live planner's owner input wins over historical P3.
+    // Then the live planner's question wins over historical P3 and the PM inspects it.
     assert_eq!(card["kind"], "owner");
     assert_eq!(card["task"], id);
-    assert_eq!(card["requires_owner"], true);
+    assert_eq!(card["requires_owner"], false);
+    assert_eq!(card["options"][0]["pm_runs"], true);
     assert!(card["evidence"].to_string().contains(question));
     assert!(
         !card["options"]

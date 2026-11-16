@@ -1,4 +1,4 @@
-//! Store-only repair mutations; file contents and owner identity come from the caller.
+//! Store-only repair mutations; file contents and operator identity come from the caller.
 use anyhow::{Context, Result};
 use corral_core::{RepairPolicy, RepairRenewal};
 use corral_protocol::cmd::{FileInput, repair::RepairCommand};
@@ -50,7 +50,7 @@ impl Verb for RepairCommand {
                 )?)?
             }
             Self::Renew { id, file } => {
-                crate::require_automation_owner(&cx.ctx.store, cx.invoker)?;
+                crate::require_operator(&cx.ctx.store, cx.invoker)?;
                 let renewal: Renewal = read(&file)?;
                 serde_json::to_value(crate::repair_renew(
                     &cx.ctx,

@@ -288,14 +288,15 @@ fn suggest_card_is_ranked_closed_and_read_only() {
     assert_eq!(first.kind, PmActionKind::IdeaPromotion);
     assert_eq!(serde_json::to_value(&first).unwrap()["kind"], "promote");
     assert_eq!(first.task.as_deref(), Some(second.id.as_str()));
-    assert!(first.requires_owner);
+    assert!(!first.requires_owner);
     assert_eq!(
         first.shortlist.iter().map(|c| &c.id).collect::<Vec<_>>(),
         [&second.id, &id]
     );
     assert_eq!(first.options.len(), 3);
     for (candidate, choice) in first.shortlist.iter().zip(&first.options) {
-        assert!(choice.requires_owner);
+        assert!(!choice.requires_owner);
+        assert!(choice.pm_runs);
         assert!(
             choice
                 .command
@@ -645,10 +646,11 @@ fn evidence_only_card_requires_code_computed_identical_commit_ranges() {
     corral_ops::verdict(&ctx, &id, corral_core::Verdict::Changes, &notes).unwrap();
     // When next invokes Git to compare the two explicit commit ranges.
     let card = pm_next(&ctx).unwrap();
-    // Then it offers acceptance only to the acting owner.
+    // Then the PM can resolve the evidence finding without waiving gate or independent review.
     assert_eq!(card.kind, PmActionKind::EvidenceOnly);
     assert_eq!(card.recommended, "accept_owner");
-    assert!(card.requires_owner);
+    assert!(!card.requires_owner);
+    assert!(card.options[0].pm_runs);
 }
 
 #[test]

@@ -287,7 +287,8 @@ fn red_checkpoint_raises_one_pm_card_with_a_prepared_command() {
         "corral",
     );
     assert_eq!(card.kind, PmActionKind::Owner);
-    assert!(card.requires_owner);
+    assert!(!card.requires_owner);
+    assert!(card.options[0].pm_runs);
     // And nothing is filed or dispatched.
     let after = f.ctx.store.list().unwrap();
     assert_eq!(after.len(), tasks.len());
