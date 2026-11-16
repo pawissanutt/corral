@@ -156,16 +156,27 @@ pub enum EndState {
     Failed(String),
 }
 
-/// The End of a named session still awaiting its row, or its refusal.
+/// The End of a session still awaiting its row, or its refusal. The quick thread's is its
+/// current generation's, so a rolled-on quick thread is not held by an earlier End.
 pub fn end_state(state: &State, feed: &Feed, scope: &str) -> Option<EndState> {
-    let end = state.live.ends.get(scope)?;
-    if ended(feed, scope) {
+    let session = end_target(feed, scope)?;
+    let end = state.live.ends.get(&session)?;
+    if ended(feed, &session) {
         return None;
     }
     Some(match &end.failed {
         Some(why) => EndState::Failed(why.clone()),
         None => EndState::Pending,
     })
+}
+
+/// The `A-n` an End of `scope` closes: the quick thread's current generation, else the session.
+pub fn end_target(feed: &Feed, scope: &str) -> Option<String> {
+    if scope == QUICK {
+        quick_id(feed)
+    } else {
+        Some(scope.to_owned())
+    }
 }
 
 /// The task's owner revision from its served detail; task verbs carry it as their precondition.
@@ -748,12 +759,21 @@ pub fn live_thread_header(state: &State, feed: &Feed, scope: &str) -> ThreadHead
         facts,
         lifetime_note: LIFETIME_NOTE,
         filed: live_filed(feed, scope),
-        end: (!quick && row.is_some() && !ended(feed, scope)).then(|| {
-            let mut end = button("End session", Action::EndSession(Some(scope.to_owned())));
-            end.danger = true;
-            end.enabled = end_state(state, feed, scope) != Some(EndState::Pending);
-            end
-        }),
+        // Ending the quick thread closes its current generation; the next message starts a
+        // new one (corrald's `app_thread`), so the owner can start the quick thread afresh.
+        end: row
+            .filter(|row| row.state != AssistantState::Ended)
+            .map(|_| {
+                let label = if quick {
+                    "End quick thread"
+                } else {
+                    "End session"
+                };
+                let mut end = button(label, Action::EndSession(Some(scope.to_owned())));
+                end.danger = true;
+                end.enabled = end_state(state, feed, scope) != Some(EndState::Pending);
+                end
+            }),
     }
 }
 

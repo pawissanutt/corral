@@ -183,3 +183,62 @@ fn cold_sessions_with_recorded_history_are_not_presented_as_never_started() {
     feed.threads.insert("A-1".into(), thread);
     assert_eq!(live_chip(&feed, "A-1"), resumed);
 }
+
+#[test]
+fn quick_thread_end_closes_its_current_generation_and_frees_the_next_one() {
+    use super::{Action, live_thread_header};
+    use crate::model::Effect;
+    use corral_protocol::assistant::AssistantSessionOp;
+    let quick = |id: &str, state| AssistantRow {
+        id: id.into(),
+        kind: AssistantKind::Quick,
+        title: "Quick thread".into(),
+        state,
+        live_in: AssistantLocation::Daemon,
+        profile: None,
+        focus: None,
+        pending: 0,
+        turn: None,
+        cost_usd: None,
+        cost_basis: None,
+        wait: None,
+        rev: 1,
+    };
+    let mut feed = Feed {
+        transport_ready: true,
+        projection_ready: true,
+        link: Link::Up,
+        session: Some(serde_json::from_value(serde_json::json!({
+            "device":{"id":"dev","name":"Desk","platform":"native","app_version":"0","enrolled_at":"2026-11-15T09:00:00Z","revoked_at":null},
+            "authority":{"reply":true,"act":true,"assistant":true,"assistant_act":true,"admin":true},
+            "seen":{"through":0,"at":null},"server_time":"2026-11-15T09:00:00Z"
+        })).unwrap()),
+        ..Feed::default()
+    };
+    feed.assistants
+        .insert("A-2".into(), quick("A-2", AssistantState::Ready));
+    let mut state = State::default();
+    assert!(
+        live_thread_header(&state, &feed, super::QUICK)
+            .end
+            .is_some()
+    );
+    let effects = state.act_live(Action::ConfirmEnd(super::QUICK.into()), &feed);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::Session { op: AssistantSessionOp::End { session }, .. }] if session == "A-2"
+    ));
+    feed.assistants.get_mut("A-2").unwrap().state = AssistantState::Ended;
+    assert!(
+        live_thread_header(&state, &feed, super::QUICK)
+            .end
+            .is_none()
+    );
+    feed.assistants
+        .insert("A-3".into(), quick("A-3", AssistantState::Cold));
+    let end = live_thread_header(&state, &feed, super::QUICK).end.unwrap();
+    assert!(
+        end.enabled,
+        "an earlier generation's End must not hold the new one"
+    );
+}

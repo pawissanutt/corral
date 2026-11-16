@@ -539,15 +539,19 @@ impl State {
         }]
     }
 
-    /// Ends a named session for good once the owner confirmed it on this device: one
-    /// `assistant.session` End, never for the shared quick thread, never twice while one waits.
-    fn end(&mut self, session: String, feed: &Feed) -> Vec<Effect> {
+    /// Ends a session for good once the owner confirmed it on this device: one
+    /// `assistant.session` End, never twice while one waits. The quick thread ends its current
+    /// generation; corrald starts the next one with the next quick message.
+    fn end(&mut self, scope: String, feed: &Feed) -> Vec<Effect> {
         self.live.confirm_end = None;
         let waiting = matches!(
-            live::end_state(self, feed, &session),
+            live::end_state(self, feed, &scope),
             Some(live::EndState::Pending)
         );
-        if session == QUICK || live::ended(feed, &session) || waiting {
+        let Some(session) = live::end_target(feed, &scope) else {
+            return Vec::new();
+        };
+        if live::ended(feed, &session) || waiting {
             return Vec::new();
         }
         let key = self.ids.next_id();

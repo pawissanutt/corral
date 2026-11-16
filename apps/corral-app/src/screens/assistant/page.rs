@@ -170,7 +170,7 @@ fn head(app: AppState, source: &ThreadRef) -> AnyElement {
 
 /// End session as `kind` (outlined beside the desktop title, words alone in a phone's head),
 /// held back while this device may not act for the assistant. The model offers it only on a
-/// served named session corrald has not ended.
+/// served session (or the quick thread's current generation) corrald has not ended.
 fn end_button(app: AppState, mut end: Button, kind: ButtonKind) -> AnyElement {
     end.enabled &= app.may_message();
     if app.form == Form::Phone {
@@ -180,14 +180,11 @@ fn end_button(app: AppState, mut end: Button, kind: ButtonKind) -> AnyElement {
     model_button(app, &end, kind)
 }
 
-/// The fresh confirmation End session asks for on this device, over the page while
-/// `confirm_end` names this served session. Confirming sends the canonical
+/// The fresh confirmation End asks for on this device, over the page while `confirm_end`
+/// names this served session or the quick thread. Confirming sends the canonical
 /// `assistant.session` End; Cancel, Escape and the scrim leave the session running.
 fn end_dialog(app: AppState, source: &ThreadRef) -> Option<AnyElement> {
     let ThreadRef::Live(scope) = source;
-    if source.is_quick() {
-        return None;
-    }
     let open = scope.clone();
     let session = scope.clone();
     Some(overlay::modal(
@@ -205,10 +202,25 @@ fn end_dialog(app: AppState, source: &ThreadRef) -> Option<AnyElement> {
 fn end_modal(app: AppState, session: &str) -> Modal {
     let form = app.form;
     let ending = session.to_owned();
+    let (title, sub) = if session == QUICK {
+        let current = app.feed.with(quick_id);
+        (
+            "End quick thread".to_owned(),
+            format!(
+                "Ends {}; your next message starts a new quick thread.",
+                current.as_deref().unwrap_or("its current session")
+            ),
+        )
+    } else {
+        (
+            format!("End {session}"),
+            "Ends this session for good; it cannot be resumed.".to_owned(),
+        )
+    };
     Modal {
         test_id: "end-session".into(),
-        title: format!("End {session}"),
-        sub: Some("Ends this session for good; it cannot be resumed.".into()),
+        title,
+        sub: Some(sub),
         body: words(
             app,
             "corrald asks its host to stop, cancels what it was waiting to do and closes the \
