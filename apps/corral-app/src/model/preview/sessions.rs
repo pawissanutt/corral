@@ -23,7 +23,7 @@ pub(super) fn controls(status: AgentStatus) -> SessionControls {
 pub(super) fn populate(feed: &mut Feed) {
     for (id, role, task, now, status) in [
         (
-            "PM",
+            "pm",
             "pm",
             None,
             "waiting · next wake on T-894 gate",
@@ -91,6 +91,23 @@ pub(super) fn populate(feed: &mut Feed) {
             now: now.into(),
             since: Some(at.clone()),
             tail: vec![format!("Preview · {now}")],
+            last_output_at: Some(stamp(feed, feed.now.saturating_sub(output_age(status)))),
+            activity: Some(sample_activity(feed, status)),
+            steps: (id == "T-871").then(|| {
+                [
+                    ("Read the annotation contract", AgentStepState::Done),
+                    ("Trace existing record callers", AgentStepState::Done),
+                    ("Update record handling", AgentStepState::InProgress),
+                    ("Exercise focused regressions", AgentStepState::Pending),
+                    ("Summarize the change", AgentStepState::Pending),
+                ]
+                .into_iter()
+                .map(|(title, state)| AgentStep {
+                    title: title.into(),
+                    state,
+                })
+                .collect()
+            }),
             cost_usd: Some(3.9),
             cost_basis: Some(CostBasis::Estimated),
             tokens: Some(12000),
@@ -238,9 +255,42 @@ pub(super) fn populate(feed: &mut Feed) {
             row.state = AssistantState::Ended;
             row.live_in = AssistantLocation::None;
         }
+        if ended && let Some(row) = feed.agents.get_mut(id) {
+            row.status = AgentStatus::Ended;
+            row.now = "Preview · session ended".into();
+            row.controls = controls(AgentStatus::Ended);
+        }
     }
     let at = stamp(feed, feed.now.saturating_sub(180));
     let text = "T-867 is stale because the base moved after gate candidate 5949a4b. T-870 also waits on your answer to T-868/R1/Q1 (restore policy). T-869 depends on T-867, not on that answer. Preview · this is an illustrative recorded conversation.";
+    let until = stamp(feed, feed.now);
+    if let Some(row) = feed.agents.get_mut("A-7") {
+        row.now = text.into();
+        row.last_output_at = Some(at.clone());
+        row.activity = Some(AgentActivity {
+            until,
+            per_minute: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 1, 0, 0, 0],
+        });
+    }
+    put(
+        feed,
+        DetailRef::Session { id: "A-7".into() },
+        DetailBody::Session(SessionPage {
+            id: "A-7".into(),
+            role: "assistant".into(),
+            task: None,
+            run: None,
+            machine: Some("preview-workstation".into()),
+            messages: vec![message(
+                "assistant",
+                &at,
+                vec![SessionItem::Text { text: text.into() }],
+            )],
+            older: None,
+            replyable: true,
+            reply_refusal: None,
+        }),
+    );
     let mut answer = entry("preview-answer", &at, EntryKind::Answer, text);
     answer.links = [
         ("task", "T-867"),
@@ -362,6 +412,53 @@ pub(super) fn assistant(
     focus: Option<&str>,
     profile: Option<String>,
 ) {
+    let at = stamp(feed, feed.now.saturating_sub(9 * 60));
+    let now = "Preview · ready for your next message";
+    let agent = AgentRow {
+        id: id.into(),
+        role: "assistant".into(),
+        task: None,
+        run: None,
+        title: format!("Preview · {title}"),
+        profile: profile.clone(),
+        runtime: Some("preview daemon-hosted".into()),
+        machine: Some("preview-workstation".into()),
+        pane: None,
+        status: AgentStatus::Idle,
+        now: now.into(),
+        since: Some(stamp(feed, feed.now.saturating_sub(4 * 3600))),
+        tail: vec![],
+        cost_usd: Some(1.12),
+        cost_basis: Some(CostBasis::Estimated),
+        tokens: None,
+        rev: 1,
+        generation: Some(1),
+        turn: None,
+        controls: controls(AgentStatus::Idle),
+        last_output_at: Some(at.clone()),
+        activity: Some(sample_activity(feed, AgentStatus::Idle)),
+        steps: None,
+    };
+    feed.agents.insert(id.into(), agent);
+    put(
+        feed,
+        DetailRef::Session { id: id.into() },
+        DetailBody::Session(SessionPage {
+            id: id.into(),
+            role: "assistant".into(),
+            task: None,
+            run: None,
+            machine: Some("preview-workstation".into()),
+            messages: vec![message(
+                "assistant",
+                &at,
+                vec![SessionItem::Text { text: now.into() }],
+            )],
+            older: None,
+            replyable: true,
+            reply_refusal: None,
+        }),
+    );
     feed.assistants.insert(
         id.into(),
         AssistantRow {
@@ -424,6 +521,7 @@ pub(super) fn sync_worker(feed: &mut Feed, task_id: &str) {
         _ => AgentStatus::Working,
     };
     let at = stamp(feed, feed.now);
+    let activity = sample_activity(feed, status);
     let row = feed
         .agents
         .entry(id.clone().into())
@@ -441,6 +539,9 @@ pub(super) fn sync_worker(feed: &mut Feed, task_id: &str) {
             now: task.now.clone(),
             since: Some(at.clone()),
             tail: vec![],
+            last_output_at: Some(at.clone()),
+            activity: Some(activity.clone()),
+            steps: None,
             cost_usd: None,
             cost_basis: None,
             tokens: None,
@@ -451,6 +552,8 @@ pub(super) fn sync_worker(feed: &mut Feed, task_id: &str) {
         });
     row.status = status;
     row.now = task.now.clone();
+    row.last_output_at = Some(at.clone());
+    row.activity = Some(activity);
     row.profile = binding.profile.clone();
     row.title = format!("Preview · {}", task.title);
     row.controls = controls(status);
@@ -494,4 +597,33 @@ pub(super) fn sync_worker(feed: &mut Feed, task_id: &str) {
         .insert(format!("session:{id}"), TopicState::default());
     feed.topics
         .insert(format!("terminal:{id}"), TopicState::default());
+}
+
+fn output_age(status: AgentStatus) -> u64 {
+    match status {
+        AgentStatus::Working | AgentStatus::Asking => 38,
+        AgentStatus::Gating | AgentStatus::Reviewing => 12,
+        AgentStatus::Idle | AgentStatus::Waiting => 9 * 60,
+        AgentStatus::Ended => 36 * 60,
+        _ => 3 * 60,
+    }
+}
+
+fn sample_activity(feed: &Feed, status: AgentStatus) -> AgentActivity {
+    let per_minute = match status {
+        AgentStatus::Working => [1, 2, 1, 0, 3, 1, 2, 4, 1, 2, 1, 0, 2, 3, 1, 2, 1, 3, 2, 1],
+        AgentStatus::Gating | AgentStatus::Reviewing => {
+            [0, 0, 1, 0, 1, 1, 0, 2, 1, 1, 2, 2, 1, 3, 2, 1, 2, 3, 3, 2]
+        }
+        AgentStatus::Asking => [2, 1, 2, 1, 0, 1, 2, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1],
+        AgentStatus::Idle | AgentStatus::Waiting => {
+            [2, 1, 2, 3, 2, 1, 2, 1, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        }
+        AgentStatus::Ended => [0; 20],
+        _ => [0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+    };
+    AgentActivity {
+        until: stamp(feed, feed.now),
+        per_minute: per_minute.to_vec(),
+    }
 }

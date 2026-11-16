@@ -20,6 +20,8 @@ pub mod devices;
 pub mod disconnected;
 /// Reducer effects and environment switches.
 pub mod effect;
+/// Counts, the loop band, named rails and activity, each with its hint.
+pub mod glance;
 /// Snapshot and health types.
 pub mod health;
 /// Semantic state colours.

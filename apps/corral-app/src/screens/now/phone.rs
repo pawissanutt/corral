@@ -1,106 +1,112 @@
-//! The phone's Now: the tab's root (the board's summary over the grouped two-line rows, then
-//! the Closed section) and the task page pushed for a task: the task's detail with its legal
-//! commands, its captured log tail and its plan, for a board task or, off the board, a closed
-//! one from its detail alone.
+//! The phone's Now: the tab's root and the task page pushed for a task.
+//!
+//! The root is the large title with its counts, then, scrolling under it, the project scope
+//! (its chips scrolling sideways) with the Group toggle, the line saying what waits in other
+//! projects, the `Since …` row with what changed (a press opens Changes in Now's scope), the
+//! board's notice, the sections of two-line rows, Waiting and Closed. No loop band: the phone
+//! has no room for five cells. An owner move's row opens its record; a task's row pushes its
+//! page: the task's detail with its legal commands, its captured log tail and its plan, for a
+//! board task or, off the board, a closed one from its detail alone.
 
 use nsh_core::prelude::*;
 
-use crate::model::work::{self, GroupedList, Press};
-use crate::model::{Form, Hue, Id, Live};
+use crate::model::work::{self, NowDigest, NowPage, NowPanel, Press};
+use crate::model::{Destination, Hue, Id, Live};
 use crate::screens::PhonePage;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::kit::chip::chip;
-use crate::ui::kit::page::{head, pane, search};
+use crate::ui::kit::glance::{page_head, stat_in};
+use crate::ui::kit::page::{pane, search};
 use crate::ui::kit::project_filter::project_filter_grouped;
-use crate::ui::kit::rows::{group_header, task_columns};
+use crate::ui::kit::rows::group_header;
 use crate::ui::kit::text::dim;
 use crate::ui::tokens::{Token, color};
 
-use super::closed::closed_section;
 use super::context::{plan_body, tail};
 use super::inspector::content;
-use super::list::rows;
+use super::list::{board_status, list, scope_note};
 use super::parts::{
-    act, action_id, dim_when, keep_loaded, press, press_id, pressable, scope, stale, wanted,
+    dim_when, go_scoped, keep_loaded, now_page, press, press_id, pressable, stale, wanted,
     wanted_id,
 };
+use super::rows::{PHONE_PAD, words};
 
 const RING: f32 = 2.0;
 
-/// The Now tab's root: the large title, then, scrolling under it, the project scope with its
-/// Group toggle, the summary chips (a press opens Changes; a stale board adds its `as of` chip),
-/// the grouped list and the Closed section.
+/// The Now tab's root.
 pub(super) fn root(app: AppState) -> AnyElement {
-    let now = computed(move || {
-        let selection = app.selection();
-        let (filter, grouping) = scope(app);
-        app.feed.with(|feed| {
-            app.work.with(|state| {
-                work::daemon_phone_now_filtered(state, feed, &selection, &filter, grouping)
-            })
-        })
-    });
-    let title = untracked(|| now.with(|now| now.title));
-    let list: Memo<GroupedList> = computed(move || now.with(|now| now.list.clone()));
-    let summary = dynamic(move || {
-        now.with(|now| {
-            if now.chips.is_empty() && now.status.as_of.is_none() {
-                return None;
-            }
-            let label = now
-                .chips
-                .iter()
-                .map(|chip| chip.label.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let strip = view()
-                .flex_row()
-                .flex_wrap()
-                .gap(px(6.0))
-                .px(px(18.0))
-                .pt(px(4.0))
-                .pb(px(10.0))
-                .children(
-                    now.chips
-                        .iter()
-                        .map(|summary| chip(app, summary.label.clone(), summary.hue))
-                        .collect::<Vec<_>>(),
-                )
-                .children(
-                    now.status
-                        .as_of
-                        .clone()
-                        .map(|stamp| chip(app, stamp, Hue::Held)),
-                );
-            let strip = match now.summary_action {
-                Some(action) => strip
-                    .cursor_pointer()
-                    .role(AccessibilityRole::Button)
-                    .label(label)
-                    .test_id(&action_id(action))
-                    .on_press(move || act(app, action))
-                    .focus_visible(|s| {
-                        s.outline(px(RING))
-                            .outline_color(color(Token::Focus))
-                            .outline_offset(px(-RING))
-                    }),
-                None => strip,
-            };
-            Some(strip.into_element())
-        })
-    });
+    let page = now_page(app);
+    let title = untracked(|| page.with(|page| page.title));
+    let stats = computed(move || page.with(|page| page.stats.clone()));
     let content = dim_when(view(), stale(app))
         .child(project_filter_grouped(app))
-        .child(summary)
-        // The phone's two-line rows show every column.
-        .child(rows(app, list, computed(|| task_columns(Form::Phone, 0.0))))
-        .child(closed_section(app));
+        .child(scope_note(app, page))
+        .child(since(app, page))
+        .child(board_status(app, page))
+        .child(list(app, page));
     view()
         .flex_1()
         .min_h(px(0.0))
-        .child(head(app, title, None, vec![search(app)]))
+        .child(dynamic(move || {
+            stats.with(|stats| page_head(app, title, stats, vec![search(app)]))
+        }))
         .child(pane(app, "now-phone", content.into_element()))
+        .into_element()
+}
+
+/// The digest as one row (`Since …` and what landed, went stale and happened); a press opens
+/// Changes in Now's scope. test id `btn-since`.
+fn since(app: AppState, page: Memo<NowPage>) -> AnyElement {
+    let digest = computed(move || {
+        page.with(|page| match &page.panel {
+            NowPanel::Digest(digest) => Some(digest.clone()),
+            _ => None,
+        })
+    });
+    dynamic(move || {
+        digest.with(|digest| digest.as_ref().map(|digest| since_row(app, digest, page)))
+    })
+}
+
+fn since_row(app: AppState, digest: &NowDigest, page: Memo<NowPage>) -> AnyElement {
+    let form = app.form;
+    let spoken = std::iter::once(digest.since.as_str())
+        .chain(digest.stats.iter().map(|stat| stat.label()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(12.0))
+        .min_h(px(48.0))
+        .px(px(PHONE_PAD))
+        .py(px(10.0))
+        .border_b_1()
+        .border_b_color(color(Token::Rule))
+        .cursor_pointer()
+        .role(AccessibilityRole::Button)
+        .label(spoken)
+        .test_id("btn-since")
+        .on_press(move || go_scoped(app, page, Destination::Changes))
+        .active(|s| s.bg(color(Token::Hover)))
+        .focus_visible(|s| {
+            s.outline(px(RING))
+                .outline_color(color(Token::Focus))
+                .outline_offset(px(-RING))
+        })
+        .child(
+            words(form, digest.since.clone(), 14.0, color(Token::Ink2))
+                .flex_1()
+                .min_w(px(0.0)),
+        )
+        .children(
+            digest
+                .stats
+                .iter()
+                .map(|stat| stat_in(app, stat))
+                .collect::<Vec<_>>(),
+        )
+        .child(icon(Icon::Chevron, 14.0, color(Token::Ink3)))
         .into_element()
 }
 

@@ -1,5 +1,9 @@
 //! Connection health, stale-board banners, destination availability and shell snapshot data.
 
+mod line;
+
+pub use line::{Condensed, SampleTag, condensed, sample_tag, stamp, waits_on_you};
+
 use std::borrow::Cow;
 
 use corral_protocol::app as wire;

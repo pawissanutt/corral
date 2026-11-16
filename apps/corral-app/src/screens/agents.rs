@@ -1,16 +1,20 @@
-//! The Agents destination: the wall of agents and one agent's session, its transcript beside
-//! the run, or its terminal. Everything shown comes from `model::agents`, built from the feed's
-//! rows and details; this module lays it out per form and sends every press to the model's
-//! reducer.
+//! The Agents destination: the roster of sessions with the selected one's panel, and one agent's
+//! full session page, its transcript beside the run, or its terminal. Everything shown comes from
+//! `model::agents`, built from the feed's rows and details; this module lays it out per form and
+//! sends every press to the model's reducer.
 
 mod console;
 mod controls;
 mod grid;
 mod keys;
+mod panel;
+mod panel_summary;
 mod reply;
+mod roster;
+mod roster_rows;
+mod segs;
 mod session;
 mod transcript;
-mod wall;
 
 use corral_protocol::detail::{DetailRef, STREAM_TERMINAL_V1};
 use nsh_core::prelude::*;
@@ -18,17 +22,21 @@ use nsh_core::prelude::*;
 use crate::model::Id;
 use crate::model::agents::{self, Action, View};
 use crate::model::daemon::Link;
+use crate::model::projects::FilterScreen;
 use crate::screens::{PhonePage, assistant};
 use crate::state::AppState;
 
-/// The Agents page. Desktop: the page head with the Wall | List switch, the machine line, the
-/// quick thread tile and one tile per agent in three columns, the assistant sessions and Filed
-/// from chat blocks, the footer note; it scrolls inside itself. Phone: the large title, the
-/// quick thread row, the machine section and one two-line row per agent, then the assistant
-/// blocks, scrolling itself with the Ask clearance. Terminal: one line per agent between the
-/// same blocks.
+/// How a press reaches the agents model: through the full session page's route selection
+/// ([`run`]) or through the roster's own selection ([`run_roster`]).
+type Dispatch = fn(AppState, Action);
+
+/// The Agents page (`pgAgents`). Desktop: the page head with its counts, role tabs and Launch PM,
+/// the project scope, the roster one line per session with the selected session's panel beside
+/// or over it, then the assistant sessions and Filed from chat. Phone: the same head and scopes
+/// over two-line rows that push the session page. Terminal: the roster as a table of Cells with
+/// the panel beside it on a wide grid, in its place otherwise.
 pub fn screen(app: AppState) -> AnyElement {
-    wall::screen(app)
+    roster::screen(app)
 }
 
 /// A session page on desktop and terminal, by its session id: the header with back to Agents,
@@ -88,11 +96,34 @@ fn run(app: AppState, action: Action) {
     });
 }
 
-/// The wall as the model builds it now (tracked).
-fn wall_view(app: AppState) -> agents::Wall {
+/// Runs one of the model's actions against the roster's selection: the panel's reply, keys and
+/// controls reach the selected session without the route changing.
+fn run_roster(app: AppState, action: Action) {
+    app.reduce(app.agents, move |state, feed, _, env| {
+        state.act_roster(action, feed, env)
+    });
+}
+
+/// The roster as the model builds it now in the Agents scope (tracked).
+fn roster_view(app: AppState) -> agents::Roster {
     let env = app.env();
-    app.feed
-        .with(|feed| app.agents.with(|state| agents::live_wall(state, feed, env)))
+    let filter = app.project_filter(FilterScreen::Agents);
+    app.feed.with(|feed| {
+        app.agents
+            .with(|state| agents::roster(state, feed, env, &filter))
+    })
+}
+
+/// The selected session's panel as the model builds it now (tracked); none while no session in
+/// scope is selected.
+fn panel_view(app: AppState) -> Option<agents::RosterPanel> {
+    let env = app.env();
+    let via = app.via();
+    let filter = app.project_filter(FilterScreen::Agents);
+    app.feed.with(|feed| {
+        app.agents
+            .with(|state| agents::roster_panel(state, feed, env, &filter, &via))
+    })
 }
 
 /// A session as the model builds it now (tracked), with the reply to its latest

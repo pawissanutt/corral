@@ -1,6 +1,6 @@
 //! Shared selected-member Story descriptors and rich-text helpers.
 
-use super::{Button, Chip};
+use super::Button;
 use crate::model::Id;
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
@@ -32,7 +32,7 @@ pub struct StoryField {
     pub button: Option<Button>,
 }
 
-/// Fully resolved inspector. Empty stage/step/button lists are the queued-member variant.
+/// The selected member's story: who acts, its four stages, its facts and commands.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Story {
     /// Selected task id.
@@ -41,22 +41,13 @@ pub struct Story {
     pub title: String,
     /// Optional parent-plan label next to the id.
     pub plan: Option<String>,
-    /// Changed-since-last-visit chip, absent for the compact queued story.
-    pub changed: Option<Chip>,
-    /// Task context, excluding the separate illustrative-machine note.
+    /// The agent working the task, or the member's place in the plan.
     pub context: Rich,
-    pub context_note: Option<&'static str>,
-    /// Delivery stepper, omitted for queued tasks without steps.
+    /// Run, gate, review and land.
     pub stages: Vec<StoryStage>,
-    /// Progress heading, absent for the queued-member variant.
-    pub progress: Option<&'static str>,
-    /// Done/total fraction shown at the progress heading's trailing edge.
-    pub progress_count: Option<String>,
-    /// Worker progress marks and text.
-    pub steps: Vec<(Mark, String)>,
-    /// Next, You, Needs, Unblocks and Cost, or the queued task's compact fields.
+    /// Next, You, Needs, Unblocks and Cost.
     pub fields: Vec<StoryField>,
-    /// Open session, Ask about this and Review candidate, absent for queued tasks.
+    /// Open session, Ask about this and Review candidate.
     pub buttons: Vec<Button>,
 }
 

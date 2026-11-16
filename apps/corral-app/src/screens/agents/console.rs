@@ -97,12 +97,6 @@ pub struct Set {
     pub wrap: bool,
 }
 
-/// The wall tile's tail (`.tile .term`, 11 pt).
-pub const TILE: Set = Set {
-    size: 11.0,
-    leading: 17.0,
-    wrap: false,
-};
 /// The desktop session terminal (`.bigterm`, 12.5 pt, 1.55).
 pub const BIG: Set = Set {
     size: 12.5,

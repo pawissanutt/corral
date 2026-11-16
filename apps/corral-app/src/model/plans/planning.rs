@@ -3,7 +3,7 @@
 use corral_protocol::detail::PlanDetail;
 use corral_protocol::rows::{PlanRow, PlanState};
 
-use super::live::{state_chip, title, tracker_actions};
+use super::live::{project_of, state_chip, title, tracker_actions};
 use super::view::pipeline_marks;
 use super::{Header, PlanningView};
 use crate::model::Id;
@@ -48,6 +48,7 @@ pub(super) fn view(
                 Some(revision) => format!("{id} {revision}"),
                 None => id.to_string(),
             },
+            project: project_of(row),
             title: title(id, row),
             meta: detail
                 .reviews

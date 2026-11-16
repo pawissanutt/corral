@@ -13,6 +13,7 @@ pub enum FilterScreen {
     Builds,
     Inbox,
     Review,
+    Agents,
 }
 impl FilterScreen {
     pub const fn slug(self) -> &'static str {
@@ -23,6 +24,7 @@ impl FilterScreen {
             Self::Builds => "builds",
             Self::Inbox => "inbox",
             Self::Review => "review",
+            Self::Agents => "agents",
         }
     }
     pub const fn of(destination: Destination) -> Option<Self> {
@@ -33,6 +35,7 @@ impl FilterScreen {
             Destination::Builds => Some(Self::Builds),
             Destination::Inbox => Some(Self::Inbox),
             Destination::Review => Some(Self::Review),
+            Destination::Agents => Some(Self::Agents),
             _ => None,
         }
     }
@@ -61,6 +64,7 @@ struct StoreFilters {
     builds: ProjectFilter,
     inbox: ProjectFilter,
     review: ProjectFilter,
+    agents: ProjectFilter,
     #[serde(rename = "now.group")]
     now_group: NowGroup,
 }
@@ -73,6 +77,7 @@ impl StoreFilters {
             FilterScreen::Builds => &mut self.builds,
             FilterScreen::Inbox => &mut self.inbox,
             FilterScreen::Review => &mut self.review,
+            FilterScreen::Agents => &mut self.agents,
         }
     }
     fn get(&self, screen: FilterScreen) -> &ProjectFilter {
@@ -83,6 +88,7 @@ impl StoreFilters {
             FilterScreen::Builds => &self.builds,
             FilterScreen::Inbox => &self.inbox,
             FilterScreen::Review => &self.review,
+            FilterScreen::Agents => &self.agents,
         }
     }
 }

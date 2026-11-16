@@ -1,89 +1,56 @@
-//! The Now destination. Desktop and terminal: a dock of tab groups the user arranges (who acts
-//! next, the inspector, what changed, live context), whose layout is app data kept in Storage;
-//! too small for its 2x2 grid it shows the list and the inspector as two panes. Phone: the tab's
-//! grouped list, and the task page pushed from it.
+//! The Now destination: what waits on the owner, what is moving and what is next, at a glance.
 //!
-//! Every panel renders the work model; the displayed tabs follow the model's `now_tab`,
-//! `low_tab` and `ctx_tab`, and the user's tab choices go back to it.
+//! Desktop and terminal: the page head with its counts, the project scope with the Group toggle,
+//! then the main column (the loop band, owner moves, moving tasks, Waiting, Closed) beside one
+//! side column driven by one selection (the digest of what changed, an owner move, or a task's
+//! story). Desktop: the side column stands 360 pt wide beside the list while the page has room
+//! for both; narrower, the digest follows the list in its scroll and a selection lays its panel
+//! over the right edge. Terminal: the side column stands beside the list while the grid holds
+//! both at their least widths; otherwise the panel follows the list. Phone: the tab's list, and
+//! the task page pushed from it.
+//!
+//! Every part renders `work::now_page`; the screen adds no words.
 
-mod cells;
-mod closed;
+pub(crate) mod closed;
 mod context;
 pub(crate) mod feed;
 mod inspector;
-mod layout;
-mod list;
+pub(crate) mod list;
 pub(crate) mod parts;
 mod phone;
+pub(crate) mod rows;
+pub(crate) mod side;
 mod verbs;
 
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::time::Duration;
-
-use nsh_base::dock::{DockAreaLayout, DockPanel, DockPanelOptions, DockTab};
-use nsh_base::dock_area;
-use nsh_core::element::cell_size;
-use nsh_core::geometry::Axis;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::work::{self, NowTab};
+use crate::model::work::{NowPage, NowPanel};
 use crate::state::AppState;
-use crate::ui::kit::button::tab_strip;
+use crate::ui::kit::glance::page_head;
+use crate::ui::kit::project_filter::project_filter_grouped;
 use crate::ui::term;
-use crate::ui::tokens::{Token, color, row_height, text_size};
+use crate::ui::tokens::{Token, color};
 
 pub use phone::live_task_phone;
 pub use verbs::verb_composer;
 pub(crate) use verbs::{verb_buttons, verb_menu, with_menu};
 
-use parts::{act, dim_when, keep_loaded, selected_task, stale};
+use list::{main_column, scope_note};
+use parts::{dim_when, keep_loaded, now_page, shown_task, stale};
 
-/// Every resize and tab selection reports a layout; Storage hears the one the user settles on.
-const SAVE_DELAY: Duration = Duration::from_millis(400);
-/// The smallest a quarter of the grid may be on a screen and still read as a panel.
-const PANE_MIN_WIDTH: f32 = 280.0;
-const PANE_MIN_HEIGHT: f32 = 144.0;
-/// The smallest a quarter may be on a terminal grid: 35 Cells wide; its tab row, the line under
-/// it and six rows of content high.
-const QUARTER_COLUMNS: f32 = 35.0;
-const QUARTER_HEAD_ROWS: f32 = 2.0;
-const QUARTER_CONTENT_ROWS: f32 = 6.0;
-/// Tab labels sit a step below the body text, as in the mock (11.5 against 13).
-const TAB_SCALE: f32 = 11.5 / 13.0;
+/// The desktop side column's width (`.split`'s second column), and the narrowest the page may be
+/// with the list still beside it (the mock's 1180 pt window less its 208 pt sidebar).
+pub(crate) const SIDE: f32 = 360.0;
+pub(crate) const BESIDE: f32 = 972.0;
+/// The panel a selection lays over a narrower page (`.split.has-sel>.aside`).
+const OVERLAY: f32 = 460.0;
+/// A terminal's list keeps its id, title, rail and age in this many Cells; the side column takes
+/// a quarter of the old dock's grid, with the line between them.
+pub(crate) const LIST_COLUMNS: f32 = 44.0;
+pub(crate) const SIDE_COLUMNS: f32 = 35.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Arrangement {
-    Grid,
-    /// The list and the inspector, side by side (`Horizontal`) or stacked.
-    Panes(Axis),
-}
-
-/// The least room the 2x2 grid needs, width and height in points: two quarters each way, and on a
-/// terminal grid the one-Cell divider the user drags between them.
-fn grid_minimum() -> (f32, f32) {
-    match cell_size() {
-        Some(cell) => (
-            (2.0 * QUARTER_COLUMNS + 1.0) * cell.width.0,
-            (2.0 * (QUARTER_HEAD_ROWS + QUARTER_CONTENT_ROWS) + 1.0) * cell.height.0,
-        ),
-        None => (2.0 * PANE_MIN_WIDTH, 2.0 * PANE_MIN_HEIGHT),
-    }
-}
-
-fn arrangement(width: f32, height: f32, (min_width, min_height): (f32, f32)) -> Arrangement {
-    if width >= min_width && height >= min_height {
-        Arrangement::Grid
-    } else if width >= height {
-        Arrangement::Panes(Axis::Horizontal)
-    } else {
-        Arrangement::Panes(Axis::Vertical)
-    }
-}
-
-/// The Now destination on every form: the dock workspace on desktop and terminal, the grouped
-/// list as the phone tab's root (it scrolls itself under its large title).
+/// The Now destination on every form.
 pub fn screen(app: AppState) -> AnyElement {
     match app.form {
         Form::Phone => phone::root(app),
@@ -91,499 +58,186 @@ pub fn screen(app: AppState) -> AnyElement {
     }
 }
 
-/// The tab titles, from the model: the list's label, the Goals panel's, and each tab enum's.
-type Titles = Rc<Vec<(&'static str, SharedString)>>;
-
-fn titles() -> Titles {
-    let mut titles: Vec<(&'static str, SharedString)> = vec![
-        (layout::WHO, work::GroupedList::LABEL.into()),
-        (layout::GOALS, list::GOALS_LABEL.into()),
-    ];
-    titles.extend(
-        NowTab::ALL
-            .iter()
-            .map(|&tab| (layout::inspector_panel(tab), tab.label().into())),
-    );
-    titles.extend(
-        work::LowTab::ALL
-            .iter()
-            .map(|&tab| (layout::lower_panel(tab), tab.label().into())),
-    );
-    titles.extend(
-        work::CtxTab::ALL
-            .iter()
-            .map(|&tab| (layout::context_panel(tab), tab.label().into())),
-    );
-    Rc::new(titles)
-}
-
-/// The title of panel `key`, tracked: the lower tabs carry the board's count.
-fn title(app: AppState, titles: &Titles, key: &str) -> impl Fn() -> SharedString + use<> {
-    let fixed = titles
-        .iter()
-        .find(|(panel, _)| *panel == key)
-        .map_or_else(|| SharedString::from(""), |(_, title)| title.clone());
-    let lower = work::LowTab::ALL
-        .into_iter()
-        .find(|tab| layout::lower_panel(*tab) == key);
-    move || match lower {
-        Some(tab) => {
-            let (filter, _) = parts::scope(app);
-            SharedString::from(
-                app.feed
-                    .with(|feed| work::daemon_lower_label_filtered(tab, feed, &filter)),
-            )
-        }
-        None => fixed.clone(),
-    }
-}
-
-/// The list's natural width in a terminal, in Cells: its marks, id, title, rail and now-phrase.
-const LIST_COLUMNS: f32 = 44.0;
-
-/// The width of the list's column in a terminal (tracked): its natural width, growing with a
-/// wide grid while the inspector keeps its room; `None` elsewhere, where the panes share the room.
-fn list_width(app: AppState) -> Option<Points> {
-    (app.form == Form::Terminal).then(|| term::cells(term::list_columns(app, LIST_COLUMNS)))
-}
-
-/// The default dock for this form, its list column sized for the grid as it stands now.
-fn default_layout(app: AppState) -> DockAreaLayout {
-    layout::default_layout(untracked(|| list_width(app)))
-}
-
-/// The dock workspace. Wide enough (measured, not guessed): a DockArea, 2x2, tab groups
-/// "Who acts next" + "Goals"; "Story" + "Evidence" + "Session"; "Since your last visit" +
-/// "Parked"; "Live" + "Plan graph". The layout is stored under "corral.now.layout" once changes
-/// settle, restored on start, and reset to the default when `app.now_reset` changes. Too small
-/// for 2x2 (terminal grids, narrow windows): the list and the inspector as two panes.
+/// The head, the scope bar and the scope's note over the two columns. The task the side column
+/// shows stays loaded.
 fn workspace(app: AppState) -> AnyElement {
-    let layout = signal(layout::stored_layout().unwrap_or_else(|| default_layout(app)));
-    // Plain Rust rather than a signal: the cleanup below must still read it while the page goes.
-    let unsaved: Rc<RefCell<Option<DockAreaLayout>>> = Rc::default();
-    let pending = stored(None::<Spawned<()>>);
-    let size = signal(None::<(f32, f32)>);
-    let minimum = grid_minimum();
-    let shape = computed(move || {
-        size.get()
-            .map(|(width, height)| arrangement(width, height, minimum))
-    });
-    let titles = titles();
-    // The selected task's detail stays loaded for every panel showing it.
-    keep_loaded(app, selected_task(app));
-
-    let seen_reset = stored(app.now_reset.get_untracked());
-    {
-        let unsaved = unsaved.clone();
-        effect(move || {
-            let reset = app.now_reset.get();
-            if seen_reset.replace(reset) != reset {
-                unsaved.borrow_mut().take();
-                if let Some(task) = pending.replace(None) {
-                    task.cancel();
-                }
-                layout.set(default_layout(app));
-                follow_model(app, layout);
-            }
-        });
-    }
-    // The model's tab state shows its panels: Tab cycling the inspector, a reset, a restored
-    // layout that displayed other tabs.
-    effect(move || follow_model(app, layout));
-    {
-        // Leaving Now ends the save timer with the page; what it would have written goes now.
-        let unsaved = unsaved.clone();
-        cleanup(move || {
-            if let Some(last) = unsaved.borrow_mut().take() {
-                layout::save(&last);
-            }
-        });
-    }
-    let on_change = move |next: &DockAreaLayout| {
-        let before = layout.get_untracked();
-        let shown: Vec<&'static str> = {
-            let was = layout::displayed(&before);
-            layout::displayed(next)
-                .into_iter()
-                .filter(|key| !was.contains(key))
-                .filter_map(|key| layout::PANELS.iter().copied().find(|panel| *panel == key))
-                .collect()
-        };
-        layout.set(next.clone());
-        *unsaved.borrow_mut() = Some(next.clone());
-        let unsaved = unsaved.clone();
-        let task = set_timeout(SAVE_DELAY, move || {
-            if let Some(last) = unsaved.borrow_mut().take() {
-                layout::save(&last);
-            }
-        });
-        if let Some(old) = pending.replace(Some(task)) {
-            old.cancel();
-        }
-        // A tab the user brought forward is the model's tab now.
-        for key in shown {
-            if let Some(action) = layout::panel_action(key) {
-                act(app, action);
-            }
-        }
+    let page = now_page(app);
+    keep_loaded(app, shown_task(app, page));
+    let title = untracked(|| page.with(|page| page.title));
+    let stats = computed(move || page.with(|page| page.stats.clone()));
+    let body = match app.form {
+        Form::Terminal => terminal_body(app, page),
+        Form::Desktop | Form::Phone => desktop_body(app, page),
     };
-
-    // The view measured is the room Now has, whatever it holds. A terminal keeps a percentage
-    // height only on an empty box: once the dock or the panes are in it, it would shrink to their
-    // height and the next measure would pick the panes. Growing into its parent keeps it the room's
-    // size before and after its content arrives (the dock grows into it the same way).
+    // A terminal keeps a box's height only while it grows into its parent.
     view()
         .size_full()
         .flex_grow(1.0)
-        .bg(color(Token::Bg))
-        .on_layout(move |frame: &Bounds<Points>| {
-            size.set(Some((frame.size.width.0, frame.size.height.0)));
-        })
-        .child(dynamic(move || {
-            shape.get().map(|shape| match shape {
-                Arrangement::Grid => dock(app, layout, titles.clone(), on_change.clone()),
-                Arrangement::Panes(axis) => panes(app, axis, &titles),
-            })
-        }))
-        .into_element()
-}
-
-/// Displays the panels of the model's tabs where the layout shows another tab of their group.
-fn follow_model(app: AppState, layout: Signal<DockAreaLayout>) {
-    let wanted = app.work.with(layout::wanted);
-    let mut next: Option<DockAreaLayout> = None;
-    for key in wanted {
-        let shown = next.clone().unwrap_or_else(|| layout.get_untracked());
-        if let Some(changed) = layout::show(&shown, key) {
-            next = Some(changed);
-        }
-    }
-    if let Some(next) = next {
-        layout.set(next);
-    }
-}
-
-fn dock(
-    app: AppState,
-    layout: Signal<DockAreaLayout>,
-    titles: Titles,
-    on_change: impl Fn(&DockAreaLayout) + 'static,
-) -> AnyElement {
-    let form = app.form;
-    let options: Vec<DockPanelOptions> = layout::PANELS
-        .iter()
-        .map(|&key| {
-            let mut option = DockPanelOptions::new(key);
-            option.closable = Some(false);
-            option
-        })
-        .collect();
-    dock_area()
-        .size_full()
-        .bg(color(Token::Bg))
-        .layout(move || layout.get())
-        .on_layout_change(on_change)
-        // The workspace already chose the grid by its measured size; the dock's own phone
-        // presentation would show one group where the grid fits.
-        .compact(Some(false))
-        .panels(options)
-        .handle_accessibility_label("Resize panels")
-        .group_style(|s| s.bg(color(Token::Bg)))
-        .tab_bar_style(move |s| tab_bar(s, form))
-        // A terminal bands the selected tab itself; a fill of the app's would turn the standard
-        // grey without bands, where the reversed selection draws its text in that grey.
-        .tab_style(move |s| {
-            let s = tab(s, form);
-            if form == Form::Terminal {
-                s
-            } else {
-                s.selected(|s| s.bg(color(Token::Bg)))
-            }
-        })
-        .content_style(|s| s.bg(color(Token::Bg)))
-        .handle_style(|s| {
-            s.bg(color(Token::Rule))
-                .group_hover(|s| s.bg(color(Token::Rule2)))
-                .group_active(|s| s.bg(color(Token::Ink3)))
-        })
-        .drop_indicator_style(|s| {
-            s.bg(color(Token::Sel))
-                .opacity(0.7)
-                .border_1()
-                .border_color(color(Token::Rule2))
-                .rounded_md()
-        })
-        .render_tab(move |tab: &DockTab| {
-            let key = tab.panel.as_str();
-            tab_label(app, title(app, &titles, key), tab.active, key)
-        })
-        .render_panel(move |panel: &DockPanel| {
-            let key = panel.id.as_str().to_owned();
-            let shown = computed(move || {
-                layout.with(|arranged| layout::displayed(arranged).contains(&key.as_str()))
-            });
-            let panel = frame(app, panel.id.as_str(), shown);
-            if form == Form::Terminal {
-                pinned(panel)
-            } else {
-                panel
-            }
-        })
-        .into_element()
-}
-
-/// A terminal's dock panel, out of the flow of the one-cell grid the dock lays it in and pinned to
-/// the cell's edges. A terminal grid's row is its content's height, never less: in flow, a panel
-/// would grow with its content past the group, which clips it, and its scroll view would have
-/// nothing to scroll (no scrollbar, no wheel, no row revealed below the fold). Pinned, it has the
-/// group's height, as the panes give it theirs.
-fn pinned(panel: AnyElement) -> AnyElement {
-    view()
-        .child(view().absolute().inset(px(0.0)).flex_col().child(panel))
-        .into_element()
-}
-
-/// The fallback for a small area: the list and the inspector, each under its bar: the list's one
-/// tab, the inspector's Story, Evidence and Session. A terminal splits them with a line of its
-/// own, which joins the frame around Now and the lines under the tabs (`┬`, `┼`, `┴`); a border
-/// there would stop short of them.
-fn panes(app: AppState, axis: Axis, titles: &Titles) -> AnyElement {
-    let form = app.form;
-    let terminal = form == Form::Terminal;
-    let side_by_side = axis == Axis::Horizontal;
-    let list_tab = tab(view(), form)
-        .child(tab_label(
-            app,
-            title(app, titles, layout::WHO),
-            true,
-            layout::WHO,
-        ))
-        .role(AccessibilityRole::Tab)
-        .accessibility_state(AccessibilityState {
-            selected: true,
-            ..AccessibilityState::default()
-        })
-        .when(!terminal, |t| t.bg(color(Token::Bg)));
-    let options: Vec<(NowTab, &'static str)> =
-        NowTab::ALL.iter().map(|&tab| (tab, tab.label())).collect();
-    let inspector_tabs = view()
-        .flex_row()
-        .items_center()
-        .px(px(8.0))
-        .child(tab_strip(
-            app,
-            &options,
-            move || app.work.with(|state| state.now_tab),
-            move |tab| act(app, work::Action::NowTab(tab)),
-            "seg-inspector",
-        ));
-    // A terminal's list beside the inspector takes its natural width, growing with a wide grid
-    // (the inspector keeps its room); stacked, or on desktop, the two panes share the room.
-    let sized = terminal && side_by_side;
-    let make_pane = |bar: AnyElement, key: &'static str, first: bool| {
-        let pane = if first && sized {
-            view()
-                .flex_grow(0.0)
-                .flex_shrink(1.0)
-                .w(move || list_width(app).unwrap_or(px(0.0)))
-        } else {
-            view().flex_1()
-        };
-        pane.flex_col()
-            .min_w(px(0.0))
-            .min_h(px(0.0))
-            .when(!terminal && first && side_by_side, |pane| pane.border_r_1())
-            .when(!terminal && first && !side_by_side, |pane| {
-                pane.border_b_1()
-            })
-            .border_color(color(Token::Rule))
-            .child(tab_bar(view(), form).child(bar))
-            .child(view().flex_1().flex_col().min_h(px(0.0)).child(frame(
-                app,
-                key,
-                computed(|| true),
-            )))
-    };
-    let divider = match (terminal, side_by_side) {
-        (true, true) => Some(term::vrule()),
-        (true, false) => Some(term::hrule()),
-        (false, _) => None,
-    };
-    view()
-        .size_full()
-        .flex_grow(1.0)
-        .map(|root| {
-            if side_by_side {
-                root.flex_row()
-            } else {
-                root.flex_col()
-            }
-        })
-        .child(make_pane(list_tab.into_element(), layout::WHO, true))
-        .children(divider)
-        .child(make_pane(
-            inspector_tabs.into_element(),
-            inspector::FOLLOW,
-            false,
-        ))
-        .into_element()
-}
-
-/// The strip of tabs on the sunk ground (`.dockbar`). A terminal draws a border as a whole row of
-/// cells, so there the strip is the tabs alone, and the panel under it starts with a line.
-fn tab_bar<S: Styled>(s: S, form: Form) -> S {
-    let s = s
-        .flex_row()
-        .flex_none()
-        .items_stretch()
-        .h(px(row_height(form)));
-    if form == Form::Terminal {
-        s
-    } else {
-        s.bg(color(Token::BgSunk))
-            .border_b_1()
-            .border_color(color(Token::Rule))
-    }
-}
-
-/// One tab (`.dockbar .dt`): 10 pt in, a rule after it; the selected one on the page's ground.
-fn tab<S: Styled>(s: S, form: Form) -> S {
-    let s = s.flex_row().items_center().gap(px(6.0));
-    if form == Form::Terminal {
-        s.px(px(8.0))
-    } else {
-        s.px(px(10.0)).border_r_1().border_color(color(Token::Rule))
-    }
-}
-
-fn tab_label(
-    app: AppState,
-    title: impl Fn() -> SharedString + 'static,
-    active: bool,
-    key: &str,
-) -> AnyElement {
-    let label = text(title)
-        .text_size(px(text_size(app.form) * TAB_SCALE))
-        .font_weight(if active {
-            FontWeight::SEMIBOLD
-        } else {
-            FontWeight::NORMAL
-        })
-        .text_color(color(if active { Token::Ink } else { Token::Ink3 }))
-        .number_of_lines(1u32);
-    let test_id = format!("seg-now-{key}");
-    if app.form == Form::Terminal {
-        return view().test_id(&test_id).child(label).into_element();
-    }
-    view()
-        .test_id(&test_id)
-        .flex_row()
-        .items_center()
-        .gap(px(6.0))
-        .child(grip(active))
-        .child(label)
-        .into_element()
-}
-
-/// Six dots before each title: the tab is a handle that drags its panel.
-fn grip(active: bool) -> AnyElement {
-    let dot = || view().size(px(2.0)).rounded_full().bg(color(Token::Ink3));
-    let row = move || view().flex_row().gap(px(2.0)).child(dot()).child(dot());
-    view()
         .flex_col()
-        .gap(px(2.0))
-        .opacity(if active { 0.7 } else { 0.45 })
-        .accessibility_elements_hidden(true)
-        .child(row())
-        .child(row())
-        .child(row())
+        .min_h(px(0.0))
+        .bg(color(Token::Bg))
+        .child(dynamic(move || {
+            stats.with(|stats| page_head(app, title, stats, Vec::new()))
+        }))
+        .child(project_filter_grouped(app))
+        .child(scope_note(app, page))
+        .child(body)
         .into_element()
 }
 
-/// A panel: its content scrolling on the page's ground, dimmed while the board is stale. In a
-/// terminal it starts with the line under its tabs, which reaches the lines on either side of the
-/// panel and joins them. Only a panel `shown` has content: a tab group's hidden panels leave no
-/// invisible controls in the focus order. On desktop, where the scroll indicator shows only while
-/// scrolling, a fade at the bottom says there is more below.
-fn frame(app: AppState, key: &str, shown: Memo<bool>) -> AnyElement {
-    let terminal = app.form == Form::Terminal;
-    let stale = stale(app);
-    let panel = key.to_owned();
-    let content = dynamic(move || {
-        shown
-            .get()
-            .then(|| untracked(|| panel_content(app, &panel)))
-    });
-    let scroller = element_ref();
-    let more = signal(false);
-    if app.form == Form::Desktop {
-        watch_scroll(
-            move || scroller.node(),
-            move |at: &ScrollEvent| {
-                more.set(at.content_size.height.0 - at.offset.y.0 - at.size.height.0 > 1.0);
-            },
-        );
-    }
-    // On desktop the dock lays the panel out as a one-cell grid, which would give a second child
-    // (a line) a row of its own and leave the scroll view its content's height: the panel is the
-    // cell's one child, a column filling it. A terminal's dock holds it in `pinned` instead.
-    view()
+/// Whether the side column holds a selection rather than the digest (tracked).
+fn selecting(page: Memo<NowPage>) -> Memo<bool> {
+    computed(move || page.with(|page| !matches!(page.panel, NowPanel::Digest(_))))
+}
+
+/// The main column in its own scroll, dimmed while the board is stale.
+fn main_scroll(app: AppState, page: Memo<NowPage>, below: Option<AnyElement>) -> AnyElement {
+    scroll()
+        .test_id("now-main")
         .flex_1()
-        .min_h(px(0.0))
         .min_w(px(0.0))
+        .min_h(px(0.0))
         .child(
-            view()
-                .relative()
-                .flex_1()
-                .flex_col()
-                .min_h(px(0.0))
-                .min_w(px(0.0))
-                .bg(color(Token::Bg))
-                .when(terminal, |panel| panel.child(term::hrule()))
-                .child(
-                    scroll()
-                        .test_id(&format!("now-{key}"))
-                        .element_ref(&scroller)
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .child(dim_when(view(), stale).child(content)),
-                )
-                .child(dynamic(move || more.get().then(fade))),
+            dim_when(view(), stale(app))
+                .child(main_column(app, page))
+                .children(below),
         )
         .into_element()
 }
 
-/// The panel's content for its key.
-fn panel_content(app: AppState, key: &str) -> AnyElement {
-    match key {
-        layout::WHO => list::list(app),
-        layout::GOALS => list::goals(app),
-        layout::STORY => inspector::panel(app, Some(NowTab::Story)),
-        layout::EVIDENCE => inspector::panel(app, Some(NowTab::Evidence)),
-        layout::SESSION => inspector::panel(app, Some(NowTab::Session)),
-        inspector::FOLLOW => inspector::panel(app, None),
-        layout::SINCE => context::since(app),
-        layout::PARKED => context::parked(app),
-        layout::LIVE => context::live(app),
-        layout::GRAPH => context::graph(app),
-        _ => view().into_element(),
+/// The side panel in its own scroll.
+fn side_scroll(app: AppState, page: Memo<NowPage>) -> AnyElement {
+    scroll()
+        .test_id("now-side")
+        .flex_1()
+        .min_h(px(0.0))
+        .child(dim_when(view(), stale(app)).child(side::panel(app, page)))
+        .into_element()
+}
+
+/// The side panel under the list in the one scroll, set off by a line.
+fn panel_below(app: AppState, page: Memo<NowPage>) -> AnyElement {
+    match app.form {
+        Form::Terminal => view()
+            .child(term::hrule())
+            .child(side::panel(app, page))
+            .into_element(),
+        Form::Desktop | Form::Phone => view()
+            .border_t_1()
+            .border_t_color(color(Token::Rule))
+            .child(side::panel(app, page))
+            .into_element(),
     }
 }
 
-/// The bottom of a panel whose content runs on: the page's ground fading in over 28 pt, under
-/// the last visible row. It takes no presses and says nothing to screen readers, which reach
-/// the rows below by themselves.
-fn fade() -> AnyElement {
+/// Desktop: measured, not assumed from the window, since the sidebar and Ask take their share.
+fn desktop_body(app: AppState, page: Memo<NowPage>) -> AnyElement {
+    let room = signal(None::<f32>);
+    let beside = computed(move || room.get().is_none_or(|width| width >= BESIDE));
     view()
-        .absolute()
-        .left(px(0.0))
-        .right(px(0.0))
-        .bottom(px(0.0))
-        .h(px(28.0))
-        .pointer_events(PointerEvents::None)
-        .accessibility_elements_hidden(true)
-        .bg_linear_to_b()
-        .gradient_from(color(Token::Bg).opacity(0.0))
-        .gradient_to(color(Token::Bg))
+        .flex_1()
+        .flex_col()
+        .min_h(px(0.0))
+        .min_w(px(0.0))
+        .on_layout(move |frame: &Bounds<Points>| room.set(Some(frame.size.width.0)))
+        .child(dynamic(move || {
+            if beside.get() {
+                untracked(|| split(app, page))
+            } else {
+                untracked(|| stacked(app, page))
+            }
+        }))
+        .into_element()
+}
+
+/// The list beside the side column, each scrolling on its own.
+fn split(app: AppState, page: Memo<NowPage>) -> AnyElement {
+    view()
+        .flex_1()
+        .flex_row()
+        .min_h(px(0.0))
+        .min_w(px(0.0))
+        .child(main_scroll(app, page, None))
+        .child(
+            view()
+                .w(px(SIDE))
+                .flex_shrink_0()
+                .flex_col()
+                .min_h(px(0.0))
+                .border_l_1()
+                .border_l_color(color(Token::Rule))
+                .child(side_scroll(app, page)),
+        )
+        .into_element()
+}
+
+/// A narrower page: the digest follows the list in its scroll; a selection's panel lies over the
+/// page's right edge, at most 460 pt wide, until it is closed.
+fn stacked(app: AppState, page: Memo<NowPage>) -> AnyElement {
+    let selecting = selecting(page);
+    let digest = dynamic(move || (!selecting.get()).then(|| untracked(|| panel_below(app, page))));
+    let overlay = dynamic(move || {
+        selecting.get().then(|| {
+            untracked(|| {
+                view()
+                    .absolute()
+                    .top(px(0.0))
+                    .right(px(0.0))
+                    .bottom(px(0.0))
+                    .w(px(OVERLAY))
+                    .max_w(relative(1.0))
+                    .flex_col()
+                    .bg(color(Token::Bg))
+                    .border_l_1()
+                    .border_l_color(color(Token::Rule2))
+                    .shadow_lg()
+                    .child(side_scroll(app, page))
+                    .into_element()
+            })
+        })
+    });
+    view()
+        .relative()
+        .flex_1()
+        .flex_col()
+        .min_h(px(0.0))
+        .min_w(px(0.0))
+        .child(main_scroll(app, page, Some(digest)))
+        .child(overlay)
+        .into_element()
+}
+
+/// Terminal: the side column beside the list while the grid holds the list's and the column's
+/// least widths and the line between; otherwise the panel follows the list in its scroll.
+fn terminal_body(app: AppState, page: Memo<NowPage>) -> AnyElement {
+    let beside = computed(move || term::page_columns(app) >= LIST_COLUMNS + 1.0 + SIDE_COLUMNS);
+    view()
+        .flex_1()
+        .flex_grow(1.0)
+        .flex_col()
+        .min_h(px(0.0))
+        .child(dynamic(move || {
+            if beside.get() {
+                untracked(|| {
+                    view()
+                        .flex_1()
+                        .flex_row()
+                        .min_h(px(0.0))
+                        .child(main_scroll(app, page, None))
+                        .child(term::vrule())
+                        .child(
+                            view()
+                                .w(term::cells(SIDE_COLUMNS))
+                                .flex_shrink_0()
+                                .flex_col()
+                                .min_h(px(0.0))
+                                .child(side_scroll(app, page)),
+                        )
+                        .into_element()
+                })
+            } else {
+                untracked(|| main_scroll(app, page, Some(panel_below(app, page))))
+            }
+        }))
         .into_element()
 }

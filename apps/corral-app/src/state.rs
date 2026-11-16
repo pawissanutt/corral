@@ -10,6 +10,7 @@ mod keys;
 mod live;
 mod preview;
 mod projects;
+mod selection;
 mod sidebar;
 mod source;
 
@@ -31,7 +32,6 @@ use crate::model::{
 const DESTINATION_KEY: &str = "corral.destination";
 const SETTINGS_KEY: &str = "corral.settings";
 const THEME_KEY: &str = "corral.theme";
-const NOW_LAYOUT_KEY: &str = "corral.now.layout";
 const SIDEBAR_KEY: &str = "corral.sidebar";
 
 /// Shared app handles. Screens render tracked reads and send domain effects back through `run`.
@@ -50,8 +50,6 @@ pub struct AppState {
     pub ask_draft: Signal<String>,
     /// Grows by one each time Ask opens, so the composer focuses its field.
     pub ask_focus: Signal<u32>,
-    /// Grows by one when the Now dock layout returns to its default.
-    pub now_reset: Signal<u32>,
     pub inbox: source::StateSource<inbox::State>,
     pub work: source::StateSource<work::State>,
     pub plans: source::StateSource<plans::State>,
@@ -150,7 +148,6 @@ impl AppState {
             ask_target: signal(AskTarget::Assistant),
             ask_draft: signal(String::new()),
             ask_focus: signal(0),
-            now_reset: signal(0),
             inbox: source::StateSource::new(
                 data,
                 inbox::State {
@@ -395,8 +392,8 @@ impl AppState {
         }
     }
 
-    /// Escape priority: confirmation, model list, newest overlay, the narrow sidebar's labels,
-    /// then top page.
+    /// Escape priority: confirmation, model list, newest overlay, the selection on the Agents or
+    /// Now page in view, the narrow sidebar's labels, then top page.
     pub fn close_newest(&self) {
         if self.confirmation.get_untracked().is_some() {
             self.confirm_no();
@@ -417,6 +414,9 @@ impl AppState {
         }
         if let Some(overlay) = self.nav.with_untracked(NavState::newest) {
             self.close(overlay);
+            return;
+        }
+        if self.clear_page_selection() {
             return;
         }
         if !self.close_sidebar_peek() {
@@ -520,12 +520,6 @@ impl AppState {
         });
     }
 
-    /// Removes the stored layout and asks Now to restore its default arrangement.
-    pub fn reset_now_layout(&self) {
-        Storage::remove_item(NOW_LAYOUT_KEY);
-        self.now_reset.update(|n| *n = n.wrapping_add(1));
-    }
-
     /// Shows a receipt; repeating the same text also restarts its root-owned delay.
     pub fn toast(&self, text: impl Into<String>) {
         self.toast.set(Some(text.into()));
@@ -583,7 +577,6 @@ impl AppState {
             Action::ToggleSession => self.toggle_session(),
             Action::Theme(theme) => self.set_theme(theme),
             Action::Data(data) => self.set_data(data),
-            Action::ResetNow => self.reset_now_layout(),
             Action::Hotkey => self.hotkey.set(true),
             Action::Share => {
                 self.lock.set(false);

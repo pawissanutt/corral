@@ -1,14 +1,15 @@
 //! The words region under a session's surface: the reply box (`.composer`, the phone's
 //! `.reply`) or, for an assistant, the shared composer bound to its thread. Send waits for a
-//! working session's turn; Steer, offered beside it while the session works, interrupts it.
+//! working session's turn; Steer, offered beside it while the session works, interrupts it. The
+//! session page and the Agents panel share it; each passes how its presses reach the model.
 
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
-use crate::model::Form;
 use crate::model::agents::{Action, Reply, ReplyMode, Session};
 use crate::model::assistant::ThreadRef;
 use crate::model::hue::Hue;
+use crate::model::{Form, Id};
 use crate::state::AppState;
 use crate::ui::ask;
 use crate::ui::icons::Icon;
@@ -18,8 +19,8 @@ use crate::ui::kit::page::bar;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
-use super::run;
 use super::transcript::line;
+use super::{Dispatch, run};
 
 /// The words region for the page's form: an assistant's composer on its thread, else the reply
 /// box (docked in the phone's bar). Each is redrawn only when what it shows changes, not with
@@ -27,12 +28,24 @@ use super::transcript::line;
 pub fn region(app: AppState, session: Memo<Session>, draft: Signal<String>) -> AnyElement {
     let chat = computed(move || session.with(|s| s.chat.clone()));
     let shown = computed(move || session.with(|s| s.reply.clone()));
+    words(app, shown, chat, draft, run)
+}
+
+/// [`region`] from its parts: the reply box `shown`, or the composer on the thread `chat`
+/// names, its presses sent through `send`.
+pub fn words(
+    app: AppState,
+    shown: Memo<Reply>,
+    chat: Memo<Option<Id>>,
+    draft: Signal<String>,
+    send: Dispatch,
+) -> AnyElement {
     dynamic(move || match chat.get() {
         Some(scope) => untracked(|| ask::docked(app, ThreadRef::Live(scope))),
         None if app.form == Form::Phone => dynamic(move || {
-            shown.with(|shown| bar(app, vec![phone_reply(app, shown, draft)], None))
+            shown.with(|shown| bar(app, vec![phone_reply(app, shown, draft, send)], None))
         }),
-        None => dynamic(move || shown.with(|shown| reply(app, shown, draft))),
+        None => dynamic(move || shown.with(|shown| reply(app, shown, draft, send))),
     })
 }
 
@@ -73,7 +86,7 @@ fn field(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
 /// Send, and Steer before it while the session works: the field's words go to the model's
 /// reducer; while a reply is in flight Send waits, dimmed, so one intent never becomes two
 /// commands. Steer is the quieter choice: Send stays the main action.
-fn sends(app: AppState, reply: &Reply, draft: Signal<String>) -> Vec<AnyElement> {
+fn sends(app: AppState, reply: &Reply, draft: Signal<String>, send: Dispatch) -> Vec<AnyElement> {
     let busy = reply.mode == ReplyMode::Busy;
     let steer = reply.steer.map(|label| {
         button(
@@ -82,11 +95,11 @@ fn sends(app: AppState, reply: &Reply, draft: Signal<String>) -> Vec<AnyElement>
             ButtonKind::Ghost,
             "btn-session-steer",
             move || {
-                run(app, Action::Steer(draft.get_untracked()));
+                send(app, Action::Steer(draft.get_untracked()));
             },
         )
     });
-    let send = button_with(
+    let primary = button_with(
         app,
         if busy { "Sending…" } else { reply.button },
         ButtonKind::Primary,
@@ -96,13 +109,13 @@ fn sends(app: AppState, reply: &Reply, draft: Signal<String>) -> Vec<AnyElement>
             ..ButtonOptions::default()
         },
         "btn-send",
-        move || run(app, Action::Send(draft.get_untracked())),
+        move || send(app, Action::Send(draft.get_untracked())),
     );
-    steer.into_iter().chain([send]).collect()
+    steer.into_iter().chain([primary]).collect()
 }
 
 /// The latest reply's outcome in its tone, with "Check delivery" when it is unknown.
-fn outcome(app: AppState, reply: &Reply) -> Option<AnyElement> {
+fn outcome(app: AppState, reply: &Reply, send: Dispatch) -> Option<AnyElement> {
     let (hue, words) = reply.status.clone()?;
     let ink = match hue {
         Hue::Neutral => color(Token::Ink3),
@@ -130,7 +143,7 @@ fn outcome(app: AppState, reply: &Reply) -> Option<AnyElement> {
                     "Check delivery",
                     ButtonKind::Quiet,
                     "btn-recover-reply",
-                    move || run(app, action.clone()),
+                    move || send(app, action.clone()),
                 )
             }))
             .into_element(),
@@ -138,14 +151,19 @@ fn outcome(app: AppState, reply: &Reply) -> Option<AnyElement> {
 }
 
 /// Why replies do not go to this session, with where to answer instead.
-fn closed(app: AppState, reason: &str, action: &Option<(&'static str, Action)>) -> AnyElement {
+fn closed(
+    app: AppState,
+    reason: &str,
+    action: &Option<(&'static str, Action)>,
+    send: Dispatch,
+) -> AnyElement {
     let go = action.clone().map(|(label, action)| {
         button(
             app,
             label,
             ButtonKind::Ghost,
             "btn-reply-elsewhere",
-            move || run(app, action.clone()),
+            move || send(app, action.clone()),
         )
     });
     if app.form == Form::Terminal {
@@ -187,21 +205,21 @@ fn closed(app: AppState, reason: &str, action: &Option<(&'static str, Action)>) 
 /// Desktop: `.composer` (a rule above, 10 24 12, the box at most 772 pt wide). Terminal: a
 /// rule, the field and the sends, the hint quiet. A session that takes no replies says why
 /// instead. The phone docks [`phone_reply`] instead.
-fn reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
+fn reply(app: AppState, reply: &Reply, draft: Signal<String>, send: Dispatch) -> AnyElement {
     let form = app.form;
-    let status = outcome(app, reply);
+    let status = outcome(app, reply, send);
     if form == Form::Terminal {
         let entry = match &reply.mode {
-            ReplyMode::Closed { reason, action } => closed(app, reason, action),
+            ReplyMode::Closed { reason, action } => closed(app, reason, action, send),
             ReplyMode::Open | ReplyMode::Busy => view()
                 .flex_row()
                 .items_end()
                 .px(term::cells(1.0))
                 .child(field(app, reply, draft))
                 .children(
-                    sends(app, reply, draft)
+                    sends(app, reply, draft, send)
                         .into_iter()
-                        .flat_map(|send| [term::space(2.0), send]),
+                        .flat_map(|button| [term::space(2.0), button]),
                 )
                 .into_element(),
         };
@@ -226,7 +244,7 @@ fn reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
             .w_full()
             .max_w(px(772.0))
             .flex_row()
-            .child(closed(app, reason, action))
+            .child(closed(app, reason, action, send))
             .into_element(),
         ReplyMode::Open | ReplyMode::Busy => view()
             .w_full()
@@ -242,7 +260,7 @@ fn reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
             .border_1()
             .border_color(color(Token::Rule2))
             .child(field(app, reply, draft))
-            .children(sends(app, reply, draft))
+            .children(sends(app, reply, draft, send))
             .into_element(),
     };
     let takes_words = !matches!(reply.mode, ReplyMode::Closed { .. });
@@ -282,9 +300,9 @@ fn reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
 
 /// The phone's docked reply (`.reply`): the field, Steer and Send in one rounded box, for the
 /// page's bar, with the latest reply's outcome above it; or why the session takes none.
-fn phone_reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
+fn phone_reply(app: AppState, reply: &Reply, draft: Signal<String>, send: Dispatch) -> AnyElement {
     let entry = match &reply.mode {
-        ReplyMode::Closed { reason, action } => closed(app, reason, action),
+        ReplyMode::Closed { reason, action } => closed(app, reason, action, send),
         ReplyMode::Open | ReplyMode::Busy => view()
             .flex_row()
             .items_end()
@@ -297,14 +315,14 @@ fn phone_reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElemen
             .border_1()
             .border_color(color(Token::Rule2))
             .child(field(app, reply, draft))
-            .children(sends(app, reply, draft))
+            .children(sends(app, reply, draft, send))
             .into_element(),
     };
     view()
         .flex_1()
         .min_w(px(0.0))
         .gap(px(6.0))
-        .children(outcome(app, reply).map(|status| view().px(px(4.0)).child(status)))
+        .children(outcome(app, reply, send).map(|status| view().px(px(4.0)).child(status)))
         .child(entry)
         .into_element()
 }

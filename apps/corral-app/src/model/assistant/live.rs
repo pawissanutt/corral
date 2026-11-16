@@ -16,7 +16,7 @@ use super::surfaces::drawer_buttons;
 use super::views::{LIFETIME_NOTE, button, context_chip, model_footer, targets};
 use super::{
     Action, Agents, COMPOSER_KEYS, Chip, Composer, Drawer, Fact, FiledLine, ModelList, ModelOption,
-    QUICK, QuickThread, SessionRow, Staged, State, ThreadHeader, tray,
+    QUICK, SessionRow, Staged, State, ThreadHeader, tray,
 };
 use crate::model::daemon::{Feed, Link, PmLevel};
 use crate::model::effect::Env;
@@ -692,36 +692,11 @@ pub fn live_thread_header(state: &State, feed: &Feed, scope: &str) -> ThreadHead
     }
 }
 
-/// The newest owner message and answer of a loaded thread, for the quick-thread tile.
-fn latest(feed: &Feed, scope: &str) -> (Option<(String, String)>, Option<String>) {
-    let Some(thread) = feed.threads.get(scope) else {
-        return (None, None);
-    };
-    let entries = super::live_parts::assemble(&thread.entries);
-    use corral_protocol::assistant::EntryKind;
-    let owner = entries
-        .iter()
-        .rev()
-        .find(|entry| matches!(entry.kind, EntryKind::Message | EntryKind::PmMessage))
-        .and_then(|entry| Some((clock(&entry.at, feed), entry.text.clone()?)));
-    let answer = entries
-        .iter()
-        .rev()
-        .find(|entry| entry.kind == EntryKind::Answer)
-        .and_then(|entry| entry.text.as_deref())
-        .and_then(|text| text.lines().find(|line| !line.trim().is_empty()))
-        .map(str::to_owned);
-    (owner, answer)
-}
-
 /// Agents' assistant blocks from the served rows.
 pub fn live_agents(state: &State, feed: &Feed, can_send: bool) -> Agents {
-    let quick = row(feed, QUICK);
-    let chip = live_chip(feed, QUICK);
-    let (owner, answer) = latest(feed, QUICK);
-    // Earlier quick generations (an ended A-3 after the quick thread moved on to A-6) stay
-    // openable as their own A-n threads; only the current generation is the pinned tile.
-    let current = quick.map(|row| row.id.as_str());
+    // Earlier quick generations stay openable as their own A-n threads; the current
+    // generation is already pinned in the roster.
+    let current = row(feed, QUICK).map(|row| row.id.as_str());
     let mut sessions: Vec<&AssistantRow> = feed
         .assistants
         .values()
@@ -770,31 +745,6 @@ pub fn live_agents(state: &State, feed: &Feed, can_send: bool) -> Agents {
     new_session.enabled = can_send && !creating;
     let filed = super::global_filed(state, feed);
     Agents {
-        quick_thread: QuickThread {
-            id: quick_id(feed).unwrap_or_else(|| QUICK.to_owned()),
-            title: quick_title(feed),
-            row_title: "Quick thread",
-            last_line: answer.unwrap_or_else(|| "No assistant reply yet.".into()),
-            state: chip,
-            pinned: "assistant · pinned",
-            last_question: owner.as_ref().map_or_else(String::new, |(_, text)| {
-                let clipped: String = text.chars().take(96).collect();
-                if text.chars().count() > 96 {
-                    format!("{clipped}…")
-                } else {
-                    clipped
-                }
-            }),
-            owner_at: owner.map_or_else(String::new, |(at, _)| format!("you · {at}")),
-            model: profile(state, feed, QUICK).unwrap_or_else(|| "profile unknown".into()),
-            location: location(quick).into(),
-            scope: "shared by your devices",
-            lifetime: quick.map_or_else(
-                || "host unknown".into(),
-                |row| cost(row.cost_usd, row.cost_basis),
-            ),
-            action: Action::OpenQuickThread,
-        },
         sessions_title: "Assistant sessions",
         sessions_count: format!("{} · daemon and pane", rows.len()),
         sessions: rows,

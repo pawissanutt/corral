@@ -1,12 +1,12 @@
-//! Pieces every Now, task and Changes view shares: running a work action or press, the model's
-//! buttons in the kit's look, the stale board's dimming, and keeping the selected task's detail
-//! loaded.
+//! Pieces every Now, task and Changes view shares: Now's page model in its scope, running a
+//! work action or press, opening a destination in Now's scope, the model's buttons in the kit's
+//! look, the stale board's dimming, and keeping the shown task's detail loaded.
 
 use nsh_core::prelude::*;
 
 use crate::model::projects::{FilterScreen, NowGroup, ProjectFilter};
-use crate::model::work::{self, Action, Button, Press};
-use crate::model::{Form, Live};
+use crate::model::work::{self, Action, Button, NowPage, NowPanel, Press};
+use crate::model::{Destination, Form, Live};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -80,9 +80,8 @@ pub(crate) fn action_id(action: Action) -> String {
         Action::Go(destination) => format!("btn-{}", destination.slug()),
         Action::Back => "btn-back".into(),
         Action::ShowAll(group) => format!("btn-more-{}", group.key()),
-        Action::NowTab(tab) => format!("seg-inspector-{}", super::layout::inspector_panel(tab)),
-        Action::CtxTab(tab) => format!("seg-context-{}", super::layout::context_panel(tab)),
-        Action::LowTab(tab) => format!("seg-lower-{}", super::layout::lower_panel(tab)),
+        Action::NowTab(tab) => format!("seg-inspector-{}", tab.label().to_lowercase()),
+        Action::ToggleWaiting => "btn-waiting".into(),
         Action::Filter(filter) => format!("seg-changes-{}", filter.label().to_lowercase()),
     }
 }
@@ -104,11 +103,12 @@ pub(crate) fn press_id(press: &Press) -> String {
         Press::CancelVerb => "btn-verb-cancel".into(),
         Press::CloseMenu => "btn-verbs-close".into(),
         Press::Recover(_) => "btn-check-result".into(),
-        Press::Goal(_) => "btn-goal".into(),
         Press::Seen(_) => "btn-mark-seen".into(),
         Press::Older(_) => "btn-older".into(),
         Press::RetryBoard => "btn-retry-board".into(),
         Press::Closed(press) => super::closed::press_id(press).into(),
+        Press::SelectAsk(key) => format!("inbox-{key}"),
+        Press::ClearSelection => "btn-clear-selection".into(),
     }
 }
 
@@ -210,23 +210,41 @@ pub(crate) fn scope(app: AppState) -> (ProjectFilter, NowGroup) {
     (app.project_filter(FilterScreen::Now), app.now_group())
 }
 
-/// The selected task to keep loaded, on the board or off it, tracked.
-pub(crate) fn selected_task(app: AppState) -> Memo<Wanted> {
+/// Now's page in its own scope, tracked: one model for the head, the list, the loop band and
+/// the side panel.
+pub(crate) fn now_page(app: AppState) -> Memo<NowPage> {
     let form = app.form;
     computed(move || {
         let selection = app.selection();
         let (filter, grouping) = scope(app);
         app.feed.with(|feed| {
-            app.work.with(|state| {
-                match work::daemon_selection_filtered(
-                    state, &selection, feed, form, &filter, grouping,
-                ) {
-                    Some(task) => wanted(feed, task),
-                    None => {
-                        work::off_board(&selection, feed).and_then(|id| wanted_id(feed, id, None))
-                    }
-                }
-            })
+            app.work
+                .with(|state| work::now_page(state, feed, &selection, form, &filter, grouping))
+        })
+    })
+}
+
+/// Opens `to` with Now's scope as that destination's own project filter.
+pub(crate) fn go_scoped(app: AppState, page: Memo<NowPage>, to: Destination) {
+    if let Some(scope) = page.with_untracked(|page| page.scope_for(to)) {
+        app.set_project_filter(scope.screen, scope.filter);
+    }
+    app.go(to);
+}
+
+/// The task the side panel shows, to keep loaded, on the board or off it (tracked); none while
+/// the panel holds the digest or an owner move.
+pub(crate) fn shown_task(app: AppState, page: Memo<NowPage>) -> Memo<Wanted> {
+    computed(move || {
+        let shown = page.with(|page| matches!(page.panel, NowPanel::Task(_) | NowPanel::Closed(_)));
+        if !shown {
+            return None;
+        }
+        let selection = app.selection();
+        let id = selection.task.clone()?;
+        app.feed.with(|feed| match feed.board.task(&id) {
+            Some(task) => wanted(feed, task),
+            None => work::off_board(&selection, feed).and_then(|id| wanted_id(feed, id, None)),
         })
     })
 }

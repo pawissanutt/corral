@@ -6,8 +6,9 @@ mod tests;
 
 pub use filters::{FilterScreen, Filters, NowGroup, NowScope};
 pub use page::{
-    BUILDS_HEADING, NO_BUILDS, NO_PLANS, PLANS_HEADING, ProjectBuild, ProjectCount, ProjectEmpty,
-    ProjectPage, ProjectPlan, ProjectTask, ProjectTaskGroup, TASKS_HEADING, not_found, page,
+    BUILDS_HEADING, FACTS_LABEL, NO_BUILDS, PLANS_HEADING, PLANS_HINT, ProjectBuild, ProjectEmpty,
+    ProjectFact, ProjectPage, ProjectPlan, ProjectSession, SESSIONS_HEADING, SESSIONS_HINT,
+    not_found, page, project_now,
 };
 
 /// The sidebar section's and the phone list's name.
@@ -152,7 +153,7 @@ impl ProjectEntry {
     /// The counts as a line: what is open, running and waiting on the owner.
     pub fn summary(&self) -> String {
         if self.filter == ProjectFilter::Unassigned {
-            return "Tasks filed without a project".into();
+            return UNASSIGNED_HINT.into();
         }
         let Some(open) = self.open else {
             return "Counts not reported by this corrald".into();
@@ -173,6 +174,30 @@ impl ProjectEntry {
     /// What assistive technology hears for the row: its name, then [`Self::summary`].
     pub fn spoken(&self) -> String {
         format!("{}, {}", self.label, self.summary())
+    }
+
+    /// What the sidebar's needs-you figure stands for: `3 wait on you`; `None` while nothing
+    /// waits or the daemon reports no counts.
+    pub fn needs_hint(&self) -> Option<String> {
+        self.needs_me
+            .filter(|n| *n > 0)
+            .map(crate::model::health::waits_on_you)
+    }
+
+    /// What the sidebar's open figure stands for: `40 open tasks: 2 running, 5 in review`;
+    /// `None` where the daemon reports no counts.
+    pub fn open_hint(&self) -> Option<String> {
+        let open = self.open?;
+        let noun = if open == 1 { "task" } else { "tasks" };
+        let detail = [(self.running, "running"), (self.review, "in review")]
+            .into_iter()
+            .filter_map(|(n, word)| n.filter(|n| *n > 0).map(|n| format!("{n} {word}")))
+            .collect::<Vec<_>>();
+        Some(if detail.is_empty() {
+            format!("{open} open {noun}")
+        } else {
+            format!("{open} open {noun}: {}", detail.join(", "))
+        })
     }
 }
 
@@ -222,12 +247,78 @@ impl Projects {
     }
 }
 
+/// One scope of a screen's project bar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilterChip {
     pub id: String,
     pub label: String,
     pub filter: ProjectFilter,
     pub selected: bool,
+    /// What waits on the owner in this project, as figures (`3`): none when nothing does, for
+    /// All and Unassigned, and on daemons that report no project counts.
+    pub needs: Option<String>,
+    /// The sentence the chip stands for: `3 wait on you in corral · 5 open · 2 running`.
+    pub hint: String,
+    /// What a screen reader hears for the toggle: its name, then what waits on the owner.
+    pub spoken: String,
+}
+
+const ALL_HINT: &str = "Every project in this workspace";
+const UNASSIGNED_HINT: &str = "Tasks filed without a project";
+const OUTSIDE_PM: &str = "outside the PM's scope";
+
+impl FilterChip {
+    fn all(selected: bool) -> Self {
+        Self {
+            id: "filter-all".into(),
+            label: "All".into(),
+            filter: ProjectFilter::All,
+            selected,
+            needs: None,
+            hint: ALL_HINT.into(),
+            spoken: "All".into(),
+        }
+    }
+
+    fn of(entry: ProjectEntry) -> Self {
+        let waiting = entry.needs_me.filter(|n| *n > 0);
+        let needs_line =
+            waiting.map(|n| format!("{n} {} on you", if n == 1 { "waits" } else { "wait" }));
+        let hint = match entry.filter {
+            ProjectFilter::Project(_) => {
+                let mut parts = Vec::new();
+                if let Some(line) = &needs_line {
+                    parts.push(format!("{line} in {}", entry.label));
+                }
+                parts.push(match (entry.open, entry.running) {
+                    (None, _) => "Counts not reported by this corrald".to_owned(),
+                    (Some(0), _) => "No open work".to_owned(),
+                    (Some(open), Some(running)) if running > 0 => {
+                        format!("{open} open · {running} running")
+                    }
+                    (Some(open), _) => format!("{open} open"),
+                });
+                if entry.in_pm_scope == Some(false) {
+                    parts.push(OUTSIDE_PM.to_owned());
+                }
+                parts.join(" · ")
+            }
+            ProjectFilter::All | ProjectFilter::Unassigned => entry.summary(),
+        };
+        let spoken = match &needs_line {
+            Some(line) => format!("{}, {line}", entry.label),
+            None => entry.label.clone(),
+        };
+        Self {
+            id: format!("filter-{}", entry.id),
+            label: entry.label,
+            filter: entry.filter,
+            selected: entry.selected,
+            needs: waiting.map(|n| n.to_string()),
+            hint,
+            spoken,
+        }
+    }
 }
 
 /// Empty means the screen should omit its project chip strip entirely.
@@ -239,22 +330,12 @@ pub fn chips(feed: &Feed, filter: &ProjectFilter, screen: FilterScreen) -> Vec<F
     if *filter == ProjectFilter::All && !has_multiple_projects(feed) && !has_unassigned(feed) {
         return Vec::new();
     }
-    let mut chips = vec![FilterChip {
-        id: "filter-all".into(),
-        label: "All".into(),
-        filter: ProjectFilter::All,
-        selected: filter.resolved(feed) == ProjectFilter::All,
-    }];
+    let mut chips = vec![FilterChip::all(filter.resolved(feed) == ProjectFilter::All)];
     chips.extend(
         Projects::build(feed, filter)
             .entries
             .into_iter()
-            .map(|entry| FilterChip {
-                id: format!("filter-{}", entry.id),
-                label: entry.label,
-                filter: entry.filter,
-                selected: entry.selected,
-            }),
+            .map(FilterChip::of),
     );
     if *filter == ProjectFilter::Unassigned && !has_unassigned(feed) {
         chips.push(FilterChip {
@@ -262,6 +343,9 @@ pub fn chips(feed: &Feed, filter: &ProjectFilter, screen: FilterScreen) -> Vec<F
             label: "Unassigned".into(),
             filter: ProjectFilter::Unassigned,
             selected: true,
+            needs: None,
+            hint: UNASSIGNED_HINT.into(),
+            spoken: "Unassigned".into(),
         });
     }
     chips

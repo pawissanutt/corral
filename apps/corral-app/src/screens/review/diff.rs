@@ -1,9 +1,9 @@
-//! The Diff tab (`.diff`): each file's head, its hunks with their headers, unified or
-//! side-by-side rows with their add/del tints and the highlighted word, the discussions between
-//! the rows they follow, and collapsed, loading or unavailable files. The rows are built here
-//! rather than with `nsh_base`'s DiffView because the mockup sets a discussion card between two
-//! rows, which DiffView does not host. On a served candidate a code line is pressable: it opens
-//! a new comment on that line.
+//! The Diff tab (`.diff`) and a Brief file's patch shown in place: each file's head, its hunks
+//! with their headers, unified or side-by-side rows with their add/del tints and the
+//! highlighted word, the discussions between the rows they follow, and collapsed, loading or
+//! unavailable files. The rows are built here rather than with `nsh_base`'s DiffView because
+//! the mockup sets a discussion card between two rows, which DiffView does not host. On a
+//! served candidate a code line is pressable: it opens a new comment on that line.
 
 use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
@@ -63,7 +63,59 @@ pub(super) fn diff(cx: &Ctx, diff: &DiffView) -> AnyElement {
 
 fn file_block(cx: &Ctx, file: &FileView) -> AnyElement {
     let terminal = cx.app.form == Form::Terminal;
-    let body = match &file.body {
+    view()
+        .when(!terminal, |block| block.mb(px(14.0)))
+        .child(file_head(cx, file))
+        .children(loose(cx, file))
+        .child(file_patch(cx, file))
+        .when(terminal, |block| block.child(term::blank()))
+        .into_element()
+}
+
+/// An expanded file's patch in place under its Brief row, which carries its name, counts and
+/// collapse: the illustrative tag and Ask at the trailing edge, the discussions shown away from
+/// their lines, then the hunks.
+pub(super) fn file_body(cx: &Ctx, file: &FileView) -> AnyElement {
+    let app = cx.app;
+    let terminal = app.form == Form::Terminal;
+    let tools: Vec<AnyElement> = file
+        .illustrative
+        .map(|tag| illus(app, tag))
+        .into_iter()
+        .chain(file.ask.iter().map(|ask| command(cx, ask)))
+        .collect();
+    view()
+        .when(!terminal, |block| {
+            block.gap(px(8.0)).pt(px(8.0)).pb(px(4.0))
+        })
+        .when(!tools.is_empty(), |block| {
+            block.child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .justify_end()
+                    .gap(px(8.0))
+                    .children(tools),
+            )
+        })
+        .children(loose(cx, file))
+        .child(file_patch(cx, file))
+        .into_element()
+}
+
+/// The discussions whose line is not among the shown ones, above the hunks.
+fn loose(cx: &Ctx, file: &FileView) -> Vec<AnyElement> {
+    file.loose
+        .iter()
+        .filter_map(|&at| file.discussions.get(at))
+        .map(|talk| discussion(cx, talk, true))
+        .collect()
+}
+
+/// The file's patch: its hunks and notes, or the line that stands where they would be.
+fn file_patch(cx: &Ctx, file: &FileView) -> AnyElement {
+    let terminal = cx.app.form == Form::Terminal;
+    match &file.body {
         FileBody::Collapsed(button) => collapsed(cx, button),
         FileBody::Loading(line) => quiet_box(cx, line.clone(), Hue::Neutral),
         FileBody::Unavailable(line) => quiet_box(cx, line.clone(), Hue::Fail),
@@ -77,19 +129,7 @@ fn file_block(cx: &Ctx, file: &FileView) -> AnyElement {
                     .map(|line| dim(cx.app, line.clone()).into_element()),
             )
             .into_element(),
-    };
-    view()
-        .when(!terminal, |block| block.mb(px(14.0)))
-        .child(file_head(cx, file))
-        .children(
-            file.loose
-                .iter()
-                .filter_map(|&at| file.discussions.get(at))
-                .map(|talk| discussion(cx, talk, true)),
-        )
-        .child(body)
-        .when(terminal, |block| block.child(term::blank()))
-        .into_element()
+    }
 }
 
 /// `.ev-file`: the mono path with its counts, cut in the middle so its root and file name both

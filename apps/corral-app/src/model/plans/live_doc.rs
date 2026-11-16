@@ -5,14 +5,12 @@
 use corral_protocol::detail::{DetailBody, DetailRef, PlanDetail, PlanDocument};
 use corral_protocol::rows::{PlanRow as WirePlan, PlanState as WireState};
 
-use super::live::{plan_cache, stale_line, state_chip, title};
-use super::view::pipeline;
+use super::live::{plan_cache, project_of, stale_line, state_chip, title};
 use super::{
     Action, AwaitingView, Button, ButtonKind, Chip, Compose, Decide, DecideNote, DecisionRow,
     DiffLine, DiffLineKind, DiffView, DocumentSection, DocumentView, Draft, Header, Lens,
     LiveAction, LiveState, ProposedRow, ReviewRow, SectionBody, Sent, State,
 };
-use crate::model::Id;
 use crate::model::act::{self, ActStatus, Authority};
 use crate::model::board::Mark;
 use crate::model::daemon::Feed;
@@ -21,6 +19,7 @@ use crate::model::hue::Hue;
 use crate::model::nav::Form;
 use crate::model::text::{Rich, span};
 use crate::model::work::when;
+use crate::model::{Id, Live};
 
 const OFFLINE: &str = "Refused offline: acceptance is revision-checked when it applies.";
 
@@ -347,7 +346,8 @@ fn diff_toggle(state: &State, id: &Id, detail: &PlanDetail) -> Option<Button> {
                     LiveAction::Document(id.clone())
                 }),
             )
-            .quiet(),
+            .quiet()
+            .hinted("Back to the plan's document."),
         );
     }
     diff_range(detail).map(|(from, to)| {
@@ -356,6 +356,7 @@ fn diff_toggle(state: &State, id: &Id, detail: &PlanDetail) -> Option<Button> {
             Action::Live(LiveAction::Diff(id.clone())),
         )
         .quiet()
+        .hinted(format!("What changed between revisions {from} and {to}."))
     })
 }
 
@@ -372,15 +373,14 @@ pub(super) fn decide(state: &State, feed: &Feed, id: &Id, detail: &PlanDetail, e
     let off = env.conn.refuses();
     let members = detail.document.as_ref().map_or(0, |doc| doc.proposed.len());
     let gate = accept_gate(live, feed, id, env);
-    let mut accept = Button::new(
-        match (phone, off, members) {
-            (true, true, _) => "Accept · refused offline".to_owned(),
-            (true, false, 0) | (false, _, 0) => "Accept".to_owned(),
-            (true, false, n) => format!("Accept · publish {n}"),
-            (false, _, n) => format!("Accept · publish {n} members"),
-        },
-        Action::Live(LiveAction::Accept(id.clone())),
-    );
+    let mut accept = Button::new("Accept plan", Action::Live(LiveAction::Accept(id.clone())))
+        .hinted(match &gate {
+            Ok(rev) if members > 0 => format!(
+                "Accept {rev} after a fresh confirmation on this device; it publishes {members} member tasks."
+            ),
+            Ok(rev) => format!("Accept {rev} after a fresh confirmation on this device."),
+            Err(refusal) => refusal.text.clone(),
+        });
     accept.enabled = gate.is_ok();
     accept.primary = true;
     accept.kind = ButtonKind::Standard;
@@ -416,19 +416,34 @@ pub(super) fn decide(state: &State, feed: &Feed, id: &Id, detail: &PlanDetail, e
     });
     let mut buttons = vec![];
     if compose.is_none() {
-        let changes = Button::new(
-            if phone { "Changes" } else { "Request changes" },
+        let changes_gate = changes_gate(live, feed, id, env);
+        let mut changes = Button::new(
+            "Request changes",
             Action::Live(LiveAction::Changes(id.clone())),
-        );
-        if phone {
+        )
+        .hinted(match &changes_gate {
+            Ok(rev) => format!("Write a request for changes to {rev}."),
+            Err(refusal) => refusal.text.clone(),
+        });
+        changes.enabled = changes_gate.is_ok();
+        buttons.push(accept);
+        buttons.push(changes);
+        // The phone's one Ask is its floating button, and its diff is in the page head.
+        if !phone {
+            buttons.push(
+                Button::new(
+                    "Ask",
+                    Action::Live(LiveAction::Ask {
+                        record: Live::Plan(id.clone()),
+                        rev: feed.plans.get(id.as_str()).map(|row| row.rev),
+                        to: None,
+                        text: None,
+                    }),
+                )
+                .quiet()
+                .hinted("Open the shared chat with this plan attached."),
+            );
             if !off {
-                buttons.push(changes);
-            }
-            buttons.push(accept);
-        } else {
-            buttons.push(accept);
-            if !off {
-                buttons.push(changes);
                 buttons.extend(diff_toggle(state, id, detail));
             }
         }
@@ -442,7 +457,10 @@ pub(super) fn decide(state: &State, feed: &Feed, id: &Id, detail: &PlanDetail, e
                     "Check result",
                     Action::Live(LiveAction::Recover(sent.key.clone())),
                 )
-                .quiet(),
+                .quiet()
+                .hinted(
+                    "Ask corrald for the result of the uncertain command, under the same identity.",
+                ),
             );
         }
     }
@@ -480,7 +498,7 @@ pub(super) fn decide(state: &State, feed: &Feed, id: &Id, detail: &PlanDetail, e
         (None, Some((_, status))) if status != ActStatus::Done => {
             Some(status_note("Accept", &status))
         }
-        _ => gate.as_ref().err().filter(|_| !(phone && off)).cloned(),
+        _ => gate.as_ref().err().cloned(),
     };
     let attribution: Rich = match (&note, phone, detail.revision.as_deref()) {
         (None, false, Some(rev)) => {
@@ -505,7 +523,7 @@ pub(super) fn decide(state: &State, feed: &Feed, id: &Id, detail: &PlanDetail, e
     }
 }
 
-/// The awaiting revision: needs-you head, pipeline, document, decisions and decide bar.
+/// The awaiting revision: needs-you head, document, decisions, and the brief beside them.
 pub(super) fn awaiting(
     state: &State,
     feed: &Feed,
@@ -576,11 +594,14 @@ pub(super) fn awaiting(
             ))],
         }),
     });
+    let decide = decide(state, feed, id, detail, env);
+    let brief = super::awaiting_brief::brief(feed, detail, &mut sections, decide);
     AwaitingView {
         header: Header {
             plan: Some(id.clone()),
             chips: vec![state_chip(WireState::Awaiting), review_chip],
             id: rev.map_or_else(|| id.to_string(), |rev| format!("{id} {rev}")),
+            project: project_of(row),
             title: title(id, row),
             meta: vec![],
             illustrative: None,
@@ -591,14 +612,8 @@ pub(super) fn awaiting(
             },
             stale,
         },
-        pipeline: pipeline(
-            "Design · awaiting you",
-            format!("Members 0/{members}"),
-            true,
-        ),
         sections,
-        artifact: vec![],
-        decide: decide(state, feed, id, detail, env),
+        brief,
     }
 }
 
@@ -624,6 +639,7 @@ pub(super) fn document_view(
                 .revision
                 .as_ref()
                 .map_or_else(|| id.to_string(), |rev| format!("{id} {rev}")),
+            project: project_of(row),
             title: title(id, row),
             meta: vec![],
             illustrative: None,
@@ -723,6 +739,7 @@ pub(super) fn diff(
                 hue: Hue::Neutral,
             }],
             id: format!("{id} {from} → {to}"),
+            project: project_of(row),
             title: title(id, row),
             meta: vec![],
             illustrative: None,

@@ -1,4 +1,4 @@
-//! One agent session from corrald: its row on the wall, its bounded transcript page, its pane's
+//! One agent session from corrald: its row in Agents, its bounded transcript page, its pane's
 //! screen (read live where corrald serves it, else a recorded capture such as a gate's log), its
 //! action bar (`controls`) and its reply box (`live_reply`) or, for an assistant, the thread its
 //! composer chats in. A session without a pane (a daemon-hosted assistant) has no terminal; none
@@ -86,7 +86,7 @@ fn reason(message: &str) -> &str {
 /// The session pane's screen: read live where corrald serves it, or a recorded capture (a
 /// gate's log). Live rows stay as read; only a current read is `Live`. Keys go to the pane only
 /// through `keys`, the bar under it, while corrald offers them.
-fn terminal(
+pub(super) fn terminal(
     row: &AgentRow,
     pane: &str,
     cache: Option<&DetailCache>,
@@ -295,7 +295,8 @@ pub fn session(
     let notice = match (row, body) {
         (None, Some(_)) => Some((
             Hue::Neutral,
-            "This session is no longer on the wall; this is its last recorded transcript.".into(),
+            "This session is no longer listed in Agents; this is its last recorded transcript."
+                .into(),
         )),
         (None, None) if !stale(feed, "agents") && feed.topics.contains_key("agents") => {
             Some((Hue::Held, format!("corrald lists no session {id} now.")))
@@ -445,6 +446,9 @@ mod tests {
                 now: String::new(),
                 since: None,
                 tail: Vec::new(),
+                last_output_at: None,
+                activity: None,
+                steps: None,
                 cost_usd: None,
                 cost_basis: None,
                 tokens: None,

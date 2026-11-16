@@ -7,11 +7,10 @@ use crate::model::review::{ArtifactContent, ArtifactView, ArtifactsView, LogView
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::marks::{hue_ink, mark};
-use crate::ui::kit::text::{dim, h3, mono, plain};
+use crate::ui::kit::text::{dim, h3, h3_flush, mono, plain};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, Token, color, text_size};
 
-use super::head::flush_h3;
 use super::{Ctx, command, rich_at};
 
 /// `.plan-doc p { max-width: 72ch }` at the body size.
@@ -74,7 +73,7 @@ pub(super) fn report(app: AppState, report: &ReportView) -> AnyElement {
             view().h(px(10.0)).into_element()
         }
     };
-    let mut parts = vec![flush_h3(app, report.heading.clone())];
+    let mut parts = vec![h3_flush(app, report.heading.clone(), None)];
     if terminal {
         parts.push(term::blank());
     }

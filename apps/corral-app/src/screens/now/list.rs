@@ -1,271 +1,245 @@
-//! "Who acts next": the grouped list of the model (`work::GroupedList`) in each form's rows, built
-//! from the feed's board. On desktop and phone a task row is the kit's; the collapsed queued line
-//! is this list's own, laid in the same columns. The list measures its width once, and its own
-//! head and rows give way as the kit's task rows do (`rows::task_columns`). Now's project scope
-//! and its Group toggle head the list; the groups are the model's, by state or by project. The
-//! Closed section follows the groups on every form. It is the destination's keyboard list
-//! (`AppState::list_keys`), and a row the keyboard selects scrolls into its panel's view.
+//! Now's main column: corrald's word on a board it cannot keep current, the loop band (desktop
+//! and terminal), the sections of owner moves and moving tasks, the Waiting line that opens its
+//! queued, held and parked rows in place, then the Closed section. The rows are built again
+//! only when what they are changes; selecting another row restyles the two concerned and keeps
+//! every row, and its focus, in place. It is the destination's keyboard list
+//! (`AppState::list_keys`), and a row the keyboard selects scrolls into view.
 
 use nsh_core::prelude::*;
 
-use crate::model::work::{self, GroupedList, Row};
-use crate::model::{Form, Hue};
+use crate::model::glance::Stat;
+use crate::model::work::{self, NowPage, NowRow, NowSection, NowWaiting};
+use crate::model::{Form, Hue, Id};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::chip::chip;
+use crate::ui::kit::glance::{loop_band, stat_in};
+use crate::ui::kit::hint::{hint_on, hinted};
+use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::notice::{notice, skeleton};
-use crate::ui::kit::project_filter::project_filter_grouped;
-use crate::ui::kit::rows::{TaskColumns, group_header, list_row, task_row};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
-use super::cells;
 use super::closed::closed_section;
-use super::parts::{press, press_id, pressable, quiet, scope};
-use super::verbs::{row_record, with_menu};
+use super::parts::{go_scoped, press, pressable, quiet};
+use super::rows::{self, Fit, ask_row, more_row, task_row};
 
 const RING: f32 = 2.0;
 
-/// The desktop and terminal list: corrald's word on a board it cannot keep current, with its
-/// Retry, the stale board's `as of` chip, the column head, the groups, then the Closed section.
-pub(super) fn list(app: AppState) -> AnyElement {
+/// What the rows are, apart from which one is selected.
+#[derive(Debug, Clone, PartialEq)]
+struct Shape {
+    loading_rows: usize,
+    notice: Option<String>,
+    sections: Vec<NowSection>,
+    waiting: NowWaiting,
+}
+
+fn shape(page: &NowPage) -> Shape {
+    let mut sections = page.sections.clone();
+    for row in sections
+        .iter_mut()
+        .flat_map(|section| section.rows.iter_mut())
+    {
+        match row {
+            NowRow::Ask(row) => row.selected = false,
+            NowRow::Task(row) => row.selected = false,
+        }
+    }
+    let mut waiting = page.waiting.clone();
+    for row in waiting
+        .groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+    {
+        row.selected = false;
+    }
+    Shape {
+        loading_rows: page.loading_rows,
+        notice: page.notice.clone(),
+        sections,
+        waiting,
+    }
+}
+
+fn ask_selected(page: &NowPage, key: &Id) -> bool {
+    page.sections
+        .iter()
+        .flat_map(|section| &section.rows)
+        .any(|row| matches!(row, NowRow::Ask(ask) if ask.key == *key && ask.selected))
+}
+
+fn task_selected(page: &NowPage, id: &str) -> bool {
+    let moving = page
+        .sections
+        .iter()
+        .flat_map(|section| &section.rows)
+        .any(|row| matches!(row, NowRow::Task(task) if task.line.id == id && task.selected));
+    moving
+        || page
+            .waiting
+            .groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .any(|task| task.line.id == id && task.selected)
+}
+
+/// The desktop and terminal main column, without its scroll: the board's notice, the loop band
+/// (a stage opens its destination in Now's scope), then [`list`].
+pub(super) fn main_column(app: AppState, page: Memo<NowPage>) -> AnyElement {
     let form = app.form;
-    let source = computed(move || {
-        let selection = app.selection();
-        let (filter, grouping) = scope(app);
-        app.feed.with(|feed| {
-            app.work.with(|state| {
-                work::daemon_list_filtered(state, feed, &selection, form, &filter, grouping)
+    let band = computed(move || page.with(|page| page.loop_band.clone()));
+    let band = dynamic(move || {
+        band.with(|band| {
+            loop_band(app, band, move |stage| {
+                if let Some(to) = stage.to {
+                    go_scoped(app, page, to);
+                }
             })
         })
     });
-    let board = computed(move || app.feed.with(|feed| work::daemon_status(feed).banner));
-    let as_of = computed(move || app.feed.with(|feed| work::daemon_status(feed).as_of));
-    let label = untracked(|| source.with(|list| list.label));
-    let (width, columns) = cells::measured(app.form);
-    let keyed = view()
-        .element_ref(&app.list_keys)
-        .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
-        .pb(px(if app.form == Form::Terminal {
-            0.0
-        } else {
-            14.0
-        }))
-        .role(AccessibilityRole::List)
-        .label(label)
-        .child(dynamic(move || {
-            board
-                .get()
-                .map(|banner| untracked(|| board_notice(app, &banner)))
-        }))
-        .child(dynamic(move || {
-            as_of.get().map(|stamp| {
-                view()
-                    .flex_row()
-                    .px(px(16.0))
-                    .pb(px(4.0))
-                    .child(chip(app, stamp, Hue::Held))
-                    .into_element()
-            })
-        }))
-        .child(rows(app, source, columns))
-        .child(closed_section(app))
-        .into_element();
-    // The chip bar is a sibling above the keyboard list, not inside it: a focused chip keeps
-    // Enter and Space, which the list keys would take to open the selected row.
-    view()
-        .pt(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
-        .child(project_filter_grouped(app))
-        .child(keyed)
-        .into_element()
-}
-
-/// corrald's notice that the board is out of date or refreshing, with its Retry (the only
-/// action the daemon's board notice carries; `btn-retry-board`), above the rows it qualifies.
-fn board_notice(app: AppState, banner: &work::Banner) -> AnyElement {
-    let retry = banner
-        .actions
-        .first()
-        .map(|button| pressable(app, button, false));
-    let room = match app.form {
-        Form::Terminal => view(),
-        Form::Desktop | Form::Phone => view().px(px(16.0)).pb(px(8.0)),
+    let band = match form {
+        Form::Terminal => view().px(term::cells(1.0)).child(band),
+        Form::Desktop | Form::Phone => view().mx(px(20.0)).mt(px(14.0)).mb(px(2.0)).child(band),
     };
-    room.child(notice(app, banner.hue, &banner.text, retry))
+    view()
+        .child(board_status(app, page))
+        .child(band)
+        .child(list(app, page))
         .into_element()
 }
 
-/// The Goals panel's title and list label.
-pub(super) const GOALS_LABEL: &str = "Goals";
-
-/// The Goals panel: the goals the board's tasks serve, each narrowing the list to it.
-pub(super) fn goals(app: AppState) -> AnyElement {
-    let rows = computed(move || {
-        let (filter, _) = scope(app);
-        app.feed.with(|feed| {
-            app.work
-                .with(|state| work::daemon_goals_filtered(state, feed, &filter))
-        })
-    });
+/// corrald's notice that the board is out of date or refreshing, with its Retry
+/// (`btn-retry-board`), and the stale board's `as of` chip.
+pub(crate) fn board_status(app: AppState, page: Memo<NowPage>) -> AnyElement {
+    let status = computed(move || page.with(|page| page.status.clone()));
     dynamic(move || {
-        rows.with(|rows| {
-            if rows.is_empty() {
-                return quiet(app, work::NO_GOALS);
+        status.with(|status| {
+            let banner = status.banner.as_ref().map(|banner| {
+                let retry = banner
+                    .actions
+                    .first()
+                    .map(|button| pressable(app, button, false));
+                notice(app, banner.hue, &banner.text, retry)
+            });
+            let stamp = status
+                .as_of
+                .clone()
+                .map(|stamp| chip(app, stamp, Hue::Held));
+            if banner.is_none() && stamp.is_none() {
+                return view().into_element();
             }
-            view()
-                .py(px(if app.form == Form::Terminal { 0.0 } else { 4.0 }))
-                .role(AccessibilityRole::List)
-                .label(GOALS_LABEL)
-                .children(
-                    rows.iter()
-                        .enumerate()
-                        .map(|(index, row)| goal_row(app, row, index))
-                        .collect::<Vec<_>>(),
-                )
+            let frame = match app.form {
+                Form::Terminal => view().px(term::cells(1.0)),
+                Form::Desktop => view().px(px(20.0)).pt(px(12.0)).gap(px(8.0)),
+                Form::Phone => view().px(px(18.0)).pt(px(8.0)).gap(px(8.0)),
+            };
+            frame
+                .children(banner)
+                .children(stamp.map(|stamp| view().flex_row().child(stamp)))
                 .into_element()
         })
     })
 }
 
-/// One goal the board serves: its words, then how many tasks serve it in mono figures; the
-/// goal the list is narrowed to carries the list's selection. A press narrows the list to it.
-fn goal_row(app: AppState, row: &work::GoalRow, index: usize) -> AnyElement {
+/// The keyboard list on every form: the sections, Waiting and Closed. It measures its width
+/// once, and its rows give way by it ([`rows::fit`]).
+pub(super) fn list(app: AppState, page: Memo<NowPage>) -> AnyElement {
     let form = app.form;
-    let selected = row.selected;
-    let action = row.button.action.clone();
-    let content = vec![
-        line(
-            form,
-            row.button.label.to_string(),
-            if form == Form::Phone { 14.0 } else { 12.5 },
-            color(Token::Ink),
-            false,
-        )
-        .flex_1()
-        .min_w(px(0.0))
-        .into_element(),
-        line(form, row.count.to_string(), 11.0, color(Token::Ink3), true).into_element(),
-    ];
-    list_row(
-        app,
-        format!("{}, {} tasks", row.button.label, row.count),
-        format!("btn-goal-{index}"),
-        move || selected,
-        move || {
-            if let Some(action) = &action {
-                press(app, action.clone());
-            }
-        },
-        content,
-    )
+    let width = signal(0.0_f32);
+    let fit = computed(move || rows::fit(form, width.get()));
+    let shape = computed(move || page.with(shape));
+    view()
+        .element_ref(&app.list_keys)
+        .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
+        .role(AccessibilityRole::List)
+        .label(work::NowPage::LIST_LABEL)
+        .pb(px(if form == Form::Terminal { 0.0 } else { 14.0 }))
+        .child(dynamic(move || {
+            shape.with(|shape| body(app, shape, page, fit))
+        }))
+        .child(closed_section(app, page))
+        .into_element()
 }
 
-/// The list's rows for `source`, built again only when its shape changes: selecting another task
-/// restyles the two rows concerned and keeps every row (and its focus) in place. `columns` says
-/// which optional columns the list's width holds, as the kit's task rows decide for themselves.
-pub(super) fn rows(
-    app: AppState,
-    source: Memo<GroupedList>,
-    columns: Memo<TaskColumns>,
-) -> AnyElement {
-    let shape = computed(move || source.with(unselected));
-    dynamic(move || shape.with(|list| groups(app, list, source, columns)))
-}
-
-/// The list with no row selected: what the rows are, apart from which one is.
-fn unselected(list: &GroupedList) -> GroupedList {
-    let mut list = list.clone();
-    for row in list
-        .groups
-        .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
-    {
-        if let Row::Task(task) = row {
-            task.selected = false;
-        }
-    }
-    list
-}
-
-fn is_selected(source: Memo<GroupedList>, id: &str) -> bool {
-    source.with(|list| {
-        list.groups
-            .iter()
-            .flat_map(|group| group.rows.iter())
-            .any(|row| matches!(row, Row::Task(task) if task.line.id == id && task.selected))
-    })
-}
-
-fn groups(
-    app: AppState,
-    list: &GroupedList,
-    source: Memo<GroupedList>,
-    columns: Memo<TaskColumns>,
-) -> AnyElement {
-    if list.loading_rows != 0 {
-        return loading(app, list.loading_rows);
-    }
-    if let Some(notice) = list.notice {
-        return quiet(app, notice);
+fn body(app: AppState, shape: &Shape, page: Memo<NowPage>, fit: Memo<Fit>) -> AnyElement {
+    if shape.loading_rows != 0 {
+        return loading(app, shape.loading_rows);
     }
     let mut out: Vec<AnyElement> = Vec::new();
-    if app.form == Form::Terminal {
-        out.push(cells::head(list, columns));
-    } else if !list.columns.is_empty() {
-        out.push(column_head(list, columns));
+    if let Some(words) = &shape.notice {
+        out.push(quiet(app, words.clone()));
     }
-    for group in &list.groups {
-        out.push(group_header(
+    for section in &shape.sections {
+        out.push(section_head(
             app,
-            group.label.clone(),
-            Some(group.count),
-            group.hue,
-            group.detail,
+            &section.label,
+            section.count.to_string(),
+            section.hue,
+            &section.hint,
         ));
-        for row in &group.rows {
+        for row in &section.rows {
             out.push(match row {
-                Row::Task(task) => {
-                    let id = task.line.id.clone();
-                    let action = task.action.clone();
-                    let record = row_record(&action);
-                    let test_id = format!("task-{id}");
-                    let selected = {
-                        let id = id.clone();
-                        computed(move || is_selected(source, &id))
-                    };
-                    let row = task_row(
-                        app,
-                        task.line.clone(),
-                        task.project_chip.clone(),
-                        move || is_selected(source, &id),
-                        move || press(app, action.clone()),
-                        test_id,
-                    );
-                    // A daemon task's row carries its commands: its context menu on desktop
-                    // and terminal, the action sheet a held finger opens on the phone.
-                    let row = match record {
-                        Some(record) => with_menu(app, record, row),
-                        None => row,
-                    };
-                    revealing(selected, row)
+                NowRow::Ask(row) => {
+                    let key = row.key.clone();
+                    let selected = computed(move || page.with(|page| ask_selected(page, &key)));
+                    revealing(selected, ask_row(app, row, selected, fit))
                 }
-                Row::More(button) => {
-                    let label = button.label.to_string();
-                    let action = button.action.clone();
-                    quiet_row(app, label, action.as_ref().map(press_id), move || {
-                        if let Some(action) = &action {
-                            press(app, action.clone());
-                        }
-                    })
-                }
+                NowRow::Task(row) => task(app, row, page, fit),
             });
+        }
+    }
+    if shape.waiting.total > 0 {
+        out.push(waiting(app, &shape.waiting, page, fit));
+    }
+    view().children(out).into_element()
+}
+
+fn task(app: AppState, row: &work::NowTaskRow, page: Memo<NowPage>, fit: Memo<Fit>) -> AnyElement {
+    let id = row.line.id.clone();
+    let selected = computed(move || page.with(|page| task_selected(page, &id)));
+    revealing(selected, task_row(app, row, selected, fit))
+}
+
+/// The Waiting line: its counts after the label; a press opens its groups in place.
+pub(crate) fn waiting(
+    app: AppState,
+    waiting: &NowWaiting,
+    page: Memo<NowPage>,
+    fit: Memo<Fit>,
+) -> AnyElement {
+    let toggle = waiting.toggle.clone();
+    let head = disclosure_head(
+        app,
+        Disclosure {
+            test_id: "btn-waiting",
+            label: waiting.label,
+            count: Some(waiting.total.to_string()),
+            stats: &waiting.stats,
+            hint: &waiting.hint,
+            open: waiting.expanded,
+        },
+        move || press(app, toggle.clone()),
+    );
+    let mut out = vec![head];
+    if waiting.expanded {
+        for group in &waiting.groups {
+            out.push(section_head(
+                app,
+                &group.label,
+                group.count.to_string(),
+                group.hue,
+                "",
+            ));
+            out.extend(group.rows.iter().map(|row| task(app, row, page, fit)));
+            out.extend(group.more.as_ref().map(|button| more_row(app, button)));
         }
     }
     view().children(out).into_element()
 }
 
-/// `row`, scrolled into its panel's view whenever it becomes the selected one, so a selection
-/// the keyboard moves never leaves the viewport. A row already in view stays where it is.
+/// A row scrolled into view whenever it becomes the selected one, so a selection the keyboard
+/// moves never leaves the viewport. A row already in view stays where it is.
 pub(super) fn revealing(selected: Memo<bool>, row: AnyElement) -> AnyElement {
     let handle = element_ref();
     effect(move || {
@@ -278,208 +252,267 @@ pub(super) fn revealing(selected: Memo<bool>, row: AnyElement) -> AnyElement {
     view().element_ref(&handle).child(row).into_element()
 }
 
-/// Placeholder rows while the projection's detail loads (`.skel` in the list's columns).
-fn loading(app: AppState, count: usize) -> AnyElement {
+/// The ink of a heading in `hue`: the hue's own, full ink for a neutral one.
+fn head_ink(hue: Hue) -> AdaptiveColor {
+    match hue {
+        Hue::Neutral => color(Token::Ink),
+        hue => hue_ink(hue),
+    }
+}
+
+/// The frame of a section heading (`.gh`): desktop 20 pt above and 6 below, 20 pt in, a
+/// hairline under it; phone 18 pt above and in; terminal one row.
+fn head_frame(form: Form) -> View {
+    let row = view()
+        .flex_row()
+        .items_center()
+        .flex_shrink_0()
+        .gap(px(8.0));
+    match form {
+        Form::Desktop => row
+            .pt(px(20.0))
+            .pb(px(6.0))
+            .px(px(20.0))
+            .border_b_1()
+            .border_b_color(color(Token::Rule)),
+        Form::Phone => row.pt(px(18.0)).pb(px(6.0)).px(px(18.0)),
+        Form::Terminal => row.h(px(16.0)),
+    }
+}
+
+fn head_label(form: Form, label: &str, ink: AdaptiveColor) -> Text {
+    let words = text(label.to_owned())
+        .number_of_lines(1u32)
+        .flex_shrink_0()
+        .text_color(ink)
+        .font_weight(if form == Form::Terminal {
+            FontWeight::BOLD
+        } else {
+            FontWeight::SEMIBOLD
+        });
+    if form == Form::Terminal {
+        words
+    } else {
+        words.font_family(FONT_TEXT).text_size(px(13.0))
+    }
+}
+
+fn head_count(form: Form, count: String) -> Text {
+    let figures = text(count)
+        .number_of_lines(1u32)
+        .flex_shrink_0()
+        .text_color(color(Token::Ink3));
+    if form == Form::Terminal {
+        figures
+    } else {
+        figures
+            .font_family(FONT_MONO)
+            .tabular_nums()
+            .text_size(px(12.0))
+    }
+}
+
+/// A section heading: the label in its hue (its sentence on hover, focus or the status line),
+/// the count in mono; a terminal rules the rest of the row.
+pub(crate) fn section_head(
+    app: AppState,
+    label: &str,
+    count: String,
+    hue: Hue,
+    hint: &str,
+) -> AnyElement {
+    let form = app.form;
+    head_frame(form)
+        .role(AccessibilityRole::Header)
+        .child(hinted(
+            app,
+            head_label(form, label, head_ink(hue)),
+            hint.to_owned(),
+        ))
+        .child(head_count(form, count))
+        .when(form == Form::Terminal, |row| {
+            row.child(view().flex_1().min_w(px(0.0)).child(term::hrule()))
+        })
+        .into_element()
+}
+
+/// The line under the scope bar when owner moves wait in other projects: its words, pressing
+/// it shows every project. test id `btn-scope-all`.
+pub(super) fn scope_note(app: AppState, page: Memo<NowPage>) -> AnyElement {
+    let note =
+        computed(move || page.with(|page| page.scope_note.clone().zip(page.scope_action.clone())));
+    dynamic(move || {
+        note.with(|note| {
+            note.clone().map(|(words, action)| {
+                let form = app.form;
+                let line = rows::words(form, words.clone(), 12.5, hue_ink(Hue::You));
+                let link = view()
+                    .flex_row()
+                    .items_center()
+                    .flex_shrink_0()
+                    .cursor_pointer()
+                    .role(AccessibilityRole::Link)
+                    .label(words)
+                    .test_id("btn-scope-all")
+                    .on_press(move || app.set_project_filter(action.screen, action.filter.clone()))
+                    .focus_visible(|s| {
+                        s.outline(px(RING))
+                            .outline_color(color(Token::Focus))
+                            .outline_offset(px(RING))
+                    })
+                    .child(line);
+                match form {
+                    Form::Desktop => view()
+                        .flex_row()
+                        .px(px(20.0))
+                        .py(px(6.0))
+                        .border_b_1()
+                        .border_b_color(color(Token::Rule))
+                        .child(link.hover(|s| s.opacity(0.8))),
+                    Form::Phone => view()
+                        .flex_row()
+                        .px(px(18.0))
+                        .py(px(8.0))
+                        .child(link.min_h(px(32.0))),
+                    Form::Terminal => view().flex_row().px(term::cells(1.0)).child(link),
+                }
+                .into_element()
+            })
+        })
+    })
+}
+
+/// What a [`disclosure_head`] says: its test id, label, count, counts at the trailing edge,
+/// hint, and whether it is open.
+pub(super) struct Disclosure<'a> {
+    pub test_id: &'a str,
+    pub label: &'a str,
+    pub count: Option<String>,
+    pub stats: &'a [Stat],
+    pub hint: &'a str,
+    pub open: bool,
+}
+
+/// A heading that opens and folds what is under it (Waiting, Closed): a chevron that turns
+/// down while open (a terminal paints its own ▸ / ▾ from the expanded state), the label in
+/// quiet ink, the count, then its counts at the trailing edge. One button for screen readers,
+/// saying whether it is expanded; its hint on hover, focus or the status line.
+pub(super) fn disclosure_head(
+    app: AppState,
+    head: Disclosure<'_>,
+    on_press: impl Fn() + 'static,
+) -> AnyElement {
+    let form = app.form;
+    let Disclosure {
+        test_id,
+        label,
+        count,
+        stats,
+        hint,
+        open,
+    } = head;
+    let spoken = match &count {
+        Some(count) => format!("{label} {count}"),
+        None => label.to_owned(),
+    };
+    let ink = color(if form == Form::Terminal {
+        Token::Ink
+    } else {
+        Token::Ink3
+    });
+    let chevron = (form != Form::Terminal).then(|| {
+        view()
+            .flex_shrink_0()
+            .rotate(move || deg(if open { 90.0 } else { 0.0 }))
+            .child(icon(Icon::Chevron, 12.0, color(Token::Ink3)))
+    });
+    let row = head_frame(form)
+        .cursor_pointer()
+        .role(AccessibilityRole::Button)
+        .label(spoken)
+        .accessibility_state(move || AccessibilityState {
+            expanded: Some(open),
+            ..AccessibilityState::default()
+        })
+        .test_id(test_id)
+        .on_press(move || on_press())
+        .focus_visible(|s| {
+            s.outline(px(RING))
+                .outline_color(color(Token::Focus))
+                .outline_offset(px(-RING))
+        })
+        .when(form == Form::Desktop, |row| {
+            row.hover(|s| s.bg(color(Token::Hover)))
+        })
+        .when(form == Form::Phone, |row| {
+            row.min_h(px(48.0)).active(|s| s.bg(color(Token::Hover)))
+        })
+        .children(chevron)
+        .child(head_label(form, label, ink))
+        .children(count.map(|count| head_count(form, count)))
+        .child(
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .when(form == Form::Terminal, |rule| rule.child(term::hrule())),
+        )
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .flex_shrink_0()
+                .gap(if form == Form::Terminal {
+                    term::cells(2.0)
+                } else {
+                    px(12.0)
+                })
+                .children(
+                    stats
+                        .iter()
+                        .map(|stat| stat_in(app, stat))
+                        .collect::<Vec<_>>(),
+                ),
+        );
+    hint_on(app, row, hint.to_owned()).into_element()
+}
+
+/// Placeholder rows while the board's first page loads, in the rows' own heights.
+pub(crate) fn loading(app: AppState, count: usize) -> AnyElement {
     let form = app.form;
     let rows = (0..count).map(|index| {
-        // The mock varies each title bar's length so the rows read as text.
+        // Each title bar a different length, so the rows read as text.
         let title = 0.6 + ((index * 13) % 35) as f32 / 100.0;
         match form {
             Form::Phone => view()
                 .px(px(18.0))
-                .py(px(7.0))
+                .py(px(10.0))
                 .child(skeleton(app, &[(0.7, 14.0), (0.4, 10.0)]))
                 .into_element(),
             Form::Terminal => view()
-                .px(term::cells(1.0))
+                .px(term::cells(2.0))
                 .child(skeleton(app, &[(title, 16.0)]))
                 .into_element(),
             Form::Desktop => view()
                 .flex_row()
+                .items_center()
                 .gap(px(10.0))
-                .px(px(16.0))
-                .py(px(9.0))
-                .child(view().w(px(50.0)).child(skeleton(app, &[(1.0, 10.0)])))
+                .h(px(38.0))
+                .px(px(20.0))
+                .border_b_1()
+                .border_b_color(color(Token::Rule))
+                .child(view().w(px(52.0)).child(skeleton(app, &[(1.0, 10.0)])))
                 .child(
                     view()
                         .flex_1()
                         .min_w(px(0.0))
                         .child(skeleton(app, &[(title, 10.0)])),
                 )
-                .child(view().w(px(64.0)).child(skeleton(app, &[(1.0, 10.0)])))
-                .child(view().w(px(120.0)).child(skeleton(app, &[(1.0, 10.0)])))
+                .child(view().w(px(150.0)).child(skeleton(app, &[(1.0, 10.0)])))
                 .into_element(),
         }
     });
     view()
-        .label("Loading")
+        .label(NowPage::LOADING)
         .children(rows.collect::<Vec<_>>())
         .into_element()
-}
-
-/// A fixed-width column of a desktop or phone row.
-fn fixed(points: f32, right: bool, child: AnyElement) -> AnyElement {
-    view()
-        .w(px(points))
-        .flex_shrink_0()
-        .flex_row()
-        .items_center()
-        .when(right, |cell| cell.justify_end())
-        .child(child)
-        .into_element()
-}
-
-/// A desktop column that gives way: hidden whole, for sight and screen readers, while `show`
-/// does not hold.
-fn give_way(
-    points: f32,
-    right: bool,
-    show: impl Fn() -> bool + Copy + 'static,
-    child: AnyElement,
-) -> AnyElement {
-    let cell = view()
-        .w(px(points))
-        .flex_shrink_0()
-        .flex_row()
-        .items_center()
-        .when(right, |cell| cell.justify_end())
-        .accessibility_elements_hidden(move || !show())
-        .child(child);
-    cells::optional(cell, show).into_element()
-}
-
-/// One line of text in the list's look: mono figures, or the text face at `size`.
-fn line(
-    form: Form,
-    content: impl Into<SharedString>,
-    size: f32,
-    ink: AdaptiveColor,
-    mono: bool,
-) -> Text {
-    let words = text(content.into())
-        .number_of_lines(1u32)
-        .truncate()
-        .text_color(ink);
-    match (form, mono) {
-        (Form::Terminal, _) => words,
-        (_, true) => words
-            .font_family(FONT_MONO)
-            .tabular_nums()
-            .text_size(px(size)),
-        (_, false) => words.font_family(FONT_TEXT).text_size(px(size)),
-    }
-}
-
-fn blank() -> AnyElement {
-    view().into_element()
-}
-
-/// The desktop column head (`.colhead`): the model's column names over id, task, rail, now, age,
-/// cost, in 10.5 pt spaced capitals, faint; the rail's names its stages for screen readers.
-fn column_head(list: &GroupedList, columns: Memo<TaskColumns>) -> AnyElement {
-    let name = |index: usize| -> Text {
-        text(list.columns.get(index).copied().unwrap_or_default())
-            .number_of_lines(1u32)
-            .uppercase()
-            .font_family(FONT_TEXT)
-            .text_size(px(10.5))
-            .letter_spacing(px(10.5 * 0.06))
-            .text_color(color(Token::Ink4))
-    };
-    let rail = name(2).label(list.rail_title);
-    view()
-        .flex_row()
-        .items_center()
-        .accessibility_elements_hidden(true)
-        .gap(px(8.0))
-        .pl(px(16.0))
-        .pr(px(14.0))
-        .h(px(22.0))
-        .child(fixed(10.0, false, blank()))
-        .child(fixed(14.0, false, blank()))
-        .child(fixed(50.0, false, name(0).into_element()))
-        .child(view().flex_1().min_w(px(0.0)).child(name(1)))
-        .child(fixed(64.0, false, rail.into_element()))
-        .child(give_way(
-            150.0,
-            false,
-            move || columns.get().now,
-            name(3).into_element(),
-        ))
-        .child(give_way(
-            34.0,
-            true,
-            move || columns.get().age,
-            name(4).into_element(),
-        ))
-        .child(give_way(
-            46.0,
-            true,
-            move || columns.get().cost,
-            name(5).into_element(),
-        ))
-        .into_element()
-}
-
-/// A quiet pressable line (`.more`): the collapsed queued tasks. Desktop 26 pt, under the titles
-/// (48 pt in), a chevron after the words; phone at least 48 pt with a hairline under it;
-/// terminal one row of Cells.
-fn quiet_row(
-    app: AppState,
-    label: String,
-    test_id: Option<String>,
-    on_press: impl Fn() + 'static,
-) -> AnyElement {
-    let form = app.form;
-    let words = line(
-        form,
-        label.clone(),
-        if form == Form::Phone { 14.0 } else { 12.0 },
-        color(if form == Form::Terminal {
-            Token::Ink
-        } else {
-            Token::Ink3
-        }),
-        false,
-    );
-    let row = view()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .flex_shrink_0()
-        .cursor_pointer()
-        .role(AccessibilityRole::Button)
-        .label(label)
-        .when_some(test_id, |row, id| row.test_id(&id))
-        .on_press(move || on_press());
-    let row = match form {
-        Form::Desktop => row
-            .h(px(26.0))
-            .pl(px(48.0))
-            .pr(px(16.0))
-            .hover(|s| s.bg(color(Token::Hover)))
-            .focus_visible(|s| {
-                s.outline(px(RING))
-                    .outline_color(color(Token::Focus))
-                    .outline_offset(px(-RING))
-            })
-            .child(words)
-            .child(icon(Icon::Chevron, 12.0, color(Token::Ink3))),
-        Form::Phone => row
-            .min_h(px(48.0))
-            .px(px(18.0))
-            .py(px(10.0))
-            .border_b_1()
-            .border_b_color(color(Token::Rule))
-            .active(|s| s.bg(color(Token::Hover)))
-            .focus_visible(|s| {
-                s.outline(px(RING))
-                    .outline_color(color(Token::Focus))
-                    .outline_offset(px(-RING))
-            })
-            .child(words.flex_1().min_w(px(0.0))),
-        // Under the titles: past the bar, Δ, actor and id columns and their gaps.
-        Form::Terminal => row.h(px(16.0)).pl(term::cells(13.0)).child(words),
-    };
-    row.into_element()
 }

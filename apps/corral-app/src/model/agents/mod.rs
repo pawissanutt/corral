@@ -1,8 +1,8 @@
-//! Agents wall and session state, reducers and presentation data.
+//! Agents roster and session state, reducers and presentation data.
 //!
-//! The assistant module supplies the quick thread before the agent tiles, and the sessions and
-//! Filed from chat blocks after them, on both desktop and phone. The presentation types here are
-//! owned so every data source uses the same feed-backed wall and session pages.
+//! The roster lists every session (agents and assistants, the quick thread pinned first); the
+//! assistant module supplies the sessions and Filed from chat blocks after it. The presentation
+//! types here are owned so every data source uses the same feed-backed roster and session pages.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,17 +29,26 @@ mod replay_pairs;
 #[cfg(test)]
 mod replay_tests;
 mod replay_tool;
+mod roster;
+mod roster_panel;
+#[cfg(test)]
+mod roster_tests;
 pub mod screen;
 
 pub use controls::{Ask, Bar, Control, ControlKind, Launch, Weight, op_status};
 pub use fleet::{Fleet, FleetEntry, FleetSection};
 pub use items::{Card, Divider, Footer, Marker, More, Picture, Prose, Section, Thinking};
 pub use keys::{KeyBar, KeyButton, KeyPress, Keys, Settled};
-pub use live::wall as live_wall;
+pub(crate) use live::{shown_id as session_shown_id, status as session_status};
 pub use live_session::{chat_scope, op_key, session as live_session};
 pub use replay::fetches;
+pub use roster::{RoleTab, Roster, RosterRole, RosterRow, roster};
+pub use roster_panel::{
+    Recent, RecentEntry, RecentState, RosterPanel, RosterPanelTab, RosterPanelTabItem, RosterWait,
+    Steps, roster_panel,
+};
 
-/// The agent's current activity, used for the wall chip and phone dot.
+/// The agent's current activity, used for the roster chip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentStatus {
     Live,
@@ -92,13 +101,6 @@ impl Feed {
             Self::Snapshot => "snapshot",
         }
     }
-    /// Wall tile label.
-    pub fn wall_label(self) -> &'static str {
-        match self {
-            Self::Live => "live",
-            Self::Snapshot => "snapshot · 20s ago",
-        }
-    }
 }
 
 /// The selected session surface.
@@ -108,20 +110,16 @@ pub enum View {
     Transcript,
     Terminal,
 }
-/// The wall/list setting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Mode {
-    #[default]
-    Wall,
-    List,
-}
-/// Session and wall interaction state; root selection owns the session identity.
+/// Session and roster interaction state; root selection owns the session identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State {
     pub ids: crate::model::id::IdSupply,
     /// The selected session's transcript or terminal view.
     pub live_view: View,
-    pub mode: Mode,
+    /// Roster selection belongs to this screen, not the full-session route.
+    pub roster_session: Option<Id>,
+    pub roster_role: RosterRole,
+    pub roster_tab: RosterPanelTab,
     /// Transcript rows the owner opened, by stable item key (a tool's call id). A thinking
     /// block shows by default, so its key here folds it instead.
     pub expanded: BTreeSet<String>,
@@ -136,7 +134,7 @@ pub struct State {
     /// The control whose confirmation this device asks for itself (an assistant's Take over or
     /// Terminate), with its session.
     pub asking: Option<(Id, ControlKind)>,
-    /// The latest Launch PM command from the wall.
+    /// The latest Launch PM command from the Agents page.
     pub launch: Option<Id>,
     /// Each daemon session's gathered keys and latest keys command.
     pub keys: BTreeMap<Id, keys::Latest>,
@@ -146,8 +144,10 @@ impl Default for State {
         Self {
             ids: Default::default(),
             live_view: View::Transcript,
-            mode: Mode::Wall,
             expanded: BTreeSet::new(),
+            roster_session: None,
+            roster_role: RosterRole::All,
+            roster_tab: RosterPanelTab::Summary,
             replies: BTreeMap::new(),
             earlier: BTreeSet::new(),
             sent: BTreeMap::new(),
@@ -175,6 +175,24 @@ impl State {
             Action::OpenSession(id) => vec![Effect::OpenLive(Live::Session(id))],
             Action::OpenQuestion(key) => vec![Effect::OpenLive(Live::Question(key))],
             Action::OpenThread(id) => vec![Effect::OpenLive(Live::Thread(id))],
+            Action::SelectRoster(id) => {
+                self.roster_session = Some(id);
+                self.roster_tab = RosterPanelTab::Summary;
+                vec![]
+            }
+            Action::ClearRoster => {
+                self.roster_session = None;
+                vec![]
+            }
+            Action::SetRosterRole(role) => {
+                self.roster_role = role;
+                vec![]
+            }
+            Action::SetRosterTab(tab) => {
+                self.roster_tab = tab;
+                vec![]
+            }
+            Action::OpenRosterTarget(target) => vec![Effect::OpenLive(target)],
             Action::Expand { key, fetch } => {
                 let opening = !self.expanded.remove(&key);
                 if opening {
@@ -248,10 +266,6 @@ impl State {
                 vec![]
             }
             Action::Back => vec![Effect::Go(Destination::Agents)],
-            Action::SetMode(mode) => {
-                self.mode = mode;
-                vec![]
-            }
         }
     }
 }
@@ -321,12 +335,16 @@ fn reread(feed: &daemon::Feed, target: DetailRef) -> Effect {
     })
 }
 
-/// Actions attached to tiles, controls, tool calls and the reply box.
+/// Actions attached to roster rows, the panel, controls, tool calls and the reply box.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    SelectRoster(Id),
+    ClearRoster,
+    SetRosterRole(RosterRole),
+    SetRosterTab(RosterPanelTab),
+    OpenRosterTarget(Live),
     Back,
     SetView(View),
-    SetMode(Mode),
     ToggleView,
     /// Send the reply field's words; a working session takes them after its current turn.
     Send(String),
@@ -340,7 +358,7 @@ pub enum Action {
     ConfirmControl,
     /// Close that confirmation; nothing is sent.
     DismissControl,
-    /// Launch the PM from the wall.
+    /// Launch the PM from the Agents page.
     LaunchPm,
     OpenSession(Id),
     OpenQuestion(Id),
@@ -372,7 +390,7 @@ pub enum Action {
     Recover(Id),
 }
 
-/// Terminal line classification, including prompt and success lines in the wall tails.
+/// Terminal line classification, including prompt and success lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineClass {
     Prompt,
@@ -426,59 +444,6 @@ pub enum Fill {
     },
     /// What failed and what happens now.
     Failed(String),
-}
-
-/// One wall tile or phone row, with its actionable session and last four tail lines.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tile {
-    /// The session id, for the `agent-<id>` test id.
-    pub id: String,
-    /// The id shown: the task, or the session for agents without one.
-    pub label: String,
-    pub role: String,
-    pub title: String,
-    pub doing: String,
-    pub profile: String,
-    pub runtime: String,
-    pub pane: String,
-    /// Reported or estimated cost and tokens, when known.
-    pub usage: Option<String>,
-    pub feed: Feed,
-    /// The tail's tag on a tile.
-    pub feed_label: String,
-    /// The tail's tag in rows.
-    pub feed_short: String,
-    /// "since 21:40".
-    pub since: String,
-    /// "21:40".
-    pub since_short: String,
-    pub chip: &'static str,
-    pub hue: Hue,
-    pub doing_hue: Hue,
-    pub tail: Vec<Line>,
-    pub action: Action,
-}
-/// Agents page content; quick thread and assistant blocks are provided by the assistant module.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Wall {
-    pub title: &'static str,
-    pub subtitle: &'static str,
-    pub machine: String,
-    pub machine_detail: String,
-    pub machine_note: Option<&'static str>,
-    pub other_machines: &'static str,
-    pub phone_machine_detail: String,
-    pub phone_machine_note: Option<&'static str>,
-    pub count: usize,
-    pub tiles: Vec<Tile>,
-    pub fill: Fill,
-    /// The last known rows are shown while their source is unreachable.
-    pub stale: Option<String>,
-    pub footer: Note,
-    pub mode: Mode,
-    pub mode_labels: [&'static str; 2],
-    /// Launch PM, while no PM is live.
-    pub launch: Option<Launch>,
 }
 
 /// A tool call row: the state mark, the tool, what it acted on and how it ended, in one quiet
@@ -655,7 +620,7 @@ pub struct Session {
     pub switch_labels: [&'static str; 2],
     pub switch_actions: [Action; 2],
     pub toggle: Action,
-    /// Why the page shows what it does: the session left the wall, or its source is stale.
+    /// Why the page shows what it does: the session left Agents, or its source is stale.
     pub notice: Option<(Hue, String)>,
     /// The session's state and the controls corrald offers for it.
     pub controls: Bar,

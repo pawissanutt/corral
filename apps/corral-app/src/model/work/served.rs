@@ -21,9 +21,8 @@ pub const NO_BOARD: &str = "No board received from corrald yet.";
 pub const EMPTY_BOARD: &str = "Nothing on the board.";
 /// The board failed before producing any rows; the status banner carries the reason and retry.
 pub(super) const BOARD_UNAVAILABLE: &str = "Board unavailable.";
-/// Said instead of the list when no task on the board serves the chosen goal.
-pub const NO_GOAL_TASKS: &str = "No task on the board serves this goal.";
-pub const NO_PROJECT_TASKS: &str = "No task on the board matches this project and goal.";
+/// Said instead of the list when no task on the board belongs to the chosen project scope.
+pub const NO_PROJECT_TASKS: &str = "No task on the board matches this project.";
 
 /// Rows a collapsed Queued or Parked group shows on desktop and terminal, and on phone.
 const COLLAPSED: usize = 12;
@@ -70,23 +69,13 @@ pub fn group_label(key: GroupKey) -> &'static str {
 /// The Daemon state's heading of the broad bucket `GroupKey::Queued`.
 pub const UPCOMING: &str = "Upcoming";
 
-/// The board's tasks the list shows: all of them, or those serving the chosen goal.
-fn shown<'a>(
-    state: &State,
-    feed: &'a daemon::Feed,
-    filter: &ProjectFilter,
-) -> Vec<&'a daemon::Task> {
+/// The board's tasks in `filter`'s project scope.
+fn shown<'a>(feed: &'a daemon::Feed, filter: &ProjectFilter) -> Vec<&'a daemon::Task> {
     let filter = filter.resolved(feed);
     feed.board
         .tasks()
         .iter()
         .filter(|task| filter.matches(task.project.as_deref()))
-        .filter(|task| {
-            state
-                .goal
-                .as_deref()
-                .is_none_or(|goal| task.goal.as_deref() == Some(goal))
-        })
         .collect()
 }
 
@@ -220,7 +209,7 @@ pub fn daemon_selection_filtered<'a>(
     filter: &ProjectFilter,
     grouping: NowGroup,
 ) -> Option<&'a daemon::Task> {
-    let tasks = shown(state, feed, filter);
+    let tasks = shown(feed, filter);
     let id = selection(state, selected.task.as_ref(), &tasks, feed, form, grouping)?;
     feed.board.task(id)
 }
@@ -249,43 +238,24 @@ pub fn daemon_list_filtered(
     grouping: NowGroup,
 ) -> GroupedList {
     if let Some(line) = feed.device.board_notice() {
-        return GroupedList {
-            notice: Some(line),
-            ..GroupedList::new(form)
-        };
+        return GroupedList::quiet(line);
     }
     let board = &feed.board;
     if !board.complete {
         if super::served_facts::board_problem(feed).is_some() {
-            return GroupedList {
-                notice: Some(BOARD_UNAVAILABLE),
-                ..GroupedList::new(form)
-            };
+            return GroupedList::quiet(BOARD_UNAVAILABLE);
         }
         return match feed.link {
-            Link::Down => GroupedList {
-                notice: Some(NO_BOARD),
-                ..GroupedList::new(form)
-            },
+            Link::Down => GroupedList::quiet(NO_BOARD),
             Link::Connecting | Link::Up => GroupedList::loading(form),
         };
     }
     if board.tasks().is_empty() {
-        return GroupedList {
-            notice: Some(EMPTY_BOARD),
-            ..GroupedList::new(form)
-        };
+        return GroupedList::quiet(EMPTY_BOARD);
     }
-    let tasks = shown(state, feed, filter);
+    let tasks = shown(feed, filter);
     if tasks.is_empty() {
-        return GroupedList {
-            notice: Some(if filter.resolved(feed) == ProjectFilter::All {
-                NO_GOAL_TASKS
-            } else {
-                NO_PROJECT_TASKS
-            }),
-            ..GroupedList::new(form)
-        };
+        return GroupedList::quiet(NO_PROJECT_TASKS);
     }
     list(
         state,
@@ -307,7 +277,7 @@ fn list(
     filter: &ProjectFilter,
     grouping: NowGroup,
 ) -> GroupedList {
-    let mut view = GroupedList::new(form);
+    let mut view = GroupedList::default();
     let phone = form == Form::Phone;
     let selected = selection(state, chosen, tasks, feed, form, grouping);
     let unseen = unseen_tasks(feed);
@@ -351,7 +321,6 @@ fn list(
             label,
             count: if grouping == NowGroup::State
                 && key == GroupKey::You
-                && state.goal.is_none()
                 && filter.resolved(feed) == ProjectFilter::All
             {
                 u32::try_from(
@@ -366,8 +335,6 @@ fn list(
             } else {
                 key.hue()
             },
-            detail: (!phone && grouping == NowGroup::State && key == GroupKey::Corral)
-                .then_some("gating · reviewing · landing"),
             rows,
         });
     }
@@ -442,7 +409,7 @@ impl State {
         if top.is_some_and(|live| !matches!(live, Live::Task(_))) {
             return None;
         }
-        let tasks = shown(self, feed, scope.filter);
+        let tasks = shown(feed, scope.filter);
         self.key_tasks(key, selected.task.as_ref(), &tasks, feed, env.form, scope)
     }
 

@@ -1,6 +1,6 @@
 //! Assistant threads, which live inside Agents: the thread page with its composer docked, the
-//! transcript the Ask drawer also shows, the quick-thread tile and the session blocks Agents
-//! places, and a pending assistant prompt as Inbox shows it. Everything renders the served
+//! transcript the Ask drawer also shows, the session blocks Agents places under its roster, and
+//! a pending assistant prompt as Inbox shows it. Everything renders the served
 //! threads of the selected feed through `model::assistant`; every button runs its reducer, whose
 //! canonical sends, commands and prompt answers the app performs.
 
@@ -20,7 +20,7 @@ use crate::model::assistant::{OpOutcome, ThreadRef};
 use crate::model::{Form, Id};
 use crate::state::AppState;
 
-pub use agents::{agents_head, agents_tail};
+pub use agents::agents_tail;
 pub use page::{live_prompt, live_thread, live_thread_phone, live_thread_title};
 pub use side_facts::{identified, stacked};
 pub use verbs::session_verbs;

@@ -154,7 +154,7 @@ fn execute(feed: &mut Feed, command: &Command) -> Result<(), String> {
             Ok(())
         }
         Command::Pm(cmd::pm::PmCommand::InboxPost { body, .. }) => {
-            sessions::append(feed, "PM", body)
+            sessions::append(feed, "pm", body)
         }
         Command::Message(command) => message(feed, command),
         _ => unsupported(&command.name()),

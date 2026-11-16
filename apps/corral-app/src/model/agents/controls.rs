@@ -1,6 +1,6 @@
-//! The session page's action bar and the wall's Launch PM: Cancel, Pause or Resume, Relaunch
-//! (Launch PM), Take over and Terminate, built only from the controls corrald reports on the
-//! session's row, with the words of each refused one and the outcome of the latest one sent.
+//! The session page's action bar and the Agents page's Launch PM: Cancel, Pause or Resume,
+//! Relaunch (Launch PM), Take over and Terminate, built only from the controls corrald reports on
+//! the session's row, with the words of each refused one and the outcome of the latest one sent.
 //! The reducers send the canonical `session` command; an assistant's controls go to the
 //! `assistant.stop` / `assistant.session` calls its host takes, since corrald refuses the
 //! `session` family for assistants.
@@ -156,7 +156,7 @@ pub struct Bar {
     pub ask: Option<Ask>,
 }
 
-/// The wall's Launch PM, while no PM is live.
+/// The Agents page's Launch PM, while no PM is live: `words` say why it is offered (its hint).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
     pub words: String,
@@ -164,7 +164,8 @@ pub struct Launch {
     pub action: Action,
     pub enabled: bool,
     pub status: Option<(Hue, String)>,
-    pub recover: Option<Action>,
+    /// "Check result" while the launch's outcome is unknown.
+    pub recover: Option<(&'static str, Action)>,
 }
 
 /// How a control command was sent, which says where its outcome is read.
@@ -456,8 +457,8 @@ fn ask(state: &State, id: &Id, row: &AgentRow) -> Option<Ask> {
     })
 }
 
-/// Launch PM on the wall: offered while corrald lists the PM row ended with `relaunch` offered,
-/// or lists no PM row at all, over a current agents list.
+/// Launch PM on the Agents page: offered while corrald lists the PM row ended with `relaunch`
+/// offered, or lists no PM row at all, over a current agents list.
 pub(super) fn launch(state: &State, feed: &daemon::Feed, env: Env) -> Option<Launch> {
     let listed = feed
         .topics
@@ -487,7 +488,12 @@ pub(super) fn launch(state: &State, feed: &daemon::Feed, env: Env) -> Option<Lau
         action: Action::LaunchPm,
         enabled: device.is_none() && !flying,
         recover: matches!(status, Some(ActStatus::Unknown))
-            .then(|| state.launch.clone().map(Action::Recover))
+            .then(|| {
+                state
+                    .launch
+                    .clone()
+                    .map(|key| ("Check result", Action::Recover(key)))
+            })
             .flatten(),
         status: status
             .as_ref()
@@ -667,7 +673,7 @@ impl State {
         }
     }
 
-    /// Launch PM from the wall: the PM row's relaunch, or opening a PM corrald does not list.
+    /// Launch PM from Agents: the PM row's relaunch, or opening a PM corrald does not list.
     pub(super) fn launch_pm(&mut self, feed: &daemon::Feed) -> Vec<Effect> {
         if let Some(key) = &self.launch {
             match act::status(feed, key) {

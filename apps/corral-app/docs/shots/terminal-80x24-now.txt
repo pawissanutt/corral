@@ -1,24 +1,24 @@
- ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
-╭─ corral ─────────────╮╭───────────────────────────┬──────────────────────────╮
-│ Autopilot            ││ Who acts next             │ Story  Evidence  Session │
-│ independent work     │├───────────────────────────┼──────────────────────────┤
-│ continues            ││   id     task     r g v l┃│ T-890 · plan T-893       ┃
-├──────────────────────┤│Needs you 3 ──────────────┃│  ▲ changed since 18:40   ┃
-│  Inbox         5   i ││  ▲ ● T-868  host… ◐ ○ ○ ○┃│ pm-bounded-read-contrac  ┃
-│▌ Now               n ││  ▲ ● T-885  plan… plan   ┃│ t                        ┃
-│  Changes      12   . ││   ● Q7     T-852… PM ask ┃│ pi-sol xhigh · on        ┃
-│  Plans         6   p ││Corral is…         3  gat…┃│ workstation machine      ┃
-│  Agents        7   a ││▌ ▲ ◐ T-890  pm-b… ✓ ◐ ○ ○┃│ name illustrative ·      ┃
-│  Review        3   r ││  ▲ ◐ T-894  api-… ✓ ◐ ○ ○┃│ started 19:31            ┃
-│  Timeline          t ││  ▲ ◐ T-867  queu… ✓ ◌ ○ ○┃│ RUN   GATE  REVI… LAND   ┃
-│  Usage             u ││Workers producing 2 ──────┃│ ✓ do… ◐ now ○ ne… ○ ne…  │
-│  Settings          , ││  ▲ ◐ T-871  anno… ◐ ○ ○ ○┃│ R1 ·… 1751… afte… main   │
-├──────────────────────┤│  ▲ ◐ T-854  Co-w… ◐ ○ ○ ○┃│ PROGRESS ────────── 3/4  │
-│  Ask               / ││Queued 23 ────────────────┤│ ✓ Read plan, inspect     │
-│  Go to            ^K ││   ○ T-891  pm-ob… ○ ○ ○ ○││   scope/read contracts   │
-│                      ││   ○ T-892  pm-re… ○ ○ ○ ○││ ✓ Shared bounded         │
-│                      ││   ○ T-895  failu… ○ ○ ○ ○││   projection +           │
-│                      ││   ○ T-896  meter… ○ ○ ○ ○││   CLI/native adapters    │
-│                      ││   ○ T-897  role-… ○ ○ ○ ○││ ✓ Verify live paging,    │
-╰─ pawis-desktop ──────╯╰───────────────────────────┴──────────────────────────╯
-  j…  move  En… open  Tab  tab │  i   n   .   p   a   r   t   u   ,  │  /   ^K
+ ◉ Corral  /preview/corral │ ● healthy                 Mon 16 Nov 10:44  sample
+╭────────╮╭────────────────────────────────────────────────────────────────────╮
+│  i    3││ Now  ●3 ◐8 ◌3                                                      │
+│▌ n    3│├────────────────────────────────────────────────────────────────────┤
+│  .     ││ Project All corral 2 mitigraph 1 mitiplay Unassigned               │
+│  p    1││ Group Actor  Project                                               │
+│  b     ││ Plan ●1 ◐6 › Run ●2 ◐2 › Gate ◐5 ◌3 › Review – › Land –            ┃
+│  a     ││Needs you 3 ─────────────────────────────────────────────────────── ┃
+│  r    1││  ● T-868    Restore policy: pane-origin input only,… 3h0…  Answer  ┃
+│  t     ││  ● T-885    Accept plan T-885 P2                  5m  Review plan  ┃
+│  u     ││  ● T-868    Your verdict on the candidate        5m  Give verdict  ┃
+│  ,     ││Corral 6 ────────────────────────────────────────────────────────── ┃
+├────────┤│  ▲ ◐ T-867  queue-contract-core   ✓ ◌ gate stale ○ ○     9m ~$3.90 ┃
+│  /     ││  ▲ ◐ T-890  pm-bounded-read-cont… ✓ ◐ gate ○ ○           9m ~$3.90 ┃
+│  ^K    ││  ▲ ◐ T-894  api-connections       ✓ ◐ gate ○ ○           9m ~$3.90 ┃
+│        ││    ◐ S-920  sweep-66              ✓ ◐ gate ○ ○           9m ~$3.90 ┃
+│        ││    ◐ S-927  audit-60              ✓ ◐ gate ○ ○           9m ~$3.90 │
+│        ││    ◐ S-928  pager-73              ✓ ◐ gate ○ ○           9m ~$3.90 │
+│        ││Workers 2 ───────────────────────────────────────────────────────── │
+│        ││    ◐ T-854  Co-work C3: save,…    ◐ run ○ ○ ○            9m ~$3.90 │
+│        ││  ▲ ◐ T-871  annotation-service    ◐ run ○ ○ ○            9m ~$3.90 │
+│        ││▸ Waiting 84 ─────────────────────────────────────────────── …82 ◆2 │
+╰────────╯╰────────────────────────────────────────────────────────────────────╯
+  j k  move  Enter  session  ]  next tab  .  actions │  /  Ask  ^K  Go to

@@ -1,26 +1,38 @@
 //! Pure plan state, canonical actions and feed-backed presentation for every form.
 
+mod awaiting_brief;
+mod brief;
+mod brief_view;
 mod graph;
 mod live;
 mod live_doc;
 mod live_role;
 mod live_story;
+mod member_brief;
+mod outline;
+#[cfg(test)]
+mod outline_tests;
+mod path;
 mod planning;
 mod story;
 mod view;
 
-pub use graph::{CardGeometry, Edge, Graph, GraphInput, GraphMember, Layer, Node, Point, layout};
-pub use live::{
-    current_plan_filtered, graph_input, live_detail, live_list_filtered, live_phone_page,
-    plan_detail,
+pub use brief::plan_brief;
+pub use brief_view::{
+    AwaitingBrief, BriefAction, ExecutingBrief, MemberBrief, MemberShare, OutlineRow,
+    OutlineSecond, OutlineSection, PathItem, PathStep, PathToDone, PathWarning, PlanOutline,
+    PublishMember, Publishes, ReviewerBrief, StateIndicator,
 };
+pub use graph::{Edge, Graph, GraphInput, GraphMember, Layer, Node, Point, layout};
+pub use live::{current_plan_filtered, graph_input, live_detail, live_phone_page, plan_detail};
+pub use outline::{page_stats, plan_outline};
+pub use path::path_to_done;
 pub use story::{Story, StoryField, StoryStage};
 pub use view::{
-    ApprovedView, AwaitingView, Blocker, Button, ButtonKind, Chip, Compose, Decide, DecideNote,
-    DecisionRow, Detail, DiffLine, DiffLineKind, DiffView, DocumentSection, DocumentView,
-    ExecutingView, Header, ListNotice, ListSection, MemberSquare, NoticeView, PhonePage,
-    PipelineStage, PlanList, PlanRow, PlanningView, ProposedRow, ReviewRow, SectionBody,
-    SquareState,
+    ApprovedView, AwaitingView, Button, ButtonKind, Chip, Compose, Decide, DecideNote, DecisionRow,
+    Detail, DiffLine, DiffLineKind, DiffView, DocumentSection, DocumentView, ExecutingView, Header,
+    ListNotice, NoticeView, PhonePage, PipelineStage, PlanningView, ProposedRow, ReviewRow,
+    SectionBody,
 };
 
 use corral_protocol::cmd::Command;
@@ -31,7 +43,7 @@ use crate::model::act::{self, Act};
 use crate::model::daemon::Feed;
 use crate::model::effect::{Effect, Env};
 use crate::model::nav::Form;
-use crate::model::{Id, Live, Selection};
+use crate::model::{AskTarget, Id, Live, Selection};
 /// Captions shared by all form-specific loading notices.
 pub const LIST_LOADING: &str = "Loading plans…";
 pub const DETAIL_LOADING: &str = "Loading the plan…";
@@ -149,8 +161,14 @@ pub enum LiveAction {
     Session(Id),
     /// Open the candidate under review for a task.
     Review(Id),
-    /// Ask about a record with its bounded context and row revision.
-    Ask(Live, Option<u64>),
+    /// Ask about a record with its bounded context and row revision; `to` picks the recipient
+    /// and `text` proposes a draft, which the owner still sends.
+    Ask {
+        record: Live,
+        rev: Option<u64>,
+        to: Option<AskTarget>,
+        text: Option<String>,
+    },
     /// Accept the shown revision through corrald's preview and a fresh confirmation.
     Accept(Id),
     /// Open the request-changes field.
@@ -203,10 +221,15 @@ impl State {
             LiveAction::Question(key) => vec![Effect::OpenLive(Live::Question(key))],
             LiveAction::Session(id) => vec![Effect::OpenLive(Live::Session(id))],
             LiveAction::Review(task) => vec![Effect::OpenLive(Live::Review(task))],
-            LiveAction::Ask(record, rev) => vec![Effect::AskAbout {
+            LiveAction::Ask {
+                record,
+                rev,
+                to,
+                text,
+            } => vec![Effect::AskAbout {
                 context: Some(record.context(rev)),
-                text: None,
-                target: None,
+                text,
+                target: to,
             }],
             LiveAction::Accept(id) => {
                 let Ok(revision) = live_doc::accept_gate(live, feed, &id, env) else {
@@ -374,7 +397,8 @@ impl State {
         _env: Env,
         filter: &crate::model::projects::ProjectFilter,
     ) -> Option<Vec<Effect>> {
-        let order = live::order_filtered(feed, filter);
+        // The order the list draws, so j and k step to the row below or above on screen.
+        let order = outline::display_order(feed, filter);
         let current = live::current_plan_filtered(selection, feed, filter);
         let index = current
             .as_ref()

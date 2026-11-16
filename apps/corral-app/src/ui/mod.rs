@@ -1,6 +1,7 @@
 pub mod ask;
 pub mod atoms;
 pub mod composer;
+pub mod health_line;
 pub mod icons;
 pub mod kit;
 pub mod palette;

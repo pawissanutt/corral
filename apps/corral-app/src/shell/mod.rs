@@ -7,6 +7,7 @@ pub mod lock;
 pub mod phone;
 pub mod projects;
 pub mod terminal;
+mod terminal_bar;
 
 use std::rc::Rc;
 

@@ -335,7 +335,7 @@ pub(super) fn bash(item: &SessionItem, key: &str, rest: Rest<'_>, cx: Cx<'_>) ->
 }
 
 /// What a call's arguments say it acts on: the first target-like string, its first line.
-fn target(args: &str) -> String {
+pub(super) fn target(args: &str) -> String {
     let Ok(serde_json::Value::Object(fields)) = serde_json::from_str::<serde_json::Value>(args)
     else {
         return String::new();

@@ -267,24 +267,34 @@ fn narrow_review_content_is_unified_and_gate_receipts_are_visible() {
         review: Some(at.task),
         ..Selection::default()
     };
-    let page = live_page_filtered(
-        &state,
-        &feed,
-        &selection,
-        None,
-        env(),
-        1099.0,
-        &ProjectFilter::All,
-    );
-    let detail = page.detail.unwrap();
-    assert_eq!(detail.verdicts[0].mark, Mark::Stale);
-    assert!(detail.verdicts[0].tag.is_some());
+    let page = |state: &State| {
+        loop_page_filtered(
+            state,
+            &feed,
+            &selection,
+            None,
+            env(),
+            1099.0,
+            &ProjectFilter::All,
+        )
+        .detail
+        .unwrap()
+        .content
+    };
+    let LoopContent::Brief(brief) = page(&state) else {
+        panic!("Brief is the first tab")
+    };
+    assert_eq!(brief.readiness[0].stats[0].key, "earlier-gates");
+    let diff_tab = State {
+        tab: Tab::Diff,
+        ..State::default()
+    };
     assert!(matches!(
-        detail.body,
-        Body::Diff(DiffView {
+        page(&diff_tab),
+        LoopContent::Evidence(Body::Diff(DiffView {
             layout: Layout::Unified,
             ..
-        })
+        }))
     ));
 }
 
@@ -320,7 +330,7 @@ fn pushed_review_actions_do_not_target_a_candidate_in_the_list_project_filter() 
         ..env()
     };
     let mut state = State::default();
-    let page = live_page_filtered(
+    let page = loop_page_filtered(
         &state,
         &feed,
         &selection,
@@ -329,7 +339,7 @@ fn pushed_review_actions_do_not_target_a_candidate_in_the_list_project_filter() 
         400.0,
         &filter,
     );
-    assert_eq!(page.title, focused.task.to_string());
+    assert_eq!(page.detail.unwrap().header.task, focused.task.to_string());
     assert_eq!(
         selected_filtered(&selection, &feed, &filter).unwrap().id,
         a.id

@@ -1,6 +1,7 @@
-//! corrald's plans in the shared descriptors: the grouped list from the plan rows, the selected
-//! plan's tracker or approved state from its detail, the member graph from the detail and the
-//! board, and the phone page. Absent facts stay absent; nothing here falls back to fixtures.
+//! corrald's plans in the shared descriptors: the list's sections from the plan rows, the
+//! selected plan's brief, document or approved state from its detail, the member graph from the
+//! detail and the board, and the phone page. Absent facts stay absent; nothing here falls back
+//! to fixtures.
 
 use std::cmp::Ordering;
 
@@ -9,11 +10,10 @@ use corral_protocol::detail::{DetailBody, DetailRef, PlanDetail, PlanMember};
 use corral_protocol::rows::{PlanRole, PlanRow as WirePlan, PlanState as WireState};
 
 use super::live_role::{linked, linked_id, linked_label, role_line};
-use super::view::{pipeline, pipeline_marks, square};
+use super::member_brief::member_brief;
 use super::{
-    Action, Blocker, Button, Chip, Detail, ExecutingView, GraphInput, GraphMember, Header, Lens,
-    ListNotice, ListSection, LiveAction, MemberSquare, NoticeView, PhonePage, PlanList, PlanRow,
-    SquareState, State, live_doc, live_role, live_story,
+    Action, Button, Chip, Detail, ExecutingView, GraphInput, GraphMember, Header, Lens, ListNotice,
+    LiveAction, NoticeView, PhonePage, State, live_doc, live_role, live_story, plan_brief,
 };
 use crate::model::board::{Mark, Rail};
 use crate::model::daemon::{DetailCache, Feed, Group, Link};
@@ -84,16 +84,8 @@ fn sorted<'a>(feed: &'a Feed, filter: &ProjectFilter) -> Vec<&'a WirePlan> {
     rows
 }
 
-/// Served plan ids in list order, for j/k.
-pub(super) fn order_filtered(feed: &Feed, filter: &ProjectFilter) -> Vec<Id> {
-    sorted(feed, filter)
-        .into_iter()
-        .map(|row| Id::from(&row.id))
-        .collect()
-}
-
 /// The plan the desktop and terminal detail shows: the root selection while corrald still lists
-/// it, otherwise the first plan of the list.
+/// it, otherwise the first plan the list draws.
 pub fn current_plan_filtered(
     selection: &Selection,
     feed: &Feed,
@@ -108,7 +100,11 @@ pub fn current_plan_filtered(
                 .get(id.as_str())
                 .is_some_and(|row| matches_project(row, &filter))
         })
-        .or_else(|| order_filtered(feed, &filter).into_iter().next())
+        .or_else(|| {
+            super::outline::display_order(feed, &filter)
+                .into_iter()
+                .next()
+        })
 }
 
 fn matches_project(row: &WirePlan, filter: &ProjectFilter) -> bool {
@@ -136,15 +132,16 @@ fn topic_loading(feed: &Feed) -> bool {
     feed.topics.get("plans").is_none_or(|topic| topic.loading)
 }
 
-/// Grouped list of corrald's plans with its loading, empty, error and stale states.
-pub fn live_list_filtered(
-    selection: &Selection,
-    feed: &Feed,
-    env: Env,
+/// Served plans in the Plans scope by list section, in display order, empty sections left out,
+/// with what the list says instead of, or above, them.
+pub(super) fn list_sections<'a>(
+    feed: &'a Feed,
     filter: &ProjectFilter,
-) -> PlanList {
+) -> (
+    Option<ListNotice>,
+    Vec<(&'static str, Hue, Vec<&'a WirePlan>)>,
+) {
     let filter = plan_filter(feed, filter);
-    let phone = env.form == Form::Phone;
     let topic = feed.topics.get("plans");
     let rows = sorted(feed, &filter);
     let notice = if rows.is_empty() {
@@ -184,130 +181,41 @@ pub fn live_list_filtered(
     } else {
         None
     };
-    let selected = if phone {
-        None
-    } else {
-        current_plan_filtered(selection, feed, &filter)
-    };
     let sections = SECTIONS
         .iter()
-        .map(|(label, kind, hue)| ListSection {
-            label: *label,
-            count: None,
-            hue: *hue,
-            illustrative: None,
-            rows: rows
+        .map(|(label, kind, hue)| {
+            let rows: Vec<&WirePlan> = rows
                 .iter()
+                .copied()
                 .filter(|row| section_of(row.state) == section_of(*kind))
-                .map(|row| list_row(feed, row, selected.as_ref(), phone, &filter))
-                .collect(),
+                .collect();
+            (*label, *hue, rows)
         })
-        .filter(|section| !section.rows.is_empty())
-        .map(|mut section| {
-            section.count = u32::try_from(section.rows.len()).ok();
-            section
-        })
+        .filter(|(_, _, rows)| !rows.is_empty())
         .collect();
-    PlanList {
-        title: "Plans",
-        large: phone,
-        notice,
-        sections,
-    }
+    (notice, sections)
 }
 
-fn list_row(
-    feed: &Feed,
-    row: &WirePlan,
-    selected: Option<&Id>,
-    phone: bool,
-    filter: &ProjectFilter,
-) -> PlanRow {
-    let id = Id::from(&row.id);
-    let tracking = matches!(row.state, WireState::Executing | WireState::Complete);
-    let sub = match row.state {
-        WireState::Drafting => vec![span("drafting").dim()],
-        WireState::Reviewing => vec![span("in plan review").dim()],
-        WireState::PlanFailed => vec![span("plan failed").hue(Hue::Fail)],
-        WireState::Awaiting => vec![
-            span(match &row.revision {
-                Some(rev) => format!("revision {rev} · {} members", row.members_total),
-                None => format!("{} members", row.members_total),
-            })
-            .dim(),
-        ],
-        // The row lists the members not yet done (corrald sends at most four); the detail's
-        // final-acceptance blockers are a different, wider fact and may number otherwise.
-        WireState::Executing if row.blockers.is_empty() => {
-            vec![span("every member done").dim()]
-        }
-        WireState::Executing => {
-            let n = row.blockers.len();
-            let more = n == 4 && row.members_total > 4;
-            vec![
-                span(format!(
-                    "{n}{} unfinished member{}",
-                    if more { "+" } else { "" },
-                    if n == 1 && !more { "" } else { "s" }
-                ))
-                .hue(Hue::Held),
-            ]
-        }
-        WireState::Approved if row.linked.is_some() => vec![span("approved").dim()],
-        WireState::Approved => vec![span("approved · no tracker published").dim()],
-        WireState::Complete => vec![span("complete").dim()],
-        WireState::Cancelled => vec![span("cancelled").dim()],
-        WireState::Other => vec![span("state not known to this app").dim()],
-    };
-    // A design and the tracker it published can share a title; the row says which is which.
-    let sub = match role_line(row.role, row.linked.as_deref()) {
-        Some(role) => {
-            let mut line = vec![span(format!("{role} · ")).dim()];
-            line.extend(sub);
-            line
-        }
-        None => sub,
-    };
-    let mut projects: Option<String> = None;
-    for project in row
-        .projects
+/// A list row's projects: the plan's projects while the scope spans several of them, or
+/// "Unassigned"; none from a daemon that serves no projects.
+pub(super) fn row_projects(feed: &Feed, row: &WirePlan, filter: &ProjectFilter) -> Vec<String> {
+    if !feed.capable(corral_protocol::PROJECTS_V1) {
+        return Vec::new();
+    }
+    let filter = plan_filter(feed, filter);
+    if row.projects.is_empty() {
+        return project_chip(feed, &filter, None).into_iter().collect();
+    }
+    row.projects
         .iter()
-        .filter(|_| feed.capable(corral_protocol::PROJECTS_V1))
-    {
-        if let Some(label) = project_chip(feed, filter, Some(project)) {
-            match &mut projects {
-                Some(projects) => {
-                    projects.push_str(", ");
-                    projects.push_str(&label);
-                }
-                None => projects = Some(label),
-            }
-        }
-    }
-    if row.projects.is_empty() && feed.capable(corral_protocol::PROJECTS_V1) {
-        projects = project_chip(feed, filter, None);
-    }
-    PlanRow {
-        id_label: match (&row.revision, phone) {
-            (Some(rev), false) => format!("{} {rev}", row.id),
-            _ => row.id.clone(),
-        },
-        project_chip: projects,
-        rev: row.revision.clone(),
-        title: row.title.clone(),
-        hue: SECTIONS[section_of(row.state)].2,
-        sub,
-        members: if tracking {
-            plan_detail(feed, &row.id).map_or_else(Vec::new, |detail| squares(feed, detail))
-        } else {
-            vec![]
-        },
-        progress: tracking.then(|| format!("{}/{}", row.members_landed, row.members_total)),
-        selected: selected == Some(&id),
-        illustrative: None,
-        action: Action::Live(LiveAction::Plan(id.clone())),
-        id,
-    }
+        .filter_map(|project| project_chip(feed, &filter, Some(project.as_str())))
+        .collect()
+}
+
+/// The projects a plan is filed under, as its head names them.
+pub(super) fn project_of(row: Option<&WirePlan>) -> Option<String> {
+    row.filter(|row| !row.projects.is_empty())
+        .map(|row| row.projects.join(", "))
 }
 
 /// A served rail as the app's marks.
@@ -327,36 +235,6 @@ pub(super) fn open_question(feed: &Feed, task: &str) -> Option<Id> {
     owner_moves(feed)
         .find(|row| row.task.as_deref() == Some(task) && row.question_rev.is_some() && is_open(row))
         .map(|row| Id::from(&row.id))
-}
-
-/// Who acts next on a member, from the board when it lists the task.
-fn member_group(feed: &Feed, member: &PlanMember) -> Option<Group> {
-    feed.board.task(&member.id).map(|task| task.group)
-}
-
-fn needs_you(feed: &Feed, member: &PlanMember) -> bool {
-    owner_moves(feed).any(|row| row.task.as_deref() == Some(member.id.as_str()))
-}
-
-fn squares(feed: &Feed, detail: &PlanDetail) -> Vec<MemberSquare> {
-    detail
-        .members
-        .iter()
-        .map(|member| {
-            let state = if needs_you(feed, member) {
-                SquareState::You
-            } else if rail(member)[3] == Mark::Done {
-                SquareState::Landed
-            } else {
-                match member_group(feed, member) {
-                    Some(Group::Verifying | Group::Producing) => SquareState::Active,
-                    Some(Group::Held) => SquareState::Held,
-                    _ => SquareState::Waiting,
-                }
-            };
-            square(Id::from(&member.id), state)
-        })
-        .collect()
 }
 
 /// corrald's layer numbers (counted from 1) as the graph's display layers from 0, by rank of
@@ -405,8 +283,9 @@ fn layers(detail: &PlanDetail) -> Vec<usize> {
     depth
 }
 
-/// The plan's members and edges as the graph draws them, with live presses: a needs-you
-/// member with an open question opens it; otherwise cards select and rows open the task.
+/// The plan's members and edges as the graph draws them, each with its named rail, with live
+/// presses: a member with an open question opens it; otherwise placed cards select the member
+/// and stacked ones open its task.
 pub fn graph_input(feed: &Feed, plan: &Id, detail: &PlanDetail) -> GraphInput {
     let layers = layers(detail);
     let members = detail
@@ -415,20 +294,16 @@ pub fn graph_input(feed: &Feed, plan: &Id, detail: &PlanDetail) -> GraphInput {
         .zip(layers)
         .map(|(member, layer)| {
             let id = Id::from(&member.id);
-            let task = feed.board.task(&member.id);
-            let question = open_question(feed, &member.id);
-            let you = needs_you(feed, member);
-            let hue = match task.map(|task| task.group) {
+            let brief = member_brief(feed, member);
+            let hue = match feed.board.task(&member.id).map(|task| task.group) {
                 Some(Group::NeedsYou) => Hue::You,
                 Some(Group::Verifying) => Hue::Corral,
                 Some(Group::Producing) => Hue::Worker,
                 Some(Group::Held) => Hue::Held,
-                _ if you => Hue::You,
+                _ if brief.needs_you => Hue::You,
                 _ => Hue::Neutral,
             };
-            let now = task.map_or_else(|| member.state.clone(), |task| task.now.clone());
-            let stale = task.is_some_and(|task| task.now_code.contains("stale"));
-            let (select, open) = match question {
+            let (select, open) = match open_question(feed, &member.id) {
                 Some(key) => (
                     Action::Live(LiveAction::Question(key.clone())),
                     Action::Live(LiveAction::Question(key)),
@@ -442,18 +317,10 @@ pub fn graph_input(feed: &Feed, plan: &Id, detail: &PlanDetail) -> GraphInput {
                 ),
             };
             GraphMember {
-                title: task.map_or_else(|| member.title.clone(), |task| task.title.clone()),
-                now,
-                rail: rail(member),
+                title: brief.title,
+                stage: brief.rail,
                 hue,
-                now_hue: if you {
-                    Hue::You
-                } else if stale {
-                    Hue::Held
-                } else {
-                    Hue::Neutral
-                },
-                needs_you: you,
+                needs_you: brief.needs_you,
                 layer,
                 select,
                 open,
@@ -606,10 +473,12 @@ pub(super) fn tracker_actions(
     if !phone {
         actions.push(Button::new(
             "Ask about this",
-            Action::Live(LiveAction::Ask(
-                Live::Plan(id.clone()),
-                row.map(|row| row.rev),
-            )),
+            Action::Live(LiveAction::Ask {
+                record: Live::Plan(id.clone()),
+                rev: row.map(|row| row.rev),
+                to: None,
+                text: None,
+            }),
         ));
     }
     if detail.document.is_some() {
@@ -645,24 +514,11 @@ fn executing(
     env: Env,
 ) -> ExecutingView {
     let phone = env.form == Form::Phone;
-    let members = graph_input(feed, id, detail);
     let selected = state
         .live
         .member_of(id)
         .filter(|member| detail.members.iter().any(|m| m.id == member.as_str()))
-        .cloned()
-        .or_else(|| detail.members.first().map(|member| Id::from(&member.id)));
-    let landed = row.map_or_else(
-        || {
-            detail
-                .members
-                .iter()
-                .filter(|member| rail(member)[3] == Mark::Done)
-                .count()
-        },
-        |row| row.members_landed as usize,
-    );
-    let total = row.map_or(detail.members.len(), |row| row.members_total as usize);
+        .cloned();
     let mut meta = vec![];
     if let Some(at) = row.and_then(|row| row.accepted_at.as_deref()) {
         let at = when(at, feed);
@@ -678,58 +534,6 @@ fn executing(
     if let Some(line) = role_line(live_role::role(row, detail), linked(row, detail).as_deref()) {
         meta.push(line);
     }
-    let members_label = format!("Members {landed}/{total} landed");
-    let pipeline = if detail.state == WireState::Complete {
-        pipeline_marks([
-            ("Design".into(), Mark::Done),
-            (members_label, Mark::Done),
-            ("Aggregate verify".into(), Mark::Done),
-            ("Final accept".into(), Mark::Done),
-        ])
-    } else {
-        pipeline("Design", members_label, false)
-    };
-    let warning = match (detail.scenarios, detail.mapped) {
-        (Some(all), Some(0)) if all > 0 => Some(format!(
-            "{all} of {all} acceptance scenarios are not mapped to any member · final verify has no owner"
-        )),
-        (Some(all), Some(mapped)) if mapped < all => Some(format!(
-            "{} of {all} acceptance scenarios are not mapped to any member",
-            all - mapped
-        )),
-        _ => None,
-    };
-    // What blocks final acceptance: every member not yet done (all of them, from the detail;
-    // the row lists at most four), then corrald's own reasons acceptance is refused.
-    let unfinished = detail
-        .members
-        .iter()
-        .filter(|member| !matches!(member.state.as_str(), "done" | "dropped"))
-        .map(|member| {
-            let you = members
-                .members
-                .iter()
-                .any(|shown| shown.needs_you && shown.id == member.id.as_str());
-            Blocker {
-                mark: if you { Mark::Active } else { Mark::Na },
-                hue: if you { Hue::You } else { Hue::Neutral },
-                text: if you {
-                    format!("{} waits on your answer", member.id)
-                } else {
-                    format!(
-                        "{} required work is {}",
-                        member.id,
-                        member.state.replace('_', " ")
-                    )
-                },
-            }
-        });
-    let reasons = detail.accept_blockers.iter().map(|text| Blocker {
-        mark: Mark::Na,
-        hue: Hue::Neutral,
-        text: text.clone(),
-    });
-    let blockers: Vec<Blocker> = unfinished.chain(reasons).collect();
     let story = if phone {
         None
     } else {
@@ -746,6 +550,7 @@ fn executing(
             plan: Some(id.clone()),
             chips: vec![state_chip(detail.state)],
             id: id.to_string(),
+            project: project_of(row),
             title: title(id, row),
             meta: if meta.is_empty() {
                 vec![]
@@ -756,14 +561,10 @@ fn executing(
             actions: tracker_actions(id, row, detail, phone),
             stale,
         },
-        pipeline,
-        warning,
-        warning_mark: Mark::Stale,
-        members_heading: "Members · live state",
-        members,
-        blockers_heading: "Blocking final acceptance",
-        blocker_count: blockers.len(),
-        blockers,
+        brief: plan_brief(feed, id, detail),
+        members_heading: "Members",
+        members_hint: "Laid out by dependency: a member starts once the members it needs have landed.",
+        members_empty: "No members yet. They appear once the plan's tracker is published.",
         selected,
         story,
     }
@@ -792,10 +593,12 @@ pub fn live_phone_page(state: &State, id: &Id, feed: &Feed, env: Env) -> PhonePa
         right: published.then(|| {
             Button::new(
                 "Ask about this",
-                Action::Live(LiveAction::Ask(
-                    Live::Plan(id.clone()),
-                    row.map(|row| row.rev),
-                )),
+                Action::Live(LiveAction::Ask {
+                    record: Live::Plan(id.clone()),
+                    rev: row.map(|row| row.rev),
+                    to: None,
+                    text: None,
+                }),
             )
         }),
         right_label: published.then_some("Ask the assistant about this plan"),

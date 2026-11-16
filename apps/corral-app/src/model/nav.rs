@@ -430,6 +430,13 @@ pub struct NavState {
     pub pages: Vec<Route>,
     /// The live record selected in each domain.
     pub selection: Selection,
+    /// The record the last navigation opened by name (a link, a row elsewhere, the palette)
+    /// and that selects in place rather than pushing a page; none after a plain `go` or once
+    /// dismissed. A narrow list-or-detail layout shows the detail for it.
+    pub opened: Option<Live>,
+    /// Grows by one (wrapping) on every such open, so a screen already showing the
+    /// destination can tell a repeated open of the same record from no change.
+    pub opens: u32,
 }
 impl NavState {
     /// Creates navigation state at the form's home destination.
@@ -442,6 +449,8 @@ impl NavState {
             overlays: Vec::new(),
             pages: Vec::new(),
             selection: Selection::default(),
+            opened: None,
+            opens: 0,
         }
     }
     /// Navigates to a destination and closes the palette.
@@ -449,6 +458,7 @@ impl NavState {
         self.goes = self.goes.wrapping_add(1);
         self.destination = destination;
         self.pages.clear();
+        self.opened = None;
         self.close(Overlay::Palette);
     }
     /// Navigates to a settings section and closes the palette.
@@ -462,7 +472,17 @@ impl NavState {
     pub fn open_live(&mut self, live: Live, form: Form) {
         self.selection.set(&live);
         let push = live.pushes(form);
+        if push {
+            self.opened = None;
+        } else {
+            self.opened = Some(live.clone());
+            self.opens = self.opens.wrapping_add(1);
+        }
         self.open_route(Route::Live(live), push);
+    }
+    /// Forgets the explicit open, as the way back from a narrow detail to its list does.
+    pub fn dismiss_opened(&mut self) {
+        self.opened = None;
     }
     /// Projects are local pages on every form; no daemon detail subscription is needed.
     pub fn open_project(&mut self, id: crate::model::Id) {

@@ -1,6 +1,7 @@
-//! Content descriptors for feed-backed plan lists, documents, trackers and phone pages.
+//! Content descriptors for a served plan's detail: its head, document, decide bar, the executing
+//! brief beside the member story, and the phone page.
 
-use super::{Action, GraphInput, Story};
+use super::{Action, AwaitingBrief, ExecutingBrief, Story};
 use crate::model::Id;
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
@@ -39,6 +40,8 @@ pub struct Button {
     pub primary: bool,
     /// Command emphasis.
     pub kind: ButtonKind,
+    /// What pressing it does, or why it is refused; empty when the label says enough.
+    pub hint: String,
 }
 
 impl Button {
@@ -50,6 +53,7 @@ impl Button {
             enabled: true,
             primary: false,
             kind: ButtonKind::Ghost,
+            hint: String::new(),
         }
     }
 
@@ -58,76 +62,12 @@ impl Button {
         self.kind = ButtonKind::Quiet;
         self
     }
-}
 
-/// A member-strip square's state, preserving landed versus merely neutral waiting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SquareState {
-    /// Needs an owner response.
-    You,
-    /// Landed on the delivery branch.
-    Landed,
-    /// Corral or a worker is progressing.
-    Active,
-    /// Held work.
-    Held,
-    /// Not moving yet.
-    Waiting,
-}
-
-/// One member square, in member/id order.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MemberSquare {
-    /// Member id for accessibility.
-    pub id: Id,
-    /// Strip-state treatment.
-    pub state: SquareState,
-    /// State hue; landed and waiting are distinct neutral treatments.
-    pub hue: Hue,
-}
-
-/// A list row, with all desktop and phone wording already resolved.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlanRow {
-    /// Plan, tracker or S-900 id.
-    pub id: Id,
-    /// Project context, only when the workspace-wide list needs disambiguation.
-    pub project_chip: Option<String>,
-    /// Revision retained as data even when the phone omits it from the id label.
-    pub rev: Option<String>,
-    /// Id plus revision on desktop; id only on phone.
-    pub id_label: String,
-    /// Full plan title.
-    pub title: String,
-    /// Actor colour for the row's state.
-    pub hue: Hue,
-    /// Complete second line, excluding the separately supplied member squares.
-    pub sub: Rich,
-    /// Executing members' state squares, when their states are known.
-    pub members: Vec<MemberSquare>,
-    /// Executing landed/total fraction, otherwise absent.
-    pub progress: Option<String>,
-    /// Neutral selection emphasis.
-    pub selected: bool,
-    /// Optional source disclosure.
-    pub illustrative: Option<&'static str>,
-    /// Desktop selection or phone navigation action.
-    pub action: Action,
-}
-
-/// One section of the grouped Plans list.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ListSection {
-    /// Group heading.
-    pub label: &'static str,
-    /// Section count when known.
-    pub count: Option<u32>,
-    /// Heading state colour.
-    pub hue: Hue,
-    /// Optional section-source disclosure.
-    pub illustrative: Option<&'static str>,
-    /// Ordered plan rows.
-    pub rows: Vec<PlanRow>,
+    /// The same command with the sentence behind it.
+    pub fn hinted(mut self, hint: impl Into<String>) -> Self {
+        self.hint = hint.into();
+        self
+    }
 }
 
 /// What the list says instead of, or above, its rows.
@@ -146,23 +86,10 @@ pub enum ListNotice {
     Stale(String),
 }
 
-/// Plans list content, including the phone's large navigation title.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlanList {
-    /// Navigation title.
-    pub title: &'static str,
-    /// Phone uses the large title treatment.
-    pub large: bool,
-    /// Loading, empty, error or stale state, absent when the rows are current.
-    pub notice: Option<ListNotice>,
-    /// Plan sections in order; empty sections are omitted for corrald's plans.
-    pub sections: Vec<ListSection>,
-}
-
-/// A pipeline stage above a document or tracker.
+/// A pipeline stage above a plan that is still being designed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PipelineStage {
-    /// Complete stage label including any progress count.
+    /// Complete stage label.
     pub label: String,
     /// Done, active or next mark.
     pub mark: Mark,
@@ -179,19 +106,21 @@ pub struct Header {
     pub chips: Vec<Chip>,
     /// Id and optional revision.
     pub id: String,
+    /// The projects corrald files the plan under, when it names any.
+    pub project: Option<String>,
     /// Full screen title.
     pub title: String,
-    /// Acceptance attribution or review timing replay.
+    /// Acceptance attribution or review timing replay; the state chip's hint.
     pub meta: Rich,
     /// Explicit illustrative marker, when the source has one.
     pub illustrative: Option<&'static str>,
-    /// Desktop commands at the title's end (Ask, document); phone puts Ask in its bar.
+    /// Desktop commands at the head (Ask, document); phone puts Ask in its bar.
     pub actions: Vec<Button>,
     /// The detail is the last copy received and is not current.
     pub stale: Option<String>,
 }
 
-/// One proposed-member row in the review document.
+/// One proposed-member row in a plan document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProposedRow {
     /// Untouched member mark.
@@ -285,7 +214,8 @@ pub struct Compose {
 /// The decide bar: actions, the request-changes field, and its note or attribution.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decide {
-    /// Desktop or phone actions with their refused state resolved.
+    /// Accept plan, Request changes, Ask, then the diff and any result check, each with its
+    /// hint; refused ones stay, disabled, with the refusal as their hint.
     pub buttons: Vec<Button>,
     /// The request-changes field, when open.
     pub compose: Option<Compose>,
@@ -295,58 +225,36 @@ pub struct Decide {
     pub attribution: Rich,
 }
 
-/// A revision under review, including the decide bar.
+/// A revision under review: its head, the document to read, and what accepting publishes,
+/// what the reviewers said and the decide bar.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AwaitingView {
     /// Needs-you/reviewed header.
     pub header: Header,
-    /// Design, members, aggregate verification and final acceptance.
-    pub pipeline: Vec<PipelineStage>,
-    /// Complete document in source order.
+    /// The document in source order, without the proposed members and verdicts, which the
+    /// brief states.
     pub sections: Vec<DocumentSection>,
-    /// Document artifact attribution; empty when corrald names none.
-    pub artifact: Rich,
-    /// Actions, field and note.
-    pub decide: Decide,
+    pub brief: AwaitingBrief,
 }
 
-/// One final-acceptance blocker.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Blocker {
-    /// Needs-your-answer active mark or not-applicable mark.
-    pub mark: Mark,
-    /// Full blocker phrase.
-    pub text: String,
-    /// Needs-you hue only for a blocker that waits on the owner.
-    pub hue: Hue,
-}
-
-/// Published tracker content and its selected-member inspector.
+/// An executing (or finished) published plan: its head, the brief with its member graph and
+/// path to done, and the story of a member selected with J/K or a card press.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutingView {
     /// State, acceptance attribution and commands.
     pub header: Header,
-    /// Four plan stages.
-    pub pipeline: Vec<PipelineStage>,
-    /// Unmapped-scenario warning, absent when mapping is complete or unknown.
-    pub warning: Option<String>,
-    /// Warning state mark.
-    pub warning_mark: Mark,
-    /// Members heading.
+    pub brief: ExecutingBrief,
+    /// Members heading and what its layout means.
     pub members_heading: &'static str,
-    /// Members, layers and dependencies; the screen lays them out at its measured width.
-    pub members: GraphInput,
-    /// Blocking-final-acceptance heading.
-    pub blockers_heading: &'static str,
-    /// Number shown alongside the blockers heading.
-    pub blocker_count: usize,
-    /// Ordered blockers.
-    pub blockers: Vec<Blocker>,
-    /// Resolved selected member, with first-member fallback.
+    pub members_hint: &'static str,
+    /// What stands in for the graph while the detail lists no member.
+    pub members_empty: &'static str,
+    /// The member the owner selected, if any.
     pub selected: Option<Id>,
-    /// Desktop/terminal inspector; absent on phone, where members push task pages.
+    /// The selected member's story; absent on phone, where members push task pages.
     pub story: Option<Story>,
 }
+
 /// Planning and review before an owner acceptance request exists.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanningView {
@@ -433,7 +341,7 @@ pub enum Detail {
     Awaiting(AwaitingView),
     /// Drafting, independent review or a planning failure, never an owner decide bar.
     Planning(PlanningView),
-    /// Published tracker and member story.
+    /// Published tracker: brief, members and path to done.
     Executing(ExecutingView),
     /// Approved, but not yet published.
     Approved(ApprovedView),
@@ -458,33 +366,6 @@ pub struct PhonePage {
     pub right_label: Option<&'static str>,
     /// Review, executing, approved, document, diff or scale body and decide actions.
     pub detail: Detail,
-}
-
-/// Square treatment and hue for the member strips and the legend.
-pub fn square(id: Id, state: SquareState) -> MemberSquare {
-    MemberSquare {
-        id,
-        state,
-        hue: match state {
-            SquareState::You => Hue::You,
-            SquareState::Active => Hue::Corral,
-            SquareState::Held => Hue::Held,
-            SquareState::Landed | SquareState::Waiting => Hue::Neutral,
-        },
-    }
-}
-
-/// The four plan stages: design, members, aggregate verification and final acceptance.
-pub fn pipeline(first: &str, members: String, awaiting: bool) -> Vec<PipelineStage> {
-    pipeline_marks([
-        (
-            first.to_owned(),
-            if awaiting { Mark::Active } else { Mark::Done },
-        ),
-        (members, if awaiting { Mark::Next } else { Mark::Active }),
-        ("Aggregate verify".into(), Mark::Next),
-        ("Final accept".into(), Mark::Next),
-    ])
 }
 
 /// Stages with explicit marks; the active one takes the Corral colour.

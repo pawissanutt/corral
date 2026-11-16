@@ -1,0 +1,128 @@
+//! The Review page: the candidate outline, its counts and the selected candidate's Brief or
+//! evidence with the decide bar.
+
+use crate::model::daemon::{Feed, Link};
+use crate::model::effect::{Conn, Env};
+use crate::model::glance::Stat;
+use crate::model::id::Id;
+use crate::model::live::Selection;
+use crate::model::projects::ProjectFilter;
+
+use super::brief::{Brief, brief};
+use super::live::{Shown, log, notice, report, selected_filtered};
+use super::outline::{
+    CandidateHeader, OutlineGroup, candidate_decide_bar, candidate_header, candidate_tabs,
+    outline_filtered, outline_stats, selected_tab,
+};
+use super::view::{effective_layout, layouts};
+use super::{Body, DecideBar, LayoutChoice, Notice, State, Tab, TabView};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoopContent {
+    Brief(Brief),
+    /// Diff, Gate log, Report and Artifacts keep their existing typed content builders.
+    Evidence(Body),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoopCandidate {
+    pub header: CandidateHeader,
+    pub notice: Option<Notice>,
+    pub tabs: Vec<TabView>,
+    pub layouts: Vec<LayoutChoice>,
+    pub content: LoopContent,
+    pub decide: DecideBar,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoopPage {
+    pub title: &'static str,
+    pub stats: Vec<Stat>,
+    pub outline: Vec<OutlineGroup>,
+    pub detail: Option<LoopCandidate>,
+    pub empty: Option<String>,
+    pub stale: bool,
+    pub conn: Conn,
+}
+
+/// `focus` is a pushed candidate: its page bypasses the project filter for its detail and
+/// actions, never for its outline or page-level counts.
+pub fn loop_page_filtered(
+    state: &State,
+    feed: &Feed,
+    selection: &Selection,
+    focus: Option<&Id>,
+    env: Env,
+    width: f32,
+    filter: &ProjectFilter,
+) -> LoopPage {
+    let task = match focus {
+        Some(id) => feed.board.task(id),
+        None => selected_filtered(selection, feed, filter),
+    };
+    let shown = task.map(|task| Shown::of(feed, task));
+    let stale = env.conn.refuses()
+        || feed.link != Link::Up
+        || shown
+            .as_ref()
+            .and_then(|shown| shown.review_cache)
+            .is_some_and(|cache| cache.stale);
+    let detail = shown.as_ref().map(|shown| {
+        let content = match shown.review {
+            Some(review) => match selected_tab(state, Some(review)) {
+                Tab::Brief => LoopContent::Brief(brief(state, feed, shown, review, env, width)),
+                Tab::Diff => LoopContent::Evidence(Body::Diff(super::live_files::diff(
+                    state,
+                    feed,
+                    shown,
+                    review,
+                    effective_layout(state, env, width),
+                    env,
+                ))),
+                Tab::Log => LoopContent::Evidence(log(review, shown.sha().unwrap_or_default())),
+                Tab::Report => LoopContent::Evidence(report(
+                    review,
+                    shown.id(),
+                    shown.sha().unwrap_or_default(),
+                )),
+                Tab::Shot => LoopContent::Evidence(super::evidence::artifacts(
+                    state,
+                    feed,
+                    shown.id(),
+                    review,
+                    env,
+                )),
+            },
+            None => LoopContent::Evidence(Body::Notice(notice(shown).map_or_else(
+                || "Loading the candidate's review detail…".into(),
+                |notice| notice.text,
+            ))),
+        };
+        LoopCandidate {
+            header: candidate_header(feed, shown.task, filter),
+            notice: notice(shown),
+            tabs: candidate_tabs(state, shown.review),
+            layouts: layouts(state, env),
+            content,
+            decide: candidate_decide_bar(state, feed, Some(shown.task), env),
+        }
+    });
+    let outline = outline_filtered(feed, selection, focus, filter);
+    LoopPage {
+        title: "Review",
+        stats: outline_stats(&outline),
+        outline,
+        empty: if detail.is_some() {
+            None
+        } else if let Some(id) = focus {
+            Some(format!("{id} is no longer on the board."))
+        } else if !feed.board.complete {
+            Some("Waiting for the board…".into())
+        } else {
+            Some("No candidates in this scope.".into())
+        },
+        detail,
+        stale,
+        conn: env.conn,
+    }
+}

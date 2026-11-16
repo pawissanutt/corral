@@ -502,7 +502,8 @@ fn no_projects_preview_has_complete_empty_work_and_usable_assistant_threads() {
     assert!(feed.board.complete);
     assert!(feed.board.tasks().is_empty());
     assert!(feed.plans.is_empty() && feed.builds.is_empty() && feed.inbox.is_empty());
-    assert!(feed.agents.is_empty());
+    // Assistant sessions are agent rows too; an assistant-only workspace has no others.
+    assert!(feed.agents.values().all(|row| row.role == "assistant"));
     assert_eq!(feed.health.as_ref().unwrap().pm, PmLevel::Absent);
     assert_eq!(feed.assistants["A-7"].focus, None);
     assert!(!feed.threads["quick"].entries.is_empty());

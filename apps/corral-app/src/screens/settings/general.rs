@@ -1,7 +1,6 @@
 //! Settings › General in every data state: this device's own preferences first (theme, the
-//! sidebar on desktop and terminal, the Now layout, and where its data comes from), which need
-//! no connection; then the workspace as the served feed reports it, or what waits for a
-//! connection.
+//! sidebar on desktop and terminal, and where its data comes from), which need no connection;
+//! then the workspace as the served feed reports it, or what waits for a connection.
 
 use nsh_core::prelude::*;
 
@@ -79,25 +78,6 @@ fn local(app: AppState) -> AnyElement {
                 "seg-sidebar",
             ),
             Some(connect::SIDEBAR_NOTE),
-        ));
-        rows.push(row(
-            app,
-            "Now layout",
-            view()
-                .flex_row()
-                .child(button_with(
-                    app,
-                    "Reset Now layout",
-                    ButtonKind::Ghost,
-                    ButtonOptions::default(),
-                    "btn-reset-now",
-                    move || {
-                        app.reset_now_layout();
-                        app.toast("Now is back to its default layout.");
-                    },
-                ))
-                .into_element(),
-            None,
         ));
     }
     rows.push(row(app, "Data", data_source(app), None));

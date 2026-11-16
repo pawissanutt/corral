@@ -33,9 +33,8 @@ use crate::{
     },
     state::AppState,
     ui::{
-        ask,
-        atoms::{self, HealthLayout},
-        composer,
+        ask, atoms, composer,
+        health_line::{HealthLayout, health_line},
         icons::{Icon, icon},
         kit::{
             notice,
@@ -133,11 +132,11 @@ fn health_strip(app: AppState) -> AnyElement {
                 untracked(|| {
                     view()
                         .flex_row()
-                        .child(atoms::health_line(app, HealthLayout::Bar))
+                        .child(health_line(app, HealthLayout::Bar))
                         .into_element()
                 })
             } else {
-                untracked(|| atoms::health_line(app, HealthLayout::Strip))
+                untracked(|| health_line(app, HealthLayout::Strip))
             }
         }))
         .into_element()
@@ -710,8 +709,8 @@ fn app_tab(nav: Nav, item: NavigationItem) -> AnyElement {
     // carries its needs-you count, which the badge otherwise announces alone.
     let name = move || {
         Some(SharedString::from(
-            match (inbox, app.snapshot().count(Destination::Inbox)) {
-                (true, Some(n)) => format!("{label}, {n} need you"),
+            match (inbox, app.snapshot().count_words(Destination::Inbox)) {
+                (true, Some(words)) => format!("{label}, {words}"),
                 _ => label.to_owned(),
             },
         ))

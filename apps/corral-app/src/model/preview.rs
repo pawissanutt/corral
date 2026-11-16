@@ -156,6 +156,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         PLANS_V1,
         BUILDS_V1,
         AGENTS_V1,
+        corral_protocol::AGENTS_ACTIVITY_V1,
         SESSION_V1,
         SESSION_FLEET_V1,
         REVIEW_V1,

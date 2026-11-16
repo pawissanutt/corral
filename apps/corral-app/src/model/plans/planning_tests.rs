@@ -5,7 +5,7 @@ use crate::model::daemon::{DetailCache, Feed, detail_key};
 use crate::model::effect::{Conn, Env};
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
-use crate::model::plans::{Detail, State, live_detail, live_list_filtered};
+use crate::model::plans::{Detail, OutlineSecond, State, live_detail, plan_outline};
 use crate::model::projects::ProjectFilter;
 use crate::model::{Id, Selection};
 
@@ -32,16 +32,12 @@ fn legacy_plans_have_unknown_projects_and_ignore_stored_filters() {
             rev: 1,
         },
     );
-    let env = Env {
-        conn: Conn::Healthy,
-        form: Form::Desktop,
-    };
     for filter in [
         ProjectFilter::All,
         ProjectFilter::Unassigned,
         ProjectFilter::Project("corral".into()),
     ] {
-        let list = live_list_filtered(&Selection::default(), &feed, env, &filter);
+        let list = plan_outline(&Selection::default(), &feed, &filter);
         let rows: Vec<_> = list
             .sections
             .iter()
@@ -128,13 +124,13 @@ fn planning_states_never_become_owner_acceptance_sections_or_details() {
             Detail::Planning(_)
         ));
     }
-    let list = live_list_filtered(&Selection::default(), &feed, env, &ProjectFilter::All);
+    let list = plan_outline(&Selection::default(), &feed, &ProjectFilter::All);
     assert_eq!(list.sections.len(), 3);
     assert!(list.sections.iter().all(|section| section.hue != Hue::You));
     assert!(
         list.sections
             .iter()
             .flat_map(|section| &section.rows)
-            .all(|row| row.progress.is_none())
+            .all(|row| matches!(row.second, OutlineSecond::Status { .. }))
     );
 }

@@ -1,24 +1,24 @@
- ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
-╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
-│ Autopilot            ││ T-868 · R1 · candidate 85b45e1e                      ┃
-│ independent work     ││ base main · 5 files · +334 −28                       ┃
-│ continues            ││ host-queue-ledger                                    ┃
-├──────────────────────┤├───────────────────────────────────────────────────── ┃
-│  Inbox         5   i ││ VERDICTS · BOUND TO CANDIDATE SHA ─────────────────  ┃
-│  Now               n ││ ◌ gate   f34f3df6  04:45 f stale · older candidate ix│
-│  Changes      12   . ││ ✓ gate   85b45e1e  08:26 pass · quick tier ·…        │
-│  Plans         6   p ││ ✓ review 85b45e1e  22:40 approve · R1-review2 ·…     │
-│  Agents        7   a ││ ○ you    85b45e1e        your verdict                │
-│▌ Review        3   r │├───────────────────────────────────────────────────── │
-│  Timeline          t ││ Diff · 5 files  Report  Screenshot  Gate log         │
-│  Usage             u │├───────────────────────────────────────────────────── │
-│  Settings          , ││                                                      │
-├──────────────────────┤│ packages/c… lines illustrative Ask about this hunk   │
-│  Ask               / ││ @@ -212,9 +212,9 @@ describe("cross-lane paging")    │
-│  Go to            ^K ││  212  212     const lane = await privateHerdr({      │
-│                      ││  213      -   const inputs = 256;                    │
-│                      │├──────────────────────────────────────────────────────┤
-│                      ││  Approve 85b45e1e    Request changes                 │
-│                      ││    Verdicts apply to 85b45e1e only; a new candidate… │
-╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
-  s  split │  i  Inbox  n  Now  .   p   a   r   t   u   ,  │  /  Ask  ^K  Go to
+ ◉ Corral  /preview/corral │ ● healthy                 Mon 16 Nov 10:44  sample
+╭────────╮╭────────────────────────────────────────────────────────────────────╮
+│  i    3││ Review  ●1 ◐3                                                      │
+│  n    3│├────────────────────────────────────────────────────────────────────┤
+│  .     ││ Project All corral 2 mitigraph 1 mitiplay Unassigned               │
+│  p    1││Your verdict 1 ────────┤  ready for verdict  T-868 R1 85b45e1       │
+│  b     ││▌T-868  host-que… ready│  corral  ▤1 +1 −1                          │
+│  a     ││In verification 3 ─────┤ host-queue-ledger                          │
+│▌ r    1││ T-867  queue-con… gate│  Brief   Diff   Gate log   Report          │
+│  t     ││ T-890  pm-bounde… gate├────────────────────────────────────────────┤
+│  u     ││ T-894  api-conne… gate│ Ready to land?                             ┃
+│  ,     ││                       │ ✓ Gate passed 85b45e1                      ┃
+├────────┤│                       │ ✓ Review approves 85b45e1                  ┃
+│  /     ││                       │  review · pi-sol                           ┃
+│  ^K    ││                       │  Preview · candidate-bound reviewer        │
+│        ││                       │  record                                    │
+│        ││                       │ ○ Your verdict 85b45e1                     │
+│        ││                       │                                            │
+│        ││                       │ What changed 1                             │
+│        ││                       ├────────────────────────────────────────────┤
+│        ││                       │  Approve 85b45e1    Request    Ask         │
+│        ││                       │  Discard   actor=owner · via=app:Preview…  │
+╰────────╯╰───────────────────────┴────────────────────────────────────────────╯
+  s  split  .  actions │  /  Ask  ^K  Go to

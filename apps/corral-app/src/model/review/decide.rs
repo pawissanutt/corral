@@ -46,7 +46,7 @@ fn authority_refusal(feed: &Feed, env: Env, authority: Authority) -> Option<Stri
     }
 }
 
-fn device_refusal(feed: &Feed, env: Env) -> Option<String> {
+pub(super) fn device_refusal(feed: &Feed, env: Env) -> Option<String> {
     authority_refusal(feed, env, Authority::Act)
 }
 
@@ -55,7 +55,7 @@ pub(super) fn reply_refusal(feed: &Feed, env: Env) -> Option<String> {
 }
 
 /// Why a decision on the shown candidate would not be bound to it.
-fn candidate_refusal(shown: &Shown) -> Option<String> {
+pub(super) fn candidate_refusal(shown: &Shown) -> Option<String> {
     if shown.review.is_none() {
         return Some("The candidate's detail has not loaded; nothing was sent.".into());
     }
@@ -108,12 +108,7 @@ fn approve_refusal(state: &State, feed: &Feed, shown: &Shown, env: Env) -> Optio
         .or_else(|| candidate_refusal(shown))
         .or_else(|| {
             let review = shown.review?;
-            (!review.approvable).then(|| {
-                format!(
-                    "Approval is unavailable in state {}.",
-                    review.state.replace('_', " ")
-                )
-            })
+            (!review.approvable).then(|| super::outline::approval_unavailable(shown))
         })
         .or_else(|| {
             in_flight(state, feed, shown.id(), |intent| {
@@ -658,6 +653,9 @@ impl State {
             return Vec::new();
         };
         let shown = Shown::of(feed, task);
+        if let Some(effects) = super::outline::navigation(&action, &shown) {
+            return effects;
+        }
         let id = shown.id().clone();
         match action {
             Action::Expand(path) => {
