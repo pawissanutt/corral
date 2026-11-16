@@ -139,8 +139,9 @@ test("owner queue lists and reorders exact follow-up objects while a turn is run
   const fx = await codeHost("worker", { catalog: 10, enabled: ["queue_control"] });
   fx.host.markAttached("interactive");
   try {
+    const requests = fixtureTransport().requests;
     const running = fx.turn([{ toolCalls: [{ callId: "queue-order", name: "fixture_hold", arguments: { name: "queue-order" } }] },
-      { text: "after tool" }, { text: "first delivered" }, { text: "third delivered" }, { text: "second delivered" }]);
+      { text: "after tool" }, { text: "all delivered" }]);
     await fx.holds.get("queue-order").started;
     for (const text of ["queue first", "queue second", "queue third"]) await fx.host.session.followUp(text);
     const items = fx.host.queue.items();
@@ -167,6 +168,11 @@ test("owner queue lists and reorders exact follow-up objects while a turn is run
         : message.content.filter(part => part.type === "text").map(part => part.text).join(""))
       .filter(text => text.startsWith("queue "));
     expect(delivered).toEqual(["queue first", "queue third", "queue second"]);
+    // The whole backlog drains at the first stop: one reply answers it, in one turn.
+    expect(fixtureTransport().requests - requests).toBe(3);
+    const started = ledger(fx).filter(entry => entry.event === "started" && entry.mode === "follow_up");
+    expect(started.map(entry => entry.item)).toEqual([items[0]!.key, items[2]!.key, items[1]!.key]);
+    expect(new Set(started.map(entry => entry.turn)).size).toBe(1);
     expect(fx.host.queue.items()).toEqual([]);
     expect(await fx.host.queue.move(items[2]!.key, -1)).toBeFalse();
   } finally { await fx.close(); }
@@ -206,7 +212,7 @@ test("a drain reentering the move journal cannot consume a partially rebuilt que
       }
       return result;
     };
-    fixtureTransport().script([{ text: "first" }, { text: "third" }, { text: "second" }]);
+    fixtureTransport().script([{ text: "drained" }]);
     try {
       await fx.host.session.agent.continue();
       expect(await duringDrain).toBeFalse();

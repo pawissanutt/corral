@@ -1619,6 +1619,14 @@ completion. IDs have the form `q-g<generation>-<bind-prefix>-<counter>`; checks 
 committed binding, not the display prefix. Ledger appends persist before queue mutations,
 including before the first conversational message. A write failure fences further progress.
 
+Follow-ups drain as one batch: when the agent would otherwise stop, every follow-up queued by then
+(inbox envelopes, code-cell results, command notices, owner input) enters the conversation
+together, in queue order, and one run answers them. Each drained item still gets its own
+`started` entry, all naming the same turn. Withdraw, edit and reorder therefore apply only until
+that stop, and a cancel ends the run for the whole batch: none of it is redelivered. Steering is
+unchanged, one item per turn boundary. On PM and assistant hosts, `corral_cost_turn` writes one
+`queued` start marker per keyed item in the batch; usage attributes the run to the last one.
+
 `queue_control` requires catalog 10 and host support (strict/standard/full defaults off/on/on).
 Older snapshots remain off. Bridge v1 adds `queue_state {limit?:1..64}` (default 64) with
 bounded metadata and an explicit `more` flag, and `queue_withdraw {key,op_key}`. Readback never

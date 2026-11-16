@@ -238,7 +238,7 @@ export class QueueDock implements Component {
   }
 
   /**
-   * `QUEUE · n waiting · each runs when its receiver is next idle` in muted, `+k more` at the right. With queue
+   * `QUEUE · n waiting · all run when its receiver is next idle` in muted, `+k more` at the right. With queue
    * control off the clause says editing is off instead, since the rows then carry no controls.
    */
   private header(items: readonly QueuedItem[], hidden: number, tight: boolean, width: number, locked: boolean): string {
@@ -246,7 +246,7 @@ export class QueueDock implements Component {
     const more = hidden > 0 && `+${hidden} more`.length + 2 < inner ? `+${hidden} more` : "";
     // Steer items reach the running turn at its next step, so the idle clause holds only for follow-ups.
     const followUps = items.every(item => item.policy === "follow_up");
-    const idle = this.receiver() ? " · each runs when its receiver is next idle" : " · each runs when the agent is next idle";
+    const idle = this.receiver() ? " · all run when its receiver is next idle" : " · all run when the agent is next idle";
     const clause = locked ? (tight ? " · editing off" : " · editing is off in this session") : tight || !followUps ? "" : idle;
     const lead = `QUEUE · ${items.length} waiting${clause}`;
     return PANEL_BG + " " + PANEL_MUTED + fit(lead, inner - (more ? more.length + 2 : 0)) + (more ? "  " + more : "") + " " + RESET;

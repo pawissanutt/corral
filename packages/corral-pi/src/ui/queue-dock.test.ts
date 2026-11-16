@@ -272,7 +272,7 @@ test("each row names its receiver in accent, joined to the text below 84 columns
   });
   const named = host(() => "the parent"), plain = host(), unset = host(() => undefined);
   const wide = screen(named.render(120));
-  expect(wide[0]).toContain("QUEUE · 2 waiting · each runs when its receiver is next idle");
+  expect(wide[0]).toContain("QUEUE · 2 waiting · all run when its receiver is next idle");
   // `n  → receiver` in a 14-cell column, then the text.
   const row = wide.find(line => line.includes("alpha"))!;
   expect(row.indexOf("→ parent")).toBe(3);

@@ -1137,7 +1137,7 @@ function dockHTML(){
    +d.opts.map((x,i)=>`<div class="opt${two?' two':''}${i===S.di?' sel':''}" data-a="pick" data-v="${i}"><span class="bar">▌</span><span class="ac">${i+1}</span><span class="b">${h(x[0])}</span>${two&&SHORT?'':`<span class="mu od${two?'':' el'}">${h(x[1])}</span>`}</div>`).join('')+`</div></div>`;
   if(S.queue.length){
     const tight=DC<84;
-    o+=`<div class="queue"><div class="mu el">QUEUE · ${S.queue.length} waiting${tight?'':' · each runs when its receiver is next idle'}</div>`
+    o+=`<div class="queue"><div class="mu el">QUEUE · ${S.queue.length} waiting${tight?'':' · all run when its receiver is next idle'}</div>`
      +S.queue.map((q,i)=>{const col=q.target==='parent'?'var(--accent)':kid(q.target).c;return `<div class="q${tight?' tight':''}"><span class="mu">${i+1}</span>${tight?`<span class="el"><span style="color:${col}">→${q.target}</span> ${h(q.text)}</span>`:`<span style="color:${col}">→ ${q.target}</span><span class="el">${h(q.text)}</span>`}<span class="ctl"><span data-a="qedit" data-v="${q.id}"><kbd>e</kbd>${tight?'':' edit'}</span><span data-a="qup" data-v="${q.id}" class="${i?'':'mu'}">↑</span><span data-a="qdown" data-v="${q.id}" class="${i<S.queue.length-1?'':'mu'}">↓</span><span data-a="qdel" data-v="${q.id}" class="er">×${tight?'':' remove'}</span></span></div>`;}).join('')+`</div>`;
   }
   return o;

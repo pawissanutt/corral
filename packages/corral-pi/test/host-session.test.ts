@@ -244,6 +244,7 @@ async function expectRestricted(): Promise<void> {
   expect(state.settings).toEqual({
     cacheWarming: "off", enableInstallTelemetry: false, enableAnalytics: false, enableSkillCommands: false,
     quietStartup: true, showCacheMissNotices: true, transport: "sse", extensions: [], compaction: { enabled: true },
+    followUpMode: "all",
   });
   for (const tool of ["fixture_forbidden", "bash"]) {
     const tag = `${tool}-${host.state().last_seq}`;
