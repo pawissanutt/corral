@@ -962,8 +962,10 @@ starts through the same continuation preview and start services. On the board, `
 this here), `K` (save for later), `N` (continue planning), `U` (review plan) and `T` (take
 over and finish) on a handed-off card, from the keyboard or the card menu, call the same
 services. The menu offers exactly the goal actions the keys accept, from the same canonical
-plan-only projection. Each acts on the card as it was shown: a contract or plan change since
-it loaded refuses as stale. Task detail offers `W` and `K` the same way. In the assistant
+plan-only projection. Each acts on the card as it was shown: the board frame carries the
+continuation pin the card was rendered with (contract, plan, transfer revision and code
+layers), and any change since then refuses as stale. Task detail's overview offers `W` and
+`K` as keys and as clickable controls, through the same services. In the assistant
 pane, the action palette's **Hand off or take back this work…** opens the same sheet as
 `/handoff`. `s open assistant` remains inspection only.
 
@@ -1011,7 +1013,9 @@ no task, and a stale or draft revision refuses before the selection is consumed.
 recorded source assumptions (HEAD, base ancestry, each observed file's digest or absence) are
 revalidated first; changed source refuses as `implement_stale_source`. The choice records a
 typed grant naming its scratch before creating it, so an interruption reconciles to exactly
-that scratch. Executing is local authority only while that grant matches the current ready
+that scratch: sync's handoff recovery rolls an unfinished grant forward, adopting only the
+granted branch at the granted base and its clean registered worktree; anything else stays
+unrecovered with the named cause and execution stays fenced. Executing is local authority only while that grant matches the current ready
 plan and its scratch is recorded. After a take-back, handing the granted work over continues
 the returned task rather than filing a rival. A plan artifact alone never authorizes
 execution.
