@@ -85,7 +85,7 @@ try:
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', r, c, 0, 0)); os.kill(proc.pid, signal.SIGWINCH)
         until(lambda: len(log) > mark and log.endswith(b'\x1b[?2026l'), f'redraw at {c}x{r}')
 
-    until(lambda: has('ASSISTANT', 'g2'), 'assistant workbench ready', 90)
+    until(lambda: has('ASSISTANT', 'gen 2'), 'assistant workbench ready', 90)
     mark = len(log); os.write(master, b'/handoff\r')
     until(lambda: has('Hand off', 'Continue planning', 'Plan r4', 'Local review r3', 'stale', 'current r4', after=mark), 'plan sheet', 60)
     frame('sheet-140')
@@ -96,6 +96,29 @@ try:
     until(lambda: has('nothing changed', after=mark), 'cancel reports no change')
     assert (tasks(), choices()) == before == ([], 0), (tasks(), choices())
     frame('cancelled')
+
+    # A composer draft survives the overlay: open it from F2 over the draft, switch to the short
+    # 52x14 layout, navigate and type inside it, cancel; no keystroke leaks, nothing changes.
+    draft = 'keep this draft'
+    mark = len(log); os.write(master, draft.encode())
+    until(lambda: has(draft, after=mark), 'draft typed')
+    mark = len(log); os.write(master, b'\x1bOQ')
+    until(lambda: has('filter actions', after=mark), 'F2 palette')
+    for ch in b'hand off': os.write(master, bytes([ch])); time.sleep(0.05)
+    until(lambda: has('this work', after=mark), 'palette filtered')
+    time.sleep(0.3); os.write(master, b'\r')
+    until(lambda: has('Save plan for later', after=mark), 'sheet from the palette')
+    resize(52, 14); os.write(master, b'\x1b[B'); time.sleep(0.15); os.write(master, b'zz'); time.sleep(0.3)
+    frame('overlay-52-short')
+    os.write(master, b'\x1b'); time.sleep(2)  # the sheet's own cancel; a fresh redraw below proves it closed
+    redraw = len(log); resize(140, 46)
+    until(lambda: has('ASSISTANT', 'Message', after=redraw), 'full redraw at 140x46'); frame('draft-preserved')
+    geometry = redraw  # later pointer lookups replay from this full 140x46 redraw
+    (out / 'segment.ansi').write_bytes(bytes(log[redraw:]))
+    def on_screen(label): return json.loads(ok(['bun', '--no-env-file', str(package / 'test/support/screen-find.ts'), str(out / 'segment.ansi'), '140', '46', label], cwd=repo))
+    assert on_screen('› ' + draft) and not on_screen(draft + 'z') and not on_screen('Context for the next session'), 'draft or overlay state'
+    assert (tasks(), choices()) == ([], 0), (tasks(), choices())
+    os.write(master, b'\x15'); time.sleep(0.3)
 
     # Plan sheet rows: three contexts, Preview context, then Save plan for later.
     mark = len(log); os.write(master, b'/handoff\r')
@@ -112,21 +135,58 @@ try:
     assert shown.get('dispatch_hold') is True and not shown.get('runs'), shown
     assert choices() == 1, choices()
 
-    # The same sheet now shows board responsibility; Down, Enter = Work on this here.
+    # Board surface on the same store: select the held card by pointer, N (continue planning)
+    # by keyboard, then Save for later through the card menu by pointer; read back each delta.
+    def held(): return json.loads(ok([corral, 'show', task['id'], '--json'], cwd=work, env=owner_env)).get('dispatch_hold')
+    bmaster, bslave = pty.openpty(); blog = bytearray()
+    fcntl.ioctl(bslave, termios.TIOCSWINSZ, struct.pack('HHHH', 46, 140, 0, 0))
+    board = subprocess.Popen([corral, 'board'], cwd=work, env=env, stdin=bslave, stdout=bslave, stderr=bslave, preexec_fn=lambda: (os.setsid(), fcntl.ioctl(0, termios.TIOCSCTTY, 0)))
+    os.close(bslave); bsel = selectors.DefaultSelector(); bsel.register(bmaster, selectors.EVENT_READ)
+    def btext(): return re.sub(r'\s+', ' ', ESC.sub(b' ', bytes(blog)).decode('utf8', 'replace'))
+    def buntil(pred, reason, timeout=30):
+        deadline = time.monotonic() + timeout
+        while not pred():
+            if time.monotonic() > deadline: raise AssertionError('board timed out: ' + reason + '\n' + btext()[-3000:])
+            if bsel.select(0.3):
+                try: blog.extend(os.read(bmaster, 65536))
+                except OSError: raise AssertionError('board exited:\n' + btext()[-3000:])
+    def bclick(label, button=0):
+        bseg = out / 'board.ansi'; bseg.write_bytes(bytes(blog)); time.sleep(0.5)
+        while bsel.select(0.3): blog.extend(os.read(bmaster, 65536))
+        bseg.write_bytes(bytes(blog))
+        at = json.loads(ok(['bun', '--no-env-file', str(package / 'test/support/screen-find.ts'), str(bseg), '140', '46', label], cwd=repo))
+        assert at, label + ' not located on the board'
+        x, y = at['col'] + 2, at['row'] + 1
+        os.write(bmaster, f'\x1b[<{button};{x};{y}M'.encode()); os.write(bmaster, f'\x1b[<{button};{x};{y}m'.encode())
+    try:
+        buntil(lambda: 'Saved plan' in btext(), 'board shows the held card', 60)
+        # The first-run tour is the topmost modal: N must not reach the card under it.
+        buntil(lambda: 'skip tour' in btext()[-400:], 'first-run tour', 30)
+        os.write(bmaster, b'N'); time.sleep(1); assert held() is True, 'key leaked through the tour modal'
+        os.write(bmaster, b'\x1b'); buntil(lambda: 'skip tour' not in btext()[-400:], 'tour closed', 30)
+        def plan_runs(): return len(json.loads(ok([corral, 'show', task['id'], '--json'], cwd=work, env=owner_env)).get('plan_runs') or [])
+        assert '▌ '+task['id'] in btext() and plan_runs() == 0, 'the only card is selected; nothing started'
+        os.write(bmaster, b'N')
+        buntil(lambda: plan_runs() == 1, 'board N admitted the plan continuation', 60)
+        buntil(lambda: 'continuing' in btext(), 'board label after N', 30)
+        (out / 'board-continued.ansi').write_bytes(blog)
+        assert len(tasks()) == 1 and choices() == 1, (tasks(), choices())
+        before_scratch = [s for s in scratches()]  # identities before the take-back
+        bclick(task['id'] + ' app', button=2); bclick('work on this here')
+        buntil(lambda: phase() == 'planning' and held() is True, 'board menu Work on this here returned it', 60)
+        (out / 'board-taken-back.ansi').write_bytes(blog)
+        returned = json.loads(ok([corral, 'show', task['id'], '--json'], cwd=work, env=owner_env))
+        assert len(tasks()) == 1 and choices() == 1 and scratches() == before_scratch, (tasks(), choices(), scratches())
+    finally:
+        (out / 'board-final.ansi').write_bytes(blog)
+        os.write(bmaster, b'q'); time.sleep(0.5)
+        if board.poll() is None: board.terminate(); board.wait(timeout=5)
+        os.close(bmaster)
+
+    # The assistant sheet reflects the board's take-back: planning again, no coding scratch.
     mark = len(log); os.write(master, b'/handoff\r')
-    until(lambda: has('Saved for later', 'Work on this here', after=mark), 'board-owned sheet')
-    frame('board-owned')
-    # Rows: Save (disabled, held) · Continue planning · Review this plan · Work on this here.
-    assert has('Continue planning', 'Review this plan', after=mark) and not has('Take over and finish', after=mark)
-    before_scratch = [s for s in scratches()]  # identities before the take-back
-    for key in [b'\x1b[B'] * 3 + [b'\r']: os.write(master, key); time.sleep(0.15)
-    until(lambda: choices() == 2 and has('take_back', after=mark), 'take back consumed', 60)
-    frame('taken-back')
-    returned = json.loads(ok([corral, 'show', task['id'], '--json'], cwd=work, env=owner_env))
-    assert len(tasks()) == 1 and not returned.get('runs'), returned
-    # Returned plan-only: the assistant is planning again and no coding scratch was opened.
-    until(lambda: phase() == 'planning', 'returned to planning', 30)
-    assert scratches() == before_scratch, ('take-back opened a scratch', before_scratch, scratches())
+    until(lambda: has('Implement here', after=mark), 'returned sheet', 60)
+    frame('taken-back'); os.write(master, b'\x1b'); time.sleep(1)
 
     # Implement here by a real SGR pointer click on its rendered row (current revision r4).
     mark = len(log); os.write(master, b'/handoff\r')
@@ -137,7 +197,7 @@ try:
     assert at, 'Implement here not located on screen'
     x, y = at['col'] + 3, at['row'] + 1
     os.write(master, f'\x1b[<0;{x};{y}M'.encode()); os.write(master, f'\x1b[<0;{x};{y}m'.encode())
-    until(lambda: phase() == 'executing' and choices() == 3, 'pointer Implement here consumed', 60)
+    until(lambda: phase() == 'executing' and choices() == 2, 'pointer Implement here consumed', 60)
     frame('implemented')
     opened = [s for s in scratches() if s not in before_scratch]
     assert len(opened) == 1 and len(tasks()) == 1, (opened, tasks())
@@ -161,7 +221,7 @@ try:
     mark = len(log); os.write(master, b'/handoff\r')
     until(lambda: has('Implement here', 'plan r4 scope', after=mark), 'implement offered again', 60)
     click('[Implement here]')
-    until(lambda: phase() == 'executing' and choices() == 4, 'second Implement here consumed', 60)
+    until(lambda: phase() == 'executing' and choices() == 3, 'second Implement here consumed', 60)
     granted = [x for x in record()['session']['scratch'] if x['slug'] not in before_scratch and x['slug'] != opened[0]]
     assert len(granted) == 1, granted
     Path(granted[0]['path'], 'cache.md').write_text('evict least recently used\n')
@@ -170,7 +230,7 @@ try:
     frame('ship-offered')
     click('[Take over and finish]')
     # Lineage: the granted work continues the returned task, never a rival task.
-    until(lambda: choices() == 5 and has('Ship when checks pass', after=mark), 'Take over and finish committed', 120)
+    until(lambda: choices() == 4 and has('Ship when checks pass', after=mark), 'Take over and finish committed', 120)
     assert len(tasks()) == 1, tasks()
     ship = json.loads(ok([corral, 'show', task['id'], '--json'], cwd=work, env=owner_env))
     assert not ship.get('dispatch_hold') and not ship.get('runs'), ship
@@ -191,10 +251,10 @@ try:
                   checks=['real store: plan r4 with completed local review of r3 reads stale (current r4), advisory only',
                           'renders at 140, 80, 52 columns and 52x14 short height',
                           'Escape: no task, no choice input',
+                          'composer draft typed, sheet opened from F2 over it, 52x14 navigation and typed keys inside, Escape: draft intact, no leaked keys, no task or choice',
                           'Preview context: read-only package preview (archived vs loaded, native fork no); no task, no choice',
                           'keyboard Save plan for later: one bound choice, one held task with no run, via native Local',
-                          'reopened sheet shows board responsibility; Work on this here consumes a second choice and returns it',
-                          'take-back returns the assistant to planning with no new coding scratch',
+                          'board PTY (same store): first-run tour modal swallows N (no effect); keyboard N on the held card admits exactly one plan continuation (label Board continuing plan, same task); right-click card menu Work on this here by pointer returns it: assistant planning, task held, no new scratch',
                           'pointer click on Implement here (current r4) consumes a third choice: executing, one scratch, no task, no ship',
                           '/plan from pane input re-enters planning; app HEAD and task count unchanged',
                           'take-back: scratch identities identical before and after',
