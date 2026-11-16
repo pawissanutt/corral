@@ -83,20 +83,23 @@ def load_context(path: str) -> dict[str, Any]:
 def plan(path: str) -> None:
     context = load_context(path)
     packages: list[str] = []
-    metadata = json.loads(subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
-        check=True, capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout)
-    members = set(metadata["workspace_members"])
-    member_dirs = {Path(pkg["manifest_path"]).parent.resolve() for pkg in metadata["packages"]
-                   if pkg["id"] in members}
     skipped: set[tuple[str, Path]] = set()
     workspace = False
+    owners: set[tuple[str, Path]] = set()
     for changed in context["changed_paths"]:
         if changed in WORKSPACE_INPUTS or changed.startswith(".cargo/"):
             workspace = True
             continue
-        owner = owning_package(changed)
-        if owner is not None:
+        if owner := owning_package(changed):
+            owners.add(owner)
+    if owners:
+        metadata = json.loads(subprocess.run(
+            ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+            check=True, stdout=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL).stdout)
+        members = set(metadata["workspace_members"])
+        member_dirs = {Path(pkg["manifest_path"]).parent.resolve() for pkg in metadata["packages"]
+                       if pkg["id"] in members}
+        for owner in owners:
             if owner[1].resolve() not in member_dirs:
                 skipped.add(owner)
             elif owner[0] not in packages:

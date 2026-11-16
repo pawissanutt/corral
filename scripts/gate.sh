@@ -145,6 +145,10 @@ if [[ $tier == quick ]]; then
     printf 'FAILED: --tier quick needs CORRAL_GATE_CONTEXT naming a gate context file\n' >&2
     exit 2
   fi
+  begin_step "800-SLOC Rust ceiling"
+  python3 scripts/check-candidate.py --worktree-sloc
+  end_step
+
   quick_dir=$gate_dir
   quick_helper plan "$CORRAL_GATE_CONTEXT" >"$quick_dir/plan.sh"
   # shellcheck disable=SC1091
@@ -166,10 +170,6 @@ if [[ $tier == quick ]]; then
   else
     printf '\nSkipping cargo fmt and clippy (no touched crates).\n'
   fi
-
-  begin_step "800-SLOC Rust ceiling"
-  python3 scripts/check-candidate.py --worktree-sloc
-  end_step
 
   if ((${#scope[@]})); then
     begin_step "cargo clippy ${scope[*]} -- -D warnings"
