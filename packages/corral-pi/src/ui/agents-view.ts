@@ -287,7 +287,8 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
 
   if (model.agents.length) {
     divider();
-    heading("Timeline", model.maxParallel === undefined ? "" : ` · up to ${model.maxParallel} at once`);
+    heading("Timeline", (model.maxParallel === undefined ? "" : ` · up to ${model.maxParallel} at once`)
+      + (model.messages ? ` · ${model.messages} ${model.messages === 1 ? "message" : "messages"}` : ""));
     const bars = timelineLines(model.agents, width, options.now, model.origin, density !== "min", options.color);
     bars.forEach((line, index) => {
       const agent = model.agents[index];

@@ -24,6 +24,7 @@ mod autopilot;
 pub use autopilot::recover_infrastructure;
 mod availability;
 pub mod boardview;
+pub mod build_session;
 pub mod classic;
 mod cleanup;
 mod cleanup_worktree;
@@ -365,8 +366,8 @@ pub use skill::{
 };
 pub use slots::{SlotUsage, slot_usage, soft_target};
 pub use sprint::{
-    SprintChange, SprintDecision, SprintNumbers, SprintReview, SprintSections, SprintTask,
-    SprintTotals, collect_sprint_review, review_sprint,
+    SprintBuild, SprintBuildCounts, SprintChange, SprintDecision, SprintNumbers, SprintReview,
+    SprintSections, SprintTask, SprintTotals, collect_sprint_review, review_sprint,
 };
 pub use stats::{
     AssistantRoleStats, AssistantStats, StatsBy, StatsRow, assistant_role_stats, assistant_stats,

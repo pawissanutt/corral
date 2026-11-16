@@ -445,6 +445,8 @@ const ENTRIES: Readonly<Record<CorralOp, Entry>> = {
   hello: { did: "Connected to corral", doing: "Connecting to corral", noun: "Connection" },
   event: { did: "Reported an event", doing: "Reporting an event", noun: "Event" },
   job: { did: "Registered a job", doing: "Registering a job", noun: "Job" },
+  peer_send: { did: "Sent an agent message", doing: "Sending an agent message", noun: "Agent message" },
+  peer_roster: { did: "Listed peer sessions", doing: "Listing peer sessions", noun: "Peer roster", read: true },
   receipt_lookup: {
     did: "Looked up a receipt", doing: "Looking up a receipt", noun: "Receipt lookup", read: true,
     target: c => str(c.args.task),

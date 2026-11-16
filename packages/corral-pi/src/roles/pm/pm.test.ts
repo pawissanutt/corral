@@ -319,8 +319,8 @@ for (const stage of ["startup", "reload", "refused replacement"]) test(
     expect(snapshot.projects).toEqual({ demo: cwd });
     expect(snapshot.policy.revision).toBe("launch-policy");
     const upstream = ["read", "edit", "write", "grep", "find", "ls", "bash"];
-    expect(host.session.getActiveToolNames().sort()).toEqual([...upstream, ...names].sort());
-    expect(state.loadout).toEqual([...upstream, ...names]);
+    expect(host.session.getActiveToolNames().sort()).toEqual([...upstream, ...names, "agent_message", "agent_roster"].sort());
+    expect(state.loadout).toEqual([...upstream, ...names, "agent_message", "agent_roster"]);
     const resources = host.runtime.services.resourceLoader;
     if (stage === "startup") expect(resources.getSkills().skills.map((skill) => skill.name)).toEqual(["corral-pm"]);
     expect(resources.getPrompts().prompts).toHaveLength(0);

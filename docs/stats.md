@@ -50,6 +50,26 @@ interval. JSON rates are fractions from 0 to 1; unavailable rates, means and
 medians are `null` (shown as `-` in the table). JSON also includes the accepted
 run count.
 
+## Build statistics
+
+`corral stats --builds [--since 30d] [--json]` reads tracked build records separately
+from task and run cohorts; builds never enter task rows. `--since` selects records created
+at or after the cutoff, using the same duration grammar.
+
+- `builds` counts records; `landed`, `kept`, `abandoned` and `open` count their outcomes.
+- `slices` sums recorded child entries. `mean_review_rounds` averages review counts over
+  reviewed builds. `first_round_approve_rate` is the fraction of reviewed builds with an
+  approving numbered first round.
+- `gate_attempts` counts all verification attempts, including skipped attempts.
+  `gate_failure_rate` divides failures by completed passes and failures, excluding skips.
+- `median_wall_seconds` is the median creation-to-outcome duration for landed builds with
+  valid outcome times; an even sample uses the mean of the two middle values.
+- `messages` counts recorded messages; `input_tokens` and `output_tokens` sum total usage.
+  `cost_usd` sums total recorded costs, and is unknown for an empty cohort or if any build
+  lacks a total cost.
+
+Unavailable values print as `-` rather than zero.
+
 ## Tokens and costs
 
 Token totals include uncached input, output, cache reads and cache writes as

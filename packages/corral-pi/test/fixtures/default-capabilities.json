@@ -1,7 +1,7 @@
 {
   "assistant": {
-    "catalog": 10,
-    "digest": "b9e805e98ff2e61031372c7002f4b28d6557c75149ff804da19a5a326d521bda",
+    "catalog": 11,
+    "digest": "5503f29288a04aa9e866807be752b15ec8897140715a065b7c744c47fbfd101b",
     "features": {
       "ask_user": {
         "enabled": true,
@@ -39,6 +39,15 @@
       },
       "context_files": {
         "enabled": true,
+        "source": "preset"
+      },
+      "fleet": {
+        "enabled": true,
+        "settings": {
+          "max_parallel": 3,
+          "max_turns": 60,
+          "timeout_secs": 1800
+        },
         "source": "preset"
       },
       "llama_cpp.enabled": {
@@ -126,8 +135,8 @@
     }
   },
   "pm": {
-    "catalog": 10,
-    "digest": "57b22c875d30bec818151f687cd0541d35721713127e8e8afe2ea4d6665c1bfd",
+    "catalog": 11,
+    "digest": "a1881d5a3e7b25be263b574bdd75084a07500b8df5e0dfb2bb0ea0515a155f09",
     "features": {
       "ask_user": {
         "enabled": true,
@@ -192,6 +201,10 @@
         },
         "source": "preset"
       },
+      "queue_control": {
+        "enabled": true,
+        "source": "preset"
+      },
       "skills": {
         "enabled": true,
         "settings": {
@@ -221,10 +234,6 @@
         "source": "preset"
       },
       "web.enabled": {
-        "enabled": true,
-        "source": "preset"
-      },
-      "queue_control": {
         "enabled": true,
         "source": "preset"
       }

@@ -1,220 +1,201 @@
 import { TOML } from "bun";
-import { checked, json, type Run, type TaskReadback } from "./corral-cli.ts";
-import { summarize } from "./git.ts";
-import type { BuildContext, BuildSummary, ExitChoice, ExitControl, ExitOption, ExitRecord, ExitState, FleetSnapshot } from "./types.ts";
+import { checked, json, type Run } from "./corral-cli.ts";
+import { patchDigest, summarize } from "./git.ts";
+import type { BuildJournal } from "./record.ts";
+import type { GateReceipt, LandResult } from "./record-types.ts";
+import { LIVE_CHILD_STATES, type BuildContext, type BuildSummary, type ExitChoice, type ExitControl, type ExitOption, type ExitRecord, type ExitState, type FleetSnapshot } from "./types.ts";
 
-export type ExitStep = "none" | "assistant" | "scratch" | "merged" | "submitted" | "waived" | "synced";
-
-/** Optional journal data travels with ExitRecord through the session store's JSON round-trip. */
+/** Recovery metadata stays local to session.json, not the tracked build record. */
 export interface ExitProgressRecord extends ExitRecord {
-  readonly progress?: {
-    readonly step: ExitStep;
-    readonly phase: ExitState["phase"];
-    readonly detail?: string;
-    readonly scratch?: string;
-    readonly head?: string;
-  };
+  readonly progress?: { readonly phase: ExitState["phase"]; readonly detail?: string };
 }
-
-const NEXT_STEP: Record<ExitStep, string> = {
-  none: "assistant session creation", assistant: "scratch creation", scratch: "Git fast-forward",
-  merged: "scratch submission", submitted: "waive-review", waived: "sync", synced: "landing",
-};
-
 export function createExit(options: {
-  context: BuildContext; run: Run; git: Run; fleet: () => FleetSnapshot;
-  save: (record: ExitRecord) => void; changed: () => void; now?: () => number; pollMs?: number;
+  context: BuildContext; run: Run; git: Run; fleet: () => FleetSnapshot; journal: BuildJournal;
+  save: (record: ExitRecord) => void; changed: () => void; now?: () => number;
   integrationBranch?: () => Promise<string | undefined>;
 }): ExitControl & { open(): void; close(): void } {
-  const { context, run, git } = options;
+  const { context, run, git, journal } = options;
   const session = context.session;
-  const root = session.workspaceRoot;
   const now = options.now ?? Date.now;
   const listeners = new Set<() => void>();
   const saved = session.exit as ExitProgressRecord | undefined;
-  let assistant = saved?.assistant;
-  let scratch = saved?.progress?.scratch;
-  let task = saved?.task;
-  let candidate = saved?.progress?.head;
-  let step: ExitStep = saved?.progress?.step ?? (task ? (saved?.reviewWaived ? "waived" : "submitted") : assistant ? "assistant" : "none");
-  let activeChoice = saved?.choice;
-  let exitAt = saved?.at;
-  let state: ExitState = { phase: "none" };
-  if (saved) {
-    if (saved.progress) {
-      const interrupted = saved.progress.phase === "running"
-        || (saved.choice === "land" && Boolean(task) && step !== "synced" && saved.progress.phase !== "failed");
-      state = { phase: interrupted ? "failed" : saved.progress.phase, record: saved,
-        detail: interrupted ? `The exit was interrupted before ${NEXT_STEP[step]} completed; choose again to continue.${retained()}` : saved.progress.detail };
-    } else if (saved.choice === "land") {
-      state = { phase: "failed", record: saved,
-        detail: `The saved land exit has no confirmed ${NEXT_STEP[step]} completion; choose again to continue.${retained()}` };
-    } else {
-      state = { phase: saved.choice === "keep" ? "kept" : saved.choice === "ship" ? "shipped" : "none", record: saved };
-    }
-  }
+  let state: ExitState = saved ? { record: saved, phase: saved.progress?.phase ?? (saved.landed ? "landed" : saved.choice === "keep" ? "kept" : "none"), detail: saved.progress?.detail } : { phase: "none" };
+  if (["rebasing", "verifying", "landing"].includes(state.phase)) state = { ...state, phase: "failed", detail: `The previous exit stopped during ${state.phase}. Inspect the worktree and choose Land again when ready.` };
   let summary: BuildSummary | undefined;
   let integration: string | undefined;
-  let integrationRead = !session.here;
   let integrationError: string | undefined;
   let inFlight: Promise<ExitState> | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
-  function changed() { options.changed(); for (const listener of listeners) listener(); }
-  function update(phase: ExitState["phase"], detail: string) {
-    state = { ...state, phase, detail }; persist(); changed();
+  function changed() {
+    for (const listener of [options.changed, ...listeners]) { try { listener(); } catch { /* Observers do not own exit execution. */ } }
   }
-  function retained() {
-    const parts = [assistant && `session ${assistant}`, scratch && `scratch ${scratch}`, task && `task ${task}`].filter(Boolean);
-    return parts.length ? ` Existing ${parts.join(", ")} remain available for manual continuation.` : "";
-  }
-  function failed(error: unknown) {
-    update("failed", `${NEXT_STEP[step]} failed: ${error instanceof Error ? error.message : String(error)}${retained()}`);
-  }
-  async function readIntegration() {
-    if (!session.here || !root || !session.project) return;
-    try {
-      integration = options.integrationBranch ? await options.integrationBranch() : await (async () => {
-        const text = await checked(run, ["--root", root, "config", "get", "projects"], root);
-        const projects = TOML.parse(text) as Record<string, { base?: string }>;
-        return projects[session.project!]?.base;
-      })();
-      integrationRead = true;
-      integrationError = undefined;
-    } catch (error) {
-      integrationError = `Cannot read the project's integration branch: ${error instanceof Error ? error.message : String(error)}`;
-      integrationRead = true;
-    }
+  function update(phase: ExitState["phase"], detail: string, record = state.record) {
+    state = { phase, detail, ...(record ? { record } : {}) };
+    if (record) options.save({ ...record, progress: { phase, detail } } as ExitProgressRecord);
+    changed();
   }
   async function getSummary() {
-    const [value] = await Promise.all([summarize(git, session, options.fleet()), readIntegration()]);
-    summary = value; changed(); return value;
+    summary = session.bare && session.repository === false
+      ? { branch: null, base: null, head: null, commits: 0, files: 0, added: 0, removed: 0, dirty: false, slices: [], outside: [] }
+      : await summarize(git, session, options.fleet());
+    integrationError = undefined;
+    if (session.bare) {
+      integration = session.baseBranch ?? undefined;
+      if (session.repository !== false && !integration) integrationError = "The session started without a base branch.";
+    } else if (session.workspaceRoot && session.project) {
+      try {
+        if (options.integrationBranch) integration = await options.integrationBranch();
+        else {
+          const projects = TOML.parse(await checked(run, ["--root", session.workspaceRoot, "config", "get", "projects"], session.workspaceRoot)) as Record<string, { base?: string }>;
+          integration = projects[session.project]?.base ?? "main";
+        }
+        if (!integration) integrationError = "The project's base branch is not configured.";
+      } catch (error) { integrationError = `Cannot read the project's base branch: ${error instanceof Error ? error.message : String(error)}`; }
+    }
+    changed(); return summary;
   }
   function choices(): readonly ExitOption[] {
-    let reason: string | undefined;
-    if (!root) reason = "This session is outside a corral workspace.";
-    else if (!session.project) reason = "This session has no configured corral project.";
-    else if (context.settings.exitPolicy === "none") reason = "Project policy disables exits through corral.";
-    else if (!task) {
-      if (!summary) reason = "The branch summary is still being read.";
-      else if (session.here && summary.branch === null) reason = "A detached session has no branch to ship.";
-      else if (session.here && integrationError) reason = integrationError;
-      else if (session.here && !integrationRead) reason = "The project's integration branch is still being read.";
-      else if (session.here && (!integration || integration === summary.branch)) reason = "The session wrote on the project's base branch; there is no separate branch to ship.";
-      else if (!summary.base || summary.commits === 0) reason = "There are no commits beyond the session base.";
-      else if (summary.dirty) reason = "Commit or remove uncommitted changes before shipping.";
-    }
+    let unavailable: string | undefined;
+    if (!session.bare && !session.workspaceRoot) unavailable = "This session is outside a corral workspace.";
+    else if (!session.bare && !session.project) unavailable = "This session has no configured corral project.";
+    else if (!session.bare && context.settings.exitPolicy === "none") unavailable = "Project policy disables landing.";
+    else if (session.bare && session.repository === false) unavailable = "This session is not in a Git repository.";
+    else if (!summary) unavailable = "The branch summary is still being read.";
+    else if (integrationError) unavailable = integrationError;
+    else if (!summary.branch) unavailable = "A detached session has no branch to land.";
+    else if (session.here && summary.branch === integration) unavailable = session.bare ? "The session is on its starting branch; use a separate branch." : "The session is on the project's base branch; use a separate branch.";
+    else if (!summary.base || summary.commits === 0) unavailable = "There are no commits beyond the session base.";
+    else if (summary.dirty) unavailable = "Commit uncommitted changes before landing.";
+    else if (options.fleet().children.some(child => LIVE_CHILD_STATES.includes(child.state))) unavailable = "Wait for all live children before landing.";
+    const review = journal.latestReview();
+    const needsReason = !session.bare && context.settings.exitPolicy === "review" && (!review || review.verdict !== "approve" || review.head !== summary?.head
+      || review.findings.some(finding => !finding.resolution || finding.resolution.state === "open"))
+      ? "No approving review covers the current head with every finding resolved. Give a reason to land anyway." : undefined;
     return [
-      { choice: "keep", label: "Keep on the branch", detail: "Keep this worktree and its branch without creating a corral task." },
-      { choice: "land", label: "Land after the gate", detail: "Submit the branch and waive independent review after the required gate.",
-        unavailable: root && context.settings.exitPolicy === "review" ? "Project policy requires independent review." : reason },
-      { choice: "ship", label: "Ship through the board", detail: "Submit the branch for the gate and independent review.", unavailable: reason },
-      { choice: "iterate", label: "Keep iterating", detail: "Return to the build session without choosing an exit." },
+      { choice: "keep", label: "Keep", detail: "Keep this worktree and branch and record the result." },
+      ...(session.bare && session.repository === false ? [] : [
+        { choice: "land" as const, label: "Land", detail: session.bare ? "Rebase and locally fast-forward the starting branch (no gate)." : "Rebase, run the full gate and fast-forward the project's base branch.", unavailable, ...(needsReason ? { needsReason } : {}) },
+      ]),
+      { choice: "iterate", label: "Iterate", detail: "Return to the session and continue working." },
     ];
   }
-  function persist() {
-    if (!activeChoice) return;
-    exitAt ??= new Date(now()).toISOString();
-    const value: ExitProgressRecord = { choice: activeChoice, at: exitAt, ...(task ? { task } : {}),
-      ...(assistant ? { assistant } : {}), ...(["waived", "synced"].includes(step) ? { reviewWaived: true } : {}),
-      progress: { step, phase: state.phase, detail: state.detail, ...(scratch ? { scratch } : {}), ...(candidate ? { head: candidate } : {}) } };
-    options.save(value);
-    state = { ...state, record: value };
+  async function primaryCheckout(): Promise<string> {
+    const entries = await checked(git, ["worktree", "list", "--porcelain", "-z"], session.worktree);
+    const first = entries.split("\0")[0];
+    if (!first?.startsWith("worktree ")) throw new Error("Cannot locate the repository's primary checkout.");
+    return first.slice("worktree ".length);
   }
-  async function poll() {
-    if (closed || state.phase !== "landing" || !task || !root) return;
+  async function checkPrimary(primary: string): Promise<void> {
+    const branch = await git(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: primary });
+    if (branch.code !== 0 || branch.stdout.trim() !== integration) {
+      throw new Error(`The repository's primary checkout must be on ${integration}; found ${branch.stdout.trim() || "a detached HEAD"}.`);
+    }
+    if ((await checked(git, ["status", "--porcelain", "--untracked-files=no"], primary)).trim()) {
+      throw new Error("The repository's primary checkout has tracked changes; commit or stash them before landing.");
+    }
+  }
+  async function rebase(): Promise<void> {
+    const result = await git(["rebase", integration!], { cwd: session.worktree });
+    if (result.code === 0) return;
+    const conflicts = await git(["diff", "--name-only", "--diff-filter=U"], { cwd: session.worktree });
+    const abort = await git(["rebase", "--abort"], { cwd: session.worktree });
+    throw new Error(`Rebase failed${conflicts.stdout.trim() ? `; conflicted paths: ${conflicts.stdout.trim().split("\n").join(", ")}` : `: ${result.stderr.trim() || result.stdout.trim()}`}.${abort.code ? ` Rebase abort failed: ${abort.stderr.trim()}` : " The rebase was aborted; the branch is unchanged."}`);
+  }
+  async function execute(choice: ExitChoice, overrideReason?: string): Promise<void> {
+    const warnings: string[] = [];
+    journal.decision("exit", choice);
+    journal.timeline("exit", choice);
     try {
-      update("landing", `Checking whether ${task} has landed.`);
-      const value = await json<TaskReadback>(run, ["show", task, "--json"], root);
-      if (closed) return;
-      const current = value.runs?.at(-1);
-      if (value.landed) { update("landed", `${task} landed at ${value.landed.sha}.`); return; }
-      if (current?.gate?.result === "fail") {
-        failed(new Error(`The gate failed for ${task}${current.gate.failed_cmd ? `: ${current.gate.failed_cmd}` : "."}`)); return;
+      if (choice === "iterate") { update("none", "The build session remains open for iteration."); return; }
+      if (choice === "keep") {
+        try { summary = session.bare && session.repository === false ? await getSummary() : await summarize(git, session, options.fleet()); } catch { /* Keeping an unborn or unavailable worktree does not require a Git head. */ }
+      } else await getSummary();
+      const option = choices().find(option => option.choice === choice);
+      if (!option) throw new Error("Land is unavailable outside a Git repository.");
+      if (option.unavailable) throw new Error(option.unavailable);
+      if (choice === "land" && option.needsReason && !overrideReason?.trim()) throw new Error(option.needsReason);
+      const record: ExitRecord = { choice, at: new Date(now()).toISOString(), ...(overrideReason?.trim() ? { overrideReason: overrideReason.trim() } : {}) };
+      state = { ...state, record };
+      if (choice === "keep") {
+        journal.outcome({ state: "kept", at: record.at, head: summary?.head ?? undefined });
+        journal.timeline("exit", "kept");
+        update("kept", "The worktree and branch are kept.", record);
+        return;
       }
-      if (value.status.toLowerCase() !== "review") {
-        failed(new Error(`${task} left Review without landing (${value.status})${current?.autopilot?.reason ? `: ${current.autopilot.reason}` : "."}`)); return;
+      if (session.bare) {
+        const primary = await primaryCheckout();
+        await checkPrimary(primary);
+        update("rebasing", `Rebasing onto ${integration}.`);
+        journal.timeline("land", `Rebasing onto ${integration}.`);
+        await rebase();
+        const head = (await checked(git, ["rev-parse", "HEAD"], session.worktree)).trim();
+        await checkPrimary(primary);
+        update("landing", `Locally fast-forwarding ${integration} to ${head}.`);
+        await checked(git, ["merge", "--ff-only", head], primary);
+        journal.outcome({ state: "landed", at: new Date(now()).toISOString(), head, landed: head, base_branch: integration });
+        journal.timeline("land", `${integration}: ${head}`);
+        update("landed", `Landed at ${head} on ${integration}.`, { ...record, landed: head, baseBranch: integration });
+        return;
       }
-      update("landing", `Waiting for ${task} to pass its gate and land.`);
-      timer = setTimeout(() => { void poll(); }, options.pollMs ?? 5000);
-    } catch (error) { if (!closed) failed(error); }
+      if (record.overrideReason) journal.decision("override", record.overrideReason);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        update("rebasing", `Rebasing onto ${integration}.`);
+        journal.timeline("land", `Rebasing onto ${integration}.`);
+        const tip = (await checked(git, ["rev-parse", integration!], session.worktree)).trim();
+        const patchBase = (await checked(git, ["merge-base", tip, "HEAD"], session.worktree)).trim();
+        const before = await patchDigest(git, patchBase, session.worktree);
+        await rebase();
+        const after = await patchDigest(git, tip, session.worktree);
+        if (context.settings.exitPolicy === "review" && before !== after && !record.overrideReason) throw new Error("The rebase changed the patch. Review the rebased head again with build_review, then choose Land.");
+        const head = (await checked(git, ["rev-parse", "HEAD"], session.worktree)).trim();
+        update("verifying", "Running the full gate on the rebased head.");
+        journal.timeline("verify", `Full gate on ${head}.`);
+        const receipt = await json<GateReceipt>(run, ["build", "gate", "--session", session.id, "--worktree", session.worktree,
+          "--project", session.project!, "--tier", "full", "--base", session.base!, "--json"], session.workspaceRoot!, 2 * 60 * 60 * 1000);
+        journal.gate(receipt);
+        try { await journal.refresh(); } catch (error) { warnings.push(`Build record Git snapshot failed: ${String(error)}`); }
+        const publication = await journal.publish();
+        if (publication) warnings.push(publication);
+        if (receipt.result === "fail") throw new Error(`Full gate failed${receipt.failed_command ? `: ${receipt.failed_command}` : ""}${receipt.log ? `; log: ${receipt.log}` : ""}`);
+        update("landing", `Landing ${head} with gate ${receipt.attempt}.`);
+        journal.timeline("land", `Landing ${head} with gate ${receipt.attempt}.`);
+        const landed = await run(["build", "land", "--session", session.id, "--worktree", session.worktree, "--project", session.project!,
+          "--expected-head", head, "--gate-attempt", receipt.attempt, "--json"], { cwd: session.workspaceRoot! });
+        if (landed.code !== 0) {
+          const refusal = landed.stderr.trim() || landed.stdout.trim();
+          if (refusal.startsWith("landing_stale:") && attempt < 2) continue;
+          throw new Error(refusal || `Landing exited ${landed.code}`);
+        }
+        let result: LandResult;
+        try { result = JSON.parse(landed.stdout) as LandResult; } catch { throw new Error("Landing returned invalid JSON; inspect the base branch before retrying."); }
+        const final = { ...record, landed: result.landed, baseBranch: result.base_branch, gateAttempt: receipt.attempt };
+        journal.outcome({ state: "landed", at: new Date(now()).toISOString(), head, landed: result.landed, base_branch: result.base_branch, override_reason: record.overrideReason });
+        journal.timeline("land", `${result.base_branch}: ${result.landed}`);
+        update("landed", `Landed at ${result.landed} on ${result.base_branch}.`, final);
+        return;
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      journal.timeline("exit", `failed: ${detail}`);
+      update("failed", detail);
+    } finally {
+      try { await journal.refresh(); } catch (error) { warnings.push(`Build record Git snapshot failed: ${error instanceof Error ? error.message : String(error)}`); }
+      const publication = await journal.publish();
+      if (publication) warnings.push(publication);
+      if (warnings.length) update(state.phase, `${state.detail ?? ""}\n${[...new Set(warnings)].join("\n")}`);
+    }
   }
-  async function execute(choice: ExitChoice): Promise<ExitState> {
-    try {
-      if (choice === "iterate") { update("none", "The build session remains open for iteration."); return state; }
-      if (activeChoice !== choice) exitAt = undefined;
-      activeChoice = choice;
-      if (choice === "keep") { update("kept", "The worktree and branch are kept without a corral task."); return state; }
-      let value: BuildSummary | undefined;
-      if (!task) {
-        update("running", "Checking the committed branch before submitting it to corral.");
-        value = await getSummary();
-      }
-      const unavailable = choices().find(option => option.choice === choice)?.unavailable;
-      if (unavailable) throw new Error(unavailable);
-      if (!root || !session.project) throw new Error("The session has no complete corral submission context.");
-      if (!task) {
-        if (!value?.base || !value.head) throw new Error("The session has no complete Git submission context.");
-        candidate ??= value.head;
-        const slug = `build-${session.id.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`.slice(0, 40);
-        if (!assistant) {
-          update("running", "Creating the assistant session that will carry this branch.");
-          const created = await json<{ id: string }>(run, ["assistant", "create", "--profile", "pi", "--json"], root);
-          if (!created.id) throw new Error("corral assistant create returned no session id.");
-          assistant = created.id;
-          step = "assistant";
-        }
-        if (!scratch) {
-          update("running", `Creating a scratch for session ${assistant}.`);
-          const createdScratch = await json<{ path: string; branch: string; base: string }>(run,
-            ["assistant", "scratch", "new", "--project", session.project, "--slug", slug, "--base", value.base, "--session", assistant, "--json"], root);
-          if (!createdScratch.path) throw new Error("corral scratch new returned no scratch path.");
-          scratch = createdScratch.path;
-          step = "scratch";
-        }
-        if (step !== "merged") {
-          update("running", `Fast-forwarding scratch ${scratch} to the build candidate.`);
-          await checked(git, ["-C", scratch, "merge", "--ff-only", candidate], root);
-          step = "merged";
-        }
-        update("running", `Submitting scratch ${scratch} from session ${assistant}.`);
-        const finished = await json<{ task: string }>(run,
-          ["assistant", "scratch", "finish", slug, "--title", session.name, "--intent", "ship", "--expected-head", candidate, "--session", assistant, "--json"], root);
-        if (!finished.task) throw new Error("corral scratch finish returned no task id.");
-        task = finished.task;
-        step = "submitted";
-      }
-      if (choice === "ship") { update("shipped", `${task} was submitted through session ${assistant} for the gate and independent review.`); return state; }
-      if (step !== "waived" && step !== "synced") {
-        update("running", `Waiving independent review for ${task} while retaining the required gate.`);
-        await checked(run, ["waive-review", task, "--reason", "build session exit: project policy requires the gate only"], root);
-        step = "waived";
-      }
-      if (step !== "synced") {
-        update("running", `Synchronizing corral so ${task} can advance through its gate.`);
-        await checked(run, ["sync"], root);
-        step = "synced";
-      }
-      update("landing", `Waiting for ${task} to pass its gate and land.`);
-      void poll();
-    } catch (error) { failed(error); }
-    return state;
-  }
-  if (state.phase === "landing") timer = setTimeout(() => { void poll(); }, options.pollMs ?? 5000);
   return {
     options: choices, summary: getSummary, state: () => state,
-    open() {
-      if (inFlight || ["kept", "shipped", "landing", "landed"].includes(state.phase)) return;
-      update("pending", "Choose what should happen to this build branch.");
-      void getSummary().catch(failed);
-    },
-    choose(choice) {
+    choose(choice, options) {
+      if (closed) return Promise.resolve(state);
+      if (state.phase === "landed" && choice !== "iterate") return Promise.resolve(state);
       if (inFlight) return inFlight;
-      if (["kept", "shipped", "landing", "landed"].includes(state.phase)) return Promise.resolve(state);
-      inFlight = Promise.resolve().then(() => execute(choice)).finally(() => { inFlight = undefined; });
+      inFlight = execute(choice, options?.overrideReason).then(() => state).finally(() => { inFlight = undefined; });
       return inFlight;
     },
-    close() { closed = true; clearTimeout(timer); },
-    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    open() { if (closed || inFlight) return; update("pending", "Choose Keep, Land or Iterate."); void getSummary().catch(error => update("failed", String(error))); },
+    close() { closed = true; listeners.clear(); },
   };
 }

@@ -1,4 +1,4 @@
-// The common explore/oracle admission and accounting seam. Every invocation is recorded before
+// Host-owned review and oracle/expert admission and accounting. Every invocation is recorded before
 // billable work; an interrupted request is uncertain, never silently charged as zero.
 import { createHash } from "node:crypto";
 import type { AuxiliarySettings } from "./settings.ts";
@@ -125,7 +125,8 @@ export class AuxiliaryRuntime {
   private requestKey(kind: AuxiliaryKind, id: string): string {
     return createHash("sha256").update(JSON.stringify([this.options.sessionId(), this.options.generation, kind, id])).digest("hex");
   }
-  run(kind: AuxiliaryKind, id: string, prompt: string, signal?: AbortSignal, research?: ResearchOptions, shadowOptions?: readonly string[]) {
+  run(kind: Exclude<AuxiliaryKind, "explore">, id: string, prompt: string, signal?: AbortSignal, research?: ResearchOptions, shadowOptions?: readonly string[]) {
+    if (kind === ("explore" as AuxiliaryKind)) return Promise.reject(new Error("explore must use FleetRuntime.explore"));
     const key = this.requestKey(kind, id);
     const previous = this.requests.get(key);
     if (previous) return previous;

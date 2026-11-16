@@ -234,7 +234,7 @@ test("through the bridge, input still before preflight at the reply deadline is 
 
 async function expectRestricted(): Promise<void> {
   const state = host.state();
-  expect([...(state.active_tools as string[])].sort()).toEqual(["corral_receipt_lookup", "read"]);
+  expect([...(state.active_tools as string[])].sort()).toEqual(["agent_message", "agent_roster", "corral_receipt_lookup", "read"]);
   const resources = state.resources as { extensions: string[]; skills: number; prompts: number; context_files: number };
   expect(resources.skills).toBe(0);
   expect(resources.prompts).toBe(0);

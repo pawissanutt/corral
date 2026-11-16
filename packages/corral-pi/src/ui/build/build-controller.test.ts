@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { BuildRecord } from "../../build/record-types.ts";
 import type {
   BoardPlan, BoardPreview, BoardTaskStatus, BuildPanelState, BuildSummary, BuildUi, ChildSnapshot, ChildState, ExitChoice,
   ExitControl, ExitOption, ExitState,
@@ -15,7 +16,7 @@ async function settle(): Promise<void> {
 }
 
 const child = (id: string, state: ChildState, extra: Partial<ChildSnapshot> = {}): ChildSnapshot => ({
-  id, call: "call-1", title: `${id} slice`, brief: "brief", owns: [], after: [], profile: "default", model: "anthropic/claude",
+  id, kind: "slice", call: "call-1", title: `${id} slice`, brief: "brief", owns: [], after: [], profile: "default", model: "anthropic/claude",
   state, createdAt: 0, edits: [], usage: { input: 0, output: 0, turns: 0 }, steers: [], pulse: [], history: "", messages: [], ...extra,
 });
 const asking = (id: string, askedAt: number) => child(id, "needs", {
@@ -23,10 +24,16 @@ const asking = (id: string, askedAt: number) => child(id, "needs", {
 });
 const OPTIONS: readonly ExitOption[] = [
   { choice: "keep", label: "Keep on the branch", detail: "keep it" },
-  { choice: "land", label: "Land after the gate", detail: "land it", unavailable: "Project policy requires independent review." },
-  { choice: "ship", label: "Ship through the board", detail: "ship it" },
+  { choice: "land", label: "Land on main", detail: "land it", unavailable: "Project policy requires an approving review." },
   { choice: "iterate", label: "Keep iterating", detail: "stay" },
 ];
+const USAGE = { input: 0, output: 0 };
+const RECORD: BuildRecord = {
+  version: 1, id: "B-1", kind: "build", title: "Save slots", intent: [], created: "", updated: "", repo_root: "/w/mitiplay",
+  worktree: "/w/mitiplay/.worktrees/build-save-slots", branch: "build/save-slots", base: "a", outcome: { state: "open" }, commits: [], slices: [],
+  verification: [], reviews: [], messages: [], decisions: [], usage: { parent: USAGE, children: USAGE, reviewers: USAGE, total: USAGE }, timeline: [],
+  transcripts: { children: {} },
+};
 const PLAN: BoardPlan = {
   title: "Save slots", project: "mitiplay", why: "split",
   tasks: [
@@ -38,7 +45,7 @@ const PLAN: BoardPlan = {
 function harness() {
   const s = {
     children: [] as ChildSnapshot[], target: "parent", exit: { phase: "none" } as ExitState, proposed: undefined as BoardPlan | undefined,
-    tasks: [] as BoardTaskStatus[], steer: true, answer: true, draft: "", focus: "composer", calls: [] as string[],
+    tasks: [] as BoardTaskStatus[], steer: true, answer: true, draft: "", focus: "composer", calls: [] as string[], options: OPTIONS,
     notices: [] as { text: string; tone: string }[], posts: [] as BuildEntry<unknown>[], marks: [] as TranscriptMark[],
     preview: Promise.withResolvers<BoardPreview>(),
     /** Called where the host notifies exit subscribers and where the panels post an entry. */
@@ -47,12 +54,13 @@ function harness() {
   const live = (id: string) => s.children.some(entry => entry.id === id && ["queued", "running", "needs"].includes(entry.state));
   const summary: BuildSummary = { branch: "build/x", base: "a", head: "b", commits: 2, files: 3, added: 10, removed: 1, dirty: false, slices: [], outside: [] };
   const exit: ExitControl & { open(): void } = {
-    options: () => OPTIONS,
+    options: () => s.options,
     summary: async () => summary,
     state: () => s.exit,
-    choose: async (choice: ExitChoice) => {
-      s.calls.push(`choose ${choice}`);
-      s.exit = choice === "iterate" ? { phase: "none" } : { phase: "kept", record: { choice, at: "now" }, detail: "kept" };
+    choose: async (choice: ExitChoice, options?: { readonly overrideReason?: string }) => {
+      s.calls.push(`choose ${choice}` + (options?.overrideReason === undefined ? "" : ` ${options.overrideReason}`));
+      s.exit = choice === "iterate" ? { phase: "none" } : choice === "land" ? { phase: "landed", record: { choice, at: "now", landed: "abc1234" } }
+        : { phase: "kept", record: { choice, at: "now" }, detail: "kept" };
       s.changed?.();
       return s.exit;
     },
@@ -61,16 +69,20 @@ function harness() {
   };
   const ui: BuildUi = {
     fleet: {
-      snapshot: () => ({ children: s.children, maxParallel: 3 }),
+      snapshot: () => ({ children: s.children, mail: [], maxParallel: 3 }),
       steer: async (id, text) => { s.calls.push(`steer ${id} ${text}`); return s.steer; },
       cancel: () => true,
       setModel: () => {},
       answer: (id, text) => { s.calls.push(`answer ${id} ${text}`); return s.answer; },
       models: () => [],
       profiles: () => [],
+      message: async () => { throw new Error("Unused fixture messaging"); },
+      roster: () => [],
+      wait: async () => [],
       subscribe: () => () => {},
     },
     exit,
+    record: () => RECORD,
     board: {
       tasks: () => s.tasks,
       proposed: () => s.proposed,
@@ -93,7 +105,7 @@ function harness() {
     session: { version: 1, id: "B-1", name: "save-slots", created: "", updated: "", repoRoot: "/w/mitiplay", worktree: "/w/mitiplay/.worktrees/build-save-slots",
       branch: "build/save-slots", base: "a", here: false, project: "mitiplay", workspaceRoot: "/w" },
     settings: { exitPolicy: "gate", maxParallel: 3, profiles: [] },
-    fleet: { children: s.children, maxParallel: 3 }, target: s.target, exit: s.exit, board: s.tasks,
+    fleet: { children: s.children, mail: [], maxParallel: 3 }, target: s.target, exit: s.exit, record: RECORD, board: s.tasks,
   });
   const controller = new BuildController({
     ui, state, streaming: () => false, overlay: () => false,
@@ -162,8 +174,35 @@ test("picking an unavailable exit never chooses and names the reason", async () 
   key("\x1b[B"); key("\x1b[A"); key(ENTER);
   await settle();
   expect(s.calls).toEqual([]);
-  expect(s.notices.filter(notice => notice.text.includes("Project policy requires independent review."))).toHaveLength(2);
+  expect(s.notices.filter(notice => notice.text.includes("Project policy requires an approving review."))).toHaveLength(2);
   expect(controller.dialog()).toBeDefined();
+});
+
+test("a Land that needs a reason shows it, takes the reason in the composer and lands only once one is given", async () => {
+  const { s, controller, key } = harness();
+  s.options = [OPTIONS[0]!, { choice: "land", label: "Land on main", detail: "land it", needsReason: "REVIEW_FINDINGS_OPEN" }, OPTIONS[2]!];
+  s.exit = { phase: "pending" };
+  controller.sync();
+  const dialog = controller.dialog();
+  expect(dialog?.options).toHaveLength(3);
+  expect(dialog?.options[1]?.unavailable).toBeUndefined();
+  expect(dialog?.options[1]?.detail).toContain("REVIEW_FINDINGS_OPEN");
+  controller.dock.guard(0);
+  key("2");
+  await settle();
+  expect(s.calls).toEqual([]);
+  expect(controller.target()?.answer).toBeTrue();
+  expect(s.focus).toBe("composer");
+  // An empty reason does not land.
+  expect(await controller.submit("   ")).toBeTrue();
+  await settle();
+  expect(s.calls).toEqual([]);
+  s.draft = "Checked the finding by hand";
+  expect(await controller.submit("Checked the finding by hand")).toBeTrue();
+  await settle();
+  expect(s.calls).toEqual(["choose land Checked the finding by hand"]);
+  expect(s.draft).toBe("");
+  expect(controller.target()).toBeUndefined();
 });
 
 test("filing waits for the preview and runs once even on a double pick", async () => {

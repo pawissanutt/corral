@@ -93,3 +93,20 @@ test("a completing live event never precedes its session-file entry", () => {
   failedAppend.observe({ type: "agent_settled", aborted: false }, 7);
   expect(failedAppend.events.since(0, EVENT_PAGE_BYTES).events.some(event => event.state === "ended")).toBeFalse();
 });
+
+test("fleet pages cap Unicode text and shed complete oldest messages before children", () => {
+  const live = new LiveEvents(3);
+  live.observeFleet({ children: [], maxParallel: 3, mail: Array.from({ length: 5 }, (_, index) => ({
+    seq: index + 1, at: index, from: "parent", to: "all",
+    text: "\0".repeat(2050), delivery: "delivered" as const,
+  })) });
+  const page = live.since(0, EVENT_PAGE_BYTES);
+  expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(EVENT_PAGE_BYTES);
+  expect(page.fleet?.messages_total).toBe(5);
+  expect(page.fleet?.messages.length).toBeLessThanOrEqual(4);
+  expect(page.fleet?.messages.at(-1)).toMatchObject({ seq: 5, text: "\0".repeat(2048) });
+  live.observeFleet({ children: [], maxParallel: 3, mail: [{
+    seq: 6, at: 6, from: "parent", to: "all", text: "💬".repeat(2050), delivery: "delivered",
+  }] });
+  expect(live.since(0, EVENT_PAGE_BYTES).fleet?.messages[0]?.text).toBe("💬".repeat(2048));
+});

@@ -9,6 +9,7 @@ import type { JobInspection } from "../extensions/jobs/runtime.ts";
 import type { CorralToolSpec } from "../roles/types.ts";
 import type { PanelView } from "./panels.ts";
 import type { TodoLedger } from "./todo.ts";
+import { buildPresenters } from "./build/build-presenters.ts";
 import { codeCellRenderers } from "./code-cell.ts";
 import { corralPresenters } from "./corral-presenter.ts";
 import { groupingFor } from "./tool-group.ts";
@@ -46,7 +47,7 @@ export interface ToolRenderDeps extends RowDeps {
 export interface PresenterModule { presenter(name: string, deps: ToolRenderDeps, label?: string): Presenter | undefined }
 
 /** Presenter modules in the order they are asked; jobs come before corral so `corral_job_monitor` reads as a job row. */
-export const PRESENTER_MODULES: readonly PresenterModule[] = [filePresenters, jobPresenters, corralPresenters, localPresenters];
+export const PRESENTER_MODULES: readonly PresenterModule[] = [filePresenters, jobPresenters, corralPresenters, localPresenters, buildPresenters];
 
 /** Tools that draw their own cards: their registered renderers stay. */
 const OWN_CARDS: Readonly<Record<string, true>> = { task: true, build_finish: true, board_plan: true };

@@ -42,6 +42,20 @@ const PERMANENT: [&str; 3] = ["bad_input", "frame_too_large", "unknown_command"]
 /// The registered corral-pi adapter.
 pub struct CorralPiAdapter;
 
+/// Offline bindings remain addressable, but a closed container never does.
+pub(crate) fn peer_role(
+    ctx: &Ctx,
+    recipient: &Recipient,
+) -> Result<Option<corral_core::agent::AgentRole>> {
+    if crate::session_control::stop::recipient_stopped(ctx, recipient)? {
+        return Ok(None);
+    }
+    Ok(match target(ctx, recipient)? {
+        Ok(target) if target.closed.is_none() => Some(target.binding.role),
+        _ => None,
+    })
+}
+
 /// The bridge idempotency key of an envelope: the host accepts `[A-Za-z0-9._:-]` only, so the
 /// envelope key's `@env` separator travels as `:env` (inbox keys never contain `:`).
 pub fn wire_key(envelope_key: &str) -> String {

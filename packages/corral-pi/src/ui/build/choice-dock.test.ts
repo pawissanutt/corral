@@ -12,11 +12,10 @@ const screen = (lines: readonly string[]) => lines.map(line => stripTerminalSequ
 interface Frame { readonly lines: string[]; readonly hits: ReadonlyMap<number, number> }
 const EXIT: ChoiceDialog = {
   key: "exit:1", title: "How should this leave the build session?", short: "How should this leave?",
-  meta: "mitiplay policy: gate allowed, review optional",
+  meta: "mitiplay · landing needs an approving review and the full gate",
   options: [
-    { label: "Keep on the branch", detail: "the worktree and its branch stay; nothing is filed" },
-    { label: "Land after the gate", detail: "runs the gate, then lands", unavailable: "Project policy requires independent review." },
-    { label: "Ship through the board", detail: "one task in Review: gate, independent review, land" },
+    { label: "Keep on the branch", detail: "the worktree and its branch stay; nothing is merged" },
+    { label: "Land on main", detail: "rebase, the full gate, then a fast-forward", unavailable: "No approving review covers this head." },
     { label: "Keep iterating", detail: "stay in the session" },
   ],
 };
@@ -53,7 +52,7 @@ function harness(dialog: ChoiceDialog) {
 
 test("digits outside the options do nothing and are not typed into the composer", () => {
   const { dock, calls } = harness(EXIT);
-  for (const key of ["5", "9", "0"]) expect(dock.handleKey(key)).toBeTrue();
+  for (const key of ["4", "5", "9", "0"]) expect(dock.handleKey(key)).toBeTrue();
   expect(calls.picks).toEqual([]);
   expect(calls.refused).toEqual([]);
   dock.handleKey("3");
@@ -67,7 +66,7 @@ test("an unavailable option is never picked; the host is asked to raise its reas
   expect(dock.selected).toBe(1);
   dock.handleKey(ENTER);
   expect(calls.picks).toEqual([]);
-  expect(calls.refused).toEqual(["Land after the gate", "Land after the gate"]);
+  expect(calls.refused).toEqual([EXIT.options[1]!.label, EXIT.options[1]!.label]);
 });
 
 test("the guard after an automatic open swallows Enter and digits only", () => {
@@ -132,12 +131,14 @@ test("options take one row from 84 columns, two below, and drop the detail when 
     expect(rowsOf(narrow, option)).toBe(2);
     expect(rowsOf(short, option)).toBe(1);
   }
-  const text = (frame: Frame) => screen(frame.lines).join("\n");
-  expect(text(wide)).toContain("nothing is filed");
-  expect(text(narrow)).toContain("nothing is filed");
+  // The detail shares the label's row when wide, sits on the row under it when narrow, and is dropped when short.
+  const text = (frame: Frame) => screen(frame.lines).join("\n"), keep = EXIT.options[0]!, land = EXIT.options[1]!;
+  expect(screen(wide.lines).find(line => line.includes(keep.label))).toContain(keep.detail!);
+  expect(text(narrow)).toContain(keep.detail!);
+  expect(screen(narrow.lines).find(line => line.includes(keep.label))).not.toContain(keep.detail!);
+  expect(text(short)).not.toContain(keep.detail!);
   // An unavailable option keeps a marker on its label row when its detail row is dropped.
-  const land = screen(short.lines).find(line => line.includes("Land after the gate"))!;
-  expect(land).toContain("unavailable");
+  expect(screen(short.lines).find(line => line.includes(land.label))).toContain("unavailable");
   // The meta only shows from 96 columns.
   expect(text(wide)).toContain("mitiplay");
   expect(text(narrow)).not.toContain("mitiplay");
@@ -164,7 +165,7 @@ test("the dialog is an accent card: closed borders, the question in its header, 
   const wide = choiceLines(EXIT, 0, 120, 14, false), rows = screen(wide.lines);
   expect(rows[0]).toBe("╭" + "─".repeat(118) + "╮");
   expect(rows[1]!.startsWith("│ How should this leave the build session? ")).toBeTrue();
-  expect(rows[1]!.endsWith(" mitiplay policy: gate allowed, review optional │")).toBeTrue();
+  expect(rows[1]!.endsWith(` ${EXIT.meta} │`)).toBeTrue();
   // Bold is on at the question's first cell and off again before the policy note.
   const head = wide.lines[1]!, start = head.indexOf("How should"), end = head.indexOf("mitiplay");
   const on = head.lastIndexOf("\x1b[1m", start);
@@ -176,7 +177,7 @@ test("the dialog is an accent card: closed borders, the question in its header, 
   expect(keep.indexOf("1 Keep on the branch")).toBe(2);
   expect(keep.indexOf("the worktree and its branch stay")).toBe(2 + 2 + 26);
   expect(keep[1]).toBe("▌");
-  expect(rows.find(row => row.includes("Land after the gate"))).toContain("unavailable: Project policy requires independent review.");
+  expect(rows.find(row => row.includes(EXIT.options[1]!.label))).toContain(`unavailable: ${EXIT.options[1]!.unavailable}`);
   // With the sidebar rail at 140 columns the dock is 105 wide: the whole note fits.
   expect(screen(choiceLines(QA, 0, 105, 14, false).lines)[1]).toContain("qa-repo · outside a corral workspace");
   // A note that cannot fit whole is shortened with an ellipsis before it is dropped.

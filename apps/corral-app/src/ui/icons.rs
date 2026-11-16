@@ -12,6 +12,7 @@ const INBOX: ImageAsset = asset!("icons/inbox.svg");
 const NOW: ImageAsset = asset!("icons/now.svg");
 const CHANGES: ImageAsset = asset!("icons/changes.svg");
 const PLANS: ImageAsset = asset!("icons/plans.svg");
+const BUILDS: ImageAsset = asset!("icons/builds.svg");
 const AGENTS: ImageAsset = asset!("icons/agents.svg");
 const REVIEW: ImageAsset = asset!("icons/review.svg");
 const TIMELINE: ImageAsset = asset!("icons/timeline.svg");
@@ -43,6 +44,8 @@ pub enum Icon {
     Now,
     Changes,
     Plans,
+    /// A branch merged into its base: work a build session landed.
+    Builds,
     Agents,
     Review,
     Timeline,
@@ -87,6 +90,7 @@ impl Icon {
             Destination::Now => Icon::Now,
             Destination::Changes => Icon::Changes,
             Destination::Plans => Icon::Plans,
+            Destination::Builds => Icon::Builds,
             Destination::Agents => Icon::Agents,
             Destination::Review => Icon::Review,
             Destination::Timeline => Icon::Timeline,
@@ -112,6 +116,7 @@ impl Icon {
             Icon::Now => NOW,
             Icon::Changes => CHANGES,
             Icon::Plans => PLANS,
+            Icon::Builds => BUILDS,
             Icon::Agents => AGENTS,
             Icon::Review => REVIEW,
             Icon::Timeline => TIMELINE,

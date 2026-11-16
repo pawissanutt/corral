@@ -17,6 +17,7 @@ use crate::runtime::Executable;
 mod annotations;
 mod assemble;
 mod batch;
+mod build_records;
 mod cleanup_panes;
 pub mod codec;
 mod conditions;

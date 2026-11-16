@@ -144,7 +144,7 @@ test("a planning role launches only with an enabled role_enabled capability", ()
 test("a planner session activates exactly its loadout, refuses source writes and sends typed plan ops", async () => {
   const bound = await bind("planner");
   expect([...bound.host.loadout])
-    .toEqual([...READ_ONLY, "corral_receipt_lookup", "corral_content_read", "corral_ask", "corral_withdraw", "corral_plan_write", "corral_plan_submit"]);
+    .toEqual([...READ_ONLY, "corral_receipt_lookup", "corral_content_read", "corral_ask", "corral_withdraw", "corral_plan_write", "corral_plan_submit", "agent_message", "agent_roster"]);
   const target = join(bound.cwd, "edited.txt");
   await turn(bound, 1, [
     { callId: "call-write", name: "write", arguments: { path: target, content: "x" } },

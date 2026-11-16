@@ -1,4 +1,4 @@
-use super::{act, change, detail, sessions, stamp};
+use super::{act, change, detail, fleet, sessions, stamp};
 use crate::model::{
     Id,
     act::Confirmable,
@@ -125,6 +125,7 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
             if *on {
                 feed.topics
                     .insert(format!("session:{session}"), TopicState::default());
+                fleet::watch(feed, session.as_str());
             }
             Ok(())
         }

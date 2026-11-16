@@ -1,6 +1,7 @@
 // Ephemeral chat projection only: never writes the Pi journal or the lifecycle event ring.
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { EventLog } from "../bridge/events.ts";
+import { EventLog, EVENT_MAX_BYTES, type EventPage } from "../bridge/events.ts";
+import type { FleetSnapshot } from "../build/types.ts";
 import { utf8Prefix } from "../roles/assistant/owner-action.ts";
 
 // JSON escaping can multiply a payload by six; leave room inside the 8 KiB event bound.
@@ -36,6 +37,16 @@ function outputTail(value: unknown): string | undefined {
   return tail;
 }
 
+/** App-only replacement projection: never includes child prompts, paths or reports. */
+export interface SessionFleet {
+  children: { id: string; kind: string; title: string; state: string; model: string;
+    started_at?: number; ended_at?: number; activity?: string; tokens: number; cost_usd?: number;
+    verdict?: "approve" | "changes"; question?: boolean }[];
+  messages: { seq: number; at: number; from: string; to: string; text: string; delivery: string }[];
+  messages_total: number;
+  max_parallel: number;
+}
+
 export class LiveEvents {
   readonly events: EventLog;
   private message = 0;
@@ -44,9 +55,56 @@ export class LiveEvents {
   private error: string | undefined;
   private readonly toolCompletions: Record<string, unknown>[] = [];
   private awaitingMessagePersistence = false;
+  private fleet: SessionFleet | undefined;
+  private fleetJson = "";
+  private fleetSeq = 0;
 
   constructor(generation: number, capacity = 512) {
     this.events = new EventLog(generation, capacity);
+  }
+
+  /** Initially empty fleets stay silent; an empty replacement after activity is a sequenced clear. */
+  observeFleet(snapshot: FleetSnapshot | undefined): void {
+    if (!snapshot || !this.fleet && !snapshot.children.length && !snapshot.mail.length) return;
+    const fleet: SessionFleet = {
+      children: snapshot.children.map(child => ({
+        id: child.id, kind: child.kind, title: child.title.slice(0, 256), state: child.state,
+        model: child.model.slice(0, 128),
+        ...(child.startedAt === undefined ? {} : { started_at: child.startedAt }),
+        ...(child.endedAt === undefined ? {} : { ended_at: child.endedAt }),
+        // Runtime activity includes tool arguments (often paths); expose only the tool name.
+        ...(child.activity ? { activity: child.activity.split(/\s/, 1)[0]!.slice(0, 64) } : {}),
+        tokens: child.usage.input + child.usage.output,
+        ...(child.usage.cost === undefined ? {} : { cost_usd: child.usage.cost }),
+        ...(child.verdict ? { verdict: child.verdict.verdict } : {}),
+        ...(child.question ? { question: true } : {}),
+      })),
+      messages: snapshot.mail.slice(-100).map(message => ({
+        seq: message.seq, at: message.at, from: message.from.slice(0, 128), to: message.to.slice(0, 128),
+        text: Array.from(message.text).slice(0, 2048).join(""), delivery: message.delivery,
+      })),
+      messages_total: snapshot.mail.at(-1)?.seq ?? 0, max_parallel: snapshot.maxParallel,
+    };
+    const json = JSON.stringify(fleet);
+    if (json === this.fleetJson) return;
+    this.fleet = fleet;
+    this.fleetJson = json;
+    this.fleetSeq = this.events.emit("live_fleet").seq;
+  }
+
+  since(seq: number, maxBytes: number): EventPage & { fleet?: SessionFleet } {
+    const initial = this.events.since(seq, maxBytes);
+    if (!this.fleet || seq >= this.fleetSeq && !initial.gap) return initial;
+    const fleet = { ...this.fleet, children: [...this.fleet.children], messages: [...this.fleet.messages] };
+    // Leave room for at least one intact event and JSON field punctuation.
+    const budget = Math.max(0, maxBytes - EVENT_MAX_BYTES - 256);
+    let size = Buffer.byteLength(JSON.stringify(fleet));
+    while (size > budget && (fleet.messages.length || fleet.children.length)) {
+      if (fleet.messages.length) fleet.messages.shift();
+      else fleet.children.shift();
+      size = Buffer.byteLength(JSON.stringify(fleet));
+    }
+    return { ...this.events.since(seq, maxBytes - size - 16), fleet };
   }
 
   /** Called after HostSession updates its turn sequence for this same upstream event. */

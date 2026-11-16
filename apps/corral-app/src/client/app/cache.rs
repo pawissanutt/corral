@@ -157,6 +157,7 @@ impl AppState {
                             .as_ref()
                             .and_then(|end| end.error.as_ref())
                             .map_or(0, String::len)
+                        + bytes(&live.fleet)
                 })
         });
         self.retained.touch(Key::Session(scope.into()), size);

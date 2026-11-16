@@ -20,6 +20,15 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, row_height, text_siz
 const RING: f32 = 2.0;
 /// The phone row's least height (`.prow`).
 const PHONE_ROW: f32 = 60.0;
+/// The desktop two-line row's least height (`.row` of a two-line list).
+const DESK_TALL_ROW: f32 = 40.0;
+
+/// How a row stands on desktop: one line, recording its own width in the signal when given
+/// (for the columns that give way), or tall enough for two or three lines.
+enum Height {
+    Line(Option<Signal<f32>>),
+    Tall,
+}
 
 /// Which of the task row's optional columns a row holds. The delta, actor mark, full id, title
 /// and rail always show; as the row narrows the now-phrase goes first, then age, then cost, each
@@ -137,7 +146,7 @@ pub fn task_row(
         selected,
         on_press,
         content,
-        measure,
+        Height::Line(measure),
     )
 }
 
@@ -524,12 +533,33 @@ pub fn list_row(
         selected,
         on_press,
         content,
-        None,
+        Height::Line(None),
     )
 }
 
-/// The body of [`list_row`] and [`task_row`]. With `measure`, the row records its own width
-/// there after each layout, for the columns that give way.
+/// [`list_row`] for content of two or three lines (a title over a facts line): on desktop at
+/// least 40 pt high with 6 pt above and below, so the lines are never clipped to the one-line
+/// row's 30 pt, the content centred on the row; phone and terminal rows as [`list_row`].
+pub fn list_row_tall(
+    app: AppState,
+    label: impl Into<SharedString>,
+    test_id: impl Into<String>,
+    selected: impl Fn() -> bool + 'static,
+    on_press: impl Fn() + 'static,
+    content: Vec<AnyElement>,
+) -> AnyElement {
+    shell(
+        app,
+        label.into(),
+        test_id.into(),
+        selected,
+        on_press,
+        content,
+        Height::Tall,
+    )
+}
+
+/// The body of [`list_row`], [`list_row_tall`] and [`task_row`].
 fn shell(
     app: AppState,
     label: SharedString,
@@ -537,10 +567,14 @@ fn shell(
     selected: impl Fn() -> bool + 'static,
     on_press: impl Fn() + 'static,
     content: Vec<AnyElement>,
-    measure: Option<Signal<f32>>,
+    height: Height,
 ) -> AnyElement {
     let form = app.form;
     let selected = computed(selected);
+    let (measure, tall) = match height {
+        Height::Line(measure) => (measure, false),
+        Height::Tall => (None, true),
+    };
     let row = view()
         .relative()
         .flex_row()
@@ -560,7 +594,8 @@ fn shell(
         });
     let row = match form {
         Form::Desktop => row
-            .h(px(row_height(form)))
+            .when(!tall, |row| row.h(px(row_height(form))))
+            .when(tall, |row| row.min_h(px(DESK_TALL_ROW)).py(px(6.0)))
             .pl(px(16.0))
             .pr(px(14.0))
             .gap(px(8.0))

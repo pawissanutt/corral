@@ -43,6 +43,8 @@ import { presentHostNotice } from "../ui/host-notices.ts";
 import { errorPresenter } from "../ui/error-copy.ts";
 import { RemoteOwner } from "./remote-owner.ts";
 import { summaryOptions } from "./summary.ts";
+import { bareProviders, requireBareProvider } from "./bare.ts";
+import { providerTransport } from "./capabilities.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -63,6 +65,7 @@ export async function runHost(config: HostConfig, overrides: {
   build?: BuildContext;
 } = {}): Promise<void> {
   const provider = config.provider ?? "openai-codex";
+  if (overrides.build?.session.bare) requireBareProvider(provider);
   const connection = admitConnection(provider, config.binding, true);
   restrictEnvironment(process.env, provider);
   if (config.summary?.provider === "amazon-bedrock") restrictEnvironment(process.env, "amazon-bedrock");
@@ -74,8 +77,10 @@ export async function runHost(config: HostConfig, overrides: {
   const events = new EventLog(config.identity.generation);
   const rawFetch = globalThis.fetch.bind(globalThis);
   const api = isApiConnection(connection);
-  const providers = api ? [provider] : (await subscriptionRoutes(modules.auth, provider, config.identity.role)).providers;
-  const send = modules.auth.transport?.(authContext(provider, connection)) ?? rawFetch;
+  const bare = overrides.build?.session.bare ? await bareProviders(modules.auth, provider) : undefined;
+  const providers = bare?.providers ?? (api ? [provider] : (await subscriptionRoutes(modules.auth, provider, config.identity.role)).providers);
+  const send = bare ? providerTransport(modules.auth, bare.providers, rawFetch)
+    : modules.auth.transport?.(authContext(provider, connection)) ?? rawFetch;
   let aws: AwsRoute | undefined;
   let rules: readonly DestinationRule[] | undefined = api ? connectionRules(connection) : undefined;
   if (provider === "llama.cpp" && config.capabilities?.llama_cpp) {
@@ -167,7 +172,7 @@ export async function runHost(config: HostConfig, overrides: {
     uid: process.getuid?.() ?? -1,
     peer: await loadPeerLookup(),
     events,
-    liveEvents: session.liveEvents.events,
+    liveEvents: session.liveEvents,
     handlers: {
       hello: () => ({
         protocol: 1, generation: config.identity.generation, role: config.identity.role,

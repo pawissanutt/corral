@@ -27,7 +27,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 10;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 11;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -217,6 +217,15 @@ pub const CATALOG: &[CapabilityDef] = &[
         },
         host: true,
         settings: Some(super::auxiliary::explore_settings),
+    },
+    CapabilityDef {
+        key: "fleet",
+        summary: "write-capable slices and review children in the shared worktree",
+        defaults: |role| {
+            matches!(role, AgentRole::Worker | AgentRole::Assistant).then_some([false, true, true])
+        },
+        host: true,
+        settings: Some(super::auxiliary::fleet_settings),
     },
     CapabilityDef {
         key: "oracle",

@@ -166,6 +166,8 @@ fn receipt(app: AppState, outcome: &ActionOutcome) -> AnyElement {
 /// field for the owner's own words when the question takes them, and how it was answered.
 pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
     let form = app.form;
+    // Four or more side by side leave a phone's options a word wide: they stack there.
+    let stacked = form == Form::Phone && card.options.len() > 3;
     let options = card.options.iter().enumerate().map(|(at, option)| {
         let selected = option.selected;
         let enabled = option.enabled;
@@ -215,7 +217,7 @@ pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
                 .into_element()
         } else {
             choice
-                .flex_1()
+                .when(!stacked, |c| c.flex_1())
                 .min_w(px(0.0))
                 .px(px(10.0))
                 .py(px(8.0))
@@ -231,6 +233,8 @@ pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
     });
     let options = if form == Form::Terminal {
         view().children(options.collect::<Vec<_>>())
+    } else if stacked {
+        view().gap(px(8.0)).children(options.collect::<Vec<_>>())
     } else {
         view()
             .flex_row()

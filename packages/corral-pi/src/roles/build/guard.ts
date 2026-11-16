@@ -16,7 +16,7 @@ const READ_ONLY_CORRAL: readonly string[] = [
   "help", "--help", "-h", "--version", "-V",
 ];
 const CORRAL_REFUSAL = "build rule: model shell calls may only read corral state; nothing ran. "
-  + "Use /board for the owner's confirmed board plan or /finish for the owner's exit choice.";
+  + "Use build_verify for gates, /board for the owner's confirmed board plan, or /finish for the owner's exit choice and landing.";
 const SHELLS: readonly string[] = ["sh", "bash", "zsh", "dash", "ksh"];
 const WRAPPERS: readonly string[] = ["env", "command", "exec", "sudo", "nice", "nohup", "time"];
 
@@ -159,7 +159,7 @@ function shellInvocation(words: readonly string[]): { name: string; args: readon
   return { name: "", args: [] };
 }
 
-function corralShellRefusal(command: string): string | undefined {
+function corralShellRefusal(command: string, bare = false): string | undefined {
   const pending = [{ source: command, depth: 0 }];
   while (pending.length) {
     const { source, depth } = pending.pop()!;
@@ -169,12 +169,14 @@ function corralShellRefusal(command: string): string | undefined {
     for (const words of commands) {
       const { name, args } = shellInvocation(words);
       if (name === "corral") {
+        if (bare) return "bare session rule: do not invoke corral; no workspace, gate or board is bound. Run local checks with the shell and let the owner choose /finish.";
         let index = 0;
         while (index < args.length) {
           if (args[index] === "--root") index += 2;
           else if (args[index]?.startsWith("--root=")) index += 1;
           else break;
         }
+        if (args[index] === "build" && ["list", "show"].includes(args[index + 1] ?? "")) continue;
         if (!READ_ONLY_CORRAL.includes(args[index] ?? "")) return CORRAL_REFUSAL;
       } else if (SHELLS.includes(name)) {
         const flag = args.findIndex((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg) || arg === "--command");
@@ -187,8 +189,8 @@ function corralShellRefusal(command: string): string | undefined {
   return undefined;
 }
 
-export function buildShellRefusal(command: string): string | undefined {
-  const boundary = corralShellRefusal(command);
+export function buildShellRefusal(command: string, bare = false): string | undefined {
+  const boundary = corralShellRefusal(command, bare);
   if (boundary) return boundary;
   const fixed = assistantShellRefusal(command);
   if (fixed) return fixed;
@@ -237,7 +239,7 @@ export function installBuildGuard(pi: ExtensionAPI, context: RoleContext): void 
     // Host controls also inspect bash/job_start. Apply the boundary here as well so
     // child sessions and other command-bearing tools cannot miss that host hook.
     if (typeof input.command === "string") {
-      const refusal = buildShellRefusal(input.command);
+      const refusal = buildShellRefusal(input.command, context.build?.session.bare === true);
       if (refusal) return { block: true, reason: refusal };
     }
     if (event.toolName !== "edit" && event.toolName !== "write") return undefined;

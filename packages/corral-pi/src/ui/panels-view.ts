@@ -1,7 +1,7 @@
 // Native presentation only. All values come from the bound host or an explicit Git read.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ContextUsage, Theme } from "@earendil-works/pi-coding-agent";
-import type { BuildPanelState } from "../build/types.ts";
+import type { BuildPanelState, FleetSnapshot } from "../build/types.ts";
 import type { ContinuedState, TodoProgress } from "./todo.ts";
 import type { AgentObservation } from "./agents-model.ts";
 import type { InspectorSnapshot } from "./inspector.ts";
@@ -11,6 +11,8 @@ import { ansi, tint, PACKAGED, type Appearance } from "./appearance.ts";
 export interface PanelJob { readonly job: string; readonly state: string; readonly detail?: import("../extensions/jobs/runtime.ts").JobInspection }
 export interface PanelSnapshot {
   readonly build?: BuildPanelState;
+  /** Children and agent messages of a session that is not a build session. */
+  readonly fleet?: FleetSnapshot;
   readonly inspector?: InspectorSnapshot;
   readonly budget?: unknown;
   readonly agents?: readonly AgentObservation[];

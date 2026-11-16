@@ -163,6 +163,8 @@ impl Blocker {
                 "auxiliary {} child {session_id} is still running",
                 match kind {
                     UsageSessionKind::Explore => "explore",
+                    UsageSessionKind::Slice => "slice",
+                    UsageSessionKind::Review => "review",
                     UsageSessionKind::Oracle => "oracle",
                     UsageSessionKind::WebSearch => "web search",
                     UsageSessionKind::Summary => "summary",

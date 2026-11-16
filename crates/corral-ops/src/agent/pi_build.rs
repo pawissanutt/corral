@@ -132,6 +132,38 @@ fn model(
     ))
 }
 
+fn bare_model(args: &BuildArgs) -> Result<(String, String, Option<String>)> {
+    let provider = args.provider.as_deref().unwrap_or(DEFAULT_PROVIDER);
+    let default = match provider {
+        "openai-codex" => "gpt-6.1-sol",
+        "anthropic" => "claude-opus-4-8",
+        "amazon-bedrock" => "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "openai" => {
+            return Err(refuse(
+                "usage_error",
+                "API connections require bound canonical metered admission",
+            ));
+        }
+        "llama.cpp" => {
+            return Err(refuse(
+                "usage_error",
+                "llama.cpp requires a bound role's configured llama_cpp capability",
+            ));
+        }
+        _ => {
+            return Err(refuse(
+                "usage_error",
+                format!("unknown provider {provider}"),
+            ));
+        }
+    };
+    Ok((
+        provider.into(),
+        args.model.as_deref().unwrap_or(default).into(),
+        args.effort.clone(),
+    ))
+}
+
 fn workspace_for(path: &Path) -> Result<Option<PathBuf>> {
     match Store::find_root(path) {
         Ok(root) => Ok(Some(root)),
@@ -170,6 +202,28 @@ pub fn build_command(
     bun: Option<PathBuf>,
     workspace: Option<&Path>,
 ) -> Result<(std::process::Command, std::io::PipeReader)> {
+    command(data_root, args, cwd, bun, workspace, false)
+}
+
+#[cfg(unix)]
+pub(crate) fn bare_build_command(
+    data_root: &Path,
+    args: &BuildArgs,
+    cwd: &Path,
+    bun: Option<PathBuf>,
+) -> Result<(std::process::Command, std::io::PipeReader)> {
+    command(data_root, args, cwd, bun, None, true)
+}
+
+#[cfg(unix)]
+fn command(
+    data_root: &Path,
+    args: &BuildArgs,
+    cwd: &Path,
+    bun: Option<PathBuf>,
+    workspace: Option<&Path>,
+    bare: bool,
+) -> Result<(std::process::Command, std::io::PipeReader)> {
     use std::io::Write;
     use std::os::fd::AsRawFd;
 
@@ -184,10 +238,18 @@ pub fn build_command(
         .as_ref()
         .map(|session| session.repo_root.as_path())
         .unwrap_or(cwd);
-    let git_root = corral_git::repo_root(source)
-        .map_err(|error| refuse("not_a_repository", format!("{error:#}")))?;
+    let bare = bare || resumed.as_ref().is_some_and(|session| session.bare);
+    let git_root = match corral_git::repo_root(source) {
+        Ok(root) => root,
+        Err(_) if bare => {
+            std::fs::canonicalize(source).context("resolving bare session directory")?
+        }
+        Err(error) => return Err(refuse("not_a_repository", format!("{error:#}"))),
+    };
     let repo_root = resumed.map(|session| session.repo_root).unwrap_or(git_root);
-    let workspace = if args.resume.is_some() {
+    let workspace = if bare {
+        None
+    } else if args.resume.is_some() {
         workspace_for(&repo_root)?
     } else {
         workspace.map(Path::to_path_buf)
@@ -271,7 +333,11 @@ pub fn build_command(
             command
         }
     };
-    let (provider, model, effort) = model(&config, workspace.is_some(), args)?;
+    let (provider, model, effort) = if bare {
+        bare_model(args)?
+    } else {
+        model(&config, workspace.is_some(), args)?
+    };
     super::hooks::preflight::credential(data_root, Some(require_provider(&provider)?.vendor))?;
     let aws = if workspace.is_some() && provider == "amazon-bedrock" {
         super::aws_profile::read_binding(data_root)?
@@ -283,10 +349,14 @@ pub fn build_command(
         project.as_ref().map(|(name, _, _)| name.as_str()),
         Some(&compat.capabilities),
     );
-    let policy = project
-        .as_ref()
-        .map(|(_, project, _)| project.build_exit.unwrap_or(BuildExit::Review))
-        .unwrap_or(BuildExit::None);
+    let policy = if bare {
+        BuildExit::Review
+    } else {
+        project
+            .as_ref()
+            .map(|(_, project, _)| project.build_exit.unwrap_or(BuildExit::Review))
+            .unwrap_or(BuildExit::None)
+    };
     let profiles: Vec<_> = config
         .build
         .profiles
@@ -304,11 +374,15 @@ pub fn build_command(
         .collect();
     let mut message = json!({
         "version": 1, "assets": assets, "data_root": std::path::absolute(data_root)?,
-        "corral": crate::prompt::corral_bin()?,
         "repo_root": repo_root, "here": args.here, "provider": provider, "model": model,
         "capabilities": capabilities_payload(&snapshot, Some(&repo_root)),
         "settings": {"exit_policy": policy, "max_parallel": config.build.max_parallel, "profiles": profiles},
     });
+    if bare {
+        message["bare"] = json!(true);
+    } else {
+        message["corral"] = json!(crate::prompt::corral_bin()?);
+    }
     if let Some(root) = &workspace {
         message["workspace_root"] = json!(root);
     }
@@ -395,6 +469,7 @@ pub struct BuildSessionSummary {
     pub repo_root: PathBuf,
     pub worktree: PathBuf,
     pub here: bool,
+    pub bare: bool,
     pub project: Option<String>,
     pub updated: String,
     /// The exit choice (`keep`, `ship`, `land`, `iterate`) once one is recorded.
@@ -416,6 +491,8 @@ struct SessionRecord {
     repo_root: PathBuf,
     worktree: PathBuf,
     here: bool,
+    #[serde(default)]
+    bare: bool,
     project: Option<String>,
     session_file: Option<String>,
     exit: Option<SessionExit>,
@@ -475,6 +552,7 @@ fn read_session(dir: &Path) -> Option<(jiff::Timestamp, BuildSessionSummary)> {
             repo_root: record.repo_root,
             worktree: record.worktree,
             here: record.here,
+            bare: record.bare,
             project: record.project,
             updated: record.updated,
             exited: record.exit.map(|exit| exit.choice),

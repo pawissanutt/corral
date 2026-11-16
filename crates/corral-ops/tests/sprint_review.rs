@@ -135,6 +135,7 @@ fn collects_all_sections_from_recorded_evidence() {
     let sections = collect_sprint_review(
         &[landed.clone(), owner.clone(), active.clone()],
         &events,
+        &[],
         None,
         ts("2026-01-01T01:00:00Z"),
     );
@@ -225,7 +226,7 @@ fn strict_window_excludes_exact_lower_boundary_and_includes_snapshot() {
         ),
     ];
     // When applying an exclusive lower and inclusive upper bound.
-    let sections = collect_sprint_review(&[owner, ready], &events, Some(lower), upper);
+    let sections = collect_sprint_review(&[owner, ready], &events, &[], Some(lower), upper);
     // Then only the exact upper event is historical; unchanged current snapshots remain.
     assert_eq!(sections.landed.len(), 1);
     assert_eq!(sections.landed[0].sha.as_deref(), Some("new"));
@@ -270,8 +271,8 @@ fn deterministic_collection_orders_tasks_and_prioritizes_owner_reductions() {
     ];
     let at = ts("2026-01-02T00:00:00Z");
     // When collecting twice with the same content in a different task enumeration order.
-    let a = collect_sprint_review(&[owner.clone(), agent.clone()], &events, None, at);
-    let b = collect_sprint_review(&[agent, owner.clone()], &events, None, at);
+    let a = collect_sprint_review(&[owner.clone(), agent.clone()], &events, &[], None, at);
+    let b = collect_sprint_review(&[agent, owner.clone()], &events, &[], None, at);
     // Then machine output is stable and owner origin takes precedence over event chronology.
     assert_eq!(
         serde_json::to_vec(&a).unwrap(),
@@ -324,6 +325,7 @@ fn owner_ideas_cover_every_state_and_preserve_merge_links_after_mark() {
     let sections = collect_sprint_review(
         &tasks,
         &events,
+        &[],
         Some(ts("2026-02-01T00:00:00Z")),
         ts("2026-03-01T00:00:00Z"),
     );
@@ -350,7 +352,8 @@ fn reviewer_children_use_their_own_profile_without_double_counting() {
     worker.review_runs = vec![reviewer, unknown];
     task.runs = vec![worker];
     // When reading only recorded accounting.
-    let sections = collect_sprint_review(&[task.clone()], &[], None, ts("2026-02-01T00:00:00Z"));
+    let sections =
+        collect_sprint_review(&[task.clone()], &[], &[], None, ts("2026-02-01T00:00:00Z"));
     // Then child costs are counted once, with unknown costs represented separately.
     assert_eq!(sections.numbers.by_task[&task.id].runs, 3);
     assert_eq!(sections.numbers.by_task[&task.id].reported_usd, Some(1.75));
@@ -470,6 +473,12 @@ fn empty_workspace_reuses_single_completed_anchor() {
         tasks[0].id
     );
     assert!(second.sections.in_flight.is_empty());
+    assert!(second.sections.builds.is_empty());
+    assert!(second.sections.numbers.builds.is_none());
+    assert!(!second.markdown.contains("Builds"));
+    let json = serde_json::to_value(&second.sections).unwrap();
+    assert!(json.get("builds").is_none());
+    assert!(json["numbers"].get("builds").is_none());
 }
 
 #[test]
@@ -563,6 +572,7 @@ fn ready_snapshot_keeps_dependencies_and_recorded_queue_reason_without_recent_ev
     let sections = collect_sprint_review(
         &[dependency, blocked.clone(), queued.clone()],
         &events,
+        &[],
         Some(ts("2026-02-01T00:00:00Z")),
         ts("2026-03-01T00:00:00Z"),
     );
@@ -588,7 +598,7 @@ fn keep_branch_approval_is_not_a_landing() {
         json!({"strategy":"keep_branch","sha":"abc"}),
     )];
     // When collecting historical landings.
-    let sections = collect_sprint_review(&[task], &events, None, ts("2026-02-01T00:00:00Z"));
+    let sections = collect_sprint_review(&[task], &events, &[], None, ts("2026-02-01T00:00:00Z"));
     // Then approval does not claim integration into the base.
     assert!(sections.landed.is_empty());
 }
@@ -608,7 +618,7 @@ fn discarded_work_appears_in_both_failed_and_dropped_history() {
         json!({"run":"R1"}),
     )];
     // When collecting outcomes.
-    let sections = collect_sprint_review(&[task], &events, None, ts("2026-02-01T00:00:00Z"));
+    let sections = collect_sprint_review(&[task], &events, &[], None, ts("2026-02-01T00:00:00Z"));
     // Then the rejected work cannot disappear from the dropped section.
     assert_eq!(sections.sent_back_failed.len(), 1);
     assert_eq!(sections.dropped_rejected_escalated.len(), 1);
@@ -643,7 +653,7 @@ fn original_change_verdict_keeps_its_notes_after_later_approval() {
         ),
     ];
     // When collecting review history after approval overwrote the latest review record.
-    let sections = collect_sprint_review(&[task], &events, None, ts("2026-02-01T00:00:00Z"));
+    let sections = collect_sprint_review(&[task], &events, &[], None, ts("2026-02-01T00:00:00Z"));
     // Then the original finding and its resolution are retained.
     assert_eq!(sections.sent_back_failed.len(), 1);
     assert_eq!(
@@ -658,4 +668,98 @@ fn original_change_verdict_keeps_its_notes_after_later_approval() {
         sections.sent_back_failed[0].resolution.as_deref(),
         Some("approved")
     );
+}
+
+#[test]
+fn build_review_includes_window_outcomes_and_old_open_records_without_task_totals() {
+    use corral_core::build_record::BuildRecord;
+    let (_temp, ctx) = fixture();
+    let mut landed: BuildRecord = serde_json::from_value(json!({
+        "version": 1, "id": "B-landed", "kind": "build", "project": "corral",
+        "title": "Build result", "intent": [], "created": "2026-01-01T00:00:00Z",
+        "updated": "2026-01-01T00:20:00Z", "repo_root": "/unused", "worktree": "/unused",
+        "branch": null, "base": null,
+        "outcome": {"state": "landed", "at": "2026-01-01T00:20:00Z", "landed": "sha-fixture",
+            "override_reason": "Accepted finding tradeoff"},
+        "commits": [], "slices": [], "reviews": [], "verification": [], "messages": [],
+        "decisions": [], "timeline": [], "transcripts": {"children": {}},
+        "usage": {
+            "parent": {"input": 0, "output": 0}, "children": {"input": 0, "output": 0},
+            "reviewers": {"input": 0, "output": 0}, "total": {"input": 1, "output": 2, "cost": 0.5}
+        }
+    }))
+    .unwrap();
+    let mut open = landed.clone();
+    open.id = "B-open".into();
+    open.outcome = serde_json::from_value(json!({"state": "open"})).unwrap();
+    open.usage.total.cost = None;
+    for record in [&landed, &open] {
+        ctx.store
+            .publish_build_record(&serde_json::to_string(record).unwrap())
+            .unwrap();
+    }
+    let build_event = |id: &str, at: &str, kind: &str| Event {
+        seq: 0,
+        ts: ts(at),
+        task: None,
+        kind: kind.into(),
+        actor: None,
+        via: None,
+        detail: json!({"id": id}),
+    };
+    let lower = ts("2026-01-01T00:10:00Z");
+    let upper = ts("2026-01-01T00:20:00Z");
+    let events = vec![
+        build_event("B-open", "2026-01-01T00:00:00Z", "build_recorded"),
+        build_event("B-landed", "2026-01-01T00:20:00Z", "build_outcome"),
+        build_event("B-landed", "2026-01-01T00:20:00Z", "build_recorded"),
+    ];
+    write_events(&ctx, &events);
+    let report = review_sprint(&ctx, Some("2026-01-01T00:10:00Z"), false).unwrap();
+    let json = serde_json::to_value(&report.sections).unwrap();
+    assert_eq!(
+        json["numbers"]["builds"],
+        json!({
+            "landed": 1, "kept": 0, "abandoned": 0, "open": 1
+        })
+    );
+    assert_eq!(
+        json["builds"],
+        json!([
+            {"id": "B-landed", "title": "Build result", "project": "corral", "state": "landed",
+                "landed": "sha-fixture", "slices": 0, "review_rounds": 0, "gate_attempts": 0,
+                "gate_failures": 0, "cost_usd": 0.5, "override_reason": "Accepted finding tradeoff"},
+            {"id": "B-open", "title": "Build result", "project": "corral", "state": "open",
+                "landed": null, "slices": 0, "review_rounds": 0, "gate_attempts": 0,
+                "gate_failures": 0, "cost_usd": null, "override_reason": null}
+        ])
+    );
+    assert!(report.markdown.contains("## 8. Builds"));
+    assert!(report.markdown.contains(&landed.id));
+    assert!(report.markdown.contains(&open.id));
+    assert!(
+        report
+            .markdown
+            .contains(landed.outcome.override_reason.as_deref().unwrap())
+    );
+    assert!(report.sections.numbers.by_task.is_empty());
+    assert!(report.sections.numbers.by_profile.is_empty());
+    // Closed records at the exact lower boundary or after the snapshot must stay out;
+    // either qualifying event kind alone must still include the landed build.
+    landed.id = "B-outside".into();
+    let records = [
+        landed,
+        open,
+        ctx.store.get_build_record("B-landed").unwrap(),
+    ];
+    for kind in ["build_recorded", "build_outcome"] {
+        let events = [
+            build_event("B-outside", "2026-01-01T00:10:00Z", kind),
+            build_event("B-outside", "2026-01-01T00:20:00.000000001Z", kind),
+            build_event("B-landed", "2026-01-01T00:20:00Z", kind),
+        ];
+        let sections = collect_sprint_review(&[], &events, &records, Some(lower), upper);
+        assert_eq!(sections.builds, report.sections.builds);
+        assert_eq!(sections.numbers.builds, report.sections.numbers.builds);
+    }
 }

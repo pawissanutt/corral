@@ -5,7 +5,7 @@ import type {
 } from "../../build/types.ts";
 import { LIVE_CHILD_STATES } from "../../build/types.ts";
 import type { ChildMark, MarkSink } from "../../host/transcript-marks.ts";
-import { PANEL_BLUE } from "../panels-view.ts";
+import { PANEL_BLUE, PANEL_WARNING } from "../panels-view.ts";
 import { exitDialog, planDialog, questionDialog } from "./build-dialogs.ts";
 import type { PreviewState } from "./build-dialogs.ts";
 import { boardEntry, exitEntry, finishEntry } from "./build-entries.ts";
@@ -45,11 +45,13 @@ type Shown = { readonly kind: "exit" } | { readonly kind: "question"; readonly i
 
 const PLAN_DRAFT = "Split the remaining work into board tasks and propose them with board_plan.";
 /** Phases after which an exit episode has an outcome the parent should learn. */
-const SETTLED: readonly ExitPhase[] = ["kept", "shipped", "landed", "failed"];
+const SETTLED: readonly ExitPhase[] = ["kept", "landed", "failed"];
 const DONE_REASON: Partial<Record<ExitPhase, string>> = {
-  kept: "this session already kept the branch", shipped: "this session already shipped",
+  kept: "this session already kept the branch", rebasing: "this session is already landing", verifying: "this session is already landing",
   landing: "this session is already landing", landed: "this session already landed",
 };
+/** The composer target while Enter gives the owner's reason to land. */
+const REASON_TARGET: ComposerTarget = { id: "exit", answer: true };
 
 const questionKey = (id: string, askedAt: number) => `${id}:${askedAt}`;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -79,6 +81,10 @@ export class BuildController implements BuildCardSource {
   private fileError: string | undefined;
   private answerFor: string | undefined;
   private steering = false;
+  /** The exit episode whose Land waits for the owner's reason in the composer. */
+  private reasonFor: number | undefined;
+  /** When the exit's current phase began, as `sync` saw it change. */
+  private phaseAt: number | undefined;
   private readonly watchers = new Set<{ readonly invalidate: () => void }>();
   private disposed = false;
 
@@ -118,6 +124,8 @@ export class BuildController implements BuildCardSource {
     if (phase !== this.lastPhase) {
       const previous = this.lastPhase;
       this.lastPhase = phase;
+      this.phaseAt = this.host.now();
+      if (phase !== "pending") this.reasonFor = undefined;
       if (phase === "pending") {
         this.episode++;
         this.chosen = undefined;
@@ -126,7 +134,7 @@ export class BuildController implements BuildCardSource {
         arrivals.push({ kind: "exit" });
       } else {
         if (this.shown?.kind === "exit") this.close();
-        const iterated = phase === "none" && this.chosen?.choice === "iterate" && (previous === "pending" || previous === "running");
+        const iterated = phase === "none" && this.chosen?.choice === "iterate" && previous === "pending";
         if (this.posted !== this.episode && (SETTLED.includes(phase) || iterated)) {
           const option = this.chosen ?? ui.exit.options().find(entry => entry.choice === exit.record?.choice);
           if (option) { this.posted = this.episode; this.host.post(exitEntry(option, exit)); }
@@ -149,7 +157,7 @@ export class BuildController implements BuildCardSource {
       this.next(fleet);
     }
 
-    const proposed = ui.board.proposed();
+    const proposed = ui.board?.proposed();
     if (proposed !== this.tracked) {
       this.track(proposed);
       if (proposed) arrivals.push({ kind: "plan" });
@@ -200,7 +208,7 @@ export class BuildController implements BuildCardSource {
       this.show({ kind: "question", id: child.id, askedAt: child.question.askedAt }, false);
       return true;
     }
-    const proposed = ui.board.proposed();
+    const proposed = ui.board?.proposed();
     if (!proposed) { this.host.notice("No plan is waiting", "text"); return false; }
     if (proposed !== this.tracked) this.track(proposed);
     this.show({ kind: "plan" }, false);
@@ -214,12 +222,14 @@ export class BuildController implements BuildCardSource {
   }
 
   target(): ComposerTarget | undefined {
+    if (this.reasonFor !== undefined) return REASON_TARGET;
     const target = this.host.ui.target();
     return target === "parent" ? undefined : { id: target, answer: this.answerFor === target };
   }
 
-  /** For `composerTitle`: shown while any child is steerable or the target is a child. */
+  /** For `composerTitle`: shown while any child is steerable, the target is a child, or Enter gives the reason to land. */
   composerTarget(): { readonly label: string; readonly color: string } | undefined {
+    if (this.reasonFor !== undefined) return { label: "land · your reason", color: PANEL_WARNING };
     const ui = this.host.ui, fleet = ui.fleet.snapshot(), target = ui.target();
     if (target === "parent") return fleet.children.some(steerable) ? { label: "parent", color: PANEL_BLUE } : undefined;
     return { label: this.answerFor === target ? `${target} · answer` : target, color: this.host.color(childHue(fleet, target)) };
@@ -236,6 +246,7 @@ export class BuildController implements BuildCardSource {
     const next = order[(order.indexOf(ui.target()) + 1) % order.length]!;
     this.setTarget(next);
     this.answerFor = undefined;
+    this.reasonFor = undefined;
     this.dock.focused = false;
     this.host.focusComposer();
     this.host.changed();
@@ -248,6 +259,7 @@ export class BuildController implements BuildCardSource {
     this.setTarget(id);
     if (this.host.ui.target() !== id) return false;
     this.answerFor = answer ? id : undefined;
+    this.reasonFor = undefined;
     this.dock.focused = false;
     this.host.focusComposer();
     this.host.changed();
@@ -258,13 +270,29 @@ export class BuildController implements BuildCardSource {
   reset(): void {
     this.setTarget("parent");
     this.answerFor = undefined;
+    this.reasonFor = undefined;
     this.host.changed();
   }
 
-  /** true when it took the text (child target or answer mode); false: Pi sends it to the parent. Never takes `/` commands. */
+  /** true when it took the text (child target, answer mode or the reason to land); false: Pi sends it to the parent. Never takes `/` commands. */
   async submit(text: string): Promise<boolean> {
+    if (text.trimStart().startsWith("/")) return false;
+    if (this.reasonFor !== undefined) {
+      const reason = text.trim(), option = this.host.ui.exit.options().find(entry => entry.choice === "land");
+      if (!reason) { this.host.notice("Landing needs your reason first", "warning"); return true; }
+      if (this.reasonFor !== this.episode || this.host.ui.exit.state().phase !== "pending" || !option || option.unavailable !== undefined) {
+        this.reasonFor = undefined;
+        this.host.notice("The exit choice is no longer waiting · your reason is still in the composer", "warning");
+        this.host.changed();
+        return true;
+      }
+      this.reasonFor = undefined;
+      this.clearDraft(text);
+      this.choose(option, reason);
+      return true;
+    }
     const target = this.target();
-    if (!target || !text.trim() || text.trimStart().startsWith("/")) return false;
+    if (!target || !text.trim()) return false;
     const ui = this.host.ui, id = target.id;
     if (target.answer) {
       if (ui.fleet.answer(id, text)) {
@@ -297,7 +325,6 @@ export class BuildController implements BuildCardSource {
   finishUnavailable(): string | undefined {
     const ui = this.host.ui, phase = ui.exit.state().phase;
     if (phase === "pending") return undefined;
-    if (phase === "running") return "an exit is already running";
     const done = DONE_REASON[phase];
     if (done) return done;
     const children = ui.fleet.snapshot().children;
@@ -355,7 +382,8 @@ export class BuildController implements BuildCardSource {
   latestFinish(): string | undefined { return this.latest; }
   color(hue: number): string { return this.host.color(hue); }
   now(): number { return this.host.now(); }
-  proposed(): BoardPlan | undefined { return this.host.ui.board.proposed(); }
+  exitSince(): number | undefined { return this.phaseAt; }
+  proposed(): BoardPlan | undefined { return this.host.ui.board?.proposed(); }
   watch(_id: string, invalidate: () => void): () => void {
     const watcher = { invalidate };
     this.watchers.add(watcher);
@@ -376,12 +404,14 @@ export class BuildController implements BuildCardSource {
     if (shown.kind === "exit") {
       const choice = ui.exit.options()[index];
       if (this.choosing || !choice || choice.unavailable !== undefined) return;
-      this.choosing = true;
-      this.chosen = choice;
       this.close();
-      ui.exit.choose(choice.choice)
-        .catch(error => { if (!this.disposed) this.host.notice(message(error), "error"); })
-        .finally(() => { this.choosing = false; if (!this.disposed) this.host.changed(); });
+      if (choice.needsReason === undefined) { this.choose(choice); return; }
+      // Landing over open findings or without an approval takes the owner's reason, typed in the composer.
+      this.reasonFor = this.episode;
+      this.dock.focused = false;
+      this.host.focusComposer();
+      this.host.notice(`${choice.needsReason} · type your reason to land anyway; Enter lands`, "warning");
+      this.host.changed();
       return;
     }
     if (shown.kind === "question") {
@@ -398,19 +428,20 @@ export class BuildController implements BuildCardSource {
       } else if (!this.point(shown.id, true)) this.host.notice(`${shown.id} no longer waits for an answer`, "warning");
       return;
     }
-    const plan = this.tracked;
-    if (!plan || this.filing) return;
+    // Only a session with a board (not bare) ever tracks a plan.
+    const plan = this.tracked, board = ui.board;
+    if (!plan || !board || this.filing) return;
     if (index === 2) {
-      ui.board.dismiss();
+      board.dismiss();
       this.close();
       this.host.notice("Nothing filed. The plan is discarded.", "text");
       return;
     }
     if (this.preview.state !== "ready") return;
-    const start = index === 0, before = new Set(ui.board.tasks().map(task => task.id));
+    const start = index === 0, before = new Set(board.tasks().map(task => task.id));
     this.filing = true;
     this.fileError = undefined;
-    ui.board.file(plan, start).then(tasks => {
+    board.file(plan, start).then(tasks => {
       if (this.disposed) return;
       this.host.post(boardEntry(tasks.filter(task => !before.has(task.id)), start));
       if (this.shown?.kind === "plan") this.close();
@@ -428,7 +459,7 @@ export class BuildController implements BuildCardSource {
     const shown = this.shown;
     if (!shown) return;
     this.close();
-    if (shown.kind === "exit") this.host.notice("No exit chosen. Nothing was filed or landed.", "text");
+    if (shown.kind === "exit") this.host.notice("No exit chosen. Nothing was landed.", "text");
     else if (shown.kind === "question") {
       this.dismissed.add(questionKey(shown.id, shown.askedAt));
       this.host.notice(`${shown.id} keeps waiting`, "text");
@@ -440,11 +471,22 @@ export class BuildController implements BuildCardSource {
   /** Docks `shown`; one that opened by itself ignores Enter and digits for a moment and takes focus only then. */
   private show(shown: Shown, auto: boolean): void {
     this.shown = shown;
+    if (shown.kind === "exit") this.reasonFor = undefined;
     if (shown.kind === "question") this.dismissed.delete(questionKey(shown.id, shown.askedAt));
     this.dock.guard(auto ? Date.now() + CHOICE_GUARD_MS : 0);
     this.dock.focused = true;
     this.host.focusDock();
     this.host.changed();
+  }
+
+  /** Runs exit `option`; `overrideReason` is the owner's reason to land over open findings. */
+  private choose(option: ExitOption, overrideReason?: string): void {
+    if (this.choosing) return;
+    this.choosing = true;
+    this.chosen = option;
+    this.host.ui.exit.choose(option.choice, overrideReason === undefined ? undefined : { overrideReason })
+      .catch(error => { if (!this.disposed) this.host.notice(message(error), "error"); })
+      .finally(() => { this.choosing = false; if (!this.disposed) this.host.changed(); });
   }
 
   private close(): void {
@@ -470,10 +512,11 @@ export class BuildController implements BuildCardSource {
   private track(plan: BoardPlan | undefined): void {
     this.tracked = plan;
     this.fileError = undefined;
-    if (!plan) return;
+    const board = this.host.ui.board;
+    if (!plan || !board) return;
     this.planEpisode++;
     this.preview = { state: "loading" };
-    this.host.ui.board.preview(plan).then(
+    board.preview(plan).then(
       value => { if (this.tracked === plan) this.preview = { state: "ready", value }; },
       error => { if (this.tracked === plan) this.preview = { state: "failed", error: message(error) }; },
     ).finally(() => { if (!this.disposed && this.tracked === plan) this.host.changed(); });

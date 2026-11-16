@@ -2,8 +2,9 @@
 // imports the host session, the SDK runtime or the UI, so every build module can depend on it.
 import type { AwsBinding } from "../auth/aws.ts";
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
+import type { BuildRecord } from "./record-types.ts";
 
-/** What landing through corral requires for a project: independent review, the gate alone, or no corral exit. */
+/** What landing from the session requires for a project: an approving in-session review and the full gate, the full gate alone, or no landing. */
 export type ExitPolicy = "review" | "gate" | "none";
 export const EXIT_POLICIES: readonly ExitPolicy[] = ["review", "gate", "none"];
 
@@ -18,12 +19,15 @@ export interface BuildProfile {
 export interface BuildSettings {
   /** Unset in config means `review`; outside a corral workspace it is `none`. */
   readonly exitPolicy: ExitPolicy;
-  /** Children running at once, 1 to 8. Default 3. */
+  /** Children running at once, 1 to `MAX_PARALLEL_LIMIT`. Default 3. */
   readonly maxParallel: number;
   /** Configured profiles. The runtime adds `default` (the parent's model) when it is absent. */
   readonly profiles: readonly BuildProfile[];
 }
 export const DEFAULT_MAX_PARALLEL = 3;
+export const MAX_PARALLEL_LIMIT = 32;
+/** Children one `task` call may start. */
+export const MAX_CHILDREN_PER_CALL = 32;
 
 /**
  * The JSON `corral pi --build` writes to the host's inherited `--launch-fd`. Snake case on the wire:
@@ -35,8 +39,9 @@ export interface BuildLaunch {
   readonly assets: string;
   /** `$XDG_DATA_HOME/corral/corral-pi`; build sessions live under `<dataRoot>/build/`. */
   readonly dataRoot: string;
-  /** The corral executable for the exit and board commands. */
-  readonly corral: string;
+  /** Bare sessions never have a corral executable or workspace binding. */
+  readonly bare?: boolean;
+  readonly corral?: string;
   /** The corral workspace root, when launched inside one. */
   readonly workspaceRoot?: string;
   /** The configured project that owns `repoRoot`, when there is one. */
@@ -74,6 +79,11 @@ export interface BuildSessionRecord {
   /** The commit the session started from. */
   readonly base: string | null;
   readonly here: boolean;
+  /** Absent on older records; false only for bare sessions started outside Git. */
+  readonly repository?: boolean;
+  readonly bare?: boolean;
+  /** The branch checked out when a bare session started. */
+  readonly baseBranch?: string | null;
   readonly project?: string;
   readonly workspaceRoot?: string;
   /** The Pi transcript of the parent conversation. */
@@ -95,8 +105,16 @@ export interface BuildContext {
 export type ChildState = "queued" | "running" | "needs" | "done" | "failed" | "cancelled";
 export const LIVE_CHILD_STATES: readonly ChildState[] = ["queued", "running", "needs"];
 
+/**
+ * What a child may do. `slice` writes inside the shared worktree; `explore` is read-only research;
+ * `review` is read-only and ends by recording a verdict.
+ */
+export type ChildKind = "slice" | "explore" | "review";
+
 /** One slice the parent hands to a child. */
 export interface ChildSpec {
+  /** Absent means `slice`. */
+  readonly kind?: ChildKind;
   /** Lowercase slug, unique within the session: `host-slots`. */
   readonly id: string;
   /** What the slice delivers, one line. */
@@ -134,8 +152,77 @@ export interface ChildQuestion {
   readonly askedAt: number;
 }
 
+/** One message between agents of a session, or to or from another session. Kept in the fleet journal. */
+export interface AgentMessage {
+  /** 1-based, in send order, unique within the session. */
+  readonly seq: number;
+  /** Epoch ms. */
+  readonly at: number;
+  /** A child id, `parent`, `owner`, or a cross-session recipient key. */
+  readonly from: string;
+  /** A child id, `parent`, `all`, or a cross-session recipient key. */
+  readonly to: string;
+  /** At most `AGENT_MESSAGE_MAX` characters. */
+  readonly text: string;
+  /**
+   * `delivered`: injected at the recipient's next step. `queued`: the recipient has not started; it
+   * reads the message in its opening prompt. `undeliverable`: no such live recipient.
+   * `answered_from_report`: the recipient had finished, so the sender received its final report.
+   */
+  readonly delivery: "delivered" | "queued" | "undeliverable" | "answered_from_report";
+  /** The `seq` this message answers, when the sender replied to a `waitReply` message. */
+  readonly replyTo?: number;
+}
+export const AGENT_MESSAGE_MAX = 8192;
+/** Messages one child may send in its lifetime. */
+export const AGENT_SEND_BUDGET = 24;
+/** Messages the fleet journal retains; older ones are dropped from the front. */
+export const AGENT_JOURNAL_MAX = 500;
+
+/** What `agent_message` returns to its caller. */
+export interface MessageOutcome {
+  readonly message: AgentMessage;
+  /** The recipient's answer when the call waited for one. */
+  readonly reply?: string;
+  /** The recipient's final report, when `delivery` is `answered_from_report`. */
+  readonly report?: string;
+  /** Why a wait ended without an answer: the timeout elapsed, or waiting would have closed a cycle of agents waiting on each other. */
+  readonly unanswered?: "timeout" | "would_deadlock" | "recipient_finished";
+}
+
+/** One line of the roster every agent can read. */
+export interface RosterEntry {
+  /** A child id or `parent`. */
+  readonly id: string;
+  readonly kind: ChildKind | "parent";
+  readonly title: string;
+  readonly owns: readonly string[];
+  readonly state: ChildState | "live";
+}
+
+export interface ReviewFinding {
+  readonly severity: "blocker" | "major" | "minor";
+  /** Repository-relative. */
+  readonly path?: string;
+  readonly line?: number;
+  readonly text: string;
+}
+
+/** What a `review` child records with its typed verdict tool. The host stores it as given; the parent cannot edit it. */
+export interface ReviewVerdict {
+  readonly verdict: "approve" | "changes";
+  readonly summary: string;
+  readonly findings: readonly ReviewFinding[];
+  /** The commit the reviewer read, when it named one. */
+  readonly head?: string;
+  readonly at: number;
+}
+
 export interface ChildSnapshot {
   readonly id: string;
+  readonly kind: ChildKind;
+  /** Present once a `review` child has recorded its verdict. */
+  readonly verdict?: ReviewVerdict;
   /** The parent tool call that started it. */
   readonly call: string;
   readonly title: string;
@@ -177,6 +264,8 @@ export interface ChildSnapshot {
 
 export interface FleetSnapshot {
   readonly children: readonly ChildSnapshot[];
+  /** The session's agent messages, oldest first, at most `AGENT_JOURNAL_MAX`. */
+  readonly mail: readonly AgentMessage[];
   readonly maxParallel: number;
   /** When the first child of this session was created. */
   readonly startedAt?: number;
@@ -195,12 +284,21 @@ export interface FleetControl {
   /** `<provider>/<id>` values a child may be switched to. */
   models(): readonly string[];
   profiles(): readonly BuildProfile[];
+  /**
+   * Sends `text` from one agent to another. `to` is a child id, `parent` or `all`. With `waitReply`
+   * the promise resolves when the recipient answers, the timeout elapses or the wait is refused.
+   */
+  message(from: string, to: string, text: string, options?: { readonly waitReply?: boolean; readonly timeoutMs?: number; readonly replyTo?: number; readonly signal?: AbortSignal }): Promise<MessageOutcome>;
+  roster(): readonly RosterEntry[];
+  /** Resolves with the named children's snapshots once each has settled; an unknown id rejects. */
+  wait(ids: readonly string[], signal?: AbortSignal): Promise<readonly ChildSnapshot[]>;
   subscribe(listener: () => void): () => void;
 }
 
 // ---------- exit ----------
 
-export type ExitChoice = "keep" | "land" | "ship" | "iterate";
+/** `land` gates, lands and records in this session; nothing is handed to the task board. */
+export type ExitChoice = "keep" | "land" | "iterate";
 
 export interface ExitOption {
   readonly choice: ExitChoice;
@@ -208,6 +306,8 @@ export interface ExitOption {
   readonly detail: string;
   /** Why the option cannot be chosen; absent when it can. */
   readonly unavailable?: string;
+  /** Set on `land` when review findings are open or no approval covers the head: the owner must give a reason to land anyway. */
+  readonly needsReason?: string;
 }
 
 export interface BuildSummary {
@@ -228,14 +328,20 @@ export interface BuildSummary {
 export interface ExitRecord {
   readonly choice: ExitChoice;
   readonly at: string;
-  /** The corral task created by `ship` or `land`. */
-  readonly task?: string;
-  /** The assistant session corral created to carry the branch. */
-  readonly assistant?: string;
-  readonly reviewWaived?: boolean;
+  /** The base branch commit after `land`. */
+  readonly landed?: string;
+  readonly baseBranch?: string;
+  /** The full-tier gate attempt that vouched for the landed head: `G3`. */
+  readonly gateAttempt?: string;
+  /** Why the owner landed over open review findings. */
+  readonly overrideReason?: string;
 }
 
-export type ExitPhase = "none" | "pending" | "running" | "kept" | "shipped" | "landing" | "landed" | "failed";
+/**
+ * `pending`: the owner is choosing. `rebasing`, `verifying` and `landing` are the steps of `land`:
+ * rebase onto the base branch, the full gate on that head, then the fast-forward.
+ */
+export type ExitPhase = "none" | "pending" | "rebasing" | "verifying" | "landing" | "kept" | "landed" | "failed";
 
 export interface ExitState {
   readonly phase: ExitPhase;
@@ -248,8 +354,8 @@ export interface ExitControl {
   options(): readonly ExitOption[];
   summary(): Promise<BuildSummary>;
   state(): ExitState;
-  /** Runs the chosen exit. Only the owner's dialog calls this; no model-callable tool does. */
-  choose(choice: ExitChoice): Promise<ExitState>;
+  /** Runs the chosen exit. Only the owner's dialog calls this; no model-callable tool does. `overrideReason` is required when the `land` option carries `needsReason`. */
+  choose(choice: ExitChoice, options?: { readonly overrideReason?: string }): Promise<ExitState>;
   subscribe(listener: () => void): () => void;
 }
 
@@ -316,6 +422,8 @@ export interface BuildPanelState {
   readonly fleet: FleetSnapshot;
   readonly target: MessageTarget;
   readonly exit: ExitState;
+  /** The session's tracked record as it stands now: verification attempts, review rounds, messages, decisions. */
+  readonly record: BuildRecord;
   readonly board: readonly BoardTaskStatus[];
 }
 
@@ -323,7 +431,10 @@ export interface BuildPanelState {
 export interface BuildUi {
   readonly fleet: FleetControl;
   readonly exit: ExitControl;
-  readonly board: BoardControl;
+  /** The same record `BuildPanelState.record` carries, read on demand. */
+  record(): BuildRecord;
+  /** Absent in a bare session, which has no board connection. */
+  readonly board?: BoardControl;
   target(): MessageTarget;
   setTarget(target: MessageTarget): void;
 }

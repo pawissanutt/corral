@@ -78,7 +78,7 @@ Sections: [limits](#limits) · [resources](#resources) · [dispatch](#dispatch) 
 ## build
 
 Build sessions use workspace settings for child concurrency and named child profiles.
-`max_parallel` defaults to 3 and must be between 1 and 8. At most 16 profiles may be
+`max_parallel` defaults to 3 and must be between 1 and 32. At most 16 profiles may be
 configured. Profile names start with a lowercase letter and contain at most 32 lowercase
 letters, digits or hyphens. Each model is a `provider/id`; `effort` and `description`
 are optional.
@@ -335,7 +335,7 @@ root itself is a repository and no subdirectory is, the root becomes one project
 | `default_profile` | none | Profile for this project's runs (older files call this `default_agent`, still accepted). |
 | `base` | repo's current branch | Branch new runs start from and land on. |
 | `review` | none | Project-level override of the [review](#review) policy. |
-| `build_exit` | `"review"` | Build-session exit policy: `"review"`, `"gate"`, or `"none"`; see [build sessions](build-sessions.md#leaving-the-session). |
+| `build_exit` | `"review"` | Build-session Land policy: `"review"` requires an approving in-session review and full gate, or an owner's recorded reason to override the review; `"gate"` requires the full gate only; `"none"` disables Land. See [build sessions](build-sessions.md#leaving-the-session). |
 | `dispatch` | inherited | Partial project override of the three [dispatch](#dispatch) policy fields. |
 | `post_land` | empty | Ordered opt-in named argv hooks with explicit cwd, env, timeouts and retry bounds; see [post-land operations](post-land.md). |
 

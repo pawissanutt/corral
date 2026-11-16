@@ -422,6 +422,7 @@ fn item_preview(state: &State, feed: &Feed, row: &InboxRow) -> ItemPreview {
             Live::Session(session) => format!("Open session {session}"),
             Live::Thread(thread) => format!("Open thread {thread}"),
             Live::Question(key) => format!("Open {key}"),
+            Live::Build(build) => format!("Open build {build}"),
         };
         button(label, Action::Live(live), ButtonKind::Primary)
     });

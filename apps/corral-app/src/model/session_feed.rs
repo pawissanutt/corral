@@ -1,8 +1,9 @@
-//! What corrald streams about one watched session's open turn, and transcript items whose
-//! content arrives in continuation pages. Updates are pure and independent of transport.
+//! What corrald streams about one watched session's open turn and its child agents, and
+//! transcript items whose content arrives in continuation pages. Updates are pure and
+//! independent of transport.
 use corral_protocol::detail::SessionItem;
 use corral_protocol::subscription::{
-    SessionLiveEvent, SessionLiveKind, SessionLiveToolState, SessionLiveTurnState,
+    SessionFleet, SessionLiveEvent, SessionLiveKind, SessionLiveToolState, SessionLiveTurnState,
 };
 
 /// One transcript item continuation, keyed in the feed by its token.
@@ -36,6 +37,9 @@ pub struct LiveSession {
     pub reread: u64,
     /// Highest sequence applied since the last discontinuity.
     pub(crate) last_seq: Option<u64>,
+    /// The session's child agents and the messages between them, as of the latest page; only
+    /// a connection that asked for `session.fleet.v1` ever holds one.
+    pub fleet: Option<SessionFleet>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +96,13 @@ impl LiveSession {
         self.follow_up = 0;
         self.last_seq = None;
         self.reread = self.reread.saturating_add(1);
+    }
+
+    /// A page's fleet is the session's whole current fleet, and a page without one says the
+    /// session has no children or messages: it replaces what was held, never adds to it. The
+    /// turn overlay's resets leave it alone, so a stale fleet stays shown as stale.
+    pub fn replace_fleet(&mut self, fleet: Option<SessionFleet>) {
+        self.fleet = fleet;
     }
 
     /// A transcript requested at N cannot settle an element completed after N.

@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { EventLog } from "../src/bridge/events.ts";
 import { FRAME_MAX_BYTES, type SubmitInput, type SubmitResult } from "../src/bridge/protocol.ts";
 import { type BridgeHandlers, type BridgeServer, startBridge } from "../src/bridge/server.ts";
+import { LiveEvents } from "../src/host/live-events.ts";
+import type { ChildSnapshot, FleetSnapshot } from "../src/build/types.ts";
 import { type PeerLookup, loadPeerLookup } from "../src/host/peer.ts";
 import { connect, refusalOnConnect } from "./support/bridge-client.ts";
 import { nextEvent } from "./support/wait.ts";
@@ -34,6 +36,7 @@ interface HarnessOptions {
   readonly inputReplyMs?: number;
   readonly queueState?: BridgeHandlers["queueState"];
   readonly queueWithdraw?: BridgeHandlers["queueWithdraw"];
+  readonly liveEvents?: LiveEvents;
 }
 
 async function bridge(peerOrOptions?: PeerLookup | HarnessOptions, capacity = 512): Promise<Harness> {
@@ -44,6 +47,7 @@ async function bridge(peerOrOptions?: PeerLookup | HarnessOptions, capacity = 51
   const submitted: SubmitInput[] = [];
   const server = await startBridge({
     path: join(dir, "host.sock"), ctlCap: CAP, generation: 3, uid, peer: options.peer ?? await loadPeerLookup(), events,
+    ...(options.liveEvents ? { liveEvents: options.liveEvents } : {}),
     ...(options.submissionsMax ? { submissionsMax: options.submissionsMax } : {}),
     ...(options.inputReplyMs ? { inputReplyMs: options.inputReplyMs } : {}),
     handlers: {
@@ -268,5 +272,57 @@ test("a request split inside a multibyte character arrives intact, and a replay 
   const pair = await client.batch([frame("get_state"), frame("hello")]);
   expect(pair.map((reply) => reply.ok)).toEqual([true, true]);
   expect(submitted).toHaveLength(1);
+  client.close();
+});
+
+test("live_since resumes the current bounded fleet after child and mail changes, including gaps", async () => {
+  const live = new LiveEvents(3, 2);
+  const { path } = await bridge({ liveEvents: live });
+  const client = await connect(path);
+  const empty: FleetSnapshot = { children: [], mail: [], maxParallel: 3 };
+  live.observeFleet(empty);
+  const idle = (await client.request(frame("live_since", { seq: 0 }))).result;
+  expect(idle).toMatchObject({ events: [], last: 0 });
+  expect(idle?.fleet).toBeUndefined();
+  const child: ChildSnapshot = {
+    id: "review", kind: "review", call: "call", title: "Review", brief: "private brief",
+    owns: ["private/path"], after: [], profile: "default", model: "provider/model",
+    state: "running", createdAt: 1, startedAt: 2, activity: "read private/path",
+    edits: [], usage: { input: 3, output: 4, turns: 1, cost: 0.01 },
+    steers: [], pulse: [], history: "r", messages: [], sessionFile: "private/transcript",
+  };
+  live.observeFleet({ ...empty, children: [child] });
+  const started = (await client.request(frame("live_since", { seq: 0 }))).result;
+  expect(started?.events).toMatchObject([{ seq: 1, kind: "live_fleet" }]);
+  expect(started?.fleet).toEqual({
+    children: [{ id: "review", kind: "review", title: "Review", state: "running",
+      model: "provider/model", started_at: 2, activity: "read", tokens: 7, cost_usd: 0.01 }],
+    messages: [], messages_total: 0, max_parallel: 3,
+  });
+  const mail = Array.from({ length: 101 }, (_, index) => ({
+    seq: index + 1, at: index + 1, from: "parent", to: "review", text: "Ready?", delivery: "delivered" as const,
+  }));
+  live.observeFleet({ ...empty, children: [child], mail });
+  const resumed = (await client.request(frame("live_since", { seq: 1 }))).result;
+  const fleet = resumed?.fleet as { messages: { seq: number }[]; messages_total: number };
+  expect(resumed?.events).toMatchObject([{ seq: 2, kind: "live_fleet" }]);
+  expect(fleet.messages.length).toBe(100);
+  expect(fleet.messages[0]?.seq).toBe(2);
+  expect(fleet.messages.at(-1)?.seq).toBe(101);
+  expect(fleet.messages_total).toBe(101);
+  expect((await client.request(frame("live_since", { seq: 0 }))).result?.fleet).toEqual(fleet);
+  expect((await client.request(frame("live_since", { seq: 2 }))).result?.fleet).toBeUndefined();
+  live.events.emit("live_queue", { steer: 0, follow_up: 0 });
+  live.events.emit("live_queue", { steer: 0, follow_up: 0 });
+  const gap = (await client.request(frame("live_since", { seq: 0 }))).result;
+  expect(gap?.gap).toMatchObject({ reconcile: true });
+  expect(gap?.fleet).toEqual(fleet);
+  live.observeFleet(empty);
+  const cleared = (await client.request(frame("live_since", { seq: 4 }))).result;
+  expect(cleared?.events).toMatchObject([{ seq: 5, kind: "live_fleet" }]);
+  expect(cleared?.fleet).toEqual({ children: [], messages: [], messages_total: 0, max_parallel: 3 });
+  live.observeFleet(empty);
+  expect(live.events.last).toBe(5);
+  expect((await client.request(frame("live_since", { seq: 5 }))).result?.fleet).toBeUndefined();
   client.close();
 });

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import type { BuildRecord } from "../../build/record-types.ts";
 import type { BuildSummary, ExitOption, ExitState } from "../../build/types.ts";
 import { agentColor } from "../agent-hues.ts";
 import { buildEntryRenderer, exitEntry } from "./build-entries.ts";
@@ -15,12 +16,25 @@ const summary = (extra: Partial<BuildSummary> = {}): BuildSummary => ({
   outside: [], ...extra,
 });
 const options: ExitOption[] = [
-  { choice: "keep", label: "Keep on the branch", detail: "d" }, { choice: "land", label: "Land after the gate", detail: "d" },
+  { choice: "keep", label: "Keep on the branch", detail: "d" }, { choice: "land", label: "Land on main", detail: "d" },
 ];
-function card(input: { summary?: BuildSummary; exit?: ExitState; live?: boolean; note?: string }, width = 100) {
+type Gates = BuildRecord["verification"];
+const GATES: Gates = [
+  { attempt: "G1", tier: "quick", head: "aaa", result: "fail", failed_command: "just check-unit", started: "2026-01-01T00:00:00Z", ended: "2026-01-01T00:01:30Z" },
+  { attempt: "G2", tier: "full", head: "bbb", result: "pass", started: "2026-01-01T00:02:00Z", ended: "2026-01-01T00:12:00Z" },
+];
+const REVIEWS: BuildRecord["reviews"] = [{
+  round: 1, reviewer: "review-1", model: "anthropic/claude-opus-5.5", head: "bbb", verdict: "changes", at: "2026-01-01T00:13:00Z",
+  findings: [
+    { id: "F1", severity: "major", path: "src/slots.rs", line: 42, text: "OPEN_FINDING_TEXT" },
+    { id: "F2", severity: "minor", text: "FIXED_FINDING_TEXT", resolution: { state: "fixed", commit: "ccc" } },
+  ],
+}];
+function card(input: { summary?: BuildSummary; exit?: ExitState; live?: boolean; note?: string; gates?: Gates; reviews?: BuildRecord["reviews"]; since?: number }, width = 100) {
   const result = resultCardLines({
     summary: input.summary, fleet: undefined, exit: input.exit ?? { phase: "pending" }, options, live: input.live ?? true,
-    ...(input.note ? { note: input.note } : {}),
+    record: { verification: input.gates ?? [], reviews: input.reviews ?? [] },
+    ...(input.note ? { note: input.note } : {}), ...(input.since === undefined ? {} : { exitSince: input.since }),
   }, width, agentColor, NOW);
   return { ...result, text: result.lines.map(line => stripTerminalSequences(line)) };
 }
@@ -45,8 +59,6 @@ test("the card is a rounded box headed by the build, slice rows in the sres colu
   expect(row.indexOf("$0.21")).toBe(row.indexOf("host-slots") + 24);
   expect(text[4]).toContain("9 files +475 −11 on build/save-slots, 4 commits");
   expect(text.join("\n")).toContain("Not checked: the full gate.");
-  expect(text.join("\n")).not.toContain("Exit choice pending");
-  expect(text.join("\n")).not.toContain("Reading the branch");
 });
 
 test("uncommitted changes are called out", () => {
@@ -54,43 +66,61 @@ test("uncommitted changes are called out", () => {
   expect(card({ summary: summary() }).text.join("\n")).not.toContain("Uncommitted changes");
 });
 
-test("a card that is not the latest says it was superseded and shows no live progress", () => {
-  const exit: ExitState = { phase: "landing", record: { choice: "land", at: "t", task: "T-962" }, detail: "Checking whether T-962 has landed." };
-  const old = card({ summary: undefined, exit, live: false }).text.join("\n");
+test("gate attempts and review rounds draw their blocks with each open finding; an empty record draws neither", () => {
+  for (const width of [46, 80, 140]) {
+    const { text } = card({ summary: summary(), gates: GATES, reviews: REVIEWS }, width);
+    const gates = ["G1", "G2"].map(attempt => text.findIndex(line => line.includes(`│ ${attempt} `)));
+    expect(gates.every(index => index > 0)).toBeTrue();
+    expect(text[gates[0]!]).toContain("✗");
+    expect(text[gates[1]!]).toContain("✓");
+    const round = text.findIndex(line => line.includes("R1"));
+    const finding = text.findIndex(line => line.includes("src/slots.rs:42"));
+    expect(round).toBeGreaterThan(gates[1]!);
+    expect(finding).toBeGreaterThan(round);
+    // A resolved finding collapses to a count; the open one keeps its row.
+    expect(text.join("\n")).not.toContain("FIXED_FINDING_TEXT");
+  }
+  const empty = card({ summary: summary() }).text;
+  expect(empty.some(line => line.includes("R1") || line.includes("G1"))).toBeFalse();
+});
+
+test("a card that is not the latest says it was superseded and shows neither live progress nor the record", () => {
+  const exit: ExitState = { phase: "verifying", record: { choice: "land", at: "t" }, detail: "Running just check on 3f2a9c1." };
+  const old = card({ summary: undefined, exit, live: false, gates: GATES, reviews: REVIEWS }).text.join("\n");
   expect(old).toContain("superseded");
-  expect(old).not.toContain("T-962");
+  expect(old).not.toContain("3f2a9c1");
   expect(old).not.toContain("you chose");
-  expect(old).not.toContain("Reading the branch");
-  const latest = card({ summary: summary(), exit, live: true }).text.join("\n");
-  expect(latest).toContain("Land after the gate");
-  expect(latest).toContain("T-962");
+  expect(old).not.toContain("src/slots.rs");
+  const latest = card({ summary: summary(), exit, live: true, since: NOW - 125_000 }).text.join("\n");
+  expect(latest).toContain("Land on main");
+  expect(latest).toContain("3f2a9c1");
+  expect(latest).toContain("2m05s");
 });
 
 test("a failed exit without a record shows its error detail with a cross on the card", () => {
-  const exit: ExitState = { phase: "failed", detail: "The gate failed for T-962: just check" };
-  const line = card({ summary: summary(), exit }).text.find(row => row.includes("The gate failed"));
-  expect(line).toBeDefined();
-  expect(line).toContain("✗ The gate failed");
+  const exit: ExitState = { phase: "failed", detail: "gate_failed: just check" };
+  const line = card({ summary: summary(), exit }).text.find(row => row.includes("gate_failed"));
+  expect(line).toContain("✗ gate_failed");
 });
 
-test("a settled exit shows its choice and outcome once across the card and its entry, a running exit stays on the card", () => {
-  const kept: ExitState = { phase: "kept", record: { choice: "keep", at: "t" }, detail: "The worktree and branch are kept without a corral task." };
-  const entry = exitEntry({ choice: "keep", label: "Keep on the branch", detail: "d" }, kept);
+test("a settled exit shows its choice and outcome once across the card and its entry; a landing exit stays on the card", () => {
+  const landed: ExitState = { phase: "landed", record: { choice: "land", at: "t", landed: "3f2a9c1e0d", baseBranch: "main", gateAttempt: "G2" } };
+  const entry = exitEntry({ choice: "land", label: "Land on main", detail: "d" }, landed);
   const drawn = buildEntryRenderer(() => undefined)({ role: "custom", ...entry, timestamp: NOW }, { expanded: false, outputPad: 1 } as never, undefined as never);
-  const both = [...card({ summary: summary(), exit: kept }).text, ...(drawn?.render(100) ?? []).map(line => stripTerminalSequences(line))];
+  const both = [...card({ summary: summary(), exit: landed }).text, ...(drawn?.render(100) ?? []).map(line => stripTerminalSequences(line))];
   expect(both.filter(line => line.includes("you chose"))).toHaveLength(1);
-  expect(both.filter(line => line.includes("kept without a corral task"))).toHaveLength(1);
-  const running: ExitState = { phase: "running", record: { choice: "land", at: "t" }, detail: "Submitting the branch." };
-  const live = card({ summary: summary(), exit: running }).text.join("\n");
-  expect(live).toContain("you chose");
-  expect(live).toContain("● Submitting the branch.");
+  expect(both.filter(line => line.includes("3f2a9c1") && line.includes("main"))).toHaveLength(1);
+  for (const phase of ["rebasing", "verifying", "landing"] as const) {
+    const live = card({ summary: summary(), exit: { phase, record: { choice: "land", at: "t" } } }).text.join("\n");
+    expect(live).toContain("you chose");
+  }
 });
 
 test("slice rows and, while the exit is pending, the header are clickable, and every line fits", () => {
   for (const width of [30, 46, 52, 61, 80, 92, 140, 185]) {
     const { lines, hits, text } = card({
       summary: summary({ dirty: true, outside: [{ path: "a/very/long/path/to/a/file/that/needs/clipping.ts", by: ["a", "b", "c"] }] }),
-      note: "Not checked: the full gate (just check), a browser run of the arrival screen.",
+      note: "Not checked: the full gate (just check), a browser run of the arrival screen.", gates: GATES, reviews: REVIEWS,
     }, width);
     for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     const slice = text.findIndex(row => row.includes("host-slots"));

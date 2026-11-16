@@ -5,6 +5,7 @@ mod closed;
 mod content;
 mod control;
 mod effects;
+mod fleet;
 mod history;
 mod sessions;
 
@@ -95,8 +96,10 @@ pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::T
         INBOX_V1,
         CHANGES_V1,
         PLANS_V1,
+        BUILDS_V1,
         AGENTS_V1,
         SESSION_V1,
+        SESSION_FLEET_V1,
         REVIEW_V1,
         TIMELINE_V1,
         USAGE_V1,
@@ -115,6 +118,7 @@ pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::T
     for topic in [
         "inbox",
         "plans",
+        "builds",
         "agents",
         "assistant",
         "usage",

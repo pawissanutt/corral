@@ -2,10 +2,11 @@ import type { AgentToolUpdateCallback, ToolDefinition } from "@earendil-works/pi
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { AuxiliaryKind, AuxiliaryRuntime } from "./runtime.ts";
+import type { FleetRuntime } from "../fleet/runtime.ts";
 import type { ResearchOptions } from "./research.ts";
 import type { HelperInspection } from "./inspection.ts";
 
-function childProgress(runtime: AuxiliaryRuntime, kind: AuxiliaryKind, id: string, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>): () => void {
+function childProgress<K extends AuxiliaryKind>(runtime: { watch(kind: K, id: string, changed: (inspection: HelperInspection) => void): () => void }, kind: K, id: string, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>): () => void {
   if (!onUpdate || signal?.aborted) return () => {};
   const turns = new Set<string>(), tools = new Set<string>();
   let latest = "";
@@ -57,7 +58,7 @@ const researchSchema = Type.Object({
   constraints: Type.Optional(Type.String({ maxLength: 4096, description: "Relevant project rules and requirements; do not paste the whole conversation" })),
 });
 
-export function exploreTool(runtime: AuxiliaryRuntime): ToolDefinition {
+export function exploreTool(runtime: Pick<FleetRuntime, "explore" | "watch">): ToolDefinition {
   return {
     name: "explore", label: "Explore with a read-only child",
     description: "Delegate a bounded research question to a read-only code or documentation helper. "
@@ -78,7 +79,7 @@ export function exploreTool(runtime: AuxiliaryRuntime): ToolDefinition {
       const size = [prompt, research.scope, research.starting_points, research.constraints].reduce((n, text) => n + (text?.length ?? 0), 0);
       if (size > 32768) throw new Error("Research question and context must total at most 32,768 characters");
       const stop = childProgress(runtime, "explore", id, signal, onUpdate);
-      const result = await runtime.run("explore", id, prompt, signal, research).finally(stop);
+      const result = await runtime.explore(id, prompt, signal, research).finally(stop);
       const status = result.report?.status ?? (result.outcome === "completed" ? "completed" : "partial");
       const header = [`Research ${status}; stop: ${result.report?.stopReason ?? result.outcome}.`,
         `Request: ${result.request}; generation: ${result.generation}.`,

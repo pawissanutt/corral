@@ -135,6 +135,19 @@ pub fn run_gates(ctx: &Ctx, since: Option<&str>, until: Option<&str>, json: bool
     Ok(())
 }
 
+pub fn run_builds(ctx: &Ctx, since: Option<&str>, json: bool) -> Result<()> {
+    let report = corral_ops::build_session::stats::stats(ctx, since)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).context("serializing build statistics")?
+        );
+    } else {
+        print!("{}", corral_ops::build_session::stats::render(&report));
+    }
+    Ok(())
+}
+
 pub fn run(
     ctx: &Ctx,
     by: &str,
@@ -358,4 +371,31 @@ fn print_mode_throughput(ctx: &Ctx, cutoff: Option<jiff::Timestamp>) -> Result<(
          EXCLUDED counts usage entries without timing."
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    #[test]
+    fn build_stats_accepts_since_and_json_but_rejects_other_report_modes() {
+        let cli =
+            crate::Cli::try_parse_from(["corral", "stats", "--builds", "--since", "7d", "--json"])
+                .unwrap();
+        assert!(matches!(cli.cmd, Some(crate::Cmd::Stats {
+            builds: true, since: Some(since), json: true, ..
+        }) if since == "7d"));
+        for conflicting in [
+            vec!["--storage"],
+            vec!["--gates"],
+            vec!["--by", "profile"],
+            vec!["--html"],
+        ] {
+            let args = ["corral", "stats", "--builds"]
+                .into_iter()
+                .chain(conflicting);
+            let error = crate::Cli::try_parse_from(args).err().unwrap();
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
+    }
 }

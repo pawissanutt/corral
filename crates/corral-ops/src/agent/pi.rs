@@ -12,14 +12,13 @@
 //! path is shown or typed. The adopted pane is recorded (`AgentPm::adopted_pane`): corral never
 //! closes it, and types into it only after verifying its live host.
 //!
-//! `--bare` execs plain unbound Pi from the installed assets: no store, bootstrap, generation,
-//! nonce, bridge, hello or role modules, only the corral-owned login and the guarded fetch.
+//! `--bare` runs the build host without any corral workspace binding or state commands.
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use corral_core::agent::{AgentRunState, ContainerRef, pm_state};
 
-use super::bridge::assets::{bun_version, compiled_host, find_bun, read_compat, version_satisfies};
+use super::bridge::assets::find_bun;
 use super::bridge::liveness::{bound_host, gone};
 use super::hooks::pm::Overrides;
 use super::launch::Prepared;
@@ -28,9 +27,6 @@ use crate::Ctx;
 
 /// The variable herdr sets in every pane: the pane bound mode adopts.
 pub const PANE_ENV: &str = "HERDR_PANE_ID";
-/// The bare entry point under an asset root.
-pub const BARE_ENTRY: &str = "src/host/bare.ts";
-pub const AUTH_MODULE: &str = "src/auth/index.ts";
 pub const DEFAULT_PROVIDER: &str = "openai-codex";
 
 /// A `corral pi` refusal before anything is opened or executed: a stable code and the reason.
@@ -460,89 +456,42 @@ pub struct BareArgs {
     pub model: Option<String>,
     pub provider: Option<String>,
     pub effort: Option<String>,
+    pub here: bool,
+    pub name: Option<String>,
+    pub resume: Option<String>,
 }
 
-/// The checked bare launch, run in the asset directory: `bun --no-env-file <assets>/src/host/bare.ts
-/// --cwd <dir> --provider <p> [--model M] [--effort E]`, or `<assets>/corral-pi-host bare ...` for a
-/// compiled installation, whose host bundles the auth module and checks its embedded Bun.
+/// Prepare a bare build launch without discovering or reading any corral workspace.
+#[cfg(unix)]
 pub fn bare_command(
     data_root: &Path,
     args: &BareArgs,
     cwd: &Path,
     bun: Option<PathBuf>,
-) -> Result<std::process::Command> {
-    platform()?;
-    let id = args.provider.as_deref().unwrap_or(DEFAULT_PROVIDER);
-    let provider = super::credentials::provider(id)
-        .ok_or_else(|| refuse("usage_error", format!("unknown provider {id}")))?;
-    let assets = super::install::installed_in(data_root)?.ok_or_else(|| {
-        refuse(
-            "assets_unavailable",
-            "no corral-pi asset installation; run `corral agent install`",
-        )
-    })?;
-    let compiled = compiled_host(&assets);
-    for module in [BARE_ENTRY, AUTH_MODULE]
-        .iter()
-        .filter(|_| compiled.is_none())
-    {
-        if !assets.join(module).is_file() {
-            return Err(refuse(
-                "bare_unavailable",
-                format!(
-                    "{} has no {module}; reinstall with `corral agent install`",
-                    assets.display()
-                ),
-            ));
-        }
-    }
-    let compat = read_compat(&assets)?;
-    let mut command = match compiled {
-        Some(host) => {
-            let mut command = std::process::Command::new(host);
-            command.arg("bare");
-            command
-        }
-        None => {
-            let bun =
-                bun.ok_or_else(|| refuse("bun_unavailable", "no executable `bun` on PATH"))?;
-            let version = bun_version(&bun)?;
-            if !version_satisfies(&version, &compat.range) {
-                return Err(refuse(
-                    "bun_version_unsupported",
-                    format!(
-                        "bun {version} at {} is outside the GO manifest's tested range {}",
-                        bun.display(),
-                        compat.range
-                    ),
-                ));
-            }
-            let mut command = std::process::Command::new(&bun);
-            command.arg("--no-env-file").arg(assets.join(BARE_ENTRY));
-            command
-        }
-    };
-    super::hooks::preflight::credential(data_root, Some(provider.vendor))?;
-    let cwd = std::path::absolute(cwd).with_context(|| format!("resolving {}", cwd.display()))?;
-    command
-        .arg("--cwd")
-        .arg(cwd)
-        .args(["--provider", provider.id]);
-    for (flag, value) in [("--model", &args.model), ("--effort", &args.effort)] {
-        if let Some(value) = value {
-            command.arg(flag).arg(value);
-        }
-    }
-    command.current_dir(&assets);
-    Ok(command)
+) -> Result<(std::process::Command, std::io::PipeReader)> {
+    super::pi_build::bare_build_command(
+        data_root,
+        &super::pi_build::BuildArgs {
+            model: args.model.clone(),
+            provider: args.provider.clone(),
+            effort: args.effort.clone(),
+            here: args.here,
+            name: args.name.clone(),
+            resume: args.resume.clone(),
+        },
+        cwd,
+        bun,
+    )
 }
 
-/// `corral pi --bare`: plain unbound Pi in the current directory, inside or outside herdr.
+/// `corral pi --bare`: build in Git, or the current directory outside a repository.
 #[cfg(unix)]
 pub fn bare(args: &BareArgs) -> Result<()> {
     use std::os::unix::process::CommandExt;
     let cwd = std::env::current_dir().context("reading the current directory")?;
-    let mut command = bare_command(&super::install::data_root()?, args, &cwd, find_bun())?;
+    let (mut command, reader) =
+        bare_command(&super::install::data_root()?, args, &cwd, find_bun())?;
+    let _reader = reader;
     let error = command.exec();
     Err(error).context("executing the bare Pi host")
 }

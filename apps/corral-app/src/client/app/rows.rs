@@ -11,6 +11,7 @@ macro_rules! keyed { ($($row:ty),*) => { $(impl Keyed for $row {
 keyed!(
     InboxRow,
     PlanRow,
+    BuildRow,
     AgentRow,
     AssistantRow,
     UsageRow,
@@ -72,6 +73,12 @@ impl AppState {
                 });
                 Topic::Plans
             }
+            SubDelta::Builds { delta } => {
+                feed.update(|feed| {
+                    changed = apply(&mut feed.builds, delta.rows, delta.left, replacement)
+                });
+                Topic::Builds
+            }
             SubDelta::Agents { delta } => {
                 feed.update(|feed| {
                     changed = apply(&mut feed.agents, delta.rows, delta.left, replacement)
@@ -116,18 +123,20 @@ impl AppState {
                 generation,
                 events,
                 gap,
+                fleet,
                 ..
             } => {
                 if !self.session_scopes.contains_key(&scope) {
                     return Ok(vec![]);
                 }
                 scope_key = Some(scope.clone());
+                // Without the capability nothing is said about children, whatever the page holds.
+                let fleet =
+                    fleet.filter(|_| feed.with_untracked(|feed| feed.capable(SESSION_FLEET_V1)));
                 feed.update(|feed| {
-                    feed.live.entry(Id::from(&scope)).or_default().apply_page(
-                        generation,
-                        events,
-                        gap.is_some(),
-                    );
+                    let live = feed.live.entry(Id::from(&scope)).or_default();
+                    live.apply_page(generation, events, gap.is_some());
+                    live.replace_fleet(fleet);
                 });
                 self.touch_session(feed, &scope);
                 Topic::Session
@@ -299,6 +308,7 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
         DetailRef::Plan { id } | DetailRef::PlanDiff { id, .. } => {
             topic == Topic::Plans && changed.contains(id)
         }
+        DetailRef::Build { id } => topic == Topic::Builds && changed.contains(id),
         DetailRef::Review { task }
         | DetailRef::ReviewFile { task, .. }
         | DetailRef::Artifact { task, .. } => topic == Topic::Board && changed.contains(task),
@@ -324,6 +334,7 @@ pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
         | DetailRef::ReviewFile { .. }
         | DetailRef::Artifact { .. } => topic == Topic::Board,
         DetailRef::Plan { .. } | DetailRef::PlanDiff { .. } => topic == Topic::Plans,
+        DetailRef::Build { .. } => topic == Topic::Builds,
         DetailRef::Session { .. } | DetailRef::Terminal { .. } => topic == Topic::Agents,
         DetailRef::Timeline { .. } | DetailRef::Burnup { .. } => {
             matches!(topic, Topic::Board | Topic::Plans | Topic::Agents)
@@ -332,3 +343,7 @@ pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "fleet_tests.rs"]
+mod fleet_tests;

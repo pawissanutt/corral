@@ -26,7 +26,8 @@ impl Record {
             Live::Review(id) => Self::Review(id.clone()),
             Live::Question(id) => Self::Question(id.clone()),
             Live::Thread(id) => Self::Assistant(id.clone()),
-            Live::Session(_) => Self::Workspace,
+            // A build record carries no record actions; the workspace's apply beside it.
+            Live::Session(_) | Live::Build(_) => Self::Workspace,
         }
     }
     pub fn live(&self) -> Option<Live> {

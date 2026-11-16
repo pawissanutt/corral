@@ -117,11 +117,31 @@ test("build launches validate paths, exit policy, profile models and rich snapsh
   expect(() => readWire(dir, { ...valid, repo_root: "relative" })).toThrow("absolute path");
   expect(() => readWire(dir, { ...valid, settings: { exit_policy: "always", max_parallel: 3, profiles: [] } })).toThrow("exit_policy");
   expect(() => readWire(dir, { ...valid, settings: { exit_policy: "review", max_parallel: 3, profiles: [{ name: "bad", model: "unqualified" }] } })).toThrow("<provider>/<id>");
-  expect(() => readWire(dir, { ...valid, settings: { exit_policy: "review", max_parallel: 9, profiles: [] } })).toThrow("max_parallel");
+  expect(() => readWire(dir, { ...valid, settings: { exit_policy: "review", max_parallel: 33, profiles: [] } })).toThrow("max_parallel");
   expect(() => readWire(dir, { ...valid, provider: "unknown" })).toThrow("provider");
   expect(() => readWire(dir, { ...valid, capabilities: { catalog: 10, enabled: ["unknown"] } })).toThrow("not implemented");
   expect(() => readWire(dir, { ...valid, guidance: { settings: { hooks: false }, project_text: false } })).toThrow("settings");
   expect(() => readWire(dir, { ...valid, name: "x".repeat(65536) })).toThrow("bound");
+});
+
+test("bare launches reject workspace bindings and persist their marker in the shared session store", () => {
+  const dir = directory();
+  const message = wire(dir);
+  delete message.workspace_root;
+  delete message.project;
+  delete message.corral;
+  message.bare = true;
+  const launch = readWire(dir, message);
+  expect(launch).toMatchObject({ bare: true, repoRoot: dir });
+  expect(launch.corral).toBeUndefined();
+  for (const key of ["workspace_root", "corral", "project"]) {
+    expect(() => readWire(dir, { ...message, [key]: dir })).toThrow("bare launches cannot carry");
+  }
+  const record = { ...createSession(launch, { worktree: dir, branch: null, base: null }), repository: false };
+  saveSession(dir, record);
+  expect(loadSession(dir, record.id).bare).toBeTrue();
+  expect(listSessions(dir).map(session => session.bare)).toEqual([true]);
+  validateBuildResume(record);
 });
 
 test("Bedrock build launches preserve the ordinary launch AWS binding through host configuration", () => {

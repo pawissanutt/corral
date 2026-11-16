@@ -22,6 +22,7 @@ pub mod effects;
 mod omo_fixture;
 pub(crate) mod owner;
 pub(crate) mod paused;
+pub(crate) mod peer;
 mod pm_reviews;
 mod refused;
 #[cfg(test)]
@@ -113,6 +114,9 @@ pub enum DeliveryStatus {
 
 /// An unknown metadata value is an ordinary legacy message, never a delivery blocker.
 pub(crate) fn explicit_busy_policy(message: &corral_core::inbox::Message) -> Option<&'static str> {
+    if message.kind == "agent_message" {
+        return Some("follow_up");
+    }
     match message.subject.as_ref()?.get("busy_policy")?.as_str()? {
         "steer" => Some("steer"),
         "follow_up" => Some("follow_up"),
@@ -574,6 +578,9 @@ fn observe(
 
 fn alert_unobserved(inbox: &Inbox<'_>, now: Timestamp) -> Result<()> {
     for message in inbox.pending_messages()? {
+        if message.kind == "agent_message" {
+            continue;
+        }
         if message.urgency == corral_core::inbox::Urgency::Wake
             && now.as_nanosecond() - message.created.as_nanosecond() >= 600_000_000_000
             && inbox

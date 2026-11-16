@@ -358,8 +358,8 @@ test("a worker starts on Chat with the keys in the composer, and its footer has 
 
 test("opening a child's conversation makes it the receiver with a notice; leaving it for another view gives the parent back", () => {
   let receiver = "parent";
-  const children = [{ id: "alpha", state: "running" }] as unknown as ChildSnapshot[];
-  const build = { fleet: { snapshot: () => ({ children, maxParallel: 3, startedAt: NOW }) }, board: { tasks: () => [], proposed: () => undefined },
+  const children = [{ id: "alpha", kind: "slice", state: "running" }] as unknown as ChildSnapshot[];
+  const build = { fleet: { snapshot: () => ({ children, mail: [], maxParallel: 3, startedAt: NOW }) }, board: { tasks: () => [], proposed: () => undefined },
     target: () => receiver, setTarget: (id: string) => { receiver = id; } } as unknown as BuildUi;
   const wb = new NativeWorkbench({ cwd: work, identity: { store: "build", project: "", role: "build", generation: 1 }, snapshot: () => snapshot(),
     changed() {}, canInteract: () => true, build });

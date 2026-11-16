@@ -41,11 +41,12 @@ fn page(generation: u32, start: u64, end: u64, text: bool) -> LivePage {
         next: end,
         more: false,
         gap: None,
+        fleet: None,
     }
 }
 
 fn delta(subscriber: &mut Subscriber) -> SubDelta {
-    let frame = subscriber.next(7).unwrap().unwrap();
+    let frame = subscriber.next(7, false).unwrap().unwrap();
     assert!(frame.payload.len() <= APP_CONTROL_MAX);
     let notification: rpc::Notification<SubDelta> = serde_json::from_slice(&frame.payload).unwrap();
     notification.params
@@ -65,7 +66,7 @@ fn receive(
         panic!("wrong live topic")
     };
     assert!(
-        subscriber.next(7).unwrap().is_none(),
+        subscriber.next(7, false).unwrap().is_none(),
         "second page escaped before ack"
     );
     subscriber.ack(cursor.clone()).unwrap();
@@ -165,7 +166,7 @@ fn slow_subscriber_gets_gap_instead_of_unbounded_buffer() {
             assert!(buffer.bytes <= SESSION_BUFFER_BYTES);
             assert!(buffer.events.front().unwrap().0.seq > 2);
         }
-        assert!(slow.next(7).unwrap().is_none());
+        assert!(slow.next(7, false).unwrap().is_none());
         slow.ack(cursor).unwrap();
         let (_, events, gap) = receive(&mut slow);
         assert!(
@@ -270,4 +271,204 @@ fn generation_change_never_reuses_stale_offsets() {
         gap.unwrap().reconcile,
         "recreated scope reused an old cursor token"
     );
+}
+
+#[test]
+fn fleet_is_connection_scoped_bounded_and_can_be_renegotiated_off() {
+    use corral_protocol::frame::read_frame;
+    use std::os::unix::net::UnixStream;
+
+    let service = service();
+    let shared = Shared::new();
+    *lock(&shared.session_live) = Some(Arc::clone(&service));
+    // Each Topics instance is owned by one connection, just as in both HELLO loops.
+    let mut current = crate::topics::Topics::new(&shared);
+    let mut legacy = crate::topics::Topics::new(&shared);
+    current.set_session_fleet(true);
+    for topics in [&mut current, &mut legacy] {
+        topics
+            .open(SubOpen {
+                topic: wire::subscription::Topic::Session,
+                scope: Some("pm".into()),
+                since: None,
+            })
+            .unwrap();
+    }
+    let mut source = page(1, 1, 32, true);
+    source.events[0].kind = SessionLiveKind::LiveFleet {};
+    source.fleet = Some(
+        serde_json::from_value(serde_json::json!({
+            "children": [{"id": "review", "kind": "review", "title": "Review", "state": "running",
+                "model": "provider/model", "tokens": 0}],
+            "messages": (1..=101).map(|seq| serde_json::json!({
+                "seq": seq, "at": seq, "from": "parent", "to": "review",
+                "text": "\0".repeat(2048), "delivery": "delivered"
+            })).collect::<Vec<_>>(),
+            "messages_total": 101, "max_parallel": 3
+        }))
+        .unwrap(),
+    );
+    lock(&lock(&service.entries)["pm"]).publish(source).unwrap();
+    let (mut current_server, mut current_client) = UnixStream::pair().unwrap();
+    let (mut legacy_server, mut legacy_client) = UnixStream::pair().unwrap();
+    let receive = |client: &mut UnixStream| {
+        let frame = read_frame(client).unwrap().unwrap();
+        assert!(frame.payload.len() <= APP_CONTROL_MAX);
+        let notice: rpc::Notification<SubDelta> = serde_json::from_slice(&frame.payload).unwrap();
+        notice.params
+    };
+    current.flush(&mut current_server).unwrap();
+    legacy.flush(&mut legacy_server).unwrap();
+    let SubDelta::Session {
+        fleet,
+        events,
+        cursor,
+        ..
+    } = receive(&mut current_client)
+    else {
+        panic!("wrong topic")
+    };
+    let fleet = fleet.unwrap();
+    assert_eq!(fleet.children.len(), 1);
+    assert!(fleet.messages.len() < 100);
+    assert_eq!(fleet.messages.last().unwrap().seq, 101);
+    assert_eq!(fleet.messages_total, 101);
+    assert!(
+        fleet
+            .messages
+            .iter()
+            .all(|message| message.text.len() == 2048)
+    );
+    assert!(matches!(events[0].kind, SessionLiveKind::LiveFleet {}));
+    let SubDelta::Session { fleet, events, .. } = receive(&mut legacy_client) else {
+        panic!("wrong topic")
+    };
+    assert!(fleet.is_none());
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event.kind, SessionLiveKind::LiveFleet {}))
+    );
+    current
+        .ack(SubAck {
+            topic: wire::subscription::Topic::Session,
+            scope: Some("pm".into()),
+            cursor,
+        })
+        .unwrap();
+    // This is the same replacement performed by a second HELLO without the capability.
+    current.set_session_fleet(false);
+    current.flush(&mut current_server).unwrap();
+    let SubDelta::Session { fleet, .. } = receive(&mut current_client) else {
+        panic!("wrong topic")
+    };
+    assert!(fleet.is_none());
+}
+
+fn fleet_replacement(generation: u32, seq: u64, empty: bool) -> LivePage {
+    let mut page = page(generation, seq, seq, false);
+    page.events[0].kind = SessionLiveKind::LiveFleet {};
+    page.fleet = Some(SessionFleet {
+        children: Vec::new(),
+        messages: if empty {
+            Vec::new()
+        } else {
+            vec![wire::subscription::SessionAgentMessage {
+                seq: 1,
+                at: 1,
+                from: "parent".into(),
+                to: "all".into(),
+                text: "Ready?".into(),
+                delivery: "delivered".into(),
+            }]
+        },
+        messages_total: u64::from(!empty),
+        max_parallel: 3,
+    });
+    page
+}
+
+fn fleet_wire(subscriber: &mut Subscriber) -> serde_json::Value {
+    let frame = subscriber.next(7, true).unwrap().unwrap();
+    assert!(frame.payload.len() <= APP_CONTROL_MAX);
+    let notice: rpc::Notification<serde_json::Value> =
+        serde_json::from_slice(&frame.payload).unwrap();
+    subscriber
+        .ack(serde_json::from_value(notice.params["cursor"].clone()).unwrap())
+        .unwrap();
+    notice.params
+}
+
+#[test]
+fn empty_fleet_clears_clients_but_transcript_pages_keep_the_current_projection() {
+    let service = service();
+    let mut subscriber = subscribe(service, "pm".into(), 7, None).unwrap();
+    let entry = Arc::clone(&subscriber.watch.entry);
+    lock(&entry)
+        .publish(fleet_replacement(1, 1, false))
+        .unwrap();
+    let initial = fleet_wire(&mut subscriber);
+    assert_eq!(initial["fleet"]["messages_total"], 1);
+    // None on the bridge is no update: ordinary live pages must retain the replacement.
+    lock(&entry).publish(page(1, 2, 2, true)).unwrap();
+    let transcript = fleet_wire(&mut subscriber);
+    assert_eq!(transcript["fleet"], initial["fleet"]);
+    lock(&entry).publish(fleet_replacement(1, 3, true)).unwrap();
+    assert!(lock(&entry).fleet.is_none());
+    let cleared = fleet_wire(&mut subscriber);
+    assert!(cleared.get("fleet").is_none());
+    assert_eq!(cleared["events"][0]["kind"], "live_fleet");
+    lock(&entry).publish(page(1, 4, 3, false)).unwrap();
+    assert!(subscriber.next(7, true).unwrap().is_none());
+}
+
+#[test]
+fn new_generations_and_same_generation_rebinds_discard_previous_fleets() {
+    let service = service();
+    let mut subscriber = subscribe(service, "pm".into(), 7, None).unwrap();
+    let entry = Arc::clone(&subscriber.watch.entry);
+    lock(&entry)
+        .publish(fleet_replacement(1, 1, false))
+        .unwrap();
+    assert!(fleet_wire(&mut subscriber).get("fleet").is_some());
+    // A new host has no events or projection yet, but the generation still clears the old data.
+    lock(&entry).publish(page(2, 1, 0, false)).unwrap();
+    assert!(lock(&entry).fleet.is_none());
+    let generation = fleet_wire(&mut subscriber);
+    assert_eq!(generation["generation"], 2);
+    assert_eq!(generation["gap"]["reconcile"], true);
+    assert!(generation.get("fleet").is_none());
+    lock(&entry)
+        .publish(fleet_replacement(2, 1, false))
+        .unwrap();
+    assert!(fleet_wire(&mut subscriber).get("fleet").is_some());
+    let mut rebound = page(2, 1, 0, false);
+    rebound.gap = Some(SessionLiveGap {
+        after: 1,
+        resumed: 1,
+        missing: 0,
+        reconcile: true,
+    });
+    lock(&entry).publish(rebound).unwrap();
+    assert!(lock(&entry).fleet.is_none());
+    let cleared = fleet_wire(&mut subscriber);
+    assert_eq!(cleared["generation"], 2);
+    assert_eq!(cleared["gap"]["reconcile"], true);
+    assert!(cleared.get("fleet").is_none());
+}
+
+#[test]
+fn legacy_hosts_emit_no_fleet_updates_or_spurious_clears() {
+    let service = service();
+    let mut subscriber = subscribe(service, "pm".into(), 7, None).unwrap();
+    let entry = Arc::clone(&subscriber.watch.entry);
+    lock(&entry).publish(page(1, 1, 0, false)).unwrap();
+    assert!(subscriber.next(7, true).unwrap().is_none());
+    lock(&entry).publish(page(1, 1, 1, false)).unwrap();
+    let ordinary = fleet_wire(&mut subscriber);
+    assert!(ordinary.get("fleet").is_none());
+    assert!(ordinary["gap"].is_null());
+    assert_eq!(ordinary["events"][0]["kind"], "live_queue");
+    lock(&entry).publish(page(1, 2, 1, false)).unwrap();
+    assert!(subscriber.next(7, true).unwrap().is_none());
 }

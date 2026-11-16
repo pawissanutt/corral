@@ -34,6 +34,23 @@ impl Default for ExploreSettings {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct FleetSettings {
+    pub max_parallel: u32,
+    pub max_turns: u32,
+    pub timeout_secs: u32,
+}
+impl Default for FleetSettings {
+    fn default() -> Self {
+        Self {
+            max_parallel: 3,
+            max_turns: 60,
+            timeout_secs: 1800,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct OracleSettings {
     pub model: Option<String>,
     pub timeout_secs: u32,
@@ -71,6 +88,20 @@ pub(crate) fn explore_settings(config: &CapabilitySettings) -> Result<Capability
     timeout_ok(settings.timeout_secs)?;
     serde_json::from_value(serde_json::json!(settings)).map_err(|e| e.to_string())
 }
+pub(crate) fn fleet_settings(config: &CapabilitySettings) -> Result<CapabilitySettings, String> {
+    let settings: FleetSettings =
+        serde_json::from_value(serde_json::json!(config)).map_err(|e| e.to_string())?;
+    if !(1..=32).contains(&settings.max_parallel) {
+        return Err("fleet max_parallel must be 1-32".into());
+    }
+    if !(1..=200).contains(&settings.max_turns) {
+        return Err("fleet max_turns must be 1-200".into());
+    }
+    if !(60..=7200).contains(&settings.timeout_secs) {
+        return Err("fleet timeout_secs must be 60-7200".into());
+    }
+    serde_json::from_value(serde_json::json!(settings)).map_err(|e| e.to_string())
+}
 pub(crate) fn oracle_settings(config: &CapabilitySettings) -> Result<CapabilitySettings, String> {
     let settings: OracleSettings =
         serde_json::from_value(serde_json::json!(config)).map_err(|e| e.to_string())?;
@@ -81,6 +112,84 @@ pub(crate) fn oracle_settings(config: &CapabilitySettings) -> Result<CapabilityS
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fleet_presets_roles_and_older_snapshots() {
+        use crate::{
+            agent::{AgentRole, CapabilitySnapshot},
+            agent_capabilities::AgentCapabilities,
+        };
+
+        for preset in ["strict", "standard", "full"] {
+            let config: AgentCapabilities =
+                toml::from_str(&format!("preset = '{preset}'")).unwrap();
+            for role in [AgentRole::Worker, AgentRole::Assistant] {
+                let snapshot = config.resolve(role, None);
+                assert_eq!(snapshot.enabled("fleet"), preset != "strict");
+                if preset != "strict" {
+                    let settings = &snapshot.features["fleet"].settings;
+                    assert_eq!(settings["max_parallel"], 3);
+                    assert_eq!(settings["max_turns"], 60);
+                    assert_eq!(settings["timeout_secs"], 1800);
+                }
+            }
+            for role in [
+                AgentRole::Pm,
+                AgentRole::Planner,
+                AgentRole::PlanReviewer,
+                AgentRole::Reviewer,
+            ] {
+                assert!(!config.resolve(role, None).features.contains_key("fleet"));
+            }
+        }
+        for role in ["pm", "planner", "plan_reviewer", "reviewer"] {
+            assert!(
+                toml::from_str::<AgentCapabilities>(&format!("[{role}.fleet]\nenabled = true"))
+                    .is_err()
+            );
+        }
+        let old: AgentCapabilities =
+            toml::from_str("preset = 'standard'\n[worker.subagents]\nmax_parallel = 2").unwrap();
+        let mut snapshot = serde_json::to_value(old.resolve(AgentRole::Worker, None)).unwrap();
+        snapshot["catalog"] = 10.into();
+        snapshot["features"]
+            .as_object_mut()
+            .unwrap()
+            .remove("fleet");
+        let restored: CapabilitySnapshot = serde_json::from_value(snapshot).unwrap();
+        assert!(!restored.enabled("fleet"));
+        assert_eq!(restored.features["subagents"].settings["max_parallel"], 2);
+    }
+
+    #[test]
+    fn fleet_settings_enforce_named_bounds_even_when_disabled() {
+        use crate::agent_capabilities::AgentCapabilities;
+
+        for (key, min, max) in [
+            ("max_parallel", 1, 32),
+            ("max_turns", 1, 200),
+            ("timeout_secs", 60, 7200),
+        ] {
+            for value in [min - 1, max + 1] {
+                let text = format!("[worker.fleet]\nenabled = false\n{key} = {value}");
+                let error = toml::from_str::<AgentCapabilities>(&text)
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains(key), "{text}: {error}");
+            }
+            for value in [min, max] {
+                let text = format!("[worker.fleet]\n{key} = {value}");
+                let config: AgentCapabilities = toml::from_str(&text).unwrap();
+                assert_eq!(
+                    config
+                        .resolve(crate::agent::AgentRole::Worker, None)
+                        .features["fleet"]
+                        .settings[key],
+                    value
+                );
+            }
+        }
+    }
+
     use super::*;
     #[test]
     fn auxiliary_presets_roles_and_overrides_share_the_catalog() {

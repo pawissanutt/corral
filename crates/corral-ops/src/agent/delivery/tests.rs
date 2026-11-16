@@ -20,6 +20,8 @@ use crate::agent::launch::{ensure_private_dir, runtime_dir, runtime_root, write_
 use crate::agent::test_support::{self as ts, Fx};
 use crate::delivery::{DeliveryStatus, deliver, owner};
 
+#[path = "peer_tests.rs"]
+mod peers;
 #[path = "planning_tests.rs"]
 mod planning;
 #[path = "refused_tests.rs"]

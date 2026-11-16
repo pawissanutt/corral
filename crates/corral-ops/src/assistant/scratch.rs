@@ -14,12 +14,15 @@ use crate::Ctx;
 use crate::cleanup_worktree::Callers;
 
 mod finish;
+mod finish_here;
 mod gc;
 mod git;
 mod measure;
 
 pub use finish::{Finish, Finished, LABEL, finish, session_for as finish_session};
 pub(crate) use finish::{record_landing, release_discarded};
+pub(crate) use finish_here::AttachedReview;
+pub use finish_here::{FinishHere, FinishedHere, finish_here};
 pub use gc::{GcItem, GcReport, Holder, gc, gc_with_options, orphans};
 pub use measure::{Measured, measure};
 

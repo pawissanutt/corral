@@ -136,8 +136,41 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
             })
         });
     }
+    let fleet = matches!(
+        payload.usage_kind,
+        Some(UsageSessionKind::Slice | UsageSessionKind::Review)
+    );
+    // A prepared fleet invocation remains settleable after a capability reload. Permission
+    // to spend is granted at prepare; start/finish still require that exact durable record.
+    if fleet && payload.action == "prepare" {
+        use corral_core::agent::AgentRole;
+        let (kind, role_allowed) = match payload.usage_kind {
+            Some(UsageSessionKind::Slice) => ("slice", envelope.identity.role == AgentRole::Worker),
+            _ => (
+                "review",
+                matches!(
+                    envelope.identity.role,
+                    AgentRole::Worker | AgentRole::Assistant
+                ),
+            ),
+        };
+        if !role_allowed {
+            return Err(Rejection::new(
+                RejectCode::OpNotAllowed,
+                format!("auxiliary {kind} requires fleet and an allowed role; role {} cannot prepare {kind}", envelope.identity.role.as_str()),
+            ).into());
+        }
+        if !snapshot.as_ref().is_some_and(|g| g.capability("fleet")) {
+            return Err(Rejection::new(
+                RejectCode::OpNotAllowed,
+                format!("auxiliary {kind}: required capability fleet is disabled"),
+            )
+            .into());
+        }
+    }
     let feature = match payload.usage_kind {
         Some(UsageSessionKind::Explore) => "subagents",
+        Some(UsageSessionKind::Slice | UsageSessionKind::Review) => "fleet",
         Some(UsageSessionKind::Oracle) => "oracle",
         Some(UsageSessionKind::Shadow)
             if envelope.identity.role == corral_core::agent::AgentRole::Pm =>
@@ -152,11 +185,11 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
         Some(UsageSessionKind::WebSearch) => "web.enabled",
         _ => {
             return Err(bad(
-                "auxiliary supports only explore, oracle, PM shadow/expert and web_search",
+                "auxiliary supports only explore, slice, review, oracle, PM shadow/expert and web_search",
             ));
         }
     };
-    if !snapshot.as_ref().is_some_and(|g| g.capability(feature)) {
+    if !fleet && !snapshot.as_ref().is_some_and(|g| g.capability(feature)) {
         return Err(
             Rejection::new(RejectCode::OpNotAllowed, "auxiliary capability is disabled").into(),
         );
@@ -207,10 +240,7 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
                         .ok_or_else(|| bad("prepare needs its configured model"))?;
                     state.usage_sessions.push(UsageSession {
                         generation,
-                        kind: payload
-                            .usage_kind
-                            .clone()
-                            .ok_or_else(|| bad("missing kind"))?,
+                        kind: payload.usage_kind.ok_or_else(|| bad("missing kind"))?,
                         session_id: payload.request.clone(),
                         session_file: file.clone(),
                         model: Some(model.into()),
@@ -225,11 +255,14 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
                         .iter()
                         .filter(|s| {
                             s.generation == generation
-                                && s.kind
-                                    == payload
-                                        .usage_kind
-                                        .clone()
-                                        .unwrap_or(UsageSessionKind::Summary)
+                                && if fleet {
+                                    matches!(
+                                        s.kind,
+                                        UsageSessionKind::Slice | UsageSessionKind::Review
+                                    )
+                                } else {
+                                    Some(&s.kind) == payload.usage_kind.as_ref()
+                                }
                                 && s.outcome == Some(AuxiliaryOutcome::Running)
                         })
                         .count();
@@ -245,13 +278,10 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
                         }
                         record.outcome = Some(AuxiliaryOutcome::Running);
                     } else {
-                        let outcome = payload
-                            .outcome
-                            .as_ref()
-                            .ok_or_else(|| bad("finish needs outcome"))?;
+                        let outcome = payload.outcome.ok_or_else(|| bad("finish needs outcome"))?;
                         let allowed = match record.outcome {
                             Some(AuxiliaryOutcome::Prepared) => {
-                                *outcome == AuxiliaryOutcome::NotStarted
+                                outcome == AuxiliaryOutcome::NotStarted
                             }
                             Some(AuxiliaryOutcome::Running) => matches!(
                                 outcome,
@@ -262,7 +292,7 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
                         if !allowed {
                             return Err(bad("auxiliary outcome is terminal or invalid"));
                         }
-                        record.outcome = Some(outcome.clone());
+                        record.outcome = Some(outcome);
                     }
                 }
                 _ => return Err(bad("unknown auxiliary action")),
@@ -286,3 +316,7 @@ mod shadow_tests;
 #[cfg(test)]
 #[path = "auxiliary_expert_tests.rs"]
 mod expert_tests;
+
+#[cfg(test)]
+#[path = "auxiliary_fleet_tests.rs"]
+mod fleet_tests;

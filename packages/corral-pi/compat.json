@@ -86,6 +86,7 @@
     "headless",
     "queue_control",
     "shadow",
-    "expert"
+    "expert",
+    "fleet"
   ]
 }

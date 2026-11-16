@@ -30,9 +30,10 @@ use crate::agent::effects;
 use crate::agent::envelope::{Envelope, error_category};
 use crate::agent::receipts::{self, Commit};
 use crate::assistant::owner_action::{self as child, kinds};
+use crate::assistant::scratch::AttachedReview;
 use kinds::{Action, Class};
 
-const FIELDS: &str = "kind, target?, args?, expected_revision?, input";
+const FIELDS: &str = "kind, target?, args?, expected_revision?, input, review?, slices?, messages?";
 /// Output and refusal text a settled receipt keeps.
 const EXCERPT_MAX: usize = 2048;
 /// The reserved result, which names the exact argv, leaves room for the excerpt beside it.
@@ -49,6 +50,13 @@ struct Payload {
     #[serde(default)]
     expected_revision: Option<u64>,
     input: String,
+    /// Host fields, deliberately absent from the model's tool schema and command flags.
+    #[serde(default)]
+    review: Option<AttachedReview>,
+    #[serde(default)]
+    slices: Vec<corral_core::build_record::RecordSlice>,
+    #[serde(default)]
+    messages: Vec<corral_core::build_record::RecordMessage>,
 }
 
 fn reject(code: RejectCode, reason: impl Into<String>) -> anyhow::Error {
@@ -142,14 +150,25 @@ fn base(action: &Action, cited: &Cited) -> Value {
         "class": if cited.confirm_class { Class::Confirm.as_str() } else { action.class.as_str() },
         "input": cited.input.id, "sha256": cited.input.sha256,
         "confirmation": confirmation.map(|entry| &entry.id),
-        "confirmed": action.kind == "finish" || confirmation.is_some_and(|entry| entry.text == "y"),
+        "confirmed": matches!(action.kind, "finish" | "finish_here") || confirmation.is_some_and(|entry| entry.text == "y"),
     })
+}
+
+fn reservation_base(action: &Action, cited: &Cited, payload: &Payload) -> Value {
+    let mut result = base(action, cited);
+    if action.kind == "finish_here" {
+        result["finish_here_evidence"] = json!({
+            "review": payload.review, "slices": payload.slices, "messages": payload.messages,
+        });
+    }
+    result
 }
 
 /// A settled result: the reservation's fields without its argv, plus the outcome.
 fn with(mut base: Value, extra: Value) -> Value {
     if let (Some(fields), Value::Object(extra)) = (base.as_object_mut(), extra) {
         fields.remove("argv");
+        fields.remove("finish_here_evidence");
         fields.extend(extra);
     }
     base
@@ -215,6 +234,14 @@ fn refusal_code(reason: &str) -> &'static str {
         "conflict_in_flight"
     } else if reason.contains("stale_revision") || reason.contains("stale revision") {
         "stale_revision"
+    } else if reason.contains("stale_candidate:") {
+        "stale_candidate"
+    } else if reason.contains("landing_stale:") {
+        "landing_stale"
+    } else if reason.contains("in_session_finish_disabled:") {
+        "in_session_finish_disabled"
+    } else if reason.contains("review_required:") {
+        "review_required"
     } else {
         "refused"
     }
@@ -306,6 +333,13 @@ fn finished(
         }
     };
     Ok(match output.status.code() {
+        Some(0) if base["kind"] == "finish_here" => {
+            let result: Value = serde_json::from_slice(&output.stdout)
+                .context("reading structured finish_here action result")?;
+            let mut result = with(base, result);
+            result["outcome"] = json!("executed");
+            (ReceiptState::Committed, result)
+        }
         Some(0) => (
             ReceiptState::Committed,
             with(
@@ -369,7 +403,7 @@ fn reserve(
                     format!("the container already holds {RECEIPTS_MAX} receipts"),
                 ));
             }
-            let mut result = base(action, &cited);
+            let mut result = reservation_base(action, &cited, payload);
             result["outcome"] = json!("reserved");
             let receipt = RequestReceipt {
                 version: AGENT_RECORD_VERSION,
@@ -513,6 +547,14 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         &payload.args,
         payload.expected_revision,
     )?;
+    if payload.kind != "finish_here"
+        && (payload.review.is_some() || !payload.slices.is_empty() || !payload.messages.is_empty())
+    {
+        return Err(reject(
+            RejectCode::BadRequest,
+            "host build evidence is only valid for finish_here",
+        ));
+    }
     let Resolved::Assistant(assistant, _) = &admitted.resolved else {
         anyhow::bail!("owner_action resolved no assistant container");
     };
@@ -560,7 +602,7 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         .with_detail(json!({"command": action.command, "kind": action.kind, "prompt": prompt}))
         .into());
     }
-    if serde_json::to_vec(&base(&action, &cited))?.len() > BASE_MAX {
+    if serde_json::to_vec(&reservation_base(&action, &cited, &payload))?.len() > BASE_MAX {
         return Err(reject(
             RejectCode::BadRequest,
             "the command is too long for one receipt; write long notes to a file and pass it \

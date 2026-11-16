@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { BuildPanelState, ChildSnapshot, FleetControl, FleetSnapshot } from "../../build/types.ts";
+import type { AgentMessage, ChildSnapshot, FleetControl, FleetSnapshot } from "../../build/types.ts";
 import { childHue, childKey } from "./contract.ts";
 import {
   childActions, childAuthors, childRow, childRows, childSpans, dependents, fleetExtras, modelChoices, type ChildActionHost,
@@ -7,14 +7,17 @@ import {
 
 const ORIGIN = 1_000_000, NOW = ORIGIN + 120_000;
 function child(id: string, extra: Partial<ChildSnapshot> = {}): ChildSnapshot {
-  return { id, call: "call-1", title: `Deliver ${id}`, brief: `Brief for ${id}`, owns: [`src/${id}`], after: [], profile: "default",
+  return { id, kind: "slice", call: "call-1", title: `Deliver ${id}`, brief: `Brief for ${id}`, owns: [`src/${id}`], after: [], profile: "default",
     model: "anthropic/model-a", state: "running", createdAt: ORIGIN, startedAt: ORIGIN + 1000, edits: [],
     usage: { input: 10, output: 5, turns: 1 }, steers: [], pulse: [1, 2], history: "r", messages: [], ...extra };
 }
-function fleet(children: readonly ChildSnapshot[]): FleetSnapshot { return { children, maxParallel: 3, startedAt: ORIGIN }; }
+function fleet(children: readonly ChildSnapshot[]): FleetSnapshot { return { children, mail: [], maxParallel: 3, startedAt: ORIGIN }; }
 function control(snapshot: () => FleetSnapshot, calls: string[][]): FleetControl {
   return {
     snapshot, steer: async () => true, answer: () => true, subscribe: () => () => {},
+    message: async () => { throw new Error("Unused fixture messaging"); },
+    roster: () => [],
+    wait: async () => [],
     cancel(id) { calls.push(["cancel", id]); return true; },
     setModel(id, model) { calls.push(["setModel", id, model]); },
     models: () => ["anthropic/model-a", "anthropic/model-deep", "openai/model-b"],
@@ -158,16 +161,43 @@ test("Changes authors OR the outside flag across repeated edits and leave out ch
   expect([...authors[0]?.paths ?? []]).toEqual([["x.ts", true], ["y.ts", false]]);
 });
 
-test("fleetExtras is absent outside build and carries the fleet's rows, parallel cap and origin inside it", () => {
+test("fleetExtras is absent without a fleet and carries the fleet's rows, parallel cap, message count and origin with one", () => {
   expect(fleetExtras(undefined, NOW)).toBeUndefined();
-  const state: BuildPanelState = {
-    session: { version: 1, id: "B-1", name: "save-slots", created: "2026-01-01T00:00:00Z", updated: "2026-01-01T00:00:00Z", repoRoot: "/repo",
-      worktree: "/repo/.worktrees/build-save-slots", branch: "build/save-slots", base: null, here: false },
-    settings: { exitPolicy: "gate", maxParallel: 3, profiles: [] },
-    fleet: fleet([child("a"), child("b", { state: "queued", after: ["a"] })]), target: "parent", exit: { phase: "none" }, board: [],
-  };
-  const extras = fleetExtras(state, NOW);
+  const mail: AgentMessage[] = [{ seq: 1, at: ORIGIN + 10, from: "a", to: "b", text: "hi", delivery: "delivered" }];
+  const shown: FleetSnapshot = { ...fleet([child("a"), child("b", { state: "queued", after: ["a"] })]), mail };
+  const extras = fleetExtras(shown, NOW);
   expect(extras?.agents.map(row => row.id)).toEqual(["a", "b"]);
   expect(extras?.maxParallel).toBe(3);
+  expect(extras?.messages).toBe(1);
   expect(extras?.origin).toBe(ORIGIN);
+  expect(fleetExtras(fleet([child("a")]), NOW)?.messages).toBeUndefined();
+});
+
+test("a message between two children reaches both conversations; one to all reaches the children live when it was sent", () => {
+  const mail: AgentMessage[] = [
+    { seq: 1, at: ORIGIN + 5000, from: "a", to: "b", text: "A_TO_B", delivery: "delivered" },
+    { seq: 2, at: ORIGIN + 6000, from: "parent", to: "all", text: "TO_ALL", delivery: "delivered" },
+    { seq: 3, at: ORIGIN + 7000, from: "b", to: "parent", text: "B_TO_PARENT", delivery: "undeliverable" },
+  ];
+  const children = [child("a"), child("b"), child("c", { state: "done", endedAt: ORIGIN + 2000 })];
+  const snapshot: FleetSnapshot = { ...fleet(children), mail };
+  const rowOf = (id: string) => childRow(children.find(entry => entry.id === id)!, snapshot, NOW);
+  expect(rowOf("a").mail?.map(message => message.text)).toEqual(["A_TO_B", "TO_ALL"]);
+  expect(rowOf("b").mail?.map(message => message.text)).toEqual(["A_TO_B", "TO_ALL", "B_TO_PARENT"]);
+  expect(rowOf("c").mail).toEqual([]);
+  // Each child side keeps its hue; `parent` and `all` have none.
+  const b = rowOf("b").mail!;
+  expect(b[0]?.fromHue).toBe(childHue(snapshot, "a"));
+  expect(b[1]?.fromHue).toBeUndefined();
+  expect(b[2]?.delivery).toBe("undeliverable");
+});
+
+test("a review child names its kind and its recorded verdict; a slice names no kind", () => {
+  const review = child("check", { kind: "review", state: "done", endedAt: NOW - 1000,
+    verdict: { verdict: "changes", summary: "One issue", findings: [{ severity: "major", path: "src/a.ts", line: 3, text: "t" }], at: NOW - 1000 } });
+  const row = childRow(review, fleet([review]), NOW);
+  expect(row.profile).toContain("review");
+  expect(row.activity).toContain("1 major");
+  expect(row.notes.some(note => note.text.includes("1 major"))).toBeTrue();
+  expect(childRow(child("s"), fleet([child("s")]), NOW).profile).not.toContain("slice");
 });

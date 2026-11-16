@@ -22,7 +22,7 @@ pub fn list_keys_live(destination: Destination, top: Option<&Live>) -> &'static 
         (Destination::Inbox, None) => LIVE_INBOX,
         (Destination::Now, None | Some(Live::Task(_))) => LIVE_MOVE_OPEN,
         (Destination::Review, None | Some(Live::Review(_))) => MENU,
-        (Destination::Plans, _) => MOVE,
+        (Destination::Plans | Destination::Builds, _) => MOVE,
         _ => &[],
     }
 }
@@ -51,6 +51,7 @@ pub fn key_legend_live(
             legend
         }
         (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member")],
+        (Destination::Builds, _) => vec![("j k", "build")],
         (Destination::Review, _) => vec![("s", "split"), (".", "actions")],
         _ => Vec::new(),
     }

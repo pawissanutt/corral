@@ -10,6 +10,8 @@ mod totals;
 mod window;
 
 pub use completeness::completeness_label;
+/// Shared with Builds, whose usage figures read the same way.
+pub(crate) use live::tokens;
 pub use live::{Inputs, page as live_page, series_request};
 
 use crate::model::Effect;
@@ -104,7 +106,7 @@ fn percent(value: f32) -> u32 {
     (value * 100.0).round() as u32
 }
 /// Dollars: whole above ten (`$1,061`), cents below (`$7.60`).
-fn money(value: f64) -> String {
+pub(crate) fn money(value: f64) -> String {
     if value >= 10.0 {
         format!("${}", count(value.round() as u64))
     } else {

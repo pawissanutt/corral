@@ -141,9 +141,10 @@ test("a fresh corral process reaches the host through ctl.cap alone; a wrong or 
   expect(first.state.generation).toBe(1);
   expect(first.state.interactive).toBeTrue();
   expect([...(first.state.active_tools as string[])].sort()).toEqual([
+    "agent_cancel", "agent_message", "agent_roster", "agent_wait",
     "browser_navigate", "browser_screenshot", "codemode", "corral_receipt_lookup", "explore", "mcp_activate", "mcp_connect",
     "mcp_read_resource", "mcp_resources",
-    "read", "tool_search", "web_fetch", "web_read", "web_search",
+    "read", "task", "tool_search", "web_fetch", "web_read", "web_search",
   ]);
   const dir = generationDir(workspace, "T-001", "R1", 1);
   for (const cap of [undefined, "f".repeat(64)]) {

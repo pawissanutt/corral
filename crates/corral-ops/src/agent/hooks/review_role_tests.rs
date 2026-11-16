@@ -364,6 +364,8 @@ fn review_run_binds_the_parent_run_review_child_and_callback_token_from_the_laun
             "hello",
             "event",
             "receipt_lookup",
+            "peer_send",
+            "peer_roster",
             "ask",
             "withdraw",
             "evidence",

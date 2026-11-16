@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { BuildContext, ChildSpec } from "../src/build/types.ts";
+import type { BuildContext, ChildKind, ChildSpec } from "../src/build/types.ts";
 import { FleetRuntime } from "../src/extensions/fleet/runtime.ts";
 import { createSdkRunner, type ChildHandle, type ChildHooks, type ChildRunner } from "../src/extensions/fleet/child.ts";
 import { resolveModel, resolveProfiles } from "../src/extensions/fleet/profiles.ts";
@@ -43,7 +43,7 @@ function fixture(maxParallel = 2) {
     session: { version: 1, id: "B-test", name: "test", created: "", updated: "", repoRoot: "/repo", worktree: "/repo/.worktrees/build-test", branch: "build/test", base: null, here: false } };
   const runtime = new FleetRuntime({ sdk: {} as typeof Sdk, models: { getModels: () => [] } as unknown as ModelRuntime,
     approved: ["approved"], parent: { provider: "approved", model: "parent", effort: "high" }, context, agentDir: "/data/agent", localTools: [],
-    runner, now: () => now, changed: () => { notifications++; } });
+    runner, deliverToParent() {}, now: () => now, changed: () => { notifications++; } });
   return { runtime, runner, context, advance(ms: number) { now += ms; }, notifications: () => notifications };
 }
 async function flush(): Promise<void> { for (let i = 0; i < 8; i++) await Promise.resolve(); }
@@ -73,7 +73,8 @@ describe("FleetRuntime", () => {
     runner.finish("dependent"); await success;
     const failure = runtime.start("failure", [spec("blocked", { after: ["broken"] }), spec("broken")]);
     runner.finish("broken", "provider failed");
-    const children = await failure;
+    await failure;
+    const children = await runtime.wait(["blocked", "broken"]);
     expect(children[0]!.state).toBe("cancelled");
     expect(children[0]!.error).toContain("broken");
     expect(runner.order).not.toContain("blocked");
@@ -90,6 +91,7 @@ describe("FleetRuntime", () => {
     expect(runner.children.get("b")!.signal.aborted).toBe(false);
     expect(runtime.snapshot().children.find(child => child.id === "b")!.state).toBe("running");
     runner.finish("b"); await work;
+    await runtime.wait(["a", "b"]);
     expect(await runtime.steer("b", "too late")).toBe(false);
     expect(runtime.cancel("b")).toBe(false);
     expect(runtime.snapshot().children[1]!.steers).toEqual(["Keep the API"]);
@@ -153,16 +155,15 @@ describe("FleetRuntime", () => {
     runner.finish("a"); await work; await runtime.close();
   });
 
-  test("aborting a call cancels only its live children, including queued slices", async () => {
+  test("aborting a task call leaves its registered children running or queued", async () => {
     const { runtime, runner } = fixture(2);
     const controller = new AbortController();
-    const first = runtime.start("first", [spec("a"), spec("b"), spec("c")], controller.signal);
-    const second = runtime.start("second", [spec("d")]);
-    controller.abort(); await first; await flush();
-    expect(runtime.snapshot().children.filter(child => child.call === "first").map(child => child.state)).toEqual(["cancelled", "cancelled", "cancelled"]);
-    expect(runner.order).not.toContain("c");
-    expect(runner.children.get("d")!.signal.aborted).toBe(false);
-    runner.finish("d"); await second; await runtime.close();
+    const children = await runtime.start("first", [spec("a"), spec("b"), spec("c")], controller.signal);
+    controller.abort();
+    expect(children.map(child => child.state)).toEqual(["running", "running", "queued"]);
+    expect(runtime.snapshot().children.map(child => child.state)).toEqual(["running", "running", "queued"]);
+    expect(runner.children.get("a")!.signal.aborted).toBe(false);
+    await runtime.close();
   });
 
   test("caps pulse buckets and messages, preserves historical state and immutable copies", async () => {
@@ -186,7 +187,8 @@ describe("FleetRuntime", () => {
     expect(runtime.snapshot().children[0]!.history.length).toBe(240);
     expect(before.children[0]!.pulse).toEqual([7, 0, 0]);
     runner.children.get("a")!.finish({ report: "x".repeat(40000) }); await flush(); runner.finish("b");
-    const children = await work;
+    await work;
+    const children = await runtime.wait(["a", "b"]);
     expect(children[0]!.report?.length).toBe(32768);
     await runtime.close();
   });
@@ -205,7 +207,7 @@ type GuardEvent = { toolName: string; input: Record<string, unknown>; parentTool
 type Guard = (event: GuardEvent) => { block: boolean; reason: string } | undefined;
 
 /** Capture the actual child extension guard without a provider or real SDK session. */
-async function childGuard(): Promise<Guard> {
+async function childGuard(kind: ChildKind = "slice"): Promise<Guard> {
   const dir = mkdtempSync(join(tmpdir(), "fleet-guard-"));
   let guard: Guard | undefined;
   const { context, runtime } = fixture();
@@ -232,8 +234,9 @@ async function childGuard(): Promise<Guard> {
     const runner = createSdkRunner({ sdk: fakeSdk, models: { getModel: () => ({}) } as unknown as ModelRuntime,
       context: { ...context, dir }, agentDir: dir, localTools,
       shellRefusal: command => command.includes(".corral") ? "Reserved .corral path" : undefined });
-    const handle = runner.run(spec("guard"), { profile: "default", provider: "approved", model: "parent" },
-      { onEvent() {}, onToolStart() {}, onTurn() {}, async ask() { return ""; } }, new AbortController().signal);
+    const handle = runner.run(spec("guard", { kind }), { profile: "default", provider: "approved", model: "parent" },
+      { onEvent() {}, onToolStart() {}, onTurn() {}, async ask() { return ""; },
+        openingPrompt: () => "", roster: async () => "", message: (to, text, options) => runtime.message("parent", to, text, options), reviewVerdict() {} }, new AbortController().signal);
     const result = await handle.done;
     expect(result.failed).toBeUndefined();
     expect(guard).toBeDefined();
@@ -280,12 +283,38 @@ test("child Git guard retains quoted global-option values and checks compound co
   }
 });
 
-test("cancelling a running child waits for its final report and usage without an owner error", async () => {
+test("explore children cannot edit, write, run shell commands, or delegate", async () => {
+  const guard = await childGuard("explore");
+  for (const toolName of ["edit", "write", "bash", "task", "agent_wait", "agent_cancel"]) {
+    expect(guard({ toolName, input: { path: "src/file.ts", command: "git status" } })?.block).toBe(true);
+  }
+  for (const toolName of ["read", "grep", "find", "ls", "agent_message", "agent_roster"]) {
+    expect(guard({ toolName, input: {} })).toBeUndefined();
+  }
+});
+
+test("review children admit only complete read-only Git commands", async () => {
+  const guard = await childGuard("review");
+  for (const command of ["git status --short", 'git -C "/work/my repo" diff -- src', "git log -3 && git show HEAD"]) {
+    expect(guard({ toolName: "bash", input: { command } })).toBeUndefined();
+  }
+  for (const command of ["cat src/a", "git status && touch file", "git diff > git status", "git reset --hard", "git status; echo hi",
+    "git log $(git status)", "git diff --output=out", "git -c core.pager=evil --paginate log"]) {
+    expect(guard({ toolName: "bash", input: { command } })?.block).toBe(true);
+  }
+  for (const toolName of ["edit", "write", "job_start", "task", "agent_wait", "agent_cancel"]) {
+    expect(guard({ toolName, input: { path: "src/a", command: "git status" } })?.block).toBe(true);
+  }
+  expect(guard({ toolName: "review_verdict", input: {} })).toBeUndefined();
+});
+
+test("agent_wait collects a cancelled child's final report and usage without an owner error", async () => {
   const { runtime, runner } = fixture(2);
   runner.finishOnAbort = false;
+  await runtime.start("cancelled-call", [spec("stopping")]);
+  await runtime.start("other-call", [spec("other")]);
   let returned = false;
-  const call = runtime.start("cancelled-call", [spec("stopping")]).then(children => { returned = true; return children; });
-  const other = runtime.start("other-call", [spec("other")]);
+  const collected = runtime.wait(["stopping"]).then(children => { returned = true; return children; });
   try {
     expect(runtime.cancel("stopping")).toBe(true);
     expect(runner.children.get("stopping")!.signal.aborted).toBe(true);
@@ -295,10 +324,10 @@ test("cancelling a running child waits for its final report and usage without an
     expect(returned).toBe(false);
     expect(runner.children.get("other")!.signal.aborted).toBe(false);
     runner.children.get("stopping")!.finish({ report: "Final cleanup report", failed: "aborted" });
-    const [stopped] = await call;
+    const [stopped] = await collected;
     expect(stopped!.state).toBe("cancelled");
     expect(stopped!.error).toBeUndefined();
     expect(stopped!.report).toBe("Final cleanup report");
     expect(stopped!.usage).toEqual({ input: 100, output: 200, turns: 1 });
-  } finally { runner.finish("stopping"); runner.finish("other"); await Promise.all([call, other]); await runtime.close(); }
+  } finally { runner.finish("stopping"); runner.finish("other"); await collected; await runtime.close(); }
 });

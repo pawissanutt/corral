@@ -96,6 +96,7 @@ pub(crate) fn press_id(press: &Press) -> String {
         Press::Open(Live::Question(_)) => "btn-answer".into(),
         Press::Open(Live::Review(_)) => "btn-review".into(),
         Press::Open(Live::Thread(id)) => format!("thread-{id}"),
+        Press::Open(Live::Build(id)) => format!("build-{id}"),
         Press::Ask { .. } => "btn-ask-about".into(),
         Press::Verb { verb, .. } => format!("btn-{}", verb.slug()),
         Press::SubmitVerb(_) => "btn-verb-send".into(),

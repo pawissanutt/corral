@@ -1676,6 +1676,13 @@ Corral, not the model, decides what a role may call: the worker's contract
 (`assets/worker-contract.md`) and the installed corral-worker skill are appended to its prompt,
 and every request is checked against the bound run on the Rust side.
 
+For a non-trivial change, a worker with `review` children runs an advisory review of the final
+committed candidate, addresses agreed findings and reports the verdict and any findings left.
+This does not replace independent review. `corral_done` returns `review_running` until a live
+review child is collected with `agent_wait` or cancelled with `agent_cancel`. When children or
+messages exist, the host attaches a `Session record` report artifact at completion; an
+attachment failure is reported but does not prevent done.
+
 **First turn.** A fresh worker session starts its first turn itself, once Pi binds the role's
 extension, which happens after the host's hello: the message names the run's prompt file and
 says to call the matching corral tool wherever the prompt names a corral command that changes
@@ -1882,7 +1889,7 @@ host it starts depends on where it runs and its flags:
 | `corral pi --resume A-<n>` | that assistant's next generation in this pane |
 | `corral pi --pm` | a fresh PM conversation in this pane (below) |
 | `corral pi --pm -c` | continue the previous PM conversation in this pane |
-| `corral pi` outside a workspace, or `corral pi --bare` | plain Pi; outside a workspace with a one-line notice |
+| `corral pi` outside a workspace, or `corral pi --bare` | a bare build session; outside a workspace with a one-line notice |
 
 The launch line names what opened (`assistant A-1 (role assistant) in pane ...`). `--pm`,
 `--assistant`, `--resume A-<n>`, `--task` and `--over-cap` outside a workspace refuse
@@ -2003,38 +2010,47 @@ it once that host is gone, so `corral agent resume --pm` refuses `pane_adopted` 
 a live host after verifying its pid, start time and command. Opening the PM in another pane
 (`corral pm` after the pane is gone) ends the adoption.
 
-**Plain Pi: `corral pi --bare`.** This starts unbound Pi in the current directory, inside or
-outside herdr and a corral workspace. Plain `corral pi` outside any workspace does the same
-after printing a one-line notice that no corral workspace was found. There is no bootstrap, generation, nonce, bridge socket,
-hello, role or delivery module, and no `corral_*` tool: only Pi's own read, edit, write, bash,
-grep, find and ls. It runs the installed assets' pinned Pi SDK: a release installation's compiled
-host runs its own bare mode (`corral-pi-host bare`) with its embedded Bun and bundled auth module,
-so no Bun is needed on PATH, and a source installation runs under Bun after the same Bun range
-and lock checks. `--provider` chooses the initial provider (default `openai-codex`; run `corral agent
+**Bare build: `corral pi --bare`.** This starts a build session inside or outside a corral
+workspace, without reading workspace, project or config state or invoking `corral` from the
+host. It has child agents and local session records, but no board or gate tool. It accepts
+`--here`, `--name`, `--model`, `--provider` and `--effort`; `corral pi --resume <id>` resumes
+the session. In Git, Land rebases and fast-forwards the branch the session started from without
+a gate; outside Git only Keep and Iterate are offered. The installed assets' pinned Pi SDK runs
+in the compiled host with embedded Bun, or under Bun for a source installation after its
+Bun range and lock checks. `--provider` chooses the initial provider (default `openai-codex`; run `corral agent
 login --provider <p>` first), not the session's provider boundary. The model picker exposes every
 supported provider with a corral-owned subscription login, so you can switch between OpenAI
 and Claude in the same session. Missing optional logins are explained at startup; log in and
 restart to include them. Bound runs retain the provider selected by their run contract.
 Bare mode uses the same guarded fetch, restrictions and model lanes as the
-bound host: Anthropic runs through the Claude Agent SDK lane, with Claude Code's private config
-directory in `$XDG_DATA_HOME/corral/corral-pi/bare/agent/claude-code/`. `--model` defaults to
-Pi's own default for the provider. Sessions are kept in
-`$XDG_DATA_HOME/corral/corral-pi/bare/sessions/` (Pi's agent directory beside it), and nothing
-is written to `.corral/`. It refuses `assets_unavailable` without an installation,
-`bare_unavailable` when a source installation predates `corral pi` (reinstall with `corral
-agent install`), and `credentials_unavailable` without the provider's login.
+bound host: Anthropic runs through the Claude Agent SDK lane. `--model` defaults to
+Pi's own default for the provider. Sessions are stored as `<data_root>/build/<id>/session.json`
+with `bare: true`; old sessions under `<data_root>/bare/sessions/` remain on disk but are not
+listed. Nothing is written to `.corral/`. Launch refuses `assets_unavailable` without an
+installation, `bare_unavailable` when the installation lacks bare support, and
+`credentials_unavailable` without the provider's login.
 
 ## Explore children and oracle
 
-`explore` researches one prompt in a separate read-only session. Concurrent calls are FIFO queued
-above `subagents.max_parallel` (default 3). Standard enables it for workers and native planning
-roles; reviewers need full or an explicit override, and PM cannot use it. Children inherit only
-parent-enabled read/grep/find/ls and read LSP/web tools. They have no shell, writes, MCP, hooks,
-Corral operations or recursive delegation. Both direct and nested calls use the final execution
-check. Each model-visible result names its request, initiating generation, transcript, status
-(`completed`, `partial`, `failed`) and stop reason; findings are capped at 32,768 characters with
-an explicit truncation notice. Partial or failed results are not proof that the question is answered.
-Turn cancellation, host shutdown and parent fencing cancel outstanding work.
+Every bound role has `agent_message` and `agent_roster` for children and other sessions.
+The `subagents` capability enables read-only `explore` children: the `explore` tool retains
+its one-shot request and result shape but runs as a fleet child visible in the roster.
+The `fleet` capability gives workers write-capable `slice` and read-only `review` children,
+and assistants `review` children. Strict disables fleet; standard and full enable it for
+workers and assistants. Configure `[agent.capabilities.worker.fleet]` or
+`[agent.capabilities.assistant.fleet]`: `max_parallel` is 1–32 (default 3), `max_turns`
+1–200 (default 60), and `timeout_secs` 60–7200 (default 1800). Slice and review children
+share the fleet concurrency limit. `task` returns child IDs immediately; reports arrive as
+messages, and `agent_wait` blocks to collect them. `agent_cancel` cancels a child.
+
+Children have no Corral operations, MCP, hooks or recursive delegation. A worker's slice
+children are confined to its worktree; the worker parent itself has no write guard. Explore
+children inherit only parent-enabled read/grep/find/ls and read LSP/web tools. Each bound child
+of kind `explore`, `slice` or `review` is recorded before it spends, and its usage is attributed
+to the parent run. Each explore result names its request, initiating generation, transcript,
+status (`completed`, `partial`, `failed`) and stop reason; findings are capped at 32,768
+characters with an explicit truncation notice. Partial or failed results are not proof that the
+question is answered. Turn cancellation, host shutdown and parent fencing cancel outstanding work.
 
 The last allowed research request is reserved for tool-free synthesis, within the existing turn
 ceiling, not an extra call after exhaustion. Near the deadline, the next request also switches to
@@ -2058,8 +2074,8 @@ missing search configuration rather than inventing sources; it does not enable w
 Use direct tools for trivial lookups. For substantial independent research, give two or three
 children non-overlapping questions and run them concurrently (for example using codemode
 `Promise.all`), while doing separate useful work in the parent. Collect and reconcile cited findings
-and coverage before answering. Helpers are not Corral independent reviewers. This API is still
-one-shot; persistent background handles and child follow-up are not provided.
+and coverage before answering. Fleet review children are advisory, not Corral independent
+reviewers. `oracle`, `expert` and host-run plan review use the older helper runtime.
 
 `oracle` is a single tool-free consultation, full-only by default for every role. It requires a
 configured model; an absent model gives setup guidance without a provider request. Both tools

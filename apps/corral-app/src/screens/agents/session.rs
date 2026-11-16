@@ -6,7 +6,8 @@
 //! terminal is its pane's bounded scrollback and screen, streamed while it shows and scrolling
 //! inside its surface, with the reply under it (docked on the phone) so the owner answers
 //! without leaving it; an assistant's reply is the shared composer on its thread
-//! (`reply::region`).
+//! (`reply::region`). A session running child agents lists them and their messages under the
+//! run (`transcript::fleet`), and on the phone in a fold under the bar.
 
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
@@ -29,7 +30,7 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::console::{self, BIG, PHONE, PHONE_SCREEN, SCREEN};
-use super::transcript::{line, transcript};
+use super::transcript::{fleet, line, transcript};
 use super::{controls, grid, keys, reply, run};
 
 /// The run column's width (`minmax(0, 1fr) 280px`).
@@ -348,6 +349,7 @@ fn key_cap(key: &'static str) -> AnyElement {
 fn transcript_view(app: AppState, session: Memo<Session>, draft: Signal<String>) -> AnyElement {
     let page = computed(move || session.with(|s| s.transcript.clone()));
     let details = computed(move || session.with(|s| s.run_details.clone()));
+    let children = computed(move || session.with(|s| s.fleet.clone()));
     let shown = dynamic(move || page.with(|page| transcript(app, page)));
     let surface = console::follow_end(
         scroll()
@@ -377,7 +379,15 @@ fn transcript_view(app: AppState, session: Memo<Session>, draft: Signal<String>)
                 context(
                     app,
                     "session-run",
-                    dynamic(move || details.with(|run| run_details(app, run))),
+                    view()
+                        .child(dynamic(move || details.with(|run| run_details(app, run))))
+                        .child(dynamic(move || {
+                            children.with(|children| match children {
+                                Some(children) => fleet::column(app, children),
+                                None => view().into_element(),
+                            })
+                        }))
+                        .into_element(),
                 ),
             ),
         ],
@@ -616,6 +626,7 @@ fn live_phone_body(app: AppState, session: Memo<Session>, switcher: AnyElement) 
         .min_h(px(0.0))
         .child(view().flex_none().child(switcher))
         .child(controls::bar(app, session))
+        .child(fleet::phone(app, session))
         .child(dynamic(move || {
             let (terminal, note) = shape.get();
             untracked(move || {

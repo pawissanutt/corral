@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ownerRun, json, type Run } from "../src/build/corral-cli.ts";
-import { createExit } from "../src/build/exit.ts";
+import { createExit, type ExitProgressRecord } from "../src/build/exit.ts";
+import { createJournal } from "../src/build/record.ts";
 import { summarize } from "../src/build/git.ts";
-import type { BuildContext, ExitControl, ExitPolicy, ExitRecord, FleetSnapshot } from "../src/build/types.ts";
+import type { GateReceipt } from "../src/build/record-types.ts";
+import type { BuildContext, ChildSnapshot, ExitPolicy, ExitRecord, FleetSnapshot } from "../src/build/types.ts";
 
 const head = "a".repeat(40), base = "b".repeat(40);
-const fleet: FleetSnapshot = { children: [], maxParallel: 3 };
+const fleet: FleetSnapshot = { children: [], mail: [], maxParallel: 3 };
 function context(policy: ExitPolicy = "gate"): BuildContext {
-  return { corral: "corral", dir: "/sessions/B-one", settings: { exitPolicy: policy, maxParallel: 3, profiles: [] }, session: {
-    version: 1, id: "B-one", name: "Build parser", created: "2026-01-01T00:00:00Z", updated: "2026-01-01T00:00:00Z",
+  return { corral: "corral", dir: "/unused", settings: { exitPolicy: policy, maxParallel: 3, profiles: [] }, session: {
+    version: 1, id: "B-one", name: "parser", created: "2026-01-01T00:00:00Z", updated: "2026-01-01T00:00:00Z",
     repoRoot: "/repo", worktree: "/repo/.worktrees/build-parser", workspaceRoot: "/workspace", project: "app",
     here: false, branch: "build/parser", base,
   } };
@@ -16,239 +22,157 @@ function context(policy: ExitPolicy = "gate"): BuildContext {
 function git(dirty = false, commits = 2, calls: string[][] = [], branch: string | null = "build/parser"): Run {
   return async argv => {
     calls.push([...argv]);
-    const stdout = argv[0] === "rev-parse" ? (argv[1] === "HEAD" ? head : branch ?? "HEAD")
-      : argv[0] === "rev-list" ? String(commits) : argv[0] === "diff" ? "4\t2\tsrc/parser.ts\n-\t-\timage.png\n"
+    const stdout = argv[0] === "rev-parse" ? (argv.includes("--abbrev-ref") ? branch ?? "HEAD" : argv[1] === "HEAD" ? head : base)
+      : argv[0] === "merge-base" ? base : argv[0] === "rev-list" ? String(commits)
+      : argv[0] === "diff" ? argv.includes("--numstat") ? "4\t2\tsrc/parser.ts\n-\t-\timage.png\n" : "patch"
       : argv[0] === "status" ? (dirty ? " M src/parser.ts\n" : "") : "";
     return { code: 0, stdout, stderr: "" };
   };
 }
-function scripted(steps: readonly { argv: readonly string[]; value?: unknown; error?: string }[], events: string[]): Run {
-  let index = 0;
-  return async (argv, options) => {
-    const step = steps[index++];
-    expect(options.cwd).toBe("/workspace");
-    expect(argv).toEqual(step?.argv);
-    events.push(argv.join(" "));
-    return { code: step?.error ? 1 : 0, stdout: step?.value === undefined ? "" : JSON.stringify(step.value), stderr: step?.error ?? "" };
+function receipt(attempt = "G1", result: GateReceipt["result"] = "pass"): GateReceipt {
+  return { attempt, tier: "full", head, result, commands: ["check"], started: "2026-01-01T00:00:00Z", ended: "2026-01-01T00:01:00Z",
+    receipt: `/logs/${attempt}.json`, log: `/logs/${attempt}.log`, ...(result === "fail" ? { failed_command: "check" } : {}) };
+}
+function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; stale?: boolean; conflict?: boolean; patchChanged?: boolean; publishFailure?: boolean } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "build-exit-"));
+  const ctx = { ...context(settings.policy), dir };
+  const events: string[] = [], records: ExitRecord[] = [], calls: string[][] = [];
+  let gates = 0, lands = 0, rebased = false;
+  const underlying = git(false, 2, calls);
+  const gitRun: Run = async (argv, options) => {
+    if (argv[0] === "rebase") {
+      events.push(argv.includes("--abort") ? "abort" : "rebase"); rebased = true;
+      return { code: settings.conflict && !argv.includes("--abort") ? 1 : 0, stdout: "", stderr: "conflict" };
+    }
+    if (argv.includes("--diff-filter=U")) return { code: 0, stdout: "src/parser.ts\n", stderr: "" };
+    if (argv.includes("--binary") && settings.patchChanged && rebased) return { code: 0, stdout: "changed patch", stderr: "" };
+    return underlying(argv, options);
   };
+  const run: Run = async (argv, options) => {
+    calls.push([...argv]);
+    if (argv[0] !== "build") throw new Error(`Unexpected corral ${argv.join(" ")}`);
+    if (argv[1] === "record") {
+      events.push("record");
+      expect(JSON.parse(readFileSync(argv[3]!, "utf8")).id).toBe(ctx.session.id);
+      return { code: settings.publishFailure ? 1 : 0, stdout: JSON.stringify({ id: ctx.session.id, revision: 1 }), stderr: settings.publishFailure ? "disk full" : "" };
+    }
+    if (argv[1] === "gate") {
+      events.push("gate"); gates++;
+      expect(options.timeoutMs).toBe(7_200_000);
+      expect(argv).toContain("full"); expect(argv).toContain(base);
+      return { code: 0, stdout: JSON.stringify(receipt(`G${gates}`, settings.failGate ? "fail" : "pass")), stderr: "" };
+    }
+    if (argv[1] === "land") {
+      events.push("land"); lands++;
+      expect(argv.slice(-5)).toEqual(["--expected-head", head, "--gate-attempt", `G${gates}`, "--json"]);
+      return settings.stale && lands === 1 ? { code: 1, stdout: "", stderr: "landing_stale: base moved" }
+        : { code: 0, stdout: JSON.stringify({ landed: head, base_branch: "main", previous: base }), stderr: "" };
+    }
+    throw new Error(`Unexpected corral ${argv.join(" ")}`);
+  };
+  const journal = createJournal({ context: ctx, run, git: gitRun, fleet: () => fleet });
+  const control = createExit({ context: ctx, run, git: gitRun, journal, fleet: () => fleet,
+    integrationBranch: async () => "main", save: record => { records.push(record); }, changed() {} });
+  return { ctx, journal, control, events, records, calls, close() { control.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
-function submission() {
-  return [
-    { argv: ["assistant", "create", "--profile", "pi", "--json"], value: { id: "A-42" } },
-    { argv: ["assistant", "scratch", "new", "--project", "app", "--slug", "build-b-one", "--base", base, "--session", "A-42", "--json"],
-      value: { path: "/repo/.worktrees/A-42-build-b-one", branch: "corral/A-42/build-b-one", base } },
-    { argv: ["assistant", "scratch", "finish", "build-b-one", "--title", "Build parser", "--intent", "ship", "--expected-head", head, "--session", "A-42", "--json"],
-      value: { task: "T-7", run: "R1", gate: "queued" } },
-  ];
-}
-async function settled(control: ExitControl) {
-  if (["landed", "failed"].includes(control.state().phase)) return;
-  const { promise, resolve } = Promise.withResolvers<void>();
-  const unsubscribe = control.subscribe(() => {
-    if (["landed", "failed"].includes(control.state().phase)) { unsubscribe(); resolve(); }
-  });
-  await promise;
+function child(id = "parser", kind: ChildSnapshot["kind"] = "slice"): ChildSnapshot {
+  return { id, kind, call: "call", title: "Parser", brief: "Build parser", owns: ["src/parser.ts"], after: [], profile: "default", model: "provider/model",
+    state: "done", createdAt: 1000, startedAt: 1000, endedAt: 4000,
+    edits: [{ path: "docs/usage.md", outside: true, at: 2000 }], usage: { input: 10, output: 20, cost: 0.25, turns: 1 },
+    steers: [], pulse: [], history: "d", messages: [], report: "done" };
 }
 
 describe("build exits", () => {
-  test("ship threads assistant and scratch identities through the fast-forward and finish", async () => {
-    const events: string[] = [], records: ExitRecord[] = [];
-    const underlyingGit = git();
-    const control = createExit({ context: context(), run: scripted(submission(), events),
-      git: async (argv, options) => {
-        if (argv[0] === "-C") {
-          events.push(argv.join(" "));
-          expect(options.cwd).toBe("/workspace");
-          expect(argv).toEqual(["-C", "/repo/.worktrees/A-42-build-b-one", "merge", "--ff-only", head]);
-        }
-        return underlyingGit(argv, options);
-      }, fleet: () => fleet, save: value => { records.push(value); }, changed() {} });
+  test("Land rebases, verifies and lands without handing work to the board", async () => {
+    const f = fixture();
     try {
-      const first = control.choose("ship");
-      expect(control.choose("land")).toBe(first);
-      expect((await first).phase).toBe("shipped");
-      expect(events.map(event => event.split(" ").slice(0, 3).join(" "))).toEqual([
-        "assistant create --profile", "assistant scratch new", "-C /repo/.worktrees/A-42-build-b-one merge", "assistant scratch finish",
-      ]);
-      expect(records.at(-1)).toMatchObject({ choice: "ship", task: "T-7", assistant: "A-42" });
-      await control.choose("ship");
-      expect(events).toHaveLength(4);
-    } finally { control.close(); }
+      expect((await f.control.choose("land")).phase).toBe("landed");
+      expect(f.events.filter(event => event !== "record")).toEqual(["rebase", "gate", "land"]);
+      expect(f.records.at(-1)).toMatchObject({ choice: "land", landed: head, baseBranch: "main", gateAttempt: "G1", progress: { phase: "landed" } });
+      expect(f.records.map(record => (record as ExitProgressRecord).progress?.phase)).toEqual(["rebasing", "verifying", "landing", "landed"]);
+      expect(f.journal.record().outcome).toMatchObject({ state: "landed", landed: head });
+      expect(f.calls.some(argv => argv.some(arg => ["assistant", "waive-review", "sync"].includes(arg)))).toBeFalse();
+    } finally { f.close(); }
   });
-
-  test("finish refusal retains the named assistant and scratch without deleting either", async () => {
-    const steps = submission();
-    const events: string[] = [];
-    const run = scripted([...steps.slice(0, 2), { argv: steps[2]!.argv, error: "scratch_attached: already attached; nothing finished" }], events);
-    const control = createExit({ context: context(), run, git: git(), fleet: () => fleet, save() {}, changed() {} });
+  test("a failing full gate leaves the session open and never lands", async () => {
+    const f = fixture({ failGate: true });
     try {
-      const state = await control.choose("ship");
-      expect(state.phase).toBe("failed");
-      expect(state.detail).toContain("scratch_attached");
-      expect(state.detail).toContain("A-42");
-      expect(state.detail).toContain("/repo/.worktrees/A-42-build-b-one");
-      expect(events).toHaveLength(3);
-    } finally { control.close(); }
+      const state = await f.control.choose("land");
+      expect(state.phase).toBe("failed"); expect(state.detail).toContain("check"); expect(state.detail).toContain("/logs/G1.log");
+      expect(f.events).not.toContain("land");
+      expect(f.journal.record().outcome.state).toBe("open");
+      expect((await f.control.choose("iterate")).phase).toBe("none");
+    } finally { f.close(); }
   });
-
-  test("land waives review, syncs and observes a later landed receipt", async () => {
-    const events: string[] = [], records: ExitRecord[] = [];
-    const run = scripted([...submission(),
-      { argv: ["waive-review", "T-7", "--reason", "build session exit: project policy requires the gate only"] },
-      { argv: ["sync"] },
-      { argv: ["show", "T-7", "--json"], value: { id: "T-7", status: "review", runs: [{ gate: { result: "running" } }] } },
-      { argv: ["show", "T-7", "--json"], value: { id: "T-7", status: "done", landed: { sha: head } } },
-    ], events);
-    const control = createExit({ context: context(), run, git: git(), fleet: () => fleet, save: record => { records.push(record); }, changed() {}, pollMs: 1 });
+  test("landing_stale retries rebase and a fresh full gate", async () => {
+    const f = fixture({ stale: true });
     try {
-      await control.choose("land"); await settled(control);
-      expect(control.state().phase).toBe("landed");
-      expect(records.at(-1)).toMatchObject({ choice: "land", task: "T-7", assistant: "A-42", reviewWaived: true });
-      expect(events).toHaveLength(7);
-    } finally { control.close(); }
+      expect((await f.control.choose("land")).phase).toBe("landed");
+      expect(f.events.filter(event => event !== "record")).toEqual(["rebase", "gate", "land", "rebase", "gate", "land"]);
+      expect(f.control.state().record?.gateAttempt).toBe("G2");
+    } finally { f.close(); }
   });
-
-  test("outside-workspace exit lifecycle and reads remain usable without corral", async () => {
-    const initial = context("review");
-    let commands = 0;
-    const control = createExit({ context: { ...initial, session: { ...initial.session, workspaceRoot: undefined } },
-      run: async () => { commands++; throw new Error("Unexpected corral command"); }, git: git(),
-      fleet: () => fleet, save() {}, changed() {} });
-    const unsubscribe = control.subscribe(() => {});
-    expect(control.state().phase).toBe("none");
-    control.open();
-    expect(control.state().phase).toBe("pending");
-    await control.summary();
-    const options = control.options();
-    for (const choice of ["land", "ship"]) {
-      expect(options.find(option => option.choice === choice)?.unavailable).toBe("This session is outside a corral workspace.");
-    }
-    expect(options.filter(option => !option.unavailable).map(option => option.choice)).toEqual(["keep", "iterate"]);
-    expect((await control.choose("ship")).phase).toBe("failed");
-    expect((await control.choose("iterate")).phase).toBe("none");
-    expect((await control.choose("keep")).phase).toBe("kept");
-    unsubscribe();
-    control.close();
-    control.close();
-    expect(control.state().phase).toBe("kept");
-    expect(control.options().map(option => option.choice)).toEqual(["keep", "land", "ship", "iterate"]);
-    expect(commands).toBe(0);
+  test("review policy requires an approving round or an owner's recorded override", async () => {
+    const f = fixture({ policy: "review" });
+    try {
+      await f.control.summary();
+      const option = f.control.options().find(option => option.choice === "land");
+      expect(option?.unavailable).toBeUndefined(); expect(typeof option?.needsReason).toBe("string");
+      expect((await f.control.choose("land")).phase).toBe("failed"); expect(f.events).not.toContain("rebase");
+      expect((await f.control.choose("land", { overrideReason: "Owner accepts the risk" })).phase).toBe("landed");
+      expect(f.journal.record()).toMatchObject({ outcome: { override_reason: "Owner accepts the risk" }, decisions: [
+        { kind: "exit", text: "land" }, { kind: "exit", text: "land" }, { kind: "override", text: "Owner accepts the risk" },
+      ] });
+    } finally { f.close(); }
   });
-
-  test("policy, empty branches and dirty worktrees disable the appropriate exits", async () => {
-    for (const [policy, dirty, commits, expected] of [
-      ["review", false, 1, ["land"]], ["none", false, 1, ["land", "ship"]],
-      ["gate", true, 1, ["land", "ship"]], ["gate", false, 0, ["land", "ship"]],
-    ] as const) {
-      const control = createExit({ context: context(policy), run: async () => { throw new Error("Unexpected corral command"); },
-        git: git(dirty, commits), fleet: () => fleet, save() {}, changed() {} });
-      try {
-        await control.summary();
-        expect(control.options().filter(option => option.unavailable).map(option => option.choice)).toEqual([...expected]);
-        expect(control.options().map(option => option.choice)).toEqual(["keep", "land", "ship", "iterate"]);
-      } finally { control.close(); }
-    }
+  test("a rebase conflict aborts and names conflicted paths", async () => {
+    const f = fixture({ conflict: true });
+    try {
+      const state = await f.control.choose("land");
+      expect(state.phase).toBe("failed"); expect(state.detail).toContain("src/parser.ts");
+      expect(f.events.filter(event => event !== "record")).toEqual(["rebase", "abort"]);
+    } finally { f.close(); }
   });
-
-  test("here sessions cannot ship detached HEAD or the configured or implicit base", async () => {
-    for (const [branch, integration, blocked] of [[null, "main", true], ["main", "main", true], ["feature", undefined, true], ["feature", "main", false]] as const) {
-      const initial = context();
-      const control = createExit({ context: { ...initial, session: { ...initial.session, here: true, branch } }, integrationBranch: async () => integration,
-        run: async () => { throw new Error("Unexpected corral command"); }, git: git(false, 2, [], branch), fleet: () => fleet, save() {}, changed() {} });
-      try { await control.summary(); expect(Boolean(control.options().find(option => option.choice === "ship")?.unavailable)).toBe(blocked); }
-      finally { control.close(); }
-    }
+  test("a changed rebased patch needs review again even after an approving round", async () => {
+    const f = fixture({ policy: "review", patchChanged: true });
+    try {
+      f.journal.review({ ...child("review-1", "review"), verdict: { verdict: "approve", summary: "Approved", findings: [], head, at: 1000 } }, head);
+      const state = await f.control.choose("land");
+      expect(state.phase).toBe("failed"); expect(state.detail).toContain("build_review");
+      expect(f.events).not.toContain("gate");
+    } finally { f.close(); }
   });
-
-  test("here sessions read the selected projects table from the owner CLI", async () => {
-    const initial = context();
-    const control = createExit({ context: { ...initial, session: { ...initial.session, here: true, branch: "main" } },
-      run: async (argv, options) => {
-        expect(argv).toEqual(["--root", "/workspace", "config", "get", "projects"]);
-        expect(options.cwd).toBe("/workspace");
-        return { code: 0, stdout: '[app]\nbase = "main"\n', stderr: "" };
-      }, git: git(false, 2, [], "main"), fleet: () => fleet, save() {}, changed() {} });
-    try { await control.summary(); expect(control.options().find(option => option.choice === "ship")?.unavailable).toContain("base branch"); }
-    finally { control.close(); }
+  test("Keep journals and publishes the outcome and publication failure does not fail the exit", async () => {
+    const f = fixture({ publishFailure: true });
+    try {
+      const state = await f.control.choose("keep");
+      expect(state.phase).toBe("kept"); expect(state.detail).toContain("disk full");
+      expect(f.events).toEqual(["record"]);
+      expect(f.journal.record()).toMatchObject({ outcome: { state: "kept", head }, decisions: [{ kind: "exit", text: "keep" }] });
+      expect(statSync(join(f.ctx.dir, "journal.json")).mode & 0o777).toBe(0o600);
+    } finally { f.close(); }
   });
-
-  test("here exit admission follows the current branch instead of the launch branch", async () => {
-    for (const [launchBranch, currentBranch, blocked] of [
-      ["feature", "main", true], ["main", "feature", false], ["feature", null, true],
-    ] as const) {
-      const initial = context(), events: string[] = [];
-      const control = createExit({ context: { ...initial, session: { ...initial.session, here: true, branch: launchBranch } },
-        integrationBranch: async () => "main", run: scripted(submission(), events), git: git(false, 2, [], currentBranch),
-        fleet: () => fleet, save() {}, changed() {} });
-      try {
-        await control.summary();
-        expect(Boolean(control.options().find(option => option.choice === "ship")?.unavailable)).toBe(blocked);
-        expect((await control.choose("ship")).phase).toBe(blocked ? "failed" : "shipped");
-        expect(events.length).toBe(blocked ? 0 : 3);
-      } finally { control.close(); }
-    }
-  });
-
-  test("failed waiver and sync persist their step and resume without a second submission", async () => {
-    const waiver = { argv: ["waive-review", "T-7", "--reason", "build session exit: project policy requires the gate only"] };
-    const sync = { argv: ["sync"] };
-    for (const failedStep of ["waive-review", "sync"] as const) {
-      let saved: ExitRecord | undefined;
-      const save = (record: ExitRecord) => { saved = JSON.parse(JSON.stringify(record)) as ExitRecord; };
-      const error = `${failedStep}_refused: the owner must resolve this refusal`;
-      const events: string[] = [];
-      const initial = createExit({ context: context(), run: scripted([
-        ...submission(), ...(failedStep === "sync" ? [waiver] : []),
-        { ...(failedStep === "sync" ? sync : waiver), error },
-      ], events), git: git(), fleet: () => fleet, save, changed() {} });
-      let detail: string | undefined;
-      try {
-        expect((await initial.choose("land")).phase).toBe("failed");
-        detail = initial.state().detail;
-        expect(detail).toContain(error);
-        expect(detail).toContain("A-42");
-        expect(detail).toContain("/repo/.worktrees/A-42-build-b-one");
-        expect(saved?.task).toBe("T-7");
-      } finally { initial.close(); }
-      const resumedEvents: string[] = [];
-      const initialContext = context();
-      const resumed = createExit({ context: { ...initialContext, session: { ...initialContext.session, exit: saved! } },
-        run: scripted([...(failedStep === "waive-review" ? [waiver] : []), sync,
-          { argv: ["show", "T-7", "--json"], value: { id: "T-7", status: "done", landed: { sha: head } } },
-        ], resumedEvents), git: async () => { throw new Error("Unexpected Git command after submission"); },
-        fleet: () => fleet, save, changed() {} });
-      try {
-        expect(resumed.state().phase).toBe("failed");
-        expect(resumed.state().detail).toBe(detail);
-        expect(resumed.options().find(option => option.choice === "land")?.unavailable).toBeUndefined();
-        await resumed.choose("land");
-        await settled(resumed);
-        expect(resumed.state().phase).toBe("landed");
-        expect(resumedEvents.map(event => event.split(" ")[0])).toEqual(failedStep === "waive-review" ? ["waive-review", "sync", "show"] : ["sync", "show"]);
-      } finally { resumed.close(); }
-      const landed = createExit({ context: { ...initialContext, session: { ...initialContext.session, exit: saved! } },
-        run: async () => { throw new Error("Unexpected corral command for a landed exit"); }, git: git(),
-        fleet: () => fleet, save, changed() {} });
-      try { expect(landed.state().phase).toBe("landed"); expect((await landed.choose("land")).phase).toBe("landed"); }
-      finally { landed.close(); }
-    }
-  });
-
-  test("land fails visibly when the gate fails or Review ends without a landing", async () => {
-    for (const readback of [{ status: "review", runs: [{ gate: { result: "fail", failed_cmd: "test parser" } }] }, { status: "needs_me", runs: [] }]) {
-      const control = createExit({ context: context(), run: scripted([...submission(),
-        { argv: ["waive-review", "T-7", "--reason", "build session exit: project policy requires the gate only"] },
-        { argv: ["sync"] }, { argv: ["show", "T-7", "--json"], value: readback },
-      ], []), git: git(), fleet: () => fleet, save() {}, changed() {}, pollMs: 1 });
-      try { await control.choose("land"); await settled(control); expect(control.state().phase).toBe("failed"); expect(control.state().detail).toContain("T-7"); }
-      finally { control.close(); }
-    }
+  test("landing admission follows workspace, policy, clean commits, live children and the current branch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "build-admission-"));
+    try {
+      for (const variant of ["outside", "project", "none", "empty", "dirty", "live", "base", "detached"] as const) {
+        const initial = context(variant === "none" ? "none" : "gate");
+        const ctx = { ...initial, dir, session: { ...initial.session, here: true,
+          ...(variant === "outside" ? { workspaceRoot: undefined } : {}), ...(variant === "project" ? { project: undefined } : {}) } };
+        const snapshot = variant === "live" ? { ...fleet, children: [{ ...child(), state: "running" as const }] } : fleet;
+        const gitRun = git(variant === "dirty", variant === "empty" ? 0 : 2, [], variant === "base" ? "main" : variant === "detached" ? null : "build/parser");
+        const run: Run = async () => { throw new Error("Unexpected corral"); };
+        const journal = createJournal({ context: ctx, run, git: gitRun, fleet: () => snapshot });
+        const control = createExit({ context: ctx, run, git: gitRun, journal, fleet: () => snapshot, save() {}, changed() {}, integrationBranch: async () => "main" });
+        await control.summary(); expect(typeof control.options().find(option => option.choice === "land")?.unavailable).toBe("string"); control.close();
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   test("summary includes working-tree numstat and fleet ownership deviations", async () => {
     const calls: string[][] = [];
     const child: FleetSnapshot["children"][number] = {
-      id: "child-1", call: "call-1", title: "Parser", brief: "Build parser", owns: ["src/parser.ts"], after: [],
+      id: "child-1", kind: "slice", call: "call-1", title: "Parser", brief: "Build parser", owns: ["src/parser.ts"], after: [],
       profile: "default", model: "provider/model", state: "done", createdAt: 1000, startedAt: 1000, endedAt: 4000,
       edits: [{ path: "src/parser.ts", outside: false, at: 2000 }, { path: "docs/usage.md", outside: true, at: 3000 }],
       usage: { input: 10, output: 20, cost: 0.25, turns: 1 }, steers: [], pulse: [], history: "d", messages: [],
@@ -259,6 +183,66 @@ describe("build exits", () => {
     expect(summary.slices).toEqual([{ id: "child-1", state: "done", seconds: 3, cost: 0.25 }]);
     expect(summary.outside).toEqual([{ path: "docs/usage.md", by: ["child-1"] }]);
   });
+});
+
+test("bare Land only rebases and fast-forwards Git in the clean primary checkout on its starting branch", async () => {
+  for (const [primaryBranch, tracked, succeeds] of [["main", "", true], ["other", "", false], ["main", " M tracked\n", false]] as const) {
+    const dir = mkdtempSync(join(tmpdir(), "bare-exit-"));
+    const original = context("review");
+    const ctx: BuildContext = { ...original, dir, session: { ...original.session,
+      workspaceRoot: undefined, project: undefined, bare: true, repository: true, baseBranch: "main" } };
+    const writes: { argv: string[]; cwd: string }[] = [], phases: string[] = [];
+    let corralCalls = 0;
+    const run: Run = async () => { corralCalls++; throw new Error("corral must never run"); };
+    const fallback = git();
+    const gitRun: Run = async (argv, options) => {
+      if (argv[0] === "worktree") return { code: 0, stdout: "worktree /primary\0HEAD ignored\0branch refs/heads/main\0\0", stderr: "" };
+      if (argv[0] === "symbolic-ref") {
+        expect(options.cwd).toBe("/primary");
+        return { code: 0, stdout: primaryBranch, stderr: "" };
+      }
+      if (argv[0] === "status" && options.cwd === "/primary") return { code: 0, stdout: tracked, stderr: "" };
+      if (["rebase", "merge"].includes(argv[0]!)) writes.push({ argv: [...argv], cwd: options.cwd });
+      return fallback(argv, options);
+    };
+    const journal = createJournal({ context: ctx, run, git: gitRun, fleet: () => fleet });
+    const exit = createExit({ context: ctx, run, git: gitRun, journal, fleet: () => fleet,
+      save() {}, changed() { phases.push(exit.state().phase); } });
+    try {
+      await exit.summary();
+      expect(exit.options().find(option => option.choice === "land")?.needsReason).toBeUndefined();
+      const result = await exit.choose("land");
+      expect(result.phase).toBe(succeeds ? "landed" : "failed");
+      if (succeeds) {
+        expect(writes).toEqual([{ argv: ["rebase", "main"], cwd: ctx.session.worktree },
+          { argv: ["merge", "--ff-only", head], cwd: "/primary" }]);
+        expect(phases).toContain("rebasing"); expect(phases).toContain("landing");
+        expect(phases).not.toContain("verifying");
+        expect(result.record).toMatchObject({ landed: head, baseBranch: "main" });
+        expect(result.record?.gateAttempt).toBeUndefined();
+      } else {
+        expect(writes).toEqual([]);
+        expect(result.detail).toContain(primaryBranch === "other" ? "must be on main" : "tracked changes");
+      }
+      expect(corralCalls).toBe(0);
+    } finally { exit.close(); rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("bare sessions outside Git offer only Keep and Iterate", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bare-no-git-"));
+  const original = context();
+  const ctx: BuildContext = { ...original, dir, session: { ...original.session,
+    workspaceRoot: undefined, project: undefined, bare: true, repository: false, branch: null, base: null } };
+  const refuse: Run = async () => { throw new Error("no command needed outside Git"); };
+  const journal = createJournal({ context: ctx, run: refuse, git: refuse, fleet: () => fleet });
+  const exit = createExit({ context: ctx, run: refuse, git: refuse, journal, fleet: () => fleet, save() {}, changed() {} });
+  try {
+    await exit.summary();
+    expect(exit.options().map(option => option.choice)).toEqual(["keep", "iterate"]);
+    expect((await exit.choose("keep")).phase).toBe("kept");
+    expect((await exit.choose("iterate")).phase).toBe("none");
+  } finally { exit.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("ownerRun removes every Rust owner-guard agent marker from the child, not the parent", async () => {
@@ -274,4 +258,75 @@ test("ownerRun removes every Rust owner-guard agent marker from the child, not t
 
 test("JSON parse failures include corral's stderr", async () => {
   await expect(json(async () => ({ code: 0, stdout: "not JSON", stderr: "command diagnostic" }), ["show", "T-1", "--json"], "/workspace")).rejects.toThrow("command diagnostic");
+});
+
+test("build records retain intent, evidence, resolutions, slice attribution, messages and priced usage across resume", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "build-record-"));
+  const sessionFile = join(dir, "parent.jsonl");
+  const initial = context();
+  const ctx = { ...initial, dir, session: { ...initial.session, sessionFile } };
+  writeFileSync(sessionFile, [
+    { type: "message", message: { role: "assistant", usage: { input: 3, cacheRead: 2, output: 4, cost: { total: 0.5 } } } },
+    { type: "compaction", usage: { input: 1, output: 1, cost: { total: 0.25 } } },
+  ].map(entry => JSON.stringify(entry)).join("\n") + "\n");
+  const snapshot: FleetSnapshot = { ...fleet, children: [{ ...child(), steers: ["Use the strict parser"], steeredAt: [2000] }, child("review-1", "review")],
+    mail: [{ seq: 1, at: 1000, from: "parser", to: "parent", text: "Ready", delivery: "delivered" }] };
+  const run: Run = async () => ({ code: 0, stdout: "{}", stderr: "" });
+  const underlying = git();
+  const gitRun: Run = async (argv, options) => argv[0] === "log"
+    ? { code: 0, stdout: `${head}\0Implement parser\0Slice: parser\n\0\n`, stderr: "" } : underlying(argv, options);
+  try {
+    const journal = createJournal({ context: ctx, run, git: gitRun, fleet: () => snapshot, now: () => 1000 });
+    journal.noteOwnerInput("Build a parser\nwith clear diagnostics");
+    expect(journal.record().title).toBe("Build a parser");
+    journal.finish("Build a diagnostic parser");
+    journal.gate(receipt());
+    journal.review({ ...snapshot.children[1]!, verdict: { verdict: "changes", summary: "One defect", head, at: 2000,
+      findings: [{ severity: "major", path: "src/parser.ts", line: 3, text: "Empty input crashes" }] } }, head);
+    expect(() => journal.resolve(1, "F1", { state: "declined" })).toThrow();
+    journal.resolve(1, "F1", { state: "fixed", commit: head });
+    await journal.refresh();
+    const record = journal.record();
+    expect(record).toMatchObject({ version: 1, title: "Build a diagnostic parser", intent: [{ text: "Build a parser\nwith clear diagnostics" }, { text: "Use the strict parser" }],
+      commits: [{ sha: head, subject: "Implement parser", slice: "parser" }], diff: { commits: 2, files: 2, added: 4, removed: 2 },
+      slices: [{ id: "parser", kind: "slice", model: "provider/model", outside: ["docs/usage.md"], report: "done" }, { kind: "review" }],
+      verification: [{ attempt: "G1", result: "pass" }],
+      reviews: [{ verdict: "changes", head, model: "provider/model", findings: [{ id: "F1", text: "Empty input crashes", resolution: { state: "fixed", commit: head } }] }],
+      messages: [{ from: "parser", to: "parent", text: "Ready" }],
+      usage: { parent: { input: 4, output: 5, cost: 0.75 }, children: { input: 10, output: 20, cost: 0.25 }, reviewers: { input: 10, output: 20, cost: 0.25 },
+        total: { input: 24, output: 45, cost: 1.25 } } });
+    expect("commands" in record.verification[0]!).toBeFalse();
+    expect("receipt" in record.verification[0]!).toBeFalse();
+    const resumed = createJournal({ context: ctx, run, git: gitRun, fleet: () => fleet });
+    expect(resumed.record()).toEqual(record);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("record caps bound wire content and missing prices never produce partial total cost", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "build-record-caps-"));
+  const ctx = { ...context(), dir };
+  const snapshot: FleetSnapshot = { ...fleet, children: [{ ...child(), report: "r".repeat(8193), usage: { input: 1, output: 2, turns: 1 } }],
+    mail: Array.from({ length: 501 }, (_, seq) => ({ seq, at: seq, from: "parent", to: "parser", text: `${seq}:` + "m".repeat(2049), delivery: "delivered" as const })) };
+  const run: Run = async () => ({ code: 0, stdout: "{}", stderr: "" });
+  const underlying = git();
+  const gitRun: Run = async (argv, options) => argv[0] === "log" ? { code: 0, stdout: Array.from({ length: 201 }, (_, index) => `${index}\0Commit ${index}\0\0`).join("\n"), stderr: "" } : underlying(argv, options);
+  try {
+    const journal = createJournal({ context: ctx, run, git: gitRun, fleet: () => snapshot });
+    for (let n = 0; n < 33; n++) journal.noteOwnerInput("i".repeat(4097));
+    await journal.refresh();
+    const record = journal.record();
+    expect(record.title).toHaveLength(120);
+    expect(record.intent).toHaveLength(32); expect(record.intent[0]!.text).toHaveLength(4096);
+    expect(record.commits).toHaveLength(200);
+    expect(record.slices[0]!.report).toHaveLength(8192);
+    expect(record.messages).toHaveLength(500); expect(record.messages[0]!.text.startsWith("1:")).toBeTrue(); expect(record.messages[0]!.text).toHaveLength(2048);
+    expect(record.usage.children.cost).toBeUndefined(); expect(record.usage.total.cost).toBeUndefined();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("patch digest subprocesses do not reject patches larger than the text output cap", async () => {
+  const size = 256 * 1024 + 1;
+  const result = await ownerRun(process.execPath)(["-e", `process.stdout.write("x".repeat(${size}))`], { cwd: process.cwd(), stdoutDigest: "sha256" });
+  expect(result.code).toBe(0);
+  expect(result.stdout).toBe(createHash("sha256").update("x".repeat(size)).digest("hex"));
 });

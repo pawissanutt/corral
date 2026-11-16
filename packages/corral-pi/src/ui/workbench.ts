@@ -5,7 +5,7 @@ import { chooseProject, projectScopes } from "./project-scopes.ts";
 import type { HostIdentity } from "../roles/types.ts";
 import type { JobControl } from "../host/job-controls.ts";
 import { LIVE_CHILD_STATES } from "../build/types.ts";
-import type { BuildPanelState, BuildUi } from "../build/types.ts";
+import type { BuildPanelState, BuildUi, FleetControl } from "../build/types.ts";
 import { target } from "./chrome.ts";
 import type { ExtensionUIContext, InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
 import { HStack, VStack, ScrollView, getKeybindings, matchesKey, type Component, type OverlayOptions, type TuiMouseEvent } from "@earendil-works/pi-tui";
@@ -41,7 +41,8 @@ import { openPager } from "./pager.ts";
 import type { BuildController } from "./build/build-controller.ts";
 import { BoardView, boardDetailLines, type BoardAction } from "./build/board-view.ts";
 import { childIdOf, childKey } from "./build/contract.ts";
-import { childActions, childAuthors, fleetExtras, steerable } from "./build/fleet-rows.ts";
+import { childActions, childAuthors, fleetExtras, shownFleet, steerable } from "./build/fleet-rows.ts";
+import { childPrompts } from "./fleet-prompts.ts";
 import type { SideSource } from "./sidebar.ts";
 import { plainLabel, PANEL_BG, PANEL_BLUE, PANEL_LINE, PANEL_TEXT, type PanelSnapshot } from "./panels-view.ts";
 import { rule, spinner, VIEW_INSET } from "./frame.ts";
@@ -118,6 +119,7 @@ const CONTEXT_OF: Readonly<Record<MainView, KeyContext>> = {
 const LETTERS: Readonly<Record<string, string>> = { Conflict: "U", New: "?", Renamed: "R", Deleted: "D", Added: "A", Modified: "M" };
 /** A child conversation's own keys; each acts only while the child's row offers it, else the letter is typing. */
 const CHILD_KEYS: Readonly<Record<string, "answer" | "steer" | "cancel" | "model">> = { a: "answer", s: "steer", x: "cancel", m: "model" };
+type ChildActs = Required<Pick<AgentActions, "steer" | "cancel" | "model" | "answer">>;
 /** The most recent notices `recentNotices()` keeps for the F2 pager. */
 const NOTICE_LOG = 50;
 /** One logged notice: the sentence shown, its tone and time, and the exact raw detail it carried, if any. */
@@ -139,20 +141,26 @@ function exitStatus(phase: BuildPanelState["exit"]["phase"], docked: boolean): H
   const quiet = (long: string, short: string): HeaderStatus => ({ long, short, tone: "muted", clickable: false });
   switch (phase) {
     case "pending": return docked ? undefined : { long: "exit choice pending", short: "choose exit", tone: "warning", clickable: true };
-    case "running": return quiet("Working · exit", "exit");
-    case "landing": return quiet("Working · gate", "gate");
+    case "rebasing": return quiet("Working · rebase", "rebase");
+    case "verifying": return quiet("Working · full gate", "gate");
+    case "landing": return quiet("Working · land", "land");
     case "kept": return quiet("Idle · kept on branch", "kept");
-    case "shipped": return quiet("Idle · handed to the board", "on board");
     case "landed": return quiet("Idle · landed", "landed");
     case "failed": return { long: "Idle · exit failed", short: "exit failed", tone: "error", clickable: false };
     case "none": return undefined;
   }
 }
+/** What landing from the session needs in this project. */
 const POLICY: Readonly<Record<BuildPanelState["settings"]["exitPolicy"], { readonly long: string; readonly short: string }>> = {
-  gate: { long: "exit policy: gate allowed", short: "exit: gate" },
-  review: { long: "exit policy: review required", short: "exit: review" },
-  none: { long: "no corral exit", short: "exit: none" },
+  gate: { long: "land: full gate", short: "land: gate" },
+  review: { long: "land: review + full gate", short: "land: review" },
+  none: { long: "landing off", short: "land: off" },
 };
+/** A bare session has no corral project and no gate: Land fast-forwards the branch it started from, locally. */
+function barePolicy(session: BuildPanelState["session"]): { readonly long: string; readonly short: string } {
+  return session.repository === false ? { long: "bare · not a Git repository", short: "bare · no Git" }
+    : { long: "bare · land: local fast-forward, no gate", short: "bare · no gate" };
+}
 
 export interface WorkbenchOptions {
   readonly jobControl?: JobControl;
@@ -180,6 +188,8 @@ export interface WorkbenchOptions {
   readonly build?: BuildUi;
   /** Docked dialogs, the message target and conversation entries of a build session. */
   readonly buildController?: BuildController;
+  /** The child runtime of a session that is not a build session, read when a child is acted on (the host builds it after the panels); absent: its children are read-only. */
+  readonly fleet?: () => FleetControl | undefined;
   /** The sidebar as a rail beside the main view; without it the main view takes the full width. */
   readonly rail?: RailSource;
   /** While the agent works: the header state word's spinner and the turn's elapsed time (activity.ts). */
@@ -207,8 +217,9 @@ export class NativeWorkbench {
   readonly agentsView: AgentsView;
   /** F10 in a build session: the board tasks this session filed. */
   readonly boardView: BoardView | undefined;
-  /** Steer, cancel, model and answer on build child rows. */
-  private readonly childActs: Required<Pick<AgentActions, "steer" | "cancel" | "model" | "answer">> | undefined;
+  /** Steer, cancel, model and answer on child rows: a build session's controls, else the session's own fleet runtime once the host has built it. */
+  private readonly buildActs: ChildActs | undefined;
+  private fleetActs: { readonly fleet: FleetControl; readonly acts: ChildActs } | undefined;
   /** Resolved Changes roots, so a symlinked path still matches the session worktree. */
   private readonly realRoots = new Map<string, string>();
   private conversation: AgentConversation | undefined;
@@ -302,16 +313,16 @@ export class NativeWorkbench {
     });
     const build = options.build, controller = options.buildController;
     if (build && controller) {
-      this.childActs = childActions({
+      this.buildActs = childActions({
         fleet: build.fleet,
         point: id => { controller.point(id); },
         question: id => { controller.open("question", id); },
-        confirm: (title, message) => this.ui ? this.ui.confirm(title, message) : Promise.resolve(false),
-        select: (title, choices) => this.ui ? this.ui.select(title, [...choices]) : Promise.resolve(undefined),
-        notice: (text, tone) => this.notice(text, tone),
+        ...this.childDialogs(),
       });
-      this.boardView = new BoardView({
-        tasks: () => build.board.tasks(), proposed: () => build.board.proposed(),
+      // A bare session has no board: no Board tab, view or actions.
+      const board = build.board;
+      if (board) this.boardView = new BoardView({
+        tasks: () => board.tasks(), proposed: () => board.proposed(),
         unavailable: () => boardUnavailable(options.snapshot()?.build),
         now: () => Date.now(), short: () => this.size(0).rows < SHORT_ROWS,
         click: event => options.canInteract() && plainClick(event), focus: () => { this.focusMain(); options.changed(); },
@@ -364,6 +375,7 @@ export class NativeWorkbench {
     return this.compact(width).short ? 1 : 2;
   }
   setView(view: MainView): void {
+    if (view === "board" && !this.boardView) return;
     if (this.view === "agent" && view !== "agent") { this.conversation?.remember(); this.leaveChild(); }
     if (view === "conversation") this.watch?.back();
     this.images.close();
@@ -451,8 +463,26 @@ export class NativeWorkbench {
     this.shownNotice = undefined; this.noticeDrawn = false;
     this.options.changed();
   }
+  private get childActs(): ChildActs | undefined {
+    if (this.buildActs) return this.buildActs;
+    const fleet = this.options.fleet?.();
+    if (!fleet) return undefined;
+    if (this.fleetActs?.fleet === fleet) return this.fleetActs.acts;
+    const dialogs = this.childDialogs();
+    const acts = childActions({ fleet, ...childPrompts({ fleet, input: title => this.ui ? this.ui.input(title) : Promise.resolve(undefined), ...dialogs }), ...dialogs });
+    this.fleetActs = { fleet, acts };
+    return acts;
+  }
+  private childDialogs() {
+    return {
+      confirm: (title: string, message: string) => this.ui ? this.ui.confirm(title, message) : Promise.resolve(false),
+      select: (title: string, choices: readonly string[]) => this.ui ? this.ui.select(title, [...choices]) : Promise.resolve(undefined),
+      notice: (text: string, tone: "text" | "success" | "warning" | "error") => this.notice(text, tone),
+    };
+  }
   agentsModel(): AgentsModel {
-    const snapshot = this.options.snapshot(), now = Date.now(), extra = fleetExtras(snapshot?.build, now);
+    const snapshot = this.options.snapshot(), now = Date.now();
+    const extra = fleetExtras(shownFleet(snapshot), now, !!this.options.build || !!this.options.fleet?.());
     return agentsModel(snapshot, now, { jobControl: !!this.options.jobControl, ...(extra ? { extra } : {}) });
   }
   private agentRow(key: string | undefined): AgentRow | undefined {
@@ -477,15 +507,15 @@ export class NativeWorkbench {
     if (action === "review") { controller.open("plan"); return; }
     if (action === "plan") { controller.planDraft(); return; }
     if (action === "refresh") { this.refreshBoard(); return; }
-    const task = build.board.tasks().find(item => item.id === id), ui = this.ui;
+    const task = build.board?.tasks().find(item => item.id === id), ui = this.ui;
     if (!task || !ui || !this.options.canInteract()) return;
     void openOutputPager(ui, `${plainLabel(task.id)} · ${plainLabel(task.title)}`, boardDetailLines(task, Date.now()));
   }
-  /** Rereads the board status this session filed; a failed read is an error notice. */
+  /** Rereads the board status this session filed; a failed read is an error notice. A bare session has no board. */
   refreshBoard(): void {
-    const build = this.options.build;
-    if (!build) return;
-    build.board.refresh().then(() => this.options.changed(),
+    const board = this.options.build?.board;
+    if (!board) return;
+    board.refresh().then(() => this.options.changed(),
       error => this.notice(`Board status unavailable: ${plainLabel(error instanceof Error ? error.message : String(error))}`, "error"));
   }
   private toggleFollow(id: string): void {
@@ -559,7 +589,7 @@ export class NativeWorkbench {
     const docked = controller.dialog()?.key.startsWith("exit:") ?? false;
     const status = exitStatus(build.exit.phase, docked);
     const place = session.here ? `checkout (${plainLabel(session.branch ?? "detached")})` : plainLabel(relative(session.repoRoot, session.worktree) || ".");
-    const policy = POLICY[build.settings.exitPolicy];
+    const policy = session.bare ? barePolicy(session) : POLICY[build.settings.exitPolicy];
     const elsewhere = r.scopeRequired || this.realRoot(r.root) !== this.realRoot(session.worktree);
     const scope = elsewhere ? `Changes: ${this.scopeLabel} · ` : "";
     return {
@@ -594,10 +624,14 @@ export class NativeWorkbench {
       }
     };
     const unread = this.view !== "conversation" && (this.watch?.unread() ?? false), place = PLACE[this.view];
-    return mainTabs(this.options.identity).map(id => {
+    return this.tabs().map(id => {
       const spec = tabSpec(id, badge(id), id === "conversation" && unread);
       return place && id === TAB_OF[this.view] ? { ...spec, label: place, short: spec.label } : spec;
     });
+  }
+  /** The main tabs of this role; a build session without a board (bare) has no Board tab. */
+  private tabs(): readonly TabId[] {
+    return mainTabs(this.options.identity).filter(id => id !== "board" || this.boardView !== undefined);
   }
   private chrome(): { readonly header: Component; readonly tabs: Component } {
     let hits: readonly TabHit[] = [];
@@ -694,7 +728,7 @@ export class NativeWorkbench {
     chat.expandTools(this.toolsExpanded);
     this.conversation = new AgentConversation({ row: () => this.agentRow(this.agentKey), chat, color: agentColor, now: () => Date.now(),
       click: event => this.options.canInteract() && plainClick(event), focus: () => { this.focusMain(); this.options.changed(); },
-      back: () => this.openAgents(), ...(this.childActs ? { answer: (key: string) => this.agentAction("answer", key) } : {}) });
+      back: () => this.openAgents(), answer: (key: string) => this.agentAction("answer", key) });
     if (this.agentKey !== undefined) this.conversation.restore(this.agentKey);
     this.childWatch = new TranscriptWatch(this.conversation.scroll);
     // Task, Proof, lifecycle, Usage, Artifacts and Inbox draw from their first column: `inset` puts them one cell in, as the frame is.
@@ -958,7 +992,7 @@ export class NativeWorkbench {
       ...(context === "usage" ? { usage: { reread: this.inspection.applicable, chart: this.usageBars } } : {}),
       ...(build && controller ? { build: {
         ...(target ? { target } : {}), steerable: build.fleet.snapshot().children.some(steerable),
-        proposed: build.board.proposed() !== undefined, choices: controller.dialog()?.options.length ?? 0,
+        proposed: build.board?.proposed() !== undefined, choices: controller.dialog()?.options.length ?? 0,
         exit: controller.dialog()?.key.startsWith("exit:") ?? false,
       } } : {}),
     };
@@ -967,7 +1001,7 @@ export class NativeWorkbench {
   sideSource(): SideSource {
     const snapshot = this.options.snapshot(), model = this.agentsModel(), r = this.review, authors = this.changeAuthors();
     return {
-      agents: model.sources.helpers || this.options.build ? model.agents.map(row => ({
+      agents: model.sources.helpers || this.options.build || model.agents.length > 0 ? model.agents.map(row => ({
         key: row.key, name: row.name, hue: row.hue, profile: row.profile, glyph: row.status.glyph, tone: row.status.tone, activity: row.activity,
         settled: isLive(row.state) ? undefined : row.state === "done" ? "ok" as const : "failed" as const,
       })) : null,
@@ -1037,7 +1071,7 @@ export class NativeWorkbench {
    * command in the composer, and any other typing (a letter the view does not offer included) goes to the composer.
    */
   handleInput(data: string): boolean {
-    const tabs = mainTabs(this.options.identity);
+    const tabs = this.tabs();
     const alt = tabs.findIndex((_, index) => { const key = viewKey(index); return key !== undefined && matchesKey(data, key); });
     if (alt >= 0) { this.openTab(tabs[alt]!); return true; }
     if (matchesKey(data, "f9")) { this.chat(); return true; }

@@ -6,6 +6,7 @@
 import { Type } from "typebox";
 
 import type { CorralToolSpec } from "../types.ts";
+import type { FleetSnapshot } from "../../build/types.ts";
 
 /** Bytes of owner text one journal entry keeps; a longer input keeps its full digest. */
 export const OWNER_INPUT_TEXT_MAX = 16 * 1024;
@@ -26,6 +27,35 @@ export function utf8Prefix(text: string, max: number): string {
   return bytes.subarray(0, end).toString("utf8");
 }
 
+/** Host-owned evidence: the most recently settled review, never the parent's claimed verdict. */
+export function finishHereEvidence(fleet: FleetSnapshot | undefined): Record<string, unknown> {
+  const settled = fleet?.children.filter(child => child.kind === "review"
+    && ["done", "failed", "cancelled"].includes(child.state))
+    .sort((a, b) => (b.endedAt ?? b.createdAt) - (a.endedAt ?? a.createdAt))[0];
+  const verdict = settled?.verdict;
+  return {
+    review: settled && verdict ? {
+      reviewer: settled.id, model: settled.model, verdict: verdict.verdict, summary: verdict.summary,
+      findings: verdict.findings.map((finding, index) => ({ id: `${settled.id}-F${index + 1}`, ...finding })),
+      head: verdict.head ?? null, at: new Date(verdict.at).toISOString(),
+    } : null,
+    ...(fleet?.children.length ? { slices: fleet.children.map(child => ({
+      id: child.id, title: child.title, kind: child.kind, owns: child.owns, model: child.model,
+      ...(child.effort ? { effort: child.effort } : {}), state: child.state,
+      ...(child.startedAt !== undefined ? { started: new Date(child.startedAt).toISOString() } : {}),
+      ...(child.endedAt !== undefined ? { ended: new Date(child.endedAt).toISOString() } : {}),
+      usage: { input: child.usage.input, output: child.usage.output, turns: child.usage.turns,
+        ...(child.usage.cost !== undefined ? { cost: child.usage.cost } : {}) },
+      outside: [...new Set(child.edits.filter(edit => edit.outside).map(edit => edit.path))],
+      ...(child.report !== undefined ? { report: utf8Prefix(child.report, 8192) } : {}),
+    })) } : {}),
+    ...(fleet?.mail.length ? { messages: fleet.mail.map(message => ({
+      at: new Date(message.at).toISOString(), from: message.from, to: message.to,
+      text: utf8Prefix(message.text, 2048), delivery: message.delivery,
+    })) } : {}),
+  };
+}
+
 type OwnerActionParams = {
   kind: string;
   target?: string;
@@ -40,11 +70,16 @@ export const ownerActionTool: CorralToolSpec<OwnerActionParams> = {
   description: "Run one owner-level corral command the owner clearly asked for in this pane, citing the "
     + "owner input ID shown after their message as [owner input A-<n>/g<g>/i<i>]. Kinds: approve, verdict, "
     + "review_run, gate_triage, dispatch, queue, unqueue, move, park, unpark, revert, plan_accept, plan_verdict, "
-    + "plan_review, plan_member_gate, plan_add_member, plan_move_member, finish, discard, config_set, mode. "
-    + "target is the task ID (config_set: the key; mode: autopilot, assist, turbo, pause or resume; finish: "
+    + "plan_review, plan_member_gate, plan_add_member, plan_move_member, finish_here, finish, discard, config_set, mode. "
+    + "target is the task ID (config_set: the key; mode: autopilot, assist, turbo, pause or resume; finish/finish_here: "
     + "your scratch slug); args are the command's further arguments and flags, one word each (move T-3: "
     + "[\"ready\"]; config_set: [\"3\"]; finish: [\"--title\", \"Fix the cache\"] or [\"--into\", \"T-5\"] "
     + "for an existing task, plus [\"--expected-head\", \"<sha>\"] naming the candidate you showed the owner). "
+    + "Finish_here uses --title and --expected-head, optionally --override-reason with the owner's stated reason; "
+    + "it gates and lands now as an assistant build record, with no task. Policy none disables it; policy review "
+    + "requires an approving review child for that head with no open findings, or the owner's override reason. "
+    + "The host attaches review/slices/messages; never supply those in args. Failed gates return their receipt; "
+    + "fix or rebase a landing_stale scratch and ask the owner again. "
     + "Finish returns durable queued task/run IDs promptly; Corral sync owns gate and independent review. "
     + "Default --intent ship authorizes landing without another approve call. For Check only use "
     + "--intent verify: checks and repairs may run but never land. Inspect the linked task for progress. "
@@ -64,6 +99,10 @@ export const ownerActionTool: CorralToolSpec<OwnerActionParams> = {
     input: Type.String({ description: "The cited owner input ID, e.g. A-1/g1/i3" }),
   }, { additionalProperties: false }),
   payload(params) {
+    if (params.kind === "finish_here" && params.args?.some(arg =>
+      ["--review", "--slices", "--messages"].includes(arg.split("=")[0] ?? ""))) {
+      throw new Error("finish_here review, slices and messages are host-owned evidence, not arguments");
+    }
     return {
       kind: params.kind,
       ...(params.target !== undefined ? { target: params.target } : {}),

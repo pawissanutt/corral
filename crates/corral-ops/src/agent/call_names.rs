@@ -7,6 +7,8 @@ impl AgentOp {
             AgentOp::Hello => "hello",
             AgentOp::Event => "event",
             AgentOp::ReceiptLookup => "receipt_lookup",
+            AgentOp::PeerSend => "peer_send",
+            AgentOp::PeerRoster => "peer_roster",
             AgentOp::Ask => "ask",
             AgentOp::Withdraw => "withdraw",
             AgentOp::Wait => "wait",

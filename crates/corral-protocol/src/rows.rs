@@ -145,6 +145,32 @@ pub struct PlanRow {
     pub rev: u64,
 }
 
+/// A published build record, independent of task scheduling and statistics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BuildRow {
+    pub id: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    pub title: String,
+    pub state: String,
+    pub created: String,
+    pub updated: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub landed: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_reason: Option<String>,
+    pub slices: u64,
+    pub review_rounds: u64,
+    pub gate_attempts: u64,
+    pub gate_failures: u64,
+    pub messages: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    pub tokens: u64,
+    pub rev: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanRole {

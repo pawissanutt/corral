@@ -44,6 +44,7 @@ pub const RESERVED: &[&str] = &[
     "memory",
     "annotation",
     "plan",
+    "build",
     "build-identity",
     "hooks",
     "run",

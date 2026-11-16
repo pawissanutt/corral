@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum UsageSessionKind {
     Explore,
+    Slice,
+    Review,
     Oracle,
     Shadow,
     Expert,

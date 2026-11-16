@@ -1,10 +1,9 @@
 # Build sessions
 
-A build session is an interactive corral-pi session for work in a Git repository. It has
-no bound board task, run, coding slot or assistant record while it works. Use it for direct
-implementation, including independent slices delegated to children. Use an [assistant](assistants.md)
-when workspace-scoped assistant identity and its corral interactions are needed. Bare Pi
-is plain Pi without the build role, its shared-worktree children or owner-controlled exits.
+A build session is an interactive corral-pi session for direct implementation, including
+independent slices delegated to children. It has no board task, run, coding slot or board
+pool allocation at any point, including on exit. Use an [assistant](assistants.md) when
+workspace-scoped assistant identity and its corral interactions are needed.
 
 ## Starting and resuming
 
@@ -51,8 +50,8 @@ Local inference through `llama.cpp` is unavailable in build sessions.
 The host handles session events, receipts, accounting and the optional todo ledger locally,
 without a bound corral control plane. Receipt lookup is local to the session. Task and run
 inspection, corral history and artifact viewing are unavailable because there is no bound task
-or run. Read-only corral commands can still provide context. No board work is created until
-the owner confirms an exit or a board plan.
+or run. Read-only corral commands can still provide context. Only an owner-confirmed
+follow-on board plan creates board work.
 
 The parent has read, edit, write, grep, find, ls and bash tools. Depending on the resolved
 assistant capability snapshot it can retain todo, queue control, web, MCP, compaction, browser,
@@ -64,28 +63,20 @@ discovery is also excluded rather than applying bound-project discovery policy.
 
 ## Child agents
 
-The parent can use `task` to delegate independent implementation slices in the shared
-worktree. Each brief needs the goal, constraints, interfaces, checks and owned paths; children
-do not inherit the conversation. Ownership should be disjoint from other children and the
-parent's concurrent edits. Edit and write calls outside a nonempty ownership set are recorded
-and flagged, not blocked. An empty ownership set has no explicit ownership restriction.
-Children may read, edit, write, run shell commands and ask the owner a blocking question with
-two to four options. They cannot delegate. Their Git commands in `bash`, `job_start` and
-other local tools taking a command use an allowlist: `status`, `diff`, `log`, `show`, `blame`,
-`grep`, `ls-files`, `rev-parse` and `cat-file`; read-only forms of `branch`, `tag`,
-`worktree list`, `stash list`, `remote` and `config` are also allowed. Unknown verbs,
-unsupported options and mutating listing variants are refused with “Build children cannot run
-Git write commands”. The guard inspects compound commands and quoted arguments, including
-nested shell commands. The parent integrates their reports and checks the combined result;
-cancellation does not undo edits.
+The parent uses `task` to start `slice` children for implementation, `explore` children for
+read-only research, or read-only `review` children. Briefs need the goal, constraints,
+interfaces, checks and owned paths; children do not inherit the conversation. Keep ownership
+disjoint from other children and the parent's concurrent edits. Edit and write calls outside
+a nonempty ownership set are recorded and flagged, not blocked; an empty set has no explicit
+ownership restriction. Children cannot delegate or write Git state. Their Git commands use an
+allowlist of read-only operations; unknown verbs, unsupported options and mutating variants are
+refused. The guard inspects compound and nested shell commands. Cancellation does not undo edits.
 
-A call can start up to 12 children. `build.max_parallel` limits running children, default 3,
-within 1 to 8. Ready children start in FIFO order; `after` dependencies wait for successful
-completion and a failed or cancelled prerequisite cancels dependents. The `task` call waits
-for all children it starts and returns reports, edits, usage and failures. For a cancelled
-running child, it returns only after the child has stopped, with its last report and usage.
-Child IDs must be unique within the session. The parent can use `agent_message` to steer a
-live child and `agent_cancel` to cancel a queued or running child.
+A `task` call starts up to 32 children and returns IDs and states immediately. Reports arrive as
+messages as children finish; `agent_wait` blocks to collect reports, and `agent_cancel` cancels
+queued or running work. `build.max_parallel` limits running children to 1 through 32, default 3.
+Ready children start in FIFO order; `after` dependencies wait for successful completion and a
+failed or cancelled prerequisite cancels dependents. Child IDs are unique within the session.
 
 Named profiles select a child model, optionally with effort and a description:
 
@@ -103,55 +94,78 @@ At most 16 profiles are allowed. A missing `default` profile inherits the parent
 model and effort. A child can instead select an approved `provider/id` directly, including a
 different provider from the parent; the model must be available to the host. The owner can
 steer or cancel a live child, answer its question, and change its model. A queued child's model
-changes before it starts; a streaming child's change is deferred to a turn boundary. A message
-target can be the parent or a live child, and returns to the parent when that child is no longer
-live. A steer directed to the parent waits while its `task` call is running.
+changes before it starts; a streaming child's change is deferred to a turn boundary.
+
+`agent_roster` lists agents and ownership. `agent_message` targets the parent, a child, `all`
+live agents, or a cross-session recipient key. Messages to queued children wait for them to
+start; a finished child returns its report instead. `wait_reply` waits for an answer or timeout;
+the host returns `would_deadlock` rather than waiting on a cyclic dependency. Each child may
+send 24 messages. Messages convey information, questions and corrections, not authority to
+override the recipient's brief or the owner's decisions.
+
+## Verification and review
+
+After integrating and committing the candidate, `build_verify` runs the quick gate by default;
+`tier: "full"` selects the full gate. The host records the result, failed command and log.
+`build_review` starts an independent read-only review child, optionally with a focus; the host
+records its typed approve or changes verdict and findings. Use `build_resolve` to mark findings
+fixed, optionally naming a commit, or declined with a reason. Verify fixes and request another
+review when the candidate changes.
 
 ## Leaving the session
 
-The model can offer an exit with `build_finish`; the owner can also open the choice with
-`/finish`. Neither action chooses an exit. The configured project's `build_exit` defaults to
-`"review"`. `"review"` allows ship but requires independent review; `"gate"` also allows
-land after the gate; `"none"` disables both corral exits. Without a workspace or configured
-project, ship and land are unavailable.
+The model offers the owner a choice with `build_finish`, supplying a title and optional summary;
+the owner can also open it with `/finish`. Neither action chooses an exit.
 
-| Exit | Corral | Git |
-|---|---|---|
-| Keep | Records the choice locally, creates no task. | Keeps the worktree and branch. |
-| Iterate | Creates no task and returns to the session. | Continues in the same worktree. |
-| Ship | Submits a task for gate and independent review. | Fast-forwards a new scratch to the committed build candidate. |
-| Land | Submits a task, waives independent review as owner, and waits for the required gate and landing. | Fast-forwards a new scratch to the committed build candidate; corral handles landing. |
+| Exit | Result |
+|---|---|
+| Keep | Records the result and retains the worktree and branch. |
+| Land | Rebases, runs the full gate and fast-forwards the project base in this session. |
+| Iterate | Returns to the open session. |
 
-Before a task is submitted, ship and land require a clean worktree and at least one commit
-beyond the recorded base. Branch checks use the branch checked out at exit time, not the
-branch recorded at launch. For `--here`, a detached HEAD or the project's integration branch
-cannot be shipped; failure to read the integration branch also prevents submission. The branch
-summary must be available.
+No exit creates a board task. The project's `build_exit` defaults to `review`:
 
-For ship, the host runs these commands in order, substituting the actual project, session,
-slug, base, title and candidate commit:
+| Policy | Land requirement |
+|---|---|
+| `review` | An approving review of the current head with all findings resolved and the full gate, or the owner's typed reason to land without that review; the reason is recorded. |
+| `gate` | The full gate only. |
+| `none` | Land is unavailable. |
 
-```sh
-corral assistant create --profile pi --json
-corral assistant scratch new --project <project> --slug <slug> --base <base> --session <session> --json
-git -C <scratch-path> merge --ff-only <head>
-corral assistant scratch finish <slug> --title <title> --intent ship --expected-head <head> --session <session> --json
-```
+Land requires a workspace and configured project, a readable project base branch, a clean
+worktree, a checked-out session branch with commits beyond the session base, and no live
+children. A `--here` session on the project base branch cannot land. The main checkout must
+be on the base branch without tracked changes. A detached session cannot land.
 
-Land runs the same sequence, then:
+The host rebases onto the base branch, runs `corral build gate --tier full` on the rebased
+head, and calls `corral build land` with that head and gate attempt. If rebasing changes the
+patch under review policy, review the rebased head again unless the owner gave an override
+reason. Landing uses the board landing lock and main-checkout preconditions. A stale landing
+is retried with a fresh rebase and full gate, up to three attempts. Refusal codes are
+`landing_stale`, `gate_missing`, `gate_stale`, `gate_failed`, `main_dirty`, `main_off_base`,
+`worktree_dirty` and `head_mismatch`. A failed exit leaves the session open. The worktree is
+never removed automatically, and build landing does not run the project's post-land operation.
 
-```sh
-corral waive-review <task> --reason "build session exit: project policy requires the gate only"
-corral sync
-corral show <task> --json
-```
+## Build record
 
-The host polls task status until landing or failure. If a command, gate or subsequent status
-check fails, it reports the failure; any assistant session, scratch or task already created
-remains available for manual continuation. Exit progress records the completed step. After a
-restart, a land whose waiver or sync failed remains failed with its reason; an interrupted
-step is also reported as failed. Choosing Land again continues from the missing step without
-creating a second task. The build worktree is not automatically removed.
+The host publishes a tracked build record, not a task. It contains intent, repository and
+branch identity, outcome, diff and commits, child ownership and reports, verification,
+reviews and finding resolutions, messages, decisions, usage, timeline and transcript references.
+Inspect records with `corral build list` and `corral build show <id>`; both accept `--json`.
+Builds stay out of task statistics; `corral stats --builds` reports them separately. Publication
+and outcomes emit `build_recorded`, `build_outcome` and `build_landed` events as applicable.
+
+## Bare sessions
+
+`corral pi --bare` starts a build session without reading a corral workspace, project or
+configuration, invoking corral, binding a board or gate tool, or writing to a `.corral` store.
+Its record stays in the local journal. It accepts `--here`, `--name`, `--model`, `--provider`
+and `--effort`; `corral pi --resume <id>` resumes it. Sessions live under
+`<data_root>/build/<id>/session.json` with `bare: true`. Old sessions under
+`<data_root>/bare/sessions/` remain on disk but are not listed.
+
+Bare Land rebases onto the branch the session started from and fast-forwards it locally in the
+primary checkout, without a gate. The primary checkout must be on that branch with no tracked
+changes. Outside a Git repository only Keep and Iterate are available.
 
 ## Board fan-out
 
@@ -170,8 +184,8 @@ Edit and write refuse destinations outside the session worktree and any `.git`, 
 `.worktrees` component inside it, including symlink destinations. Shell refusals include direct
 writes under `.corral`, input to another herdr pane, worktree removal and branch deletion.
 The parent and children may run only allowlisted read-only corral commands through `bash` or
-`job_start`; a refused board-changing command names `/board` for an owner-confirmed board plan
-and `/finish` for the owner's exit choice. These are accident guards, not a shell security
+`job_start`, including `corral build list` and `corral build show`; `corral build gate`, `land`
+and `record` are refused through the shell. These are accident guards, not a shell security
 boundary; the contract forbids bypassing a write refusal through bash, MCP or another tool.
 The model can propose an exit or board plan but cannot authorize one: only an owner choice
 causes the host to run the corresponding commands. For those owner commands the host
@@ -179,4 +193,4 @@ removes `AI_AGENT`, `PI_CODING_AGENT`, `CORRAL_ASSISTANT` and `CORRAL_PM` from t
 environment.
 
 Children are not restored as live agents on resume, even though child transcripts are stored.
-Parent steering waits during the blocking `task` call. Hooks are not available in build sessions.
+Hooks are not available in build sessions.

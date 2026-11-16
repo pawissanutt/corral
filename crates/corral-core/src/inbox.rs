@@ -23,7 +23,9 @@ pub use header::{
     WitnessReason,
 };
 mod owner;
+mod peer;
 pub use owner::{Recovery, RetryInspection};
+pub use peer::{AGENT_MESSAGES_PER_GENERATION, AgentPostRefusal};
 mod recipient_ref;
 mod records;
 mod storage;

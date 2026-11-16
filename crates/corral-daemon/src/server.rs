@@ -245,6 +245,7 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
                     topic,
                     Topic::Inbox
                         | Topic::Plans
+                        | Topic::Builds
                         | Topic::Agents
                         | Topic::Assistant
                         | Topic::Usage
@@ -276,6 +277,12 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
                         "app" => "app",
                         _ => "daemon",
                     };
+                    topics.set_session_fleet(
+                        hello
+                            .caps
+                            .iter()
+                            .any(|cap| cap == wire::app::SESSION_FLEET_V1),
+                    );
                     reply(
                         &mut stream,
                         id,

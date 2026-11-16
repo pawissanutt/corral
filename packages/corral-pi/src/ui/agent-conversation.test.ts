@@ -85,12 +85,12 @@ test("the back target covers the rendered ‹ Agents at every width, and a click
 });
 
 test("a child conversation shows the brief once, untimed steers after the replies, and its ▲ question line answers", () => {
-  const child: ChildSnapshot = { id: "picker-ui", call: "call-1", title: "Picker", brief: "BRIEF_ONCE_VISIBLE", owns: ["src/picker/"], after: [],
+  const child: ChildSnapshot = { id: "picker-ui", kind: "slice", call: "call-1", title: "Picker", brief: "BRIEF_ONCE_VISIBLE", owns: ["src/picker/"], after: [],
     profile: "default", model: "anthropic/model-a", state: "needs", createdAt: NOW - 9000, startedAt: NOW - 8000, edits: [],
     usage: { input: 1, output: 1, turns: 1 }, steers: ["STEER_ONE_VISIBLE", "STEER_TWO_VISIBLE"], pulse: [], history: "rn",
     question: { question: "QUESTION_VISIBLE", options: [{ label: "Grid" }, { label: "List" }], askedAt: NOW - 1000 },
     messages: [{ id: "a", kind: "assistant", text: "REPLY_VISIBLE", stopReason: "stop" }] };
-  const row = childRow(child, { children: [child], maxParallel: 3, startedAt: NOW - 9000 }, NOW);
+  const row = childRow(child, { children: [child], mail: [], maxParallel: 3, startedAt: NOW - 9000 }, NOW);
   const answered: string[] = [];
   const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"), color: agentColor, now: () => NOW,
     click: (event: TuiMouseEvent) => event.type === "click" && event.button === "left", focus() {}, back() {}, answer(key) { answered.push(key); } });
@@ -126,12 +126,12 @@ test("a child conversation shows the brief once, untimed steers after the replie
 });
 
 test("steers sit where they were sent, an untimed steer comes last, and the retention note sits under the brief", () => {
-  const child: ChildSnapshot = { id: "picker-ui", call: "call-1", title: "Picker", brief: "BRIEF_VISIBLE", owns: ["src/picker/"], after: [],
+  const child: ChildSnapshot = { id: "picker-ui", kind: "slice", call: "call-1", title: "Picker", brief: "BRIEF_VISIBLE", owns: ["src/picker/"], after: [],
     profile: "default", model: "anthropic/model-a", state: "running", createdAt: NOW - 9000, startedAt: NOW - 8000, edits: [],
     usage: { input: 1, output: 1, turns: 1 }, steers: ["TIMED_STEER", "UNTIMED_STEER"], steeredAt: [NOW - 5000], pulse: [], history: "rr", dropped: 12,
     messages: [{ id: "a", kind: "assistant", text: "EARLY_REPLY", stopReason: "stop", at: NOW - 7000 },
       { id: "b", kind: "assistant", text: "LATE_REPLY", stopReason: "stop", at: NOW - 3000 }] };
-  const row = childRow(child, { children: [child], maxParallel: 3, startedAt: NOW - 9000 }, NOW);
+  const row = childRow(child, { children: [child], mail: [], maxParallel: 3, startedAt: NOW - 9000 }, NOW);
   const rows = conversation(() => row, new HelperChat(() => undefined, "/tmp")).scroll.render(80).map(line => stripTerminalSequences(line));
   const at = (needle: string) => rows.findIndex(line => line.includes(needle));
   const note = rows.findIndex(line => line.trim().startsWith("! 12 earlier messages were dropped"));
@@ -141,6 +141,30 @@ test("steers sit where they were sent, an untimed steer comes last, and the rete
   expect(at("LATE_REPLY")).toBeGreaterThan(at("TIMED_STEER"));
   expect(at("UNTIMED_STEER")).toBeGreaterThan(at("LATE_REPLY"));
   expect(rows.filter(line => line.includes("dropped by the retention limit"))).toHaveLength(1);
+});
+
+test("messages with other agents sit among the replies by their time, labelled sender to recipient; a helper without mail is unchanged", () => {
+  const picker: ChildSnapshot = { id: "picker-ui", kind: "slice", call: "call-1", title: "Picker", brief: "BRIEF", owns: ["src/picker/"], after: [],
+    profile: "default", model: "anthropic/model-a", state: "running", createdAt: NOW - 9000, startedAt: NOW - 8000, edits: [],
+    usage: { input: 1, output: 1, turns: 1 }, steers: [], pulse: [], history: "rr",
+    messages: [{ id: "a", kind: "assistant", text: "EARLY_REPLY", stopReason: "stop", at: NOW - 7000 },
+      { id: "b", kind: "assistant", text: "LATE_REPLY", stopReason: "stop", at: NOW - 3000 }] };
+  const slots: ChildSnapshot = { ...picker, id: "host-slots", messages: [] };
+  const row = childRow(picker, { children: [slots, picker], maxParallel: 3, startedAt: NOW - 9000, mail: [
+    { seq: 1, at: NOW - 5000, from: "host-slots", to: "picker-ui", text: "MAIL_IN", delivery: "delivered" },
+    { seq: 2, at: NOW - 1000, from: "picker-ui", to: "parent", text: "MAIL_OUT", delivery: "undeliverable" },
+  ] }, NOW);
+  const rows = conversation(() => row, new HelperChat(() => undefined, "/tmp")).scroll.render(80).map(line => stripTerminalSequences(line));
+  const at = (needle: string) => rows.findIndex(line => line.includes(needle));
+  expect(at("MAIL_IN")).toBeGreaterThan(at("EARLY_REPLY"));
+  expect(at("LATE_REPLY")).toBeGreaterThan(at("MAIL_IN"));
+  expect(rows[at("MAIL_IN")]).toContain("host-slots → picker-ui");
+  expect(rows[at("MAIL_OUT")]).toContain("picker-ui → parent");
+  // An undelivered message says so inside its bubble, under its text.
+  expect(rows.slice(at("MAIL_OUT") + 1).some(line => line.includes("!"))).toBeTrue();
+  const plain = rowOf(helper({}));
+  const before = conversation(() => plain, new HelperChat(() => undefined, "/tmp")).scroll.render(80);
+  expect(conversation(() => ({ ...plain, mail: [] }), new HelperChat(() => undefined, "/tmp")).scroll.render(80)).toEqual(before);
 });
 
 test("a running agent's page follows its end until the owner scrolls up; a finished one opens at the top", () => {

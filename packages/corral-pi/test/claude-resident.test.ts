@@ -541,7 +541,8 @@ for (const cause of ["finish", "model-change"] as const) {
       context, agentDir: root, localTools: [] });
     const handle = runner.run({ id: "fleet-report-id", title: "Child", brief: "Work", owns: [] },
       { profile: "fixture", provider: setup.model.provider, model: setup.model.id },
-      { onEvent() {}, onToolStart() {}, onTurn() {}, async ask() { return "answer"; } }, new AbortController().signal);
+      { onEvent() {}, onToolStart() {}, onTurn() {}, async ask() { return "answer"; }, openingPrompt: () => "", roster: async () => "",
+        async message() { throw new Error("Unused fixture messaging"); }, reviewVerdict() {} }, new AbortController().signal);
     try {
       await started.promise;
       expect(residentSessions.size).toBe(1);

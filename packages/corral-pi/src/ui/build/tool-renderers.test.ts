@@ -9,7 +9,7 @@ import { buildToolRenderers } from "./tool-renderers.ts";
 const NOW = 4_000_000;
 function child(id: string, state: ChildSnapshot["state"]): ChildSnapshot {
   return {
-    id, call: "call-1", title: `Slice ${id}`, brief: "b", owns: [], after: [], profile: "default", model: "p/m", state,
+    id, kind: "slice", call: "call-1", title: `Slice ${id}`, brief: "b", owns: [], after: [], profile: "default", model: "p/m", state,
     createdAt: NOW - 60_000, startedAt: NOW - 50_000, ...(state === "running" ? {} : { endedAt: NOW - 1000 }),
     edits: [], usage: { input: 1, output: 1, turns: 1 }, steers: [], pulse: [], history: "", messages: [],
   };
@@ -40,12 +40,15 @@ test("renderers exist for exactly the three build tools", () => {
   expect(buildToolRenderers("task", source)?.renderResult).toBeDefined();
   expect(buildToolRenderers("build_finish", source)?.renderCall).toBeDefined();
   expect(buildToolRenderers("board_plan", source)?.renderResult).toBeDefined();
-  for (const name of ["agent_message", "agent_cancel", "read", "bash", "corral_task"]) expect(buildToolRenderers(name, source)).toBeUndefined();
+  // The verification tools and the agent tools are kit rows, not build cards.
+  for (const name of ["build_verify", "build_review", "agent_message", "agent_wait", "agent_roster", "read", "bash", "corral_task"]) {
+    expect(buildToolRenderers(name, source)).toBeUndefined();
+  }
 });
 
 test("the task card watches once per tool call and releases once every row settled and the result arrived", () => {
   let children = [child("host-slots", "running"), child("picker-ui", "running")];
-  const fake = fakeSource(() => ({ children, maxParallel: 3, startedAt: NOW - 60_000 }));
+  const fake = fakeSource(() => ({ children, mail: [], maxParallel: 3, startedAt: NOW - 60_000 }));
   const renderers = buildToolRenderers("task", () => fake.source)!;
   const args = { agents: children.map(item => ({ id: item.id, title: item.title, brief: "b", owns: [] })) };
   const ctx = context(args);
@@ -75,7 +78,7 @@ test("the task card watches once per tool call and releases once every row settl
 
 test("a result does not release the watch while a row is still live", () => {
   const children = [child("host-slots", "running")];
-  const fake = fakeSource(() => ({ children, maxParallel: 3 }));
+  const fake = fakeSource(() => ({ children, mail: [], maxParallel: 3 }));
   const renderers = buildToolRenderers("task", () => fake.source)!;
   const args = { agents: [{ id: "host-slots", title: "t", brief: "b", owns: [] }] };
   const ctx = context(args);
@@ -85,21 +88,21 @@ test("a result does not release the watch while a row is still live", () => {
   expect(fake.released()).toBe(0);
 });
 
-test("an exit entry tells the parent which exit the owner chose and how it ended", () => {
-  const landed: ExitState = { phase: "landed", record: { choice: "land", at: "t", task: "T-962" }, detail: "T-962 landed at 3f2a9c1." };
-  const entry = exitEntry({ choice: "land", label: "Land after the gate", detail: "d" }, landed);
-  expect(entry.content).toContain("Land after the gate");
-  expect(entry.content).toContain("T-962 landed at 3f2a9c1.");
-  const failed: ExitState = { phase: "failed", record: { choice: "ship", at: "t" }, detail: "The gate failed for T-963" };
-  const shipped = exitEntry({ choice: "ship", label: "Ship through the board", detail: "d" }, failed);
-  expect(shipped.content).toContain("Ship through the board");
-  expect(shipped.content).toContain("The gate failed for T-963");
-  expect(shipped.display).toBeTrue();
+test("an exit entry tells the parent which exit the owner chose, where it landed and why it landed over findings", () => {
+  const landed: ExitState = { phase: "landed", record: { choice: "land", at: "t", landed: "3f2a9c1e0d", baseBranch: "main", gateAttempt: "G3", overrideReason: "REASON_GIVEN" } };
+  const entry = exitEntry({ choice: "land", label: "Land on main", detail: "d" }, landed);
+  expect(entry.content).toContain("Land on main");
+  expect(entry.content).toContain("3f2a9c1");
+  expect(entry.content).toContain("G3");
+  expect(entry.content).toContain("REASON_GIVEN");
+  const failed = exitEntry({ choice: "land", label: "Land on main", detail: "d" }, { phase: "failed", record: { choice: "land", at: "t" }, detail: "gate_failed: just check" });
+  expect(failed.content).toContain("gate_failed: just check");
+  expect(failed.display).toBeTrue();
 });
 
 test("the task card frames itself, starts in the entries' column and keeps its click rows", () => {
   const children = [child("alpha", "done"), child("beta", "done")];
-  const fake = fakeSource(() => ({ children, maxParallel: 3, startedAt: NOW - 60_000 }));
+  const fake = fakeSource(() => ({ children, mail: [], maxParallel: 3, startedAt: NOW - 60_000 }));
   const args = { agents: children.map(item => ({ id: item.id, title: item.title, brief: "b", owns: [] })) };
   // The column where each drawing starts: the cells of inset before its first styled cell.
   const firstColumn = (lines: readonly string[]) => (lines[0] ?? "").search(/[^ ]/);

@@ -1,8 +1,9 @@
 //! Deterministic sprint readback. No provider, transcript, usage refresh, or live pane access.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
 use anyhow::{Context, Result};
+use corral_core::build_record::{BuildRecord, GateResult, OutcomeState};
 use corral_core::{Artifact, ArtifactKind, Event, Origin, PinRef, Run, Status, Task};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -32,6 +33,8 @@ pub struct SprintSections {
     pub in_flight: Vec<SprintTask>,
     pub owner_ideas: Vec<SprintTask>,
     pub decisions: Vec<SprintDecision>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub builds: Vec<SprintBuild>,
     pub numbers: SprintNumbers,
 }
 
@@ -82,6 +85,29 @@ pub struct SprintDecision {
     pub pm_recommendation: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SprintBuild {
+    pub id: String,
+    pub title: String,
+    pub project: Option<String>,
+    pub state: OutcomeState,
+    pub landed: Option<String>,
+    pub slices: usize,
+    pub review_rounds: usize,
+    pub gate_attempts: usize,
+    pub gate_failures: usize,
+    pub cost_usd: Option<f64>,
+    pub override_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct SprintBuildCounts {
+    pub landed: usize,
+    pub kept: usize,
+    pub abandoned: usize,
+    pub open: usize,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct SprintNumbers {
     pub by_task: BTreeMap<String, SprintTotals>,
@@ -89,6 +115,9 @@ pub struct SprintNumbers {
     pub review_rounds: usize,
     pub gate_failures: usize,
     pub lessons: Vec<Event>,
+    /// Counts of the selected build records, never included in task/run totals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub builds: Option<SprintBuildCounts>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -140,7 +169,11 @@ pub fn review_sprint(ctx: &Ctx, since: Option<&str>, mark: bool) -> Result<Sprin
         "since is after the sprint snapshot"
     );
     let tasks = ctx.store.list()?;
-    let sections = collect_sprint_review(&tasks, &events, since, snapshot_at);
+    let records = crate::build_session::record::list(ctx)?
+        .into_iter()
+        .map(|row| crate::build_session::record::show(ctx, &row.id))
+        .collect::<Result<Vec<_>>>()?;
+    let sections = collect_sprint_review(&tasks, &events, &records, since, snapshot_at);
     let markdown = markdown::render(&sections, since, snapshot_at)?;
     let anchor = match tasks.iter().min_by_key(|t| &t.id) {
         Some(task) => task.id.clone(),
@@ -191,9 +224,12 @@ pub fn review_sprint(ctx: &Ctx, since: Option<&str>, mark: bool) -> Result<Sprin
 /// Run costs are recorded cumulative values for runs ending in the window (or starting
 /// there when unfinished), not estimated deltas. Reviewer children count under their profiles.
 /// Snapshot sections deliberately survive an otherwise empty event window.
+/// Build records enter through a build_recorded/build_outcome event in that window;
+/// open records are current snapshots and remain visible regardless of their event age.
 pub fn collect_sprint_review(
     tasks: &[Task],
     events: &[Event],
+    records: &[BuildRecord],
     since: Option<Timestamp>,
     snapshot_at: Timestamp,
 ) -> SprintSections {
@@ -347,6 +383,42 @@ pub fn collect_sprint_review(
         })
         .map(|e| (*e).clone())
         .collect();
+    let build_ids: BTreeSet<_> = window
+        .iter()
+        .filter(|event| matches!(event.kind.as_str(), "build_recorded" | "build_outcome"))
+        .filter_map(|event| event.detail["id"].as_str())
+        .collect();
+    for record in records.iter().filter(|record| {
+        record.outcome.state == OutcomeState::Open || build_ids.contains(record.id.as_str())
+    }) {
+        let counts = result.numbers.builds.get_or_insert_default();
+        match record.outcome.state {
+            OutcomeState::Landed => counts.landed += 1,
+            OutcomeState::Kept => counts.kept += 1,
+            OutcomeState::Abandoned => counts.abandoned += 1,
+            OutcomeState::Open => counts.open += 1,
+        }
+        result.builds.push(SprintBuild {
+            id: record.id.clone(),
+            title: record.title.clone(),
+            project: record.project.clone(),
+            state: record.outcome.state,
+            landed: (record.outcome.state == OutcomeState::Landed)
+                .then(|| record.outcome.landed.clone())
+                .flatten(),
+            slices: record.slices.len(),
+            review_rounds: record.reviews.len(),
+            gate_attempts: record.verification.len(),
+            gate_failures: record
+                .verification
+                .iter()
+                .filter(|attempt| attempt.result == GateResult::Fail)
+                .count(),
+            cost_usd: record.usage.total.cost,
+            override_reason: record.outcome.override_reason.clone(),
+        });
+    }
+    result.builds.sort_by(|a, b| a.id.cmp(&b.id));
     result
 }
 

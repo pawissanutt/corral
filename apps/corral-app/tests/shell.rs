@@ -100,6 +100,7 @@ fn desktop_sidebar_reaches_every_destination() {
         ("now", "Now"),
         ("changes", "Changes"),
         ("plans", "Plans"),
+        ("builds", "Builds"),
         ("agents", "Agents"),
         ("review", "Review"),
         ("timeline", "Timeline"),
@@ -111,7 +112,7 @@ fn desktop_sidebar_reaches_every_destination() {
             app.wait_for("id:inbox-list").unwrap();
         } else if slug == "now" {
             app.wait_for("text:Who acts next").unwrap();
-        } else if matches!(slug, "plans" | "review") {
+        } else if matches!(slug, "plans" | "review" | "builds") {
             app.wait_for("id:qhead-title").unwrap();
         } else if slug == "settings" {
             app.wait_for("id:page-title").unwrap();
@@ -137,6 +138,7 @@ fn phone_tabs_and_more_reach_every_destination() {
     app.press("id:tab-more").unwrap();
     for (slug, title) in [
         ("changes", "Changes"),
+        ("builds", "Builds"),
         ("review", "Review"),
         ("timeline", "Timeline"),
         ("usage", "Usage"),
@@ -449,4 +451,41 @@ fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     assert_eq!(app.screen().count("label:/^gate-T-890 /").unwrap(), 0);
     app.press("id:seg-group-1").unwrap();
     app.wait_for("label:/^gate-T-890 /").unwrap();
+}
+
+/// A build that landed over an open review finding says so where it is opened: in place on
+/// desktop, on its pushed page on the phone, not as a task.
+#[test]
+fn a_build_landed_over_open_findings_is_called_out_when_opened() {
+    let mut app = preview(desktop(), &[("corral.destination", "builds")]);
+    app.wait_for("id:build-B-record-store").unwrap();
+    app.press("id:build-B-peer-roster").unwrap();
+    app.wait_for("id:build-override").unwrap();
+    assert_eq!(app.screen().count("id:build-section-messages").unwrap(), 0);
+    drop(app);
+
+    let mut app = preview(phone(), &[]);
+    app.press("id:tab-more").unwrap();
+    app.press("id:nav-builds").unwrap();
+    app.wait_for("id:build-B-peer-roster").unwrap();
+    app.press("id:build-B-peer-roster").unwrap();
+    app.wait_for("id:build-detail").unwrap();
+    app.wait_for("id:build-override").unwrap();
+    assert_eq!(app.screen().count("id:builds-list").unwrap(), 0);
+}
+
+/// A session running child agents lists them and their messages beside its transcript; a
+/// session without any shows no children list at all.
+#[test]
+fn only_a_session_with_children_lists_them() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.press("id:agent-T-871").unwrap();
+    app.wait_for("id:agent-T-871-child-reader").unwrap();
+    app.wait_for("id:agent-T-871-msg-3").unwrap();
+    drop(app);
+
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.press("id:agent-T-854").unwrap();
+    app.wait_for("id:session-transcript").unwrap();
+    assert_eq!(app.screen().count("id:session-fleet").unwrap(), 0);
 }

@@ -13,7 +13,9 @@ use corral_protocol::{
     app::APP_CONTROL_MAX,
     board::BoardCursor,
     frame::Frame,
-    subscription::{SessionLiveEvent, SessionLiveGap, SubAck, SubDelta, SubOpen},
+    subscription::{
+        SessionFleet, SessionLiveEvent, SessionLiveGap, SessionLiveKind, SubAck, SubDelta, SubOpen,
+    },
 };
 
 use super::super::notification;
@@ -55,6 +57,7 @@ struct Buffer {
     next: u64,
     more: bool,
     gap: Option<SessionLiveGap>,
+    fleet: Option<SessionFleet>,
 }
 
 impl Buffer {
@@ -70,6 +73,7 @@ impl Buffer {
             next: 0,
             more: false,
             gap: None,
+            fleet: None,
         }
     }
 
@@ -82,6 +86,7 @@ impl Buffer {
         self.next = 0;
         self.more = false;
         self.gap = gap;
+        self.fleet = None;
         self.ready = true;
     }
 
@@ -114,6 +119,21 @@ impl Buffer {
                 })
             });
             self.clear(Some(page.generation), gap);
+        }
+        if let Some(mut fleet) = page.fleet {
+            corral_ops::session_live::bound_fleet(
+                &mut fleet,
+                corral_ops::session_live::LIVE_FLEET_BYTES,
+            )?;
+            // A present empty replacement clears the cache; a missing field leaves it untouched.
+            self.fleet = if fleet.children.is_empty()
+                && fleet.messages.is_empty()
+                && fleet.messages_total == 0
+            {
+                None
+            } else {
+                Some(fleet)
+            };
         }
         for event in page.events {
             let bytes = serde_json::to_vec(&event)
@@ -292,9 +312,14 @@ impl SessionTopics {
             .ack(ack.cursor)
     }
 
-    pub fn flush(&mut self, shared: &Shared, conn: &mut dyn crate::conn::Conn) -> Result<()> {
+    pub fn flush(
+        &mut self,
+        shared: &Shared,
+        conn: &mut dyn crate::conn::Conn,
+        fleet: bool,
+    ) -> Result<()> {
         for subscriber in self.subscribers.values_mut() {
-            if let Some(frame) = subscriber.next(shared.epoch())? {
+            if let Some(frame) = subscriber.next(shared.epoch(), fleet)? {
                 conn.send_frame(&frame)
                     .context("pushing session live page")?;
             }
@@ -376,7 +401,7 @@ impl Subscriber {
         Ok(())
     }
 
-    fn next(&mut self, epoch: u64) -> Result<Option<Frame>> {
+    fn next(&mut self, epoch: u64, include_fleet: bool) -> Result<Option<Frame>> {
         if self.in_flight.is_some() {
             return Ok(None);
         }
@@ -413,8 +438,25 @@ impl Subscriber {
                 reconcile: true,
             });
         }
-        let mut used = 0;
-        let events: Vec<_> = buffer
+        let initial_fleet = include_fleet && self.version.is_none() && buffer.fleet.is_some();
+        if !initial_fleet
+            && gap.is_none()
+            && buffer
+                .events
+                .back()
+                .is_none_or(|(event, _)| event.seq <= start)
+        {
+            return Ok(None);
+        }
+        let fleet = include_fleet.then(|| buffer.fleet.clone()).flatten();
+        let fleet_bytes = fleet
+            .as_ref()
+            .map_or(Ok(0), |fleet| {
+                serde_json::to_vec(fleet).map(|bytes| bytes.len() + 16)
+            })
+            .context("sizing session fleet page")?;
+        let mut used = fleet_bytes;
+        let mut events: Vec<_> = buffer
             .events
             .iter()
             .filter(|(event, _)| event.seq > start)
@@ -425,8 +467,12 @@ impl Subscriber {
             })
             .map(|(event, _)| event.clone())
             .collect();
-        if events.is_empty() && gap.is_none() {
+        let seq = events.last().map_or(start, |event| event.seq);
+        if events.is_empty() && gap.is_none() && !(self.version.is_none() && fleet.is_some()) {
             return Ok(None);
+        }
+        if !include_fleet {
+            events.retain(|event| !matches!(event.kind, SessionLiveKind::LiveFleet {}));
         }
         let version = buffer.version;
         let generation = buffer.generation;
@@ -437,7 +483,6 @@ impl Subscriber {
             .serial
             .checked_add(1)
             .context("session page serial exhausted")?;
-        let seq = events.last().map_or(start, |event| event.seq);
         let cursor = BoardCursor {
             rev: seq,
             after: Some(format!("session:{version}:{}", self.serial)),
@@ -452,6 +497,7 @@ impl Subscriber {
                 cursor: cursor.clone(),
                 more: seq < next || source_more,
                 gap,
+                fleet,
             },
         )?;
         ensure!(

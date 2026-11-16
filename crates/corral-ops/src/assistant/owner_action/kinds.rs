@@ -73,7 +73,7 @@ const fn spec(
     }
 }
 
-pub const KINDS: [Spec; 21] = [
+pub const KINDS: [Spec; 22] = [
     spec(
         "approve",
         &["approve"],
@@ -212,6 +212,19 @@ pub const KINDS: [Spec; 21] = [
                 ("--note", true),
                 ("--expected-head", true),
                 ("--intent", true),
+            ],
+        )
+    },
+    Spec {
+        target: Target::Scratch,
+        ..spec(
+            "finish_here",
+            &["assistant", "scratch", "finish-here"],
+            &[],
+            &[
+                ("--title", true),
+                ("--expected-head", true),
+                ("--override-reason", true),
             ],
         )
     },

@@ -9,6 +9,7 @@ import { authContext, restrictProvider } from "../src/host/session.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
 import { runAuxiliarySession } from "../src/extensions/subagent/session.ts";
 import { AuxiliaryRuntime } from "../src/extensions/subagent/runtime.ts";
+import { FleetRuntime } from "../src/extensions/fleet/runtime.ts";
 
 test("real SDK explore reads but cannot write or recurse; oracle has no tools and persists cancellation", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "corral-auxiliary-"));
@@ -31,13 +32,20 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
       execute: (invocation, signal) => runAuxiliarySession({ sdk, models, provider: "openai-codex", cwd,
         agentDir: join(cwd, "agent"), parentLoadout: ["read", "write", "bash", "explore", "oracle"], localTools: [] }, invocation, signal),
     });
+    const fleet = new FleetRuntime({ sdk, models, approved: ["openai-codex"], parent: { provider: "openai-codex", model: "gpt-6.1-sol" },
+      context: { dir: cwd, session: { worktree: cwd, name: "parent" }, settings: { maxParallel: 3, profiles: [] } },
+      agentDir: join(cwd, "agent"), localTools: [], parentLoadout: ["read", "write", "bash", "explore", "oracle"],
+      allowedKinds: ["explore"], research: { settings: settings.explore, generation: 4, sessionId: () => "parent" },
+      async record(payload) { refs.push(payload); return { session_id: payload.request, session_file: join(cwd, `${payload.request}.jsonl`) }; },
+      changed() {}, deliverToParent() { throw new Error("Blocking research must not be redelivered"); },
+    });
     transport.script([
       { toolCalls: [{ callId: "read", name: "read", arguments: { path: "source.txt" } }] },
       { toolCalls: [{ callId: "write", name: "write", arguments: { path: "bad.txt", content: "bad" } }] },
       { toolCalls: [{ callId: "recurse", name: "explore", arguments: { prompt: "spawn" } }] },
       { text: "research finished" },
     ]);
-    const result = await runtime.run("explore", "research", "read source");
+    const result = await fleet.explore("research", "read source");
     expect(result.text).toBe("research finished");
     const child = readFileSync(join(cwd, `${result.request}.jsonl`), "utf8").split("\n").filter(Boolean).map((s) => JSON.parse(s));
     const toolResults = child.filter((e) => e.message?.role === "toolResult").map((e) => e.message);
@@ -52,14 +60,14 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
       { toolCalls: [{ callId: "bounded-read", name: "read", arguments: { path: "source.txt" } }] },
       { text: "source.txt:1 contains fixture source; further coverage is incomplete" },
     ]);
-    const bounded = await runtime.run("explore", "bounded", "Find the source and report evidence");
+    const bounded = await fleet.explore("bounded", "Find the source and report evidence");
     expect(transport.requests - beforeResearch).toBe(2);
     const boundedChild = readFileSync(join(cwd, `${bounded.request}.jsonl`), "utf8").split("\n").filter(Boolean).map(s => JSON.parse(s));
     expect(boundedChild.flatMap(entry => entry.message?.toolsRemoved ?? []).map(tool => tool.name)).toContain("read");
     expect(bounded.text).toContain("source.txt:1");
     expect(bounded.report).toMatchObject({ status: "partial", stopReason: "turn_limit" });
     transport.script([{ text: "source.txt:1 already answers the narrow question" }]);
-    const early = await runtime.run("explore", "early", "Answer from supplied context");
+    const early = await fleet.explore("early", "Answer from supplied context");
     expect(early.report).toMatchObject({ status: "completed", stopReason: "completed" });
     // A provider that ignores tool removal still cannot execute tools or spend another turn.
     transport.script([
@@ -67,7 +75,7 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
       { toolCalls: [{ callId: "ignored-removal", name: "read", arguments: { path: "missing.txt" } }] },
     ]);
     const beforeFallback = transport.requests;
-    const fallback = await runtime.run("explore", "fallback", "Research source");
+    const fallback = await fleet.explore("fallback", "Research source");
     expect(transport.requests - beforeFallback).toBe(2);
     expect(fallback.report).toMatchObject({ status: "partial", stopReason: "turn_limit" });
     expect(fallback.text).toContain("fixture source");
@@ -78,7 +86,7 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     settings.explore.timeout_secs = 4;
     transport.script([{ toolCalls: [{ callId: "reserve", name: "read", arguments: { path: "source.txt" } }] }]);
     const beforeReserve = transport.requests;
-    const reserved = await runtime.run("explore", "reserve", "Answer from supplied context");
+    const reserved = await fleet.explore("reserve", "Answer from supplied context");
     expect(transport.requests - beforeReserve).toBe(1);
     expect(reserved.report?.stopReason).toBe("time_reserve");
     settings.explore.timeout_secs = 30;
@@ -88,7 +96,7 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     transport.holdNext();
     const researchHeld = transport.whenHeld();
     const beforeCancel = transport.requests;
-    const interrupted = runtime.run("explore", "cancelled", "Research source", stopResearch.signal);
+    const interrupted = fleet.explore("cancelled", "Research source", stopResearch.signal);
     await researchHeld;
     stopResearch.abort();
     expect((await interrupted).report).toMatchObject({ status: "failed", stopReason: "cancelled" });
@@ -136,7 +144,7 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     expect(expertTranscript.filter(entry => entry.message?.role === "toolResult").map(entry => [entry.message.toolName, entry.message.isError]))
       .toEqual([["read", false], ["write", true], ["bash", true], ["corral_expert", true]]);
     expect(existsSync(join(cwd, "expert-bad.txt"))).toBeFalse();
-    await runtime.close();
+    await Promise.all([runtime.close(), fleet.close()]);
     console.log("real SDK: allowed read succeeded; write/recursive spawn failed; oracle declared zero tools; cancellation saved once");
   } finally { globalThis.fetch = originalFetch; rmSync(cwd, { recursive: true, force: true }); }
 }, 30_000);

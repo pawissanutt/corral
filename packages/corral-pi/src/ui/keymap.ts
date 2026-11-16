@@ -358,12 +358,13 @@ export function footerRow(hints: readonly Hint[], tier: ChromeTier, width: numbe
 
 /**
  * The F1 keys list for this mode: every group holds only keys the mode offers. Rows with data run on Enter.
- * `build` adds Board and the message receiver, names each agent's own keys, and has no Task, Proof or Inbox.
+ * `build` adds Board (unless `board` is false: a bare session has none) and the message receiver, names each agent's
+ * own keys, and has no Task, Proof or Inbox.
  * `sidebarKey` is the chosen sidebar toggle; `questionsKey` the owner-question key when it is free.
  */
 export function keyGroups(mode: {
   readonly taskBound: boolean; readonly answer: boolean; readonly jobs: boolean;
-  readonly queueControl: boolean; readonly lifecycle: boolean; readonly build?: boolean;
+  readonly queueControl: boolean; readonly lifecycle: boolean; readonly build?: boolean; readonly board?: boolean;
   readonly sidebarKey?: KeyId; readonly questionsKey?: KeyId;
 }): KeyGroup[] {
   const row = (binding: string, label: string): KeyRow => {
@@ -382,7 +383,7 @@ export function keyGroups(mode: {
   const info = (key: string, label: string): KeyRow => ({ key, label });
   const rows = (...items: (KeyRow | false | undefined)[]) => items.filter((item): item is KeyRow => !!item);
   const focus = mode.queueControl ? queueFocusKey() : undefined;
-  const build = mode.build === true, target = build ? targetKey() : undefined;
+  const build = mode.build === true, board = build && mode.board !== false, target = build ? targetKey() : undefined;
   const taskBound = mode.taskBound && !build;
   // The views in tab order (header.ts mainTabs): the F-key, and Alt+n when the terminal and the user leave it free.
   const views = [
@@ -391,7 +392,7 @@ export function keyGroups(mode: {
     { key: "f8", label: build ? "Agents: every agent, focus the list" : mode.jobs ? "Agents: helper calls and jobs, focus the list" : "Agents: helper calls, focus the list" },
     { key: "f7", label: build ? "Changes: files and diffs, filtered by agent" : "Changes: files and diffs in the chosen comparison" },
     taskBound && { key: "f10", label: "Proof: criteria, gate and review" },
-    build && { key: "f10", label: "Board: tasks this session filed" },
+    board && { key: "f10", label: "Board: tasks this session filed" },
     !build && { key: "f11", label: "Inbox: decisions waiting for the owner" },
   ].filter((item): item is { key: string; label: string } => !!item);
   const rail = mode.sidebarKey ?? "ctrl+b", filter = keyLabel(FILTER_KEY);
@@ -449,7 +450,7 @@ export function keyGroups(mode: {
       info("r", "Refresh"),
     ) },
   ];
-  if (build) {
+  if (board) {
     groups.push({ title: "Board", rows: rows(
       info("↑↓", "Select a task"),
       info("⏎", "Details"),

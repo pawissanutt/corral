@@ -3,7 +3,7 @@ import { isAbsolute } from "node:path";
 import type { AwsBinding } from "../auth/aws.ts";
 import { isAwsRegion, isProviderId } from "../auth/providers.ts";
 import { capabilityGuidance, capabilitySet, LaunchMessageInvalid } from "../host/config.ts";
-import { EXIT_POLICIES, type BuildLaunch, type ExitPolicy } from "./types.ts";
+import { EXIT_POLICIES, MAX_PARALLEL_LIMIT, type BuildLaunch, type ExitPolicy } from "./types.ts";
 
 type Json = Record<string, unknown>;
 const MAX_BYTES = 64 * 1024;
@@ -54,12 +54,17 @@ export function readBuildLaunch(fd: number): BuildLaunch {
   catch { throw new LaunchMessageInvalid("not JSON"); }
   const wire = object(parsed, "launch");
   if (wire.version !== 1) throw new LaunchMessageInvalid("version must be 1");
+  if (wire.bare !== undefined && typeof wire.bare !== "boolean") throw new LaunchMessageInvalid("bare must be a boolean");
+  const bare = wire.bare === true;
+  if (bare && ["workspace_root", "project", "corral", "aws"].some(key => key in wire)) {
+    throw new LaunchMessageInvalid("bare launches cannot carry workspace_root, project, corral or aws");
+  }
   if (typeof wire.here !== "boolean") throw new LaunchMessageInvalid("here must be a boolean");
   if (!isProviderId(wire.provider)) throw new LaunchMessageInvalid("provider is unknown");
   const settings = object(wire.settings, "settings");
   if (!EXIT_POLICIES.includes(settings.exit_policy as ExitPolicy)) throw new LaunchMessageInvalid("exit_policy is unknown");
-  if (!Number.isSafeInteger(settings.max_parallel) || Number(settings.max_parallel) < 1 || Number(settings.max_parallel) > 8) {
-    throw new LaunchMessageInvalid("max_parallel must be 1 to 8");
+  if (!Number.isSafeInteger(settings.max_parallel) || Number(settings.max_parallel) < 1 || Number(settings.max_parallel) > MAX_PARALLEL_LIMIT) {
+    throw new LaunchMessageInvalid(`max_parallel must be 1 to ${MAX_PARALLEL_LIMIT}`);
   }
   if (!Array.isArray(settings.profiles)) throw new LaunchMessageInvalid("profiles must be a list");
   const names = new Set<string>();
@@ -89,7 +94,8 @@ export function readBuildLaunch(fd: number): BuildLaunch {
     aws = { profile, region };
   }
   return {
-    version: 1, assets: path(wire, "assets"), dataRoot: path(wire, "data_root"), corral: path(wire, "corral"),
+    version: 1, assets: path(wire, "assets"), dataRoot: path(wire, "data_root"),
+    ...(bare ? { bare: true } : { corral: path(wire, "corral") }),
     repoRoot: path(wire, "repo_root"), here: wire.here, provider: wire.provider, model: model(wire, false),
     ...(wire.workspace_root != null ? { workspaceRoot: path(wire, "workspace_root") } : {}),
     ...(project !== undefined ? { project } : {}), ...(wire.name != null ? { name: text(wire, "name", 256) } : {}),

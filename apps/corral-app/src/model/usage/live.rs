@@ -167,7 +167,7 @@ fn chart(
     })
 }
 
-fn tokens(count: u64) -> String {
+pub(crate) fn tokens(count: u64) -> String {
     match count {
         0..1_000 => count.to_string(),
         1_000..1_000_000 => format!("{:.1}k", count as f64 / 1_000.0),

@@ -12,6 +12,7 @@ use corral_protocol::{
 pub(crate) enum Rows {
     Inbox(Vec<InboxRow>),
     Plans(Vec<PlanRow>),
+    Builds(Vec<BuildRow>),
     Agents(Vec<AgentRow>),
     Assistant(Vec<AssistantRow>),
     Usage(Vec<UsageRow>),
@@ -24,6 +25,7 @@ macro_rules! each {
         match $self {
             Rows::Inbox($rows) => $body,
             Rows::Plans($rows) => $body,
+            Rows::Builds($rows) => $body,
             Rows::Agents($rows) => $body,
             Rows::Assistant($rows) => $body,
             Rows::Usage($rows) => $body,
@@ -66,6 +68,7 @@ impl Rows {
         match self {
             Self::Inbox(rows) => SubDelta::Inbox { delta: page!(rows) },
             Self::Plans(rows) => SubDelta::Plans { delta: page!(rows) },
+            Self::Builds(rows) => SubDelta::Builds { delta: page!(rows) },
             Self::Agents(rows) => SubDelta::Agents { delta: page!(rows) },
             Self::Assistant(rows) => SubDelta::Assistant { delta: page!(rows) },
             Self::Usage(rows) => SubDelta::Usage { delta: page!(rows) },
@@ -83,6 +86,7 @@ pub(super) fn read(ctx: &Ctx, topic: Topic) -> Result<Rows> {
     Ok(match topic {
         Topic::Inbox => Rows::Inbox(app_read::inbox_rows(ctx)?),
         Topic::Plans => Rows::Plans(app_read::plans_rows(ctx)?),
+        Topic::Builds => Rows::Builds(app_read::builds_rows(ctx)?),
         Topic::Agents => Rows::Agents(app_read::agents_rows(ctx)?),
         Topic::Assistant => Rows::Assistant(app_read::assistant_rows(ctx)?),
         Topic::Usage => Rows::Usage(app_read::usage_rows(ctx)?),

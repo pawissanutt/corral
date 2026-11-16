@@ -212,6 +212,7 @@ pub const fn capability(destination: Destination) -> Option<&'static str> {
         Destination::Inbox => Some(wire::INBOX_V1),
         Destination::Changes => Some(wire::CHANGES_V1),
         Destination::Plans => Some(wire::PLANS_V1),
+        Destination::Builds => Some(wire::BUILDS_V1),
         Destination::Agents => Some(wire::AGENTS_V1),
         Destination::Review => Some(wire::REVIEW_V1),
         Destination::Timeline => Some(wire::TIMELINE_V1),
