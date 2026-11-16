@@ -532,6 +532,48 @@ impl NavState {
     }
 }
 
+/// Explicit record navigation changes only a destination scope that would hide the record.
+/// Legacy plan rows have unknown project membership and already ignore project filters.
+pub fn explicit_record_filter(
+    feed: &crate::model::daemon::Feed,
+    filters: &crate::model::projects::Filters,
+    live: &Live,
+) -> Option<(
+    crate::model::projects::FilterScreen,
+    crate::model::projects::ProjectFilter,
+)> {
+    use crate::model::projects::{FilterScreen, ProjectFilter};
+
+    let store = feed.store.as_deref()?;
+    let screen = FilterScreen::of(live.owner())?;
+    let filter = filters.get(store, screen, feed);
+    if filter == ProjectFilter::All {
+        return None;
+    }
+    let projects = match live {
+        Live::Task(id) => feed.board.task(id)?.project.as_slice(),
+        Live::Build(id) => feed.builds.get(id)?.project.as_slice(),
+        Live::Plan(id) if feed.capable(corral_protocol::PROJECTS_V1) => {
+            feed.plans.get(id)?.projects.as_slice()
+        }
+        _ => return None,
+    };
+    let visible = match &filter {
+        ProjectFilter::All => true,
+        ProjectFilter::Project(project) => projects.iter().any(|name| name == project.as_str()),
+        ProjectFilter::Unassigned => projects.is_empty(),
+    };
+    if visible {
+        return None;
+    }
+    let scope = match projects {
+        [] => ProjectFilter::Unassigned,
+        [project] => ProjectFilter::Project(crate::model::Id::from(project.as_str())),
+        _ => ProjectFilter::All,
+    };
+    Some((screen, scope))
+}
+
 /// Navigation targets keep Ask a chat interaction rather than a board destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NavigationTarget {
@@ -625,6 +667,75 @@ mod tests {
         assert_eq!(nav.close_newest(), Some(Overlay::Ask));
         assert_eq!(nav.close_newest(), Some(Overlay::Palette));
         assert_eq!(nav.close_newest(), None);
+    }
+
+    #[test]
+    fn explicitly_opening_a_hidden_plan_reveals_its_project_and_requested_detail() {
+        use crate::model::projects::{FilterScreen, Filters, ProjectFilter};
+        use corral_protocol::rows::{PlanRow, PlanState, ProjectRow};
+
+        let mut feed = crate::model::daemon::Feed {
+            store: Some("store".into()),
+            ..Default::default()
+        };
+        feed.capabilities
+            .insert(corral_protocol::PROJECTS_V1.into());
+        for project in ["A", "B"] {
+            feed.projects.insert(
+                project.into(),
+                ProjectRow {
+                    id: project.into(),
+                    path: project.into(),
+                    open: 0,
+                    running: 0,
+                    review: 0,
+                    needs_me: 0,
+                    in_pm_scope: false,
+                    autopilot: false,
+                    rev: 1,
+                },
+            );
+        }
+        for (id, project) in [("T-1", "A"), ("T-2", "B")] {
+            feed.plans.insert(
+                id.into(),
+                PlanRow {
+                    id: id.into(),
+                    title: id.into(),
+                    projects: vec![project.into()],
+                    role: None,
+                    linked: None,
+                    state: PlanState::Drafting,
+                    revision: None,
+                    delivery: None,
+                    members_total: 0,
+                    members_landed: 0,
+                    blockers: vec![],
+                    accepted_at: None,
+                    rev: 1,
+                },
+            );
+        }
+        for form in [Form::Desktop, Form::Terminal, Form::Phone] {
+            let mut filters = Filters::default();
+            filters.set(
+                "store",
+                FilterScreen::Plans,
+                ProjectFilter::Project("A".into()),
+            );
+            let mut nav = NavState::new(form);
+            let live = Live::Plan("T-2".into());
+            let (screen, filter) = explicit_record_filter(&feed, &filters, &live).unwrap();
+            filters.set("store", screen, filter);
+            nav.open_live(live.clone(), form);
+            let filter = filters.get("store", FilterScreen::Plans, &feed);
+            assert_eq!(filter, ProjectFilter::Project("B".into()));
+            assert_eq!(
+                crate::model::plans::current_plan_filtered(&nav.selection, &feed, &filter),
+                Some("T-2".into()),
+            );
+            assert_eq!(explicit_record_filter(&feed, &filters, &live), None);
+        }
     }
 
     #[test]

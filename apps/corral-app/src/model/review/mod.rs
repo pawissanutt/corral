@@ -3,6 +3,7 @@
 //! The feed-backed candidate lists tasks awaiting review and reads their immutable candidate,
 //! task details and expanded file patches. Every decision and comment is a canonical command
 //! carrying the current candidate's preconditions.
+//! Project filters scope the candidate list, not an explicitly pushed candidate page or its actions.
 //! Render the builders' fields without consulting state again.
 //! Patches and new-comment composers carry the same immutable run/base/head identity. An older
 //! daemon that omits a patch identity can still be read, but cannot safely accept line actions.

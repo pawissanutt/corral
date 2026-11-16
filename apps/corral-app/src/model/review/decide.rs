@@ -619,13 +619,14 @@ impl State {
         }
     }
 
-    /// Applies a served control's intent with the feed and the root's selection.
-    /// `filter` is the Review screen's own scope, so a pick or a step lands on its rows.
+    /// Applies a served control to the pushed `focus`, or the root's selection in list mode.
+    /// `filter` scopes list selection only; a pushed page keeps its explicit target.
     pub fn apply_live_filtered(
         &mut self,
         action: Action,
         feed: &Feed,
         selection: &Selection,
+        focus: Option<&Id>,
         env: Env,
         filter: &ProjectFilter,
     ) -> Vec<Effect> {
@@ -649,7 +650,11 @@ impl State {
             }
             _ => {}
         }
-        let Some(task) = selected_filtered(selection, feed, filter) else {
+        let task = match focus {
+            Some(id) => feed.board.task(id),
+            None => selected_filtered(selection, feed, filter),
+        };
+        let Some(task) = task else {
             return Vec::new();
         };
         let shown = Shown::of(feed, task);

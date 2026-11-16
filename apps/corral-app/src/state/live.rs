@@ -50,6 +50,7 @@ impl AppState {
 
     /// Selects a live record and pushes its page where this form stacks it.
     pub fn open_live(&self, live: Live) {
+        self.reveal_live(&live);
         if matches!(live, Live::Thread(_)) {
             self.close(Overlay::Ask);
         }
@@ -59,6 +60,7 @@ impl AppState {
 
     /// Selects a live record in place.
     pub fn select(&self, live: Live) {
+        self.reveal_live(&live);
         self.nav.update(|nav| nav.selection.set(&live));
     }
 

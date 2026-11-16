@@ -375,6 +375,7 @@ fn disconnected_live_review_approval_refuses_without_a_command_or_confirmation()
         review::Action::Approve,
         &feed,
         &selection,
+        None,
         env,
         &all,
     );
@@ -388,6 +389,7 @@ fn disconnected_live_review_approval_refuses_without_a_command_or_confirmation()
         review::Action::Approve,
         &feed,
         &selection,
+        None,
         env,
         &all,
     );

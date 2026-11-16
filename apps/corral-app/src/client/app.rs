@@ -186,6 +186,7 @@ impl AppState {
                 feed.inbox.clear();
                 feed.plans.clear();
                 feed.builds.clear();
+                feed.projects.clear();
                 feed.agents.clear();
                 feed.assistants.clear();
                 feed.usage.clear();

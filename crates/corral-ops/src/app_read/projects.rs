@@ -53,11 +53,12 @@ pub(super) fn projects_rows(ctx: &Ctx) -> Result<Vec<ProjectRow>> {
         row.running = row.running.saturating_add(u32::from(worker_live(&head)));
         // The board also treats a completed worker as waiting for review before the
         // lifecycle reconciliation has moved its task to Review.
-        let review = head.status == Status::Review
-            || head
-                .current_run
-                .as_deref()
-                .is_some_and(|run| run.outcome == Some(RunOutcome::Done));
+        let review = crate::review::awaiting_owner(&head)?
+            || (head.status == Status::Running
+                && head
+                    .current_run
+                    .as_deref()
+                    .is_some_and(|run| run.outcome == Some(RunOutcome::Done)));
         row.review = row.review.saturating_add(u32::from(review));
     }
     for item in super::questions::inbox_rows(ctx)? {

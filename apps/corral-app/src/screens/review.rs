@@ -131,6 +131,7 @@ fn page_view(cx: &Ctx, width: f32) -> PageView {
 fn act(cx: &Ctx, action: Action) -> impl Fn() + 'static {
     let app = cx.app;
     let drafts = cx.drafts;
+    let focus = cx.focus.clone();
     move || {
         if let Action::Restore { draft, text, .. } = &action {
             drafts.update(|all| {
@@ -138,9 +139,10 @@ fn act(cx: &Ctx, action: Action) -> impl Fn() + 'static {
             });
         }
         let action = action.clone();
+        let focus = focus.clone();
         let filter = untracked(|| scope(app));
         app.reduce(app.review, move |state, feed, selection, env| {
-            state.apply_live_filtered(action, feed, selection, env, &filter)
+            state.apply_live_filtered(action, feed, selection, focus.as_ref(), env, &filter)
         });
     }
 }

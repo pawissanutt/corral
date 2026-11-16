@@ -15,6 +15,8 @@ impl AppState {
             feed.inbox.clear();
             feed.plans.clear();
             feed.builds.clear();
+            feed.projects.clear();
+            feed.topics.remove("projects");
             feed.health = None;
             feed.drafts.clear();
             feed.commands.clear();

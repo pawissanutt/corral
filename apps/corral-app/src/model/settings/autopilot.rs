@@ -5,6 +5,7 @@
 use corral_protocol::cmd::Command;
 use corral_protocol::cmd::mode::ModeCommand;
 use corral_protocol::rows::{OperatingMode, SettingsSnapshot};
+use std::collections::BTreeSet;
 
 use super::live::grant_on;
 use crate::model::daemon::Feed;
@@ -170,6 +171,7 @@ pub struct ProjectOption {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GrantForm {
     pub projects: String,
+    pub selected_projects: BTreeSet<Id>,
     pub tasks: String,
     pub plans: String,
     pub exclusions: String,
@@ -223,48 +225,45 @@ impl GrantForm {
         if known.is_empty() {
             return ProjectPicker::FreeText;
         }
-        let selected = list(&self.projects);
         ProjectPicker::Known(
             known
                 .into_iter()
                 .map(|id| ProjectOption {
-                    selected: selected.iter().any(|project| project == id.as_str()),
+                    selected: self.selected_projects.contains(&id),
                     id,
                 })
                 .collect(),
         )
     }
 
-    /// Toggle only a known project; retire stale text scopes when switching to the picker.
+    /// Toggle only a known project, removing selections no longer in the list.
     pub fn toggle_project(&mut self, feed: &Feed, project: Id) {
         let known = known_projects(feed);
         if !known.contains(&project) {
             return;
         }
-        let mut selected = list(&self.projects);
-        selected.retain(|project| known.iter().any(|id| id.as_str() == project));
-        if selected.iter().any(|id| id == project.as_str()) {
-            selected.retain(|id| id != project.as_str());
-        } else {
-            selected.push(project.to_string());
+        self.selected_projects.retain(|id| known.contains(id));
+        if !self.selected_projects.remove(&project) {
+            self.selected_projects.insert(project);
         }
-        selected.sort_unstable();
-        selected.dedup();
-        self.projects = selected.join(", ");
     }
 
     /// Feed-aware validation prevents a stale free-text scope bypassing the known list.
     pub fn problem_for(&self, feed: &Feed) -> Option<&'static str> {
-        if let Some(problem) = self.problem() {
-            return Some(problem);
-        }
         let known = known_projects(feed);
-        if !known.is_empty()
-            && list(&self.projects)
+        let projects = if known.is_empty() {
+            list(&self.projects)
+        } else {
+            if self.selected_projects.iter().any(|id| !known.contains(id)) {
+                return Some("Choose projects from the current project list.");
+            }
+            self.selected_projects
                 .iter()
-                .any(|project| !known.iter().any(|id| id.as_str() == project))
-        {
-            return Some("Choose projects from the current project list.");
+                .map(ToString::to_string)
+                .collect()
+        };
+        if let Some(problem) = self.problem(&projects) {
+            return Some(problem);
         }
         None
     }
@@ -273,19 +272,24 @@ impl GrantForm {
         if self.problem_for(feed).is_some() {
             return None;
         }
-        Some(self.grant(ids))
+        let projects = if known_projects(feed).is_empty() {
+            list(&self.projects)
+        } else {
+            self.selected_projects
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        };
+        Some(self.grant(ids, projects))
     }
 
     pub fn power(&self, power: Power) -> bool {
         self.powers[power as usize]
     }
 
-    /// Why the grant cannot be previewed yet, before the project list is consulted.
-    fn problem(&self) -> Option<&'static str> {
-        if list(&self.projects).is_empty()
-            && list(&self.tasks).is_empty()
-            && list(&self.plans).is_empty()
-        {
+    /// Why the grant cannot be previewed yet.
+    fn problem(&self, projects: &[String]) -> Option<&'static str> {
+        if projects.is_empty() && list(&self.tasks).is_empty() && list(&self.plans).is_empty() {
             return Some("Name at least one project, task or plan; corral never grants all work.");
         }
         if !self.powers.iter().any(|on| *on) {
@@ -297,9 +301,9 @@ impl GrantForm {
         None
     }
 
-    fn grant(&self, ids: &mut IdSupply) -> Act {
+    fn grant(&self, ids: &mut IdSupply, projects: Vec<String>) -> Act {
         let command = ModeCommand::Autopilot {
-            projects: list(&self.projects),
+            projects,
             include_new: self.include_new,
             expires_after_days: count(&self.expires_days).ok().flatten(),
             max_new_tasks: count(&self.max_new).ok().flatten(),
@@ -375,7 +379,7 @@ mod tests {
         );
         form.toggle_project(&feed, "mitiplay".into());
         form.toggle_project(&feed, "corral".into());
-        assert_eq!(form.projects, "corral, mitiplay");
+        assert_eq!(form.selected_projects.len(), 2);
         let ProjectPicker::Known(options) = form.project_picker(&feed) else {
             panic!("known project picker expected");
         };
@@ -389,7 +393,7 @@ mod tests {
         };
         assert_eq!(projects, ["corral", "mitiplay"]);
         form.toggle_project(&feed, "mitiplay".into());
-        assert_eq!(form.projects, "corral");
+        assert_eq!(form.selected_projects, BTreeSet::from([Id::from("corral")]));
 
         feed.projects.clear();
         assert_eq!(form.project_picker(&feed), ProjectPicker::FreeText);
@@ -397,6 +401,50 @@ mod tests {
         assert!(
             form.act_for(&feed, &mut IdSupply::new("grant-test"))
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn picker_preserves_project_ids_with_spaces_and_commas() {
+        use corral_protocol::rows::ProjectRow;
+
+        let id = "repo one, two";
+        let mut feed = Feed::default();
+        feed.capabilities
+            .insert(corral_protocol::PROJECTS_V1.into());
+        feed.projects.insert(
+            id.into(),
+            ProjectRow {
+                id: id.into(),
+                path: id.into(),
+                open: 0,
+                running: 0,
+                review: 0,
+                needs_me: 0,
+                in_pm_scope: false,
+                autopilot: false,
+                rev: 1,
+            },
+        );
+        let mut form = GrantForm::default();
+        form.powers[Power::Dispatch as usize] = true;
+        form.toggle_project(&feed, id.into());
+        let ProjectPicker::Known(options) = form.project_picker(&feed) else {
+            panic!("known project picker expected");
+        };
+        assert_eq!(options.len(), 1);
+        assert!(options[0].selected);
+        let act = form
+            .act_for(&feed, &mut IdSupply::new("grant-test"))
+            .unwrap();
+        let Command::Mode(ModeCommand::Autopilot { projects, .. }) = act.command else {
+            panic!("autopilot command expected");
+        };
+        assert_eq!(projects, [id]);
+        form.toggle_project(&feed, id.into());
+        assert!(
+            form.act_for(&feed, &mut IdSupply::new("grant-test"))
+                .is_none()
         );
     }
 }
