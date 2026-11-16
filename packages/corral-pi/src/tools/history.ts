@@ -18,7 +18,8 @@ export function historyArgs(request: HistoryRequest): string[] {
     case "questions": return ["question", "list", "--task", task(request.task), "--json"];
     case "assistant":
       if (!/^A-\d+$/.test(request.assistant)) throw new Error("Invalid history assistant");
-      return ["assistant", "show", request.assistant, "--json"];
+      // Bounded: History reads no receipt/budget/usage rows; long sessions must still open.
+      return ["assistant", "show", request.assistant, "--json", "--host"];
     case "recovery": return ["agent", "rewind", task(request.task), "--run", run(request.run), "--list"];
     case "transcript":
       if (!Number.isSafeInteger(request.first) || request.first < 1 || request.first > 1_000_000) throw new Error("Invalid history page");

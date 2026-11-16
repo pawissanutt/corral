@@ -435,3 +435,52 @@ fn blocked_card_menu_opens_recover_by_keyboard_and_mouse_and_cancel_has_no_effec
         "no recovery record"
     );
 }
+
+#[test]
+fn handed_off_card_take_over_by_key_and_by_menu_click_reach_the_same_handler() {
+    // Given a transfer-fenced card (no readable transfer journal: the service must refuse).
+    let fx = seeded();
+    fx.ctx
+        .store
+        .update("T-002", |task| {
+            task.cowork = Some(corral_core::Cowork {
+                completion: Some(corral_core::CompletionScope {
+                    version: 1,
+                    contract_revision: "fixture".into(),
+                    intent: corral_core::CompletionIntent::Ship,
+                    driver: corral_core::CompletionDriver::Board,
+                    instruction: "fixture transfer".into(),
+                }),
+                session: "A-1".into(),
+                scratch: "work".into(),
+                run: "R1".into(),
+                review: corral_core::CoworkReview::TransferV1,
+                owner_confirmed: false,
+                review_waiver: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let (mut app, _) = board_app(&fx);
+    app.handle_key(code(KeyCode::Char('r')));
+    let text = render(&mut app);
+    click(&mut app, find_any(&text, "T-002"));
+    // When the owner presses T, then chooses the menu's "take over and finish" by pointer.
+    app.toasts.clear();
+    app.handle_key(crate::board::tests::key('T'));
+    render(&mut app);
+    let by_key: Vec<_> = app.toasts.iter().map(|(t, _)| t.title.clone()).collect();
+    app.toasts.clear();
+    let text = render(&mut app);
+    let (x, y) = find_any(&text, "T-002");
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Right), x, y));
+    let text = render(&mut app);
+    click(&mut app, find_any(&text, "take over and finish"));
+    let by_menu: Vec<_> = app.toasts.iter().map(|(t, _)| t.title.clone()).collect();
+    // Then both reach the same service with the same refusal, and nothing changes.
+    assert_eq!(by_key, vec!["T-002: nothing changed".to_string()]);
+    assert_eq!(by_menu, by_key);
+    let task = fx.ctx.store.get("T-002").unwrap();
+    assert_eq!(task.status, Status::Backlog);
+    assert!(task.runs.is_empty());
+}

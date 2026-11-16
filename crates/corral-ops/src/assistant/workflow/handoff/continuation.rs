@@ -28,7 +28,44 @@ impl Choice {
     }
 }
 
-pub fn preview(ctx: &Ctx, id: &str, goal: Goal) -> Result<Choice> {
+/// Everything a continuation binds except the goal, as a card displays it. The board keeps
+/// the pin from the frame it rendered; activation compares it to the current pin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pin {
+    pub transfer: String,
+    pub task: String,
+    pub revision: u64,
+    pub contract_revision: String,
+    /// Exact plan identity (continuations) and fresh review target (review-only goal).
+    pub plan: Option<ReviewTarget>,
+    pub review: Option<Result<ReviewTarget, String>>,
+    pub code: Option<super::code_pin::CodePin>,
+}
+
+impl Pin {
+    fn choice(self, goal: Goal) -> Result<Choice> {
+        let plan = match goal {
+            Goal::PlanReviewOnly => self.review.map(|r| r.map_err(anyhow::Error::msg)).transpose()?,
+            _ => self.plan,
+        };
+        ensure!(
+            goal != Goal::PlanReviewOnly || plan.is_some(),
+            "plan_review_only: formal reviewable snapshot and actual producer required; no replacement planner"
+        );
+        Ok(Choice {
+            transfer: self.transfer,
+            task: self.task,
+            revision: self.revision,
+            contract_revision: self.contract_revision,
+            goal,
+            plan,
+            code: self.code,
+        })
+    }
+}
+
+pub fn pin(ctx: &Ctx, id: &str) -> Result<Pin> {
     let task = ctx.store.head(id)?;
     let journal =
         lifecycle::for_task(&ctx.store, &task)?.context("handoff: task has no transfer")?;
@@ -48,31 +85,36 @@ pub fn preview(ctx: &Ctx, id: &str, goal: Goal) -> Result<Choice> {
         !matches!(task.status, Status::Done | Status::Dropped),
         "handoff: task is terminal"
     );
-    let plan = task
-        .last_plan_head()?
-        .map(|_| {
-            if goal == Goal::PlanReviewOnly {
-                lifecycle::review_target(&task)
-            } else {
-                lifecycle::plan_identity(&task)
-            }
-        })
+    let planned = task.last_plan_head()?.is_some();
+    let plan = planned
+        .then(|| lifecycle::plan_identity(&task))
         .transpose()?;
-    ensure!(
-        goal != Goal::PlanReviewOnly || plan.is_some(),
-        "plan_review_only: formal reviewable snapshot and actual producer required; no replacement planner"
-    );
-    let contract_revision = task.contract_revision()?;
-    let code = super::code_pin::current(ctx, &task)?;
-    Ok(Choice {
+    let review = planned.then(|| lifecycle::review_target(&task).map_err(|e| format!("{e:#}")));
+    Ok(Pin {
         transfer: journal.id.clone(),
         task: task.id.clone(),
         revision: transfer.revision,
-        contract_revision,
-        goal,
+        contract_revision: task.contract_revision()?,
         plan,
-        code,
+        review,
+        code: super::code_pin::current(ctx, &task)?,
     })
+}
+
+pub fn preview(ctx: &Ctx, id: &str, goal: Goal) -> Result<Choice> {
+    pin(ctx, id)?.choice(goal)
+}
+
+/// A continuation pinned to the card the owner saw: the current pin (contract, plan,
+/// transfer revision and code layers) must equal the one displayed, else it refuses as stale.
+pub fn preview_pinned(ctx: &Ctx, shown: Option<&Pin>, id: &str, goal: Goal) -> Result<Choice> {
+    let shown = shown.context("handoff_stale_choice: the card shows no continuation; refresh")?;
+    let current = pin(ctx, id)?;
+    ensure!(
+        &current == shown,
+        "handoff_stale_choice: the card changed since it was shown; refresh"
+    );
+    current.choice(goal)
 }
 
 pub(crate) fn start(

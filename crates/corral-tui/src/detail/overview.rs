@@ -127,6 +127,19 @@ impl DetailView {
                 theme::dim(),
             ));
         }
+        if let Some(h) = &self.handoff {
+            // Text-labelled responsibility and its real wait; Open assistant stays inspection.
+            lines.push(Line::styled(h.label.clone(), theme::bold()));
+            if let Some(waiting) = &h.waiting {
+                lines.extend(ui::text_lines(waiting));
+            }
+            if h.plan_only {
+                lines.push(Line::styled(
+                    "Plan only: no implementation runs under this goal.",
+                    theme::dim(),
+                ));
+            }
+        }
         if task.tracker {
             lines.push(Line::from(format!(
                 "{} child tasks. Open Plan [8] for their status.",

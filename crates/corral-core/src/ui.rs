@@ -39,7 +39,7 @@ impl Accent {
 }
 
 /// Action name, canonical key, and Settings label. Arrows and Enter remain available.
-pub const BOARD_KEYS: [(&str, char, &str); 32] = [
+pub const BOARD_KEYS: [(&str, char, &str); 37] = [
     ("assistant", 's', "Open card assistant"),
     ("assistants", 'S', "Assistants and PM inbox"),
     ("left", 'h', "Select left"),
@@ -72,6 +72,11 @@ pub const BOARD_KEYS: [(&str, char, &str); 32] = [
     ("leave", 'q', "Leave board"),
     ("messages", 'M', "Messages"),
     ("capture_alias", 'c', "New task alias"),
+    ("work_here", 'W', "Work on this here (take back)"),
+    ("save_later", 'K', "Save for later"),
+    ("continue_planning", 'N', "Continue planning"),
+    ("review_plan", 'U', "Review this plan"),
+    ("take_over", 'T', "Take over and finish"),
 ];
 
 /// `[ui]`: personal preferences; workspace values override them key by key.

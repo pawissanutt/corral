@@ -511,3 +511,40 @@ fn incomplete_review_only_refuses_without_task_or_reservation_instead_of_replann
     assert!(f.ctx.store.list().unwrap().is_empty());
     assert!(read_journal(&f.ctx.store, prepared.id()).unwrap().is_none());
 }
+
+#[test]
+fn board_continuation_refuses_a_card_that_changed_after_it_was_shown() {
+    let (f, _, prepared) = setup(Goal::PlanContinue);
+    let loaded = commit(&f, &prepared, true);
+    let stale = |shown: &continuation::Pin| {
+        let error = continuation::preview_pinned(&f.ctx, Some(shown), &loaded.id, Goal::PlanContinue)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("handoff_stale_choice"), "{error:#}");
+    };
+    // The spec is edited after the board loaded the card: N/U/T must not act on newer work.
+    let shown = continuation::pin(&f.ctx, &loaded.id).unwrap();
+    f.ctx
+        .store
+        .update(&loaded.id, |task| {
+            task.body.push_str("\nEdited after display");
+            Ok(())
+        })
+        .unwrap();
+    stale(&shown);
+    let task = f.ctx.store.get(&loaded.id).unwrap();
+    assert!(task.dispatch_hold && task.runs.is_empty() && task.plan_runs.is_empty());
+    // Transfer-only change: another surface starts the shown Saved card; contract and plan
+    // are equal, but the stale display must not bind the newer disposition.
+    let shown = continuation::pin(&f.ctx, &loaded.id).unwrap();
+    let choice = continuation::preview_pinned(&f.ctx, Some(&shown), &loaded.id, Goal::PlanContinue)
+        .unwrap();
+    continuation::start(&f.ctx, &choice, &choice.digest().unwrap(), instruction()).unwrap();
+    let current = continuation::pin(&f.ctx, &loaded.id).unwrap();
+    assert_eq!(
+        (&current.contract_revision, &current.plan),
+        (&shown.contract_revision, &shown.plan)
+    );
+    stale(&shown);
+    // A card without a pin never guesses one.
+    assert!(continuation::preview_pinned(&f.ctx, None, &loaded.id, Goal::PlanContinue).is_err());
+}

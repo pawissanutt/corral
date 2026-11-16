@@ -8,7 +8,7 @@ import { HostSession } from "../src/host/session.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
 import { assistantRole } from "../src/roles/assistant/index.ts";
-import { assistantPlanTool, assistantPlanReviewTool, ASSISTANT_WORKFLOW_OPS } from "../src/roles/assistant/planning.ts";
+import { ASSISTANT_WORKFLOW_OPS } from "../src/roles/assistant/planning.ts";
 import { AuxiliaryRuntime, type AuxiliaryResult } from "../src/extensions/subagent/runtime.ts";
 import { PlanReviews, type LocalReviewProjection } from "../src/host/plan-review.ts";
 import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
@@ -90,8 +90,7 @@ test("public host review returns before held inference; main research and r4 pub
     host = await HostSession.create({ sdk, identity, cwd: dir, agentDir: join(dir, "agent"), model: "gpt-6.1-sol", client, events, network,
       capabilities: { catalog: 9, digest: "a".repeat(64), preset: "full", enabled: ["subagents"] }, ui: "plain",
       guidance: { projectText: false, settings: { subagents: { model: "gpt-6-luna", max_parallel: 2, max_turns: 12, timeout_secs: 30 } } },
-      modules: { ...modules, role: { ...role, corralOps: [...role.corralOps, ...ASSISTANT_WORKFLOW_OPS],
-        tools: context => [...role.tools(context), assistantPlanTool, assistantPlanReviewTool] } },
+      modules: { ...modules, role: { ...role, corralOps: [...new Set([...role.corralOps, ...ASSISTANT_WORKFLOW_OPS])] } },
       sessionManager: sdk.SessionManager.create(dir, join(dir, "sessions")) });
     await host.session.bindExtensions({}); await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
     const bytes = Buffer.from(plan), offsets = [0];

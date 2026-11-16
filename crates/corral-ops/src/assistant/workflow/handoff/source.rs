@@ -64,8 +64,12 @@ pub(super) fn task(ctx: &Ctx, prepared: &Prepared) -> Result<Option<String>> {
             } else {
                 old.source_path.clone()
             };
+            // An owner's Implement here, chosen after this return, opened the scope's current
+            // work in its granted scratch: that continues the same task, never a rival.
+            let granted = p.source_path.is_some()
+                && granted_path(ctx, &p.assistant, &container)?.as_ref() == p.source_path.as_ref();
             ensure!(
-                p.source_path == expected_path,
+                p.source_path == expected_path || granted,
                 "handoff_source_changed: historical/unrelated scratch is not the current scope; use the latest returned work or a new assistant"
             );
             return Ok(Some(transfer.task.clone()));
@@ -99,6 +103,29 @@ pub(super) fn task(ctx: &Ctx, prepared: &Prepared) -> Result<Option<String>> {
                 .id)
         })
         .transpose()
+}
+
+/// The scratch path of the current, validated Implement here grant, if executing under one.
+fn granted_path(
+    ctx: &Ctx,
+    session: &str,
+    container: &corral_core::assistant::AssistantContainer,
+) -> Result<Option<std::path::PathBuf>> {
+    let Some(w) = container.workflow.as_ref().map(|i| &i.current) else {
+        return Ok(None);
+    };
+    if w.phase != corral_core::assistant_workflow::WorkflowPhase::Executing || w.execution.is_none()
+    {
+        return Ok(None);
+    }
+    let grant = super::native_implement::grant(&ctx.store, w)?;
+    Ok(ctx
+        .store
+        .get_assistant(session)?
+        .scratch
+        .into_iter()
+        .find(|s| s.slug == grant.scratch && s.base == grant.base)
+        .map(|s| s.path))
 }
 
 pub(super) fn driver(ctx: &Ctx, task: &Task, prepared: &Prepared) -> Result<bool> {

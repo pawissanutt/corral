@@ -421,15 +421,26 @@ pub(super) fn plan_review(ctx: &Ctx, task: &Task) -> Option<String> {
     crate::plan_review_wait(ctx, task)
 }
 
+/// Assistant responsibility and the continuation pin the card is displayed with.
+pub(super) fn handoff(ctx: &Ctx, task: &Task) -> Option<super::Handoff> {
+    use crate::assistant::workflow::handoff::status;
+    task.cowork.as_ref()?;
+    // Frame rows are head shells; responsibility reads the plan and run history.
+    match ctx.store.get(&task.id) {
+        Ok(full) => status::project(ctx, &full),
+        Err(error) => Some(status::reconciling(format!("{error:#}"))),
+    }
+}
+
 /// Recompute `compute(task)` for the tasks `dirty` selects and reuse `previous` for the rest;
 /// tasks that left the frame are dropped. Each recomputed task enters `span` once.
-pub(super) fn per_task(
+pub(super) fn per_task<T: Clone>(
     tasks: &[&Task],
-    previous: &BTreeMap<String, String>,
+    previous: &BTreeMap<String, T>,
     span: &'static str,
     mut dirty: impl FnMut(&Task) -> bool,
-    mut compute: impl FnMut(&Task) -> Option<String>,
-) -> BTreeMap<String, String> {
+    mut compute: impl FnMut(&Task) -> Option<T>,
+) -> BTreeMap<String, T> {
     let mut out = BTreeMap::new();
     for &task in tasks {
         let value = if dirty(task) {

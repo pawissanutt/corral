@@ -605,6 +605,13 @@ A task linked to another task's plan cannot replace that membership. Unsupported
 replacements are rejected before final approval is recorded. Use
 `corral plan show T-001 --json` and the artifact finder to inspect history.
 
+An assistant's local plan keeps the same exactness in the handoff surfaces. `/handoff`
+shows the current plan revision and stage and the latest local review's own revision and
+freshness, for example `Plan r4 · ready · Local review r3 completed · stale (current r4) ·
+advisory only`. A review of r3 never reads as current after r4 is published, and a local
+review is advisory: it never approves the plan. Handing a plan to the board (**Continue
+planning** or **Review this plan**) stops at a reviewed plan and never starts code.
+
 A published tracker has a separate `approved_scope_revision`, initially zero.
 Amend its approved scope with
 `corral import scope-amendment.md --amend T-004 --expected-revision 0`.

@@ -109,9 +109,14 @@ impl BoardView {
                 .find(|(c, _)| c == id)
                 .map(|(_, r)| *r)
         };
-        self.menu = self
-            .selected_task()
-            .map(|t| CardMenu::new(t, anchor(&t.id), self.task_pinned(&t.id)));
+        self.menu = self.selected_task().map(|t| {
+            CardMenu::new(
+                t,
+                anchor(&t.id),
+                self.task_pinned(&t.id),
+                self.handoffs.get(&t.id),
+            )
+        });
     }
 
     /// During an active drag: `Some(true)` for a legal drop column, `Some(false)` for an illegal one; `None` for
