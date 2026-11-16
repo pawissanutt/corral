@@ -16,6 +16,7 @@ use crate::model::act::{self, Act, ActStatus};
 use crate::model::daemon::Feed;
 use crate::model::effect::{Effect, Env};
 use crate::model::nav::AskTarget;
+use crate::model::projects::ProjectFilter;
 use crate::model::{Id, Live, Selection};
 
 /// A command this device sent for a question: its identity, kept for the same-id recovery
@@ -134,7 +135,16 @@ pub fn target(row: &InboxRow) -> Option<Live> {
 
 /// Canonical owner moves in working order: blocking first, then the oldest ask and id.
 pub fn ordered(feed: &Feed) -> Vec<&InboxRow> {
-    let mut rows: Vec<&InboxRow> = feed.inbox.values().filter(|row| is_open(row)).collect();
+    ordered_filtered(feed, &ProjectFilter::All)
+}
+
+pub fn ordered_filtered<'a>(feed: &'a Feed, filter: &ProjectFilter) -> Vec<&'a InboxRow> {
+    let filter = filter.resolved(feed);
+    let mut rows: Vec<&InboxRow> = feed
+        .inbox
+        .values()
+        .filter(|row| is_open(row) && filter.matches(row.project.as_deref()))
+        .collect();
     rows.sort_by_cached_key(|row| {
         (
             !row.blocking,
@@ -289,7 +299,14 @@ pub fn reply_value(state: &State, feed: &Feed, key: &str) -> String {
 
 impl State {
     /// Dispatch a served-Inbox action; every command and navigation is an effect.
-    pub fn act_live(&mut self, action: Action, feed: &Feed, _env: Env) -> Vec<Effect> {
+    /// `filter` is the Inbox screen's own scope, so row moves follow the rows on screen.
+    pub fn act_live_filtered(
+        &mut self,
+        action: Action,
+        feed: &Feed,
+        _env: Env,
+        filter: &ProjectFilter,
+    ) -> Vec<Effect> {
         self.prune(feed);
         match action {
             Action::Row(id) => self.select_row(id, feed),
@@ -353,7 +370,7 @@ impl State {
                 self.reply_focus = self.reply_focus.wrapping_add(1);
                 Vec::new()
             }
-            Action::Next(id) => self.next(&id, feed),
+            Action::Next(id) => self.next(&id, feed, filter),
             Action::Thread => {
                 self.thread_open = true;
                 Vec::new()
@@ -369,21 +386,23 @@ impl State {
     /// Served-Inbox keys on desktop and terminal: j/k and the arrows move the selected row,
     /// Enter and f open it, digits choose an option of the selected question. On a question's
     /// own page digits and j/k move the choice and e cycles the evidence.
-    pub fn key_live(
+    /// `filter` is the Inbox screen's own scope.
+    pub fn key_live_filtered(
         &mut self,
         key: &str,
         top: Option<&Live>,
         _selection: &Selection,
         feed: &Feed,
         env: Env,
+        filter: &ProjectFilter,
     ) -> Option<Vec<Effect>> {
         if let Some(top) = top {
             let Live::Question(question) = top else {
                 return None;
             };
-            return self.question_key(key, question.clone(), feed, env);
+            return self.question_key(key, question.clone(), feed, env, filter);
         }
-        let rows = ordered(feed);
+        let rows = ordered_filtered(feed, filter);
         let current = selected(&self.desk, &rows)?;
         let at = rows
             .iter()
@@ -396,7 +415,7 @@ impl State {
             "enter" | "f" => Some(self.open_row(&id(at), feed)),
             digit if is_question(current) => {
                 let index = digit.parse::<usize>().ok()?.checked_sub(1)?;
-                Some(self.act_live(Action::Pick(id(at), index), feed, env))
+                Some(self.act_live_filtered(Action::Pick(id(at), index), feed, env, filter))
             }
             _ => None,
         }
@@ -408,6 +427,7 @@ impl State {
         question: Id,
         feed: &Feed,
         env: Env,
+        filter: &ProjectFilter,
     ) -> Option<Vec<Effect>> {
         let detail = question_detail(feed, &question)?;
         let count = detail.options.len();
@@ -429,7 +449,7 @@ impl State {
         if count == 0 {
             return Some(Vec::new());
         }
-        Some(self.act_live(Action::Pick(question, index), feed, env))
+        Some(self.act_live_filtered(Action::Pick(question, index), feed, env, filter))
     }
 
     fn select_row(&mut self, id: Id, feed: &Feed) -> Vec<Effect> {
@@ -451,9 +471,8 @@ impl State {
     }
 
     /// Open the next open item after this one, wrapping to the first.
-    fn next(&mut self, id: &Id, feed: &Feed) -> Vec<Effect> {
-        let rows = ordered(feed);
-        let open: Vec<&InboxRow> = rows.into_iter().filter(|row| is_open(row)).collect();
+    fn next(&mut self, id: &Id, feed: &Feed, filter: &ProjectFilter) -> Vec<Effect> {
+        let open = ordered_filtered(feed, filter);
         let at = open.iter().position(|row| row.id == id.as_str());
         let next = match at {
             Some(at) => open

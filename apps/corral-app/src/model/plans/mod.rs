@@ -10,7 +10,10 @@ mod story;
 mod view;
 
 pub use graph::{CardGeometry, Edge, Graph, GraphInput, GraphMember, Layer, Node, Point, layout};
-pub use live::{current_plan, graph_input, live_detail, live_list, live_phone_page, plan_detail};
+pub use live::{
+    current_plan_filtered, graph_input, live_detail, live_list_filtered, live_phone_page,
+    plan_detail,
+};
 pub use story::{Story, StoryField, StoryStage};
 pub use view::{
     ApprovedView, AwaitingView, Blocker, Button, ButtonKind, Chip, Compose, Decide, DecideNote,
@@ -361,16 +364,18 @@ impl State {
     }
 
     /// Move through feed-backed plans or cycle the selected plan's members.
-    pub fn key_live(
+    /// `filter` is the Plans screen's own scope, so the keys walk the rows on screen.
+    pub fn key_live_filtered(
         &mut self,
         key: &str,
         _top: Option<&Live>,
         selection: &Selection,
         feed: &Feed,
         _env: Env,
+        filter: &crate::model::projects::ProjectFilter,
     ) -> Option<Vec<Effect>> {
-        let order = live::order(feed);
-        let current = live::current_plan(selection, feed);
+        let order = live::order_filtered(feed, filter);
+        let current = live::current_plan_filtered(selection, feed, filter);
         let index = current
             .as_ref()
             .and_then(|id| order.iter().position(|row| row == id));

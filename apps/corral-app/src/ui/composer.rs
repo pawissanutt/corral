@@ -137,12 +137,14 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
         let ThreadRef::Live(scope) = &source;
         // Offline there is no session to refuse with: the message queues on the device.
         let can_send = app.may_message();
-        let context = app.ask_context.get();
+        // The project brief shows as its own chip, so it is not repeated as the record chip.
+        let context = app.composer_record_context();
+        let project = app.composer_project();
         draft.with(|text| {
             app.ask_staged.with(|staged| {
                 app.feed.with(|feed| {
                     app.assistant.with(|state| {
-                        assistant::live_composer(
+                        assistant::composer_with_project(
                             state,
                             feed,
                             assistant::Draft {
@@ -153,6 +155,7 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
                                 can_send,
                                 staged,
                             },
+                            project.as_ref(),
                             env,
                         )
                     })

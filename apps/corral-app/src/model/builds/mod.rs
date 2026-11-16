@@ -15,7 +15,9 @@ mod wording;
 mod tests;
 
 pub use detail::{Block, BuildView, Detail, Line, Section, detail_of};
-pub use list::{BuildList, ListNotice, ListRow, ListSection, current_build, live_list};
+pub use list::{
+    BuildList, ListNotice, ListRow, ListSection, current_build_filtered, live_list_filtered,
+};
 /// A child agent's state, verdict, message delivery and figures read the same in a live
 /// session's fleet as in a published build.
 pub(crate) use wording::{cost, count, delivery, note, slice_state, tokens, verdict};
@@ -53,17 +55,23 @@ pub fn reduce(action: Action) -> Vec<Effect> {
     }
 }
 
-/// j/k (and the arrows) move the selection through the list; other keys are not Builds'.
-pub fn key_live(key: &str, selection: &Selection, feed: &Feed) -> Option<Vec<Effect>> {
+/// j/k (and the arrows) move the selection through the list in the Builds screen's `filter`;
+/// other keys are not Builds'.
+pub fn key_live_filtered(
+    key: &str,
+    selection: &Selection,
+    feed: &Feed,
+    filter: &crate::model::projects::ProjectFilter,
+) -> Option<Vec<Effect>> {
     if !matches!(key, "j" | "down" | "k" | "up") {
         return None;
     }
-    let order = list::order(feed);
+    let order = list::order_filtered(feed, filter);
     if order.is_empty() {
         return Some(vec![]);
     }
-    let index =
-        current_build(selection, feed).and_then(|id| order.iter().position(|row| *row == id));
+    let index = current_build_filtered(selection, feed, filter)
+        .and_then(|id| order.iter().position(|row| *row == id));
     let next = if matches!(key, "j" | "down") {
         index.map_or(0, |at| (at + 1).min(order.len() - 1))
     } else {

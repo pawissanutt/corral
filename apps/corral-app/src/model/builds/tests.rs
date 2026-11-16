@@ -8,6 +8,7 @@ use crate::model::daemon::{DetailCache, Link, TopicState, detail_key};
 use crate::model::effect::{Conn, Env};
 use crate::model::health::{Availability, availability};
 use crate::model::nav::{Destination, Form};
+use crate::model::projects::ProjectFilter;
 
 const DESKTOP: Env = Env {
     conn: Conn::Healthy,
@@ -151,7 +152,12 @@ fn a_daemon_without_builds_v1_shows_builds_unavailable_not_empty_or_sample() {
         availability(&serving, Destination::Builds),
         Availability::Ready
     );
-    let list = live_list(&Selection::default(), &serving, DESKTOP);
+    let list = live_list_filtered(
+        &Selection::default(),
+        &serving,
+        DESKTOP,
+        &ProjectFilter::All,
+    );
     assert_eq!(list.notice, Some(ListNotice::Loading));
 }
 
@@ -191,7 +197,7 @@ fn a_build_landed_over_open_findings_is_called_out_in_the_list_and_the_detail() 
         ],
         vec![detail("B-over", Some(reason))],
     );
-    let list = live_list(&Selection::default(), &feed, DESKTOP);
+    let list = live_list_filtered(&Selection::default(), &feed, DESKTOP, &ProjectFilter::All);
     let holding = |id: &str| {
         list.sections
             .iter()
@@ -216,7 +222,7 @@ fn an_unknown_cost_is_never_shown_as_zero() {
         vec![row("B-free", "open", None, None)],
         vec![detail("B-free", None)],
     );
-    let list = live_list(&Selection::default(), &feed, DESKTOP);
+    let list = live_list_filtered(&Selection::default(), &feed, DESKTOP, &ProjectFilter::All);
     let listed = &list.sections[0].rows[0];
     assert!(!listed.cost_known);
     assert!(!listed.cost.contains('$'), "{}", listed.cost);

@@ -39,6 +39,12 @@ drafts/messages across restarts and concurrent tabs. Saved credentials permit of
 from complete last-known Board/Inbox/Plans/Builds/Health snapshots marked stale, not live.
 Builds (`builds.v1`) is its own read-only destination for published build-session records;
 see the screen map in [mockup/DESIGN.md](mockup/DESIGN.md).
+Projects (`projects.v1`, `Topic::Projects`) make a workspace's configured projects visible:
+a sidebar project list with Project pages, independent per-screen project filters, and the
+project in scope as Ask context, so filed Ideas default to it. A complete empty project
+list means no project management: the app offers only Ask, Agents, Usage and Settings.
+One app connection still serves one daemon; filters are keyed by daemon store so a later
+multi-daemon switcher can keep separate scopes.
 
 Timeline reads use indexed half-open timestamp windows (including owner/PM points),
 overlapping recorded sessions, and predecessor phase state. Completed historical

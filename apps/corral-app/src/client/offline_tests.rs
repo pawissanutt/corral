@@ -101,6 +101,7 @@ fn plan_row(id: &str) -> PlanRow {
         members_total: 2,
         members_landed: 1,
         blockers: vec![],
+        projects: Vec::new(),
         accepted_at: None,
         rev: 1,
     }

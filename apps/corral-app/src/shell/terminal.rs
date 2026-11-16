@@ -15,7 +15,7 @@ use crate::{
         nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, SIDEBAR_LABEL, THIS_DEVICE},
     },
     screens,
-    shell::{confirmation, section_short, toast},
+    shell::{confirmation, destinations, projects, section_short, toast},
     state::AppState,
     ui::{
         ask, atoms, composer,
@@ -34,8 +34,13 @@ const SIDEBAR_CHORD: &str = "^B";
 /// The terminal shell for `Form::Terminal`.
 pub fn shell(app: AppState) -> AnyElement {
     // Overlays opening and closing change the nav state too; the sidebar rows follow the
-    // destination alone.
-    let destination = computed(move || app.destination());
+    // destination alone, and none is current while a Project page shows.
+    let current = computed(move || {
+        projects::open_project(app)
+            .is_none()
+            .then(|| app.destination())
+    });
+    let shown = computed(move || destinations(app));
     let workspace = computed(move || app.snapshot().workspace);
     let collapsed = computed(move || term::sidebar_collapsed(app));
     let focus = Focus::watch();
@@ -56,14 +61,14 @@ pub fn shell(app: AppState) -> AnyElement {
                 .child(content(app, focus))
                 .child(dynamic(move || {
                     if collapsed.get() {
-                        untracked(|| rail(app, destination))
+                        untracked(|| rail(app, current, shown))
                     } else {
-                        untracked(|| sidebar(app, destination, workspace))
+                        untracked(|| sidebar(app, current, shown, workspace))
                     }
                 })),
         )
         .child(toast(app))
-        .child(key_line(app, typing))
+        .child(key_line(app, typing, shown))
         .child(ask::hotkey(app))
         .into_element()
 }
@@ -144,38 +149,27 @@ fn content(app: AppState, focus: Focus) -> AnyElement {
     .into_element()
 }
 
-/// The workspace in the top line, its autopilot state under it; the nine destinations with
-/// their counts and keys in columns, the Settings sections under Settings while it is
-/// selected; Ask and Go to under a rule; this device in the bottom line. The rows scroll, so
-/// every one stays reachable on a short grid.
+/// The workspace in the top line, its autopilot state under it; the destinations this
+/// workspace has with their counts and keys in columns, the Settings sections under Settings
+/// while it is selected; the PROJECTS section; Ask and Go to under a rule; this device in the
+/// bottom line. The rows scroll, so every one stays reachable on a short grid.
 fn sidebar(
     app: AppState,
-    destination: Memo<Destination>,
+    current: Memo<Option<Destination>>,
+    shown: Memo<Vec<Destination>>,
     workspace: Memo<Option<Workspace>>,
 ) -> AnyElement {
-    let rows = Destination::ALL.into_iter().map(move |item| {
-        let row = atoms::nav_row(
-            app,
-            item.label(),
-            format!("nav-{}", item.slug()),
-            move || destination.get() == item,
-            Some(trailing(
-                Some(atoms::count(app, item)),
-                String::from(item.key()),
-            )),
-            move || app.go(item),
-        );
-        if item == Destination::Settings {
+    let rows = dynamic(move || {
+        let shown = shown.get();
+        untracked(move || {
             view()
-                .child(row)
-                .child(when(
-                    move || destination.get() == Destination::Settings,
-                    move || settings_sections(app),
-                ))
+                .children(
+                    shown
+                        .into_iter()
+                        .map(move |item| destination_row(app, current, item)),
+                )
                 .into_element()
-        } else {
-            row
-        }
+        })
     });
     let body = view()
         .flex_1()
@@ -189,7 +183,8 @@ fn sidebar(
         .child(
             scroll().flex_1().min_h(px(0.0)).child(
                 view()
-                    .children(rows)
+                    .child(rows)
+                    .child(projects::section(app))
                     .child(term::hrule())
                     .child(atoms::nav_row(
                         app,
@@ -228,23 +223,35 @@ fn sidebar(
 
 /// The folded sidebar: each destination as its key, its count beside it, the Settings
 /// sections' short names under Settings while it is selected, then Ask and Go to as their keys.
-fn rail(app: AppState, destination: Memo<Destination>) -> AnyElement {
-    let rows = Destination::ALL.into_iter().map(move |item| {
-        atoms::nav_row(
-            app,
-            destination_key(item).unwrap_or_default(),
-            format!("nav-{}", item.slug()),
-            move || destination.get() == item,
-            Some(
-                view()
-                    .w(cells(3.0))
-                    .flex_row()
-                    .justify_end()
-                    .child(atoms::count(app, item))
-                    .into_element(),
-            ),
-            move || app.go(item),
-        )
+/// Projects need their names, so the folded sidebar leaves them to the unfolded one (`^B`).
+fn rail(
+    app: AppState,
+    current: Memo<Option<Destination>>,
+    shown: Memo<Vec<Destination>>,
+) -> AnyElement {
+    let rows = dynamic(move || {
+        let shown = shown.get();
+        untracked(move || {
+            view()
+                .children(shown.into_iter().map(move |item| {
+                    atoms::nav_row(
+                        app,
+                        destination_key(item).unwrap_or_default(),
+                        format!("nav-{}", item.slug()),
+                        move || current.get() == Some(item),
+                        Some(
+                            view()
+                                .w(cells(3.0))
+                                .flex_row()
+                                .justify_end()
+                                .child(atoms::count(app, item))
+                                .into_element(),
+                        ),
+                        move || app.go(item),
+                    )
+                }))
+                .into_element()
+        })
     });
     let sections = move || {
         view()
@@ -262,9 +269,9 @@ fn rail(app: AppState, destination: Memo<Destination>) -> AnyElement {
     };
     let body = scroll().flex_1().min_h(px(0.0)).child(
         view()
-            .children(rows)
+            .child(rows)
             .child(when(
-                move || destination.get() == Destination::Settings,
+                move || current.get() == Some(Destination::Settings),
                 sections,
             ))
             .child(term::hrule())
@@ -288,6 +295,36 @@ fn rail(app: AppState, destination: Memo<Destination>) -> AnyElement {
     term::framed(view().flex_1().min_h(px(0.0)).child(body))
         .w(move || cells(term::sidebar_columns(app)))
         .flex_shrink_0()
+        .into_element()
+}
+
+/// A destination's row: its name, count and key; Settings brings its sections under it while
+/// it is the one shown.
+fn destination_row(
+    app: AppState,
+    current: Memo<Option<Destination>>,
+    item: Destination,
+) -> AnyElement {
+    let row = atoms::nav_row(
+        app,
+        item.label(),
+        format!("nav-{}", item.slug()),
+        move || current.get() == Some(item),
+        Some(trailing(
+            Some(atoms::count(app, item)),
+            String::from(item.key()),
+        )),
+        move || app.go(item),
+    );
+    if item != Destination::Settings {
+        return row;
+    }
+    view()
+        .child(row)
+        .child(when(
+            move || current.get() == Some(Destination::Settings),
+            move || settings_sections(app),
+        ))
         .into_element()
 }
 
@@ -476,13 +513,15 @@ fn fits() -> impl Iterator<Item = Fit> {
 /// The key line for what is in view. While Ask's field has the keys, letters typed go into it:
 /// the line gives the composer's own keys and Go to, the one chord that still reaches past it.
 /// Otherwise the keys of the page in view (when the model gives it any and the destination is
-/// served), the destinations, then Ask and Go to. `off_board`: Now's selection is off the board.
+/// served), the `shown` destinations, then Ask and Go to. `off_board`: Now's selection is off
+/// the board.
 fn line(
     destination: Destination,
     live: Option<Live>,
     served: bool,
     typing: bool,
     off_board: bool,
+    shown: &[Destination],
 ) -> Line {
     let go_to = Entry::new(PALETTE_CHORD, PALETTE_LABEL, KEEP_GO_TO);
     if typing {
@@ -506,8 +545,9 @@ fn line(
             .into_iter()
             .map(|(keys, name)| Entry::new(keys, name, KEEP_PAGE))
             .collect(),
-        destinations: Destination::ALL
-            .into_iter()
+        destinations: shown
+            .iter()
+            .copied()
             .map(|item| Entry::new(item.key(), item.label(), keep(item)))
             .collect(),
         actions: vec![Entry::new(ASK_KEY, ASK_LABEL, KEEP_ASK), go_to],
@@ -573,7 +613,7 @@ impl Line {
 /// The last row, a legend: each key as a cap and the name it goes to, the keys in focus first.
 /// When the grid is short of room the names give way one by one, then whole groups, as
 /// [`fits`] orders them; a key's cap is never cut.
-fn key_line(app: AppState, typing: Memo<bool>) -> AnyElement {
+fn key_line(app: AppState, typing: Memo<bool>, shown: Memo<Vec<Destination>>) -> AnyElement {
     let route = computed(move || {
         let selection = app.selection();
         let off_board = app
@@ -584,15 +624,20 @@ fn key_line(app: AppState, typing: Memo<bool>) -> AnyElement {
             app.live_page(),
             app.data.get(),
             off_board,
+            projects::open_project(app).is_some(),
         )
     });
     dynamic(move || {
         let room = term::columns();
-        let (destination, live, data, off_board) = route.get();
-        // An unserved destination answers no keys of its own; disconnected, none is served.
+        let (destination, live, data, off_board, project_page) = route.get();
+        let shown = shown.get();
+        // An unserved destination answers no keys of its own; disconnected, none is served. A
+        // Project page and the assistant workspace's landing are not their owner's list.
         let served = data != DataState::Disconnected
+            && !project_page
+            && shown.contains(&destination)
             && app.available(destination) == crate::model::Availability::Ready;
-        let line = line(destination, live, served, typing.get(), off_board);
+        let line = line(destination, live, served, typing.get(), off_board, &shown);
         let (fit, count) = line.layout(room);
         let mut row = view()
             .h(term::rows(1.0))
@@ -644,7 +689,14 @@ mod tests {
         ];
         for (destination, live) in views {
             for typing in [false, true] {
-                let line = line(destination, live.clone(), true, typing, false);
+                let line = line(
+                    destination,
+                    live.clone(),
+                    true,
+                    typing,
+                    false,
+                    &Destination::ALL,
+                );
                 for room in 20..=240 {
                     let (fit, count) = line.layout(room);
                     assert!(

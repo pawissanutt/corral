@@ -515,7 +515,7 @@ impl State {
             // Picking happens at the app root, inside the press, so a browser lets it open.
             Action::Attach(_) | Action::AttachLink => Vec::new(),
             // Unchip clears the app-owned context; Send goes through `send_live`.
-            Action::Unchip | Action::Send => Vec::new(),
+            Action::Unchip | Action::UnchipProject | Action::Send => Vec::new(),
         }
     }
 

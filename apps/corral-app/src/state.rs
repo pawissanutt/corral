@@ -9,6 +9,7 @@ mod devices;
 mod keys;
 mod live;
 mod preview;
+mod projects;
 mod sidebar;
 mod source;
 
@@ -64,6 +65,9 @@ pub struct AppState {
     pub confirmation: Signal<Option<Confirmation>>,
     /// The real context "Ask about this" attached to the composer; cleared when Ask closes.
     pub ask_context: Signal<Option<ContextRef>>,
+    /// Independent per-store screen scopes persisted as `corral.filters`.
+    pub filters: Signal<crate::model::projects::Filters>,
+    project_context_removed: Signal<Option<Id>>,
     /// What is staged for the next message, shared by Ask and docked composers like the draft.
     /// In memory only; it outlives a closed Ask so a picker answering late still lands.
     pub ask_staged: Signal<Vec<assistant::Staged>>,
@@ -228,6 +232,8 @@ impl AppState {
             ),
             confirmation: signal(None),
             ask_context: signal(None),
+            filters: signal(projects::load_filters()),
+            project_context_removed: signal(None),
             ask_staged: signal(Vec::new()),
             ask_field: signal(None),
             ask_field_text: signal(String::new()),
@@ -259,6 +265,7 @@ impl AppState {
         app.install_toast_timer();
         app.watch_receipts();
         app.follow_sidebar();
+        app.follow_projects();
         app.latch_previews();
         app.follow_cached_feed();
         app.follow_authority();
@@ -318,6 +325,7 @@ impl AppState {
 
     /// Changes destination and clears all pushed pages.
     pub fn go(&self, destination: Destination) {
+        let destination = self.workspace_destination(destination);
         self.change(|nav| nav.go(destination));
     }
 
@@ -382,6 +390,7 @@ impl AppState {
         self.change(|nav| nav.close(overlay));
         if overlay == Overlay::Ask {
             self.ask_context.set(None);
+            self.project_context_removed.set(None);
             self.close_attach_field();
         }
     }
@@ -422,7 +431,7 @@ impl AppState {
 
     /// Selects the transport or an isolated, explicitly chosen synthetic feed.
     pub fn set_data(&self, state: DataState) {
-        if state == self.data.get_untracked() {
+        if state == self.data.get_untracked() && state != DataState::Fixture {
             return;
         }
         // Dispose old-source views before draft observers see the new source's empty composer.
@@ -449,6 +458,7 @@ impl AppState {
             self.ask_staged.set(Vec::new());
             self.ask_draft.set(String::new());
             self.ask_context.set(None);
+            self.project_context_removed.set(None);
             self.change(|nav| {
                 nav.pages.clear();
                 nav.selection = Default::default();
@@ -564,6 +574,8 @@ impl AppState {
             Action::Go(destination) => self.go(destination),
             Action::Settings(section) => self.go_settings(section),
             Action::OpenLive(live) => self.open_live(live),
+            Action::Project(id) => self.open_project(id),
+            Action::PreviewNoProjects => self.preview_no_projects(),
             Action::Ask(text) => match text {
                 Some(text) => self.open_ask_with(&text),
                 None => self.open_ask(),

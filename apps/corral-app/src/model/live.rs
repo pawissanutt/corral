@@ -157,12 +157,15 @@ impl Selection {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Route {
     Live(Live),
+    /// A locally assembled project page, not a daemon detail request.
+    Project(Id),
 }
 
 impl Route {
     pub fn owner(&self) -> Destination {
         match self {
             Route::Live(live) => live.owner(),
+            Route::Project(_) => Destination::Now,
         }
     }
 
@@ -170,7 +173,8 @@ impl Route {
     pub fn is_detail(&self) -> bool {
         matches!(
             self,
-            Route::Live(Live::Task(_) | Live::Plan(_) | Live::Review(_) | Live::Build(_))
+            Route::Project(_)
+                | Route::Live(Live::Task(_) | Live::Plan(_) | Live::Review(_) | Live::Build(_))
         )
     }
 }

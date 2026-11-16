@@ -5,6 +5,7 @@ use crate::model::Form;
 use crate::model::board::Mark;
 use crate::model::daemon::{DetailCache, Feed, Group, Link, Step, Task, detail_key};
 use crate::model::effect::{Conn, Effect};
+use crate::model::projects::ProjectFilter;
 use corral_protocol::detail::{DetailBody, PatchPage, ReviewCandidate, ReviewFile};
 use serde_json::json;
 
@@ -145,7 +146,7 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
     show(&mut feed, &old);
     patch(&mut feed, &old);
     assert!(file(&state, &feed).annotatable);
-    state.apply_live(
+    state.apply_live_filtered(
         Action::Annotate {
             candidate: old.clone(),
             at: at.clone(),
@@ -153,6 +154,7 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
         &feed,
         &selection,
         env(),
+        &ProjectFilter::All,
     );
     assert!(state.composing.is_some());
 
@@ -170,7 +172,7 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
         },
         Compose::Changes(old.clone()),
     ] {
-        let effects = state.apply_live(
+        let effects = state.apply_live_filtered(
             Action::Submit {
                 target,
                 text: "owner note".into(),
@@ -178,6 +180,7 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
             &feed,
             &selection,
             env(),
+            &ProjectFilter::All,
         );
         assert!(
             !effects
@@ -201,7 +204,7 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
     patch(&mut feed, &new);
     assert!(file(&state, &feed).annotatable);
     state.composing = None;
-    state.apply_live(
+    state.apply_live_filtered(
         Action::Annotate {
             candidate: old,
             at: at.clone(),
@@ -209,9 +212,10 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
         &feed,
         &selection,
         env(),
+        &ProjectFilter::All,
     );
     assert!(state.composing.is_none());
-    let effects = state.apply_live(
+    let effects = state.apply_live_filtered(
         Action::Submit {
             target: Compose::New {
                 candidate: new.clone(),
@@ -222,6 +226,7 @@ fn stale_patches_and_open_composers_never_rebind_to_a_new_candidate() {
         &feed,
         &selection,
         env(),
+        &ProjectFilter::All,
     );
     assert!(
         matches!(&effects[..], [Effect::Act(act)] if matches!(&act.command,
@@ -258,7 +263,15 @@ fn narrow_review_content_is_unified_and_gate_receipts_are_visible() {
         review: Some(at.task),
         ..Selection::default()
     };
-    let page = live_page(&state, &feed, &selection, None, env(), 1099.0);
+    let page = live_page_filtered(
+        &state,
+        &feed,
+        &selection,
+        None,
+        env(),
+        1099.0,
+        &ProjectFilter::All,
+    );
     let detail = page.detail.unwrap();
     assert_eq!(detail.verdicts[0].mark, Mark::Stale);
     assert!(detail.verdicts[0].tag.is_some());

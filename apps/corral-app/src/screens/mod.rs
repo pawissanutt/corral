@@ -9,9 +9,11 @@ pub mod assistant;
 pub mod builds;
 pub mod changes;
 pub mod inbox;
+pub mod landing;
 pub(crate) mod markdown;
 pub mod now;
 pub mod plans;
+pub mod projects;
 pub mod review;
 pub mod settings;
 pub mod timeline;
@@ -20,7 +22,9 @@ pub mod usage;
 use nsh_core::prelude::*;
 
 use crate::model::settings::connect;
-use crate::model::{Availability, DataState, Destination, Form, Live, Route, SettingsSection};
+use crate::model::{
+    Availability, DataState, Destination, Form, Live, Route, SettingsSection, WorkspaceMode,
+};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::page;
@@ -64,16 +68,25 @@ impl PhoneBar {
 
 /// The destination's screen; the unavailable frame while no daemon serves it. Made again only
 /// when the data state or the destination's availability changes, so a screen keeps its own
-/// state otherwise.
+/// state otherwise. In a workspace with no projects, Now (where such a workspace lands) is the
+/// assistant landing.
 ///
 /// `root` is a phone tab's root: its unavailable frame keeps the head's search button, so a
 /// disconnected phone still reaches the palette (the way into the labelled preview).
 pub fn destination(app: AppState, destination: Destination, root: bool) -> AnyElement {
-    let gate = computed(move || (app.data.get(), unavailable(app, destination)));
+    let gate = computed(move || {
+        (
+            app.data.get(),
+            unavailable(app, destination),
+            lands(app, destination),
+        )
+    });
     dynamic(move || {
-        let (_, unavailable) = gate.get();
+        let (_, unavailable, landing) = gate.get();
         untracked(move || {
-            if unavailable {
+            if landing {
+                landing::screen(app)
+            } else if unavailable {
                 frame(app, destination, root)
             } else {
                 screen(app, destination)
@@ -83,9 +96,9 @@ pub fn destination(app: AppState, destination: Destination, root: bool) -> AnyEl
 }
 
 /// The content container's page on desktop and terminal: the top page when there is one
-/// (the focused question, a session, a thread), else the destination's screen. Tasks, plans
-/// and reviews are selected in place there, so their destination's screen shows them. Made
-/// again only when the route itself changes; the screens track their own state.
+/// (the focused question, a session, a thread, a project), else the destination's screen.
+/// Tasks, plans and reviews are selected in place there, so their destination's screen shows
+/// them. Made again only when the route itself changes; the screens track their own state.
 pub fn content(app: AppState) -> AnyElement {
     let route = computed(move || {
         let destination = app.destination();
@@ -95,11 +108,15 @@ pub fn content(app: AppState) -> AnyElement {
             top,
             app.data.get(),
             unavailable(app, destination),
+            lands(app, destination),
         )
     });
     dynamic(move || {
-        let (destination, top, _, unavailable) = route.get();
+        let (destination, top, _, unavailable, landing) = route.get();
         untracked(move || {
+            if landing && top.is_none() {
+                return landing::screen(app);
+            }
             if unavailable {
                 return frame(app, destination, false);
             }
@@ -107,10 +124,19 @@ pub fn content(app: AppState) -> AnyElement {
                 Some(Route::Live(Live::Question(key))) => inbox::live_question(app, key),
                 Some(Route::Live(Live::Session(id))) => agents::live_session(app, id),
                 Some(Route::Live(Live::Thread(id))) => assistant::live_thread(app, id),
+                Some(Route::Project(id)) => projects::page(app, id),
                 _ => screen(app, destination),
             }
         })
     })
+}
+
+/// Tracked: whether the destination shows the assistant landing: Now, in a served workspace
+/// that has no projects (its board destinations are not offered at all).
+fn lands(app: AppState, destination: Destination) -> bool {
+    destination == Destination::Now
+        && app.data.get() != DataState::Disconnected
+        && app.workspace_mode() == WorkspaceMode::AssistantOnly
 }
 
 /// Tracked: whether the destination shows the unavailable frame instead of its screen.

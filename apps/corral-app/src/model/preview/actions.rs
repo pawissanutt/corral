@@ -91,6 +91,7 @@ pub fn act(feed: &mut Feed, act: &Act) -> Result<(), String> {
     if result.is_ok() {
         content::refresh_plans(feed);
         super::history::refresh_filings(feed);
+        super::projects::refresh(feed);
         change(feed, None, act.title.clone(), ChangeKind::Other);
     }
     result

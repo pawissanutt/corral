@@ -9,6 +9,7 @@ use crate::model::work::{self, FeedRow, HoldRow};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::marks::{dot, hue_ink, mark};
+use crate::ui::kit::rows::{measured, project_chip};
 use crate::ui::kit::text::rich_small;
 use crate::ui::term::{cells, hrule};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
@@ -70,11 +71,12 @@ fn column(form: Form, points: f32, terminal_cells: f32, child: AnyElement) -> An
         .into_element()
 }
 
-/// One event (`.ev`): desktop a 26 pt line, time, mark 14, id 50, the event cut to fit, then
-/// corrald's attribution in faint ink; new events in ink, seen ones in ink-2 and historical
-/// ones faint; terminal the same in Cells; phone the mock's `.prow`: time, id and event (the
-/// attribution under it), the mark at the trailing edge, at least 48 pt with a hairline under
-/// it. The time column holds `18:40` and `Nov 12` alike. A row with an action opens its task;
+/// One event (`.ev`): desktop a 26 pt line, time, mark 14, id 50, the event cut to fit, its
+/// project chip when the feed spans projects, then corrald's attribution in faint ink; new
+/// events in ink, seen ones in ink-2 and historical ones faint; terminal the same in Cells;
+/// phone the mock's `.prow`: time, id and event (the project chip and attribution under it), the
+/// mark at the trailing edge, at least 48 pt with a hairline under it. The time column holds
+/// `18:40` and `Nov 12` alike. A row with an action opens its task;
 /// `test_id` names it.
 pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement {
     let form = app.form;
@@ -112,11 +114,31 @@ pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement
         }
         .into_element()
     });
+    // A terminal row's Cells beside the event: time 6, mark 1, id 5, the side padding and the
+    // gaps, the attribution after it.
+    let room = signal(0.0_f32);
+    let reserved = 6.0
+        + 1.0
+        + 1.0
+        + 5.0
+        + 2.0
+        + event
+            .by
+            .as_ref()
+            .map_or(0.0, |by| by.chars().count().min(24) as f32 + 1.0);
+    let project = event
+        .project_chip
+        .clone()
+        .map(|project| project_chip(app, project, room, reserved));
+    let label = match &event.project_chip {
+        Some(project) => format!("{}, {project}", event.label()),
+        None => event.label(),
+    };
     let base = view()
         .flex_row()
         .items_center()
         .flex_shrink_0()
-        .label(event.label())
+        .label(label)
         .test_id(&test_id);
     let base = match event.action.clone() {
         Some(action) => base
@@ -153,7 +175,14 @@ pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement
                             .child(mono(form, event.id.clone(), 13.0))
                             .child(words.font_family(FONT_TEXT).text_size(px(14.5))),
                     )
-                    .children(by),
+                    .children((project.is_some() || by.is_some()).then(move || {
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.0))
+                            .children(project)
+                            .children(by)
+                    })),
             )
             .child(column(form, 14.0, 0.0, change_mark(app, event.kind)))
             .into_element(),
@@ -166,9 +195,10 @@ pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement
             .child(column(form, 14.0, 0.0, change_mark(app, event.kind)))
             .child(column(form, 50.0, 0.0, mono(form, event.id.clone(), 11.0)))
             .child(words.font_family(FONT_TEXT).text_size(px(12.0)))
+            .children(project)
             .children(by)
             .into_element(),
-        Form::Terminal => base
+        Form::Terminal => measured(app, base, room)
             .h(px(16.0))
             .px(cells(1.0))
             .gap(px(8.0))
@@ -176,6 +206,7 @@ pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement
             .child(column(form, 0.0, 1.0, change_mark(app, event.kind)))
             .child(column(form, 0.0, 5.0, mono(form, event.id.clone(), 0.0)))
             .child(words)
+            .children(project)
             .children(by)
             .into_element(),
     }
@@ -185,11 +216,13 @@ pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement
 /// attribution dimmed after it. A hold with an action opens its task.
 pub(crate) fn hold(app: AppState, held: &HoldRow) -> AnyElement {
     let form = app.form;
-    let label = format!("{} {} {}", held.since, held.id, held.title);
-    let row = view()
-        .flex_row()
-        .items_center()
-        .flex_shrink_0()
+    let mut label = format!("{} {} {}", held.since, held.id, held.title);
+    if let Some(project) = &held.project_chip {
+        label = format!("{label}, {project}");
+    }
+    // A terminal row's Cells beside the text: time 5, mark 1, id 5, the side padding and gaps.
+    let room = signal(0.0_f32);
+    let row = measured(app, view().flex_row().items_center().flex_shrink_0(), room)
         .overflow_hidden()
         .label(label)
         .child(column(
@@ -206,6 +239,11 @@ pub(crate) fn hold(app: AppState, held: &HoldRow) -> AnyElement {
                 .min_w(px(0.0))
                 .overflow_hidden()
                 .child(rich_small(app, &held.text)),
+        )
+        .children(
+            held.project_chip
+                .clone()
+                .map(|project| project_chip(app, project, room, 16.0)),
         );
     let row = match held.action.clone() {
         Some(action) => row

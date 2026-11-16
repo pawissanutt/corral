@@ -43,6 +43,8 @@ pub struct Tab {
 pub struct FeedRow {
     /// Local time, `18:40` today or `Nov 12` before.
     pub at: String,
+    /// Project context when the workspace-wide feed needs disambiguation.
+    pub project_chip: Option<String>,
     /// The task the event concerns; empty for an event about none.
     pub id: String,
     /// The mark drawn for the event.
@@ -87,6 +89,7 @@ pub struct HoldRow {
     pub text: Rich,
     /// Open the task, in the Daemon state.
     pub action: Option<Press>,
+    pub project_chip: Option<String>,
 }
 /// A Changes filter control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -26,6 +26,10 @@ pub(crate) fn act(app: AppState, action: assistant::Action) {
             app.ask_context.set(None);
             return;
         }
+        assistant::Action::UnchipProject => {
+            app.remove_composer_project();
+            return;
+        }
         assistant::Action::Attach(pick) => {
             app.attach(pick);
             return;

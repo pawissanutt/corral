@@ -10,6 +10,7 @@ use crate::model::act::{self, ActStatus};
 use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 use crate::model::plans::{self, Action, Button, GraphInput, Lens, LiveAction};
+use crate::model::projects::FilterScreen;
 use crate::model::text::span;
 use crate::model::work;
 use crate::model::{Form, Id};
@@ -167,11 +168,14 @@ fn pin(app: AppState, pinned: Stored<Vec<DetailRef>>, wanted: [Option<DetailRef>
     }
 }
 
-/// Keeps the desktop and terminal detail's plan current: the root selection, or the first plan.
+/// Keeps the desktop and terminal detail's plan current: the root selection, or the first plan
+/// the Plans scope lists.
 pub(super) fn keep_selected_loaded(app: AppState) {
     keep_current(app, true, move || {
         let selection = app.selection();
-        app.feed.with(|feed| plans::current_plan(&selection, feed))
+        let filter = app.project_filter(FilterScreen::Plans);
+        app.feed
+            .with(|feed| plans::current_plan_filtered(&selection, feed, &filter))
     });
 }
 

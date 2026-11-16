@@ -368,9 +368,16 @@ impl State {
         Vec::new()
     }
 
-    /// Preview and confirm the written grant; the form stays as written until it settles.
-    pub fn submit_grant(&mut self) -> Vec<Effect> {
-        match self.edits.grant.act(&mut self.ids) {
+    /// Adds or removes a project corrald lists; names it does not list are never toggled in.
+    pub fn grant_toggle_project(&mut self, feed: &Feed, project: Id) -> Vec<Effect> {
+        self.edits.grant.toggle_project(feed, project);
+        Vec::new()
+    }
+
+    /// Preview and confirm the written grant; the form stays as written until it settles. A
+    /// project name the current list no longer has blocks it rather than reaching corrald.
+    pub fn submit_grant(&mut self, feed: &Feed) -> Vec<Effect> {
+        match self.edits.grant.act_for(feed, &mut self.ids) {
             Some(act) => self.track("grant".into(), act),
             None => Vec::new(),
         }

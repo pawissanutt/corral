@@ -19,15 +19,17 @@ use nsh_core::{
 };
 
 use self::nav::{Entry, Nav};
-use super::{confirmation, lock, stale, toast};
+use super::{confirmation, destinations, lock, stale, toast};
 use crate::{
     model::{
-        Availability, DataState, Destination, Live, Overlay, PhoneTab, Route,
-        nav::{ASK_BUTTON, ASK_BUTTON_LABEL},
+        Availability, DataState, Destination, Live, Overlay, PhoneTab, ProjectFilter, Route,
+        nav::{ASK_BUTTON, ASK_BUTTON_LABEL, NavigationItem, NavigationTarget, phone_navigation},
+        projects::{PROJECTS_HEADING, PROJECTS_MORE_SUBTITLE, Projects},
         work::{self, MoreRow},
     },
     screens::{
-        self, PhoneBar, PhonePage, agents, assistant, builds, inbox, now, plans, review, settings,
+        self, PhoneBar, PhonePage, agents, assistant, builds, inbox, now, plans, projects, review,
+        settings,
     },
     state::AppState,
     ui::{
@@ -206,9 +208,11 @@ fn page_of(app: AppState, entry: Entry) -> (PhonePage, bool) {
         {
             pushed(live_page(app, live))
         }
+        Entry::Page(Route::Project(id)) if connected => pushed(projects::project_phone(app, id)),
         Entry::Page(route) => destination_page(app, route.owner()),
         Entry::Destination(destination) => destination_page(app, destination),
         Entry::Section(section) => pushed(settings::section_phone(app, section)),
+        Entry::Projects => pushed(projects::phone_list(app)),
     }
 }
 
@@ -386,18 +390,37 @@ fn page_bar(bar: PhoneBar) -> AnyElement {
         .into_element()
 }
 
-/// The More tab's root (`SCREENS.more`): the large title with search, then a row per
-/// destination with its icon, label and the feed's subtitle, each pushing its destination.
+/// The More tab's root (`SCREENS.more`): the large title with search, then the Projects row
+/// while corrald lists any, and a row per destination this workspace has with its icon, label
+/// and the feed's subtitle, each pushing its destination.
 fn more_list(nav: Nav) -> AnyElement {
     let app = nav.app;
     let more = app.feed.with_untracked(work::daemon_more);
-    let rows: Vec<AnyElement> = more.rows.iter().map(|&row| more_row(nav, row)).collect();
-    let list = view()
-        .mt(px(6.0))
-        .border_t_1()
-        .border_t_color(color(Token::Rule))
-        .children(rows)
-        .into_element();
+    let rows = more.rows;
+    let listed = computed(move || {
+        let projects = app.feed.with(|feed| {
+            !Projects::build(feed, &ProjectFilter::All)
+                .entries
+                .is_empty()
+        });
+        (destinations(app), projects)
+    });
+    let list = dynamic(move || {
+        let (shown, projects) = listed.get();
+        untracked(move || {
+            view()
+                .mt(px(6.0))
+                .border_t_1()
+                .border_t_color(color(Token::Rule))
+                .children(projects.then(|| projects_row(nav)))
+                .children(
+                    rows.iter()
+                        .filter(|row| shown.contains(&row.destination))
+                        .map(|&row| more_row(nav, row)),
+                )
+                .into_element()
+        })
+    });
     frame(
         app,
         Some(head(app, more.title, None, vec![search(app)])),
@@ -411,6 +434,33 @@ fn more_list(nav: Nav) -> AnyElement {
         true,
         false,
         false,
+    )
+}
+
+/// More's Projects row, first: every project's open work, a page of its own.
+fn projects_row(nav: Nav) -> AnyElement {
+    let app = nav.app;
+    list_row(
+        app,
+        format!("{PROJECTS_HEADING}, {PROJECTS_MORE_SUBTITLE}"),
+        "nav-projects",
+        || false,
+        move || nav.open_projects(),
+        vec![
+            view()
+                .w(px(28.0))
+                .flex_shrink_0()
+                .child(icon(Icon::Project, 20.0, color(Token::Ink)))
+                .into_element(),
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .gap(px(2.0))
+                .child(plain(app, PROJECTS_HEADING).truncate())
+                .child(dim(app, PROJECTS_MORE_SUBTITLE).truncate())
+                .into_element(),
+            icon(Icon::Chevron, 16.0, color(Token::Ink3)),
+        ],
     )
 }
 
@@ -498,86 +548,159 @@ fn ask_button(app: AppState) -> AnyElement {
         .into_element()
 }
 
+/// Tracked: whether a tab is the one shown. An assistant workspace's tabs are destinations, and
+/// its Ask tab is its landing (which stands in Now's place).
+fn tab_selected(nav: Nav, target: &NavigationTarget) -> bool {
+    match target {
+        NavigationTarget::Tab(tab) => nav.tab.get() == *tab,
+        NavigationTarget::Destination(destination) => nav.showing() == Some(*destination),
+        NavigationTarget::Ask => nav.showing() == Some(Destination::Now),
+    }
+}
+
+/// Choosing a tab shows its root, the selected one included; the Ask tab shows the landing and
+/// opens Ask over it.
+fn tab_press(nav: Nav, target: &NavigationTarget) {
+    match target {
+        NavigationTarget::Tab(tab) => nav.select(*tab),
+        NavigationTarget::Destination(destination) => nav.app.go(*destination),
+        NavigationTarget::Ask => {
+            nav.app.go(Destination::Now);
+            nav.app.open_ask();
+        }
+    }
+}
+
+fn tab_icon(target: &NavigationTarget) -> Icon {
+    match target {
+        NavigationTarget::Tab(tab) => Icon::phone_tab(*tab),
+        NavigationTarget::Destination(destination) => Icon::destination(*destination),
+        NavigationTarget::Ask => Icon::Ask,
+    }
+}
+
+/// Tracked: the tabs this workspace has (`nav::phone_navigation`).
+fn tab_items(nav: Nav) -> Memo<Vec<NavigationItem>> {
+    computed(move || nav.app.feed.with(phone_navigation))
+}
+
 /// iOS and Android: the system's bar, in flow so it takes its own height, the home indicator's
 /// or navigation bar's inset included.
 fn system_tabs(nav: Nav) -> AnyElement {
     let ios = matches!(os(), Os::Ios);
-    let items: Vec<TabBarItem> = PhoneTab::ALL
-        .iter()
-        .map(|&tab| {
-            let item = TabBarItem::new(tab.label());
-            // Android icons are the app's own drawables, which this build has none of.
-            if ios { item.icon(symbol(tab)) } else { item }
+    let items = tab_items(nav);
+    dynamic(move || {
+        let shown = items.get();
+        untracked(move || {
+            let bar: Vec<TabBarItem> = shown
+                .iter()
+                .map(|item| {
+                    let entry = TabBarItem::new(item.label);
+                    // Android icons are the app's own drawables, which this build has none of.
+                    if ios {
+                        entry.icon(symbol(&item.target))
+                    } else {
+                        entry
+                    }
+                })
+                .collect();
+            tab_bar()
+                .items(bar)
+                .selected_index(move || {
+                    items.with(|items| {
+                        items
+                            .iter()
+                            .position(|item| tab_selected(nav, &item.target))
+                            .and_then(|at| u32::try_from(at).ok())
+                            .unwrap_or(0)
+                    })
+                })
+                .on_change(move |index: &u32| {
+                    let target = items.with_untracked(|items| {
+                        usize::try_from(*index)
+                            .ok()
+                            .and_then(|at| items.get(at))
+                            .map(|item| item.target.clone())
+                    });
+                    if let Some(target) = target {
+                        tab_press(nav, &target);
+                    }
+                })
+                .into_element()
         })
-        .collect();
-    tab_bar()
-        .items(items)
-        .selected_index(move || nav.tab.get().index())
-        .on_change(move |index: &u32| {
-            if let Some(tab) = PhoneTab::from_index(*index) {
-                nav.select(tab);
-            }
-        })
-        .into_element()
+    })
 }
 
 /// The SF Symbol of a tab on iOS.
-fn symbol(tab: PhoneTab) -> &'static str {
-    match tab {
-        PhoneTab::Inbox => "tray",
-        PhoneTab::Now => "bolt",
-        PhoneTab::Agents => "terminal",
-        PhoneTab::Plans => "list.bullet.rectangle",
-        PhoneTab::More => "ellipsis",
+fn symbol(target: &NavigationTarget) -> &'static str {
+    match target {
+        NavigationTarget::Tab(PhoneTab::Inbox) => "tray",
+        NavigationTarget::Tab(PhoneTab::Now) => "bolt",
+        NavigationTarget::Tab(PhoneTab::Agents)
+        | NavigationTarget::Destination(Destination::Agents) => "terminal",
+        NavigationTarget::Tab(PhoneTab::Plans) => "list.bullet.rectangle",
+        NavigationTarget::Tab(PhoneTab::More) => "ellipsis",
+        NavigationTarget::Destination(Destination::Usage) => "chart.bar",
+        NavigationTarget::Destination(Destination::Settings) => "gearshape",
+        NavigationTarget::Destination(_) => "circle",
+        NavigationTarget::Ask => "bubble.left",
     }
 }
 
 /// Every other platform: the tabs in the mock's look (`.ptab`), above the bottom inset, on the
 /// page's ground behind a hairline.
 fn app_tabs(nav: Nav) -> AnyElement {
-    tabs()
-        .flex_row()
-        .bg(color(Token::Bg).opacity(0.92))
-        .border_t_1()
-        .border_t_color(color(Token::Rule))
-        .pt(px(6.0))
-        .px(px(4.0))
-        .pb_safe_area()
-        .pl_safe_area()
-        .pr_safe_area()
-        // The selected tab reads by its ink and weight, as in the mock; no bar marks it.
-        .indicator_style(|s| s.h(px(0.0)).opacity(0.0))
-        .children(PhoneTab::ALL.iter().map(|&which| app_tab(nav, which)))
-        .into_element()
+    let items = tab_items(nav);
+    dynamic(move || {
+        let shown = items.get();
+        untracked(move || {
+            tabs()
+                .flex_row()
+                .bg(color(Token::Bg).opacity(0.92))
+                .border_t_1()
+                .border_t_color(color(Token::Rule))
+                .pt(px(6.0))
+                .px(px(4.0))
+                .pb_safe_area()
+                .pl_safe_area()
+                .pr_safe_area()
+                // The selected tab reads by its ink and weight, as in the mock; no bar marks it.
+                .indicator_style(|s| s.h(px(0.0)).opacity(0.0))
+                .children(shown.into_iter().map(|item| app_tab(nav, item)))
+                .into_element()
+        })
+    })
 }
 
 /// One drawn tab: the selected one has the strong ink and a bold label, so colour is never the
-/// only cue. Choosing a tab shows its root, the selected one included.
-fn app_tab(nav: Nav, which: PhoneTab) -> AnyElement {
+/// only cue.
+fn app_tab(nav: Nav, item: NavigationItem) -> AnyElement {
     let app = nav.app;
-    let selected = move || nav.tab.get() == which;
+    let NavigationItem { id, label, target } = item;
+    let probe = target.clone();
+    let selected = computed(move || tab_selected(nav, &probe));
     let ink = move || {
-        if selected() {
+        if selected.get() {
             color(Token::Ink)
         } else {
             color(Token::Ink3)
         }
     };
+    let glyph = tab_icon(&target);
+    let inbox = target == NavigationTarget::Tab(PhoneTab::Inbox);
     let glyph = view()
         .relative()
         .size(px(TAB_ICON))
-        .child(dynamic(move || {
-            icon(Icon::phone_tab(which), TAB_ICON, ink())
-        }))
-        .when(which == PhoneTab::Inbox, |v| v.child(inbox_badge(app)));
+        .child(dynamic(move || icon(glyph, TAB_ICON, ink())))
+        .when(inbox, |v| v.child(inbox_badge(app)));
     // The test id sits on the icon and label; a press there reaches the tab.
     let face = view()
-        .test_id(&format!("tab-{}", which.slug()))
+        .test_id(&id)
         .items_center()
         .gap(px(3.0))
         .child(glyph)
         .child(
-            text(which.label())
+            text(label)
                 .font_family(FONT_TEXT)
                 .text_size(px(TAB_LABEL))
                 .style_when(selected, |s| s.font_weight(FontWeight::BOLD))
@@ -587,16 +710,16 @@ fn app_tab(nav: Nav, which: PhoneTab) -> AnyElement {
     // carries its needs-you count, which the badge otherwise announces alone.
     let name = move || {
         Some(SharedString::from(
-            match (which, app.snapshot().count(Destination::Inbox)) {
-                (PhoneTab::Inbox, Some(n)) => format!("{}, {n} need you", which.label()),
-                _ => which.label().to_owned(),
+            match (inbox, app.snapshot().count(Destination::Inbox)) {
+                (true, Some(n)) => format!("{label}, {n} need you"),
+                _ => label.to_owned(),
             },
         ))
     };
     tab()
         .selected(selected)
         .accessibility_label(name)
-        .on_press(move |_: &()| nav.select(which))
+        .on_press(move |_: &()| tab_press(nav, &target))
         .flex_1()
         .h(px(TAB_HEIGHT))
         .items_center()

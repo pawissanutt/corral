@@ -23,7 +23,7 @@ use crate::ui::kit::text::{dim, h3, mono, plain, rich, rich_small};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::context::tail;
-use super::parts::{model_button, press, press_id, pressable, quiet};
+use super::parts::{model_button, press, press_id, pressable, quiet, scope};
 use super::verbs::reasons;
 
 /// The phone's least touch target: a dependency id or the plan link is pressed as a button is.
@@ -42,8 +42,10 @@ pub(super) fn panel(app: AppState, tab: Option<NowTab>) -> AnyElement {
             state.now_tab = tab;
         }
         let selection = app.selection();
-        app.feed
-            .with(|feed| work::daemon_inspector(&state, feed, &selection, form))
+        let (filter, grouping) = scope(app);
+        app.feed.with(|feed| {
+            work::daemon_inspector_filtered(&state, feed, &selection, form, &filter, grouping)
+        })
     });
     dynamic(move || inspector.with(|inspector| content(app, inspector)))
 }

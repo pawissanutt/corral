@@ -98,6 +98,10 @@ pub enum Action {
     Settings(SettingsSection),
     /// Select or push a live record.
     OpenLive(Live),
+    /// Open a locally built project page.
+    Project(Id),
+    /// Launch the explicit assistant-only workspace preview.
+    PreviewNoProjects,
     /// Run the same record action offered in the inspector and row menu.
     Work(crate::model::work::Press),
     /// Open Ask, optionally with a free-text draft.
@@ -165,26 +169,48 @@ pub fn commands(
     let query = query.trim();
     let live = data != DataState::Disconnected;
     let preview = data == DataState::Fixture;
+    let managed = crate::model::WorkspaceMode::of(feed) == crate::model::WorkspaceMode::Managed;
     let ask = preview || (live && feed.capable(corral_protocol::app::ASSISTANT_V1));
     let mut rows = Vec::new();
     if ask {
         rows.extend(ask_with(query));
     }
-    if live {
+    if live && managed {
         live_needs_you(&mut rows, feed, query);
         live_verbs(&mut rows, feed, record);
     }
-    rows.extend(Destination::ALL.into_iter().map(|destination| {
-        row(
-            format!("go:{}", destination.slug()),
-            "Go to",
-            destination.label(),
-            destination_key(destination),
-            Action::Go(destination),
-        )
-    }));
+    rows.extend(
+        crate::model::nav::navigation(feed)
+            .into_iter()
+            .filter_map(|item| {
+                let crate::model::nav::NavigationTarget::Destination(destination) = item.target
+                else {
+                    return None;
+                };
+                Some(row(
+                    format!("go:{}", destination.slug()),
+                    "Go to",
+                    destination.label(),
+                    destination_key(destination),
+                    Action::Go(destination),
+                ))
+            }),
+    );
     if live {
         live_open(&mut rows, feed, query);
+        rows.extend(
+            crate::model::projects::known_projects(feed)
+                .into_iter()
+                .map(|id| {
+                    row(
+                        format!("project-{id}"),
+                        "Projects",
+                        format!("Project: {id}"),
+                        None,
+                        Action::Project(id),
+                    )
+                }),
+        );
     }
     rows.push(pair_row(data));
     if preview {
@@ -240,13 +266,22 @@ pub fn commands(
         }),
     );
     rows.push(row(
-        "reset-now",
-        "Now",
-        "Reset Now layout",
+        "preview-no-projects",
+        "Data",
+        "Preview: no projects",
         None,
-        Action::ResetNow,
+        Action::PreviewNoProjects,
     ));
-    if live {
+    if managed {
+        rows.push(row(
+            "reset-now",
+            "Now",
+            "Reset Now layout",
+            None,
+            Action::ResetNow,
+        ));
+    }
+    if live && managed {
         // One row for both directions: the palette reads no Now state, and either word finds it.
         rows.push(row(
             "closed:toggle",
@@ -418,48 +453,52 @@ fn task_id(query: &str) -> Option<Id> {
 /// Records the daemon served: board tasks, plans, builds, agent sessions, assistant threads. A
 /// whole task id the board does not list (a closed task) opens by id, from its detail.
 fn live_open(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
-    if let Some(id) = task_id(query).filter(|id| feed.board.task(id).is_none()) {
-        let live = Live::Task(id);
-        rows.push(row(
-            format!("live:{}:{}", live.kind().slug(), live.id()),
-            "Open",
-            format!("Open {}", live.id()),
-            None,
-            Action::OpenLive(live),
-        ));
-    }
-    push_live(
-        rows,
-        "Open",
-        query,
-        feed.board.tasks().iter().map(|task| {
-            (
-                format!("{} {}", task.id, task.title),
-                Live::Task(task.id.clone()),
-            )
-        }),
-    );
-    push_live(
-        rows,
-        "Open",
-        query,
-        feed.plans
-            .iter()
-            .filter(|(_, plan)| !matches!(plan.state, PlanState::Complete | PlanState::Cancelled))
-            .map(|(id, plan)| (format!("Plan {id} {}", plan.title), Live::Plan(id.clone()))),
-    );
-    if feed.capable(corral_protocol::app::BUILDS_V1) {
+    if crate::model::WorkspaceMode::of(feed) == crate::model::WorkspaceMode::Managed {
+        if let Some(id) = task_id(query).filter(|id| feed.board.task(id).is_none()) {
+            let live = Live::Task(id);
+            rows.push(row(
+                format!("live:{}:{}", live.kind().slug(), live.id()),
+                "Open",
+                format!("Open {}", live.id()),
+                None,
+                Action::OpenLive(live),
+            ));
+        }
         push_live(
             rows,
             "Open",
             query,
-            feed.builds.iter().map(|(id, build)| {
+            feed.board.tasks().iter().map(|task| {
                 (
-                    format!("Build {id} {}", build.title),
-                    Live::Build(id.clone()),
+                    format!("{} {}", task.id, task.title),
+                    Live::Task(task.id.clone()),
                 )
             }),
         );
+        push_live(
+            rows,
+            "Open",
+            query,
+            feed.plans
+                .iter()
+                .filter(|(_, plan)| {
+                    !matches!(plan.state, PlanState::Complete | PlanState::Cancelled)
+                })
+                .map(|(id, plan)| (format!("Plan {id} {}", plan.title), Live::Plan(id.clone()))),
+        );
+        if feed.capable(corral_protocol::app::BUILDS_V1) {
+            push_live(
+                rows,
+                "Open",
+                query,
+                feed.builds.iter().map(|(id, build)| {
+                    (
+                        format!("Build {id} {}", build.title),
+                        Live::Build(id.clone()),
+                    )
+                }),
+            );
+        }
     }
     push_live(
         rows,

@@ -3,7 +3,7 @@
 //! details requested while the page is open and revalidates them when the board moves; the
 //! burn-up is the scope the owner picked.
 
-use corral_protocol::detail::DetailBody;
+use corral_protocol::detail::{DetailBody, DetailRef};
 use jiff::tz::TimeZone;
 use nsh_core::prelude::*;
 
@@ -99,20 +99,8 @@ pub fn shown(app: AppState) -> Shown {
             }
             None => (None, Status::Loading, Vec::new()),
         };
-        let burnup_cache = feed.detail(&timeline::burnup_request(&state));
-        let burnup_coverage =
-            burnup_cache
-                .and_then(DetailCache::body)
-                .and_then(|body| match body {
-                    DetailBody::Burnup(burnup) => completeness_label(&burnup.completeness),
-                    _ => None,
-                });
-        let burnup = burnup_cache
-            .and_then(DetailCache::body)
-            .and_then(|body| match body {
-                DetailBody::Burnup(burnup) => timeline::burnup_series(burnup, now, feed),
-                _ => None,
-            });
+        let (burnup, burnup_status, burnup_coverage) =
+            burnup_parts(feed, &timeline::burnup_request(&state), now);
         Shown {
             gaps_empty: plot
                 .is_some()
@@ -122,10 +110,44 @@ pub fn shown(app: AppState) -> Shown {
             gaps_title: timeline::gaps_title(state.range),
             gaps,
             burnup,
-            burnup_status: state_of(burnup_cache),
+            burnup_status,
             burnup_coverage,
         }
     })
+}
+
+/// A burn-up detail as drawn: its series, where its request stands, and how complete corrald's
+/// count of it is.
+pub type BurnupParts = (Option<BurnupSeries>, Status, Option<String>);
+
+fn burnup_parts(feed: &Feed, request: &DetailRef, now: u64) -> BurnupParts {
+    let cache = feed.detail(request);
+    let body = cache.and_then(DetailCache::body);
+    let coverage = body.and_then(|body| match body {
+        DetailBody::Burnup(burnup) => completeness_label(&burnup.completeness),
+        _ => None,
+    });
+    let series = body.and_then(|body| match body {
+        DetailBody::Burnup(burnup) => timeline::burnup_series(burnup, now, feed),
+        _ => None,
+    });
+    (series, state_of(cache), coverage)
+}
+
+/// Tracked: one fixed scope's burn-up, for a page outside the Timeline (a project's).
+pub fn burnup_of(app: AppState, request: &DetailRef) -> BurnupParts {
+    app.feed
+        .with(|feed| burnup_parts(feed, request, minute(feed)))
+}
+
+/// Keeps one fixed scope's burn-up requested while the page showing it is open.
+pub fn keep_burnup(app: AppState, request: DetailRef) {
+    effect(move || {
+        if app.daemon() {
+            let request = request.clone();
+            untracked(|| app.load(request));
+        }
+    });
 }
 
 /// A number that moves whenever a board row's revision does, so the recorded spans are

@@ -12,6 +12,7 @@ keyed!(
     InboxRow,
     PlanRow,
     BuildRow,
+    ProjectRow,
     AgentRow,
     AssistantRow,
     UsageRow,
@@ -78,6 +79,12 @@ impl AppState {
                     changed = apply(&mut feed.builds, delta.rows, delta.left, replacement)
                 });
                 Topic::Builds
+            }
+            SubDelta::Projects { delta } => {
+                feed.update(|feed| {
+                    changed = apply(&mut feed.projects, delta.rows, delta.left, replacement)
+                });
+                Topic::Projects
             }
             SubDelta::Agents { delta } => {
                 feed.update(|feed| {

@@ -464,6 +464,10 @@ impl NavState {
         let push = live.pushes(form);
         self.open_route(Route::Live(live), push);
     }
+    /// Projects are local pages on every form; no daemon detail subscription is needed.
+    pub fn open_project(&mut self, id: crate::model::Id) {
+        self.open_route(Route::Project(id), true);
+    }
     fn open_route(&mut self, route: Route, push: bool) {
         self.destination = route.owner();
         self.close(Overlay::Palette);
@@ -526,6 +530,71 @@ impl NavState {
             false
         }
     }
+}
+
+/// Navigation targets keep Ask a chat interaction rather than a board destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NavigationTarget {
+    Ask,
+    Destination(Destination),
+    Tab(PhoneTab),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NavigationItem {
+    pub id: String,
+    pub label: &'static str,
+    pub target: NavigationTarget,
+}
+
+/// Board destinations disappear in assistant workspaces, rather than becoming disabled.
+pub fn navigation(feed: &crate::model::daemon::Feed) -> Vec<NavigationItem> {
+    use crate::model::projects::WorkspaceMode;
+    let mut items = vec![NavigationItem {
+        id: "nav-ask".into(),
+        label: "Ask",
+        target: NavigationTarget::Ask,
+    }];
+    let assistant = WorkspaceMode::of(feed) == WorkspaceMode::AssistantOnly;
+    items.extend(
+        Destination::ALL
+            .into_iter()
+            .filter(|destination| {
+                !assistant
+                    || matches!(
+                        destination,
+                        Destination::Agents | Destination::Usage | Destination::Settings
+                    )
+            })
+            .map(|destination| NavigationItem {
+                id: format!("nav-{}", destination.slug()),
+                label: destination.label(),
+                target: NavigationTarget::Destination(destination),
+            }),
+    );
+    items
+}
+
+pub fn phone_navigation(feed: &crate::model::daemon::Feed) -> Vec<NavigationItem> {
+    if crate::model::projects::WorkspaceMode::of(feed)
+        == crate::model::projects::WorkspaceMode::AssistantOnly
+    {
+        return navigation(feed)
+            .into_iter()
+            .map(|mut item| {
+                item.id = item.id.replacen("nav-", "tab-", 1);
+                item
+            })
+            .collect();
+    }
+    PhoneTab::ALL
+        .into_iter()
+        .map(|tab| NavigationItem {
+            id: format!("tab-{}", tab.slug()),
+            label: tab.label(),
+            target: NavigationTarget::Tab(tab),
+        })
+        .collect()
 }
 
 #[cfg(test)]

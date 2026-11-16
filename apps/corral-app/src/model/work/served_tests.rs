@@ -2,6 +2,14 @@ use super::*;
 use crate::model::board::Mark;
 use crate::model::effect::Conn;
 
+/// The unscoped workspace: no project chosen, grouped by state.
+const ALL: ProjectFilter = ProjectFilter::All;
+const BY_STATE: NowGroup = NowGroup::State;
+const SCOPE: NowScope<'_> = NowScope {
+    filter: &ALL,
+    grouping: BY_STATE,
+};
+
 fn task(id: &str, group: daemon::Group) -> daemon::Task {
     daemon::Task {
         id: Id::from(id),
@@ -97,7 +105,14 @@ fn unenrolled_or_revoked_device_hides_board_rows() {
         (DeviceLink::Revoked { id: "dev-1".into() }, REVOKED),
     ] {
         feed.device = device;
-        let list = daemon_list(&state, &feed, &Selection::default(), Form::Desktop);
+        let list = daemon_list_filtered(
+            &state,
+            &feed,
+            &Selection::default(),
+            Form::Desktop,
+            &ALL,
+            BY_STATE,
+        );
         assert_eq!(list.notice, Some(notice));
         assert!(list.groups.is_empty());
     }
@@ -118,7 +133,15 @@ fn daemon_list_groups_rows_by_who_acts_next_and_puts_other_under_queued() {
     let refs: Vec<&daemon::Task> = tasks.iter().collect();
     let mut feed = daemon::Feed::default();
     feed.inbox.insert("T-3".into(), owner_move("T-3"));
-    let list = list(&State::default(), &refs, None, &feed, Form::Desktop);
+    let list = list(
+        &State::default(),
+        &refs,
+        None,
+        &feed,
+        Form::Desktop,
+        &ProjectFilter::All,
+        NowGroup::State,
+    );
     let keys: Vec<GroupKey> = list.groups.iter().map(|group| group.key).collect();
     assert_eq!(keys, [GroupKey::You, GroupKey::Worker, GroupKey::Queued]);
     assert_eq!(ids(&list, GroupKey::Queued), ["T-1", "T-4"]);
@@ -135,13 +158,13 @@ fn collapsed_queued_rows_stay_out_of_keyboard_reach_until_expanded() {
     let mut state = State::default();
     let mut current = Some(tasks[0].id.clone());
     for _ in 0..tasks.len() {
-        let effects = state.key_tasks("j", current.as_ref(), &refs, &feed, Form::Desktop);
+        let effects = state.key_tasks("j", current.as_ref(), &refs, &feed, Form::Desktop, SCOPE);
         selected_after(effects, &mut current);
     }
     assert_eq!(current, Some(tasks[COLLAPSED - 1].id.clone()));
     state.act(Action::ShowAll(GroupKey::Queued));
     for _ in 0..tasks.len() {
-        let effects = state.key_tasks("j", current.as_ref(), &refs, &feed, Form::Desktop);
+        let effects = state.key_tasks("j", current.as_ref(), &refs, &feed, Form::Desktop, SCOPE);
         selected_after(effects, &mut current);
     }
     assert_eq!(current, Some(tasks[tasks.len() - 1].id.clone()));
@@ -200,7 +223,7 @@ fn an_off_board_selection_shows_its_own_detail_and_never_aliases_the_first_row()
         ..Selection::default()
     };
     let mut state = State::default();
-    let list = daemon_list(&state, &feed, &selected, Form::Desktop);
+    let list = daemon_list_filtered(&state, &feed, &selected, Form::Desktop, &ALL, BY_STATE);
     assert!(
         !list
             .groups
@@ -208,14 +231,21 @@ fn an_off_board_selection_shows_its_own_detail_and_never_aliases_the_first_row()
             .flat_map(|group| group.rows.iter())
             .any(|row| matches!(row, Row::Task(row) if row.selected))
     );
-    let inspector = super::super::daemon_inspector(&state, &feed, &selected, Form::Desktop);
+    let inspector = super::super::daemon_inspector_filtered(
+        &state,
+        &feed,
+        &selected,
+        Form::Desktop,
+        &ALL,
+        BY_STATE,
+    );
     assert!(matches!(
         &inspector,
         super::super::Inspector::LiveStory(story) if story.id == "T-404"
     ));
     // The list keys enter the list from its top.
     let mut current = Some(closed);
-    let effects = state.key_live(
+    let effects = state.key_live_filtered(
         "j",
         None,
         &selected,
@@ -224,6 +254,7 @@ fn an_off_board_selection_shows_its_own_detail_and_never_aliases_the_first_row()
             conn: Conn::Healthy,
             form: Form::Desktop,
         },
+        SCOPE,
     );
     selected_after(effects, &mut current);
     assert_eq!(current.as_deref(), Some("T-6"));
@@ -264,11 +295,13 @@ fn rows_past_the_seen_cursor_carry_the_changed_mark() {
         through: 5,
         at: None,
     });
-    let list = daemon_list(
+    let list = daemon_list_filtered(
         &State::default(),
         &feed,
         &Selection::default(),
         Form::Desktop,
+        &ALL,
+        BY_STATE,
     );
     let changed: Vec<String> = list
         .groups
@@ -345,7 +378,7 @@ fn task_attention_routes_inspector_and_enter_without_inventing_questions() {
             .unwrap();
         assert_eq!(button.action, Some(Press::Open(expected.clone())));
         let effects = state
-            .key_tasks("Enter", None, &tasks, &feed, Form::Desktop)
+            .key_tasks("Enter", None, &tasks, &feed, Form::Desktop, SCOPE)
             .unwrap();
         assert_eq!(effects, [Effect::OpenLive(expected)]);
     }
@@ -371,7 +404,7 @@ fn board_topic_failure_stops_loading_and_marks_retained_rows_last_known() {
             }),
         },
     );
-    let list = daemon_list(&state, &feed, &selected, Form::Desktop);
+    let list = daemon_list_filtered(&state, &feed, &selected, Form::Desktop, &ALL, BY_STATE);
     assert!(list.notice.is_some());
     assert!(list.groups.is_empty());
     let status = super::super::daemon_status(&feed);
@@ -390,19 +423,19 @@ fn board_topic_failure_stops_loading_and_marks_retained_rows_last_known() {
         [Effect::RetryTopic("board".into())]
     );
     assert!(
-        super::super::daemon_live(&state, &feed, &selected, Form::Desktop)
+        super::super::daemon_live_filtered(&state, &feed, &selected, Form::Desktop, &ALL, BY_STATE)
             .selected_note
             .is_some()
     );
     assert!(
-        super::super::daemon_plan(&state, &feed, &selected, Form::Desktop)
+        super::super::daemon_plan_filtered(&state, &feed, &selected, Form::Desktop, &ALL, BY_STATE)
             .empty
             .is_some()
     );
 
     feed.board_received(1, vec![task("T-1", daemon::Group::Queued)], &[], true);
     assert!(
-        !daemon_list(&state, &feed, &selected, Form::Desktop)
+        !daemon_list_filtered(&state, &feed, &selected, Form::Desktop, &ALL, BY_STATE)
             .groups
             .is_empty()
     );
@@ -434,16 +467,16 @@ fn next_tab_key_and_enter_keep_the_live_session_in_now() {
     });
     let feed = daemon::Feed::default();
     assert_eq!(
-        state.key_tasks("]", None, &[&row], &feed, Form::Desktop),
+        state.key_tasks("]", None, &[&row], &feed, Form::Desktop, SCOPE),
         Some(vec![])
     );
     assert_eq!(state.now_tab, super::super::NowTab::Evidence);
     assert!(
         state
-            .key_tasks("Tab", None, &[&row], &feed, Form::Desktop)
+            .key_tasks("Tab", None, &[&row], &feed, Form::Desktop, SCOPE)
             .is_none()
     );
-    let effects = state.key_tasks("Enter", None, &[&row], &feed, Form::Desktop);
+    let effects = state.key_tasks("Enter", None, &[&row], &feed, Form::Desktop, SCOPE);
     assert_eq!(effects, Some(vec![]));
     assert_eq!(state.now_tab, super::super::NowTab::Session);
 }
@@ -480,22 +513,29 @@ fn closed_rows_join_the_list_keys_only_while_the_section_is_open() {
         },
     );
     let mut state = State::default();
-    let tasks = shown(&state, feed.board.tasks());
+    let tasks = shown(&state, &feed, &ProjectFilter::All);
     let mut current = Some(Id::from("T-1"));
-    let effects = state.key_tasks("j", current.as_ref(), &tasks, &feed, Form::Desktop);
+    let effects = state.key_tasks("j", current.as_ref(), &tasks, &feed, Form::Desktop, SCOPE);
     selected_after(effects, &mut current);
     assert_eq!(current.as_deref(), Some("T-1"));
 
     state.closed.press(super::super::ClosedPress::Toggle);
-    let effects = state.key_tasks("j", current.as_ref(), &tasks, &feed, Form::Desktop);
+    let effects = state.key_tasks("j", current.as_ref(), &tasks, &feed, Form::Desktop, SCOPE);
     selected_after(effects, &mut current);
     assert_eq!(current.as_deref(), Some("T-9"));
-    let effects = state.key_tasks("Enter", current.as_ref(), &tasks, &feed, Form::Desktop);
+    let effects = state.key_tasks(
+        "Enter",
+        current.as_ref(),
+        &tasks,
+        &feed,
+        Form::Desktop,
+        SCOPE,
+    );
     assert_eq!(
         effects,
         Some(vec![Effect::OpenLive(Live::Task(Id::from("T-9")))])
     );
-    let effects = state.key_tasks("k", current.as_ref(), &tasks, &feed, Form::Desktop);
+    let effects = state.key_tasks("k", current.as_ref(), &tasks, &feed, Form::Desktop, SCOPE);
     selected_after(effects, &mut current);
     assert_eq!(current.as_deref(), Some("T-1"));
 }

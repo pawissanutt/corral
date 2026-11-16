@@ -100,7 +100,7 @@ fn record(id: &str, title: &str, outcome: BuildOutcome, total: BuildUsage) -> Bu
     BuildDetail {
         id: id.into(),
         kind: "build".into(),
-        project: Some("corral".into()),
+        project: super::super::projects::sample_project(id).map(str::to_owned),
         title: title.into(),
         rev: 1,
         state: outcome.state.clone(),

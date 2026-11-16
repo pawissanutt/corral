@@ -60,6 +60,7 @@ fn daemon_palette_lists_served_records_only() {
             accepted_at: None,
             role: None,
             linked: None,
+            projects: Vec::new(),
             rev: 1,
         },
     );

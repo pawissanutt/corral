@@ -97,7 +97,9 @@ impl AppState {
 
     /// Enqueues an intent for client admission, not an ownership transfer. The composer
     /// retains its words and attachments until the matching persisted acceptance arrives.
-    pub fn send_message(&self, message: AssistantSend) -> bool {
+    pub fn send_message(&self, mut message: AssistantSend) -> bool {
+        let project = untracked(|| self.composer_project());
+        crate::model::assistant::attach_default_project(&mut message, project.as_ref());
         if self.fixture() {
             return self.preview_send(message);
         }

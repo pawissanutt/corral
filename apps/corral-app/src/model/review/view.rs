@@ -67,6 +67,8 @@ pub(super) fn button(label: impl Into<String>, action: Action, style: ButtonStyl
 pub struct CandidateRow {
     /// Task id, the row's stable key and test id.
     pub task: String,
+    /// Project context when the workspace-wide list needs disambiguation.
+    pub project_chip: Option<String>,
     /// Short title below the identity.
     pub title: String,
     /// Stage line below the title.

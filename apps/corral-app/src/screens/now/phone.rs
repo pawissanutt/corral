@@ -12,6 +12,7 @@ use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::page::{head, pane, search};
+use crate::ui::kit::project_filter::project_filter_grouped;
 use crate::ui::kit::rows::{group_header, task_columns};
 use crate::ui::kit::text::dim;
 use crate::ui::tokens::{Token, color};
@@ -21,19 +22,23 @@ use super::context::{plan_body, tail};
 use super::inspector::content;
 use super::list::rows;
 use super::parts::{
-    act, action_id, dim_when, keep_loaded, press, press_id, pressable, stale, wanted, wanted_id,
+    act, action_id, dim_when, keep_loaded, press, press_id, pressable, scope, stale, wanted,
+    wanted_id,
 };
 
 const RING: f32 = 2.0;
 
-/// The Now tab's root: the large title, then, scrolling under it, the summary chips (a press opens
-/// Changes; a stale board adds its `as of` chip), the grouped list and the Closed section.
+/// The Now tab's root: the large title, then, scrolling under it, the project scope with its
+/// Group toggle, the summary chips (a press opens Changes; a stale board adds its `as of` chip),
+/// the grouped list and the Closed section.
 pub(super) fn root(app: AppState) -> AnyElement {
     let now = computed(move || {
         let selection = app.selection();
+        let (filter, grouping) = scope(app);
         app.feed.with(|feed| {
-            app.work
-                .with(|state| work::daemon_phone_now(state, feed, &selection))
+            app.work.with(|state| {
+                work::daemon_phone_now_filtered(state, feed, &selection, &filter, grouping)
+            })
         })
     });
     let title = untracked(|| now.with(|now| now.title));
@@ -86,6 +91,7 @@ pub(super) fn root(app: AppState) -> AnyElement {
         })
     });
     let content = dim_when(view(), stale(app))
+        .child(project_filter_grouped(app))
         .child(summary)
         // The phone's two-line rows show every column.
         .child(rows(app, list, computed(|| task_columns(Form::Phone, 0.0))))

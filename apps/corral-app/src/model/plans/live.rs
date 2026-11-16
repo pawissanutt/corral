@@ -21,6 +21,7 @@ use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::inbox::{is_open, owner_moves};
 use crate::model::nav::Form;
+use crate::model::projects::{ProjectFilter, project_chip};
 use crate::model::text::span;
 use crate::model::work::when;
 use crate::model::{Id, Live, Selection};
@@ -59,9 +60,22 @@ fn by_id(a: &str, b: &str) -> Ordering {
     }
 }
 
+fn plan_filter(feed: &Feed, filter: &ProjectFilter) -> ProjectFilter {
+    if feed.capable(corral_protocol::PROJECTS_V1) {
+        filter.resolved(feed)
+    } else {
+        ProjectFilter::All
+    }
+}
+
 /// Served plans in list order: by section, then by id.
-fn sorted(feed: &Feed) -> Vec<&WirePlan> {
-    let mut rows: Vec<&WirePlan> = feed.plans.values().collect();
+fn sorted<'a>(feed: &'a Feed, filter: &ProjectFilter) -> Vec<&'a WirePlan> {
+    let filter = plan_filter(feed, filter);
+    let mut rows: Vec<&WirePlan> = feed
+        .plans
+        .values()
+        .filter(|row| matches_project(row, &filter))
+        .collect();
     rows.sort_by(|a, b| {
         section_of(a.state)
             .cmp(&section_of(b.state))
@@ -71,8 +85,8 @@ fn sorted(feed: &Feed) -> Vec<&WirePlan> {
 }
 
 /// Served plan ids in list order, for j/k.
-pub(super) fn order(feed: &Feed) -> Vec<Id> {
-    sorted(feed)
+pub(super) fn order_filtered(feed: &Feed, filter: &ProjectFilter) -> Vec<Id> {
+    sorted(feed, filter)
         .into_iter()
         .map(|row| Id::from(&row.id))
         .collect()
@@ -80,12 +94,29 @@ pub(super) fn order(feed: &Feed) -> Vec<Id> {
 
 /// The plan the desktop and terminal detail shows: the root selection while corrald still lists
 /// it, otherwise the first plan of the list.
-pub fn current_plan(selection: &Selection, feed: &Feed) -> Option<Id> {
+pub fn current_plan_filtered(
+    selection: &Selection,
+    feed: &Feed,
+    filter: &ProjectFilter,
+) -> Option<Id> {
+    let filter = plan_filter(feed, filter);
     selection
         .plan
         .clone()
-        .filter(|id| feed.plans.contains_key(id.as_str()))
-        .or_else(|| order(feed).into_iter().next())
+        .filter(|id| {
+            feed.plans
+                .get(id.as_str())
+                .is_some_and(|row| matches_project(row, &filter))
+        })
+        .or_else(|| order_filtered(feed, &filter).into_iter().next())
+}
+
+fn matches_project(row: &WirePlan, filter: &ProjectFilter) -> bool {
+    match filter {
+        ProjectFilter::All => true,
+        ProjectFilter::Project(project) => row.projects.iter().any(|name| name == project.as_str()),
+        ProjectFilter::Unassigned => row.projects.is_empty(),
+    }
 }
 
 /// The cached detail of a plan, whatever its state.
@@ -106,10 +137,16 @@ fn topic_loading(feed: &Feed) -> bool {
 }
 
 /// Grouped list of corrald's plans with its loading, empty, error and stale states.
-pub fn live_list(selection: &Selection, feed: &Feed, env: Env) -> PlanList {
+pub fn live_list_filtered(
+    selection: &Selection,
+    feed: &Feed,
+    env: Env,
+    filter: &ProjectFilter,
+) -> PlanList {
+    let filter = plan_filter(feed, filter);
     let phone = env.form == Form::Phone;
     let topic = feed.topics.get("plans");
-    let rows = sorted(feed);
+    let rows = sorted(feed, &filter);
     let notice = if rows.is_empty() {
         Some(
             if let Some(error) = topic.and_then(|topic| topic.error.as_ref()) {
@@ -118,12 +155,20 @@ pub fn live_list(selection: &Selection, feed: &Feed, env: Env) -> PlanList {
                 ListNotice::Error(
                     "No plans received from corrald yet; the connection is down.".into(),
                 )
-            } else if topic_loading(feed) {
+            } else if topic_loading(feed) && feed.plans.is_empty() {
                 ListNotice::Loading
             } else {
                 ListNotice::Empty {
-                    heading: "No plans",
-                    body: "corrald has no plan awaiting acceptance, executing or approved.",
+                    heading: if filter == ProjectFilter::All {
+                        "No plans"
+                    } else {
+                        "No matching plans"
+                    },
+                    body: if filter == ProjectFilter::All {
+                        "corrald has no plan awaiting acceptance, executing or approved."
+                    } else {
+                        "No served plan matches this project filter."
+                    },
                 }
             },
         )
@@ -142,7 +187,7 @@ pub fn live_list(selection: &Selection, feed: &Feed, env: Env) -> PlanList {
     let selected = if phone {
         None
     } else {
-        current_plan(selection, feed)
+        current_plan_filtered(selection, feed, &filter)
     };
     let sections = SECTIONS
         .iter()
@@ -154,7 +199,7 @@ pub fn live_list(selection: &Selection, feed: &Feed, env: Env) -> PlanList {
             rows: rows
                 .iter()
                 .filter(|row| section_of(row.state) == section_of(*kind))
-                .map(|row| list_row(feed, row, selected.as_ref(), phone))
+                .map(|row| list_row(feed, row, selected.as_ref(), phone, &filter))
                 .collect(),
         })
         .filter(|section| !section.rows.is_empty())
@@ -171,7 +216,13 @@ pub fn live_list(selection: &Selection, feed: &Feed, env: Env) -> PlanList {
     }
 }
 
-fn list_row(feed: &Feed, row: &WirePlan, selected: Option<&Id>, phone: bool) -> PlanRow {
+fn list_row(
+    feed: &Feed,
+    row: &WirePlan,
+    selected: Option<&Id>,
+    phone: bool,
+    filter: &ProjectFilter,
+) -> PlanRow {
     let id = Id::from(&row.id);
     let tracking = matches!(row.state, WireState::Executing | WireState::Complete);
     let sub = match row.state {
@@ -217,11 +268,31 @@ fn list_row(feed: &Feed, row: &WirePlan, selected: Option<&Id>, phone: bool) -> 
         }
         None => sub,
     };
+    let mut projects: Option<String> = None;
+    for project in row
+        .projects
+        .iter()
+        .filter(|_| feed.capable(corral_protocol::PROJECTS_V1))
+    {
+        if let Some(label) = project_chip(feed, filter, Some(project)) {
+            match &mut projects {
+                Some(projects) => {
+                    projects.push_str(", ");
+                    projects.push_str(&label);
+                }
+                None => projects = Some(label),
+            }
+        }
+    }
+    if row.projects.is_empty() && feed.capable(corral_protocol::PROJECTS_V1) {
+        projects = project_chip(feed, filter, None);
+    }
     PlanRow {
         id_label: match (&row.revision, phone) {
             (Some(rev), false) => format!("{} {rev}", row.id),
             _ => row.id.clone(),
         },
+        project_chip: projects,
         rev: row.revision.clone(),
         title: row.title.clone(),
         hue: SECTIONS[section_of(row.state)].2,

@@ -36,6 +36,7 @@ const SIGNAL: ImageAsset = asset!("icons/signal.svg");
 const BATTERY: ImageAsset = asset!("icons/batt.svg");
 const SIDEBAR: ImageAsset = asset!("icons/sidebar.svg");
 const PLUS: ImageAsset = asset!("icons/plus.svg");
+const PROJECT: ImageAsset = asset!("icons/project.svg");
 
 /// The mock's sprite (`ui.js`, `i-*`). `Ask` is the sprite's `i-chat` speech bubble.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -80,6 +81,8 @@ pub enum Icon {
     Sidebar,
     /// The phone composer's attachments menu.
     Plus,
+    /// A folder: a configured project (its page, the composer's default project).
+    Project,
 }
 
 impl Icon {
@@ -140,6 +143,7 @@ impl Icon {
             Icon::Battery => BATTERY,
             Icon::Sidebar => SIDEBAR,
             Icon::Plus => PLUS,
+            Icon::Project => PROJECT,
         }
     }
 }

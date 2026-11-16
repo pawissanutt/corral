@@ -12,6 +12,7 @@ use crate::model::daemon::{Feed, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
+use crate::model::projects::{ProjectFilter, project_chip};
 use crate::model::text::{Rich, span};
 use crate::model::work::when;
 use crate::model::{Id, Selection};
@@ -55,6 +56,7 @@ pub struct ListSection {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ListRow {
     pub id: Id,
+    pub project_chip: Option<String>,
     pub title: String,
     /// The dot's hue: the outcome's.
     pub hue: Hue,
@@ -86,8 +88,13 @@ fn instant(at: &str) -> Option<jiff::Timestamp> {
 }
 
 /// Served builds in list order: by outcome group, then newest update first, then id.
-fn sorted(feed: &Feed) -> Vec<&BuildRow> {
-    let mut rows: Vec<&BuildRow> = feed.builds.values().collect();
+fn sorted<'a>(feed: &'a Feed, filter: &ProjectFilter) -> Vec<&'a BuildRow> {
+    let filter = filter.resolved(feed);
+    let mut rows: Vec<&BuildRow> = feed
+        .builds
+        .values()
+        .filter(|row| filter.matches(row.project.as_deref()))
+        .collect();
     rows.sort_by(|a, b| {
         outcome(a)
             .rank()
@@ -104,8 +111,8 @@ fn sorted(feed: &Feed) -> Vec<&BuildRow> {
 }
 
 /// Served build ids in list order, for j/k.
-pub(super) fn order(feed: &Feed) -> Vec<Id> {
-    sorted(feed)
+pub(super) fn order_filtered(feed: &Feed, filter: &ProjectFilter) -> Vec<Id> {
+    sorted(feed, filter)
         .into_iter()
         .map(|row| Id::from(&row.id))
         .collect()
@@ -113,31 +120,54 @@ pub(super) fn order(feed: &Feed) -> Vec<Id> {
 
 /// The build the desktop and terminal detail shows: the root selection while corrald still
 /// lists it, otherwise the first build of the list.
-pub fn current_build(selection: &Selection, feed: &Feed) -> Option<Id> {
+pub fn current_build_filtered(
+    selection: &Selection,
+    feed: &Feed,
+    filter: &ProjectFilter,
+) -> Option<Id> {
+    let filter = filter.resolved(feed);
     selection
         .build
         .clone()
-        .filter(|id| feed.builds.contains_key(id.as_str()))
-        .or_else(|| order(feed).into_iter().next())
+        .filter(|id| {
+            feed.builds
+                .get(id.as_str())
+                .is_some_and(|row| filter.matches(row.project.as_deref()))
+        })
+        .or_else(|| order_filtered(feed, &filter).into_iter().next())
 }
 
 /// The grouped list of corrald's builds with its loading, empty, error and stale states.
-pub fn live_list(selection: &Selection, feed: &Feed, env: Env) -> BuildList {
+pub fn live_list_filtered(
+    selection: &Selection,
+    feed: &Feed,
+    env: Env,
+    filter: &ProjectFilter,
+) -> BuildList {
+    let filter = filter.resolved(feed);
     let phone = env.form == Form::Phone;
     let topic = feed.topics.get("builds");
-    let rows = sorted(feed);
+    let rows = sorted(feed, &filter);
     let failed = topic.and_then(|topic| topic.error.as_ref());
     let notice = if rows.is_empty() {
         Some(if let Some(error) = failed {
             ListNotice::Error(format!("corrald could not send builds: {}", error.message))
         } else if feed.link == Link::Down {
             ListNotice::Error("No builds received from corrald yet; the connection is down.".into())
-        } else if topic.is_none_or(|topic| topic.loading) {
+        } else if topic.is_none_or(|topic| topic.loading) && feed.builds.is_empty() {
             ListNotice::Loading
         } else {
             ListNotice::Empty {
-                heading: "No builds",
-                body: "No interactive build session has published a record in this workspace yet.",
+                heading: if filter == ProjectFilter::All {
+                    "No builds"
+                } else {
+                    "No matching builds"
+                },
+                body: if filter == ProjectFilter::All {
+                    "No interactive build session has published a record in this workspace yet."
+                } else {
+                    "No served build matches this project filter."
+                },
             }
         })
     } else if let Some(error) = failed {
@@ -152,14 +182,16 @@ pub fn live_list(selection: &Selection, feed: &Feed, env: Env) -> BuildList {
     } else {
         None
     };
-    let selected = (!phone).then(|| current_build(selection, feed)).flatten();
+    let selected = (!phone)
+        .then(|| current_build_filtered(selection, feed, &filter))
+        .flatten();
     let sections = Outcome::ORDER
         .iter()
         .filter_map(|group| {
             let rows: Vec<ListRow> = rows
                 .iter()
                 .filter(|row| outcome(row) == *group)
-                .map(|row| list_row(feed, row, selected.as_ref()))
+                .map(|row| list_row(feed, row, selected.as_ref(), &filter))
                 .collect();
             (!rows.is_empty()).then(|| ListSection {
                 label: group.section(),
@@ -176,7 +208,7 @@ pub fn live_list(selection: &Selection, feed: &Feed, env: Env) -> BuildList {
     }
 }
 
-fn list_row(feed: &Feed, row: &BuildRow, selected: Option<&Id>) -> ListRow {
+fn list_row(feed: &Feed, row: &BuildRow, selected: Option<&Id>, filter: &ProjectFilter) -> ListRow {
     let id = Id::from(&row.id);
     let outcome = outcome(row);
     let state = match (&row.landed, outcome) {
@@ -187,10 +219,7 @@ fn list_row(feed: &Feed, row: &BuildRow, selected: Option<&Id>) -> ListRow {
     };
     let (gate, gate_hue) = wording::gate(row.gate_attempts, row.gate_failures);
     let mut facts: Rich = Vec::new();
-    if let Some(project) = &row.project {
-        facts.push(span(project.as_str()));
-        facts.push(span(" · ").dim());
-    }
+    let project_chip = project_chip(feed, filter, row.project.as_deref());
     if row.kind != "build" {
         facts.push(span(format!("{} session · ", row.kind)).dim());
     }
@@ -216,6 +245,7 @@ fn list_row(feed: &Feed, row: &BuildRow, selected: Option<&Id>) -> ListRow {
     label.push(cost.clone());
     ListRow {
         title: row.title.clone(),
+        project_chip,
         hue: outcome.hue(),
         state,
         flag: (outcome == Outcome::Override).then_some(("override", Hue::Held)),

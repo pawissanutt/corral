@@ -5,8 +5,60 @@ use crate::model::daemon::{DetailCache, Feed, detail_key};
 use crate::model::effect::{Conn, Env};
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
-use crate::model::plans::{Detail, State, live_detail, live_list};
+use crate::model::plans::{Detail, State, live_detail, live_list_filtered};
+use crate::model::projects::ProjectFilter;
 use crate::model::{Id, Selection};
+
+#[test]
+fn legacy_plans_have_unknown_projects_and_ignore_stored_filters() {
+    let mut feed = crate::model::preview::feed(0, String::new(), String::new(), None);
+    feed.capabilities.remove(corral_protocol::PROJECTS_V1);
+    feed.plans.clear();
+    feed.plans.insert(
+        "T-1".into(),
+        PlanRow {
+            id: "T-1".into(),
+            title: "plan".into(),
+            projects: vec![],
+            role: None,
+            linked: None,
+            state: PlanState::Drafting,
+            revision: None,
+            delivery: None,
+            members_total: 0,
+            members_landed: 0,
+            blockers: vec![],
+            accepted_at: None,
+            rev: 1,
+        },
+    );
+    let env = Env {
+        conn: Conn::Healthy,
+        form: Form::Desktop,
+    };
+    for filter in [
+        ProjectFilter::All,
+        ProjectFilter::Unassigned,
+        ProjectFilter::Project("corral".into()),
+    ] {
+        let list = live_list_filtered(&Selection::default(), &feed, env, &filter);
+        let rows: Vec<_> = list
+            .sections
+            .iter()
+            .flat_map(|section| &section.rows)
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].project_chip.is_none());
+        assert!(
+            crate::model::projects::chips(
+                &feed,
+                &filter,
+                crate::model::projects::FilterScreen::Plans
+            )
+            .is_empty()
+        );
+    }
+}
 
 #[test]
 fn planning_states_never_become_owner_acceptance_sections_or_details() {
@@ -30,6 +82,7 @@ fn planning_states_never_become_owner_acceptance_sections_or_details() {
             PlanRow {
                 id: id.to_string(),
                 title: "plan".into(),
+                projects: vec![],
                 role: Some(PlanRole::Design),
                 linked: None,
                 state: status,
@@ -75,7 +128,7 @@ fn planning_states_never_become_owner_acceptance_sections_or_details() {
             Detail::Planning(_)
         ));
     }
-    let list = live_list(&Selection::default(), &feed, env);
+    let list = live_list_filtered(&Selection::default(), &feed, env, &ProjectFilter::All);
     assert_eq!(list.sections.len(), 3);
     assert!(list.sections.iter().all(|section| section.hue != Hue::You));
     assert!(

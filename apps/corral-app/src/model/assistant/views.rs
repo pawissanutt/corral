@@ -159,6 +159,8 @@ pub struct Composer {
     pub next_message: Option<Rich>,
     /// Removable bounded-context chip.
     pub chip: Option<ContextChip>,
+    /// Removable default filing project, independent of the bounded record brief.
+    pub project_chip: Option<ContextChip>,
     /// Draft owned by the app.
     pub text: String,
     /// Empty-field prompt.

@@ -2,9 +2,10 @@
 //! Plans tab and the pushed plan page (phone), and the dependency graph Now's panel shows too.
 //!
 //! Everything shown comes from the served feed (corrald's, or the explicitly chosen synthetic
-//! preview) through `model::plans`: `live_list` for the rows, `live_detail` for the review
-//! document, tracker, approved state, document or diff, `live_phone_page` for the pushed page
-//! and `layout` for the graph. Presses run `plans::State::reduce_live` through
+//! preview) through `model::plans`: `live_list_filtered` in the screen's own project scope for
+//! the rows, `live_detail` for the review document, tracker, approved state, document or diff,
+//! `live_phone_page` for the pushed page and `layout` for the graph. Presses run
+//! `plans::State::reduce_live` through
 //! `AppState::reduce`, whose effects the root executes. `live.rs` keeps the shown plan's
 //! detail loaded and current.
 
@@ -23,17 +24,19 @@ use crate::model::plans::{
     self, Action, ButtonKind as Weight, ListNotice, ListSection, LiveAction, MemberSquare,
     PlanList, PlanRow, SquareState,
 };
+use crate::model::projects::FilterScreen;
 use crate::model::text::{flat, span};
 use crate::model::{Form, Id};
 use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
-use crate::ui::kit::chip::illus;
+use crate::ui::kit::chip::{chip, illus};
 use crate::ui::kit::marks::{dot, hue_ink};
 use crate::ui::kit::notice::{empty, error, loading, notice};
 use crate::ui::kit::page::{Width, columns, group_head, head, pane, search};
-use crate::ui::kit::rows::list_row;
+use crate::ui::kit::project_filter::project_filter;
+use crate::ui::kit::rows::{list_row, measured, project_chip};
 use crate::ui::kit::text::rich_small;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
@@ -156,12 +159,13 @@ fn decides(detail: &plans::Detail) -> bool {
     }
 }
 
-/// The list content from the served feed.
+/// The list content from the served feed, in the Plans scope.
 fn content(app: AppState) -> PlanList {
     let env = app.env();
     let selection = app.selection();
+    let filter = app.project_filter(FilterScreen::Plans);
     app.feed
-        .with(|feed| plans::live_list(&selection, feed, env))
+        .with(|feed| plans::live_list_filtered(&selection, feed, env, &filter))
 }
 
 /// Runs one Plans press with the served feed.
@@ -312,9 +316,9 @@ fn squares(app: AppState, members: &[MemberSquare]) -> AnyElement {
         .into_element()
 }
 
-/// The grouped list (`.list`), the destination's keyboard list (`AppState::list_keys`): a
-/// loading, empty, error or stale notice where corrald says so, then each section's head in its
-/// hue with its count, then its rows.
+/// The grouped list (`.list`), the destination's keyboard list (`AppState::list_keys`): the
+/// project scope, a loading, empty, error or stale notice where corrald says so, then each
+/// section's head in its hue with its count, then its rows.
 fn list(app: AppState) -> AnyElement {
     // The plan last scrolled into view: a refresh that keeps the selection leaves the scroll
     // where the reader put it.
@@ -371,6 +375,7 @@ fn list(app: AppState) -> AnyElement {
         .pb(px(if terminal { 0.0 } else { 14.0 }))
         .role(AccessibilityRole::List)
         .label(untracked(|| content(app).title))
+        .child(project_filter(app, FilterScreen::Plans))
         .child(rows)
         .into_element()
 }
@@ -396,9 +401,10 @@ fn group(app: AppState, section: &ListSection, revealed: Stored<Option<Id>>) -> 
         .into_element()
 }
 
-/// What a screen reader hears for a plan row: id, title, the sub line and the progress.
+/// What a screen reader hears for a plan row: id, title, project, the sub line and the progress.
 fn row_label(row: &PlanRow) -> String {
     let mut parts = vec![format!("{} {}", row.id_label, row.title)];
+    parts.extend(row.project_chip.clone());
     let sub = flat(&row.sub);
     if !sub.is_empty() {
         parts.push(sub);
@@ -456,7 +462,7 @@ fn revealing(id: Id, revealed: Stored<Option<Id>>, row: AnyElement) -> AnyElemen
     view().element_ref(&handle).child(row).into_element()
 }
 
-/// The title line of a row: the title cut to fit and its illustrative tag after it.
+/// The title line of a row: the title cut to fit, its project chip and illustrative tag after it.
 fn title_line(app: AppState, row: &PlanRow, size: f32, weight: FontWeight) -> AnyElement {
     let words = text(row.title.clone())
         .flex_shrink(1.0)
@@ -469,14 +475,30 @@ fn title_line(app: AppState, row: &PlanRow, size: f32, weight: FontWeight) -> An
     } else {
         words.font_family(FONT_TEXT).text_size(px(size))
     };
-    view()
-        .flex_row()
-        .items_center()
-        .gap(px(6.0))
-        .min_w(px(0.0))
-        .child(words)
-        .children(row.illustrative.map(|label| illus(app, label)))
-        .into_element()
+    let room = signal(0.0_f32);
+    // The illustrative tag beside the project's takes its own room from the title.
+    let reserved = row
+        .illustrative
+        .map_or(0.0, |label| label.chars().count() as f32 + 3.0);
+    let tag = row
+        .project_chip
+        .clone()
+        .map(|project| project_chip(app, project, room, reserved));
+    measured(
+        app,
+        view()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .min_w(px(0.0))
+            // A terminal row measures this line, so it takes its width from the cell around it.
+            .when(app.form == Form::Terminal, |line| line.w_full()),
+        room,
+    )
+    .child(words)
+    .children(tag)
+    .children(row.illustrative.map(|label| illus(app, label)))
+    .into_element()
 }
 
 fn progress(app: AppState, row: &PlanRow, size: f32) -> Option<AnyElement> {
@@ -618,28 +640,35 @@ fn phone_cells(app: AppState, row: &PlanRow) -> Vec<AnyElement> {
         )
         .children(row.illustrative.map(|label| illus(app, label)));
     let figures = progress(app, row, 12.0);
-    let meta = (!row.members.is_empty() || !row.sub.is_empty() || figures.is_some()).then(|| {
-        view()
-            .flex_row()
-            .items_center()
-            .gap(px(8.0))
-            .min_w(px(0.0))
-            .when(!row.members.is_empty(), |line| {
-                line.child(squares(app, &row.members))
-            })
-            // The sentence takes the room between the strip and the figures, so the figures
-            // keep the trailing edge even when there is no sentence.
-            .child(
+    let project = row
+        .project_chip
+        .clone()
+        .map(|project| chip(app, project, Hue::Neutral));
+    let meta =
+        (project.is_some() || !row.members.is_empty() || !row.sub.is_empty() || figures.is_some())
+            .then(|| {
                 view()
-                    .flex_1()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.0))
                     .min_w(px(0.0))
-                    .when(!row.sub.is_empty(), |cell| {
-                        cell.child(rich_small(app, &row.sub))
-                    }),
-            )
-            .children(figures)
-            .into_element()
-    });
+                    .children(project)
+                    .when(!row.members.is_empty(), |line| {
+                        line.child(squares(app, &row.members))
+                    })
+                    // The sentence takes the room between the strip and the figures, so the figures
+                    // keep the trailing edge even when there is no sentence.
+                    .child(
+                        view()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .when(!row.sub.is_empty(), |cell| {
+                                cell.child(rich_small(app, &row.sub))
+                            }),
+                    )
+                    .children(figures)
+                    .into_element()
+            });
     vec![
         view()
             .w(px(12.0))

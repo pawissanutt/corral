@@ -10,6 +10,7 @@ use nsh_core::prelude::*;
 use crate::model::Id;
 use crate::model::builds;
 use crate::model::daemon::Feed;
+use crate::model::projects::FilterScreen;
 use crate::state::AppState;
 
 /// What the client's cache holds of the build's detail.
@@ -88,12 +89,13 @@ fn keep_current(app: AppState, build: impl Fn() -> Option<Id> + 'static) {
 }
 
 /// Keeps the desktop and terminal detail's build current: the root selection, or the first
-/// build listed.
+/// build the Builds scope lists.
 pub(super) fn keep_selected_loaded(app: AppState) {
     keep_current(app, move || {
         let selection = app.selection();
+        let filter = app.project_filter(FilterScreen::Builds);
         app.feed
-            .with(|feed| builds::current_build(&selection, feed))
+            .with(|feed| builds::current_build_filtered(&selection, feed, &filter))
     });
 }
 

@@ -205,7 +205,7 @@ pub(in crate::model::preview) fn task(
     Task {
         id: id.into(),
         title: title.into(),
-        project: Some("corral".into()),
+        project: super::super::projects::sample_project(id).map(str::to_owned),
         plan: plan.map(str::to_owned),
         goal: Some(format!("Preview · {title}")),
         group,

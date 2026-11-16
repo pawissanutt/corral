@@ -5,7 +5,7 @@
 
 use nsh_core::prelude::*;
 
-use super::{Key, words};
+use super::{Key, with_source, words};
 use crate::model::Form;
 use crate::model::inbox;
 use crate::model::work::{self, Press, Record, VerbAction};
@@ -17,12 +17,11 @@ use crate::ui::tokens::{Token, color};
 /// The shown question's verbs, made again as the feed changes what they can do.
 pub(super) fn row(app: AppState, key: Key) -> AnyElement {
     let verbs = computed(move || {
-        app.feed.with(|feed| {
-            app.inbox.with(|state| {
-                inbox::shown_key(state, feed, key.as_ref())
-                    .map(|shown| work::record_verbs(feed, &Record::Question(shown)))
-                    .unwrap_or_default()
-            })
+        with_source(app, |state, src, filter| {
+            let inbox::Src::Live(feed) = src;
+            inbox::shown_key_filtered(state, feed, key.as_ref(), filter)
+                .map(|shown| work::record_verbs(feed, &Record::Question(shown)))
+                .unwrap_or_default()
         })
     });
     dynamic(move || {

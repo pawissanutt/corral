@@ -312,6 +312,9 @@ pub struct Feed {
     pub plans: BTreeMap<Id, PlanRow>,
     /// Published build records (`Topic::Builds`); never tasks.
     pub builds: BTreeMap<Id, BuildRow>,
+    /// Configured workspace projects (`Topic::Projects`, `projects.v1`). With the topic's
+    /// complete page applied, an empty map means the workspace has no project management.
+    pub projects: BTreeMap<Id, ProjectRow>,
     pub agents: BTreeMap<Id, AgentRow>,
     pub assistants: BTreeMap<Id, AssistantRow>,
     pub usage: BTreeMap<Id, UsageRow>,

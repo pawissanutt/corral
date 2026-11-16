@@ -127,7 +127,13 @@ fn title(app: AppState, titles: &Titles, key: &str) -> impl Fn() -> SharedString
         .into_iter()
         .find(|tab| layout::lower_panel(*tab) == key);
     move || match lower {
-        Some(tab) => SharedString::from(app.feed.with(|feed| work::daemon_lower_label(tab, feed))),
+        Some(tab) => {
+            let (filter, _) = parts::scope(app);
+            SharedString::from(
+                app.feed
+                    .with(|feed| work::daemon_lower_label_filtered(tab, feed, &filter)),
+            )
+        }
         None => fixed.clone(),
     }
 }

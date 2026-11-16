@@ -10,6 +10,7 @@ pub mod notice;
 pub mod overlay;
 pub mod page;
 pub mod page_phone;
+pub mod project_filter;
 pub mod rows;
 pub mod table;
 pub mod text;

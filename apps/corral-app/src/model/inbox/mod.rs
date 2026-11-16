@@ -16,12 +16,12 @@ mod sheet;
 mod sheet_types;
 mod view;
 
-pub use attention::{AttentionLine, attention_counts, attention_line, owner_moves};
+pub use attention::{AttentionLine, attention_counts_filtered, attention_line, owner_moves};
 pub use context::{question_context_refs, question_dependencies};
 pub use list::*;
 pub use live::{
-    Desk, Draft, Sent, can_answer, choice, clock, is_open, is_question, ordered, question_detail,
-    question_ref, question_state as served_state, reply_value, selected, target,
+    Desk, Draft, Sent, can_answer, choice, clock, is_open, is_question, ordered, ordered_filtered,
+    question_detail, question_ref, question_state as served_state, reply_value, selected, target,
 };
 pub use provenance::{provenance, via_name};
 pub use sheet::*;

@@ -8,12 +8,13 @@ use crate::model::board::Mark;
 use crate::model::daemon::{self, Link};
 use crate::model::hue::Hue;
 use crate::model::nav::{Destination, Form};
+use crate::model::projects::{NowGroup, ProjectFilter, project_chip};
 use crate::model::text::span;
 use crate::model::{Live, Selection};
 
 use super::{
     Action, Button, ButtonKind, GroupKey, HoldRow, LowTab, PhoneNow, Press, State, Status,
-    SummaryChip, daemon_list, group_key, stamp,
+    SummaryChip, group_key, stamp,
 };
 
 /// Said by the holds panel when the board holds no held or parked task.
@@ -71,12 +72,14 @@ pub fn daemon_status(feed: &daemon::Feed) -> Status {
 
 /// The held and parked tasks of the daemon's board, in the hold table's columns: how long ago
 /// the task entered its state, the id, the title with its reason dimmed after it. Each opens
-/// its task.
-pub fn daemon_holds(feed: &daemon::Feed) -> Vec<HoldRow> {
+/// its task. Only `filter`'s tasks.
+pub fn daemon_holds_filtered(feed: &daemon::Feed, filter: &ProjectFilter) -> Vec<HoldRow> {
+    let filter = filter.resolved(feed);
     feed.board
         .tasks()
         .iter()
         .filter(|task| matches!(group_key(task.group), GroupKey::Held | GroupKey::Parked))
+        .filter(|task| filter.matches(task.project.as_deref()))
         .map(|task| {
             let mut text = vec![span(task.title.clone())];
             if let Some(reason) = &task.held_reason {
@@ -86,6 +89,7 @@ pub fn daemon_holds(feed: &daemon::Feed) -> Vec<HoldRow> {
             }
             HoldRow {
                 id: task.id.to_string(),
+                project_chip: project_chip(feed, &filter, task.project.as_deref()),
                 since: super::when::age(task.since, feed.now),
                 title: task.title.clone(),
                 mark: Mark::Na,
@@ -98,7 +102,12 @@ pub fn daemon_holds(feed: &daemon::Feed) -> Vec<HoldRow> {
 
 /// A lower dock tab's title in the Daemon state: Since carries this device's last visit; the
 /// holds tab counts the board's held and parked tasks once a board has arrived.
-pub fn daemon_lower_label(tab: LowTab, feed: &daemon::Feed) -> String {
+pub fn daemon_lower_label_filtered(
+    tab: LowTab,
+    feed: &daemon::Feed,
+    filter: &ProjectFilter,
+) -> String {
+    let filter = filter.resolved(feed);
     let board = &feed.board;
     match tab {
         LowTab::Since => feed
@@ -112,8 +121,15 @@ pub fn daemon_lower_label(tab: LowTab, feed: &daemon::Feed) -> String {
                 |at| format!("Since your last visit · {at}"),
             ),
         LowTab::Parked if board.complete => {
-            let held = board.count(daemon::Group::Held);
-            match board.count(daemon::Group::Parked) {
+            let count = |group| {
+                board
+                    .tasks()
+                    .iter()
+                    .filter(|task| task.group == group && filter.matches(task.project.as_deref()))
+                    .count()
+            };
+            let held = count(daemon::Group::Held);
+            match count(daemon::Group::Parked) {
                 0 => format!("Held {held}"),
                 parked => format!("Held {held} · parked {parked}"),
             }
@@ -132,12 +148,18 @@ pub struct GoalRow {
 
 /// The goals the board's tasks name, each with its task count, after an "All goals" row while
 /// the list is narrowed; empty when no task names one.
-pub fn daemon_goals(state: &State, feed: &daemon::Feed) -> Vec<GoalRow> {
+pub fn daemon_goals_filtered(
+    state: &State,
+    feed: &daemon::Feed,
+    filter: &ProjectFilter,
+) -> Vec<GoalRow> {
+    let filter = filter.resolved(feed);
     let mut goals: Vec<(&str, usize)> = Vec::new();
     for goal in feed
         .board
         .tasks()
         .iter()
+        .filter(|task| filter.matches(task.project.as_deref()))
         .filter_map(|task| task.goal.as_deref())
     {
         match goals.iter_mut().find(|(known, _)| *known == goal) {
@@ -151,7 +173,12 @@ pub fn daemon_goals(state: &State, feed: &daemon::Feed) -> Vec<GoalRow> {
     let mut rows = Vec::with_capacity(goals.len() + 1);
     rows.push(GoalRow {
         button: Button::new("All goals", Press::Goal(None), ButtonKind::Quiet),
-        count: feed.board.tasks().len(),
+        count: feed
+            .board
+            .tasks()
+            .iter()
+            .filter(|task| filter.matches(task.project.as_deref()))
+            .count(),
         selected: state.goal.is_none(),
     });
     rows.extend(goals.into_iter().map(|(goal, count)| GoalRow {
@@ -169,20 +196,25 @@ pub fn daemon_goals(state: &State, feed: &daemon::Feed) -> Vec<GoalRow> {
 /// The phone's summary chips from the board and the changes feed: what is new since this
 /// device's last visit (when corrald serves changes), what needs the owner, what moves and what
 /// waits. None before the first board.
-fn daemon_chips(feed: &daemon::Feed) -> Vec<SummaryChip> {
+fn daemon_chips(feed: &daemon::Feed, filter: &ProjectFilter) -> Vec<SummaryChip> {
+    let filter = filter.resolved(feed);
     let board = &feed.board;
     if !board.complete || feed.device.board_notice().is_some() {
         return Vec::new();
     }
     let count = |groups: &[daemon::Group]| {
-        let total: usize = groups.iter().map(|group| board.count(*group)).sum();
+        let total = board
+            .tasks()
+            .iter()
+            .filter(|task| groups.contains(&task.group) && filter.matches(task.project.as_deref()))
+            .count();
         u32::try_from(total).unwrap_or(u32::MAX)
     };
     let mut chips = Vec::with_capacity(4);
     if feed.capable(CHANGES_V1)
         && let Some(seen) = &feed.seen
     {
-        let unseen = super::live_changes::unseen_count(feed);
+        let unseen = super::live_changes::unseen_count_filtered(feed, &filter);
         let new = u32::try_from(unseen.count).unwrap_or(u32::MAX);
         let qualifier = if unseen.total { "" } else { " loaded" };
         let since = seen
@@ -199,7 +231,8 @@ fn daemon_chips(feed: &daemon::Feed) -> Vec<SummaryChip> {
             new,
         ));
     }
-    let you = u32::try_from(crate::model::inbox::attention_counts(feed).now).unwrap_or(u32::MAX);
+    let you = u32::try_from(crate::model::inbox::attention_counts_filtered(feed, &filter).now)
+        .unwrap_or(u32::MAX);
     chips.push(SummaryChip::new(
         format!("{you} need you"),
         if you == 0 { Hue::Neutral } else { Hue::You },
@@ -222,14 +255,20 @@ fn daemon_chips(feed: &daemon::Feed) -> Vec<SummaryChip> {
 
 /// The phone Now tab in the Daemon state: the daemon's list under the board's own summary; a
 /// press on the summary opens Changes where corrald serves it.
-pub fn daemon_phone_now(state: &State, feed: &daemon::Feed, selected: &Selection) -> PhoneNow {
+pub fn daemon_phone_now_filtered(
+    state: &State,
+    feed: &daemon::Feed,
+    selected: &Selection,
+    filter: &ProjectFilter,
+    grouping: NowGroup,
+) -> PhoneNow {
     PhoneNow {
         title: "Now",
-        chips: daemon_chips(feed),
+        chips: daemon_chips(feed, filter),
         summary_action: feed
             .capable(CHANGES_V1)
             .then_some(Action::Go(Destination::Changes)),
-        list: daemon_list(state, feed, selected, Form::Phone),
+        list: super::daemon_list_filtered(state, feed, selected, Form::Phone, filter, grouping),
         status: daemon_status(feed),
     }
 }

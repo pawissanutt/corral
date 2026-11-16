@@ -172,25 +172,29 @@ pub fn destination_spoken(app: AppState, destination: Destination) -> impl Fn() 
 /// row is the current page for assistive technology.
 pub fn nav_row(
     app: AppState,
-    label: &'static str,
+    label: impl Into<SharedString>,
     test_id: String,
     selected: impl Fn() -> bool + 'static,
     trailing: Option<AnyElement>,
     on_press: impl Fn() + 'static,
 ) -> AnyElement {
-    let spoken = move || SharedString::from(label);
+    let label: SharedString = label.into();
+    let spoken = {
+        let label = label.clone();
+        move || label.clone()
+    };
     row(
         app, None, label, spoken, test_id, selected, trailing, on_press,
     )
 }
 
-/// nav_row with a leading icon in the label's colour, named by `spoken` for assistive
+/// nav_row with an optional leading icon in the label's colour, named by `spoken` for assistive
 /// technology ([`destination_spoken`] for a destination with a count).
 #[allow(clippy::too_many_arguments)]
 pub fn nav_row_icon(
     app: AppState,
-    icon: Icon,
-    label: &'static str,
+    icon: Option<Icon>,
+    label: impl Into<SharedString>,
     spoken: impl Fn() -> SharedString + 'static,
     test_id: String,
     selected: impl Fn() -> bool + 'static,
@@ -199,8 +203,8 @@ pub fn nav_row_icon(
 ) -> AnyElement {
     row(
         app,
-        Some(icon),
-        label,
+        icon,
+        label.into(),
         spoken,
         test_id,
         selected,
@@ -216,7 +220,7 @@ pub fn nav_row_icon(
 fn row(
     app: AppState,
     glyph: Option<Icon>,
-    label: &'static str,
+    label: SharedString,
     spoken: impl Fn() -> SharedString + 'static,
     test_id: String,
     selected: impl Fn() -> bool + 'static,

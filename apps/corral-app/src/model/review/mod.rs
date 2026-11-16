@@ -20,7 +20,9 @@ pub use diff::{
     Anchor, Highlight, NumberedLine, ParsedHunk, ParsedPatch, SplitRow, UnifiedRow, line_index,
     parse_patch, split_rows, unified_rows, word_mark,
 };
-pub use live::{candidate_list, candidates, live_page, selected};
+pub use live::{
+    candidate_list_filtered, candidates_filtered, live_page_filtered, selected_filtered,
+};
 pub use view::{
     AcceptanceView, ArtifactContent, ArtifactView, ArtifactsView, Body, Button, ButtonStyle,
     CandidateGroup, CandidateRow, Chip, CommentView, Composer, DecideBar, DetailView, DiffContent,
@@ -239,21 +241,40 @@ impl State {
     }
 
     /// Served: `s` toggles the layout on Review itself, not under a pushed focus page.
-    pub fn key_live(
+    /// `filter` is the Review screen's own scope.
+    pub fn key_live_filtered(
         &mut self,
         key: &str,
         top: Option<&Live>,
         selection: &Selection,
         feed: &Feed,
         _env: Env,
+        filter: &crate::model::projects::ProjectFilter,
     ) -> Option<Vec<Effect>> {
         if top.is_some_and(|live| !matches!(live, Live::Review(_))) {
             return None;
         }
+        if top.is_none() && matches!(key, "j" | "down" | "ArrowDown" | "k" | "up" | "ArrowUp") {
+            let rows = candidates_filtered(feed, filter);
+            if rows.is_empty() {
+                return Some(Vec::new());
+            }
+            let index = selection
+                .review
+                .as_ref()
+                .and_then(|id| rows.iter().position(|task| task.id == *id))
+                .unwrap_or(0);
+            let next = if matches!(key, "j" | "down" | "ArrowDown") {
+                (index + 1).min(rows.len() - 1)
+            } else {
+                index.saturating_sub(1)
+            };
+            return Some(vec![Effect::Select(Live::Review(rows[next].id.clone()))]);
+        }
         if key == "." {
             let id = match top {
                 Some(Live::Review(id)) => id.clone(),
-                _ => selected(selection, feed)?.id.clone(),
+                _ => selected_filtered(selection, feed, filter)?.id.clone(),
             };
             return Some(vec![Effect::VerbMenu(crate::model::work::Record::Review(
                 id,
