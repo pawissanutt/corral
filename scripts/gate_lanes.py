@@ -26,6 +26,10 @@ PI_CONTRACTS = (
 # Each catalog entry names a behavior, not merely a duration. Changes to these owners
 # restore the whole relevant torture suite; budget fixtures alone do not opt them in.
 SLOW_OWNERS = {
+    # One recovery intent must survive competing apply and process loss without another launch.
+    "=recovery::tests::concurrency::concurrent_apply_and_process_loss_never_replay_one_reviewer": (
+        "crates/corral-ops/src/recovery", "crates/corral-ops/tests/recovery",
+    ),
     # Local advisory review recovery covers each durable publication/accounting boundary.
     "=assistant::workflow::tests::review_tests::assistant_local_review_restart_boundaries_never_replay_inference": (
         "crates/corral-ops/src/assistant/workflow/review/",

@@ -10,10 +10,12 @@ inert reviewers and the existing local terminal confirmation paths are in scope.
 No live recovery, credential activation, provider call, policy rewrite, task-file
 patch, or owner verdict on a real task is authorized by this report.
 
-**Work in progress:** lower-layer checks passed; the opt-in surface runner is
-being completed. No gate result or task acceptance is inferred. Q2 requests the
-mandatory slow-lane registration scope for recovery-specific process/race proof;
-Q3 records the missing ordinary acceptance readback fields.
+**Final validation in progress:** lower-layer checks and all ten private surface
+journeys passed before final rebase. No gate result or full task acceptance is
+inferred. Q2 approved registration-only changes for one bounded slow process/race
+case; its first execution passed. Q3 requires the absent ordinary readback fields
+to remain **NOT VERIFIED**, tracked separately as **T-971**, with no production
+changes or acceptance waiver.
 
 ## Evidence classes
 
@@ -40,16 +42,16 @@ is not erased or reclassified. No pre-T-133 workflow executable was run.
 
 | Required invariant | Lowest-layer evidence / surface obligation | This run |
 | --- | --- | --- |
-| N ordinary same-model review remains permitted | `ordinary_same_model_review_is_not_recovery`; private CLI, keyboard and mouse journeys | Passed semantically; ordinary mode/boolean fields are absent (Q3). |
-| F observes both ordinary family refusals and current raw digest success | `family_recovery_binds_launch_callback_owner_acceptance_and_hold`; private F CLI/TUI | Ops, CLI and keyboard passed; mouse runner still in progress. |
-| F carries exactly family + binding exceptions through callback and owner acceptance | Same F journey, immutable config/plan/unrelated task and held dispatch | Ops, CLI and keyboard passed. |
-| M distinguishes launch from callback and ordinary task selection | `ordinary_explicit_binding_escalates_then_task_selection_succeeds`; private M | Ops and both CLI alternatives passed; TUI runner not yet executed. |
+| N ordinary same-model review remains permitted | `ordinary_same_model_review_is_not_recovery`; private CLI, keyboard and mouse journeys | Passed semantically; `acceptance_mode=policy` and `policy_satisfied=true` are **NOT VERIFIED (T-971)**. |
+| F observes both ordinary family refusals and current raw digest success | `family_recovery_binds_launch_callback_owner_acceptance_and_hold`; private F CLI/TUI | Ops plus CLI, keyboard and mouse passed before final rebase. |
+| F carries exactly family + binding exceptions through callback and owner acceptance | Same F journey, immutable config/plan/unrelated task and held dispatch | Ops plus all three surfaces passed before final rebase. |
+| M distinguishes launch from callback and ordinary task selection | `ordinary_explicit_binding_escalates_then_task_selection_succeeds`; private M | Ops, both CLI alternatives, and binding-only keyboard/mouse recovery passed before final rebase. |
 | Recovery-only effective-model floor never leaks into ordinary N | `binding_only_preview_and_recovery_model_floor_are_distinct` plus N | Ops passed. |
 | Plan waiver/code override preserve original observations and missing receipts | Existing `waiver`, `code`, `landing`, `external` operation contracts | Ops passed; these are operation fixtures, not live landings. |
 | Preview freshness binds policy, bytes, candidate, parameters and target | Existing `mod`, `rebinding`, `code`, `tui` contracts | Ops/CLI/TUI targeted tests passed. |
 | Managed roles cannot grant recovery; no digest/actor/headless shortcut | CLI refusal/terminal tests and TUI confirmation tests | Targeted tests passed; fixture ceremony uses the unchanged production paths. |
-| Actual keyboard and mouse controls at narrow/wide sizes | Live PTY captures, not Ratatui TestBackend images | Partial; final complete run pending. |
-| Concurrent/process-loss recovery remains single-use and uncertain until reconciled; resource force is stage-only | Existing journals/resources plus requested slow recovery test | Deterministic boundary/resource tests passed; new process/race proof pending Q2. |
+| Actual keyboard and mouse controls at narrow/wide sizes | Live PTY captures, not Ratatui TestBackend images | All ten opt-in journeys passed; final candidate-bound repeat pending. |
+| Concurrent/process-loss recovery remains single-use and uncertain until reconciled; resource force is stage-only | Existing journals/resources plus requested slow recovery test | Boundary/resource tests and one explicit slow concurrency/process-loss regression passed; final repeat pending. |
 | Recovered parent/children remain held across publication/reopen | F and `acceptance_waiver_preserves_missing_review_and_publishes_held_children` | Ops passed. |
 | Schema compatibility and immutable original receipt chain | Core recovery/schema/durability tests; genuine old-reader probe | 18 passed, including actual fresh schema-2 reader refusal; already-open old-writer variant not rerun. |
 
@@ -65,9 +67,11 @@ Checked against production source `55b8e36eea7750cf612bcb5e8d08b03521aee37a`:
 - The commands used repository Cargo configuration, four compile jobs and the configured mbx pilot. No extra gate tier was run. The core durability test retained actual WAL-sync/EIO traces.
 - Genuine old-reader probe: 68 old-core tracked files were hash-checked against unchanged commit `911486b4347027f522e155c69812405f10cb3759`. Executable SHA-256 `a0c5ef30f936716cc21cebaabe376c012cfab789fa09234bbcecba5353bf1628`; provenance artifact `T-141:R1:0b080c3e-schema2-provenance.json`. It proves the store fence, not historical workflow failures.
 
-No new routine test registrations so far. Existing N/F/M operation tests gained
-stronger exact-check, canonical-verdict and immutability assertions. Surface QA
-is opt-in attached evidence, not another default end-to-end suite.
+One new slow registration: `recovery::tests::concurrency::concurrent_apply_and_process_loss_never_replay_one_reviewer`, first nextest slow-profile run **1 passed in 1.026s**. It uses an accepted fake-command socket barrier, a competing apply/reconcile, owned process-group loss and exact one-launch counting through Unknown and canonical callback reconciliation. It is not a general crash matrix. Q2 permits only its two registration files; no timeout, budget or other catalog entry changed.
+
+Existing N/F/M tests gained stronger exact-check, verdict and immutability assertions. No new routine end-to-end registration was added.
+
+Test-cost justification: the ten opt-in real-terminal journeys took 82.682s including setup in the preliminary run. Actual CLI/TUI input, repaint, owner-confirmation and generated callback behavior cannot be proved by TestBackend alone. Variant guards stay in existing cheap operation/unit tests; only the one required process-loss regression enters the slow catalog. The QA runner is attached evidence, not another default suite.
 
 The run's authoritative gate is the receipted quick gate; it is **not yet run**.
 The full landing gate belongs to Corral and is not run separately by this
@@ -79,6 +83,7 @@ Fixture reviewers test routing, exact callbacks and receipts, **not** model revi
 quality. Retained H cannot prove N/F/M. Seeded operation-boundary tests are not
 process-crash evidence; Ratatui unit tests are not actual terminal interaction
 captures. Ordinary plan approval currently exposes no `acceptance_mode` or
-`policy_satisfied` fields; proving its ordinary digest/approval/no-recovery
-semantics does not invent those fields. Any missing execution remains explicitly
+`policy_satisfied` fields. Their N values are explicitly **NOT VERIFIED (T-971)**;
+ordinary digest/approval/no-recovery proof does not invent those fields or prove
+full N acceptance. Any missing execution remains explicitly
 not verified.

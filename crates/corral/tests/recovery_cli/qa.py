@@ -34,6 +34,19 @@ def cleanup(evidence):
     save(evidence / "cleanup-after.json", herdr("workspace", "list"))
 
 
+def close_case_workspaces(f):
+    task = json.loads((f.ev / "final.json").read_text())
+    refs = [run.get("herdr") for run in task.get("plan_runs", [])]
+    refs += [review.get("herdr") for plan in task["plans"] for review in plan.get("reviews", [])]
+    owned = {ref["workspace_id"] for ref in refs if ref}
+    before = {w["workspace_id"] for w in herdr("workspace", "list")["result"]["workspaces"]}
+    for workspace in sorted(owned & before):
+        herdr("workspace", "close", workspace)
+    after = {w["workspace_id"] for w in herdr("workspace", "list")["result"]["workspaces"]}
+    assert after == before - owned, "case cleanup changed an unrelated fixture workspace"
+    save(f.ev / "workspace-cleanup.json", {"owned": sorted(owned), "before": sorted(before), "after": sorted(after)})
+
+
 def family_refusals(f):
     for reviewer in [[], ["--reviewer", "gpt-astra"]]:
         error = f.c("plan", "review", f.id, *reviewer, ok=False)
@@ -105,7 +118,9 @@ def run(evidence, historical):
     selected = os.environ.get("RECOVERY_QA_CASES", "")
     requested = selected.split(",") if selected else cases
     assert set(requested) <= set(cases), requested
-    save(evidence / "coverage.json", {"required": cases, "selected": requested, "complete": requested == cases})
+    save(evidence / "coverage.json", {"required": cases, "selected": requested, "all_cases_selected": requested == cases,
+         "acceptance_complete": False, "not_verified": ["N acceptance_mode=policy", "N policy_satisfied=true"],
+         "followup": "T-971"})
     try:
         for name in requested:
             print(f"START {name}", flush=True)
@@ -117,13 +132,16 @@ def run(evidence, historical):
                 surface(f, mouse=name.endswith("mouse"), recovered=not name.startswith("N-"))
             else:
                 cli(f, name)
-            results.append({"case": name, "status": "pass", "seconds": round(time.monotonic() - started, 3)})
+            close_case_workspaces(f)
+            results.append({"case": name, "status": "pass", "seconds": round(time.monotonic() - started, 3),
+                            "not_verified": ["acceptance_mode=policy", "policy_satisfied=true"] if name.startswith("N-") else [],
+                            "followup": "T-971" if name.startswith("N-") else None})
             save(evidence / "results.json", results)
             print(f"PASS {name}", flush=True)
         assert hashes() == before, "private global config changed across recovery"
         save(evidence / "global-config-hashes.json", {"before": before, "after": hashes()})
         save(evidence / "limitations.json", {"H": "retained only, no historical binary reproduction",
-             "ordinary_plan_readback": "no acceptance_mode/policy_satisfied fields in PlanApproval; ordinary digest/approval/no-recovery checked, fields not invented",
+             "ordinary_plan_readback": "NOT VERIFIED (T-971): no acceptance_mode/policy_satisfied fields in PlanApproval; ordinary digest/approval/no-recovery checked, fields not invented",
              "quality": "inert reviewers prove callback identity, not review quality",
              "coverage": "operation-level freshness, resources, authority, crash and schema tests run separately"})
     except Exception as error:
