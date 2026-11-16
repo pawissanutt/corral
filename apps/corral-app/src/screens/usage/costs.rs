@@ -2,9 +2,9 @@
 //! track (as the mockup draws them), the day before it and the total after it, then the legend.
 //! Desktop and phone draw filled boxes, the desktop's no wider than reads at a glance; a terminal
 //! draws Cell bars as wide as its room allows. The day and total beside each bar are its text;
-//! the bar itself is hidden from screen readers. The series' coverage or staleness comes first,
-//! in the held ink, and a day whose total is only partly known says so under its bar. With no
-//! bars the model's words (loading, unavailable, nothing recorded) stand in their place.
+//! the bar itself is hidden from screen readers. A retained series says so first, in the held
+//! ink; the series' coverage is the page's one note, not repeated per day. With no bars the
+//! model's words (loading, unavailable, nothing recorded) stand in their place.
 
 use nsh_core::prelude::*;
 
@@ -61,7 +61,7 @@ fn metrics(form: Form) -> Metrics {
 /// The section on desktop and phone: the coverage note, then the bars and the legend, or what
 /// is said in their place. Rows `day | bar total`: the day in its column (34 pt on desktop), the
 /// bar as long as its share of the costliest day, its total right after its end, bars 10 pt
-/// high with 2 pt corners, a day's qualifier under its bar, the legend 10 pt under them.
+/// high with 2 pt corners, the legend 10 pt under them.
 /// test_id "usage-costs".
 pub fn bars(app: AppState, costs: &Costs) -> AnyElement {
     let content = match &costs.empty {
@@ -87,7 +87,7 @@ fn drawn(app: AppState, costs: &Costs) -> AnyElement {
     let rows = costs
         .bars
         .iter()
-        .map(|bar| day_row(app, bar, &m))
+        .map(|bar| day_row(bar, &m))
         .collect::<Vec<_>>();
     let legend = costs
         .legend
@@ -130,10 +130,9 @@ fn drawn(app: AppState, costs: &Costs) -> AnyElement {
         .into_element()
 }
 
-/// One day: its row, and under the bar what keeps its total from being whole. The track keeps
-/// the total's width free at its end, so the costliest day's bar fills the rest and every total
-/// sits right after its own bar.
-fn day_row(app: AppState, bar: &CostBar, m: &Metrics) -> AnyElement {
+/// One day's row. The track keeps the total's width free at its end, so the costliest day's bar
+/// fills the rest and every total sits right after its own bar.
+fn day_row(bar: &CostBar, m: &Metrics) -> AnyElement {
     let drawn: u32 = bar.values.iter().sum::<u32>().min(100);
     let segments = bar
         .values
@@ -149,7 +148,7 @@ fn day_row(app: AppState, bar: &CostBar, m: &Metrics) -> AnyElement {
                 .into_element()
         })
         .collect::<Vec<_>>();
-    let row = view()
+    view()
         .flex_row()
         .items_center()
         .gap(px(8.0))
@@ -190,21 +189,13 @@ fn day_row(app: AppState, bar: &CostBar, m: &Metrics) -> AnyElement {
                         .text_size(px(m.size * 0.93))
                         .text_color(color(Token::Ink3)),
                 ),
-        );
-    match &bar.total_note {
-        None => row.into_element(),
-        Some(line) => view()
-            .gap(px(2.0))
-            .child(row)
-            // Under the bar: past the day column and its 8 pt gap.
-            .child(view().pl(px(m.day + 8.0)).child(qualifier(app, line)))
-            .into_element(),
-    }
+        )
+        .into_element()
 }
 
-/// The terminal's section, `room` Cells wide: the coverage note, then the day, the Cell bar and
-/// the total at the end, a day's qualifier on the line under it; then the legend, each
-/// segment's Cell before its name. test_id "usage-costs".
+/// The terminal's section, `room` Cells wide: the retained-series note, then the day, the Cell
+/// bar and the total at the end; then the legend, each segment's Cell before its name. test_id
+/// "usage-costs".
 pub fn terminal(app: AppState, costs: &Costs, room: usize) -> AnyElement {
     let note = costs.note.as_deref().map(|line| qualifier(app, line));
     if let Some(words) = &costs.empty {
@@ -252,14 +243,6 @@ pub fn terminal(app: AppState, costs: &Costs, room: usize) -> AnyElement {
                 )
                 .into_element(),
         );
-        if let Some(line) = &bar.total_note {
-            rows.push(
-                view()
-                    .pl(term::cells(TERM_DAY + 1.0))
-                    .child(qualifier(app, line))
-                    .into_element(),
-            );
-        }
     }
     let mut legend = Vec::new();
     for (at, (label, look)) in costs.legend.iter().cloned().zip(COST_LOOKS).enumerate() {

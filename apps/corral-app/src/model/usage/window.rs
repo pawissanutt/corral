@@ -8,7 +8,10 @@ use corral_protocol::rows::UsageRow;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
-use super::{QuotaLine, UNKNOWN, quota};
+use super::{NO_PROFILE, QuotaLine, UNKNOWN, coverage, quota};
+
+/// The source corrald names for an observation it has no quota source for.
+const UNKNOWN_SOURCE: &str = "unknown";
 
 /// The observation a provider's card is drawn from: an account-wide one before a narrower
 /// scope, one with a known use fraction before one without, then the latest observed. Facts of
@@ -17,7 +20,7 @@ pub(super) fn header<'a>(
     rows: impl Iterator<Item = &'a UsageRow>,
 ) -> Option<(&'a UsageRow, &'a UsageQuota)> {
     rows.flat_map(|row| row.quotas.iter().map(move |fact| (row, fact)))
-        .filter(|(_, fact)| fact.source != UNKNOWN)
+        .filter(|(_, fact)| fact.source != UNKNOWN_SOURCE && quota::informative(fact))
         .max_by_key(|&(_, fact)| {
             (
                 fact.scope.as_deref() == Some("account"),
@@ -39,12 +42,10 @@ pub(super) fn when(at: Option<&str>, now: Timestamp, tz: &TimeZone) -> Option<St
     })
 }
 
-/// "5 h window", or "window unknown" when the observation names none.
-pub(super) fn window(fact: Option<&UsageQuota>) -> String {
-    match fact.and_then(|fact| fact.window.as_deref()) {
-        Some(window) => format!("{window} window"),
-        None => format!("window {UNKNOWN}"),
-    }
+/// "5 h window", when the observation names one.
+pub(super) fn window(fact: Option<&UsageQuota>) -> Option<String> {
+    fact.and_then(|fact| fact.window.as_deref())
+        .map(|window| format!("{window} window"))
 }
 
 /// The observation's amounts in one line: use against the limit, headroom, the reset.
@@ -79,7 +80,7 @@ pub(super) fn amounts(fact: &UsageQuota, now: Timestamp, tz: &TimeZone) -> Strin
     }
     parts.push(
         when(fact.resets_at.as_deref(), now, tz)
-            .map_or_else(|| format!("reset {UNKNOWN}"), |at| format!("resets {at}")),
+            .map_or_else(|| "no reset recorded".into(), |at| format!("resets {at}")),
     );
     parts.join(" · ")
 }
@@ -87,7 +88,7 @@ pub(super) fn amounts(fact: &UsageQuota, now: Timestamp, tz: &TimeZone) -> Strin
 /// The headroom alone, for a line with no room for the amounts.
 pub(super) fn headroom(fact: Option<&UsageQuota>) -> String {
     match fact {
-        None => format!("quota {UNKNOWN}"),
+        None => "no quota".into(),
         Some(fact) if fact.headroom.is_some() => {
             format!("{} left", quota::number(fact.headroom))
         }
@@ -96,12 +97,8 @@ pub(super) fn headroom(fact: Option<&UsageQuota>) -> String {
     }
 }
 
-/// What a card says in place of the amounts when corral holds no quota observation.
-pub(super) fn missing() -> String {
-    format!("no quota recorded · headroom and reset {UNKNOWN}")
-}
-
 /// One observation's provenance line; `with_amounts` for every observation but the header's.
+/// What the observation does not name is left out rather than called unknown field by field.
 pub(super) fn line(
     row: &UsageRow,
     fact: &UsageQuota,
@@ -109,27 +106,19 @@ pub(super) fn line(
     now: Timestamp,
     tz: &TimeZone,
 ) -> QuotaLine {
-    let view = quota::view(fact, row.profile.as_deref(), tz);
-    let mut parts = vec![view.profile];
+    let mut parts = vec![row.profile.clone().unwrap_or_else(|| NO_PROFILE.into())];
     if with_amounts {
-        parts.push(format!(
-            "{} · {}",
-            window(Some(fact)),
-            amounts(fact, now, tz)
-        ));
+        parts.extend(window(Some(fact)));
+        parts.push(amounts(fact, now, tz));
     }
-    parts.push(view.source.replace('_', " "));
-    parts.push(match fact.scope.as_deref() {
-        Some(scope) => format!("{scope} scope"),
-        None => format!("scope {UNKNOWN}"),
-    });
-    parts.push(when(fact.observed_at.as_deref(), now, tz).map_or_else(
-        || format!("observed {UNKNOWN}"),
-        |at| format!("observed {at}"),
-    ));
+    if fact.source != UNKNOWN_SOURCE {
+        parts.push(fact.source.replace('_', " "));
+    }
+    parts.extend(fact.scope.as_deref().map(|scope| format!("{scope} scope")));
+    parts.extend(when(fact.observed_at.as_deref(), now, tz).map(|at| format!("observed {at}")));
     QuotaLine {
         text: parts.join(" · "),
         exhausted: fact.exhausted == Some(true),
-        completeness: view.completeness,
+        completeness: coverage::observation(&fact.completeness, now, tz),
     }
 }

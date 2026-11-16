@@ -1,11 +1,13 @@
-//! Usage: cost and quota per provider, profile and session, visibility only. Desktop sets the
-//! provider cards in a ruled grid (`.ugrid`, up to three a row as the width allows) over three
-//! full-width sections: the profile table, cost per day and the sessions; the phone stacks the
-//! provider blocks (with their profiles), the cost bars and the sessions; a terminal draws a
-//! gauge line per provider, the table in columns and the costs as Cell bars. Every word and
-//! figure is `model::usage`'s, built from the selected feed's recorded usage (`shown`) in a
-//! daemon session and the explicit sample preview alike; loading, stale and failed states are
-//! said once, compactly, above the content. The period switch runs its reducer.
+//! Usage: cost and quota per provider, profile and session, visibility only. Desktop leads with
+//! the page's one coverage note, then sets a summary card per provider in a ruled grid
+//! (`.ugrid`, up to three a row as the width allows); under it the profile table (grouped by
+//! provider) and cost per day stand side by side where the width allows, else stacked, then the
+//! sessions. The phone stacks the provider blocks (with their profiles), the cost bars and the
+//! sessions; a terminal draws a gauge line per provider, the table in columns and the costs as
+//! Cell bars. Every word and figure is `model::usage`'s, built from the selected feed's recorded
+//! usage (`shown`) in a daemon session and the explicit sample preview alike; loading, stale,
+//! failed and partial states are said once, compactly, above the content. The period switch
+//! runs its reducer.
 
 mod cellbar;
 mod chart;
@@ -20,7 +22,9 @@ use nsh_core::element::cell_size;
 use nsh_core::prelude::*;
 
 use crate::model::text::span;
-use crate::model::usage::{PROFILE_TITLE, Period, ProviderView, SESSION_TITLE, SUBTITLE, TITLE};
+use crate::model::usage::{
+    PROFILE_TITLE, Page, Period, ProviderView, SESSION_TITLE, SUBTITLE, TITLE,
+};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button, seg};
@@ -36,17 +40,40 @@ use shown::{Shown, Status};
 /// its coverage the same way.
 pub(crate) use costs::qualifier;
 
-/// A provider card needs about this much width; the grid holds as many a row as fit, up to
-/// [`CARDS_MAX`].
-const CARD_MIN: f32 = 300.0;
+/// A provider card needs about this much width (its amounts line and chart); the grid holds as
+/// many a row as fit, up to [`CARDS_MAX`].
+const CARD_MIN: f32 = 270.0;
 const CARDS_MAX: usize = 3;
 /// Below this content width the profile and session tables have no room for their columns and
 /// stack as records (a narrow window, or a collapsed sidebar on a small screen).
 const TABLES_MIN: f32 = 760.0;
+/// From this content width the profile table and cost per day stand side by side.
+const BESIDE_MIN: f32 = 1080.0;
+/// A desktop section's sides, as the page head's.
+const SECTION_SIDES: f32 = 18.0;
 /// A terminal below this many Cells lists the sessions as records too.
 const TERM_TABLES_MIN: usize = 64;
 /// One Cell where the surface reports none yet.
 const COLUMN: f32 = 8.0;
+
+/// How the desktop sections fit the content width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fit {
+    /// Tables as stacked records.
+    Narrow,
+    /// Tables in columns, one section under another.
+    Stacked,
+    /// The profile table beside cost per day.
+    Beside,
+}
+
+fn fit(width: Option<f32>) -> Fit {
+    match width {
+        Some(width) if width < TABLES_MIN => Fit::Narrow,
+        Some(width) if width < BESIDE_MIN => Fit::Stacked,
+        _ => Fit::Beside,
+    }
+}
 
 /// The Usage destination on every form. Desktop and terminal fill the content area and scroll
 /// below the page head; the phone returns its scrolling body (the shell draws the pushed
@@ -77,7 +104,8 @@ fn period_seg(app: AppState) -> AnyElement {
 
 /// Above the content: the rows' loading or stale state, then corrald's read failure said once
 /// as a compact notice (the model folds the rows' and the series' causes into one line) with its
-/// Retry; nothing when current.
+/// Retry, then how complete the totals are, said once for the whole page in the held tone, as
+/// partial figures are degraded ones; nothing when current and whole.
 fn status(app: AppState, current: &Shown) -> Vec<AnyElement> {
     let pad = |element: AnyElement| match app.form {
         Form::Terminal => element,
@@ -116,6 +144,13 @@ fn status(app: AppState, current: &Shown) -> Vec<AnyElement> {
             );
             notice(app, Hue::Fail, &vec![span(line.as_str())], Some(retry))
         }))
+        .chain(
+            current
+                .page
+                .coverage
+                .iter()
+                .map(|line| notice(app, Hue::Held, &vec![span(line.as_str())], None)),
+        )
         .map(pad)
         .collect()
 }
@@ -132,7 +167,7 @@ fn live_body(data: Memo<Shown>, build: impl Fn(&Shown) -> AnyElement + 'static) 
 /// A desktop section: its caption over the content, at the page head's 18 pt sides.
 fn block(app: AppState, title: impl Into<SharedString>, content: AnyElement) -> AnyElement {
     view()
-        .px(px(18.0))
+        .px(px(SECTION_SIDES))
         .pb(px(10.0))
         .child(h3(app, title, None))
         .child(content)
@@ -179,7 +214,7 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
             .get()
             .map_or(CARDS_MAX, |w| ((w / CARD_MIN) as usize).clamp(1, CARDS_MAX))
     });
-    let compact = computed(move || width.get().is_some_and(|w| w < TABLES_MIN));
+    let fits = computed(move || fit(width.get()));
     let content = view()
         .on_layout(move |frame: &Bounds<Points>| {
             let measured = Some(frame.size.width.0);
@@ -188,9 +223,9 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
             }
         })
         .child(dynamic(move || {
-            let (columns, compact) = (columns.get(), compact.get());
+            let (columns, fits) = (columns.get(), fits.get());
             let shown = data.get();
-            untracked(|| desktop_body(app, &shown, columns, compact))
+            untracked(|| desktop_body(app, &shown, columns, fits))
         }))
         .into_element();
     view()
@@ -207,41 +242,91 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
         .into_element()
 }
 
-/// The desktop page: `columns` provider cards a row, then the sections; `compact` (a content
-/// width under [`TABLES_MIN`]) sets the profile and session tables as stacked records.
-fn desktop_body(app: AppState, shown: &Shown, columns: usize, compact: bool) -> AnyElement {
+/// The profile table and cost per day: side by side where they [`Fit::Beside`], the table at its
+/// own width and the bars taking the rest past a rule; else one under the other, the table no
+/// wider than beside, so its figures stay near their names.
+fn profiles_and_costs(app: AppState, page: &Page, fits: Fit) -> AnyElement {
+    let table_width = profiles::desktop_width(page);
+    let profiles = (!page.groups.is_empty()).then(|| {
+        let table = if fits == Fit::Narrow {
+            profiles::compact(app, page)
+        } else {
+            profiles::desktop(app, page)
+        };
+        block(
+            app,
+            PROFILE_TITLE,
+            view().max_w(px(table_width)).child(table).into_element(),
+        )
+    });
+    let costs = block(
+        app,
+        page.costs.title.clone(),
+        costs::bars(app, &page.costs),
+    );
+    match profiles {
+        Some(profiles) if fits == Fit::Beside => view()
+            .flex_row()
+            .child(
+                view()
+                    .w(px(table_width + 2.0 * SECTION_SIDES))
+                    .flex_shrink_0()
+                    .child(profiles),
+            )
+            .child(
+                view()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .border_l(px(1.0))
+                    .border_l_color(color(Token::Rule))
+                    .child(costs),
+            )
+            .into_element(),
+        profiles => view().children(profiles).child(costs).into_element(),
+    }
+}
+
+/// The desktop page: the notices, `columns` provider cards a row, then the sections as they
+/// [`fit`] the content width.
+fn desktop_body(app: AppState, shown: &Shown, columns: usize, fits: Fit) -> AnyElement {
     let page = &shown.page;
+    let notices = status(app, shown);
+    // Under notices the grid opens with its own rule; under the page head, the head's rule.
+    let lead = !notices.is_empty() || page.providers_empty.is_some();
     view()
-        .children(status(app, shown))
+        .children(notices)
         .children(page.providers_empty.map(|line| {
             view()
-                .px(px(18.0))
+                .px(px(SECTION_SIDES))
                 .pt(px(16.0))
                 .child(dim(app, line))
                 .into_element()
         }))
-        .child(grid(app, &page.providers, columns))
-        .children((!page.profiles.is_empty()).then(|| {
-            let table = if compact {
-                profiles::compact(app, page)
-            } else {
-                profiles::desktop(app, page)
-            };
-            block(app, PROFILE_TITLE, table)
-        }))
-        .child(block(
-            app,
-            page.costs.title.clone(),
-            costs::bars(app, &page.costs),
-        ))
+        .when(!page.providers.is_empty(), |body| {
+            body.child(
+                view()
+                    .when(lead, |grid| {
+                        grid.mt(px(12.0))
+                            .border_t(px(1.0))
+                            .border_color(color(Token::Rule))
+                    })
+                    .child(grid(app, &page.providers, columns)),
+            )
+        })
+        .child(profiles_and_costs(app, page, fits))
         .child(block(
             app,
             SESSION_TITLE,
-            sessions::table(app, &page.sessions, page.sessions_note.as_deref(), compact),
+            sessions::table(
+                app,
+                &page.sessions,
+                page.sessions_note.as_deref(),
+                fits == Fit::Narrow,
+            ),
         ))
         .child(
             view()
-                .px(px(18.0))
+                .px(px(SECTION_SIDES))
                 .pt(px(8.0))
                 .pb(px(18.0))
                 .child(note(app, page.disclaimer)),
@@ -356,7 +441,7 @@ fn terminal_content(app: AppState, shown: &Shown, room: usize) -> AnyElement {
                 .map(|line| dim(app, line).into_element()),
         )
         .children(lines)
-        .children((!page.profiles.is_empty()).then(|| {
+        .children((!page.groups.is_empty()).then(|| {
             view()
                 .child(term::blank())
                 .child(h3(app, PROFILE_TITLE, None))

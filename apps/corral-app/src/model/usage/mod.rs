@@ -2,6 +2,7 @@
 //! Usage is visibility only.
 
 mod completeness;
+mod coverage;
 mod daily;
 mod live;
 mod quota;
@@ -59,15 +60,23 @@ pub const SUBTITLE: &str = "cost and quota per provider and profile · visibilit
 /// The small quiet word following a provider cell's desktop usage percentage.
 pub const USED_LABEL: &str = "used";
 /// Profile table heading.
-pub const PROFILE_TITLE: &str = "By profile · current window";
+pub const PROFILE_TITLE: &str = "By profile";
 /// Session table heading.
 pub const SESSION_TITLE: &str = "By session";
 /// Session table column labels.
 pub const SESSION_HEADERS: [&str; 5] = ["Session", "Working on", "Profile", "Tokens", "Cost"];
 /// Heading over a provider's quota observations.
 pub const QUOTA_TITLE: &str = "Quota source";
-/// Said for a fact corral does not hold.
-pub const UNKNOWN: &str = "unknown";
+/// Stands in for a figure corral does not hold; the page's closing note says so once.
+pub const UNKNOWN: &str = "—";
+/// Said once in a provider's card when corral holds no quota observation for it.
+pub const NO_QUOTA: &str = "No quota reported";
+/// The group of usage recorded without a provider connection.
+pub const UNATTRIBUTED: &str = "Unattributed";
+/// Beside [`UNATTRIBUTED`], where a provider's window would be.
+pub const UNATTRIBUTED_ASIDE: &str = "no provider recorded";
+/// A usage row recorded without a profile.
+pub const NO_PROFILE: &str = "no profile recorded";
 
 /// Usage band for a provider or a profile meter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,12 +103,26 @@ pub fn level(used: f32) -> Level {
 fn percent(value: f32) -> u32 {
     (value * 100.0).round() as u32
 }
+/// Dollars: whole above ten (`$1,061`), cents below (`$7.60`).
 fn money(value: f64) -> String {
     if value >= 10.0 {
-        format!("${:.0}", value.round())
+        format!("${}", count(value.round() as u64))
     } else {
         format!("${value:.2}")
     }
+}
+
+/// A count with thousands separated: `98,249`.
+fn count(n: u64) -> String {
+    let digits = n.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (at, digit) in digits.chars().enumerate() {
+        if at > 0 && (digits.len() - at) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
 }
 
 /// Samples of a window's use (fractions) at their local times of day (hours since midnight,
@@ -249,57 +272,48 @@ pub fn band_chart(chart: &Chart, width: f32, height: f32) -> BandChart {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderView {
     pub id: String,
+    /// The connection, or [`UNATTRIBUTED`].
     pub label: String,
-    /// "5 h window", or "window unknown".
-    pub window: String,
-    /// The big figure: window use, or the period's cost when no quota is known.
+    /// Beside the label: "5 h window" when the observation names one, [`UNATTRIBUTED_ASIDE`]
+    /// for the unattributed group, else nothing.
+    pub aside: Option<String>,
+    /// The big figure: window use, the period's cost when no quota is known, or [`UNKNOWN`].
     pub big: String,
-    /// Qualification displayed with the figure, never clipped into the figure column.
-    pub big_note: Option<String>,
-    /// The quiet word after the big figure.
-    pub big_label: &'static str,
+    /// The quiet words after the big figure.
+    pub big_label: String,
     /// Fraction of the window used, when known.
     pub used: Option<f32>,
     /// The 70/90 band of `used`; `Level::None` when use is unknown.
     pub level: Level,
-    /// The observation in words: "34 of 100 used · 66 left · resets 20:39", or what is missing.
+    /// Whether corral holds a quota observation for this provider.
+    pub quota_known: bool,
+    /// The observation in words, "34 of 100 used · 66 left · resets 20:39", or [`NO_QUOTA`].
     pub quota_line: String,
     /// The observation records the window as exhausted.
     pub exhausted: bool,
-    /// Headroom alone, for the terminal's gauge line: "66 left", "exhausted", "quota unknown".
+    /// Headroom alone, for the terminal's gauge line: "66 left", "exhausted", "no quota".
     pub headroom: String,
-    /// "today ~$22.70 · 7 days ~$141", with its qualifiers.
+    /// The costs the big figure does not already say: "today ~$22.70 · 7 days ~$141".
     pub costs: String,
+    /// Where this provider's coverage differs from the page's; the page says the rest once.
+    pub note: Option<String>,
     /// Today's window samples; absent when corral recorded fewer than two.
     pub chart: Option<Chart>,
+    /// The phone block's profile lines; the desktop and terminal list them in the table.
     pub profiles: Vec<PhoneProfile>,
-    /// Where the quota facts come from, the header's observation first.
+    /// Where the quota facts come from, the header's observation first. Observations that hold
+    /// no fact at all are left out: the card's [`NO_QUOTA`] already says so.
     pub quotas: Vec<QuotaLine>,
-}
-
-/// One provider quota observation; unavailable facts are explicitly unknown.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QuotaView {
-    pub profile: String,
-    pub source: String,
-    pub scope: String,
-    pub window: String,
-    pub used: String,
-    pub limit: String,
-    pub headroom: String,
-    pub resets_at: String,
-    pub observed_at: String,
-    pub exhausted: String,
-    pub completeness: Option<String>,
 }
 
 /// One quota observation as a single quiet provenance line: its profile, its amounts (for every
 /// observation but the header's, whose amounts the card already shows), source, scope and when
-/// it was observed.
+/// it was observed, leaving out what the observation does not name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaLine {
     pub text: String,
     pub exhausted: bool,
+    /// The observation's own coverage, when partial.
     pub completeness: Option<String>,
 }
 
@@ -307,33 +321,46 @@ pub struct QuotaLine {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhoneProfile {
     pub name: String,
+    /// False for [`NO_PROFILE`], which is drawn quieter than a name.
+    pub named: bool,
+    /// "34% · ~$23 · 12 unpriced", or the cost alone.
     pub detail: String,
 }
-/// One profile table row, with repeated provider and headroom cells suppressed.
+
+/// One provider's profiles in the profile table, under a row with the provider's own total.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileGroup {
+    pub id: String,
+    pub label: String,
+    /// The provider's cost over the period.
+    pub cost: String,
+    pub rows: Vec<ProfileRow>,
+}
+
+/// One profile table row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileRow {
-    /// Provider label on the first row only.
-    pub provider: String,
     pub profile: String,
+    /// False for [`NO_PROFILE`], which is drawn quieter than a name.
+    pub named: bool,
+    /// The row's own unpriced or undated entries: "12 unpriced".
+    pub gaps: Option<String>,
     /// Meter fill as a percentage; None when the share is unknown.
     pub share_percent: Option<u32>,
     /// "34%", or [`UNKNOWN`].
     pub share: String,
     /// Meter level follows provider use, not profile use.
     pub level: Level,
-    /// The period's cost.
+    /// The period's cost, or [`UNKNOWN`].
     pub cost: String,
-    pub cost_note: Option<String>,
-    /// Provider headroom on the first row only; [`UNKNOWN`] when corral holds none.
-    pub headroom: Option<String>,
 }
+
 /// One stacked daily cost bar: segment widths in percent of the track, in legend order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CostBar {
     pub day: String,
     pub values: [u32; 3],
     pub total_label: String,
-    pub total_note: Option<String>,
 }
 /// The cost-per-day section.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -343,7 +370,7 @@ pub struct Costs {
     pub bars: Vec<CostBar>,
     /// Said in place of the bars when there are none.
     pub empty: Option<String>,
-    /// Coverage or retained-series status; independent of whether bars exist.
+    /// The series is a retained copy; its coverage is the page's note.
     pub note: Option<String>,
 }
 /// One session's recorded tokens and cost; `None` is a fact corral does not hold.
@@ -358,15 +385,18 @@ pub struct SessionRow {
 }
 
 impl SessionRow {
-    /// Profile, tokens and cost in one line, for a form with no table: unknowns said as such.
+    /// Profile, tokens and cost in one line, for a form with no table; a missing figure is
+    /// [`UNKNOWN`].
     pub fn summary(&self) -> String {
         format!(
             "{} · {} · {}",
-            self.profile.as_deref().unwrap_or("profile unknown"),
+            self.profile.as_deref().unwrap_or(NO_PROFILE),
             self.tokens
                 .as_deref()
                 .map_or_else(|| format!("tokens {UNKNOWN}"), |t| format!("{t} tokens")),
-            self.cost.as_deref().unwrap_or("cost unknown"),
+            self.cost
+                .clone()
+                .unwrap_or_else(|| format!("cost {UNKNOWN}")),
         )
     }
 }
@@ -376,13 +406,19 @@ pub struct Page {
     pub providers: Vec<ProviderView>,
     /// Said when no provider has recorded usage.
     pub providers_empty: Option<&'static str>,
-    pub profile_headers: [&'static str; 5],
-    pub profiles: Vec<ProfileRow>,
+    /// How complete the totals are, said once above the content; None when whole.
+    pub coverage: Option<String>,
+    /// Profile, share of window, the period's cost.
+    pub profile_headers: [&'static str; 3],
+    /// Whether any profile's share of its window is known; without one the table leaves the
+    /// share column out rather than fill it with [`UNKNOWN`].
+    pub shares_known: bool,
+    pub groups: Vec<ProfileGroup>,
     pub costs: Costs,
     /// Per-session tokens and cost, costliest first.
     pub sessions: Vec<SessionRow>,
     pub sessions_note: Option<String>,
-    /// One short line on where the figures come from.
+    /// One short line on where the figures come from and what [`UNKNOWN`] means.
     pub disclaimer: &'static str,
     /// Deduplicated read errors; render once above the content.
     pub notices: Vec<String>,

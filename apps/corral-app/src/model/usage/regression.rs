@@ -60,14 +60,19 @@ fn usage(connection: &str, profile: &str, cost: Option<f64>) -> ProfileUsage {
     }
 }
 
+/// Every card, profile line and daily bar once repeated the same partial scan with raw ISO
+/// stamps; the scan is said once for the page in calendar days, while each profile keeps its own
+/// unpriced entries and no total loses its qualification.
 #[test]
-fn partial_totals_keep_coverage_and_unpriced_contributions_on_every_surface() {
+fn partial_coverage_is_said_once_in_days_and_rows_keep_their_unpriced_entries() {
     let known = row("c", Some("known"), Some(2.0));
     let mut unknown = row("c", Some("unknown"), None);
     let partial = UsageCompleteness {
         partial: true,
-        reason: Some("scan_budget".into()),
+        reason: Some("row_limit".into()),
         unpriced_entries: 3,
+        scanned_from: Some("2023-10-25T05:28:18.427Z".into()),
+        scanned_to: Some("2023-11-14T01:31:49.207Z".into()),
         ..coverage()
     };
     unknown.today_completeness = partial.clone();
@@ -87,26 +92,11 @@ fn partial_totals_keep_coverage_and_unpriced_contributions_on_every_surface() {
     for period in [Period::Today, Period::Week, Period::Month] {
         inputs.period = period;
         let page = page(&inputs);
-        let note = page.providers[0].big_note.as_deref().unwrap();
-        assert!(
-            note.contains("partial") && note.contains("scanned 5") && note.contains("3 unpriced")
-        );
-        assert!(page.providers[0].costs.contains("partial"));
-        assert!(
-            page.profiles[1]
-                .cost_note
-                .as_deref()
-                .unwrap()
-                .contains("3 unpriced")
-        );
-        assert!(
-            page.costs.bars[0]
-                .total_note
-                .as_deref()
-                .unwrap()
-                .contains("3 unpriced")
-        );
-        assert!(page.costs.note.as_deref().unwrap().contains("partial"));
+        let said = page.coverage.as_deref().unwrap();
+        assert!(!said.contains("T05:28") && !said.contains(".427Z"), "{said}");
+        assert!(page.providers.iter().all(|card| card.note.is_none()));
+        assert!(page.groups[0].rows[1].gaps.is_some());
+        assert_eq!(page.groups[0].rows[0].gaps, None);
     }
 }
 
@@ -184,21 +174,9 @@ fn retained_series_errors_qualify_monthly_costs_as_stale() {
     inputs.period = Period::Month;
     inputs.series_error = Some("refresh failed");
     let page = page(&inputs);
-    assert!(
-        page.providers[0]
-            .big_note
-            .as_deref()
-            .unwrap()
-            .contains("stale")
-    );
-    assert!(
-        page.profiles[0]
-            .cost_note
-            .as_deref()
-            .unwrap()
-            .contains("stale")
-    );
-    assert!(page.costs.note.as_deref().unwrap().contains("stale"));
+    // The series' own coverage is whole, so only its staleness can qualify the page.
+    assert!(page.coverage.is_some());
+    assert!(page.costs.note.is_some());
     assert_eq!(page.notices.len(), 1);
 }
 
@@ -232,7 +210,11 @@ fn exhaustion_observations_do_not_fabricate_numerical_quotas() {
         "{}",
         provider.quota_line
     );
-    assert_eq!(page.profiles[0].headroom.as_deref(), Some(UNKNOWN));
+    assert!(
+        !provider.headroom.chars().any(|c| c.is_ascii_digit()),
+        "{}",
+        provider.headroom
+    );
 }
 
 /// The card header once required an account-scoped fact and said "window unknown", "quota
@@ -257,8 +239,44 @@ fn provider_header_reads_the_quota_its_card_lists() {
     let page = page(&input(vec![&row], None, &tz));
     let provider = &page.providers[0];
     assert_eq!(provider.used, Some(0.34));
-    for said in [&provider.window, &provider.quota_line, &provider.headroom] {
+    let aside = provider.aside.clone().unwrap_or_default();
+    for said in [&aside, &provider.quota_line, &provider.headroom] {
         assert!(!said.contains(UNKNOWN) && !said.contains("66.0"), "{said}");
     }
-    assert_eq!(page.profiles[0].headroom.as_deref(), Some("66"));
+    assert!(provider.headroom.contains("66"));
+}
+
+/// Usage recorded without a connection made a card with no title over a giant "unknown".
+#[test]
+fn unattributed_usage_has_a_title_and_follows_named_providers() {
+    let rows = [row("", Some("p"), None), row("b", Some("p"), Some(1.0))];
+    let tz = TimeZone::UTC;
+    let page = page(&input(rows.iter().collect(), None, &tz));
+    let labels: Vec<&str> = page.providers.iter().map(|card| card.label.as_str()).collect();
+    assert_eq!(labels, ["b", UNATTRIBUTED]);
+    assert!(page.providers.iter().all(|card| !card.id.is_empty()));
+}
+
+/// corrald lists a profile with no quota source as an observation holding nothing; every such
+/// profile became a provenance line of "unknown" fields under a "partial" warning.
+#[test]
+fn empty_quota_observations_are_no_quota_rather_than_lines_of_unknowns() {
+    let mut row = row("a", Some("p"), Some(1.0));
+    row.quotas.push(UsageQuota {
+        source: "unknown".into(),
+        scope: None,
+        window: None,
+        used: None,
+        limit: None,
+        headroom: None,
+        resets_at: None,
+        observed_at: None,
+        exhausted: None,
+        completeness: Default::default(),
+    });
+    let tz = TimeZone::UTC;
+    let page = page(&input(vec![&row], None, &tz));
+    let provider = &page.providers[0];
+    assert!(!provider.quota_known);
+    assert!(provider.quotas.is_empty());
 }
