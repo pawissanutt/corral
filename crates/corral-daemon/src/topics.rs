@@ -43,6 +43,7 @@ pub(super) struct Topics<'a> {
     health: Option<Subscriber>,
     classic: Option<ClassicSubscriber>,
     app: app::AppTopics,
+    session_fleet: bool,
 }
 
 impl<'a> Topics<'a> {
@@ -53,7 +54,13 @@ impl<'a> Topics<'a> {
             health: None,
             classic: None,
             app: app::AppTopics::default(),
+            session_fleet: false,
         }
+    }
+
+    /// Negotiated by HELLO for this connection only; re-HELLO replaces the grant.
+    pub fn set_session_fleet(&mut self, enabled: bool) {
+        self.session_fleet = enabled;
     }
 
     pub fn open(&mut self, open: SubOpen) -> Result<()> {
@@ -162,7 +169,7 @@ impl<'a> Topics<'a> {
                 }
             }
         }
-        self.app.flush(self.shared, conn)
+        self.app.flush(self.shared, conn, self.session_fleet)
     }
 
     fn next(&mut self, topic: Topic) -> Result<Option<Frame>> {

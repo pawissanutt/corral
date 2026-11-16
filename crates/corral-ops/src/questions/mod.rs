@@ -64,7 +64,7 @@ pub use triage::{hold_owner_attention, settle_needs_me};
 use crate::Ctx;
 
 /// Inbox message kinds of the corral-pi adapter that a closed container never receives.
-pub const CORRAL_PI_MESSAGE_KINDS: [&str; 8] = [
+pub const CORRAL_PI_MESSAGE_KINDS: [&str; 9] = [
     "question_answer",
     "question_correction",
     "question_followup",
@@ -73,6 +73,7 @@ pub const CORRAL_PI_MESSAGE_KINDS: [&str; 8] = [
     "question_wake",
     "recovery_notice",
     "recovery_update",
+    "agent_message",
 ];
 
 /// Why a question operation was refused; nothing changed.

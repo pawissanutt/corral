@@ -2,7 +2,7 @@ import type { BoardPlan, BuildPanelState, BuildSummary, FleetSnapshot } from "..
 
 export type BuildTone = "text" | "muted" | "accent" | "success" | "warning" | "error";
 
-/** Who Enter reaches, as the UI keeps it. Absent: the parent. `answer`: Enter answers the child's open question. */
+/** Who Enter reaches, as the UI keeps it. Absent: the parent. `answer`: Enter answers the child's open question, or gives the reason to land (id `exit`). */
 export interface ComposerTarget { readonly id: string; readonly answer: boolean }
 
 export const CHILD_PREFIX = "child:";
@@ -25,6 +25,8 @@ export interface BuildCardSource {
   latestFinish(): string | undefined;
   color(hue: number): string;
   now(): number;
+  /** When the exit's current phase began, as this UI saw it change; undefined when unknown. */
+  exitSince?(): number | undefined;
   /** Redraws a live card on fleet, exit or board changes until the returned function is called. */
   watch(id: string, invalidate: () => void): () => void;
   question(id: string): void;

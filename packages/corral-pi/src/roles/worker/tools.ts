@@ -1,10 +1,18 @@
 // Worker-only corral tools: wait, progress, checkpoint, gate and done (OD3). The run they act on
 // is the launcher-bound one; corral's Rust operation table stays the authority on what runs.
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Errors } from "typebox/value";
 import { Type } from "typebox";
 
 import type { CorralToolSpec } from "../types.ts";
 import { pick } from "../common/tools.ts";
 import { ProgressUpdate, CheckpointUpdate } from "../common/records.ts";
+import { LIVE_CHILD_STATES, type FleetSnapshot } from "../../build/types.ts";
+import { sessionRecord, type SessionRecordOptions } from "../../extensions/fleet/session-record.ts";
+import { toolRequestId } from "../../tools/corral.ts";
+import type { ToolHost } from "../../tools/define.ts";
 
 type Params = Record<string, unknown>;
 
@@ -82,7 +90,8 @@ export const doneTool: CorralToolSpec = {
   label: "Finish the run",
   description: "Report the run complete and move the task to Review, exactly as `corral done` would. It refuses "
     + "while any of your questions is pending (wait for the answer or withdraw it) and when the gate_ref is "
-    + "not the run's current gate receipt.",
+    + "not the run's current gate receipt. Collect any live review child with agent_wait or cancel it first. "
+    + "Include the advisory review verdict and any deliberately unaddressed findings in your report.",
   op: "done",
   parameters: Type.Object({
     summary: Type.String({ description: "This run's activity, then a `Verified:` line and a `Not verified:` line" }),
@@ -92,3 +101,39 @@ export const doneTool: CorralToolSpec = {
   }),
   payload: (params: Params) => pick(params, ["summary", "result", "gate_ref", "contract_sha256"]),
 };
+
+/** Attach advisory fleet evidence without changing the done operation's authority or result. */
+export function workerDoneTool(tool: ToolDefinition, host: Pick<ToolHost, "client" | "sessionId" | "currentTurn"> & SessionRecordOptions & {
+  readonly recordDir: string;
+  fleet(): FleetSnapshot;
+}): ToolDefinition {
+  return { ...tool, async execute(id, params, signal, update, context) {
+    // The underlying tool owns argument errors; invalid calls must not attach artifacts.
+    if (Errors(doneTool.parameters, params).length) return tool.execute(id, params, signal, update, context);
+    const fleet = host.fleet();
+    const live = fleet.children.filter(child => child.kind === "review" && LIVE_CHILD_STATES.includes(child.state));
+    if (live.length) {
+      const text = `Review child ${live.map(child => child.id).join(", ")} is still running. Collect it first with agent_wait or cancel it with agent_cancel before corral_done.`;
+      const value = { request_id: toolRequestId(host.sessionId(), id), op: "done",
+        error: { code: "review_running", category: "invalid_state", reason: text, effect: "not_started" } };
+      return { content: [{ type: "text", text }], details: value, structuredContent: value, isError: true };
+    }
+    let warning: string | undefined;
+    if (fleet.children.length || fleet.mail.length) {
+      try {
+        const requestId = toolRequestId(host.sessionId(), `session-record:${id}`);
+        const path = join(host.recordDir, `${requestId}.json`);
+        mkdirSync(host.recordDir, { recursive: true, mode: 0o700 });
+        // A retried call must keep the same artifact bytes as well as its request ID.
+        if (!existsSync(path)) writeFileSync(path, `${JSON.stringify(sessionRecord(fleet, { task: host.task, run: host.run }))}\n`, { flag: "wx", mode: 0o600 });
+        const receipt = await host.client.call("artifact", { requestId, turn: host.currentTurn(),
+          payload: { path, kind: "report", title: "Session record" } });
+        if (receipt.state !== "committed") warning = `Session record attachment failed (${receipt.state}): ${JSON.stringify(receipt.result)}`;
+      } catch (error) {
+        warning = `Session record attachment failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    const result = await tool.execute(id, params, signal, update, context);
+    return warning ? { ...result, content: [...result.content, { type: "text", text: warning }] } : result;
+  } };
+}

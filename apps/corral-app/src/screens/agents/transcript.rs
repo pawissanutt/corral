@@ -8,6 +8,7 @@
 //! Every item carries the test id `item-<n>`, numbered across the page, and a row that opens
 //! carries `btn-expand-<n>`.
 
+pub mod fleet;
 mod parts;
 mod prose;
 mod rows;

@@ -40,6 +40,7 @@ Tokens (dark → light): ground `oklch(.195 .012 240)` → `oklch(.977 .003 230)
 | 2 | Now | 2×2 dock: who-acts-next list · inspector (Story/Evidence/Session) · since-last-visit/Parked · Live/Plan graph | tab: grouped two-line rows; tap pushes task page (story, live tail, plan) |
 | – | Changes | time feed with per-device seen line | More › Changes |
 | 3 | Plans | plan list · awaiting-acceptance review doc with decide bar · executing: pipeline, unmapped-criteria warning, member graph, blockers, member story · 64-member layer strips | tab: list; plan page; graph falls back to vertical layers; 64 members as layer strips |
+| 3b | Builds (key `b`, `builds.v1`) | its own destination, not part of Now/Changes/Plans: a build is an interactive session that implemented, verified, reviewed and landed work itself, never a task, so it has no rail or task verbs; list grouped by outcome (in flight, landed over open findings, landed, kept, abandoned) beside the selected build: outcome and intent · slices · verification · review rounds and findings · agent messages · owner decisions · usage · timeline; empty sections omitted, shortened lists say "showing n of m"; an override is called out in row and detail | More › Builds; build page pushed |
 | 4 | Session | transcript (messages, tool calls, inline question card, reply box) ⇄ terminal (`` ` `` key or toggle) | segmented Transcript/Terminal; terminal keys row (Esc Tab Ctrl ↑ ↓ ⏎) |
 | 5 | Agents | quick thread · A-7 pinned first (state, last line), then a tile per agent (PM, workers, gates: state, doing-now, runtime, tail `live` or `snapshot`), then assistant sessions (`live · since HH:MM`, `open`, `open · task done`, `ended`), **+ New session**, **Filed from chat** with source session; a session opens its thread with the composer docked | tab: quick-thread row pinned, one row per agent, sessions, Filed from chat |
 | 5b | Usage | per-provider window use against 70/90 % bands, headroom, resets; per-profile table; 7-day cost | More › Usage, stacked provider blocks |
@@ -56,7 +57,7 @@ Desktop puts it in the custom title bar; phone gives it a two-row strip under th
 
 | Rule | Desktop / web | Phone | Terminal target |
 |---|---|---|---|
-| Navigation | persistent sidebar, keys `i n . p a r t u ,`, `j/k`, Enter, Esc, `/` Ask, `Ctrl K` | 5-tab bar (Inbox, Now, Agents, Plans, More) + floating **Ask** button, back stack | footer key line, same keys |
+| Navigation | persistent sidebar, keys `i n . p b a r t u ,`, `j/k`, Enter, Esc, `/` Ask, `Ctrl K` | 5-tab bar (Inbox, Now, Agents, Plans, More) + floating **Ask** button, back stack | footer key line, same keys |
 | Row | one line, fixed columns: Δ · actor · id · title · rail · now · age · cost | two lines: id · title · rail / now · age · cost | one line, Opus anatomy |
 | Panels | DockArea tabs, split, zoom | DockArea collapses to one group; context becomes pushed pages or sheets | stacked panes |
 | High-risk commands | confirm dialog with exact-effect preview | biometric/PIN sheet with the same preview | typed confirmation |

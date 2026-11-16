@@ -407,25 +407,26 @@ impl Entry {
 }
 
 /// Go to's and Ask's names give way after every destination's.
-const KEEP_GO_TO: u8 = 9;
-const KEEP_ASK: u8 = 10;
+const KEEP_GO_TO: u8 = 10;
+const KEEP_ASK: u8 = 11;
 /// The keys in focus keep their names longest: they are the ones the page in view (or Ask's
 /// field) answers to, and no other line of the screen lists them.
-const KEEP_PAGE: u8 = 11;
+const KEEP_PAGE: u8 = 12;
 
 /// How long each destination's name stays when the key line is short: the daily ones and
 /// Settings (whose key, `,`, says nothing by itself) last.
 fn keep(destination: Destination) -> u8 {
     match destination {
-        Destination::Usage => 0,
-        Destination::Timeline => 1,
-        Destination::Plans => 2,
-        Destination::Review => 3,
-        Destination::Changes => 4,
-        Destination::Agents => 5,
-        Destination::Settings => 6,
-        Destination::Now => 7,
-        Destination::Inbox => 8,
+        Destination::Builds => 0,
+        Destination::Usage => 1,
+        Destination::Timeline => 2,
+        Destination::Plans => 3,
+        Destination::Review => 4,
+        Destination::Changes => 5,
+        Destination::Agents => 6,
+        Destination::Settings => 7,
+        Destination::Now => 8,
+        Destination::Inbox => 9,
     }
 }
 

@@ -12,7 +12,7 @@ import {
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
-import type { ConversationSource } from "./agents-model.ts";
+import type { AgentMail, ConversationSource } from "./agents-model.ts";
 import { userLabel } from "./panels-theme.ts";
 import { plainLabel, PANEL_BUBBLE, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING } from "./panels-view.ts";
 import { presenterFor, type ToolRenderDeps } from "./tool-rendering.ts";
@@ -26,9 +26,12 @@ export interface HelperChatStyle {
 }
 /** The prompt bubble's label (`brief from parent`) and the muted lines under the prompt inside it. */
 export interface PromptBubble { readonly label: string; readonly notes?: readonly string[] }
-/** An owner's steer: its text and when it was sent; without a time it is drawn after the replies. */
-export interface Steer { readonly text: string; readonly at?: number }
-/** The owner's steers of one conversation and the label of their bubbles (`you → picker-ui`). */
+/**
+ * A bubble among the replies: an owner's steer or a message between agents, with when it was sent (without a time it
+ * is drawn after the replies). `label` replaces the conversation's steer label; `notes` sit under the text.
+ */
+export interface Steer { readonly text: string; readonly at?: number; readonly label?: string; readonly notes?: readonly string[] }
+/** The bubbles placed among one conversation's replies and the label of those without their own (`you → picker-ui`). */
 export interface Steers { readonly label: string; readonly items: readonly Steer[] }
 
 const RESET = "\x1b[0m";
@@ -115,6 +118,20 @@ function bubbleRows(lines: readonly string[], width: number, pad: number): strin
  */
 export function bubble(label: string, text: string, width: number, notes: readonly string[] = []): string[] {
   return bubbleRows([PANEL_MUTED + label + " " + PANEL_TEXT + text, ...notes.map(note => PANEL_MUTED + note)], width, 1);
+}
+/**
+ * Messages between agents as bubbles among the replies, each labelled `<from> → <to>` with every side drawn by `name`
+ * (an agent's id in its hue; `hue` is undefined for `parent`, `owner`, `all` and other sessions' keys). A message the
+ * recipient read in its opening prompt, answered from its final report or never received says so under its text.
+ */
+export function mailSteers(mail: readonly AgentMail[], name: (id: string, hue: number | undefined) => string): Steer[] {
+  return mail.map(message => {
+    const note = message.delivery === "queued" ? ["queued · read when it starts"]
+      : message.delivery === "answered_from_report" ? ["it had finished · answered from its final report"]
+      : message.delivery === "undeliverable" ? [PANEL_WARNING + "! not delivered · no live recipient"] : [];
+    return { text: helperText(message.text), at: message.at, notes: note,
+      label: name(helperText(message.from), message.fromHue) + PANEL_MUTED + " → " + name(helperText(message.to), message.toHue) };
+  });
 }
 /**
  * What the retention limit took from a conversation: the count of earlier messages dropped when it is known
@@ -219,7 +236,7 @@ export class HelperChat {
     const timed = (options.steers?.items ?? []).filter(steer => steer.at !== undefined).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
     let steered = 0;
     const steer = (item: Steer) => {
-      if (options.steers) rows.push("", ...bubble(options.steers.label, item.text, width));
+      if (options.steers) rows.push("", ...bubble(item.label ?? options.steers.label, item.text, width, item.notes));
       lastLine = false;
     };
     const retained = new Set<string>();

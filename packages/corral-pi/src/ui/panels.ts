@@ -51,6 +51,8 @@ import { noticeGlyph, toastFrame } from "./toast.ts";
 
 export interface NativePanelsOptions {
   readonly build?: BuildUi;
+  /** The child runtime of a session that is not a build session; the Agents page steers, cancels, answers and re-models its children through it. Read when used: the host may build it after the panels. */
+  readonly fleetControl?: FleetControl;
   readonly identity: HostIdentity;
   readonly cwd: string;
   readonly inspection?: () => Promise<unknown>;
@@ -106,8 +108,10 @@ function routedBuild(build: BuildUi, deliver: ((text: string) => Promise<boolean
     steer: (id, text) => id === build.target() ? deliver(text) : fleet.steer(id, text),
     cancel: id => fleet.cancel(id), setModel: (id, model) => fleet.setModel(id, model), answer: (id, text) => fleet.answer(id, text),
     models: () => fleet.models(), profiles: () => fleet.profiles(), subscribe: listener => fleet.subscribe(listener),
+    message: (from, to, text, options) => fleet.message(from, to, text, options), roster: () => fleet.roster(), wait: (ids, signal) => fleet.wait(ids, signal),
   };
-  return { fleet: routed, exit: build.exit, board: build.board, target: () => build.target(), setTarget: target => build.setTarget(target) };
+  return { fleet: routed, exit: build.exit, record: () => build.record(), ...(build.board ? { board: build.board } : {}),
+    target: () => build.target(), setTarget: target => build.setTarget(target) };
 }
 
 export class NativePanels implements PanelSurface {
@@ -213,7 +217,7 @@ export class NativePanels implements PanelSurface {
       // A build session's queue names the parent as every item's receiver: children never take queued input.
       ...(build ? { receiver: () => "parent" } : {}),
     });
-    this.workbench = new NativeWorkbench({ ...options, ...(build && this.build ? { build, buildController: this.build } : {}),
+    this.workbench = new NativeWorkbench({ ...options, ...(build && this.build ? { build, buildController: this.build } : {}), fleet: () => this.options.fleetControl,
       snapshot: () => this.snapshot(),
       terminal: () => this.terminal ? { columns: this.terminal.physical.columns, rows: this.terminal.rows } : undefined,
       onFocusMain: () => { this.sidebar.focused = false; this.queue.focused = false; this.blurDocks(); this.closeKeyDrawer(); },
@@ -232,7 +236,7 @@ export class NativePanels implements PanelSurface {
       live: live => this.liveRows(live) });
     if (build) {
       const sync = () => { this.build?.sync(); this.refresh(); };
-      this.unsubscribeBuild = [build.fleet.subscribe(sync), build.exit.subscribe(sync), build.board.subscribe(sync)];
+      this.unsubscribeBuild = [build.fleet.subscribe(sync), build.exit.subscribe(sync), ...(build.board ? [build.board.subscribe(sync)] : [])];
     }
   }
   mainView(transcript: Component, presentation?: () => InteractiveChatPresentation): Component { return this.workbench.mount(transcript, presentation); }
@@ -335,10 +339,10 @@ export class NativePanels implements PanelSurface {
   private attentionState(): TitleAttention {
     const build = this.build, ui = this.options.build, snapshot = this.snapshot();
     const needs = this.activity.phase() === "owner" || !!build?.dialog() || (build?.questions().length ?? 0) > 0
-      || ui?.exit.state().phase === "pending" || !!ui?.board.proposed()
+      || ui?.exit.state().phase === "pending" || !!ui?.board?.proposed()
       || (this.questions?.waiting().some(question => question.status === "pending") ?? false);
     if (needs) return "needs-you";
-    const children = snapshot?.build?.fleet.children ?? [];
+    const children = snapshot?.build?.fleet.children ?? snapshot?.fleet?.children ?? [];
     return this.activity.active || snapshot?.streaming || children.some(child => LIVE_CHILD_STATES.includes(child.state)) ? "working" : "idle";
   }
   /** A reopen notice whose subject has since had its outcome (the exit chosen, the question answered) is stale. */
@@ -645,10 +649,10 @@ export class NativePanels implements PanelSurface {
     if (!ui) return;
     const [kind, id = ""] = key.split(":");
     const [text, settled]: [string, () => boolean] = kind === "exit"
-      ? ["No exit chosen. Nothing was filed or landed · F2 Finish reopens it", () => ui.exit.state().phase !== "pending"]
+      ? ["No exit chosen. Nothing was landed · F2 Finish reopens it", () => ui.exit.state().phase !== "pending"]
       : kind === "question"
         ? [`${id} keeps waiting · F2 Answer ${id}'s question reopens it`, () => !this.build?.questions().some(child => child.id === id)]
-        : ["Nothing filed. The plan still waits · F10 Board, then p, reopens it", () => !ui.board.proposed()];
+        : ["Nothing filed. The plan still waits · F10 Board, then p, reopens it", () => !ui.board?.proposed()];
     this.workbench.notice(text, "text");
     const notice = this.workbench.currentNotice;
     if (notice) this.dismissal = { notice, settled };
@@ -980,7 +984,7 @@ export class NativePanels implements PanelSurface {
   }
   /** `/board`: the Board view, when the interactive panels are running. */
   showBoard(): void {
-    if (!this.build || !this.ui || this.disposed) return;
+    if (!this.build || !this.options.build?.board || !this.ui || this.disposed) return;
     this.workbench.setView("board");
   }
   /**
@@ -993,7 +997,7 @@ export class NativePanels implements PanelSurface {
     if (this.disposed) return;
     const taskBound = !!this.options.identity.task;
     const missing = (view === "task" || view === "proof" || view === "artifacts") && !taskBound ? "this session has no bound task"
-      : view === "board" && !this.build ? "only a build session has a board"
+      : view === "board" && !this.options.build?.board ? (this.build ? "a bare session has no board" : "only a build session has a board")
       : view === "inbox" && this.build ? "a build session has no inbox" : undefined;
     if (missing) { this.workbench.notice(`Cannot open ${view}: ${missing}`, "warning"); return; }
     switch (view) {
@@ -1023,7 +1027,7 @@ export class NativePanels implements PanelSurface {
     if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
     if (value === "refresh") { await this.workbench.inspection.refresh(true); await this.loadFiles(); if (this.workbench.view === "inbox") await this.workbench.inbox.refresh(); return; }
     if (value === "toggle") { this.toggleSidebar(); return; }
-    const view = value === "board" && !this.build ? undefined : PANEL_VIEWS[value];
+    const view = value === "board" && !this.options.build?.board ? undefined : PANEL_VIEWS[value];
     if (view && (!TASK_VIEWS[view] || this.options.identity.task)) {
       if (view === "agents") this.workbench.openAgents(); else if (view === "conversation") this.workbench.chat(); else this.workbench.setView(view);
       this.refresh(); return;
@@ -1063,7 +1067,7 @@ export class NativePanels implements PanelSurface {
       panel("views", "agents", "Agents", "F8"),
       panel("views", "changes", "Changes", "F7"),
       ...(taskBound ? [panel("views", "task", "Task", "F5"), panel("views", "proof", "Proof", "F10")] : []),
-      build ? build.board : panel("views", "inbox", "Inbox", "F11"),
+      ...(build ? (build.board ? [build.board] : []) : [panel("views", "inbox", "Inbox", "F11")]),
       panel("views", "usage", "Usage"),
       action("inspect", "agents.details", "Agent details", "", async () => { await this.workbench.openAgentDetails(); }, () => {
         if (ready()) return ready();
@@ -1095,7 +1099,7 @@ export class NativePanels implements PanelSurface {
       panel("workspace", "refresh", taskBound ? "Reread proof, usage and files" : "Reread files"),
       action("workspace", "sidebar.focus", "Sidebar: focus, then the next tab", "F6", () => this.sidebarKey()),
       panel("workspace", "toggle", "Sidebar: collapse or expand", sidebarKeyLabel(this.sidebarToggle)),
-      ...(build ? [build.refresh] : []),
+      ...(build?.refresh ? [build.refresh] : []),
     ];
     for (const appearance of Object.keys(PACKAGED) as Appearance[]) items.push(action("display", `appearance.${appearance}`,
       `Appearance: ${appearance}`, "", () => {
@@ -1119,26 +1123,30 @@ export class NativePanels implements PanelSurface {
   }
   /**
    * F2 in a build session: Board (a view), the message receiver, open questions, Finish and board planning (message),
-   * and the board status reread (workspace), each with its unavailable reason; undefined in every other role.
+   * and the board status reread (workspace), each with its unavailable reason; undefined in every other role. A bare
+   * session has no board, so Board, board planning and the reread are not offered.
    */
   private buildActions(action: ActionMaker, ready: () => string | undefined):
-    { readonly board: HostAction; readonly message: readonly HostAction[]; readonly refresh: HostAction } | undefined {
+    { readonly board?: HostAction; readonly message: readonly HostAction[]; readonly refresh?: HostAction } | undefined {
     const build = this.build, ui = this.options.build;
     if (!build || !ui) return undefined;
-    const receiver = targetKey(), unavailable = () => ready() ?? boardUnavailable(this.snapshot()?.build);
+    const receiver = targetKey(), unavailable = () => ready() ?? boardUnavailable(this.snapshot()?.build), board = ui.board;
+    const message = [
+      action("message", "build.target", "Change who receives the message", receiver ? keyLabel(receiver) : "", () => build.cycleTarget(),
+        () => ready() ?? (ui.fleet.snapshot().children.some(steerable) ? undefined : "no agent is running")),
+      ...build.questions().map(child => action("message", `build.answer.${child.id}`, `Answer ${plainLabel(child.id)}'s question`, "",
+        () => { build.open("question", child.id); })),
+      action("message", "build.finish", "Finish: choose how this leaves the session", "", () => { build.openFinish(); }, () => ready() ?? build.finishUnavailable()),
+    ];
+    if (!board) return { message };
     return {
       board: action("views", "/panels board", "Board", "F10", () => this.panelCommand("board")),
-      message: [
-        action("message", "build.target", "Change who receives the message", receiver ? keyLabel(receiver) : "", () => build.cycleTarget(),
-          () => ready() ?? (ui.fleet.snapshot().children.some(steerable) ? undefined : "no agent is running")),
-        ...build.questions().map(child => action("message", `build.answer.${child.id}`, `Answer ${plainLabel(child.id)}'s question`, "",
-          () => { build.open("question", child.id); })),
-        action("message", "build.finish", "Finish: choose how this leaves the session", "", () => { build.openFinish(); }, () => ready() ?? build.finishUnavailable()),
+      message: [...message,
         action("message", "build.plan.review", "Review the proposed board plan", "", () => { build.open("plan"); },
-          () => ready() ?? (ui.board.proposed() ? undefined : "no plan is waiting")),
+          () => ready() ?? (board.proposed() ? undefined : "no plan is waiting")),
         action("message", "build.plan.draft", "Plan board tasks from this conversation", "", () => build.planDraft(), unavailable),
       ],
-      refresh: action("workspace", "build.board.refresh", "Reread board status", "", () => ui.board.refresh(), unavailable),
+      refresh: action("workspace", "build.board.refresh", "Reread board status", "", () => board.refresh(), unavailable),
     };
   }
   private themeCtor: typeof Sdk.Theme | undefined;
@@ -1184,7 +1192,7 @@ export class NativePanels implements PanelSurface {
     const identity = this.options.identity, answerKey = this.questions ? questionsKey() : undefined;
     const groups = keyGroups({ taskBound: !!identity.task, answer: identity.role === "pm" || identity.role === "assistant",
       jobs: this.snapshot()?.jobs != null, queueControl: this.queue.controllable, lifecycle: !!identity.task,
-      sidebarKey: this.sidebarToggle, ...(answerKey ? { questionsKey: answerKey } : {}), ...(this.build ? { build: true } : {}) });
+      sidebarKey: this.sidebarToggle, ...(answerKey ? { questionsKey: answerKey } : {}), ...(this.build ? { build: true, board: !!this.options.build?.board } : {}) });
     this.overlay = "keys"; this.refresh();
     let data: string | undefined;
     try {

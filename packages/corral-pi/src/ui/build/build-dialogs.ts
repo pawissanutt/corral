@@ -13,12 +13,20 @@ const PREVIEW_FULL = 100;
 const PREVIEW_MED = 56;
 const BOLD = "\x1b[1m", NORMAL = "\x1b[22m";
 
-/** "mitiplay policy: gate allowed, review optional"; outside a workspace, the reason instead of a policy. */
+/**
+ * "mitiplay · landing needs an approving review and the full gate"; outside a workspace, the reason instead of a policy.
+ * A bare session has no corral project and no policy: it says what Land does there (a local fast-forward, no gate).
+ */
 export function policyLabel(state: BuildPanelState): string {
-  const project = plainLabel(state.session.project ?? basename(state.session.repoRoot));
-  if (!state.session.workspaceRoot) return `${project} · outside a corral workspace`;
+  const session = state.session, project = plainLabel(session.project ?? basename(session.repoRoot));
+  if (session.bare) {
+    if (session.repository === false) return `${project} · bare · not a Git repository, so nothing can land`;
+    const base = session.baseBranch ? plainLabel(session.baseBranch) : "the branch it started from";
+    return `${project} · bare · landing fast-forwards ${base} locally, no gate; review recommended`;
+  }
+  if (!session.workspaceRoot) return `${project} · outside a corral workspace`;
   const policy = state.settings.exitPolicy;
-  return `${project} policy: ${policy === "gate" ? "gate allowed, review optional" : policy === "review" ? "review required" : "no corral exit"}`;
+  return `${project} · ${policy === "review" ? "landing needs an approving review and the full gate" : policy === "gate" ? "landing needs the full gate" : "landing is off"}`;
 }
 
 /**
@@ -35,6 +43,7 @@ function wrapped(text: string, color: string, width: number, rows: number): stri
   return [...kept, PANEL_MUTED + `… ${lines.length - kept.length} more lines`];
 }
 
+/** Keep, Land and Iterate as the host offers them; a Land that needs the owner's reason says why, ahead of its detail. */
 export function exitDialog(state: BuildPanelState, options: readonly ExitOption[], episode: number, live: number): ChoiceDialog {
   const policy = policyLabel(state);
   return {
@@ -42,7 +51,11 @@ export function exitDialog(state: BuildPanelState, options: readonly ExitOption[
     title: "How should this leave the build session?",
     short: "How should this leave?",
     meta: live ? `${policy} · ${live} ${live === 1 ? "agent" : "agents"} still running` : policy,
-    options: options.map(option => ({ label: option.label, detail: option.detail, ...(option.unavailable !== undefined ? { unavailable: option.unavailable } : {}) })),
+    options: options.map(option => ({
+      label: option.label,
+      detail: option.needsReason !== undefined && option.unavailable === undefined ? `needs your reason: ${option.needsReason} · ${option.detail}` : option.detail,
+      ...(option.unavailable !== undefined ? { unavailable: option.unavailable } : {}),
+    })),
   };
 }
 

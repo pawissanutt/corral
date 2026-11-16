@@ -39,6 +39,8 @@ pub enum Destination {
     Changes,
     /// Plans.
     Plans,
+    /// Builds: interactive sessions that implemented, verified, reviewed and landed work.
+    Builds,
     /// Agents.
     Agents,
     /// Items to review.
@@ -63,11 +65,12 @@ impl Destination {
         }
     }
     /// Destinations in navigation order.
-    pub const ALL: [Destination; 9] = [
+    pub const ALL: [Destination; 10] = [
         Self::Inbox,
         Self::Now,
         Self::Changes,
         Self::Plans,
+        Self::Builds,
         Self::Agents,
         Self::Review,
         Self::Timeline,
@@ -81,6 +84,7 @@ impl Destination {
             Self::Now => "Now",
             Self::Changes => "Changes",
             Self::Plans => "Plans",
+            Self::Builds => "Builds",
             Self::Agents => "Agents",
             Self::Review => "Review",
             Self::Timeline => "Timeline",
@@ -95,6 +99,7 @@ impl Destination {
             Self::Now => "now",
             Self::Changes => "changes",
             Self::Plans => "plans",
+            Self::Builds => "builds",
             Self::Agents => "agents",
             Self::Review => "review",
             Self::Timeline => "timeline",
@@ -113,6 +118,7 @@ impl Destination {
             Self::Now => 'n',
             Self::Changes => '.',
             Self::Plans => 'p',
+            Self::Builds => 'b',
             Self::Agents => 'a',
             Self::Review => 'r',
             Self::Timeline => 't',
@@ -219,8 +225,9 @@ impl PhoneTab {
         Self::More,
     ];
     /// Destinations listed under More.
-    pub const MORE: [Destination; 5] = [
+    pub const MORE: [Destination; 6] = [
         Destination::Changes,
+        Destination::Builds,
         Destination::Review,
         Destination::Timeline,
         Destination::Usage,

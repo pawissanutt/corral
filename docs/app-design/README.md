@@ -36,7 +36,9 @@ supports model selection and optional `assistant.summary_profile` for quick-thre
 compaction, effective at the next assistant-host start. Paid-API summary profiles are
 refused without separate spending authority. Acknowledged transactional outboxes preserve
 drafts/messages across restarts and concurrent tabs. Saved credentials permit offline boot
-from complete last-known Board/Inbox/Plans/Health snapshots marked stale, not live.
+from complete last-known Board/Inbox/Plans/Builds/Health snapshots marked stale, not live.
+Builds (`builds.v1`) is its own read-only destination for published build-session records;
+see the screen map in [mockup/DESIGN.md](mockup/DESIGN.md).
 
 Timeline reads use indexed half-open timestamp windows (including owner/PM points),
 overlapping recorded sessions, and predecessor phase state. Completed historical

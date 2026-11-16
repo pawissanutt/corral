@@ -43,6 +43,7 @@ pub(super) const CAPS: &[&str] = &[
     INBOX_V1,
     CHANGES_V1,
     PLANS_V1,
+    BUILDS_V1,
     AGENTS_V1,
     REVIEW_V1,
     TIMELINE_V1,
@@ -54,6 +55,7 @@ pub(super) const CAPS: &[&str] = &[
     ACT_V1,
     ASSISTANT_ATTACH_V1,
     SESSION_V1,
+    SESSION_FLEET_V1,
     corral_protocol::detail::STREAM_TERMINAL_V1,
     PUSH_V1,
 ];
@@ -182,6 +184,7 @@ impl AppState {
                 feed.synced = None;
                 feed.inbox.clear();
                 feed.plans.clear();
+                feed.builds.clear();
                 feed.agents.clear();
                 feed.assistants.clear();
                 feed.usage.clear();
@@ -240,6 +243,7 @@ impl AppState {
         for (topic, cap) in [
             (Topic::Inbox, INBOX_V1),
             (Topic::Plans, PLANS_V1),
+            (Topic::Builds, BUILDS_V1),
             (Topic::Agents, AGENTS_V1),
             (Topic::Assistant, ASSISTANT_V1),
             (Topic::Usage, USAGE_V1),

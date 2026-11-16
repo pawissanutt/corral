@@ -27,6 +27,8 @@ pub enum AgentOp {
     Hello,
     Event,
     ReceiptLookup,
+    PeerSend,
+    PeerRoster,
     Ask,
     Withdraw,
     Wait,
@@ -105,10 +107,12 @@ const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assist
 const TRIAGE: &[AgentRole] = &[AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 53] = [
+    pub const ALL: [AgentOp; 55] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
+        AgentOp::PeerSend,
+        AgentOp::PeerRoster,
         AgentOp::Ask,
         AgentOp::Withdraw,
         AgentOp::Wait,
@@ -169,6 +173,7 @@ impl AgentOp {
     pub fn roles(self) -> &'static [AgentRole] {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => ALL_ROLES,
+            AgentOp::PeerSend | AgentOp::PeerRoster => ALL_ROLES,
             AgentOp::GateTriage => TRIAGE,
             AgentOp::ReadAnnotations => super::ops::annotations::ROLES,
             AgentOp::Todo
@@ -218,6 +223,7 @@ impl AgentOp {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup | AgentOp::ReadAnnotations => {
                 None
             }
+            AgentOp::PeerSend | AgentOp::PeerRoster => None,
             AgentOp::MemoryList
             | AgentOp::MemoryRead
             | AgentOp::MemoryPut
@@ -317,6 +323,7 @@ pub enum RejectCode {
     /// write_permission: the session already holds its maximum of active grants.
     GrantsFull,
     AnnotationRefused,
+    AgentMessageLimit,
 }
 
 impl RejectCode {
@@ -351,6 +358,7 @@ impl RejectCode {
             RejectCode::FixedRule => "fixed_rule",
             RejectCode::GrantsFull => "grants_full",
             RejectCode::AnnotationRefused => "annotation_refused",
+            RejectCode::AgentMessageLimit => "agent_message_limit",
         }
     }
 }
@@ -557,6 +565,8 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::Notes => super::ops::notes::call(ctx, &envelope),
             AgentOp::PmAction => super::ops::pm_actions::call(ctx, &envelope),
             AgentOp::PmShadow => super::ops::pm_shadow::call(ctx, &envelope),
+            AgentOp::PeerSend => super::ops::peer::send(ctx, &envelope),
+            AgentOp::PeerRoster => super::ops::peer::roster(ctx, &envelope),
             AgentOp::MemoryList
             | AgentOp::MemoryRead
             | AgentOp::MemoryPut

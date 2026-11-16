@@ -65,6 +65,30 @@ pub fn authority() -> OwnerAuthority {
         .map_or(OwnerAuthority::Shell, OwnerAuthority::ViaAssistant)
 }
 
+/// Unforgeable within callers: only this authority-validation module constructs this proof.
+pub(crate) struct BuildAuthority {
+    _private: (),
+}
+
+pub(crate) fn build_shell_authority(ctx: &Ctx) -> Result<BuildAuthority> {
+    crate::build_session::require_owner(ctx)?;
+    Ok(BuildAuthority { _private: () })
+}
+
+pub(crate) fn build_finish_authority(ctx: &Ctx, session: &str) -> Result<BuildAuthority> {
+    super::scratch::finish_session(Some(session))?;
+    match authority() {
+        OwnerAuthority::ViaAssistant(via) => {
+            ensure!(
+                via.kind == "finish_here" && via.session == session,
+                "assistant_refused: only a claimed finish_here instruction authorizes in-session landing"
+            );
+            Ok(BuildAuthority { _private: () })
+        }
+        OwnerAuthority::Shell => build_shell_authority(ctx),
+    }
+}
+
 /// The command child a `started` evidence names, once the child claimed its reservation.
 pub(crate) fn started(receipt: &RequestReceipt) -> Option<Executor> {
     let evidence = receipt

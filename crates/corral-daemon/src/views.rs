@@ -36,6 +36,7 @@ impl Key {
             Topic::Usage => 4,
             Topic::Settings => 5,
             Topic::Thread => 6,
+            Topic::Builds => 7,
             _ => return Err(anyhow!("unsupported app topic")),
         };
         let scope = if topic == Topic::Thread {
@@ -64,6 +65,7 @@ impl Key {
             3 => Topic::Assistant,
             4 => Topic::Usage,
             5 => Topic::Settings,
+            7 => Topic::Builds,
             _ => Topic::Thread,
         }
     }

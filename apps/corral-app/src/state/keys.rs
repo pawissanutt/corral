@@ -10,7 +10,9 @@ use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
 use super::AppState;
-use crate::model::{DataState, Destination, Effect, Overlay, commands, inbox, plans, review, work};
+use crate::model::{
+    DataState, Destination, Effect, Overlay, builds, commands, inbox, plans, review, work,
+};
 
 /// Where the keyboard focus is, as far as key routing needs it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -197,6 +199,7 @@ impl AppState {
             Destination::Review => self.review.update(|state| {
                 effects = state.key_live(key, top, &selection, feed, env);
             }),
+            Destination::Builds => effects = builds::key_live(key, &selection, feed),
             _ => {}
         });
         effects

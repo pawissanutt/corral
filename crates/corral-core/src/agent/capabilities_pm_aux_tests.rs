@@ -6,7 +6,7 @@ fn pm_catalog_matches_assistant_except_pm_specific_capabilities() {
         assert_eq!(
             (def.defaults)(AgentRole::Pm),
             match def.key {
-                "write_permissions" => None,
+                "write_permissions" | "fleet" => None,
                 "shadow" | "expert" => Some([false; 3]),
                 _ => (def.defaults)(AgentRole::Assistant),
             },

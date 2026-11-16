@@ -7,6 +7,9 @@ Destinations:
 - **Inbox**: items needing attention and a question handover with evidence and answers.
 - **Now**: the workspace, task details and plan graph. **Changes** shows changes since the last visit. Closed tasks appear in the collapsed Closed section at the bottom of Now.
 - **Plans**: plan lists, details, review and graphs.
+- **Builds**: records interactive build sessions publish (outcome, intent, slices, gate
+  attempts, review rounds, agent messages, owner decisions, usage, timeline); never tasks.
+  Needs `builds.v1`; a daemon without it shows Builds as unavailable.
 - **Agents**: the agent wall, sessions, quick thread and filed chat records.
 - **Review**: a candidate replay, verdicts, evidence and diff.
 - **Timeline**: the activity timeline and range selection.
@@ -93,8 +96,9 @@ The WebSocket carrier uses Noise IK; initial pairing uses single-use Noise IKpsk
 ### Live behavior and revocation
 
 Typed live subscriptions, details and permitted actions cover Inbox, Now, Changes, Plans,
-Agents, Review, Timeline, Usage, Settings and Ask. Availability depends on negotiated
-capabilities and device authority; missing facts, provider failures and unsupported operations
+Builds (read-only), Agents, Review, Timeline, Usage, Settings and Ask. Availability depends on
+negotiated capabilities and device authority; missing facts, provider failures and unsupported
+operations
 are shown as such. Usage totals, daily costs, Timeline and burn-up retain bounded partial
 results with completeness/scan-coverage notes; incomplete or unpriced totals are not complete
 bills. Usage says its coverage once per page, in calendar days, and per provider or profile
@@ -118,7 +122,7 @@ Reply-class covers answers, follow-ups, task replies/comments and annotation rep
 The canonical table is `crates/corral-protocol/src/cmd/mod.rs::Command::app_class`.
 
 On link loss, retained data is stale and subscriptions reconnect. A restart can open the
-last complete Board/Inbox/Plans and Health snapshot for the saved credential, explicitly
+last complete Board/Inbox/Plans/Builds and Health snapshot for the saved credential, explicitly
 stale/offline, not authenticated live data. Drafts and bounded assistant messages persist
 per device/store; queued messages remain visible and cancellable with their original IDs.
 Other offline actions refuse. IndexedDB transaction completion or native synced atomic
@@ -284,7 +288,7 @@ Run one cargo or NSH build at a time on this shared host.
 
 | Key | Action |
 |---|---|
-| `i n . p a r t u ,` | Inbox, Now, Changes, Plans, Agents, Review, Timeline, Usage, Settings |
+| `i n . p b a r t u ,` | Inbox, Now, Changes, Plans, Builds, Agents, Review, Timeline, Usage, Settings |
 | `/` | Open Ask |
 | `Ctrl K` or `?` | Open palette |
 | `Ctrl B` | Toggle sidebar; narrow windows fold it to a rail, not remove it |
@@ -297,7 +301,7 @@ Run one cargo or NSH build at a time on this shared host.
 On macOS, `Ctrl` shortcuts above use Command (`mod`). Letter shortcuts do not navigate
 while editing a field. List keys (`j`/`k`, arrows, Enter and answer digits) bind only
 while the destination list has focus or no control has focus, with no overlay/confirmation.
-Inbox supports move/open/answer, Now move/open-session, and Plans move; question pages
+Inbox supports move/open/answer, Now move/open-session, and Plans and Builds move; question pages
 leave arrows for scrolling. Tab moves focus; Enter/Space and arrows remain with focused
 controls. Domain letters include Inbox `f`/`e`, Plans `J`/`K` (member) and `x` (preview
 scale), and Review `s` (split when wide enough).

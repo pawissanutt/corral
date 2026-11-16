@@ -567,6 +567,24 @@ runtime directory. Reading neither writes the store nor sends input.
   Session discontinuities themselves use the gap field and keep the topic open.
   Ignore unknown `Other` kinds/states without treating them as durable content.
 
+### Children and agent messages
+
+A connection that requests `session.fleet.v1` receives the watched session's child agents
+and their messages with every page (`fleet`, absent when the session has neither). Each
+value replaces the previous one; the app never merges them. It clears the fleet when the
+watch ends, on a namespace switch, on Forget and on revocation, and shows a held fleet as
+stale whenever the session topic is stale. Against a daemon without the capability the
+page shows what it showed before, with no children placeholder.
+
+The session page lists the fleet under the run's facts and stages in the run column
+(desktop and terminal; a terminal too narrow for that column shows the transcript alone),
+and on the phone in a fold under the action bar that opens both lists in a bounded scroll.
+The transcript keeps its place. Children read as a published build's slices do: kind when
+it is not a slice, title, state, model, current tool, running time, tokens, cost (unknown,
+never zero), a review's verdict and an open-question chip. Messages are in time order as
+`from → to` with their words and any delivery other than delivered; a shortened list says
+`showing 100 of N messages`. Children are read-only: no command addresses them.
+
 ### Rust wire definitions
 
 These are the verbatim additions to the existing `Topic` and `SubDelta` enums in

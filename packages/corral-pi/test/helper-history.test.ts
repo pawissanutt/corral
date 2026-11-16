@@ -2,7 +2,11 @@ import { expect, test } from "bun:test";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AuxiliaryHistory, HELPER_HISTORY_LIMIT, HELPER_TEXT_LIMIT } from "../src/extensions/subagent/inspection.ts";
 import { observeHelperEvent } from "../src/extensions/subagent/session.ts";
-import { AuxiliaryRuntime, type Invocation } from "../src/extensions/subagent/runtime.ts";
+import { AuxiliaryRuntime } from "../src/extensions/subagent/runtime.ts";
+import type * as Sdk from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { FleetRuntime } from "../src/extensions/fleet/runtime.ts";
+import type { ChildHooks } from "../src/extensions/fleet/child.ts";
 
 function barrier<T = void>() {
   let resolve!: (value: T) => void;
@@ -90,35 +94,48 @@ test("history is bounded and completed entries ignore late callbacks without res
 });
 
 test("live runtime inspection retains prompt, partials and result; queued cancellation never becomes provider execution", async () => {
-  const started = barrier<Invocation>(), release = barrier(), queuedReady = barrier();
-  const runtime = new AuxiliaryRuntime({ settings: { explore: { model: null, max_parallel: 1, max_turns: 2, timeout_secs: 30 } },
-    generation: 4, provider: "fixture", model: "model", sessionId: () => "parent",
-    changed: () => { if (runtime.inspections().some(entry => entry.prompt === "Second prompt" && entry.phase === "queued")) queuedReady.resolve(); },
-    record: async value => ({ session_id: value.request, session_file: "/unused/owned-reference" }),
-    execute: async invocation => {
-      invocation.observe?.({ type: "assistant_start" }); invocation.observe?.({ type: "assistant_delta", text: "Live partial" });
-      started.resolve(invocation); await release.promise;
-      invocation.observe?.({ type: "assistant_end", text: "Final answer" }); return { text: "Final answer", outcome: "completed" };
-    },
+  const started = barrier<ChildHooks>(), release = barrier(), queuedReady = barrier();
+  const records: Record<string, unknown>[] = [];
+  let executions = 0;
+  const runtime = new FleetRuntime({ sdk: {} as typeof Sdk, models: {} as ModelRuntime, approved: ["fixture"],
+    parent: { provider: "fixture", model: "model" }, agentDir: "/unused", localTools: [],
+    context: { dir: "/unused", session: { worktree: "/repo", name: "parent" }, settings: { maxParallel: 1, profiles: [] } },
+    allowedKinds: ["explore"],
+    research: { settings: { model: null, max_parallel: 1, max_turns: 2, timeout_secs: 30 }, generation: 4, sessionId: () => "parent" },
+    changed: () => { if (runtime.snapshot().children.some(entry => entry.brief === "Second prompt" && entry.state === "queued")) queuedReady.resolve(); },
+    deliverToParent() { throw new Error("Blocking research must not be redelivered"); },
+    record: async value => { records.push(value); return { session_id: value.request, session_file: "/unused/owned-reference" }; },
+    runner: { run(_spec, _model, hooks) {
+      executions++;
+      hooks.onEvent({ type: "assistant_start" }); hooks.onEvent({ type: "assistant_delta", text: "Live partial" });
+      started.resolve(hooks);
+      return { done: release.promise.then(() => {
+        hooks.onEvent({ type: "assistant_end", text: "Final answer" });
+        return { report: "Final answer", researchReport: { status: "completed" as const, stopReason: "completed" as const } };
+      }), usage: () => ({ input: 1, output: 1, turns: 1 }), async steer() {}, async setModel() { return "applied"; } };
+    } },
   });
-  const first = runtime.run("explore", "one", "First prompt");
-  const invocation = await started.promise;
-  const cancel = new AbortController();
-  const queued = runtime.run("explore", "two", "Second prompt", cancel.signal);
-  const rejected = queued.catch(error => error);
-  await queuedReady.promise;
-  expect(runtime.inspections().find(value => value.prompt === "Second prompt")?.phase).toBe("queued");
-  expect(runtime.inspections().find(value => value.prompt === "First prompt")?.messages[0]?.text).toBe("Live partial");
-  cancel.abort(); await rejected;
-  const cancelled = runtime.inspections().find(value => value.prompt === "Second prompt");
-  expect(cancelled?.phase).toBe("not_started");
-  expect(runtime.inspection().find(value => value.request === cancelled?.request)?.state).toBe("not_started");
-  release.resolve(); await first;
-  invocation.observe?.({ type: "assistant_delta", text: "Late callback" });
-  expect(runtime.inspections().find(value => value.prompt === "First prompt")?.result).toBe("Final answer");
-  expect(JSON.stringify(runtime.inspections())).not.toContain("Late callback");
-  expect(runtime.run("explore", "one", "First prompt")).toBe(first);
-  expect(runtime.inspections()).toHaveLength(2); await runtime.close();
+  try {
+    const first = runtime.explore("one", "First prompt");
+    const hooks = await started.promise;
+    const cancel = new AbortController();
+    const queued = runtime.explore("two", "Second prompt", cancel.signal);
+    await queuedReady.promise;
+    expect(runtime.snapshot().children.find(value => value.brief === "Second prompt")?.state).toBe("queued");
+    expect(runtime.snapshot().children.find(value => value.brief === "First prompt")?.messages[0]?.text).toBe("Live partial");
+    cancel.abort();
+    const result = await queued;
+    expect(result.report?.stopReason).toBe("cancelled");
+    expect(runtime.snapshot().children.find(value => value.brief === "Second prompt")?.state).toBe("cancelled");
+    expect(records.filter(value => value.request === result.request && value.action === "finish").map(value => value.outcome)).toEqual(["not_started"]);
+    expect(executions).toBe(1);
+    release.resolve(); await first;
+    hooks.onEvent({ type: "assistant_delta", text: "Late callback" });
+    expect(runtime.snapshot().children.find(value => value.brief === "First prompt")?.report).toBe("Final answer");
+    expect(JSON.stringify(runtime.snapshot())).not.toContain("Late callback");
+    expect(runtime.explore("one", "First prompt")).toBe(first);
+    expect(runtime.snapshot().children).toHaveLength(2);
+  } finally { release.resolve(); await runtime.close(); }
 });
 
 test("a failed terminal record remains uncertain, not a successful helper or task", async () => {

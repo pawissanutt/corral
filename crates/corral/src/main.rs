@@ -8,6 +8,7 @@ mod assistant_effects_cmd;
 mod assistant_handoff_cmd;
 mod attention_cmd;
 mod automation_cmd;
+mod build_cmd;
 mod cmds;
 mod completion_cmd;
 mod config_cmd;
@@ -104,7 +105,7 @@ pub enum Cmd {
     Attention(attention_cmd::AttentionArgs),
     /// corral-pi agent host: authenticated host calls, launch, install and recovery
     Agent(agent_cmd::AgentArgs),
-    /// Start corral-pi here: the launcher on a terminal, an assistant with --assistant, a build session with --build, the PM with --pm, or plain Pi with --bare
+    /// Start corral-pi: the launcher, --build, --bare (a local build session without corral), --assistant, --pm or --resume
     Pi(pi_cmd::PiArgs),
     /// Triage corral-pi agent questions by key and revision: list, show, answer, escalate, cancel, deadline
     Question(question_cmd::QuestionArgs),
@@ -143,6 +144,11 @@ pub enum Cmd {
     Plan {
         #[command(subcommand)]
         cmd: plan_cmd::PlanCmd,
+    },
+    /// Gate, land and publish interactive build sessions without task-board handoff
+    Build {
+        #[command(subcommand)]
+        cmd: build_cmd::BuildCmd,
     },
     /// Print the immutable landed identity embedded by a post-land install
     BuildIdentity,
@@ -230,9 +236,12 @@ pub enum Cmd {
         /// Artifact storage totals per task and workspace, including limit warnings
         #[arg(long, conflicts_with = "since")]
         storage: bool,
+        /// Report tracked build records, separately from task statistics
+        #[arg(long, conflicts_with_all = ["storage", "gates", "by", "html"])]
+        builds: bool,
         #[arg(long, default_value = "profile", value_parser = ["profile", "model", "kind", "project", "task", "size", "mode", "day"])]
         by: String,
-        /// Include runs dispatched in the last N days, hours or weeks (e.g. 30d); with --gates, gates started since then or since an RFC 3339 timestamp
+        /// Include runs or builds created in the last N days, hours or weeks (e.g. 30d); with --gates, gates started since then or since an RFC 3339 timestamp
         #[arg(long)]
         since: Option<String>,
         /// Gate report per cohort, tier and destination instead of run groups.

@@ -361,6 +361,16 @@ pub(crate) fn retire(ctx: &Ctx, recipient: &Recipient, reason: &str) -> Result<(
         {
             continue;
         }
+        if message.kind == "agent_message" {
+            inbox.mark_terminal_held(
+                &posting,
+                message.seq,
+                TerminalState::Cancelled,
+                reason,
+                "run_end",
+            )?;
+            continue;
+        }
         let attempted = inbox
             .record::<u64>("message-envelope", &format!("{:020}", message.seq))?
             .map(|number| inbox.envelope(number))
@@ -635,6 +645,7 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
             let _ = settle_with(ctx, &recipient, adapter);
         }
     }
+    super::peer::reconcile_standalone(ctx)?;
     Ok(())
 }
 

@@ -17,6 +17,7 @@ use crate::model::text::{Rich, span};
 use crate::model::{ActStatus, Id, Live, Selection, act};
 
 mod controls;
+mod fleet;
 mod items;
 mod keys;
 mod live;
@@ -31,6 +32,7 @@ mod replay_tool;
 pub mod screen;
 
 pub use controls::{Ask, Bar, Control, ControlKind, Launch, Weight, op_status};
+pub use fleet::{Fleet, FleetEntry, FleetSection};
 pub use items::{Card, Divider, Footer, Marker, More, Picture, Prose, Section, Thinking};
 pub use keys::{KeyBar, KeyButton, KeyPress, Keys, Settled};
 pub use live::wall as live_wall;
@@ -664,6 +666,8 @@ pub struct Session {
     /// the reply box.
     pub chat: Option<Id>,
     pub run_details: Run,
+    /// The session's child agents and their messages, beside the run; none when it has neither.
+    pub fleet: Option<Fleet>,
 }
 
 #[cfg(test)]

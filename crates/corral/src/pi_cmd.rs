@@ -1,9 +1,9 @@
 //! `corral pi`: start the corral-pi host from nothing. In a workspace on a terminal it opens the
-//! launcher, which asks whether to open a build session, an assistant, the PM or a stopped session
-//! to resume; `--build`, `--assistant`, `--pm` and `--resume A-<n>`/`B-<id>` open one directly, and
-//! a plain `corral pi` without a terminal opens an assistant. Outside a workspace only `--build`
-//! (and `--resume B-<id>`) start the corral-pi host; plain `corral pi` there, or `--bare`, starts
-//! plain Pi. Handler bodies live in `corral_ops::agent::pi` and `corral_ops::agent::pi_build`.
+//! launcher, which offers Build, Bare, Assistant, PM and stopped sessions to resume. `--build`,
+//! `--bare`, `--assistant`, `--pm` and `--resume A-<n>`/`B-<id>` open one directly; a plain
+//! `corral pi` without a terminal opens an assistant. Outside a workspace, plain `corral pi`
+//! starts a bare build session without corral tools or state; `--build` and `--resume B-<id>`
+//! also work there. Handler bodies live in `corral_ops::agent::pi` and `corral_ops::agent::pi_build`.
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -23,8 +23,9 @@ use crate::entry::Entry;
 
 #[derive(Args)]
 pub struct PiArgs {
-    /// Plain unbound Pi in the current directory: no store, binding or corral tools
-    #[arg(long, conflicts_with_all = ["pm", "resume", "over_cap"])]
+    /// Open a build session without corral: no workspace or project, board or gate; its record stays local.
+    /// Accepts --here, --name, --model, --provider and --effort. Resume later with --resume B-<id> (without --bare).
+    #[arg(long, group = "work_session", conflicts_with_all = ["pm", "resume", "over_cap"])]
     bare: bool,
     /// Open the workspace PM in this pane, or take over a dead one
     #[arg(long, conflicts_with_all = ["resume", "over_cap"])]
@@ -33,16 +34,16 @@ pub struct PiArgs {
     #[arg(long, conflicts_with_all = ["bare", "pm", "resume"])]
     assistant: bool,
     /// Open an untethered build session: parallel agents in one worktree, nothing reaches the board until you choose an exit
-    #[arg(long, conflicts_with_all = ["bare", "pm", "assistant", "task", "over_cap", "continue_session"])]
+    #[arg(long, group = "work_session", conflicts_with_all = ["bare", "pm", "assistant", "task", "over_cap", "continue_session"])]
     build: bool,
-    /// Write in the current checkout and branch instead of a new build worktree
-    #[arg(long, requires = "build", conflicts_with = "resume")]
+    /// With --build or --bare, write in the current checkout and branch instead of a new worktree
+    #[arg(long, requires = "work_session", conflicts_with = "resume")]
     here: bool,
-    /// Name the build session; a new worktree is `.worktrees/build-<NAME>` on branch `build/<NAME>`
+    /// Name a --build or --bare session; a new worktree is `.worktrees/build-<NAME>` on branch `build/<NAME>`
     #[arg(
         long,
         value_name = "NAME",
-        requires = "build",
+        requires = "work_session",
         conflicts_with = "resume"
     )]
     name: Option<String>,
@@ -50,7 +51,7 @@ pub struct PiArgs {
     #[arg(short = 'c', long = "continue", requires = "pm",
         conflicts_with_all = ["bare", "resume", "over_cap", "task"])]
     continue_session: bool,
-    /// Resume stopped assistant session A-<n> (fencing its previous generation) or build session B-<id> in this pane (inside an assistant, /resume picks one)
+    /// Resume a stopped assistant A-<n> (fencing its previous generation), build B-<id>, or local bare B-<id> session in this pane
     #[arg(long, value_name = "ID", conflicts_with = "over_cap")]
     resume: Option<String>,
     /// Open an assistant even when assistant.max_live assistants are already live
@@ -59,13 +60,13 @@ pub struct PiArgs {
     /// Preload bounded read-only context for this task in a new assistant
     #[arg(long, value_name = "TASK-ID", conflicts_with_all = ["bare", "pm", "resume"])]
     task: Option<String>,
-    /// Model to run instead of the profile's (bare: Pi's default for the provider)
+    /// Override the model (bare defaults to the built-in model for its provider)
     #[arg(long)]
     model: Option<String>,
     /// Provider whose `corral agent login` runs the session (bare default: openai-codex)
     #[arg(long, value_parser = ["openai-codex", "anthropic"])]
     provider: Option<String>,
-    /// Reasoning effort instead of the profile's
+    /// Override reasoning effort (also accepted with --bare)
     #[arg(long)]
     effort: Option<String>,
 }
@@ -73,7 +74,7 @@ pub struct PiArgs {
 /// What one `corral pi` invocation opens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Invocation {
-    /// Plain Pi; `notice` when it was chosen because no workspace was found.
+    /// A build session without corral; `notice` when chosen because no workspace was found.
     Bare {
         notice: bool,
     },
@@ -92,13 +93,15 @@ pub enum Invocation {
     },
 }
 
-pub const BARE_NOTICE: &str =
-    "corral pi: no corral workspace here; starting bare Pi (no store, binding or corral tools)";
+pub const BARE_NOTICE: &str = "corral pi: no corral workspace here; starting a bare build session (no corral, board or gate; local record only)";
 
-/// The invocation split: a build session needs only a Git repository (checked when it starts);
-/// otherwise outside a workspace only plain Pi can start, and a plain `corral pi` on a terminal
-/// (stdin and stdout both) asks with the launcher.
+/// The invocation split: ordinary builds need Git; bare builds also work outside a repository.
+/// A plain `corral pi` in a workspace on a terminal asks with the launcher; outside a workspace
+/// it starts a bare session.
 pub fn invocation(args: &PiArgs, in_workspace: bool, terminal: bool) -> Result<Invocation> {
+    if (args.here || args.name.is_some()) && !args.build && !args.bare {
+        bail!("corral pi refused: usage_error: --here and --name require --build or --bare");
+    }
     if args.bare {
         return Ok(Invocation::Bare { notice: false });
     }
@@ -156,7 +159,12 @@ fn is_build_session(id: &str) -> bool {
 
 pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
     let terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let invocation = invocation(&args, Store::find_root(start).is_ok(), terminal)?;
+    let needs_workspace = !args.bare && !args.resume.as_deref().is_some_and(is_build_session);
+    let invocation = invocation(
+        &args,
+        needs_workspace && Store::find_root(start).is_ok(),
+        terminal,
+    )?;
     let mut overrides = Overrides {
         model: args.model,
         provider: args.provider,
@@ -168,11 +176,7 @@ pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
             if notice {
                 eprintln!("{BARE_NOTICE}");
             }
-            pi::bare(&BareArgs {
-                model: overrides.model,
-                provider: overrides.provider,
-                effort: overrides.effort,
-            })
+            start_bare(overrides, args.here, args.name)
         }
         Invocation::Build { here, name, resume } => start_build(overrides, here, name, resume),
         Invocation::Launcher => {
@@ -185,12 +189,18 @@ pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
             };
             let (next, continue_session) = chosen(&id, option)?;
             overrides.continue_session = continue_session;
-            if let Invocation::Build { here, name, resume } = next {
-                // The build host never uses the store: release it before the host replaces us.
-                drop(ctx);
-                return start_build(overrides, here, name, resume);
+            match launcher_dispatch(next) {
+                LauncherDispatch::Bare => {
+                    drop(ctx);
+                    start_bare(overrides, false, None)
+                }
+                LauncherDispatch::Build { here, name, resume } => {
+                    // Standalone hosts never use the store: release it before exec.
+                    drop(ctx);
+                    start_build(overrides, here, name, resume)
+                }
+                LauncherDispatch::Bound(next) => open(start, &ctx, next, &overrides, None),
             }
-            open(start, &ctx, next, &overrides, None)
         }
         direct => open(
             start,
@@ -200,6 +210,36 @@ pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
             args.task.as_deref(),
         ),
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum LauncherDispatch {
+    Bare,
+    Build {
+        here: bool,
+        name: Option<String>,
+        resume: Option<String>,
+    },
+    Bound(Invocation),
+}
+
+fn launcher_dispatch(next: Invocation) -> LauncherDispatch {
+    match next {
+        Invocation::Bare { .. } => LauncherDispatch::Bare,
+        Invocation::Build { here, name, resume } => LauncherDispatch::Build { here, name, resume },
+        bound => LauncherDispatch::Bound(bound),
+    }
+}
+
+fn start_bare(overrides: Overrides, here: bool, name: Option<String>) -> Result<()> {
+    pi::bare(&BareArgs {
+        model: overrides.model,
+        provider: overrides.provider,
+        effort: overrides.effort,
+        here,
+        name,
+        resume: None,
+    })
 }
 
 /// Starts the untethered build host; `corral_ops::agent::pi_build` refuses outside a Git repository.
@@ -240,6 +280,7 @@ fn open(
 }
 
 const BUILD_ROW: &str = "build";
+const BARE_ROW: &str = "bare";
 const ASSISTANT_ROW: &str = "assistant";
 const PM_ROW: &str = "pm";
 /// The Build row's option that writes in the current checkout (`--here`).
@@ -262,8 +303,45 @@ fn build_entry() -> LauncherEntry {
     }
 }
 
-/// A recorded build session's Resume row: its name, project (or directory), age and, once it has
-/// exited, how.
+/// The Bare row: the Build session without corral, in the launcher's current directory.
+fn bare_entry() -> LauncherEntry {
+    LauncherEntry {
+        id: BARE_ROW.into(),
+        section: Section::Start,
+        key: Some('r'),
+        name: "Bare".into(),
+        detail: "build without corral · no board · no gate · nothing recorded in the workspace"
+            .into(),
+        options: Vec::new(),
+    }
+}
+
+/// The launcher's start rows, in order: Build, Bare, Assistant, PM.
+fn start_entries() -> Vec<LauncherEntry> {
+    vec![
+        build_entry(),
+        bare_entry(),
+        LauncherEntry {
+            id: ASSISTANT_ROW.into(),
+            section: Section::Start,
+            key: Some('a'),
+            name: "Assistant".into(),
+            detail: "board-aware · scratch worktrees · owner actions on your instruction".into(),
+            options: Vec::new(),
+        },
+        LauncherEntry {
+            id: PM_ROW.into(),
+            section: Section::Start,
+            key: Some('p'),
+            name: "PM".into(),
+            detail: "workspace coordinator · continues the previous conversation".into(),
+            options: Vec::new(),
+        },
+    ]
+}
+
+/// A recorded session's Resume row, `build` or `bare` by its record: its name, project (or
+/// directory), age and, once it has exited, how.
 fn build_resume_entry(session: &BuildSessionSummary, now: jiff::Timestamp) -> LauncherEntry {
     let place = match (&session.project, session.repo_root.file_name()) {
         (Some(project), _) => project.clone(),
@@ -288,7 +366,7 @@ fn build_resume_entry(session: &BuildSessionSummary, now: jiff::Timestamp) -> La
         id: session.id.clone(),
         section: Section::Resume,
         key: None,
-        name: "build".into(),
+        name: if session.bare { "bare" } else { "build" }.into(),
         detail,
         options: Vec::new(),
     }
@@ -311,29 +389,12 @@ fn git_top_level(start: &Path) -> Option<PathBuf> {
         .ok()
 }
 
-/// The launcher's rows: start a build session, an assistant or the PM, or resume one of the newest
-/// stopped sessions: assistants `corral pi --resume` accepts (open, with no running host) and the
-/// build sessions recorded for a repository inside this workspace or `top`, the current one.
+/// The launcher's rows: start a build session, a bare one, an assistant or the PM, or resume one of
+/// the newest stopped sessions: assistants `corral pi --resume` accepts (open, with no running
+/// host) and the build and bare sessions recorded for a repository inside this workspace or `top`,
+/// the current one.
 fn launcher_entries(ctx: &Ctx, top: Option<&Path>) -> Result<Vec<LauncherEntry>> {
-    let mut entries = vec![
-        build_entry(),
-        LauncherEntry {
-            id: ASSISTANT_ROW.into(),
-            section: Section::Start,
-            key: Some('a'),
-            name: "Assistant".into(),
-            detail: "board-aware · scratch worktrees · owner actions on your instruction".into(),
-            options: Vec::new(),
-        },
-        LauncherEntry {
-            id: PM_ROW.into(),
-            section: Section::Start,
-            key: Some('p'),
-            name: "PM".into(),
-            detail: "workspace coordinator · continues the previous conversation".into(),
-            options: Vec::new(),
-        },
-    ];
+    let mut entries = start_entries();
     let mut stopped: Vec<_> = corral_ops::assistant_stats(&ctx.store, None)?
         .into_iter()
         .filter(|row| row.ended.is_none() && !row.live)
@@ -469,6 +530,7 @@ fn chosen(id: &str, option: usize) -> Result<(Invocation, bool)> {
             },
             false,
         ),
+        BARE_ROW => (Invocation::Bare { notice: false }, false),
         ASSISTANT_ROW => (Invocation::Assistant { over_cap: false }, false),
         PM_ROW => (Invocation::Pm, true),
         _ if is_build_session(id) => (
@@ -617,6 +679,12 @@ mod tests {
             ),
             (&["--bare"], true, true, Ok(Bare { notice: false })),
             (&["--bare"], false, false, Ok(Bare { notice: false })),
+            (
+                &["--bare", "--here", "--name", "local"],
+                true,
+                true,
+                Ok(Bare { notice: false }),
+            ),
             (&[], false, true, Ok(Bare { notice: true })),
             (&[], false, false, Ok(Bare { notice: true })),
             (&["--model", "m"], false, true, Ok(Bare { notice: true })),
@@ -636,6 +704,12 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn launcher_bare_selection_dispatches_without_opening_a_bound_session() {
+        let (next, _) = chosen(BARE_ROW, 0).unwrap();
+        assert_eq!(launcher_dispatch(next), LauncherDispatch::Bare);
     }
 
     #[test]
@@ -669,6 +743,7 @@ mod tests {
             repo_root: "/work/mitiplay".into(),
             worktree: "/work/mitiplay/.worktrees/build-checkout-copy".into(),
             here: false,
+            bare: false,
             project: None,
             updated: "2026-11-12T10:00:00Z".into(),
             exited: Some("ship".into()),
@@ -681,6 +756,42 @@ mod tests {
             chosen(&row.id, 0).unwrap(),
             (build(false, None, Some("B-abc123")), false)
         );
+    }
+
+    #[test]
+    fn launcher_offers_bare_and_marks_resumable_bare_sessions() {
+        // Bare is a start row directly after Build and opens `--bare`.
+        let rows = start_entries();
+        assert_eq!(rows[0].id, BUILD_ROW);
+        assert_eq!(rows[1].id, BARE_ROW);
+        assert_eq!(rows[1].name, "Bare");
+        assert!(matches!(rows[1].section, Section::Start));
+        assert_eq!(rows.len(), 4);
+        assert_eq!(
+            chosen(BARE_ROW, 0).unwrap(),
+            (Invocation::Bare { notice: false }, false)
+        );
+        // A recorded bare session's row says bare and resumes by id; a build one still says build.
+        let session = |bare| BuildSessionSummary {
+            id: "B-bare01".into(),
+            name: "scratch".into(),
+            repo_root: "/work/mitiplay".into(),
+            worktree: "/work/mitiplay/.worktrees/build-scratch".into(),
+            here: false,
+            bare,
+            project: None,
+            updated: "2026-11-12T10:00:00Z".into(),
+            exited: None,
+        };
+        let now: jiff::Timestamp = "2026-11-12T10:23:00Z".parse().unwrap();
+        let bare = build_resume_entry(&session(true), now);
+        assert_eq!(bare.name, "bare");
+        assert!(matches!(bare.section, Section::Resume));
+        assert_eq!(
+            chosen(&bare.id, 0).unwrap(),
+            (build(false, None, Some("B-bare01")), false)
+        );
+        assert_eq!(build_resume_entry(&session(false), now).name, "build");
     }
 
     #[test]

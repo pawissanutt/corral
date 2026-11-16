@@ -11,6 +11,8 @@ import type { CorralOp, CorralToolSpec } from "../roles/types.ts";
 import { nestedChild } from "../extensions/codemode/child.ts";
 import { nestedCorralRead } from "../roles/common/execution.ts";
 import { CorralCallError, type CorralClient, type CorralReceipt, toolRequestId, triageDecisionRequestId } from "./corral.ts";
+import type { FleetSnapshot } from "../build/types.ts";
+import { finishHereEvidence } from "../roles/assistant/owner-action.ts";
 
 /** The pane UI a confirmation is shown in; absent when the host has no dialog-capable UI. */
 export interface ConfirmUi {
@@ -29,6 +31,7 @@ export interface ToolHost {
   readonly allowedOps: readonly CorralOp[];
   sessionId(): string;
   currentTurn(): number | undefined;
+  fleetSnapshot?(): FleetSnapshot | undefined;
   /**
    * Shows the owner `command` and journals the answer bound to `requestId`; true once the
    * answer is journaled. Only an assistant host provides it.
@@ -105,6 +108,9 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
       catch (error) {
         return failure({ code: "bad_payload", category: "invalid_arguments", effect: "not_started",
           reason: error instanceof Error ? error.message : "Invalid payload" });
+      }
+      if (spec.name === "corral_owner_action" && payload.kind === "finish_here") {
+        payload = { ...payload, ...finishHereEvidence(host.fleetSnapshot?.()) };
       }
       const send = (body: Record<string, unknown>) => host.client.call(spec.op, {
         requestId, payload: body, turn: host.currentTurn(), ...(child ? { parent: child.parent } : {}),

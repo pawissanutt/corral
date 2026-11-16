@@ -14,6 +14,7 @@ impl AppState {
             feed.board = Board::default();
             feed.inbox.clear();
             feed.plans.clear();
+            feed.builds.clear();
             feed.health = None;
             feed.drafts.clear();
             feed.commands.clear();

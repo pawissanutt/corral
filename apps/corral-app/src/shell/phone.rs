@@ -26,7 +26,9 @@ use crate::{
         nav::{ASK_BUTTON, ASK_BUTTON_LABEL},
         work::{self, MoreRow},
     },
-    screens::{self, PhoneBar, PhonePage, agents, assistant, inbox, now, plans, review, settings},
+    screens::{
+        self, PhoneBar, PhonePage, agents, assistant, builds, inbox, now, plans, review, settings,
+    },
     state::AppState,
     ui::{
         ask,
@@ -219,6 +221,7 @@ fn live_page(app: AppState, live: Live) -> PhonePage {
         Live::Session(id) => agents::live_session_phone(app, id),
         Live::Thread(id) => assistant::live_thread_phone(app, id),
         Live::Review(task) => review::live_review_phone(app, task),
+        Live::Build(id) => builds::live_build_phone(app, id),
     }
 }
 

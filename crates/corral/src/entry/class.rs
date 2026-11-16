@@ -9,6 +9,7 @@ use crate::assistant_cmd::{AssistantCmd, PermissionsCmd, ScratchCmd};
 use crate::assistant_effects_cmd::EffectsCmd;
 use crate::attention_cmd::AttentionCmd;
 use crate::automation_cmd::AutomationCmd;
+use crate::build_cmd::BuildCmd;
 use crate::completion_cmd::{CriteriaCmd, EvidenceCmd};
 use crate::dashboard_cmd::DashboardCmd;
 use crate::export_cmd::ExportCmd;
@@ -111,7 +112,9 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
                 | ScratchCmd::Promote { .. } => File,
                 ScratchCmd::List { .. } => Read,
                 // Finishing is the owner's: it reaches an assistant only as corral_owner_action.
-                ScratchCmd::Gc { .. } | ScratchCmd::Finish { .. } => Refused,
+                ScratchCmd::Gc { .. }
+                | ScratchCmd::Finish { .. }
+                | ScratchCmd::FinishHere { .. } => Refused,
             },
         },
         Cmd::Session(args) => match &args.cmd {
@@ -215,6 +218,10 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             | crate::annotation_cmd::AnnotationCmd::Reply(_)
             | crate::annotation_cmd::AnnotationCmd::Resolve(_)
             | crate::annotation_cmd::AnnotationCmd::Reopen(_) => Refused,
+        },
+        Cmd::Build { cmd } => match cmd {
+            BuildCmd::Gate { .. } | BuildCmd::Land { .. } | BuildCmd::Record { .. } => Refused,
+            BuildCmd::List { .. } | BuildCmd::Show { .. } => Read,
         },
         Cmd::Plan { cmd } => match cmd {
             PlanCmd::Progress { .. } | PlanCmd::Recovery { .. } | PlanCmd::Show { .. } => Read,

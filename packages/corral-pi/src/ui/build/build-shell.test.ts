@@ -9,6 +9,7 @@ import { KeybindingsManager } from "../../../node_modules/@earendil-works/pi-cod
 import { createChatViewport } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js";
 import { stripTerminalSequences, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { getLayoutBoxesAt, renderLayoutFrame, type LayoutFrame } from "../../../node_modules/@earendil-works/pi-tui/dist/layout.js";
+import type { BuildRecord } from "../../build/record-types.ts";
 import type {
   BoardTaskStatus, BuildPanelState, BuildSessionRecord, BuildSummary, BuildUi, ChildSnapshot, ChildState, ExitOption, ExitState,
 } from "../../build/types.ts";
@@ -38,15 +39,20 @@ function settle(): Promise<void> {
 
 const OPTIONS: readonly ExitOption[] = [
   { choice: "keep", label: "Keep on the branch", detail: "the branch stays for you" },
-  { choice: "land", label: "Land after the gate", detail: "the gate checks it, then it lands", unavailable: "Project policy requires independent review." },
-  { choice: "ship", label: "Ship through the board", detail: "a board task carries it" },
+  { choice: "land", label: "Land on main", detail: "rebase, the full gate, then a fast-forward", unavailable: "Project policy requires an approving review." },
   { choice: "iterate", label: "Keep iterating", detail: "back to the conversation" },
 ];
+const USAGE = { input: 0, output: 0 };
+const RECORD: BuildRecord = {
+  version: 1, id: "B-1", kind: "build", title: "Save slots", intent: [], created: "", updated: "", repo_root: "/w", worktree: "/w/build",
+  branch: "build/save-slots", base: "a", outcome: { state: "open" }, commits: [], slices: [], verification: [], reviews: [], messages: [], decisions: [],
+  usage: { parent: USAGE, children: USAGE, reviewers: USAGE, total: USAGE }, timeline: [], transcripts: { children: {} },
+};
 const SUMMARY: BuildSummary = { branch: "build/save-slots", base: "a", head: "b", commits: 2, files: 1, added: 3, removed: 1, dirty: false, slices: [], outside: [] };
 
 function child(id: string, state: ChildState, extra: Partial<ChildSnapshot> = {}): ChildSnapshot {
   return {
-    id, call: "call-1", title: `${id} slice`, brief: `Build the ${id} slice`, owns: ["src"], after: [], profile: "default", model: "openai/gpt-5",
+    id, kind: "slice", call: "call-1", title: `${id} slice`, brief: `Build the ${id} slice`, owns: ["src"], after: [], profile: "default", model: "openai/gpt-5",
     state, createdAt: NOW - 60_000, ...(state === "queued" ? {} : { startedAt: NOW - 50_000 }),
     edits: [], usage: { input: 10, output: 5, turns: 1, cost: 0.12 }, steers: [], pulse: [1, 2], history: "qrr", messages: [], ...extra,
   };
@@ -55,8 +61,8 @@ const asking = (id: string, askedAt: number) => child(id, "needs", {
   question: { question: "Which empty state should the picker show?", askedAt, options: [{ label: "Show a new game action" }, { label: "Hide the picker" }] },
 });
 
-/** A BuildUi over plain state: tests change the state, then `fire()` notifies the panels as the host does. */
-function fakeBuild(worktree: string, base = "a") {
+/** A BuildUi over plain state: tests change the state, then `fire()` notifies the panels as the host does. `bare` has no board and no project. */
+function fakeBuild(worktree: string, base = "a", bare = false) {
   const s = {
     children: [] as ChildSnapshot[], target: "parent", exit: { phase: "none" } as ExitState, tasks: [] as BoardTaskStatus[],
     steer: true, calls: [] as string[], listeners: new Set<() => void>(),
@@ -65,30 +71,34 @@ function fakeBuild(worktree: string, base = "a") {
   const live = (id: string) => s.children.some(entry => entry.id === id && ["queued", "running", "needs"].includes(entry.state));
   const ui: BuildUi = {
     fleet: {
-      snapshot: () => ({ children: s.children, maxParallel: 3, startedAt: NOW - 60_000 }),
+      snapshot: () => ({ children: s.children, mail: [], maxParallel: 3, startedAt: NOW - 60_000 }),
       steer: async (id, text) => { s.calls.push(`steer ${id} ${text}`); return s.steer; },
       cancel: id => { s.calls.push(`cancel ${id}`); return true; },
       setModel: (id, model) => { s.calls.push(`model ${id} ${model}`); },
       answer: (id, text) => { s.calls.push(`answer ${id} ${text}`); return true; },
       models: () => ["anthropic/claude-opus-5.5", "openai/gpt-5"],
       profiles: () => [{ name: "deep", model: "anthropic/claude-opus-5.5" }, { name: "default", model: "openai/gpt-5" }],
+      message: async () => { throw new Error("Unused fixture messaging"); },
+      roster: () => [],
+      wait: async () => [],
       subscribe,
     },
     exit: {
       options: () => OPTIONS, summary: async () => SUMMARY, state: () => s.exit,
       choose: async choice => { s.calls.push(`choose ${choice}`); return s.exit; }, subscribe,
     },
-    board: {
+    record: () => RECORD,
+    ...(bare ? {} : { board: {
       tasks: () => s.tasks, proposed: () => undefined, preview: () => Promise.withResolvers<never>().promise, file: async () => [], dismiss: () => {},
       refresh: async () => { s.calls.push("refresh"); }, subscribe,
-    },
+    } }),
     target: () => s.target,
     setTarget: target => { s.target = target === "parent" || live(target) ? target : "parent"; },
   };
   const session: BuildSessionRecord = { version: 1, id: "B-1", name: "save-slots", created: "", updated: "", repoRoot: work, worktree,
-    branch: "build/save-slots", base, here: false, project: "mitiplay", workspaceRoot: work };
+    branch: "build/save-slots", base, here: false, ...(bare ? { bare: true, baseBranch: "main" } : { project: "mitiplay", workspaceRoot: work }) };
   const state = (): BuildPanelState => ({ session, settings: { exitPolicy: "gate", maxParallel: 3, profiles: [] },
-    fleet: ui.fleet.snapshot(), target: s.target, exit: s.exit, board: s.tasks });
+    fleet: ui.fleet.snapshot(), target: s.target, exit: s.exit, record: RECORD, board: s.tasks });
   return { s, ui, state, fire: () => { for (const listener of [...s.listeners]) listener(); } };
 }
 type Build = ReturnType<typeof fakeBuild>;
@@ -192,6 +202,26 @@ test("F10 opens Board in a build session, and a click on the Board tab does the 
     expect(x).toBeGreaterThan(0);
     expect(click(frame, x, row)).toBeTrue(); expect(h.panels.workbench.view).toBe("board");
   } finally { h.stop(); }
+});
+
+test("a bare session offers no Board tab, key, view or F2 row; a build session with a board offers them all", () => {
+  for (const bare of [false, true]) {
+    const build = fakeBuild(work, "a", bare);
+    const h = shell(140, 46, build);
+    try {
+      const ids = h.panels.actions().map(action => action.id);
+      expect(ids.includes("/panels board")).toBe(!bare);
+      expect(ids.includes("build.board.refresh")).toBe(!bare);
+      expect(ids.includes("build.plan.draft")).toBe(!bare);
+      expect(ids.includes("build.finish")).toBeTrue();
+      expect(h.panels.workbench.boardView === undefined).toBe(bare);
+      h.panels.handleInput(KEY.f10);
+      expect(h.panels.workbench.view === "board").toBe(!bare);
+      h.panels.openView("board");
+      expect(h.panels.workbench.view === "board").toBe(!bare);
+      expect(h.frame().lines.length).toBeGreaterThan(0);
+    } finally { h.stop(); }
+  }
 });
 
 test("the composer is a rounded box with its title in the top border, `›` before the draft and the model bar inside", () => {

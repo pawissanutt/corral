@@ -300,6 +300,9 @@ fn list_sessions_reads_host_records_newest_first_and_skips_unresumable_ones() {
     let data = tempfile::tempdir().unwrap();
     assert!(list_sessions(data.path()).is_empty());
     let older = session_record("B-older1", "2026-11-02T10:00:00.000Z");
+    let mut bare = session_record("B-bare01", "2026-11-01T10:00:00.000Z");
+    bare["bare"] = json!(true);
+    session_file(data.path(), "B-bare01", &bare.to_string());
     session_file(data.path(), "B-older1", &older.to_string());
     let mut newer = session_record("B-newer1", "2026-11-03T10:00:00.000Z");
     newer["here"] = json!(true);
@@ -314,7 +317,7 @@ fn list_sessions_reads_host_records_newest_first_and_skips_unresumable_ones() {
     session_file(data.path(), "B-broken1", "{\"id\": \"B-broken1\"");
     let sessions = list_sessions(data.path());
     let ids: Vec<_> = sessions.iter().map(|session| session.id.as_str()).collect();
-    assert_eq!(ids, ["B-newer1", "B-older1"]);
+    assert_eq!(ids, ["B-newer1", "B-older1", "B-bare01"]);
     assert_eq!(
         sessions[0],
         BuildSessionSummary {
@@ -323,6 +326,7 @@ fn list_sessions_reads_host_records_newest_first_and_skips_unresumable_ones() {
             repo_root: "/repo".into(),
             worktree: "/repo".into(),
             here: true,
+            bare: false,
             project: Some("app".into()),
             updated: "2026-11-03T10:00:00.000Z".into(),
             exited: Some("ship".into()),
@@ -335,6 +339,64 @@ fn list_sessions_reads_host_records_newest_first_and_skips_unresumable_ones() {
     assert!(!sessions[1].here);
     assert_eq!(sessions[1].project, None);
     assert_eq!(sessions[1].exited, None);
+    assert!(!sessions[1].bare);
+    assert!(sessions[2].bare);
+}
+
+#[test]
+fn bare_command_ignores_workspace_configuration_and_omits_all_workspace_bindings() {
+    let fx = fixture();
+    let data = tempfile::tempdir().unwrap();
+    managed_assets(data.path(), true);
+    auth(data.path());
+    // A bare launch must not even parse the workspace's deliberately invalid configuration.
+    std::fs::write(
+        fx.ctx.store.root().join(".corral/corral.toml"),
+        "invalid = [",
+    )
+    .unwrap();
+    let args = super::super::pi::BareArgs {
+        model: None,
+        provider: None,
+        effort: None,
+        here: true,
+        name: Some("local".into()),
+        resume: None,
+    };
+    let (_, reader) =
+        super::super::pi::bare_command(data.path(), &args, fx.ctx.store.root(), None).unwrap();
+    let launch = message(reader);
+    assert_eq!(launch["bare"], true);
+    assert_eq!(launch["here"], true);
+    assert_eq!(launch["name"], "local");
+    assert_eq!(launch["model"], "gpt-6.1-sol");
+    assert_eq!(launch["settings"]["max_parallel"], 3);
+    assert_eq!(launch["settings"]["profiles"], json!([]));
+    for key in ["workspace_root", "project", "corral"] {
+        assert!(launch.get(key).is_none(), "bare launch carried {key}");
+    }
+    let id = "B-bare001";
+    let mut record = session_record(id, "2026-11-01T10:00:00.000Z");
+    record["bare"] = json!(true);
+    record["repoRoot"] = json!(fx.ctx.store.root());
+    record["worktree"] = json!(fx.ctx.store.root());
+    session_file(data.path(), id, &record.to_string());
+    let (_, reader) = build_command(
+        data.path(),
+        &BuildArgs {
+            resume: Some(id.into()),
+            ..BuildArgs::default()
+        },
+        data.path(),
+        None,
+        None,
+    )
+    .unwrap();
+    let resumed = message(reader);
+    assert_eq!(resumed["bare"], true);
+    for key in ["workspace_root", "project", "corral"] {
+        assert!(resumed.get(key).is_none(), "bare resume carried {key}");
+    }
 }
 
 #[test]

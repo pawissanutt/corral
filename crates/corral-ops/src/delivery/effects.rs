@@ -44,6 +44,11 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
         let Some(observed) = entry.observed else {
             continue;
         };
+        // Peer information cannot answer decisions, clear attention or wake paused work.
+        if message.kind == "agent_message" {
+            inbox.start_effect(message.seq, true, None)?;
+            continue;
+        }
         let stale = match recipient.task() {
             Some(id) => !current(
                 &ctx.store.head(id)?,

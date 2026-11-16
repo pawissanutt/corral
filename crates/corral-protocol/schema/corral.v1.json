@@ -1547,6 +1547,732 @@
         ],
         "type": "object"
       },
+      "BuildCommit": {
+        "properties": {
+          "sha": {
+            "type": "string"
+          },
+          "slice": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "BuildDecision": {
+        "properties": {
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BuildDetail": {
+        "properties": {
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commits": {
+            "description": "At most 50, in stored order (newest last).",
+            "items": {
+              "$ref": "#/components/schemas/BuildCommit"
+            },
+            "type": "array"
+          },
+          "commits_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/BuildDecision"
+            },
+            "type": "array"
+          },
+          "decisions_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BuildDiff"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "intent": {
+            "items": {
+              "$ref": "#/components/schemas/BuildIntent"
+            },
+            "type": "array"
+          },
+          "intent_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "messages": {
+            "description": "At most the newest 100, chronological by timestamp instant; source order breaks ties.",
+            "items": {
+              "$ref": "#/components/schemas/BuildMessage"
+            },
+            "type": "array"
+          },
+          "messages_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/BuildOutcome"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/BuildReview"
+            },
+            "type": "array"
+          },
+          "reviews_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slices": {
+            "items": {
+              "$ref": "#/components/schemas/BuildSlice"
+            },
+            "type": "array"
+          },
+          "slices_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/BuildTimeline"
+            },
+            "type": "array"
+          },
+          "timeline_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/BuildUsageTotals"
+          },
+          "verification": {
+            "items": {
+              "$ref": "#/components/schemas/BuildVerification"
+            },
+            "type": "array"
+          },
+          "verification_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "rev",
+          "state",
+          "outcome",
+          "intent",
+          "intent_total",
+          "commits",
+          "commits_total",
+          "slices",
+          "slices_total",
+          "verification",
+          "verification_total",
+          "reviews",
+          "reviews_total",
+          "messages",
+          "messages_total",
+          "decisions",
+          "decisions_total",
+          "usage",
+          "timeline",
+          "timeline_total"
+        ],
+        "type": "object"
+      },
+      "BuildDiff": {
+        "properties": {
+          "added": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "commits": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "removed": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "commits",
+          "files",
+          "added",
+          "removed"
+        ],
+        "type": "object"
+      },
+      "BuildFinding": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "line": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BuildResolution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "severity": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BuildIntent": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BuildMessage": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "delivery": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "from",
+          "to",
+          "text",
+          "delivery"
+        ],
+        "type": "object"
+      },
+      "BuildOutcome": {
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "base_branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "landed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "override_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "BuildResolution": {
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "BuildReview": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/BuildFinding"
+            },
+            "type": "array"
+          },
+          "head": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "round": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "round",
+          "reviewer",
+          "model",
+          "head",
+          "verdict",
+          "at",
+          "findings"
+        ],
+        "type": "object"
+      },
+      "BuildRow": {
+        "description": "A published build record, independent of task scheduling and statistics.",
+        "properties": {
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "created": {
+            "type": "string"
+          },
+          "gate_attempts": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "gate_failures": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "landed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "messages": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "override_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "review_rounds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slices": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updated": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "state",
+          "created",
+          "updated",
+          "slices",
+          "review_rounds",
+          "gate_attempts",
+          "gate_failures",
+          "messages",
+          "tokens",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "BuildSlice": {
+        "properties": {
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ended": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "outside": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "report": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "turns": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "model",
+          "state",
+          "tokens",
+          "turns",
+          "outside"
+        ],
+        "type": "object"
+      },
+      "BuildTimeline": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "phase"
+        ],
+        "type": "object"
+      },
+      "BuildUsage": {
+        "properties": {
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "input": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input",
+          "output"
+        ],
+        "type": "object"
+      },
+      "BuildUsageTotals": {
+        "properties": {
+          "children": {
+            "$ref": "#/components/schemas/BuildUsage"
+          },
+          "parent": {
+            "$ref": "#/components/schemas/BuildUsage"
+          },
+          "reviewers": {
+            "$ref": "#/components/schemas/BuildUsage"
+          },
+          "total": {
+            "$ref": "#/components/schemas/BuildUsage"
+          }
+        },
+        "required": [
+          "parent",
+          "children",
+          "reviewers",
+          "total"
+        ],
+        "type": "object"
+      },
+      "BuildVerification": {
+        "properties": {
+          "attempt": {
+            "type": "string"
+          },
+          "ended": {
+            "type": "string"
+          },
+          "failed_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "started": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "tier",
+          "head",
+          "result",
+          "started",
+          "ended"
+        ],
+        "type": "object"
+      },
       "Burnup": {
         "properties": {
           "completeness": {
@@ -2773,6 +3499,22 @@
           {
             "properties": {
               "body": {
+                "$ref": "#/components/schemas/BuildDetail"
+              },
+              "kind": {
+                "const": "build",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
                 "$ref": "#/components/schemas/PatchPage"
               },
               "kind": {
@@ -3017,6 +3759,22 @@
               },
               "kind": {
                 "const": "plan",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "build",
                 "type": "string"
               }
             },
@@ -8726,6 +9484,130 @@
           }
         ]
       },
+      "SessionAgentMessage": {
+        "properties": {
+          "at": {
+            "description": "Epoch milliseconds, as in the host fleet journal.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "delivery": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "description": "At most 2,048 Unicode characters; oldest entries are removed to fit a page.",
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "from",
+          "to",
+          "text",
+          "delivery"
+        ],
+        "type": "object"
+      },
+      "SessionChild": {
+        "description": "Bounded app projection; no child instructions, transcripts, reports or paths.",
+        "properties": {
+          "activity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "question": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "started_at": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionChildVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`approve` or `changes` when a review child records its verdict."
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "state",
+          "model",
+          "tokens"
+        ],
+        "type": "object"
+      },
+      "SessionChildVerdict": {
+        "enum": [
+          "approve",
+          "changes"
+        ],
+        "type": "string"
+      },
       "SessionCommand": {
         "oneOf": [
           {
@@ -9010,6 +9892,41 @@
           "relaunch",
           "keys",
           "take_over"
+        ],
+        "type": "object"
+      },
+      "SessionFleet": {
+        "properties": {
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/SessionChild"
+            },
+            "type": "array"
+          },
+          "max_parallel": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "messages": {
+            "description": "Newest at most 100 entries, in journal order.",
+            "items": {
+              "$ref": "#/components/schemas/SessionAgentMessage"
+            },
+            "type": "array"
+          },
+          "messages_total": {
+            "description": "Includes messages removed by journal retention and page byte bounds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "children",
+          "messages",
+          "messages_total",
+          "max_parallel"
         ],
         "type": "object"
       },
@@ -9750,6 +10667,19 @@
             "type": "object"
           },
           {
+            "description": "The optional page-level fleet is a current replacement, not a turn delta.",
+            "properties": {
+              "kind": {
+                "const": "live_fleet",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "kind": {
                 "const": "other",
@@ -10411,6 +11341,47 @@
               },
               "rows": {
                 "items": {
+                  "$ref": "#/components/schemas/BuildRow"
+                },
+                "type": "array"
+              },
+              "topic": {
+                "const": "builds",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One bounded page in flight; `left` contains removed row IDs.",
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "items": {
                   "$ref": "#/components/schemas/AgentRow"
                 },
                 "type": "array"
@@ -10623,6 +11594,17 @@
                   "$ref": "#/components/schemas/SessionLiveEvent"
                 },
                 "type": "array"
+              },
+              "fleet": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SessionFleet"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Current fleet replacement for capable clients; omission means no current fleet."
               },
               "gap": {
                 "anyOf": [
@@ -11980,6 +12962,7 @@
           "classic",
           "inbox",
           "plans",
+          "builds",
           "agents",
           "assistant",
           "usage",
@@ -12986,7 +13969,8 @@
             8,
             9,
             10,
-            11
+            11,
+            12
           ]
         },
         {
@@ -13019,7 +14003,8 @@
             8,
             9,
             10,
-            11
+            11,
+            12
           ]
         },
         {
@@ -13042,8 +14027,23 @@
             "type": "array"
           },
           "x-required-in": [
-            10
+            11
           ]
+        },
+        {
+          "name": "fleet",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionFleet"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Current fleet replacement for capable clients; omission means no current fleet."
+          }
         },
         {
           "name": "gap",
@@ -13089,7 +14089,8 @@
             6,
             7,
             8,
-            9
+            9,
+            10
           ]
         },
         {
@@ -13123,7 +14124,8 @@
             8,
             9,
             10,
-            11
+            11,
+            12
           ]
         },
         {
@@ -13171,6 +14173,12 @@
               },
               {
                 "items": {
+                  "$ref": "#/components/schemas/BuildRow"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
                   "$ref": "#/components/schemas/AgentRow"
                 },
                 "type": "array"
@@ -13210,7 +14218,8 @@
             6,
             7,
             8,
-            9
+            9,
+            10
           ]
         },
         {
@@ -13220,9 +14229,9 @@
             "type": "string"
           },
           "x-required-in": [
-            9,
             10,
-            11
+            11,
+            12
           ]
         },
         {
@@ -13276,6 +14285,10 @@
               },
               {
                 "const": "plans",
+                "type": "string"
+              },
+              {
+                "const": "builds",
                 "type": "string"
               },
               {
@@ -14183,7 +15196,7 @@
             "$ref": "#/components/schemas/TimelineBy"
           },
           "x-required-in": [
-            9
+            10
           ]
         },
         {
@@ -14193,7 +15206,7 @@
             "type": "string"
           },
           "x-required-in": [
-            13
+            14
           ]
         },
         {
@@ -14203,8 +15216,8 @@
             "type": "string"
           },
           "x-required-in": [
-            3,
-            9
+            4,
+            10
           ]
         },
         {
@@ -14217,10 +15230,11 @@
             1,
             2,
             3,
-            6,
+            4,
             7,
             8,
-            13
+            9,
+            14
           ]
         },
         {
@@ -14231,7 +15245,7 @@
           },
           "x-required-in": [
             0,
-            12
+            13
           ]
         },
         {
@@ -14249,6 +15263,10 @@
               },
               {
                 "const": "plan",
+                "type": "string"
+              },
+              {
+                "const": "build",
                 "type": "string"
               },
               {
@@ -14317,7 +15335,7 @@
             "type": "string"
           },
           "x-required-in": [
-            5
+            6
           ]
         },
         {
@@ -14327,7 +15345,7 @@
             "type": "string"
           },
           "x-required-in": [
-            11
+            12
           ]
         },
         {
@@ -14337,7 +15355,7 @@
             "type": "string"
           },
           "x-required-in": [
-            10
+            11
           ]
         },
         {
@@ -14347,9 +15365,9 @@
             "type": "string"
           },
           "x-required-in": [
-            4,
             5,
-            12
+            6,
+            13
           ]
         },
         {
@@ -14359,8 +15377,8 @@
             "type": "string"
           },
           "x-required-in": [
-            3,
-            9
+            4,
+            10
           ]
         },
         {
@@ -14370,7 +15388,7 @@
             "type": "string"
           },
           "x-required-in": [
-            7
+            8
           ]
         }
       ],

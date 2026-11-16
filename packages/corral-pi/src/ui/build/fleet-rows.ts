@@ -1,12 +1,14 @@
-// Build children as agents-view rows, their actions over FleetControl, and their edits as Changes authors.
-// Every value comes from the fleet snapshot; unknown cost and context stay absent, never zero.
+// Fleet children (a build session's, or any other role's) as agents-view rows, their actions over FleetControl, and their edits as Changes authors.
+// Every value comes from the fleet snapshot; unknown cost and context stay absent, never zero. A child that is not a
+// slice names its kind beside its profile, a review child shows its verdict once recorded, and each child carries the
+// messages it exchanged with other agents for its conversation.
 import type { AgentActions, AgentExtras, AgentNote, AgentRow, AgentSpan, AgentEnd, AgentState } from "../agents-model.ts";
-import { agentStatus, duration } from "../agents-model.ts";
+import { agentMail, agentStatus, duration } from "../agents-model.ts";
 import type { ChangeAuthor } from "../changes-view.ts";
 import { helperText } from "../helper-chat.ts";
-import { plainLabel } from "../panels-view.ts";
+import { plainLabel, type PanelSnapshot } from "../panels-view.ts";
 import { LIVE_CHILD_STATES } from "../../build/types.ts";
-import type { BuildPanelState, ChildSnapshot, ChildState, FleetControl, FleetSnapshot } from "../../build/types.ts";
+import type { ChildSnapshot, ChildState, FleetControl, FleetSnapshot, ReviewVerdict } from "../../build/types.ts";
 import { childHue, childIdOf, childKey } from "./contract.ts";
 
 const BUCKET = 5000, HISTORY_CAP = 240;
@@ -25,6 +27,18 @@ function editedPaths(child: ChildSnapshot): { readonly files: readonly string[];
 /** The first dependency that has not finished, or undefined when only a free slot is missing. */
 function waitingFor(child: ChildSnapshot, fleet: FleetSnapshot): string | undefined {
   return child.after.find(id => fleet.children.find(other => other.id === id)?.state !== "done");
+}
+/** `approved · no findings` or `changes requested · 1 blocker, 2 major`. */
+export function verdictText(verdict: ReviewVerdict): string {
+  const counts = (["blocker", "major", "minor"] as const).flatMap(severity => {
+    const count = verdict.findings.filter(finding => finding.severity === severity).length;
+    return count ? [`${count} ${severity}`] : [];
+  });
+  return (verdict.verdict === "approve" ? "approved" : "changes requested") + " · " + (counts.length ? counts.join(", ") : "no findings");
+}
+/** The profile column: the profile, behind the kind when the child is not a slice (`review · deep`); an absent kind is a slice. */
+export function childProfile(child: { readonly kind?: string; readonly profile: string }): string {
+  return child.kind === "explore" || child.kind === "review" ? `${child.kind} · ${clean(child.profile)}` : clean(child.profile);
 }
 
 /** One to one: queued, running, needs, done, failed, cancelled. */
@@ -56,6 +70,7 @@ export function childActivity(child: ChildSnapshot, fleet: FleetSnapshot): strin
       return blocker === undefined ? "waits for a free slot" : `waits for ${clean(blocker)}`;
     }
     case "done": {
+      if (child.verdict) return verdictText(child.verdict);
       const { files, outside } = editedPaths(child), report = firstLine(child.report);
       return [`${files.length} file${files.length === 1 ? "" : "s"}`, ...(outside.length ? [`${outside.length} outside its files`] : []), ...(report ? [report] : [])].join(" · ");
     }
@@ -97,16 +112,19 @@ export function childSpans(child: ChildSnapshot, origin: number, now: number): {
   return { spans };
 }
 
-export function childRow(child: ChildSnapshot, fleet: FleetSnapshot, now: number): AgentRow {
-  const id = clean(child.id), state = childState(child.state), { files, outside } = editedPaths(child);
+/** `control` false (no `FleetControl` in this session): the row is read-only, offering no steer, cancel, model or answer. */
+export function childRow(child: ChildSnapshot, fleet: FleetSnapshot, now: number, control = true): AgentRow {
+  const id = clean(child.id), state = childState(child.state), { files, outside } = editedPaths(child), verdict = child.verdict;
   const status = agentStatus(state, child.startedAt === undefined ? undefined : duration((child.endedAt ?? now) - child.startedAt));
   const pending = child.pendingModel === undefined ? undefined : shortModel(child.pendingModel);
-  const meta = [`model ${clean(child.model)}`, ...(child.effort ? [`effort ${clean(child.effort)}`] : []), `call ${clean(child.call)}`,
+  const meta = [`kind ${child.kind}`, `model ${clean(child.model)}`, ...(child.effort ? [`effort ${clean(child.effort)}`] : []), `call ${clean(child.call)}`,
     ...(child.sessionFile ? [`session file ${clean(child.sessionFile)}`] : [])];
   const blocker = child.state === "queued" ? waitingFor(child, fleet) : undefined;
-  // Detail order: the live wait (muted), a pending model, edits outside its files, the error.
+  // Detail order: the live wait (muted), the review verdict, a pending model, edits outside its files, the error.
   const notes: AgentNote[] = [
     ...(child.state === "queued" ? [{ text: blocker === undefined ? `Waiting for a free slot · ${fleet.maxParallel} at once` : `Waiting for ${clean(blocker)}`, tone: "muted" as const }] : []),
+    ...(verdict ? [{ text: `Verdict: ${verdictText(verdict)}` + (firstLine(verdict.summary) ? ` · ${firstLine(verdict.summary)}` : ""),
+      tone: verdict.verdict === "approve" ? "success" as const : "warning" as const }] : []),
     ...(child.pendingModel ? [{ text: `Model change pending: ${clean(child.pendingModel)}, from its next request`, tone: "accent" as const }] : []),
     ...(outside.length ? [{ text: "Edited outside its files: " + outside.map(clean).join(", "), tone: "warning" as const }] : []),
     ...(child.error ? [{ text: "Error: " + clean(child.error), tone: "error" as const }] : []),
@@ -115,7 +133,7 @@ export function childRow(child: ChildSnapshot, fleet: FleetSnapshot, now: number
   const { spans, end } = childSpans(child, fleet.startedAt ?? child.createdAt, now);
   return {
     key: childKey(child.id), source: "child", id: child.id, name: id, title: firstLine(child.title), hue: childHue(fleet, child.id),
-    profile: clean(child.profile), model: shortModel(child.model), ...(pending === undefined ? {} : { pendingModel: pending }),
+    profile: childProfile(child), model: shortModel(child.model), ...(pending === undefined ? {} : { pendingModel: pending }),
     state, status, createdAt: child.createdAt,
     ...(child.startedAt === undefined ? {} : { startedAt: child.startedAt }),
     ...(child.endedAt === undefined ? {} : { endedAt: child.endedAt }),
@@ -129,10 +147,12 @@ export function childRow(child: ChildSnapshot, fleet: FleetSnapshot, now: number
     spans, ...(end ? { end } : {}),
     owns: child.owns.map(clean), after: child.after.map(clean), steers: child.steers.map(clean),
     ...(child.steeredAt === undefined ? {} : { steeredAt: child.steeredAt }),
+    mail: agentMail(child.id, fleet.mail, { from: child.createdAt, ...(child.endedAt === undefined ? {} : { to: child.endedAt }) },
+      other => fleet.children.some(entry => entry.id === other) ? childHue(fleet, other) : undefined),
     ...(child.question ? { question: clean(child.question.question) } : {}),
     meta, notes,
-    capabilities: { open: true, transcript: false, steer: true, cancel: true, model: true, answer: child.state === "needs" },
-    ...(finished ? { disabled: { steer: "not running", cancel: "not running", model: "not running" } }
+    capabilities: control ? { open: true, transcript: false, steer: true, cancel: true, model: true, answer: child.state === "needs" } : { open: true, transcript: false },
+    ...(!control ? {} : finished ? { disabled: { steer: "not running", cancel: "not running", model: "not running" } }
       : child.state === "queued" ? { disabled: { steer: "not started yet" } } : {}),
     conversation: { request: child.id, prompt: child.brief, phase: child.state, messages: child.messages,
       ...(child.report === undefined ? {} : { result: child.report }),
@@ -140,22 +160,29 @@ export function childRow(child: ChildSnapshot, fleet: FleetSnapshot, now: number
   };
 }
 
-export function childRows(fleet: FleetSnapshot, now: number): AgentRow[] {
-  return fleet.children.map(child => childRow(child, fleet, now));
+export function childRows(fleet: FleetSnapshot, now: number, control = true): AgentRow[] {
+  return fleet.children.map(child => childRow(child, fleet, now, control));
 }
 
-/** `{ agents: childRows(...), maxParallel: fleet.maxParallel, origin: fleet.startedAt }`; undefined outside build. */
-export function fleetExtras(state: BuildPanelState | undefined, now: number): AgentExtras | undefined {
-  if (!state) return undefined;
-  const fleet = state.fleet;
-  return { agents: childRows(fleet, now), maxParallel: fleet.maxParallel, ...(fleet.startedAt === undefined ? {} : { origin: fleet.startedAt }) };
+/** The fleet the Agents page shows: a build session's, else the snapshot's once it has children or messages. */
+export function shownFleet(snapshot: PanelSnapshot | null | undefined): FleetSnapshot | undefined {
+  if (snapshot?.build) return snapshot.build.fleet;
+  const fleet = snapshot?.fleet;
+  return fleet && (fleet.children.length || fleet.mail.length) ? fleet : undefined;
+}
+
+/** `{ agents: childRows(...), maxParallel, messages, origin: fleet.startedAt }`; undefined without a fleet. */
+export function fleetExtras(fleet: FleetSnapshot | undefined, now: number, control = true): AgentExtras | undefined {
+  if (!fleet) return undefined;
+  return { agents: childRows(fleet, now, control), maxParallel: fleet.maxParallel, ...(fleet.mail.length ? { messages: fleet.mail.length } : {}),
+    ...(fleet.startedAt === undefined ? {} : { origin: fleet.startedAt }) };
 }
 
 export interface ChildActionHost {
   readonly fleet: FleetControl;
-  /** `ui.setTarget(id)`, then logical focus to the composer. */
+  /** Gives the child a message: a build session points the composer at it, any other session asks for the text. */
   point(id: string): void;
-  /** Docks the child's question dialog. */
+  /** Asks for the child's answer: a build session docks its question dialog, any other session opens a prompt. */
   question(id: string): void;
   /** Pi's confirm dialog. */
   confirm(title: string, message: string): Promise<boolean>;

@@ -11,13 +11,14 @@ Project management control plane for agentic coding, inside herdr
 Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
+  ask                     Send a question or idea to the assistant or PM
   assistant               Inspect and manage durable assistant sessions (no coding slot)
   session                 Control task and PM sessions
   mode                    Select Assist or explicitly confirm scoped Autopilot for this workspace
   inbox                   Inspect and durably manage agent inbox messages without delivering them
   attention               Inspect current task conditions and progress without changing state
   agent                   corral-pi agent host: authenticated host calls, launch, install and recovery
-  pi                      Start corral-pi here: the launcher on a terminal, an assistant with --assistant, a build session with --build, the PM with --pm, or plain Pi with --bare
+  pi                      Start corral-pi: the launcher, --build, --bare (a local build session without corral), --assistant, --pm or --resume
   question                Triage corral-pi agent questions by key and revision: list, show, answer, escalate, cancel, deadline
   automation              Preview, explicitly confirm, or inspect finite operating authority
   selection               Read current selection guidance or save a validated Auto receipt; JSON output
@@ -33,6 +34,7 @@ Commands:
   memory                  Read and explicitly edit scoped workspace memory; JSON output
   annotation              Read candidate-bound review threads or author them as the owner
   plan                    Submit, review and approve implementation plans independently of code review
+  build                   Gate, land and publish interactive build sessions without task-board handoff
   build-identity          Print the immutable landed identity embedded by a post-land install
   hooks                   Inspect, reconcile and retry durable project post-land operations
   run                     Persist run progress, checkpoints, waits, decisions and resume receipts
@@ -105,6 +107,23 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
   -V, --version      Print version
+```
+
+## `corral ask`
+
+```text
+Send a question or idea to the assistant or PM
+
+Usage: corral ask [OPTIONS] <TEXT|->
+
+Arguments:
+  <TEXT|->  Message text, or - to read it from standard input
+
+Options:
+      --pm           Send to the PM inbox instead of the assistant quick thread
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --file <PATH>  Attach an image or UTF-8 file (assistant only; repeat for multiple files)
+  -h, --help         Print help
 ```
 
 ## `corral assistant`
@@ -512,13 +531,14 @@ Scratch worktrees for spikes and co-work
 Usage: corral assistant scratch [OPTIONS] <COMMAND>
 
 Commands:
-  new      Create a scratch worktree at <repo>/.worktrees/A-<n>-<slug> on corral/A-<n>/<slug>
-  list     List scratch worktrees (all sessions for the owner unless --session)
-  discard  Remove a scratch and its branch, saving any work as a session diff artifact first
-  promote  File a Backlog task with the scratch diff attached; the scratch stays unchanged
-  finish   Submit a scratch as a task or repair; confirmed finishes require gate and independent review (owner)
-  gc       Collect ended or idle hostless sessions' scratch, saving work first (owner or PM)
-  help     Print this message or the help of the given subcommand(s)
+  new          Create a scratch worktree at <repo>/.worktrees/A-<n>-<slug> on corral/A-<n>/<slug>
+  list         List scratch worktrees (all sessions for the owner unless --session)
+  discard      Remove a scratch and its branch, saving any work as a session diff artifact first
+  promote      File a Backlog task with the scratch diff attached; the scratch stays unchanged
+  finish       Submit a scratch as a task or repair; confirmed finishes require gate and independent review (owner)
+  finish-here  Gate and land a scratch in this session, recording a build rather than a board task (owner)
+  gc           Collect ended or idle hostless sessions' scratch, saving work first (owner or PM)
+  help         Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -618,6 +638,31 @@ Options:
       --session <SESSION>
       --json
   -h, --help                 Print help
+```
+
+#### `corral assistant scratch finish-here`
+
+```text
+Gate and land a scratch in this session, recording a build rather than a board task (owner)
+
+Usage: corral assistant scratch finish-here [OPTIONS] --title <TITLE> --expected-head <SHA> <SLUG>
+
+Arguments:
+  <SLUG>
+
+Options:
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --title <TITLE>
+
+      --expected-head <SHA>
+
+      --override-reason <OVERRIDE_REASON>
+
+      --session <SESSION>
+
+  -h, --help
+          Print help
 ```
 
 #### `corral assistant scratch gc`
@@ -1271,7 +1316,7 @@ Run one corral-pi host request: a JSON envelope on stdin, one JSON receipt on st
 Usage: corral agent call [OPTIONS] --op <OP>
 
 Options:
-      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, notes, pm_action, pm_shadow, checkpoint, evidence, artifact, gate, gate_triage, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_content, read_lessons, read_annotations, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict, owner_action, owner_ask, owner_prompt, idea_file, write_permission, assistant_plan, assistant_plan_review, assistant_handoff, memory_list, memory_read, memory_put, memory_remove]
+      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, peer_send, peer_roster, ask, withdraw, wait, progress, todo, notes, pm_action, pm_shadow, checkpoint, evidence, artifact, gate, gate_triage, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_content, read_lessons, read_annotations, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict, owner_action, owner_ask, owner_prompt, idea_file, write_permission, assistant_plan, assistant_plan_review, assistant_handoff, memory_list, memory_read, memory_put, memory_remove]
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -1413,25 +1458,25 @@ Options:
 ## `corral pi`
 
 ```text
-Start corral-pi here: the launcher on a terminal, an assistant with --assistant, a build session with --build, the PM with --pm, or plain Pi with --bare
+Start corral-pi: the launcher, --build, --bare (a local build session without corral), --assistant, --pm or --resume
 
 Usage: corral pi [OPTIONS]
 
 Options:
-      --bare                 Plain unbound Pi in the current directory: no store, binding or corral tools
+      --bare                 Open a build session without corral: no workspace or project, board or gate; its record stays local. Accepts --here, --name, --model, --provider and --effort. Resume later with --resume B-<id> (without --bare)
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
       --pm                   Open the workspace PM in this pane, or take over a dead one
       --assistant            Open an assistant directly, without the launcher
       --build                Open an untethered build session: parallel agents in one worktree, nothing reaches the board until you choose an exit
-      --here                 Write in the current checkout and branch instead of a new build worktree
-      --name <NAME>          Name the build session; a new worktree is `.worktrees/build-<NAME>` on branch `build/<NAME>`
+      --here                 With --build or --bare, write in the current checkout and branch instead of a new worktree
+      --name <NAME>          Name a --build or --bare session; a new worktree is `.worktrees/build-<NAME>` on branch `build/<NAME>`
   -c, --continue             Continue the previous PM conversation instead of starting fresh
-      --resume <ID>          Resume stopped assistant session A-<n> (fencing its previous generation) or build session B-<id> in this pane (inside an assistant, /resume picks one)
+      --resume <ID>          Resume a stopped assistant A-<n> (fencing its previous generation), build B-<id>, or local bare B-<id> session in this pane
       --over-cap             Open an assistant even when assistant.max_live assistants are already live
       --task <TASK-ID>       Preload bounded read-only context for this task in a new assistant
-      --model <MODEL>        Model to run instead of the profile's (bare: Pi's default for the provider)
+      --model <MODEL>        Override the model (bare defaults to the built-in model for its provider)
       --provider <PROVIDER>  Provider whose `corral agent login` runs the session (bare default: openai-codex) [possible values: openai-codex, anthropic]
-      --effort <EFFORT>      Reasoning effort instead of the profile's
+      --effort <EFFORT>      Override reasoning effort (also accepted with --bare)
   -h, --help                 Print help
 ```
 
@@ -2956,6 +3001,105 @@ Options:
   -h, --help         Print help
 ```
 
+## `corral build`
+
+```text
+Gate, land and publish interactive build sessions without task-board handoff
+
+Usage: corral build [OPTIONS] <COMMAND>
+
+Commands:
+  gate    Run a project's configured gate on a clean session candidate, without a task slot
+  land    Owner only: fast-forward the project base using an exact passing full gate
+  record  Owner only: publish the session's versioned build record
+  list    List published build session records
+  show    Read a published build session record
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral build gate`
+
+```text
+Run a project's configured gate on a clean session candidate, without a task slot
+
+Usage: corral build gate [OPTIONS] --session <SESSION> --worktree <WORKTREE> --project <PROJECT> --tier <TIER>
+
+Options:
+      --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --session <SESSION>
+      --worktree <WORKTREE>
+      --project <PROJECT>
+      --tier <TIER>          [possible values: quick, full]
+      --base <BASE>
+      --json
+  -h, --help                 Print help
+```
+
+### `corral build land`
+
+```text
+Owner only: fast-forward the project base using an exact passing full gate
+
+Usage: corral build land [OPTIONS] --session <SESSION> --worktree <WORKTREE> --project <PROJECT> --expected-head <EXPECTED_HEAD> --gate-attempt <GATE_ATTEMPT>
+
+Options:
+      --root <ROOT>                    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --session <SESSION>
+      --worktree <WORKTREE>
+      --project <PROJECT>
+      --expected-head <EXPECTED_HEAD>
+      --gate-attempt <GATE_ATTEMPT>
+      --json
+  -h, --help                           Print help
+```
+
+### `corral build record`
+
+```text
+Owner only: publish the session's versioned build record
+
+Usage: corral build record [OPTIONS] --file <FILE>
+
+Options:
+      --file <FILE>
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help         Print help
+```
+
+### `corral build list`
+
+```text
+List published build session records
+
+Usage: corral build list [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral build show`
+
+```text
+Read a published build session record
+
+Usage: corral build show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
 ## `corral build-identity`
 
 ```text
@@ -3620,12 +3764,15 @@ Options:
       --storage
           Artifact storage totals per task and workspace, including limit warnings
 
+      --builds
+          Report tracked build records, separately from task statistics
+
       --by <BY>
           [default: profile]
           [possible values: profile, model, kind, project, task, size, mode, day]
 
       --since <SINCE>
-          Include runs dispatched in the last N days, hours or weeks (e.g. 30d); with --gates, gates started since then or since an RFC 3339 timestamp
+          Include runs or builds created in the last N days, hours or weeks (e.g. 30d); with --gates, gates started since then or since an RFC 3339 timestamp
 
       --gates
           Gate report per cohort, tier and destination instead of run groups.

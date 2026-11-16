@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
@@ -19,6 +19,22 @@ import { nextEvent } from "./support/wait.ts";
 import { RecordingTerminal } from "./support/panel-terminal.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
 import { PACKAGE_ROOT } from "./support/fixture-install.ts";
+import type { FleetSnapshot } from "../src/build/types.ts";
+
+function canonicalPreparations(client: CorralClient): Map<string, string> {
+  const references = new Map<string, string>();
+  const call = client.call.bind(client);
+  client.call = async (op, input) => {
+    const receipt = await call(op, input);
+    if (receipt.state === "committed" && input.payload.kind === "auxiliary" && input.payload.action === "prepare") {
+      const result = receipt.result as { session_id?: unknown; session_file?: unknown };
+      if (typeof result.session_id !== "string" || typeof result.session_file !== "string") throw new Error("Canonical prepare reference missing");
+      references.set(result.session_id, result.session_file);
+    }
+    return receipt;
+  };
+  return references;
+}
 
 test("host wires explore/oracle to bound runtime and keeps child restrictions after reload", async () => {
   const assets = buildFixtureInstall();
@@ -43,10 +59,8 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     const corral = writeFakeCorral(cwd);
     // The real operation's path-selection/admission/replay are tested in Rust; this fake supplies
     // canonical-shaped references while exercising the complete SDK host/child wiring offline.
-    writeFileSync(corral.path, readFileSync(corral.path, "utf8").replace("result: { op: envelope.op,", `result: { op: envelope.op,
-      ...(envelope.payload.kind === "auxiliary" ? { session_id: envelope.payload.request,
-        session_file: join(dir, envelope.payload.request + ".jsonl"), generation: 1 } : {}),`));
     const client = new CorralClient({ corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
+    const preparations = canonicalPreparations(client);
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", modules: { ...modules, role: workerRole(PACKAGE_ROOT) },
       client, events, network, capabilities: { catalog: 7, digest: "a".repeat(64), preset: "full", enabled: ["subagents", "oracle"] },
       guidance: { projectText: false, settings: { subagents: { max_parallel: 3, model: "gpt-6-luna", service_tier: "priority", max_turns: 12, timeout_secs: 30 },
@@ -65,8 +79,12 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
       markdownTheme: sdk.getMarkdownTheme(), markdownTransformers: [], renderers: name => sdk.withBuiltInRenderers(name, undefined) }));
     const screen = () => stripTerminalSequences(renderLayoutFrame(root, 80, 70, () => {}).lines.join("\n"));
     workbench.openAgents(); expect(screen()).toContain("No agents yet.");
+    let previousExplore: string | undefined;
     for (const stage of ["startup", "reload"]) {
-      if (stage === "reload") await host.session.reload();
+      if (stage === "reload") {
+        await host.session.reload();
+        expect((host.state().fleet as FleetSnapshot | null)?.children.some(child => child.call === previousExplore)).toBeTrue();
+      }
       fixtureTransport().script([
         { toolCalls: [{ callId: `${stage}-explore`, name: "explore", arguments: { prompt: "research only" } }] },
         { toolCalls: [{ callId: "write", name: "write", arguments: { path: "bad", content: "bad" } }] },
@@ -89,12 +107,16 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
       expect(screen()).toContain("oracle advice"); expect(screen()).toContain("consult only");
       const exploreReference = corral.calls().filter(call => call.envelope.payload.usage_kind === "explore" && call.envelope.payload.action === "prepare").at(-1)?.envelope.payload.request;
       if (typeof exploreReference !== "string") throw new Error("Explore reference missing");
-      workbench.openAgent(`helper:${exploreReference}`);
-      expect(screen()).toContain("child findings"); expect(screen()).toContain("research only");
-      // Ctrl+O expands the native tool cards, then folds them again for the next stage.
-      workbench.handleInput("\x0f");
-      expect(screen()).toContain("Tool write not found");
-      workbench.handleInput("\x0f");
+      const fleet = host.state().fleet as FleetSnapshot | null;
+      const researchResult = results.find(message => message.role === "toolResult" && message.toolName === "explore");
+      if (researchResult?.role !== "toolResult") throw new Error("Explore tool result missing");
+      const explore = fleet?.children.find(child => child.call === researchResult.toolCallId);
+      previousExplore = researchResult.toolCallId;
+      expect(explore).toMatchObject({ kind: "explore", state: "done", brief: "research only", report: "child findings" });
+      expect(preparations.has(exploreReference)).toBeTrue();
+      expect(explore?.sessionFile).toBe(preparations.get(exploreReference));
+      expect(explore?.messages.some(message => message.text.includes("child findings"))).toBeTrue();
+      expect(explore?.messages.some(message => message.tool === "write" && message.text.includes("Tool write not found"))).toBeTrue();
       expect(requestCount).toBe(beforeInspection); // Inspecting never invokes a model or resumes a child.
     }
     const researchRequests = requests.filter(request => request.model === "gpt-6-luna");
@@ -121,6 +143,7 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     expect(requestCount - before).toBe(2);
     expect(host.state().auxiliary).toEqual({ explore: { running: 0, queued: 0 }, oracle: { running: 0, queued: 0 },
       web_search: { running: 0, queued: 0 }, stopped: true });
+    expect((host.state().fleet as FleetSnapshot | null)?.children.every(child => !["running", "queued", "needs"].includes(child.state))).toBeTrue();
     const terminal = corral.calls().filter((c) => c.envelope.payload.kind === "auxiliary" && c.envelope.payload.action === "finish");
     expect(terminal.at(-1)?.envelope.payload.outcome).toBe("uncertain");
     const budget = corral.calls().filter((c) => c.envelope.payload.kind === "budget");
@@ -130,5 +153,66 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     console.log("host: explore/oracle and read-only child guard survive reload; parent stop cancels streaming child without follow-up; generation-linked terminal records");
   } finally {
     await host?.close(); globalThis.fetch = originalFetch; assets.cleanup(); rmSync(cwd, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("bound worker task slices commit prepare, started and finish before collection", async () => {
+  const assets = buildFixtureInstall();
+  const cwd = mkdtempSync(join(tmpdir(), "corral-slice-host-"));
+  const originalFetch = globalThis.fetch;
+  let host: HostSession | undefined;
+  let unsubscribe: (() => void) | undefined;
+  const collecting = Promise.withResolvers<void>();
+  try {
+    const modules = await loadModules(assets.dir, "worker");
+    const transport = modules.auth.transport?.(authContext());
+    if (!transport) throw new Error("fixture transport missing");
+    const network = guardedFetch(transport);
+    globalThis.fetch = network.fetch;
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-571", run: "R1" };
+    const events = new EventLog(1);
+    const corral = writeFakeCorral(cwd);
+    const client = new CorralClient({ corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
+    const preparations = canonicalPreparations(client);
+    host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol",
+      modules: { ...modules, role: workerRole(PACKAGE_ROOT) }, ui: "plain", client, events, network,
+      capabilities: { catalog: 7, digest: "a".repeat(64), preset: "full", enabled: ["fleet"] },
+      guidance: { projectText: false, settings: {} },
+      sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")),
+    });
+    await host.session.bindExtensions({});
+    await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+    expect(host.loadout).toContain("task");
+    unsubscribe = host.session.subscribe(event => {
+      if (event.type === "tool_execution_start" && event.toolName === "agent_wait") collecting.resolve();
+    });
+    fixtureTransport().script([
+      { match: "slice lifecycle", toolCalls: [{ callId: "slice-task", name: "task", arguments: {
+        agents: [{ id: "slice-one", kind: "slice", title: "One slice", brief: "slice child brief", owns: [] }],
+      } }] },
+      { match: "slice lifecycle", toolCalls: [{ callId: "slice-wait", name: "agent_wait", arguments: { ids: ["slice-one"] } }] },
+      { match: "slice child brief", chunks: ["slice ", "completed"], afterFirstChunk: () => collecting.promise },
+      { match: "slice lifecycle", text: "parent finished" },
+    ]);
+    const ended = nextEvent(events, event => event.kind === "turn_ended");
+    await host.submit({ text: "slice lifecycle", busyPolicy: "prompt", idempotencyKey: "slice", origin: "test" }, "rq-slice");
+    await ended;
+    await host.drained();
+    const records = corral.calls().filter(call => call.envelope.payload.kind === "auxiliary");
+    expect(records.map(call => call.envelope.payload.action)).toEqual(["prepare", "started", "finish"]);
+    expect(records.every(call => call.envelope.payload.usage_kind === "slice" && call.envelope.identity.generation === 1)).toBeTrue();
+    expect(new Set(records.map(call => call.envelope.payload.request)).size).toBe(1);
+    expect(records.at(-1)?.envelope.payload.outcome).toBe("completed");
+    const request = records[0]?.envelope.payload.request;
+    if (typeof request !== "string") throw new Error("Slice reference missing");
+    expect(preparations.has(request)).toBeTrue();
+    expect((host.state().fleet as FleetSnapshot | null)?.children).toMatchObject([
+      { id: "slice-one", kind: "slice", state: "done", report: "slice completed", sessionFile: preparations.get(request) },
+    ]);
+    const results = host.session.messages.filter(message => message.role === "toolResult" && message.toolCallId.startsWith("slice-"));
+    expect(results.map(message => message.role === "toolResult" && message.isError)).toEqual([false, false]);
+  } finally {
+    collecting.resolve(); unsubscribe?.(); await host?.close();
+    globalThis.fetch = originalFetch; assets.cleanup(); rmSync(cwd, { recursive: true, force: true });
   }
 }, 30_000);

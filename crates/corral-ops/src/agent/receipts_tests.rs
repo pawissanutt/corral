@@ -113,12 +113,20 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
         let bound = committed(&hello(&fx, &host));
         let landed = match target {
             BindTarget::Planner { .. } | BindTarget::PlanReviewer { .. } => {
-                json!(["hello", "event", "receipt_lookup"])
+                json!([
+                    "hello",
+                    "event",
+                    "receipt_lookup",
+                    "peer_send",
+                    "peer_roster"
+                ])
             }
             BindTarget::Assistant { .. } => json!([
                 "hello",
                 "event",
                 "receipt_lookup",
+                "peer_send",
+                "peer_roster",
                 "todo",
                 "gate_triage",
                 "read_annotations",
@@ -139,6 +147,8 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "hello",
                 "event",
                 "receipt_lookup",
+                "peer_send",
+                "peer_roster",
                 "todo",
                 "notes",
                 "pm_action",
@@ -171,6 +181,8 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "hello",
                 "event",
                 "receipt_lookup",
+                "peer_send",
+                "peer_roster",
                 "ask",
                 "withdraw",
                 "wait",
@@ -195,6 +207,8 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                     "hello",
                     "event",
                     "receipt_lookup",
+                    "peer_send",
+                    "peer_roster",
                     "ask",
                     "withdraw",
                     "evidence",

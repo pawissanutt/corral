@@ -154,7 +154,7 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
       return [`Done in scratch ${slug}; candidate ${sha}.`, `Changed: ${stat}`, `Checks: test -s USAGE.md ${check}.`,
         "Risks: documentation only."].join("\n");
     };
-    const choices = ["Ship it", "Keep for later", "Drop it"];
+    const choices = ["Finish it here", "Ship it through the board", "Keep for later", "Drop it"];
     await turn(`/questions ${implementation}`, [
       bash("scratch", `${quote(corral)} --root ${quote(workspace)} assistant scratch new -p corral --slug ${slug}`),
       { toolCalls: [{ callId: "edit", name: "write", arguments: { path: join(scratch, "USAGE.md"), content: "# Usage\n\nRun `app --help`.\n" } }] },
@@ -174,7 +174,7 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
     expect(selections).toEqual([question]);
 
     // One owner answer finishes exactly the reported candidate; independent review still runs.
-    selected = "Ship it"; extra = "land it now";
+    selected = "Ship it through the board"; extra = "land it now";
     await turn(`/questions ${shipping}`, [
       { toolCalls: [{ callId: "finish", name: "corral_owner_action", arguments: { kind: "finish", target: slug,
         args: ["--title", "Add a usage section", "--expected-head", candidate.slice(0, 12)], input: input(3) } }] },
@@ -197,7 +197,7 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
       const event = storeEvents().find((e) => e.kind === kind && e.task === "T-001");
       const authority = event?.detail?.owner_authority as { input?: string; owner_message?: string } | undefined;
       expect([authority?.input, authority?.owner_message]).toEqual([input(3),
-        `[ask_user answer ${shipping}]\nShip this candidate?: Ship it\nland it now`]);
+        `[ask_user answer ${shipping}]\nShip this candidate?: Ship it through the board\nland it now`]);
     }
     expect(storeEvents().find((e) => e.kind === "cowork_finished")?.detail?.candidate).toBe(candidate);
     expect(questionCount()).toBe(2);

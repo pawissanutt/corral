@@ -9,6 +9,7 @@ pub(crate) mod agents;
 mod artifacts;
 mod attachments;
 mod attention;
+mod builds;
 mod change_kinds;
 mod changes;
 mod closed;
@@ -37,6 +38,7 @@ use sha2::{Digest, Sha256};
 
 use crate::Ctx;
 
+pub use builds::{build_detail, builds_rows};
 pub use changes::changes;
 
 /// The durable change-feed checkpoint, not a task/question owner revision.
@@ -188,6 +190,7 @@ fn read_snapshot(ctx: &Ctx, request: &DetailGet) -> Result<DetailReply> {
         DetailRef::Question { key } => questions::question(ctx, key)?,
         DetailRef::Task { id } => tasks::task(ctx, id)?,
         DetailRef::Plan { id } => plans::plan(ctx, id)?,
+        DetailRef::Build { id } => DetailBody::Build(builds::build_detail(ctx, id)?),
         DetailRef::Review { task } => review::review(ctx, task)?,
         DetailRef::Session { .. } => unreachable!(),
         DetailRef::SessionItem { id, token } => agents::session_item(ctx, id, token)?,
@@ -235,6 +238,7 @@ fn validate(request: &DetailGet) -> Result<()> {
         DetailRef::Question { key } => bounded(key, 512)?,
         DetailRef::Task { id }
         | DetailRef::Plan { id }
+        | DetailRef::Build { id }
         | DetailRef::Session { id }
         | DetailRef::Terminal { id } => bounded(id, 512)?,
         DetailRef::SessionItem { id, token } => {

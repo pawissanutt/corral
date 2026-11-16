@@ -67,6 +67,7 @@ beforeAll(async () => {
     sdk, identity, cwd, agentDir: join(work, "pi-agent"), model: "gpt-6.1-sol", modules, client, events, network,
     sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
   });
+  expect(corral.calls()).toEqual([]);
   await host.session.bindExtensions({});
   await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
 }, 60_000);
@@ -102,8 +103,8 @@ test("the contract is the installed reviewer-contract.md with the bound identity
 });
 
 test("a host session activates exactly the loadout and denies a write the model attempts", async () => {
-  expect([...host.loadout]).toEqual([...UPSTREAM, ...CORRAL_TOOLS]);
-  expect([...(host.state().active_tools as string[])].sort()).toEqual([...UPSTREAM, ...CORRAL_TOOLS].sort());
+  expect([...host.loadout]).toEqual([...UPSTREAM, ...CORRAL_TOOLS, "agent_message", "agent_roster"]);
+  expect([...(host.state().active_tools as string[])].sort()).toEqual([...UPSTREAM, ...CORRAL_TOOLS, "agent_message", "agent_roster"].sort());
   expect(host.session.systemPrompt).toContain("# corral reviewer contract (corral-pi)");
   const target = join(cwd, "edited.txt");
   fixtureTransport().script([
@@ -134,6 +135,7 @@ test("corral_verdict is one verdict envelope whose request ID derives from the s
   expect(verdicts.map((envelope) => [envelope.request_id, envelope.identity.turn, envelope.identity.review, envelope.identity.callback]))
     .toEqual([[toolRequestId(host.sessionId(), callIds[0] ?? ""), 2, "R2-review1", "g1:c1"]]);
   expect(verdicts[0]?.payload).toEqual({ verdict: "changes", notes });
+  expect(corral.calls().filter(call => ["peer_send", "peer_roster"].includes(call.envelope.op))).toEqual([]);
 });
 
 test("review kickoff is attempt-scoped and recovery retries only unobserved requests", () => {

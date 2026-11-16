@@ -152,11 +152,12 @@ fn status(entry: &InboxEntry) -> Cow<'static, str> {
 
 fn print_entry(entry: &InboxEntry) {
     println!(
-        "{}\t{}\t{}\t{}",
+        "{}\t{}\t{}\t{}\t{}",
         entry.message.id,
         status(entry),
         entry.message.kind,
-        entry.message.created
+        entry.message.created,
+        entry.message.author
     );
 }
 

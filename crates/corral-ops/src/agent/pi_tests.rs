@@ -390,6 +390,9 @@ fn bare_refuses_without_an_installation_or_with_an_unknown_provider() {
         model: None,
         provider: provider.map(str::to_owned),
         effort: None,
+        here: false,
+        name: None,
+        resume: None,
     };
     let error = bare_command(data.path(), &args(None), data.path(), None).unwrap_err();
     assert_eq!(code(&error), Some("assets_unavailable"), "{error}");
@@ -430,30 +433,30 @@ fn bare_runs_a_compiled_installation_without_bun_or_source_modules() {
     )
     .unwrap();
     let assets = crate::agent::install::installed_in(&root).unwrap().unwrap();
-    assert!(!assets.join(BARE_ENTRY).exists() && !assets.join(AUTH_MODULE).exists());
+    assert!(!assets.join("src").exists());
     // When bare mode prepares its launch with no Bun on PATH.
     let args = BareArgs {
         model: Some("gpt-6.1-sol".into()),
         provider: None,
         effort: None,
+        here: false,
+        name: None,
+        resume: None,
     };
-    let command = bare_command(&root, &args, tmp.path(), None).unwrap();
-    // Then it runs the installed compiled host's bare mode.
+    let (command, mut reader) = bare_command(&root, &args, tmp.path(), None).unwrap();
+    // Then it runs the same build host, with a bare inherited launch message.
     assert_eq!(Path::new(command.get_program()), assets.join(HOST_BINARY));
     let argv: Vec<_> = command
         .get_args()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    let cwd = tmp.path().display().to_string();
-    let expected = [
-        "bare",
-        "--cwd",
-        &cwd,
-        "--provider",
-        "openai-codex",
-        "--model",
-        "gpt-6.1-sol",
-    ];
-    assert_eq!(argv, expected);
+    assert_eq!(argv[0], "build");
+    assert_eq!(argv[1], "--launch-fd");
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut reader, &mut bytes).unwrap();
+    let launch: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(launch["bare"], true);
+    assert_eq!(launch["model"], "gpt-6.1-sol");
+    assert!(launch.get("corral").is_none());
     assert_eq!(command.get_current_dir(), Some(assets.as_path()));
 }

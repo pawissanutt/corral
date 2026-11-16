@@ -42,6 +42,16 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
         } finally { await host.close(); }
       }
       const base = await profile([]);
+      expect(base.tools.some(tool => tool.name === "task")).toBe(false);
+      expect(base.tools.filter(tool => ["agent_message", "agent_roster"].includes(tool.name))).toHaveLength(2);
+      const fleet = await profile(["fleet", "subagents"]);
+      const task = fleet.tools.find(tool => tool.name === "task");
+      expect(task).toBeDefined();
+      const schema = JSON.stringify(task!.parameters);
+      expect(schema).toContain('"explore"');
+      expect(schema.includes('"slice"')).toBe(role === "worker");
+      expect(schema.includes('"review"')).toBe(role === "worker");
+      expect(fleet.tools.filter(tool => ["agent_wait", "agent_cancel"].includes(tool.name))).toHaveLength(2);
       if (role === "pm") {
         const beforeExpert = await profile([], false);
         expect(base).toEqual(beforeExpert);

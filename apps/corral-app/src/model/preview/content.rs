@@ -1,4 +1,5 @@
 mod board;
+mod builds;
 mod plans;
 mod question;
 mod review;
@@ -6,6 +7,7 @@ mod scale;
 
 use board::TASKS;
 pub(super) use board::{rail, save_task, stages, task};
+use builds::builds;
 use plans::plans;
 pub(super) use plans::refresh_plans;
 use question::question;
@@ -34,6 +36,7 @@ pub(super) fn populate(feed: &mut Feed) {
     scale(feed);
     settings(feed);
     reviews(feed);
+    builds(feed);
 }
 
 fn settings(feed: &mut Feed) {

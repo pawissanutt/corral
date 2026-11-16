@@ -184,6 +184,18 @@ pub enum ScratchCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Gate and land a scratch in this session, recording a build rather than a board task (owner)
+    FinishHere {
+        slug: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long, value_name = "SHA")]
+        expected_head: String,
+        #[arg(long)]
+        override_reason: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Collect ended or idle hostless sessions' scratch, saving work first (owner or PM)
     Gc {
         /// Stop resident processes only for ended or idle hostless sessions
@@ -580,6 +592,27 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
                     println!("review pending; queued completion follows its intent and live policy")
                 }
             }
+        }
+        ScratchCmd::FinishHere {
+            slug,
+            title,
+            expected_head,
+            override_reason,
+            session,
+        } => {
+            let session = ops::finish_session(session.as_deref())?;
+            let result = ops::finish_here(
+                ctx,
+                &session,
+                &slug,
+                &ops::FinishHere {
+                    title: &title,
+                    expected_head: &expected_head,
+                    override_reason: override_reason.as_deref(),
+                },
+            )?;
+            // The owner-action executor consumes the same structured result as the owner's shell.
+            print_json(&result)?;
         }
         ScratchCmd::Gc {
             dry_run,

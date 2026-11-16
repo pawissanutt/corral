@@ -28,6 +28,15 @@ after `snapshot_at` stay excluded even if they are already stored. A backward
 wall-clock adjustment can therefore defer a recently recorded outcome until
 the report clock catches up; it does not erase the event or its author.
 
+## Builds
+
+The Builds section lists all open build records and records with a `build_recorded` or
+`build_outcome` event in the review window, sorted by ID. Each row includes the title,
+project, outcome, slice and review-round counts, gate attempts and failures, and cost;
+landed records also show the landed SHA. An owner override reason appears in a
+“landed over open findings” callout. The numbers section counts the included landed,
+kept, abandoned and open builds separately from task outcomes.
+
 ## Protecting owner intent
 
 Human CLI submissions default to `origin: owner`, including non-Idea tasks.

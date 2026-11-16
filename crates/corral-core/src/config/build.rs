@@ -28,8 +28,8 @@ impl BuildCfg {
     /// Problems independent of workspace paths or the host's provider registry.
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
-        if !(1..=8).contains(&self.max_parallel) {
-            out.push("build.max_parallel must be within 1..=8".into());
+        if !(1..=32).contains(&self.max_parallel) {
+            out.push("build.max_parallel must be within 1..=32".into());
         }
         if self.profiles.len() > 16 {
             out.push("build.profiles must contain at most 16 profiles".into());
@@ -142,7 +142,7 @@ build_exit = "gate"
         ] {
             assert!(errors.iter().any(|error| error.contains(key)), "{errors:?}");
         }
-        cfg.build.max_parallel = 9;
+        cfg.build.max_parallel = 33;
         assert!(
             cfg.build
                 .problems()

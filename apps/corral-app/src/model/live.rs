@@ -15,6 +15,7 @@ pub enum LiveKind {
     Session,
     Thread,
     Review,
+    Build,
 }
 
 impl LiveKind {
@@ -27,12 +28,13 @@ impl LiveKind {
             LiveKind::Session => "session",
             LiveKind::Thread => "thread",
             LiveKind::Review => "review",
+            LiveKind::Build => "build",
         }
     }
 }
 
 /// A daemon record to open: a question by key, a task, a plan, an agent session, an assistant
-/// thread ("quick" or A-n), or the candidate of a task under review.
+/// thread ("quick" or A-n), the candidate of a task under review, or a published build record.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Live {
     Question(Id),
@@ -41,6 +43,7 @@ pub enum Live {
     Session(Id),
     Thread(Id),
     Review(Id),
+    Build(Id),
 }
 
 impl Live {
@@ -52,6 +55,7 @@ impl Live {
             Live::Session(_) => LiveKind::Session,
             Live::Thread(_) => LiveKind::Thread,
             Live::Review(_) => LiveKind::Review,
+            Live::Build(_) => LiveKind::Build,
         }
     }
 
@@ -62,7 +66,8 @@ impl Live {
             | Live::Plan(id)
             | Live::Session(id)
             | Live::Thread(id)
-            | Live::Review(id) => id,
+            | Live::Review(id)
+            | Live::Build(id) => id,
         }
     }
 
@@ -74,6 +79,7 @@ impl Live {
             Live::Plan(_) => Destination::Plans,
             Live::Session(_) | Live::Thread(_) => Destination::Agents,
             Live::Review(_) => Destination::Review,
+            Live::Build(_) => Destination::Builds,
         }
     }
 
@@ -101,6 +107,7 @@ impl Live {
             Live::Plan(_) => DetailRef::Plan { id },
             Live::Session(_) => DetailRef::Session { id },
             Live::Review(_) => DetailRef::Review { task: id },
+            Live::Build(_) => DetailRef::Build { id },
             Live::Thread(_) => return None,
         })
     }
@@ -115,6 +122,7 @@ pub struct Selection {
     pub session: Option<Id>,
     pub thread: Option<Id>,
     pub review: Option<Id>,
+    pub build: Option<Id>,
 }
 
 impl Selection {
@@ -126,6 +134,7 @@ impl Selection {
             LiveKind::Session => self.session.as_ref(),
             LiveKind::Thread => self.thread.as_ref(),
             LiveKind::Review => self.review.as_ref(),
+            LiveKind::Build => self.build.as_ref(),
         }
     }
 
@@ -139,6 +148,7 @@ impl Selection {
             LiveKind::Session => self.session = id,
             LiveKind::Thread => self.thread = id,
             LiveKind::Review => self.review = id,
+            LiveKind::Build => self.build = id,
         }
     }
 }
@@ -156,11 +166,11 @@ impl Route {
         }
     }
 
-    /// Task, plan and review pages stay on the stack they were opened from on phone.
+    /// Task, plan, review and build pages stay on the stack they were opened from on phone.
     pub fn is_detail(&self) -> bool {
         matches!(
             self,
-            Route::Live(Live::Task(_) | Live::Plan(_) | Live::Review(_))
+            Route::Live(Live::Task(_) | Live::Plan(_) | Live::Review(_) | Live::Build(_))
         )
     }
 }

@@ -494,6 +494,21 @@ pub fn land(
     land_prepared(repo, worktree, branch, base, strategy, |_, _| Ok(()))
 }
 
+/// Require the board's landing checkout: on `base`, with no tracked changes.
+/// Untracked files are deliberately allowed, exactly as for task landing.
+pub fn require_landing_checkout(repo: &Path, base: &str) -> Result<()> {
+    if current_branch(repo)? != base {
+        bail!("main checkout {} is not on {base}", repo.display());
+    }
+    if !git(repo, &["status", "--porcelain", "--untracked-files=no"])?
+        .trim()
+        .is_empty()
+    {
+        bail!("main checkout {} has uncommitted changes", repo.display());
+    }
+    Ok(())
+}
+
 /// Like `land`, with a durable preparation callback after any rebase and before base mutation.
 /// The callback receives the original base and exact candidate SHA. Caller holds `landing_lock`.
 pub fn land_prepared(
@@ -504,15 +519,7 @@ pub fn land_prepared(
     strategy: MergeStrategy,
     prepare: impl FnOnce(&str, &str) -> Result<()>,
 ) -> Result<String> {
-    if current_branch(repo)? != base {
-        bail!("main checkout {} is not on {base}", repo.display());
-    }
-    if !git(repo, &["status", "--porcelain", "--untracked-files=no"])?
-        .trim()
-        .is_empty()
-    {
-        bail!("main checkout {} has uncommitted changes", repo.display());
-    }
+    require_landing_checkout(repo, base)?;
     if strategy == MergeStrategy::Rebase
         && let RebaseOutcome::Conflict { message, .. } = rebase(worktree, base)?
     {

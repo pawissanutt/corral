@@ -10,6 +10,7 @@ import { agentDensity } from "../agents-view.ts";
 import { card, onSurface, spinner } from "../frame.ts";
 import { plainLabel, PANEL_BG, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT } from "../panels-view.ts";
 import { childHue } from "./contract.ts";
+import { childProfile, verdictText } from "./fleet-rows.ts";
 
 export interface TaskCardRow {
   readonly id: string; readonly hue: number; readonly state: ChildState | "unknown"; readonly title: string;
@@ -66,7 +67,7 @@ function childCardRow(child: ChildSnapshot, hue: number, now: number): TaskCardR
   const time = child.startedAt === undefined ? undefined : duration((child.endedAt ?? now) - child.startedAt);
   const activity = child.state === "running" ? plainLabel(child.activity ?? "") || "working" : undefined;
   return {
-    id: child.id, hue, state: child.state, title: plainLabel(child.title), profile: plainLabel(child.profile), model: plainLabel(child.model),
+    id: child.id, hue, state: child.state, title: plainLabel(child.title), profile: childProfile(child), model: plainLabel(child.model),
     ...(time === undefined ? {} : { time }), ...(activity === undefined ? {} : { activity }),
   };
 }
@@ -92,7 +93,8 @@ export function taskCardRows(args: { readonly agents: readonly ChildSpec[] }, ca
   if (children.length) return children.map((child, index) => childCardRow(child, hueOf(live, child.id, index), now));
   return specs(args).map((spec, index) => ({
     id: spec.id, hue: hueOf(live, spec.id, index), state: "unknown", title: plainLabel(typeof spec.title === "string" ? spec.title : ""),
-    profile: plainLabel(typeof spec.profile === "string" && spec.profile ? spec.profile : "default"), model: "",
+    profile: childProfile({ ...(typeof spec.kind === "string" ? { kind: spec.kind } : {}),
+      profile: typeof spec.profile === "string" && spec.profile ? spec.profile : "default" }), model: "",
   }));
 }
 
@@ -173,7 +175,8 @@ export function finishedLines(children: readonly ChildSnapshot[], fleet: FleetSn
     let text: string;
     if (child.state === "done") {
       const report = firstLine(child.report ?? "").replace(/^#+\s*/, "");
-      text = PANEL_SUCCESS + "✓ " + name(PANEL_SUCCESS) + " finished · " + editCounts(child) + (report ? " · " + report : "");
+      text = PANEL_SUCCESS + "✓ " + name(PANEL_SUCCESS) + " finished · " + (child.verdict ? verdictText(child.verdict) : editCounts(child))
+        + (report ? " · " + report : "");
     } else if (child.state === "failed") {
       const error = firstLine(child.error ?? "");
       text = PANEL_ERROR + "✗ " + name(PANEL_ERROR) + " failed" + (error ? " · " + error : "");

@@ -7,7 +7,9 @@ use corral_core::{
     TaskRef,
     agent::{self, ContainerRef, HostHealth, pm_state},
 };
-use corral_protocol::subscription::{SessionLiveKind, SessionLiveToolState, SessionLiveTurnState};
+use corral_protocol::subscription::{
+    SessionFleet, SessionLiveKind, SessionLiveToolState, SessionLiveTurnState,
+};
 
 use crate::{
     Ctx,
@@ -22,6 +24,7 @@ pub const LIVE_HOST_EVENTS: usize = 512;
 pub const LIVE_EVENT_BYTES: usize = 8 * 1024;
 pub const LIVE_PAYLOAD_BYTES: usize = 1024;
 pub const LIVE_ERROR_BYTES: usize = 512;
+pub const LIVE_FLEET_BYTES: usize = 44 * 1024;
 
 #[derive(PartialEq, Eq)]
 struct Host {
@@ -68,7 +71,9 @@ impl LiveReader {
             .as_ref()
             .context("live identity unavailable")?;
         let host = resolve(ctx, container)?;
-        if self.host.as_ref().is_some_and(|previous| previous != &host) {
+        let rebound = self.host.as_ref().is_some_and(|previous| previous != &host);
+        let previous_seq = self.seq;
+        if rebound {
             self.seq = 0;
         }
         if self.host.as_ref() != Some(&host) || self.bridge.is_none() {
@@ -78,7 +83,7 @@ impl LiveReader {
             self.bridge = Some(bridge);
             self.host = Some(host);
         }
-        let page = self
+        let mut page = self
             .bridge
             .as_mut()
             .context("live bridge unavailable")?
@@ -89,10 +94,35 @@ impl LiveReader {
             page.generation == host.generation,
             "live page names another generation"
         );
+        bound_page_fleet(&mut page)?;
+        if rebound {
+            reconcile_rebind(&mut page, previous_seq);
+        }
         validate(&page, self.seq)?;
         self.seq = page.next;
         Ok(page)
     }
+}
+
+/// Preserve field presence: Some(empty) clears the daemon cache; None carries no update.
+fn bound_page_fleet(page: &mut LivePage) -> Result<()> {
+    if let Some(fleet) = &mut page.fleet {
+        bound_fleet(fleet, LIVE_FLEET_BYTES)?;
+    }
+    Ok(())
+}
+
+/// A new bridge starts a fresh ring even when the watched session keeps its generation.
+fn reconcile_rebind(page: &mut LivePage, after: u64) {
+    page.gap = Some(corral_protocol::subscription::SessionLiveGap {
+        after,
+        resumed: page
+            .events
+            .first()
+            .map_or(page.next.saturating_add(1), |event| event.seq),
+        missing: page.gap.as_ref().map_or(0, |gap| gap.missing),
+        reconcile: true,
+    });
 }
 
 /// Resolve a session id and read one bounded page without retaining a connection.
@@ -262,3 +292,51 @@ fn validate(page: &LivePage, after: u64) -> Result<()> {
     ensure!(page.next >= prior, "live cursor moved backwards");
     Ok(())
 }
+
+/// Keep complete newest messages first, then complete newest children within the page budget.
+/// The total remains the full journal count even when retention or byte bounds remove entries.
+pub fn bound_fleet(fleet: &mut SessionFleet, max_bytes: usize) -> Result<()> {
+    fleet.messages_total = fleet
+        .messages_total
+        .max(fleet.messages.last().map_or(0, |message| message.seq));
+    let excess = fleet.messages.len().saturating_sub(100);
+    fleet.messages.drain(..excess);
+    for message in &mut fleet.messages {
+        if let Some((end, _)) = message.text.char_indices().nth(2048) {
+            message.text.truncate(end);
+        }
+    }
+    let mut bytes = serde_json::to_vec(fleet)
+        .context("sizing session fleet")?
+        .len();
+    let mut remove = 0;
+    for message in &fleet.messages {
+        if bytes <= max_bytes {
+            break;
+        }
+        let removed = serde_json::to_vec(message)
+            .context("sizing agent message")?
+            .len();
+        bytes = bytes.saturating_sub(removed);
+        remove += 1;
+    }
+    fleet.messages.drain(..remove);
+    remove = 0;
+    for child in &fleet.children {
+        if bytes <= max_bytes {
+            break;
+        }
+        let removed = serde_json::to_vec(child)
+            .context("sizing session child")?
+            .len();
+        bytes = bytes.saturating_sub(removed);
+        remove += 1;
+    }
+    fleet.children.drain(..remove);
+    ensure!(bytes <= max_bytes, "session fleet exceeds byte budget");
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "session_live_tests.rs"]
+mod tests;

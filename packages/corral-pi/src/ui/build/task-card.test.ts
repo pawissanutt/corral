@@ -7,7 +7,7 @@ import { CARD_MAX, finishedLines, taskCardLines, taskCardRows } from "./task-car
 const NOW = 2_000_000;
 function child(id: string, state: ChildSnapshot["state"], extra: Partial<ChildSnapshot> = {}): ChildSnapshot {
   return {
-    id, call: "call-1", title: `Deliver the ${id} slice with a deliberately long title that has to be clipped`, brief: "brief",
+    id, kind: "slice", call: "call-1", title: `Deliver the ${id} slice with a deliberately long title that has to be clipped`, brief: "brief",
     owns: [`src/${id}`], after: [], profile: "frontend", model: "anthropic/claude-sonnet-4.5", state, createdAt: NOW - 90_000,
     ...(state === "queued" ? {} : { startedAt: NOW - 80_000 }),
     ...(state === "done" || state === "failed" || state === "cancelled" ? { endedAt: NOW - 10_000 } : {}),
@@ -16,7 +16,7 @@ function child(id: string, state: ChildSnapshot["state"], extra: Partial<ChildSn
 }
 const spec = (id: string): ChildSpec => ({ id, title: `Slice ${id}`, brief: "b", owns: [] });
 const args = { agents: [spec("host-slots"), spec("picker-ui")] };
-const fleet = (children: ChildSnapshot[]): FleetSnapshot => ({ children, maxParallel: 3, startedAt: NOW - 100_000 });
+const fleet = (children: ChildSnapshot[]): FleetSnapshot => ({ children, mail: [], maxParallel: 3, startedAt: NOW - 100_000 });
 const plain = (lines: readonly string[]) => lines.map(line => stripTerminalSequences(line));
 
 test("only children started by this tool call become rows", () => {

@@ -310,6 +310,8 @@ pub struct Feed {
     /// Driver-supplied local timezone; absent when the platform cannot determine it.
     pub time_zone: Option<jiff::tz::TimeZone>,
     pub plans: BTreeMap<Id, PlanRow>,
+    /// Published build records (`Topic::Builds`); never tasks.
+    pub builds: BTreeMap<Id, BuildRow>,
     pub agents: BTreeMap<Id, AgentRow>,
     pub assistants: BTreeMap<Id, AssistantRow>,
     pub usage: BTreeMap<Id, UsageRow>,
@@ -500,12 +502,16 @@ impl Feed {
         self.session = None;
         self.inbox.clear();
         self.plans.clear();
+        self.builds.clear();
         self.agents.clear();
         self.assistants.clear();
         self.usage.clear();
         self.settings.clear();
         self.threads.clear();
         self.details.clear();
+        // A watched session's turn and child agents are daemon facts this device may no
+        // longer read.
+        self.live.clear();
         self.uploads.clear();
         self.cancelling.clear();
         self.not_withdrawn.clear();

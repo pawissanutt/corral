@@ -1,5 +1,5 @@
 // The row model behind the agents view, the sidebar Context tab and the Agents tab badge. Helper calls and
-// background jobs come from the bound host's snapshot; build children arrive later as ready-made rows through
+// background jobs come from the bound host's snapshot; fleet children (a build session's or any other role's) arrive as ready-made rows through
 // `AgentExtras`. Unknown values stay absent and render as "–", never as zero.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { HelperInspection, HelperMessage } from "../extensions/subagent/inspection.ts";
@@ -154,6 +154,31 @@ export interface ConversationSource {
   readonly truncated?: boolean; readonly dropped?: number;
 }
 
+/**
+ * One message between agents, as a conversation shows it: sender and recipient (an agent id, `parent`, `owner`, `all`
+ * or another session's key), when it was sent and how it was delivered; `fromHue`/`toHue` when that side is a known agent.
+ */
+export interface AgentMail {
+  readonly at: number; readonly from: string; readonly to: string; readonly text: string;
+  readonly delivery: "delivered" | "queued" | "undeliverable" | "answered_from_report";
+  readonly fromHue?: number; readonly toHue?: number;
+}
+/**
+ * The messages agent `id` sent or received, oldest first. A message to `all` reached the agents live when it was sent,
+ * so it counts for `id` while `live` covers its time (`from` the agent's creation, `to` its end; open while it runs).
+ * `hue` gives another agent's hue by id, undefined for `parent`, `owner`, `all` and keys of other sessions.
+ */
+export function agentMail(id: string, mail: readonly Omit<AgentMail, "fromHue" | "toHue">[], live: { readonly from: number; readonly to?: number },
+  hue: (id: string) => number | undefined): AgentMail[] {
+  return mail.filter(message => message.from === id || message.to === id
+    || (message.to === "all" && message.at >= live.from && (live.to === undefined || message.at <= live.to)))
+    .map(message => {
+      const fromHue = hue(message.from), toHue = hue(message.to);
+      return { at: message.at, from: message.from, to: message.to, text: message.text, delivery: message.delivery,
+        ...(fromHue === undefined ? {} : { fromHue }), ...(toHue === undefined ? {} : { toHue }) };
+    });
+}
+
 export interface AgentRow {
   readonly key: string;                  // "helper:<request>" | "child:<id>"
   readonly source: "helper" | "child";
@@ -177,6 +202,8 @@ export interface AgentRow {
   readonly steers?: readonly string[]; readonly question?: string;
   /** When each steer was sent, index for index with `steers`; a steer without a time is drawn after the replies. */
   readonly steeredAt?: readonly number[];
+  /** Messages it sent or received from other agents, oldest first; drawn among the replies at the time they were sent. Absent: none. */
+  readonly mail?: readonly AgentMail[];
   readonly meta: readonly string[];      // model id, tier, generation, session, parent
   readonly notes: readonly AgentNote[];
   readonly capabilities: AgentCapabilities;
@@ -197,6 +224,7 @@ export interface JobRow {
 export interface AgentExtras {
   readonly agents: readonly AgentRow[];  // rendered before helper rows
   readonly maxParallel?: number;         // timeline caption "up to n at once"
+  readonly messages?: number;            // timeline caption "n messages"; absent or 0: not shown
   readonly origin?: number;              // timeline zero; default earliest createdAt
 }
 export interface AgentsModel {
@@ -206,6 +234,7 @@ export interface AgentsModel {
   readonly sources: { readonly helpers: boolean; readonly jobs: boolean };
   readonly bound: boolean;
   readonly maxParallel?: number;
+  readonly messages?: number;
   readonly origin: number;
 }
 
@@ -317,16 +346,32 @@ export function jobRows(snapshot: PanelSnapshot | null, now: number, control: bo
   });
 }
 
+/**
+ * An explore call that is also a fleet child: the fleet runtime names the child `e-` and the first 30 characters of
+ * the research request, and a helper observation of the same call carries that request (or the child id) as its own.
+ */
+function exploreChild(helper: AgentRow, children: ReadonlySet<string>): boolean {
+  return helper.profile === "explore" && (children.has(helper.id) || children.has("e-" + helper.id.slice(0, 30)));
+}
+
+/**
+ * Fleet children (`extra`) lead, then the helper observations that are not fleet children (an explore call shows
+ * once, as its fleet row), their hues continuing after the children's so no two rows share a colour.
+ */
 export function agentsModel(snapshot: PanelSnapshot | null, now: number,
   options?: { readonly jobControl?: boolean; readonly extra?: AgentExtras }): AgentsModel {
-  const extra = options?.extra;
-  const agents = [...extra?.agents ?? [], ...helperRows(snapshot, now)];
+  const extra = options?.extra, children = extra?.agents ?? [], ids = new Set(children.map(child => child.id));
+  const helpers = children.length
+    ? helperRows(snapshot, now).filter(helper => !exploreChild(helper, ids)).map(helper => ({ ...helper, hue: helper.hue + children.length }))
+    : helperRows(snapshot, now);
+  const agents = [...children, ...helpers];
   const origin = extra?.origin ?? (agents.length ? Math.min(...agents.map(agent => agent.createdAt)) : now);
   return {
     agents, jobs: jobRows(snapshot, now, options?.jobControl ?? false),
     sources: { helpers: snapshot?.helpers != null, jobs: snapshot?.jobs != null },
     bound: snapshot?.bound ?? false,
     ...(extra?.maxParallel === undefined ? {} : { maxParallel: extra.maxParallel }),
+    ...(extra?.messages ? { messages: extra.messages } : {}),
     origin,
   };
 }

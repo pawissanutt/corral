@@ -34,7 +34,7 @@ corral pi --build              # an untethered build session in .worktrees/build
 corral pi --build --here       # a build session in the current checkout and branch
 corral pi --build --name x     # a build session named x
 corral pi --resume B-<id>      # that build session again
-corral pi --bare               # plain Pi; also what `corral pi` does outside a workspace
+corral pi --bare               # bare build; also what `corral pi` does outside a workspace
 ```
 
 `corral pi --assistant` in a herdr pane inside a corral workspace allocates the next session,
@@ -51,9 +51,9 @@ vendor and login preflight as any corral-pi launch. The assistant needs no appro
 scope: it is not bound to a project and has no board authority of its own.
 
 Outside a workspace, `corral pi` prints a one-line notice that no corral workspace was found
-and starts plain Pi; `--pm`, `--assistant`, `--resume A-<n>`, `--task` and `--over-cap` there
-refuse `not_in_workspace`. `--build` and `--resume B-<id>` need only a Git repository; build
-sessions are described in the [corral-pi guide](corral-pi.md#starting-pi-yourself-corral-pi).
+and starts a bare build; `--pm`, `--assistant`, `--resume A-<n>`, `--task` and `--over-cap` there
+refuse `not_in_workspace`. `--build` needs a Git repository; bare sessions can be resumed
+outside one. Build sessions are described in the [corral-pi guide](corral-pi.md#starting-pi-yourself-corral-pi).
 
 ### The launcher
 
@@ -65,17 +65,14 @@ has one, its key as a key cap on the right. The selected row is highlighted.
 
 - **Start**: **Build** (key `b`, selected first) opens a build session as `--build` does;
   **Assistant** (key `a`) opens a new assistant as `--assistant` does; **PM** (key `p`) opens
-  the PM and continues its previous conversation, as `--pm -c` does. Their descriptions read
-  `untethered · parallel agents · nothing reaches the board until you ship`,
-  `board-aware · scratch worktrees · owner actions on your instruction` and
-  `workspace coordinator · continues the previous conversation`.
+  the PM and continues its previous conversation, as `--pm -c` does.
 - **Resume**: the eight most recently active stopped sessions, newest first: assistants
   `corral pi --resume` accepts (open, with no running host) and build sessions recorded for a
   repository inside this workspace or the current Git repository. An assistant row is named
   `A-<n>` and reads its summary (or `focus <task>`, or `no summary recorded`), its project (or
   `workspace`) and how long ago it was last active; a build row is named `build` and reads the
   session name, its project (or the repository's directory name), how long ago it was last
-  updated and, once it has ended, `kept`, `shipped` or `landed`. Opening a build row is
+  updated and, once it has ended, its outcome. Opening a build row is
   `--resume B-<id>`.
 
 Under the rows a block shows what a build session would open with:
@@ -227,7 +224,7 @@ generation records a transition when its snapshot differs from the previous one.
 
 | Key | strict / standard / full |
 |---|---|
-| `context_files`, `skills`, `prompt_templates`, `todo`, `codemode`, `mcp.enabled`, `tool_search`, `web.enabled`, `lsp`, `subagents` | off / on / on |
+| `context_files`, `skills`, `prompt_templates`, `todo`, `codemode`, `mcp.enabled`, `tool_search`, `web.enabled`, `lsp`, `subagents`, `fleet` | off / on / on |
 | `write_permissions` | off / on / on (assistant only) |
 | `compaction` | on / on / on |
 | `bash_rules`, `oracle`, `browser` | off / off / on |
@@ -929,13 +926,32 @@ implement-now work is not handed to a worker to redo.
 
 Implement-now work happens in one of the session's scratch worktrees. When it is done, the
 assistant stops and reports the scratch and its candidate commit, the diff stat against the
-base, the checks it ran with their results and the risks left, then offers three options:
+base, the checks it ran with their results and the risks left, then offers four options:
 
 | Owner picks | The assistant runs (citing that answer's owner input) | Result |
 |---|---|---|
-| Ship it | `finish` with `--title` and `--expected-head <candidate>` | the [finish](#co-work-finish-and-landing) task proceeds through gate, independent review and automatic landing |
+| Finish it here | `finish_here` with `--title` and `--expected-head <candidate>` | gate and land in this session as an assistant build record, without a task or board capacity |
+| Ship it through the board | `finish` with `--title` and `--expected-head <candidate>` | the [finish](#co-work-finish-and-landing) task proceeds through gate, independent review and automatic landing |
 | Keep it for later | nothing | the scratch stays as it is |
 | Drop it | `corral assistant scratch discard <slug>` | the work is saved as session artifacts, then removed |
+
+**Finish here.** The project's `build_exit` policy controls this choice: `none` disables it;
+`gate` requires the full gate; `review` (the default) also requires an approving review of
+the candidate head with no open findings, or the owner's stated reason to land anyway. For
+`review`, the assistant starts a `task` review child, waits for it and shows its verdict; if
+no review child is available, it obtains an explicit override reason or selects another option.
+The assistant cites the owner's answer in `corral_owner_action`, targets the scratch slug and
+passes `--title` and `--expected-head`, plus `--override-reason` when needed.
+
+The host attaches the most recently settled review and fleet summaries as evidence; a
+model-supplied verdict is not accepted as evidence. Corral checks the committed, clean
+candidate and runs the full gate, then lands through the same landing lock and main-checkout
+preconditions as board landing. A failed gate returns its receipt, including the attempt,
+failed command and log. `landing_stale` means the base moved: fix or rebase in the same
+scratch, report the new candidate, review again when required and ask the owner again.
+On success Corral publishes a build record of kind `assistant`, returns the landed head, base
+branch, gate attempt and record, and retires the scratch. If scratch cleanup fails, it remains
+discoverable. No task, run, scheduled review or board capacity is used.
 
 The owner's one ship answer authorizes the complete finish pipeline, including repairs
 returned to that assistant; it needs no separate approve call. Independent review and the

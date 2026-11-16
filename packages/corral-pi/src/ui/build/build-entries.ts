@@ -5,12 +5,11 @@
 import type { MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import type { BoardTaskStatus, ExitChoice, ExitOption, ExitPhase, ExitState } from "../../build/types.ts";
-import { toneColor } from "../agents-model.ts";
+import type { BoardTaskStatus, ExitChoice, ExitOption, ExitPhase, ExitRecord, ExitState } from "../../build/types.ts";
 import { onSurface } from "../frame.ts";
 import { plainLabel, PANEL_BG, PANEL_BUBBLE, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT } from "../panels-view.ts";
 import type { BuildCardSource } from "./contract.ts";
-import { EXIT_LABELS, exitProgress, resultCardLines } from "./result-card.ts";
+import { EXIT_LABELS, exitLines, exitProgress, resultCardLines, shortSha } from "./result-card.ts";
 import type { ResultHit } from "./result-card.ts";
 import { cardCell, cardLine, cardWrap } from "./task-card.ts";
 
@@ -22,7 +21,8 @@ export const BUILD_BOARD_ENTRY = "corral_build_board";
 export const BUILD_FINISH_ENTRY = "corral_build_finish";
 
 export interface BuildEntry<T> { readonly customType: string; readonly content: string; readonly display: true; readonly details: T }
-export interface ExitEntryDetails { readonly choice: ExitChoice; readonly label: string; readonly phase: ExitPhase; readonly detail?: string; readonly task?: string }
+export type ExitEntryDetails = { readonly choice: ExitChoice; readonly label: string; readonly phase: ExitPhase; readonly detail?: string }
+  & Pick<ExitRecord, "landed" | "baseBranch" | "gateAttempt" | "overrideReason">;
 export interface BoardEntryDetails { readonly filed: readonly { readonly id: string; readonly title: string; readonly depends: readonly string[] }[]; readonly started: boolean }
 export interface FinishEntryDetails { readonly id: string }
 
@@ -65,10 +65,11 @@ export function finishLive(cards: BuildCardSource | undefined, id: string): bool
 /** The result card of exit card `id`, drawn from live data. Clicks open a slice's conversation or the pending exit choice. */
 export function resultCard(source: () => BuildCardSource | undefined, id: string, note?: string, inset = 0): BuildCard<ResultHit> {
   return new BuildCard<ResultHit>(width => {
-    const cards = source(), state = cards?.state(), live = finishLive(cards, id);
+    const cards = source(), state = cards?.state(), live = finishLive(cards, id), since = cards?.exitSince?.();
     return resultCardLines({
       summary: live ? cards?.summary() : undefined, ...(note === undefined ? {} : { note }),
       fleet: state?.fleet, exit: state?.exit ?? { phase: "none" }, options: [], live,
+      ...(state?.record ? { record: state.record } : {}), ...(since === undefined ? {} : { exitSince: since }),
     }, width, hue => cards?.color(hue) ?? "", cards?.now() ?? Date.now());
   }, hit => {
     const cards = source();
@@ -81,28 +82,32 @@ function sentence(text: string): string {
   const line = plainLabel(text);
   return !line || /[.!?]$/.test(line) ? line : line + ".";
 }
-function outcome(details: Pick<ExitEntryDetails, "choice" | "phase" | "detail" | "task">): string {
+function outcome(details: Pick<ExitEntryDetails, "choice" | "phase" | "detail">): string {
   if (details.detail) return sentence(details.detail);
   switch (details.phase) {
-    case "kept": return "The branch stays in its worktree; nothing was filed or merged.";
-    case "shipped": return details.task ? `${details.task} is on the board for the gate and independent review.` : "The branch was handed to the board.";
-    case "landed": return details.task ? `${details.task} landed.` : "The branch landed.";
+    case "kept": return "The branch stays in its worktree; nothing was merged.";
+    case "landed": return "The branch landed.";
     case "failed": return "The exit failed.";
-    case "running": case "landing": return "The exit is still running.";
-    default: return details.choice === "iterate" ? "The build session continues; nothing was filed or landed." : "No exit ran.";
+    case "rebasing": case "verifying": case "landing": return "The exit is still running.";
+    default: return details.choice === "iterate" ? "The build session continues; nothing was landed." : "No exit ran.";
   }
 }
 
-/** Content is model-visible (custom messages convert to user content): `The owner chose "Land after the gate" for this build branch. T-962 landed at 3f2a9c1.` */
+/** Content is model-visible (custom messages convert to user content): `The owner chose "Land on the base branch" for this build branch. Landed. main now points at 3f2a9c1 (gate G3).` */
 export function exitEntry(option: ExitOption, state: ExitState): BuildEntry<ExitEntryDetails> {
-  const label = plainLabel(option.label), task = state.record?.task, detail = state.detail ? plainLabel(state.detail) : undefined;
+  const label = plainLabel(option.label), record = state.record, detail = state.detail ? plainLabel(state.detail) : undefined;
   const details: ExitEntryDetails = {
-    choice: option.choice, label, phase: state.phase, ...(detail ? { detail } : {}), ...(task ? { task } : {}),
+    choice: option.choice, label, phase: state.phase, ...(detail ? { detail } : {}),
+    ...(record?.landed ? { landed: plainLabel(record.landed) } : {}), ...(record?.baseBranch ? { baseBranch: plainLabel(record.baseBranch) } : {}),
+    ...(record?.gateAttempt ? { gateAttempt: plainLabel(record.gateAttempt) } : {}),
+    ...(record?.overrideReason ? { overrideReason: plainLabel(record.overrideReason) } : {}),
   };
-  return {
-    customType: BUILD_EXIT_ENTRY, display: true, details,
-    content: `The owner chose "${label}" for this build branch. ${outcome(details)}`,
-  };
+  const sentences = [
+    `The owner chose "${label}" for this build branch.`, outcome(details),
+    ...(details.landed ? [`${details.baseBranch ?? "The base branch"} now points at ${shortSha(details.landed)}${details.gateAttempt ? ` (gate ${details.gateAttempt})` : ""}.`] : []),
+    ...(details.overrideReason ? [`The owner landed over open review findings: "${details.overrideReason}".`] : []),
+  ];
+  return { customType: BUILD_EXIT_ENTRY, display: true, details, content: sentences.join(" ") };
 }
 
 export function boardEntry(filed: readonly BoardTaskStatus[], started: boolean): BuildEntry<BoardEntryDetails> {
@@ -119,7 +124,7 @@ export function boardEntry(filed: readonly BoardTaskStatus[], started: boolean):
 export function finishEntry(id: string): BuildEntry<FinishEntryDetails> {
   return {
     customType: BUILD_FINISH_ENTRY, display: true, details: { id },
-    content: "The owner opened the exit choice for this build branch. The owner chooses the exit; do not land, submit or ship the branch yourself.",
+    content: "The owner opened the exit choice for this build branch. The owner chooses the exit; do not land or merge the branch yourself.",
   };
 }
 
@@ -130,12 +135,15 @@ function bubble(who: string, text: string, width: number): string[] {
   return wrapTextWithAnsi(PANEL_MUTED + who + " " + PANEL_TEXT + text, size - 2)
     .map(row => PANEL_BUBBLE + PANEL_TEXT + " " + onSurface(cardCell(row, size - 2), PANEL_BUBBLE) + " " + PANEL_BG);
 }
-function exitLines(details: ExitEntryDetails, width: number): string[] {
-  // A stored entry may name a choice this build does not know; its own words are shown then.
+function exitEntryLines(details: ExitEntryDetails, width: number): string[] {
+  // A stored entry may name a choice or a phase this build does not know; its own words are shown then.
   const label = details.label || (EXIT_LABELS[details.choice] ?? details.choice);
-  const shown = exitProgress(details);
-  const text = shown ? toneColor(shown.tone) + shown.glyph + " " + shown.text : PANEL_MUTED + "· " + outcome(details);
-  return [...bubble("you chose", plainLabel(label), width), ...cardWrap(text, "", width)];
+  const shown = exitProgress({ phase: details.phase, ...(details.detail ? { detail: details.detail } : {}), record: details });
+  return [
+    ...bubble("you chose", plainLabel(label), width),
+    ...(shown ? exitLines(shown, width) : cardWrap(PANEL_MUTED + "· " + outcome(details), "", width)),
+    ...(details.overrideReason ? cardWrap(PANEL_MUTED + "landed over open findings: " + PANEL_TEXT + details.overrideReason, "", width, 2) : []),
+  ];
 }
 function boardLines(details: BoardEntryDetails, width: number): string[] {
   const ids = details.filed.map(task => task.id), count = `${ids.length} ${ids.length === 1 ? "task" : "tasks"}`;
@@ -155,7 +163,7 @@ export function buildEntryRenderer(source: () => BuildCardSource | undefined): M
     switch (message.customType) {
       case BUILD_EXIT_ENTRY:
         if (typeof details["choice"] !== "string" || typeof details["phase"] !== "string") return undefined;
-        return new BuildCard(width => ({ lines: exitLines(details as unknown as ExitEntryDetails, width) }), undefined, inset);
+        return new BuildCard(width => ({ lines: exitEntryLines(details as unknown as ExitEntryDetails, width) }), undefined, inset);
       case BUILD_BOARD_ENTRY:
         if (!Array.isArray(details["filed"])) return undefined;
         return new BuildCard(width => ({ lines: boardLines(details as unknown as BoardEntryDetails, width) }), undefined, inset);

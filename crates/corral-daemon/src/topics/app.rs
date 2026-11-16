@@ -1,5 +1,8 @@
 //! App topics use pinned replacement walks, not an unbounded per-client delta queue.
 //! Every walk upserts all current rows then explicitly removes all unseen old IDs.
+//! Builds share Plans' acknowledged snapshot/delta walks and stale-read resets.
+//! Their watched view refreshes from the durable feed, including build_recorded,
+//! build_outcome and build_landed events, rather than a separate event queue.
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, mpsc};
 
@@ -154,8 +157,13 @@ impl AppTopics {
         Ok(())
     }
 
-    pub fn flush(&mut self, shared: &Shared, conn: &mut dyn crate::conn::Conn) -> Result<()> {
-        self.sessions.flush(shared, conn)?;
+    pub fn flush(
+        &mut self,
+        shared: &Shared,
+        conn: &mut dyn crate::conn::Conn,
+        session_fleet: bool,
+    ) -> Result<()> {
+        self.sessions.flush(shared, conn, session_fleet)?;
         self.terminals.flush(conn)?;
         let mut closed = Vec::new();
         for (key, subscriber) in &mut self.subscribers {

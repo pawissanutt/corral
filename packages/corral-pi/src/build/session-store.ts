@@ -13,7 +13,7 @@ export function createSession(launch: BuildLaunch, worktree: Pick<BuildSessionRe
   const suffix = now.getTime().toString(36) + randomInt(36 * 36).toString(36).padStart(2, "0");
   const name = launch.name?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || suffix;
   return { version: 1, id: `B-${suffix}`, name, created: now.toISOString(), updated: now.toISOString(),
-    repoRoot: launch.repoRoot, ...worktree, here: launch.here,
+    repoRoot: launch.repoRoot, ...worktree, here: launch.here, ...(launch.bare ? { bare: true } : {}),
     ...(launch.project ? { project: launch.project } : {}), ...(launch.workspaceRoot ? { workspaceRoot: launch.workspaceRoot } : {}) };
 }
 
@@ -25,6 +25,10 @@ export function loadSession(dataRoot: string, id: string): BuildSessionRecord {
     || typeof record.here !== "boolean" || ![record.repoRoot, record.worktree].every(value => typeof value === "string" && isAbsolute(value))
     || !(record.branch === null || typeof record.branch === "string") || !(record.base === null || typeof record.base === "string")
     || [record.workspaceRoot, record.sessionFile].some(value => value !== undefined && (typeof value !== "string" || !isAbsolute(value)))
+    || (record.bare !== undefined && typeof record.bare !== "boolean")
+    || (record.repository !== undefined && typeof record.repository !== "boolean")
+    || (record.baseBranch !== undefined && record.baseBranch !== null && typeof record.baseBranch !== "string")
+    || (record.bare === true && (record.workspaceRoot !== undefined || record.project !== undefined))
     || (record.project !== undefined && typeof record.project !== "string")) throw new Error(`Invalid build session record: ${id}`);
   return record;
 }

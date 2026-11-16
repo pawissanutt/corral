@@ -378,6 +378,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         Cmd::Hooks { cmd } => crate::hooks_cmd::run(&open(&root)?, cmd),
         Cmd::Run { cmd } => crate::run_cmd::run(&inv, cmd),
         Cmd::Plan { cmd } => crate::plan_cmd::run(&inv, cmd),
+        Cmd::Build { cmd } => crate::build_cmd::run(&inv, cmd),
         Cmd::Annotation(args) => crate::annotation_cmd::run(&start_dir(&root)?, &entry, args),
         Cmd::Lessons(args) => crate::lessons_cmd::run(&inv, args),
         Cmd::Memory(args) => crate::memory_cmd::run(&inv, args),
@@ -616,6 +617,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         Cmd::Jump { id } => corral_ops::jump(&open(&root)?, &id),
         Cmd::Stats {
             storage,
+            builds,
             by,
             since,
             gates,
@@ -629,6 +631,8 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
                 crate::artifact_cmd::storage(&ctx, json)
             } else if gates {
                 crate::stats::run_gates(&ctx, since.as_deref(), until.as_deref(), json)
+            } else if builds {
+                crate::stats::run_builds(&ctx, since.as_deref(), json)
             } else {
                 crate::stats::run(&ctx, &by, since.as_deref(), json, html, out.as_deref())
             }

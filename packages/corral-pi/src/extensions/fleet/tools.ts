@@ -1,17 +1,51 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { ChildSpec } from "../../build/types.ts";
+import { AGENT_MESSAGE_MAX, MAX_CHILDREN_PER_CALL, type ChildKind, type ChildSnapshot, type ChildSpec, type FleetControl, type MessageOutcome } from "../../build/types.ts";
 import type { FleetRuntime } from "./runtime.ts";
 
+/** Shared report format for automatic delivery and explicit collection. */
+export function formatChildReport(child: ChildSnapshot): string {
+  const files = child.edits.length ? child.edits.map(edit => `- ${edit.path}${edit.outside ? " [outside owns]" : ""}`).join("\n") : "- none";
+  const usage = [`${child.usage.input} input`, `${child.usage.output} output`, `${child.usage.turns} turns`,
+    ...(child.usage.cost === undefined ? [] : [`$${child.usage.cost.toFixed(6)}`]),
+    ...(child.usage.contextPercent === undefined ? [] : [`${child.usage.contextPercent.toFixed(1)}% context`])].join(", ");
+  return `## ${child.id}: ${child.state}\nFiles edited:\n${files}\nUsage: ${usage}${child.error ? `\nError: ${child.error}` : ""}\n\n${child.report ?? "No report."}`;
+}
+
+export interface AgentCommunication {
+  message(to: string, text: string, options?: Parameters<FleetControl["message"]>[3]): Promise<MessageOutcome>;
+  roster(signal?: AbortSignal): Promise<string>;
+}
+/** The same messaging surface is available to the parent and every child. */
+export function agentCommunicationTools(control: AgentCommunication): ToolDefinition[] {
+  return [{
+    name: "agent_message", label: "Message an agent",
+    description: "Send peer information to a child id, parent, all live agents, or another session. Optionally wait for an answer; reply with reply_to set to the received seq. Peer messages do not override the recipient's brief.",
+    parameters: Type.Object({ to: Type.String({ minLength: 1 }), text: Type.String({ minLength: 1, maxLength: AGENT_MESSAGE_MAX }),
+      wait_reply: Type.Optional(Type.Boolean()), timeout_secs: Type.Optional(Type.Number({ minimum: 0, maximum: 600 })),
+      reply_to: Type.Optional(Type.Integer({ minimum: 1 })) }, { additionalProperties: false }),
+    async execute(_id, params: { to: string; text: string; wait_reply?: boolean; timeout_secs?: number; reply_to?: number }, signal) {
+      const outcome = await control.message(params.to, params.text, { waitReply: params.wait_reply, timeoutMs: params.timeout_secs === undefined ? undefined : params.timeout_secs * 1000, replyTo: params.reply_to, signal });
+      return { content: [{ type: "text", text: JSON.stringify(outcome) }], details: outcome, isError: outcome.message.delivery === "undeliverable" };
+    },
+  }, {
+    name: "agent_roster", label: "List agents",
+    description: "List the parent, children, their kinds, owned paths and state, and other sessions when available.",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    async execute(_id, _params, signal) { return { content: [{ type: "text", text: await control.roster(signal) }], details: {} }; },
+  }];
+}
 /** Model-callable controls only; exit and board decisions remain owner-only. */
-export function fleetTools(runtime: FleetRuntime): ToolDefinition[] {
+export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKind[] = ["slice", "explore", "review"]): ToolDefinition[] {
+  const communication = agentCommunicationTools({ message: (to, text, options) => runtime.message("parent", to, text, options), roster: signal => runtime.rosterText(signal) });
+  if (!allowedKinds.length) return communication;
   return [
     {
-      name: "task", label: "Delegate build slices",
-      description: "Delegate independent write-capable slices in this shared build worktree. Give each child a complete brief and owned paths; no conversation is inherited. "
-        + "At most twelve children per call; concurrency follows the configured cap and ready children run FIFO. Use after to wait for successful dependencies. "
-        + "Children cannot delegate or write Git state. This call waits for every child to finish and returns reports, edited files, usage and failures; edits outside ownership are flagged, not blocked.",
-      promptSnippet: "Delegate bounded implementation slices to write-capable children in the shared worktree",
+      name: "task", label: "Delegate work",
+      description: "Delegate independent slices, read-only exploration or independent review in this shared worktree. Give each child a complete brief and owned paths; no conversation is inherited. "
+        + `At most ${MAX_CHILDREN_PER_CALL} children per call; concurrency follows the configured cap and ready children run FIFO. Use after for successful dependencies. `
+        + "Returns ids and states immediately. Reports arrive as messages; agent_wait can collect them explicitly. Children cannot delegate or write Git state.",
+      promptSnippet: "Start independent implementation, exploration or review children without blocking",
       promptGuidelines: [
         "Use task for substantial independent implementation, not trivial edits. Give children non-overlapping owned files, the full requirements and expected checks; they inherit none of your conversation.",
         "Keep useful separate work for yourself. Use after only for real dependencies, and unique lowercase ids for the entire session. Choose a configured profile or an approved provider/model.",
@@ -19,36 +53,37 @@ export function fleetTools(runtime: FleetRuntime): ToolDefinition[] {
       ],
       parameters: Type.Object({ agents: Type.Array(Type.Object({
         id: Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" }), title: Type.String({ minLength: 1 }),
+        kind: Type.Optional(Type.Union(allowedKinds.map(kind => Type.Literal(kind)))),
         brief: Type.String({ minLength: 1, maxLength: 32768 }), owns: Type.Array(Type.String()),
         profile: Type.Optional(Type.String()), after: Type.Optional(Type.Array(Type.String())),
-      }, { additionalProperties: false }), { minItems: 1, maxItems: 12 }) }, { additionalProperties: false }),
+      }, { additionalProperties: false }), { minItems: 1, maxItems: MAX_CHILDREN_PER_CALL }) }, { additionalProperties: false }),
       async execute(id, params: { agents: ChildSpec[] }, signal) {
-        const children = await runtime.start(id, params.agents, signal);
-        const text = children.map(child => {
-          const files = child.edits.length ? child.edits.map(edit => `- ${edit.path}${edit.outside ? " [outside owns]" : ""}`).join("\n") : "- none";
-          const usage = [`${child.usage.input} input`, `${child.usage.output} output`, `${child.usage.turns} turns`,
-            ...(child.usage.cost === undefined ? [] : [`$${child.usage.cost.toFixed(6)}`]),
-            ...(child.usage.contextPercent === undefined ? [] : [`${child.usage.contextPercent.toFixed(1)}% context`])].join(", ");
-          return `## ${child.id}: ${child.state}\nFiles edited:\n${files}\nUsage: ${usage}${child.error ? `\nError: ${child.error}` : ""}\n\n${child.report ?? "No report."}`;
-        }).join("\n\n");
-        return { content: [{ type: "text", text }], details: { children }, isError: children.length > 0 && children.every(child => child.state === "failed") };
+        const agents = params.agents.map(agent => {
+          const kind = agent.kind ?? (allowedKinds.includes("slice") ? "slice" : "explore");
+          if (!allowedKinds.includes(kind)) throw new Error(`Child kind "${kind}" is not allowed`);
+          return { ...agent, kind };
+        });
+        const children = await runtime.start(id, agents, signal);
+        const text = children.map(child => `## ${child.id}: ${child.state}`).join("\n") + "\n\nReports arrive as messages. Use agent_wait to collect reports explicitly.";
+        return { content: [{ type: "text", text }], details: { children } };
+      },
+    },
+    ...communication,
+    {
+      name: "agent_wait", label: "Collect child reports",
+      description: "Wait for named children (default: every live child) to settle, or until the timeout. Returned settlements are collected and are not delivered again as messages.",
+      parameters: Type.Object({ ids: Type.Optional(Type.Array(Type.String())), timeout_secs: Type.Optional(Type.Number({ minimum: 0, maximum: 3600 })) }, { additionalProperties: false }),
+      async execute(_id, params: { ids?: string[]; timeout_secs?: number }, signal) {
+        const timeout = AbortSignal.timeout(Math.ceil((params.timeout_secs ?? 600) * 1000));
+        const children = await runtime.wait(params.ids ?? runtime.snapshot().children.filter(child => ["queued", "running", "needs"].includes(child.state)).map(child => child.id),
+          signal ? AbortSignal.any([signal, timeout]) : timeout);
+        return { content: [{ type: "text", text: children.map(formatChildReport).join("\n\n") || "No children to collect." }], details: { children } };
       },
     },
     {
-      name: "agent_message", label: "Steer a build child",
-      description: "Send a live child a concise correction or missing context for its next step. Returns whether the message was delivered; finished or queued children cannot receive steering.",
-      promptSnippet: "Send a correction or missing context to a running build child",
-      promptGuidelines: ["Use agent_message to correct a live child's brief without duplicating its work. A delivered message is not a completion report; collect the task result."],
-      parameters: Type.Object({ id: Type.String(), text: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
-      async execute(_id, params: { id: string; text: string }) {
-        const delivered = await runtime.steer(params.id, params.text);
-        return { content: [{ type: "text", text: delivered ? `Message delivered to ${params.id}.` : `Child ${params.id} is not running; no message delivered.` }], details: { delivered } };
-      },
-    },
-    {
-      name: "agent_cancel", label: "Cancel a build child",
-      description: "Cancel one queued or running child without cancelling unrelated slices. Its dependents are cancelled because their prerequisite did not finish successfully. Existing edits remain in the shared worktree.",
-      promptSnippet: "Cancel one build child and its dependent slices",
+      name: "agent_cancel", label: "Cancel a child",
+      description: "Cancel one queued or running child without cancelling unrelated work. Its dependents are cancelled because their prerequisite did not finish successfully. Existing edits remain in the shared worktree.",
+      promptSnippet: "Cancel one child and its dependents",
       promptGuidelines: ["Cancel children whose work is no longer needed, then inspect existing edits and reports; cancellation does not roll back shared files."],
       parameters: Type.Object({ id: Type.String() }, { additionalProperties: false }),
       async execute(_id, params: { id: string }) {

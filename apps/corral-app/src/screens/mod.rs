@@ -6,6 +6,7 @@
 
 pub mod agents;
 pub mod assistant;
+pub mod builds;
 pub mod changes;
 pub mod inbox;
 pub(crate) mod markdown;
@@ -129,6 +130,7 @@ fn screen(app: AppState, destination: Destination) -> AnyElement {
         Destination::Now => now::screen(app),
         Destination::Changes => changes::screen(app),
         Destination::Plans => plans::screen(app),
+        Destination::Builds => builds::screen(app),
         Destination::Agents => agents::screen(app),
         Destination::Review => review::screen(app),
         Destination::Timeline => timeline::screen(app),

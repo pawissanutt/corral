@@ -84,6 +84,13 @@ pub(super) fn render(
             )?;
         }
     }
+    if let Some(builds) = &s.numbers.builds {
+        writeln!(
+            out,
+            "\nBuilds: {} landed; {} kept; {} abandoned; {} open",
+            builds.landed, builds.kept, builds.abandoned, builds.open
+        )?;
+    }
     writeln!(
         out,
         "\nReview rounds: {}\nGate failures: {}\n\n### Lessons\n",
@@ -97,6 +104,35 @@ pub(super) fn render(
             event.kind,
             event.detail
         )?;
+    }
+    if !s.builds.is_empty() {
+        writeln!(out, "\n## 8. Builds\n")?;
+        for build in &s.builds {
+            writeln!(
+                out,
+                "- {} {} [{}]; project: {}; slices: {}; review rounds: {}; gate attempts: {}; gate failures: {}; cost USD {}",
+                build.id,
+                build.title,
+                build.state.as_str(),
+                build.project.as_deref().unwrap_or("-"),
+                build.slices,
+                build.review_rounds,
+                build.gate_attempts,
+                build.gate_failures,
+                build
+                    .cost_usd
+                    .map_or_else(|| "-".into(), |cost| format!("{cost:.4}"))
+            )?;
+            if let Some(sha) = &build.landed {
+                writeln!(out, "  - Landed SHA: {sha}")?;
+            }
+            if let Some(reason) = &build.override_reason {
+                writeln!(
+                    out,
+                    "\n  > **Owner override — landed over open findings:** {reason}\n"
+                )?;
+            }
+        }
     }
     Ok(out)
 }

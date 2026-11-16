@@ -7,7 +7,7 @@ import { agentColor } from "./agent-hues.ts";
 import { AGENT_HUES, PACKAGED, type Appearance } from "./appearance.ts";
 import { PANEL_BLUE, PANEL_MUTED, type PanelJob, type PanelSnapshot } from "./panels-view.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
-import type { BuildPanelState, ChildSnapshot, FleetSnapshot } from "../build/types.ts";
+import type { ChildSnapshot, FleetSnapshot } from "../build/types.ts";
 import { childKey } from "./build/contract.ts";
 import { fleetExtras } from "./build/fleet-rows.ts";
 
@@ -184,26 +184,19 @@ test("agent hues keep at least 4.5:1 contrast on the panel background and the se
 });
 
 function buildChild(id: string, extra: Partial<ChildSnapshot> = {}): ChildSnapshot {
-  return { id, call: "call-1", title: `Deliver ${id}`, brief: `Brief for ${id}`, owns: [`src/${id}/`], after: [], profile: "default",
+  return { id, kind: "slice", call: "call-1", title: `Deliver ${id}`, brief: `Brief for ${id}`, owns: [`src/${id}/`], after: [], profile: "default",
     model: "anthropic/model-a", state: "running", createdAt: NOW - 200_000, startedAt: NOW - 190_000, edits: [],
     usage: { input: 1200, output: 300, turns: 4, cost: 0.12, contextPercent: 41 }, steers: [], pulse: [1, 3, 5, 2], history: "qrrr", messages: [], ...extra };
 }
 const QUESTION = { question: "The wireframe shows two layouts; which one should the picker render?", options: [{ label: "Grid" }, { label: "List" }], askedAt: NOW - 5000 };
-const MOCK_FLEET: FleetSnapshot = { maxParallel: 3, startedAt: NOW - 200_000, children: [
+const MOCK_FLEET: FleetSnapshot = { mail: [], maxParallel: 3, startedAt: NOW - 200_000, children: [
   buildChild("host-slots", { state: "done", endedAt: NOW - 100_000, history: "qrrrrd", report: "Slots stored per host\nmore",
     edits: [{ path: "src/host-slots/a.rs", outside: false, at: NOW - 150_000 }, { path: "src/app-store/b.rs", outside: true, at: NOW - 140_000 }] }),
   buildChild("app-store", { activity: "edit src/app-store/store.rs", steers: ["Keep the store API stable"] }),
   buildChild("picker-ui", { state: "needs", question: QUESTION, history: "qrrn" }),
   buildChild("arrival", { state: "queued", after: ["app-store"], startedAt: undefined, history: "qqqq", usage: { input: 0, output: 0, turns: 0 } }),
 ]};
-function buildState(fleet: FleetSnapshot): BuildPanelState {
-  return {
-    session: { version: 1, id: "B-1", name: "save-slots", created: "2026-01-01T00:00:00Z", updated: "2026-01-01T00:00:00Z", repoRoot: "/repo",
-      worktree: "/repo/.worktrees/build-save-slots", branch: "build/save-slots", base: null, here: false },
-    settings: { exitPolicy: "gate", maxParallel: fleet.maxParallel, profiles: [] }, fleet, target: "parent", exit: { phase: "none" }, board: [],
-  };
-}
-const buildModel = (fleet = MOCK_FLEET) => agentsModel(fixture, NOW, { extra: fleetExtras(buildState(fleet), NOW) });
+const buildModel = (fleet = MOCK_FLEET) => agentsModel(fixture, NOW, { extra: fleetExtras(fleet, NOW) });
 
 test("child rows lead the table in fleet order, with their detail and key-cap actions, at 140 and 52 columns", () => {
   for (const width of [140, 52]) {

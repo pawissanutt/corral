@@ -609,6 +609,10 @@ pub fn end(ctx: &Ctx, id: &str) -> Result<(AssistantSession, Option<String>)> {
         "assistant ended",
     )?;
     let session = ctx.store.end_assistant(id)?;
+    crate::delivery::peer::cancel(
+        ctx,
+        &corral_core::inbox::Recipient::Assistant { session: id.into() },
+    )?;
     if let Err(error) = crate::assistant::permissions::drain_permission_audit(&ctx.store, id) {
         let queued =
             format!("warning: {id}'s write-permission audit lines stay queued ({error:#})");

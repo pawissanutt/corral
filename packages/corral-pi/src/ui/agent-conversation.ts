@@ -2,12 +2,12 @@
 // profile and model, state and time, cost and context, and the activity sparkline while it runs), then the
 // prompt in a bubble, the retention note when earlier messages were dropped, the replies and one line per tool
 // call, then the agent's notes. A build child's prompt is its brief from the parent with what it owns inside the
-// bubble; the owner's steers sit among the replies at the time they were sent, then its state (waiting, asking,
+// bubble; the owner's steers and the messages it exchanged with other agents sit among the replies at the time they were sent, then its state (waiting, asking,
 // cancelled). A running agent's page follows its end until the owner scrolls up; the reading position is kept per agent key.
 import { ScrollView, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { duration, isLive, money, sparkline, timeLabel, toneColor, type AgentRow } from "./agents-model.ts";
 import { spinner } from "./frame.ts";
-import { bubble, type HelperChat, type Steer } from "./helper-chat.ts";
+import { bubble, mailSteers, type HelperChat, type Steer } from "./helper-chat.ts";
 import { PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
 
 export interface AgentConversationHost {
@@ -102,12 +102,13 @@ export class AgentConversation {
       const prompt = child
         ? { label: "brief from parent", notes: [`Owns: ${row.owns?.length ? row.owns.join(", ") : "nothing (read-only)"} · no board access · no nested agents`] }
         : { label: "prompt from parent" };
-      const steers: readonly Steer[] = (row.steers ?? []).map((text, index) => {
+      // The owner's steers and the messages it exchanged with other agents sit among the replies by the time they were sent.
+      const steers: readonly Steer[] = [...(row.steers ?? []).map((text, index) => {
         const at = row.steeredAt?.[index];
         return at === undefined ? { text } : { text, at };
-      });
+      }), ...mailSteers(row.mail ?? [], (id, hue) => hue === undefined ? id : BOLD + this.host.color(hue) + id + UNBOLD)];
       const chat = row.conversation ? this.host.chat.renderHelper(row.conversation, width,
-        { bubble: prompt, now, ...(child ? { steers: { label: "you → " + BOLD + this.host.color(row.hue) + row.name + UNBOLD, items: steers } } : {}) })
+        { bubble: prompt, now, ...(child || steers.length ? { steers: { label: "you → " + BOLD + this.host.color(row.hue) + row.name + UNBOLD, items: steers } } : {}) })
         : [" " + PANEL_MUTED + "Conversation unavailable for this agent." + RESET];
       this.chatRows = row.conversation ? chat.length : 0;
       lines.push(...chat);
@@ -116,7 +117,7 @@ export class AgentConversation {
         if (row.state === "needs" && row.question !== undefined) {
           lines.push("");
           const from = lines.length;
-          lines.push(...say("▲ " + row.question + PANEL_MUTED + " · answer in the dialog", PANEL_WARNING));
+          lines.push(...say("▲ " + row.question + (row.capabilities.answer ? PANEL_MUTED + " · answer in the dialog" : ""), PANEL_WARNING));
           if (row.capabilities.answer) this.ask = { from, to: lines.length, key: row.key };
         }
         if (row.state === "cancelled") lines.push("", ...say("✗ Cancelled. Its edits so far stay in the worktree.", PANEL_ERROR));

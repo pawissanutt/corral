@@ -115,6 +115,8 @@ pub struct LivePage {
     pub more: bool,
     #[serde(default)]
     pub gap: Option<corral_protocol::subscription::SessionLiveGap>,
+    #[serde(default)]
+    pub fleet: Option<corral_protocol::subscription::SessionFleet>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

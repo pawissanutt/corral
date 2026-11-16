@@ -352,6 +352,7 @@ fn live_needs_you(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
             Live::Review(id) => format!("Review {id} · {}", row.title),
             Live::Thread(_) | Live::Session(_) => format!("Permission {} · {}", row.id, row.title),
             Live::Task(id) => format!("{id} · {}", row.title),
+            Live::Build(id) => format!("Build {id} · {}", row.title),
         };
         Some((label, target))
     });
@@ -414,8 +415,8 @@ fn task_id(query: &str) -> Option<Id> {
         .then(|| Id::from(format!("T-{number}")))
 }
 
-/// Records the daemon served: board tasks, plans, agent sessions, assistant threads. A whole
-/// task id the board does not list (a closed task) opens by id, from its detail.
+/// Records the daemon served: board tasks, plans, builds, agent sessions, assistant threads. A
+/// whole task id the board does not list (a closed task) opens by id, from its detail.
 fn live_open(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
     if let Some(id) = task_id(query).filter(|id| feed.board.task(id).is_none()) {
         let live = Live::Task(id);
@@ -447,6 +448,19 @@ fn live_open(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
             .filter(|(_, plan)| !matches!(plan.state, PlanState::Complete | PlanState::Cancelled))
             .map(|(id, plan)| (format!("Plan {id} {}", plan.title), Live::Plan(id.clone()))),
     );
+    if feed.capable(corral_protocol::app::BUILDS_V1) {
+        push_live(
+            rows,
+            "Open",
+            query,
+            feed.builds.iter().map(|(id, build)| {
+                (
+                    format!("Build {id} {}", build.title),
+                    Live::Build(id.clone()),
+                )
+            }),
+        );
+    }
     push_live(
         rows,
         "Open",
@@ -548,6 +562,7 @@ pub const fn destination_key(destination: Destination) -> Option<&'static str> {
         Destination::Now => "n",
         Destination::Changes => ".",
         Destination::Plans => "p",
+        Destination::Builds => "b",
         Destination::Agents => "a",
         Destination::Review => "r",
         Destination::Timeline => "t",

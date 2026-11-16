@@ -54,6 +54,21 @@ Inbox recipients have keys such as `T-144_R2`, `T-144_plan-P1`,
 Records live under `.corral/inbox/<key>/`; sequence and envelope counters live on the
 recipient's run, or in `.corral/state/pm-inbox.json`.
 
+## Agent messages
+
+Every bound role can send informational `agent_message` messages through `peer_send`;
+the sender's recipient key is derived from the authenticated caller binding, not model input.
+`peer_roster` lists open peers and their recipient keys. The Pi tools `agent_message` and
+`agent_roster` expose messaging and discovery to the host. Recipient keys identify runs, plan
+and review children, assistants or `pm`; the sender's key appears as the message author and
+as the last column of `corral inbox` list output.
+
+Agent messages are always follow-up, never interruptions. They carry no owner authority:
+they are not owner replies, cannot lift a pause or answer a decision, and do not block
+`corral done`. A sender may post at most 60 per generation across recipients; further sends
+refuse `agent_message_limit`. The posting call performs a delivery pass; sync reconciliation
+retries unsettled delivery. Closing the recipient cancels its agent messages.
+
 ## corral-pi host
 
 The `corral_pi` adapter delivers to a corral-pi worker run (`T-144_R2`), review child

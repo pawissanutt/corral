@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProviderId } from "../auth/providers.ts";
@@ -13,6 +13,7 @@ import { prepareWorktree } from "../build/worktree.ts";
 import type { BuildContext, BuildLaunch, BuildSessionRecord } from "../build/types.ts";
 import { LaunchMessageInvalid, type HostCapabilities, type HostConfig } from "./config.ts";
 import { runHost } from "./main.ts";
+import { requireBareProvider } from "./bare.ts";
 
 // Everything here runs in the host, its own managed processes, or the local receipt plane.
 // write_permissions needs assistant scratch ownership; checkpoints needs a worker run;
@@ -45,6 +46,11 @@ const resumeCommand = (id: string) => `\`corral pi --resume ${id}\``;
 /** Verify the recorded checkout before opening its transcript or binding any tools. */
 export function validateBuildResume(record: BuildSessionRecord): void {
   const resume = resumeCommand(record.id);
+  if (record.bare && record.repository === false) {
+    if (!statSync(record.worktree).isDirectory()) throw new BuildResumeRefused(record, "session directory is missing",
+      `${record.worktree} is no longer a directory.`, `Restore that directory, then run ${resume}.`);
+    return;
+  }
   const commonDirectory = (path: string): string => {
     const result = spawnSync("git", ["-C", path, "rev-parse", "--git-common-dir"], { encoding: "utf8" });
     if (result.error || result.status !== 0) {
@@ -99,7 +105,7 @@ export function buildHostConfig(launch: BuildLaunch, record: BuildSessionRecord,
   return {
     identity: { store: "build", project: record.project ?? "", role: "build", generation: 1 },
     secrets: { hostCap: randomBytes(32).toString("base64url"), ctlCap: randomBytes(32).toString("base64url"), bindNonce: randomBytes(32).toString("base64url") },
-    pane: "", cwd: record.worktree, root: record.workspaceRoot ?? record.repoRoot, corral: launch.corral, assets,
+    pane: "", cwd: record.worktree, root: record.workspaceRoot ?? record.repoRoot, corral: launch.corral ?? "", assets,
     sessionDir: join(dir, "sessions"), runtimeDir: join(dir, "runtime"), ui: "rich",
     ...(record.sessionFile ? { resumeSession: record.sessionFile } : {}), capabilities,
     ...(guidance ? { guidance } : {}), todo: capabilities.enabled.includes("todo"),
@@ -122,7 +128,7 @@ function refusalLines(error: unknown, resume: string | undefined): readonly [str
 function quitLines(dataRoot: string, fallback: BuildSessionRecord): readonly string[] {
   let record = fallback;
   try { record = loadSession(dataRoot, fallback.id); } catch { /* The record read at launch still names the work. */ }
-  const where = `${record.worktree} on ${record.branch ? `branch ${record.branch}` : "a detached HEAD"}`;
+  const where = `${record.worktree}${record.repository === false ? " (outside Git)" : ` on ${record.branch ? `branch ${record.branch}` : "a detached HEAD"}`}`;
   if (!record.exit) {
     return [`Build ${record.name} stopped without an exit; its work stays in ${where}.`,
       `Resume it with ${resumeCommand(record.id)}, then choose an exit with /finish.`];
@@ -141,6 +147,7 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
     if (!Number.isSafeInteger(fd) || fd < 3) throw new LaunchMessageInvalid("invalid launch descriptor");
     const launch = readBuildLaunch(fd);
     resume = launch.resume;
+    if (launch.bare) requireBareProvider(launch.provider as ProviderId);
     if (launch.provider === "llama.cpp") {
       throw new LaunchRefused("Local inference is unavailable in a build session", "Local inference (llama.cpp) is unavailable in a build session.",
         "Choose another provider with `corral pi --build --provider <provider>`.");
@@ -154,6 +161,7 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
         throw new LaunchRefused(detail, `Build ${id} cannot resume: its session record is missing or unreadable (${detail}).`,
           "Pick a recent build in the `corral pi` launcher, or start a new one with `corral pi --build`.");
       }
+      if ((record.bare === true) !== (launch.bare === true)) throw new LaunchMessageInvalid("resume bare marker differs from the saved session");
       validateBuildResume(record);
       if (!record.sessionFile) {
         throw new LaunchRefused("The build session has no recorded transcript to resume", `Build ${id} has no recorded conversation to resume.`,
@@ -161,7 +169,20 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
       }
     } else {
       const draft = createSession(launch, { worktree: launch.repoRoot, branch: null, base: null });
-      try { record = { ...draft, ...prepareWorktree(launch.repoRoot, draft.name, launch.here) }; }
+      try {
+        if (launch.bare) {
+          const repository = spawnSync("git", ["-C", launch.repoRoot, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+          if (repository.status !== 0) {
+            if (!repository.stderr?.includes("not a git repository")) throw new Error(repository.error?.message ?? repository.stderr.trim());
+            record = { ...draft, here: true, repository: false };
+          } else {
+            const branch = spawnSync("git", ["-C", launch.repoRoot, "symbolic-ref", "--quiet", "--short", "HEAD"], { encoding: "utf8" });
+            if (branch.status !== 0 && branch.status !== 1) throw new Error(branch.error?.message ?? branch.stderr.trim());
+            record = { ...draft, ...prepareWorktree(launch.repoRoot, draft.name, launch.here), repository: true,
+              baseBranch: branch.status === 0 ? branch.stdout.trim() : null };
+          }
+        } else record = { ...draft, ...prepareWorktree(launch.repoRoot, draft.name, launch.here) };
+      }
       catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         const taken = /^Build (worktree|branch) already exists: (.*)$/.exec(detail);
@@ -172,7 +193,7 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
       saveSession(launch.dataRoot, record);
     }
     const dir = sessionDir(launch.dataRoot, record.id);
-    const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral };
+    const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral ?? "" };
     const config = buildHostConfig(launch, record, assets);
     const ledger = createTodoLedger(dir);
     // Pi ends an ordinary quit with process.exit(0); this prints after the terminal is restored.

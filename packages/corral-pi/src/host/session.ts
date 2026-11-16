@@ -66,6 +66,7 @@ import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSetti
 import { createModelCatalog } from "./catalog.ts";
 import { createApiCatalog } from "./api-connections.ts";
 import { installModelSelection, subscriptionRoutes } from "./subscriptions.ts";
+import { bareProviders } from "./bare.ts";
 import { observeTerminalInput, type InputObservation } from "./input-observation.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { createLocalModels } from "./local-models.ts";
@@ -88,9 +89,14 @@ import { auxiliarySettings } from "../extensions/subagent/settings.ts";
 import { expertTool, exploreTool } from "../extensions/subagent/index.ts";
 import { oracleTool } from "../extensions/oracle/index.ts";
 import { runAuxiliarySession } from "../extensions/subagent/session.ts";
+import { FleetRuntime } from "../extensions/fleet/runtime.ts";
+import { fleetTools } from "../extensions/fleet/tools.ts";
+import { boundFleetSettings } from "../extensions/fleet/settings.ts";
+import { createPeerTransport } from "../extensions/peers/transport.ts";
 import { executionRefusal, exploreLoadout, nestedCorralRead } from "../roles/common/execution.ts";
 import { OWNER_INPUT_TEXT_MAX, ownerInputText, utf8Prefix } from "../roles/assistant/owner-action.ts";
 import type { ConfirmUi, GateTriageProposal, TriageUi } from "../tools/define.ts";
+import { workerDoneTool } from "../roles/worker/tools.ts";
 import { askGateTriage } from "./triage-dialog.ts";
 import { memoryContext } from "./memory.ts";
 import { transcriptPreview } from "./transcript-preview.ts";
@@ -373,6 +379,7 @@ export class HostSession {
   private readonly permissions: BashPermissions | undefined;
   private readonly checkpoints: Checkpoints | undefined;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
+  private readonly fleet: FleetRuntime | undefined;
   private readonly buildControls: BuildControls | undefined;
   private readonly shadow: ShadowDispatcher | undefined;
   private nextTurnInbox = false;
@@ -410,6 +417,7 @@ export class HostSession {
   readonly provider: ProviderId;
 
   private constructor(private readonly options: HostSessionOptions) {
+    const host = this;
     this.liveEvents = new LiveEvents(options.identity.generation);
     this.provider = options.provider ?? "openai-codex";
     this.paidContinuation = new HostContinuation({
@@ -430,7 +438,7 @@ export class HostSession {
       current: () => !this.closing && this.bound && this.session.sessionId === this.boundSessionId,
       turn: next => next || !this.open ? this.turn + 1 : this.turn,
       emit: (kind, data) => options.events.emit(kind, data),
-      fence: () => { this.stopCause ??= "host"; this.closing = true; this.writeAbort.abort(); this.session.agent.abort(); },
+      fence: () => { this.stopCause ??= "host"; this.closing = true; this.writeAbort.abort(); void this.fleet?.close(); this.session.agent.abort(); },
     });
     this.planning = options.identity.role === "assistant" ? new PlanningPolicy({
       read: async () => {
@@ -481,13 +489,22 @@ export class HostSession {
       parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
       agentDir: options.agentDir,
       localTools: () => this.localTools.filter(tool => !this.buildControls?.tools.includes(tool)).map(tool => this.planningTool(tool)),
-      shellRefusal: options.modules.role.shellRefusal, changed: () => this.panels?.refresh(),
+      deliverToParent: async text => {
+        const key = `fleet:${crypto.randomUUID()}`;
+        const result = await this.submit({ text, busyPolicy: "follow_up", idempotencyKey: key, origin: "command" }, key);
+        if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
+      },
+      shellRefusal: options.modules.role.shellRefusal, changed: () => {
+        this.liveEvents.observeFleet(this.buildControls?.fleet.snapshot());
+        this.panels?.refresh();
+      },
     }) : undefined;
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
       sidebarKey: sidebarToggleKey(process.env),
       ...(this.marks ? { marks: this.marks } : {}),
       ...(this.buildControls ? { build: this.buildControls.ui, deliverBuildInput: (text: string) => this.deliverBuildInput(text) } : {}),
+      get fleetControl() { return options.build ? undefined : host.fleet; },
       queueControl: {
         enabled: () => this.queue.controlEnabled,
         edit: key => this.queue.edit(key),
@@ -538,7 +555,7 @@ export class HostSession {
         if (this.open) this.stopCause ??= "budget";
         if (this.open) this.report("budget_exhausted", { budget: this.budget.state() });
       },
-      cancel: () => { void this.cancelRun(this.currentTurn(), "budget"); void this.auxiliary?.cancelAll(); },
+      cancel: () => { void this.cancelRun(this.currentTurn(), "budget"); void this.auxiliary?.cancelAll(); void this.fleet?.cancelAll(); },
     });
     const registerCapability = capabilityRegistry(() => this.session?.sessionFile);
     const remotePrompts = this.remotePrompts;
@@ -636,6 +653,48 @@ export class HostSession {
     const auxiliary = { ...auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings),
       ...(subscriptionSearch ? { web_search: { model: null, timeout_secs: (options.capabilities?.web?.timeout_ms ?? 15000) / 1000 } } : {}),
     };
+    const record = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      if (!this.bound) throw new Error("host_not_bound");
+      await this.drained();
+      const event = options.events.emit("auxiliary", payload);
+      const receipt = await options.client.call("event", {
+        requestId: eventRequestId(options.identity.generation, event.seq), payload, turn: this.currentTurn(),
+      });
+      if (receipt.state !== "committed") throw new Error(`auxiliary record refused: ${JSON.stringify(receipt.result)}`);
+      return receipt.result as Record<string, unknown>;
+    };
+    if (!options.build) {
+      const host = this;
+      const settings = boundFleetSettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
+      this.fleet = new FleetRuntime({
+        sdk: options.sdk,
+        get models() {
+          if (!host.auxiliaryModels) throw new Error("child model runtime is not ready");
+          return host.auxiliaryModels;
+        },
+        get approved() { return host.buildProviders; },
+        parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
+        context: { session: { worktree: options.cwd, name: `${options.identity.role} session` },
+          dir: options.runtimeDir ?? join(options.agentDir, "runtime", String(options.identity.generation)),
+          settings: { maxParallel: settings.maxParallel, profiles: [] } },
+        agentDir: options.agentDir, bound: true, allowedKinds: settings.allowedKinds,
+        maxTurns: settings.maxTurns, timeoutSecs: settings.timeoutSecs,
+        ...(auxiliary.explore ? { research: { settings: auxiliary.explore, generation: options.identity.generation, sessionId: () => this.sessionId() } } : {}),
+        identity: { generation: options.identity.generation, sessionId: () => this.sessionId() },
+        get parentLoadout() { return host.loadout.filter(name => host.planning?.visible(name) !== false); },
+        get localTools() { return host.localTools.map(tool => host.planningTool(tool)); },
+        shellRefusal: options.modules.role.shellRefusal,
+        peers: createPeerTransport(options.client), changed: () => {
+          this.liveEvents.observeFleet(this.fleet?.snapshot());
+          this.panels?.refresh();
+        }, record,
+        deliverToParent: async text => {
+          const key = `fleet:${crypto.randomUUID()}`;
+          const result = await this.submit({ text, busyPolicy: "follow_up", idempotencyKey: key, origin: "command" }, key);
+          if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
+        },
+      });
+    }
     if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search || auxiliary.shadow || auxiliary.expert) {
       this.auxiliary = new AuxiliaryRuntime({
         settings: auxiliary, generation: options.identity.generation, provider: this.provider, model: options.model,
@@ -646,16 +705,7 @@ export class HostSession {
           return model && ["openai-codex", "anthropic"].includes(model.provider) && this.searchModels?.getModel(model.provider, model.id)
             ? { provider: model.provider, model: model.id } : undefined;
         },
-        record: async (payload) => {
-          if (!this.bound) throw new Error("host_not_bound");
-          await this.drained();
-          const event = options.events.emit("auxiliary", payload);
-          const receipt = await options.client.call("event", {
-            requestId: eventRequestId(options.identity.generation, event.seq), payload, turn: this.currentTurn(),
-          });
-          if (receipt.state !== "committed") throw new Error(`auxiliary record refused: ${JSON.stringify(receipt.result)}`);
-          return receipt.result as Record<string, unknown>;
-        },
+        record,
         execute: (invocation, signal) => {
           if (invocation.kind === "web_search") {
             if (!this.searchModels || !options.capabilities?.web) throw new Error("subscription search runtime is not ready");
@@ -756,11 +806,13 @@ export class HostSession {
           return (await this.auxiliary.run("web_search", id, JSON.stringify({ query, count }), signal)).text;
         } : undefined) : []),
       ...(this.jobs ? jobTools(this.jobs, true, this.commands).filter(tool => tool.name !== "bash" || role.upstreamTools.includes("bash")) : []),
-      ...(this.auxiliary && auxiliary.explore ? [exploreTool(this.auxiliary)] : []),
+      ...(this.fleet && auxiliary.explore ? [exploreTool(this.fleet)] : []),
       ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
       ...(this.auxiliary && auxiliary.expert ? [expertTool(this.auxiliary)] : []),
       ...(browser ? browserTools(browser, { cwd: options.cwd, registerCapability }) : [])];
     if (this.buildControls) this.localTools = [...this.localTools, ...this.buildControls.tools];
+    if (this.fleet) this.localTools = [...this.localTools, ...fleetTools(this.fleet,
+      boundFleetSettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings).allowedKinds)];
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
     if (mcp !== (options.capabilities?.mcp !== undefined)) {
@@ -1035,13 +1087,14 @@ export class HostSession {
     }
     const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
     const apiBinding = isApiConnection(connection) ? options.binding : undefined;
-    const subscriptions = apiBinding
+    const subscriptions = options.build?.session.bare ? await bareProviders(options.modules.auth, route.id) : apiBinding
       ? { providers: [route.id], credentials: options.modules.auth.credentials(authContext(route.id, connection)) }
       : await subscriptionRoutes(options.modules.auth, route.id, options.binding ? "worker" : options.identity.role);
     const apiModels = apiBinding ? await createApiCatalog(subscriptions.credentials, apiBinding, options.network.fetch,
       request => host.budget.physical(request)) : undefined;
     const models = apiModels?.models ?? localModels?.models ?? await createModelCatalog(subscriptions.credentials, {
       providers: subscriptions.providers,
+      ...(options.build?.session.bare ? { modelsPath: join(options.build.dir, "..", "..", "models.json") } : {}),
     });
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
     const model = apiModels?.model ?? localModels?.model ?? models.getModel(route.id, modelId);
@@ -1260,6 +1313,7 @@ export class HostSession {
       const tool = defineCorralTool(spec, {
         client: this.options.client, allowedOps: this.options.modules.role.corralOps,
         sessionId: () => this.sessionId(), currentTurn: () => this.currentTurn(),
+        fleetSnapshot: () => this.fleet?.snapshot(),
         ...(this.options.identity.role === "assistant"
           ? { confirm: (command: string, context: ConfirmUi, requestId: string) =>
             this.confirmOwnerAction(command, context, requestId) } : {}),
@@ -1268,7 +1322,12 @@ export class HostSession {
             askGateTriage(proposal, context, signal ? AbortSignal.any([this.writeAbort.signal, signal]) : this.writeAbort.signal,
               () => this.planning?.refusal("corral_gate_triage")) } } : {}),
       });
-      pi.registerTool(tool);
+      pi.registerTool(role === "worker" && spec.op === "done" && this.fleet
+        ? workerDoneTool(tool, {
+          client: this.options.client, sessionId: () => this.sessionId(), currentTurn: () => this.currentTurn(),
+          task: this.options.identity.task, run: this.options.identity.run, fleet: () => this.fleet!.snapshot(),
+          recordDir: join(this.options.runtimeDir ?? join(this.options.agentDir, "runtime", String(this.options.identity.generation)), "session-records"),
+        }) : tool);
     }
     if (rich) {
       installChrome(pi, {
@@ -1376,7 +1435,7 @@ export class HostSession {
     if (this.buildControls) {
       const { exit, board } = this.buildControls;
       pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { if (!this.panels?.finish()) exit.open(); } });
-      pi.registerCommand("board", { description: "Refresh this build session's board tasks", handler: async () => { await board.refresh(); this.panels?.showBoard(); } });
+      if (board) pi.registerCommand("board", { description: "Refresh this build session's board tasks", handler: async () => { await board.refresh(); this.panels?.showBoard(); } });
     }
     if (this.exportable()) {
       pi.registerCommand(EXPORT_COMMAND, {
@@ -1396,6 +1455,8 @@ export class HostSession {
       if (this.closing) return { action: "handled" as const };
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
+      // A build session's record keeps what the owner asked for, verbatim.
+      if (event.source === "interactive" && !event.text.startsWith("/")) this.buildControls?.noteOwnerInput(event.text);
       // Only text the owner typed into this pane is journaled, before the model sees it.
       if (event.source !== "interactive" || this.options.identity.role !== "assistant" || event.text.startsWith("/")) {
         return { action: "continue" as const };
@@ -1427,6 +1488,7 @@ export class HostSession {
       if (event.reason === "quit") await this.options.herdr?.close();
       await this.planReviews?.close(event.reason === "reload");
       if (event.reason === "reload") await this.auxiliary?.cancelAll(); else await this.auxiliary?.close();
+      if (event.reason === "reload") await this.fleet?.cancelAll(); else await this.fleet?.close();
       this.commands?.pause();
       await this.jobs?.shutdown();
       if (event.reason === "reload") await this.assistantShell?.shutdown(); else await this.assistantShell?.close();
@@ -1513,7 +1575,7 @@ export class HostSession {
       }) : [],
       children: [
         ...(this.auxiliary?.inspection() ?? []).map(child => ({ id: child.request, state: child.state, label: `${child.kind} ${child.request.slice(0, 12)}` })),
-        ...(this.buildControls?.fleet.snapshot().children ?? []).map(child => ({ id: child.id, state: child.state, label: `agent ${child.id}: ${child.title}` })),
+        ...((this.buildControls?.fleet ?? this.fleet)?.snapshot().children ?? []).map(child => ({ id: child.id, state: child.state, label: `agent ${child.id}: ${child.title}` })),
       ],
       events: [
         ...(this.request?.waits() ?? []),
@@ -1865,6 +1927,7 @@ export class HostSession {
     await this.planReviews?.close();
     await this.auxiliary?.close();
     await this.buildControls?.close();
+    await this.fleet?.close();
     await this.jobs?.shutdown();
     await this.assistantShell?.close();
     await aborted;
@@ -2081,6 +2144,7 @@ export class HostSession {
       ...this.commands?.recovered() ?? []] : null;
     return {
       ...(this.buildControls ? { build: this.buildControls.panelState() } : {}),
+      ...(this.fleet ? { fleet: this.fleet.snapshot() } : {}),
       budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : undefined,
       bound: this.bound, model: session.model ? `${session.model.provider}/${session.model.id}` : null,
       effort: session.thinkingLevel, effortAvailable: session.supportsThinking(),
@@ -2136,6 +2200,7 @@ export class HostSession {
       binding: this.options.binding ?? null,
       connection: resolveConnection((session.model?.provider ?? this.provider) as ProviderId, this.options.binding?.connection),
       native_children: this.auxiliary?.inspection().map(({ sessionFile: _file, ...child }) => child) ?? null,
+      fleet: this.fleet?.snapshot() ?? null,
       todo: this.loadout.includes("corral_todo"),
       // The plan the sidebar renders and the model summary names: one host ledger.
       ledger: this.ledger?.current ? { plan: this.ledger.current.plan ?? null, revision: this.ledger.current.revision } : null,

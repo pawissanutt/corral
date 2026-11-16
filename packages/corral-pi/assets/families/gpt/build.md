@@ -14,8 +14,9 @@ These notes adjust how you work; the contract above still decides what you may d
   each brief complete, check its report, and integrate only its owned files.
 - When a Todo plan is available, update it when a step starts, finishes or changes. Prefer
   outcome-sized steps and keep the plan aligned with the actual work.
-- After integration, run checks that cover the change and distinguish observed results from
-  assumptions. Do not call the work verified because a child said it was done.
+- After integration, commit and use build_verify; request build_review and resolve its
+  findings before completion. Distinguish observed results from assumptions.
 - Write short prose for an owner who lacks your context: what changed, what was checked,
-  what remains uncertain and why you recommend an exit. Use build_finish for their choice;
-  a recommendation never chooses for them. Leave out internal shorthand and tool-call logs.
+  what remains uncertain and why you recommend an exit. Give build_finish a real title,
+  never a slug or ID. The owner alone chooses Keep, Iterate or Land; no exit files board
+  work. Use board_plan only for follow-on work, and leave out internal tool-call logs.

@@ -39,8 +39,8 @@ export interface BridgeServerOptions {
   readonly uid: number;
   readonly peer: PeerLookup;
   readonly events: EventLog;
-  /** Separate ephemeral chat ring; absent on callers that do not produce live events. */
-  readonly liveEvents?: EventLog;
+  /** Separate ephemeral live source, optionally carrying its bounded fleet replacement. */
+  readonly liveEvents?: Pick<EventLog, "since">;
   readonly handlers: BridgeHandlers;
   readonly submissionsMax?: number;
   readonly inputReplyMs?: number;

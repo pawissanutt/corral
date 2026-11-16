@@ -404,6 +404,7 @@ pub fn session(
             steps_title: "Stages",
             steps,
         },
+        fleet: super::fleet::fleet(state, id, feed),
     }
 }
 

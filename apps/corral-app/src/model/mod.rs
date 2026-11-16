@@ -8,6 +8,8 @@ pub mod agents;
 pub mod assistant;
 /// Shared board snapshot.
 pub mod board;
+/// Published build records of interactive build sessions; never tasks.
+pub mod builds;
 /// Palette commands and confirmation previews.
 pub mod commands;
 /// Owned snapshots received from the daemon.

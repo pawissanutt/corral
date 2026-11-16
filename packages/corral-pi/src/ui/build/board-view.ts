@@ -151,7 +151,7 @@ export function renderBoard(tasks: readonly BoardTaskStatus[], proposed: BoardPl
     } else {
       push(fill(" " + BOLD + PANEL_TEXT + "Nothing from this session is on the board." + UNBOLD, width));
       paragraph();
-      lines.push(...wrapped("A finished build can ship through the board, or a larger plan can be split into tasks that run there under corral's gate and review.",
+      lines.push(...wrapped("A larger plan can be split into tasks that run there under corral's gate and review.",
         PANEL_MUTED, width, options.short ? 2 : 4));
       paragraph();
       const label = "Plan board tasks from this conversation…";

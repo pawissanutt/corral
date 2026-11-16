@@ -11,6 +11,10 @@ import { loadModules } from "../../host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../../host/restrict.ts";
 import { HostSession, authContext } from "../../host/session.ts";
 import { CorralClient, sha256Hex, toolRequestId } from "../../tools/corral.ts";
+import type { CorralCall } from "../../tools/corral.ts";
+import { defineCorralTool } from "../../tools/define.ts";
+import type { ChildSnapshot, FleetSnapshot } from "../../build/types.ts";
+import { doneTool, workerDoneTool } from "./tools.ts";
 import { fixtureTransport } from "../../../test/fixtures/auth/index.ts";
 import { type FakeCorral, writeFakeCorral } from "../../../test/support/fake-corral.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../../test/support/fixture-install.ts";
@@ -107,8 +111,8 @@ test("the contract is the installed worker-contract.md with the bound identity f
 
 test("a host session activates exactly the loadout and loads only the installed corral-worker skill", () => {
   const state = host.state();
-  expect([...host.loadout]).toEqual([...UPSTREAM, ...CORRAL_TOOLS, ...LSP_TOOLS]);
-  expect([...(state.active_tools as string[])].sort()).toEqual([...UPSTREAM, ...CORRAL_TOOLS, ...LSP_TOOLS].sort());
+  expect([...host.loadout]).toEqual([...UPSTREAM, ...CORRAL_TOOLS, ...LSP_TOOLS, "agent_message", "agent_roster"]);
+  expect([...(state.active_tools as string[])].sort()).toEqual([...UPSTREAM, ...CORRAL_TOOLS, ...LSP_TOOLS, "agent_message", "agent_roster"].sort());
   const skills = host.runtime.services.resourceLoader.getSkills().skills;
   expect(skills.map((skill) => [skill.name, skill.filePath])).toEqual([["corral-worker", join(assets.dir, SKILL_ASSET)]]);
   expect(readFileSync(skills[0]?.filePath ?? "", "utf8")).toBe(readFileSync(join(PACKAGE_ROOT, SKILL_ASSET), "utf8"));
@@ -132,7 +136,7 @@ test("each corral tool call is one envelope whose request ID derives from the se
     message.role === "assistant" ? message.content.filter((part) => part.type === "toolCall") : [])
     .map((part) => [part.name, part.id]);
   expect(callIds.map(([name]) => name)).toEqual(["corral_gate", "corral_done"]);
-  const tools = corral.calls().map((call) => call.envelope).filter((envelope) => ["gate", "done"].includes(envelope.op));
+  const tools = corral.calls().map((call) => call.envelope).filter((envelope) => ["artifact", "gate", "done"].includes(envelope.op));
   expect(tools.map((envelope) => [envelope.op, envelope.request_id, envelope.identity.turn, envelope.identity.run])).toEqual([
     ["gate", toolRequestId(host.sessionId(), callIds[0]?.[1] ?? ""), 1, "R2"],
     ["done", toolRequestId(host.sessionId(), callIds[1]?.[1] ?? ""), 1, "R2"],
@@ -215,4 +219,63 @@ test("in a real host the kickoff turn starts after hello, when extensions bind, 
     { kind: "turn_started", turn: 1, origin: { kind: "unknown" }, provider: "openai-codex", model: "gpt-6.1-sol" },
     { kind: "turn_ended", turn: 1 },
   ]);
+});
+
+const completedChild: ChildSnapshot = {
+  id: "slice", kind: "slice", call: "task", title: "Implement", brief: "Implement", owns: ["file.ts"], after: [],
+  profile: "default", model: "provider/model", state: "done", createdAt: 0, edits: [],
+  usage: { input: 1, output: 2, turns: 1 }, steers: [], pulse: [], history: "d", messages: [], report: "Done",
+};
+
+function completionHarness(fleet: FleetSnapshot, recordDir: string, artifact: "committed" | "rejected" | "throw") {
+  const calls: { op: string; call: CorralCall }[] = [];
+  const client = { async call(op: string, call: CorralCall) {
+    calls.push({ op, call });
+    if (op === "artifact" && artifact === "throw") throw new Error("artifact transport unavailable");
+    return { version: 1, request_id: call.requestId, op, state: op === "artifact" ? artifact : "committed",
+      result: op === "artifact" && artifact === "rejected" ? { code: "artifact_refused" } : {} };
+  } } as unknown as CorralClient;
+  const context = { client, sessionId: () => "worker-session", currentTurn: () => 4, task: "T-007", run: "R2", recordDir, fleet: () => fleet };
+  return { calls, tool: workerDoneTool(defineCorralTool(doneTool, { ...context, allowedOps: ["done", "artifact"] }), context) };
+}
+
+test("worker done attaches fleet evidence before completing and attachment refusals or errors never fail done", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "corral-worker-record-"));
+  const mail = [{ seq: 1, at: 0, from: "pm", to: "parent", text: "Information", delivery: "delivered" as const }];
+  try {
+    for (const artifact of ["committed", "rejected", "throw"] as const) {
+      const { calls, tool } = completionHarness({ children: artifact === "throw" ? [] : [completedChild], mail, maxParallel: 1 },
+        join(directory, artifact), artifact);
+      const result = await tool.execute("done-call", { summary: "Done.\nVerified: none\nNot verified: gate" }, undefined, undefined, {} as never);
+      expect(calls.map(call => call.op)).toEqual(["artifact", "done"]);
+      expect(calls[0]?.call.payload.title).toBe("Session record");
+      expect(calls[0]?.call.payload.kind).toBe("report");
+      expect(calls[0]?.call.turn).toBe(4);
+      expect(calls[0]?.call.requestId).not.toBe(calls[1]?.call.requestId);
+      const record = JSON.parse(readFileSync(String(calls[0]?.call.payload.path), "utf8"));
+      expect(record.version).toBe(1);
+      expect(record.slices.map((slice: { id: string }) => slice.id)).toEqual(artifact === "throw" ? [] : ["slice"]);
+      expect(record.messages[0].from).toBe("pm");
+      expect(result.isError).toBeFalse();
+      expect(result.terminate).toBeTrue();
+      const text = result.content.filter(part => part.type === "text").map(part => part.text).join("\n");
+      if (artifact === "committed") expect(text).not.toContain("Session record attachment failed");
+      else expect(text).toContain(artifact === "rejected" ? "artifact_refused" : "artifact transport unavailable");
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("worker done collects or cancels live reviews before sending any operation", async () => {
+  for (const state of ["queued", "running", "needs"] as const) {
+    const { calls, tool } = completionHarness({ children: [{ ...completedChild, id: "review", kind: "review", state }], mail: [], maxParallel: 1 },
+      join(work, "live-review-record"), "committed");
+    const result = await tool.execute("done-live", { summary: "Done" }, undefined, undefined, {} as never);
+    expect(calls).toHaveLength(0);
+    expect(result.isError).toBeTrue();
+    const text = result.content.filter(part => part.type === "text").map(part => part.text).join("\n");
+    expect(text).toContain("review");
+    expect(text).toContain("still running");
+    expect(text).toContain("agent_wait");
+    expect(text).toContain("agent_cancel");
+  }
 });

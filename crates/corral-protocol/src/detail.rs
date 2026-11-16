@@ -2,6 +2,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 pub mod artifact;
+pub mod build;
 pub mod closed;
 pub mod filing;
 pub mod plan;
@@ -12,6 +13,7 @@ pub mod task;
 pub mod timeline;
 pub mod usage;
 pub use artifact::*;
+pub use build::*;
 pub use closed::*;
 pub use filing::*;
 pub use plan::*;
@@ -32,6 +34,9 @@ pub enum DetailRef {
         id: String,
     },
     Plan {
+        id: String,
+    },
+    Build {
         id: String,
     },
     PlanDiff {
@@ -111,6 +116,7 @@ pub enum DetailBody {
     Question(QuestionDetail),
     Task(TaskDetail),
     Plan(PlanDetail),
+    Build(BuildDetail),
     PlanDiff(PatchPage),
     Review(ReviewDetail),
     ReviewFile(PatchPage),

@@ -159,6 +159,13 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
         if request.method == wire::HELLO && !claimed {
             match serde_json::from_value::<wire::Hello>(params) {
                 Ok(hello) if hello.proto.major == wire::PROTO_MAJOR => {
+                    topics.set_session_fleet(
+                        pair.is_none()
+                            && hello
+                                .caps
+                                .iter()
+                                .any(|cap| cap == wire::app::SESSION_FLEET_V1),
+                    );
                     reply(
                         &mut conn,
                         id,
