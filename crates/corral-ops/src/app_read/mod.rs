@@ -11,6 +11,7 @@ mod attachments;
 mod attention;
 mod change_kinds;
 mod changes;
+mod closed;
 mod paging;
 mod plans;
 mod question_context;
@@ -25,6 +26,9 @@ mod usage;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod closed_tests;
 
 use anyhow::{Result, bail, ensure};
 use corral_protocol::detail::{DetailBody, DetailGet, DetailRef, DetailReply};
@@ -192,6 +196,7 @@ fn read_snapshot(ctx: &Ctx, request: &DetailGet) -> Result<DetailReply> {
         DetailRef::Burnup { scope } => timeline::burnup(ctx, scope)?,
         DetailRef::UsageSeries { period } => usage::usage_series(ctx, period)?,
         DetailRef::Filings { before } => agents::filings(ctx, *before)?,
+        DetailRef::Closed { before } => DetailBody::Closed(closed::page(ctx, before.as_deref())?),
         DetailRef::Artifact { .. } | DetailRef::Attachment { .. } => unreachable!(),
         DetailRef::Other => bail!("unsupported app detail selector"),
         DetailRef::PlanDiff { .. } | DetailRef::ReviewFile { .. } => unreachable!(),
@@ -272,6 +277,7 @@ fn validate(request: &DetailGet) -> Result<()> {
                 bail!("invalid filings before anchor");
             }
         }
+        DetailRef::Closed { before } => closed::validate(before.as_deref())?,
         DetailRef::Other => bail!("unsupported app detail selector"),
     }
     if request.etag.as_ref().is_some_and(|value| value.len() > 128)

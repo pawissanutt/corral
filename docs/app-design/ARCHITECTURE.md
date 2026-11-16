@@ -380,7 +380,7 @@ JSON-RPC 2.0 is chosen because herdr-core and the Pi bridge already speak line J
 | Compatibility test | A second test diffs against the last released schema and fails on removals or type changes, the policy herdr-core documents ("The API only grows", `hc:schema/README.md`). |
 | TSX codegen | Not needed for the Rust-only client (section 10). If TSX screens are added, TypeScript types are generated from the same OpenRPC file [INFERENCE: generator not chosen]. |
 | Version | `hello{proto:{major,minor}, caps[], client{kind, version}}`, `welcome{proto, caps[], daemon{version, store, epoch}, health}`. The daemon serves majors N and N-1. Minor = additive only. Unknown fields ignored; enums carry an `other` arm. |
-| Capabilities | Feature strings, intersected at hello: `board.v1`, `changes.v1`, `detail.v1`, `cmd.v1`, `confirm.v1`, `stream.transcript.v1`, `stream.terminal.raw.v1`, `stream.terminal.snapshot.v1`, `push.v1`, `relay.v1`, `machines.v1`, `assistant.v1`. A session on the legacy adapter lacks `stream.terminal.raw.v1`; a daemon-hosted assistant has no terminal stream at all. |
+| Capabilities | Feature strings, intersected at hello: `board.v1`, `changes.v1`, `detail.v1`, `closed.v1`, `cmd.v1`, `confirm.v1`, `stream.transcript.v1`, `stream.terminal.raw.v1`, `stream.terminal.snapshot.v1`, `push.v1`, `relay.v1`, `machines.v1`, `assistant.v1`. A session on the legacy adapter lacks `stream.terminal.raw.v1`; a daemon-hosted assistant has no terminal stream at all. |
 
 ### Message catalog
 
@@ -394,7 +394,7 @@ JSON-RPC 2.0 is chosen because herdr-core and the Pi bridge already speak line J
 | `sub.delta{topic, epoch, rows[], left[], cursor, more}` | D→C | State delta: upserts and removals since the cursor |
 | `sub.reset{topic, epoch}` | D→C | Cursor unusable; client drops the topic cache and resubscribes |
 | `sub.ack{topic, cursor}` / `sub.close` | C→D | Flow control (one delta in flight per topic) / unsubscribe |
-| `detail.get{kind, id, etag?, page?}` | C→D | Lazy detail: `story`, `question`, `plan`, `review`, `diff`, `timeline`, `evidence`, `usage_series`, `burnup`, `settings`, `thread`; answers `not_modified` on an etag match |
+| `detail.get{kind, id, etag?, page?}` | C→D | Lazy detail: `story`, `question`, `plan`, `review`, `diff`, `timeline`, `evidence`, `usage_series`, `burnup`, `settings`, `thread`, `closed` (with `closed.v1`: done/dropped tasks newest-updated first, at most 50 per page behind an opaque `before` anchor; the board never carries closed tasks); answers `not_modified` on an etag match |
 | `blob.open{ref}`, `blob.put{sha256, bytes, mime}` | C→D | DATA stream down for an artifact, log or screenshot; up for a message attachment (content-addressed, so a retry is a no-op) |
 | `cmd.preview{name, args}` | C→D | Dry run for commands that need one: effects, `preview_id`, digest, `confirm` requirement |
 | `cmd.submit{cmd_id, name, args, expect, issued_at, expires_at, confirm?}` | C→D | Execute one owner command |

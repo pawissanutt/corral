@@ -142,6 +142,25 @@ fn head_queries(make: MakeFixture<'_>) -> Result<()> {
         "recent done order {:?}",
         ids(&rest)
     );
+    let boundary = &rest[1].header;
+    let seek = |num| {
+        view.heads(
+            &HeadQuery::RecentByStatusBefore {
+                status: "done".to_owned(),
+                updated: boundary.fields.updated,
+                num,
+            },
+            PageReq::first(2),
+        )
+    };
+    ensure!(
+        ids(&seek(boundary.num)?.items) == [made[3].clone()],
+        "recent status seek must exclude the boundary"
+    );
+    ensure!(
+        ids(&seek(TaskNum(boundary.num.0 + 1))?.items) == [made[2].clone(), made[3].clone()],
+        "recent status seek must include smaller numbers at the same timestamp"
+    );
     Ok(())
 }
 

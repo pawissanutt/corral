@@ -63,6 +63,7 @@ pub(crate) fn capability(shared: &Shared, cap: &str) -> bool {
         | app::SESSION_V1
         | wire::detail::STREAM_TERMINAL_V1
         | app::FILINGS_V1
+        | app::CLOSED_V1
         | app::REVIEW_V1
         | app::TIMELINE_V1
         | app::USAGE_V1

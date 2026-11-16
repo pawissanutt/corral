@@ -19,8 +19,8 @@ mod schema;
 pub mod subscription;
 
 pub use app::{
-    ACT_V1, AGENTS_V1, ASSISTANT_V1, CHANGES_V1, FILINGS_V1, INBOX_V1, PLANS_V1, REVIEW_V1,
-    SETTINGS_V1, TIMELINE_V1, USAGE_V1,
+    ACT_V1, AGENTS_V1, ASSISTANT_V1, CHANGES_V1, CLOSED_V1, FILINGS_V1, INBOX_V1, PLANS_V1,
+    REVIEW_V1, SETTINGS_V1, TIMELINE_V1, USAGE_V1,
 };
 pub use classic::CLASSIC_V1;
 pub use health::{DaemonState, Health, LoopFacts, PmState, RuntimeHealth, RuntimeState};
