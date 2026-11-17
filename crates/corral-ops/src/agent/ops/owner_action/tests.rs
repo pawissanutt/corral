@@ -17,6 +17,29 @@ mod remote_tests;
 
 const PANE: &str = "w1:p7";
 
+#[test]
+fn slice_decimal_cost_crosses_the_integer_envelope_without_changing_record_cost() {
+    let payload = |cost: Value| {
+        json!({
+            "kind": "finish_here", "input": "A-1/g1/i1",
+            "slices": [{
+                "id": "review", "title": "Review", "kind": "review", "owns": [],
+                "model": "provider/reviewer", "state": "done", "outside": [],
+                "usage": {"input": 10, "output": 2, "turns": 1, "cost": cost}
+            }]
+        })
+    };
+    let decoded: Payload = serde_json::from_value(payload(json!("0.069448"))).unwrap();
+    assert_eq!(decoded.slices[0].usage.usage.cost, Some(0.069448));
+    let legacy: Payload = serde_json::from_value(payload(json!(0.069448))).unwrap();
+    assert_eq!(legacy.slices, decoded.slices);
+    let absent: Payload = serde_json::from_value(payload(Value::Null)).unwrap();
+    assert_eq!(absent.slices[0].usage.usage.cost, None);
+    for invalid in ["NaN", "Infinity", "not-money"] {
+        assert!(serde_json::from_value::<Payload>(payload(json!(invalid))).is_err());
+    }
+}
+
 /// A-1 bound by a live stand-in host, with a stand-in corral that logs each command it runs.
 pub(super) struct Session {
     pub(super) fx: Fx,

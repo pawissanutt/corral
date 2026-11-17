@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import type { ChildSnapshot, FleetSnapshot } from "../../build/types.ts";
-import { CorralClient, type CorralCall, type CorralReceipt } from "../../tools/corral.ts";
+import { canonicalJson, CorralClient, type CorralCall, type CorralReceipt } from "../../tools/corral.ts";
 import { defineCorralTool } from "../../tools/define.ts";
 import { ownerActionTool } from "./owner-action.ts";
 
 function review(id: string, endedAt: number, verdict: "approve" | "changes", state: ChildSnapshot["state"] = "done"): ChildSnapshot {
   return { id, endedAt, kind: "review", state, call: id, title: id, brief: "Review candidate", owns: [], after: [],
     profile: "reviewer", model: "provider/reviewer", createdAt: 1, startedAt: 2, edits: [],
-    usage: { input: 0, output: 0, turns: 1 }, steers: [], pulse: [], history: "d", messages: [],
+    usage: { input: 0, output: 0, turns: 1, cost: 0.069448 }, steers: [], pulse: [], history: "d", messages: [],
     verdict: { verdict, summary: id, findings: [], head: "a".repeat(40), at: endedAt } };
 }
 
@@ -17,6 +17,7 @@ const params = { kind: "finish_here", target: "cache", input: "A-1/g1/i1",
 function hostTool(fleet: FleetSnapshot) {
   const calls: CorralCall[] = [];
   const client = { call: async (_op: string, call: CorralCall): Promise<CorralReceipt> => {
+    canonicalJson(call.payload);
     calls.push(call);
     return { version: 1, request_id: call.requestId, op: "owner_action", state: "committed", result: {} };
   } } as unknown as CorralClient;
@@ -33,7 +34,9 @@ test("finish_here attaches the latest settled host review, not an older approval
   expect(calls.length).toBe(1);
   expect(calls[0]?.payload.review).toEqual({ reviewer: "latest", model: "provider/reviewer", verdict: "changes",
     summary: "latest", findings: [], head: "a".repeat(40), at: new Date(20).toISOString() });
-  expect((calls[0]?.payload.slices as unknown[]).length).toBe(3);
+  const slices = calls[0]?.payload.slices as { usage: { cost: string } }[];
+  expect(slices.length).toBe(3);
+  expect(slices[0]?.usage.cost).toBe("0.069448");
   expect(calls[0]?.payload.messages).toEqual([{ at: new Date(20).toISOString(), from: "latest", to: "parent",
     text: "Needs repair", delivery: "delivered" }]);
 });
