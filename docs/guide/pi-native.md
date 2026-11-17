@@ -9,15 +9,30 @@ See [herdr status](corral-pi.md#herdr-status).
 <a id="amazon-bedrock-metered-opt-in"></a>
 See [Amazon Bedrock](corral-pi.md#amazon-bedrock-metered-opt-in).
 
+## PM availability and authority
+
+PM chat, launch and relaunch do not require Autopilot or an approved automation scope.
+They remain available in Assist, while automation is paused, and with absent or stale
+grants. Relaunch continues the existing conversation without changing automation config
+or confirming a grant. The workspace PM sees configured projects, including projects
+outside the grant; an empty configured workspace can still use PM for setup and capture.
+Legacy project-bound hosts remain restricted to their stored project.
+
+Conversation access is not executor consent: automatic dispatch, review, gates, repair
+and landing independently recheck current effective policy and pauses at action time.
+Existing bounded manual PM operator authority and owner-only controls remain unchanged.
+See [PM authority](pm.md#pm-authority).
+
 ## Annotation host API
 
 The Changes panel can use `src/host/annotations.ts` without exposing an annotation
 mutation tool to the model. This API does not render a panel.
 
 - `read_annotations` is an authenticated, receipt-free lookup. Worker and reviewer
-  hosts may read only their bound task; PM hosts stay within their effective project
-  scope; assistant hosts may read any task in their store. Planner roles are refused
-  with `role_not_permitted`. The payload is `{task, thread?, query?}`; query accepts
+  hosts may read only their bound task; workspace PM hosts may read configured projects,
+  while legacy PM hosts stay within their stored project; assistant hosts may read any
+  task in their store. Planner roles are refused with `role_not_permitted`. The payload
+  is `{task, thread?, query?}`; query accepts
   state/anchor filters, a cursor and a limit (1–64). List pages contain summaries;
   thread pages contain entries. Continue with `next_cursor`, retaining the same query.
 - `readAnnotations(client, query)` validates AnnotationsView v1 and distinguishes an

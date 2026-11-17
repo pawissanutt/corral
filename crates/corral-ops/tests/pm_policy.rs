@@ -675,19 +675,14 @@ fn pi_pm_launch_binds_the_actual_pane_before_policy_startup_and_run() {
 }
 
 #[test]
-fn pi_pm_preflight_refuses_missing_assets_and_unapproved_scope_but_accepts_three_projects() {
-    // Given missing assets, no approval, or a valid three-project scope.
-    for variant in ["assets", "unapproved", "multiple"] {
+fn pi_pm_preflight_refuses_missing_assets_but_accepts_three_configured_projects_without_a_grant() {
+    // Required assets still gate launch; automation approval never gates conversation.
+    for variant in ["assets", "multiple"] {
         let mut fx = Fx::new();
         fx.pi();
         if variant == "assets" {
-            fx.grant();
             std::fs::remove_file(fx.tmp.path().join("assets/src/roles/pm/index.ts")).unwrap();
-        } else if variant == "multiple" {
-            let first = fx.grant();
-            let mut tasks = [first]
-                .into_iter()
-                .collect::<std::collections::BTreeSet<_>>();
+        } else {
             for project in ["other", "third"] {
                 std::fs::create_dir_all(fx.tmp.path().join(project).join(".git")).unwrap();
                 fx.ctx.store.config.projects.insert(
@@ -695,25 +690,11 @@ fn pi_pm_preflight_refuses_missing_assets_and_unapproved_scope_but_accepts_three
                     serde_json::from_value(json!({"path":project})).unwrap(),
                 );
                 fx.ctx.store.save_config().unwrap();
-                tasks.insert(
-                    fx.ctx
-                        .store
-                        .create(project, Some(project), Status::Ready, "")
-                        .unwrap()
-                        .id,
-                );
+                fx.ctx
+                    .store
+                    .create(project, Some(project), Status::Ready, "")
+                    .unwrap();
             }
-            let selection = OperatingSelection {
-                tasks,
-                ..Default::default()
-            };
-            let preview = fx.ctx.store.preview_operating_policy(&selection).unwrap();
-            fx.ctx
-                .store
-                .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
-                .unwrap();
-        }
-        if variant == "multiple" {
             assert_eq!(open_pm(&fx.fresh()).unwrap(), "pm:p1");
             let pm = corral_core::agent::pm_state::load(&fx.ctx.store)
                 .unwrap()
@@ -726,17 +707,22 @@ fn pi_pm_preflight_refuses_missing_assets_and_unapproved_scope_but_accepts_three
                 1,
             )
             .unwrap();
+            let bootstrap: Value =
+                serde_json::from_slice(&std::fs::read(dir.join("bootstrap.json")).unwrap())
+                    .unwrap();
+            let input: Value = serde_json::from_slice(
+                &std::fs::read(bootstrap["prompt_file"].as_str().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(input["projects"].as_object().unwrap().len(), 3);
+            assert!(input["policy"]["authorization"].is_null());
+            assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
             std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
             continue;
         }
         // Invalid launches refuse before any pane or policy startup.
         let error = open_pm(&fx.fresh()).unwrap_err().to_string();
-        let code = match variant {
-            "assets" => "role_unavailable",
-            "unapproved" => "pm_scope_unapproved",
-            _ => unreachable!(),
-        };
-        assert!(error.contains(code), "{variant}: {error}");
+        assert!(error.contains("role_unavailable"), "{variant}: {error}");
         assert!(fx.calls(&["workspace", "create"]).is_empty());
         assert!(fx.calls(&["pane", "run"]).is_empty());
         assert!(

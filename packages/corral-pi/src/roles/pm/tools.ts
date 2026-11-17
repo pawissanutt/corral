@@ -32,7 +32,7 @@ function tool(
   };
 }
 
-const Task = Type.String({ description: "One task ID in an approved project" });
+const Task = Type.String({ description: "One task ID in a configured workspace project" });
 const Text = Type.String();
 const Revision = {
   key: Type.String({ description: "Canonical question key from corral readback" }),
@@ -49,8 +49,8 @@ export const pmTools: readonly CorralToolSpec[] = [
   notesTool,
   actionTool,
   gateTriageTool,
-  tool("brief", "read_brief", "Read the approved projects' PM brief without running sync.", {}),
-  tool("next", "read_next", "Read the approved projects' next actions without executing them or running sync.", {}),
+  tool("brief", "read_brief", "Read the workspace projects' PM brief without running sync.", {}),
+  tool("next", "read_next", "Read the workspace projects' next actions without executing them or running sync.", {}),
   tool("show", "read_show", "Read one task's canonical sections. content_json is a JSON text chunk; "
     + "follow next_offset with the same section and key to read the rest. Offsets and limits count characters. "
     + "Default 1024; opt into up to 4096 (wire-byte bounds may shorten a page). Use questions + key for exact triage; "
@@ -64,18 +64,18 @@ export const pmTools: readonly CorralToolSpec[] = [
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 4096 })),
   }),
-  tool("list", "read_list", "Read a bounded page of tasks across approved projects.", {
+  tool("list", "read_list", "Read a bounded page of tasks across configured workspace projects.", {
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
     status: Type.Optional(Type.Union(["idea", "backlog", "ready", "running", "needs_me", "review", "done", "dropped"].map((s) => Type.Literal(s)))),
   }),
-  tool("search", "read_search", "Search the approved projects' tasks.", {
+  tool("search", "read_search", "Search the configured workspace projects' tasks.", {
     query: Text,
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
   }),
   tool("route", "read_route", "Read one task's routing without dispatching or changing it.", { task: Task }),
   tool("artifacts", "read_artifacts", "Read one task's artifact references.", { task: Task }),
-  tool("lessons", "read_lessons", "Read the approved projects' lessons.", {}),
+  tool("lessons", "read_lessons", "Read the workspace projects' lessons.", {}),
   tool("question_answer", "question_answer",
     "Answer a clarification or technical_choice using cited evidence inside the approved scope and acceptance. "
     + "Owner-only and permission questions must be escalated. The owner may supersede this answer. "
@@ -104,7 +104,7 @@ export const pmTools: readonly CorralToolSpec[] = [
     ...Revision,
     reason: Text,
   }),
-  tool("reply", "reply", "Send one reply to a task in an approved project through corral. "
+  tool("reply", "reply", "Send one reply to a task in a configured workspace project through corral. "
     + "An uncertain legacy delivery must not be replayed.", { task: Task, text: Text }),
   tool("comment", "comment", "Record one task comment without sending it to the agent.", { task: Task, text: Text }),
   tool("inbox_read", "inbox_read", "Read the workspace PM inbox: without id, a page of open and claimed item "
@@ -131,9 +131,9 @@ export const pmTools: readonly CorralToolSpec[] = [
       text: Type.Optional(Text),
       refs: Type.Optional(Type.Array(Text)),
     }),
-  tool("capture", "capture", "Capture one idea or backlog task in an approved project. "
+  tool("capture", "capture", "Capture one idea or backlog task in a configured workspace project. "
     + "This does not authorize implementation or promote the task to ready.", {
-      project: Type.String({ description: "A project in the approved operating scope" }),
+      project: Type.String({ description: "A configured workspace project" }),
       title: Text,
       body: Text,
       status: Type.Optional(Type.Union([Type.Literal("idea"), Type.Literal("backlog")])),

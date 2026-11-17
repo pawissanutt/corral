@@ -99,7 +99,7 @@ pub(crate) fn native_summary(policy: &PolicySnapshot) -> Value {
 /// replacement, the generic runbook and the role context cannot disagree about it.
 pub(crate) const PM_AUTHORITY: &str = "\
 ## PM authority\n\n\
-You operate this board inside the approved projects. When work is stuck, you unblock it: act, \
+You operate this board inside the configured workspace projects. When work is stuck, you unblock it: act, \
 then record what you did and why in a task comment. Waiting for the owner is correct only for \
 the owner-only list below.\n\n\
 You may run, through typed tools or the corral CLI: dispatch and queue changes, gate and re-gate, \

@@ -1,4 +1,4 @@
-//! Project-scoped PM reads and mutations. No operation runs the board's sync or action
+//! Workspace/project-bound PM reads and mutations. No operation runs the board's sync or action
 //! executor. Single-phase receipts commit with their target; capture and legacy delivery
 //! reserve in AgentPm and never replay an interrupted effect (T-252 F1.c).
 use anyhow::{Context, Result, ensure};

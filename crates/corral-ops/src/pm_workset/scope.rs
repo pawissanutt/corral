@@ -1,4 +1,4 @@
-//! Native PM reads share workset policy without widening their approved project set.
+//! Native PM reads share workset policy within their configured workspace or legacy project binding.
 #[cfg(test)]
 #[path = "scope_tests.rs"]
 mod tests;

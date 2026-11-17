@@ -6,7 +6,7 @@ Keep PM handoffs and notes in workspace machine state under `.corral/pm/`. Use
 ## corral-pi operating procedure
 
 Pi's Rust launcher writes `.corral/prompts/pm-pi.json` on every launch/resume with the
-workspace, approved project paths and a compact effective-policy summary (mode, pause,
+workspace, configured project paths and a compact effective-policy summary (mode, pause,
 revision, authorization, configured authority and scope counts). Per-task scope members,
 permissions and refusals are deliberately omitted: read them freshly through typed tools,
 not a startup cache. Launch size therefore does not grow with the task population.
@@ -18,6 +18,13 @@ command runbook are **not** appended to Pi. Project context/skills still load on
 the recorded capability and project-text trust settings; this snapshot does not enable
 additional guidance or executable resources. Policy replacement supersedes older policy,
 not Pi's tool ceiling; resume regenerates the snapshot even when reusing a conversation.
+
+PM chat, launch and relaunch are available in Assist, while automation is paused, and
+without a current grant. Relaunch resumes the same conversation without enabling automation
+or confirming a grant. The workspace PM can read and discuss every configured project,
+including projects outside the automation grant; an empty workspace can still open PM for
+setup and task-capture guidance. A legacy project-bound host remains restricted to its
+stored project until replaced by a workspace-bound generation.
 
 On an actionable wake, use typed `corral_brief` and `corral_next`, read relevant inbox
 items and canonical task questions, and resume or append to the visible request todo.
@@ -37,9 +44,9 @@ than a new polling loop. Quiet progress does not require repeated owner summarie
 
 ### PM authority
 
-The PM operates the board inside its approved projects and is the default unblocker:
+The workspace PM operates the board across configured projects and is the default unblocker:
 a stuck task waits for the PM, not the owner, unless its resolution is on the owner-only
-list. The same text reaches every PM through the `[corral-policy]` message
+list. The same authority text reaches every PM through the `[corral-policy]` message
 (`PM_AUTHORITY` in `crates/corral-ops/src/pm_policy.rs`) and the Pi role context.
 
 | Owner-only | Why |
@@ -65,11 +72,13 @@ otherwise. A PM shell (`CORRAL_PM=1`) passes the operator guard on `repair renew
 These are tool boundaries, not a sandbox: assistant shells are refused by their marker and
 workers while they stay in a run worktree; worker launches do not yet export a marker.
 
-Two authorities stay separate. Corral's executor (`corral pm act <id>`, autopilot) acts only
-on what the effective operating policy delegates: a pause or a missing grant stops it. The
-PM is not stopped by either: a card option with `requires_owner: false` and `pm_runs: true`
-has no action ID and is run by the PM through the CLI. `requires_owner: true` now means the
-owner-only list, nothing else.
+Two authorities stay separate. Corral's executor (`corral pm act <id>`, autopilot) checks
+the current effective operating policy at action time: Assist, a pause, or a missing or
+stale grant stops automatic dispatch, review, gates, repair and landing. Starting or
+relaunching PM never supplies that authority. The PM conversation and existing bounded
+manual operator commands are not stopped by either: a card option with
+`requires_owner: false` and `pm_runs: true` has no action ID and is run by the PM through
+the CLI. `requires_owner: true` means the owner-only list, nothing else.
 
 Pi's typed tools cover scoped reads, question answer/escalate/cancel, inbox claim/resolve,
 reply/comment, backlog/idea capture and board actions. Prefer `corral_action` over `bash`
@@ -87,9 +96,10 @@ for the routine board path:
 - `attend` records handling of one current attention key (`corral attention attend`, 30m
   next check); a stale key is refused.
 
-Each typed action is refused before any effect when its task lies outside the PM's approved
-projects, and is receipt-backed: replaying a request returns the stored result and runs
-nothing. Handoffs and board reads never confer authority on the owner-only list.
+Each typed action is refused before any effect when its task lies outside the workspace's
+configured projects (or a legacy host's stored project), and is receipt-backed: replaying
+a request returns the stored result and runs nothing. Handoffs, board reads and PM
+availability never confer automatic execution authority or authority on the owner-only list.
 
 A red integration base is fixed at once. A worker fixes a mechanical failure the base
 already has (formatter output, a lint fix the tool names, a size-ceiling split) in a

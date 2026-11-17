@@ -578,8 +578,8 @@ pub(crate) fn prompt_file(ctx: &Ctx) -> Result<std::path::PathBuf> {
 #[path = "pm_context_notes.rs"]
 mod context_notes;
 
-/// The Pi role assembles its installed instructions with this bounded data snapshot.
-/// Project guidance is loaded separately by the host under its recorded trust settings.
+/// The Pi role assembles its installed instructions with this bounded data snapshot of
+/// configured workspace projects. Guidance is loaded separately under recorded trust settings.
 pub(crate) fn save_native_context(ctx: &Ctx) -> Result<std::path::PathBuf> {
     let projects = crate::agent::hooks::pm::projects(&ctx.store)?
         .into_iter()
