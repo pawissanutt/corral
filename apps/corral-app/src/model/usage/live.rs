@@ -545,6 +545,7 @@ mod tests {
             state: corral_protocol::rows::AssistantState::Ready,
             live_in: corral_protocol::rows::AssistantLocation::Daemon,
             profile: Some("app-smoke".into()),
+            connection: None,
             focus: None,
             pending: 0,
             turn: Some(1),

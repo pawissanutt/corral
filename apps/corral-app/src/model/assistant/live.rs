@@ -26,12 +26,16 @@ use crate::model::live::Live;
 use crate::model::nav::{AskTarget, Form};
 use crate::model::text::span;
 
+#[cfg(test)]
+#[path = "model_choice_tests.rs"]
+mod model_choice_tests;
+
 /// The served settings snapshot, when settings are served.
 pub fn settings(feed: &Feed) -> Option<&SettingsSnapshot> {
     feed.settings.values().next()
 }
 
-/// The configured `[assistant.quick] models`, in cycling order.
+/// The configured corral-pi profiles, in selector order.
 pub fn models(feed: &Feed) -> &[ModelChoice] {
     settings(feed).map_or(&[], |settings| settings.assistant_models.as_slice())
 }
@@ -631,6 +635,13 @@ pub fn live_thread_header(state: &State, feed: &Feed, scope: &str) -> ThreadHead
         Fact {
             label: "Profile",
             value: profile_value,
+        },
+        Fact {
+            label: "Connection",
+            value: vec![span(
+                row.and_then(|row| row.connection.as_deref())
+                    .map_or("unknown", super::billing::connection_label),
+            )],
         },
         Fact {
             label: "Cost",

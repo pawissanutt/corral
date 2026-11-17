@@ -2,6 +2,7 @@
 
 mod actions;
 mod attach;
+mod billing;
 mod cards;
 mod labels;
 mod live;

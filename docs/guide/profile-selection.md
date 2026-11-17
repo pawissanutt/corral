@@ -1,5 +1,9 @@
 # Profile selection
 
+For direct metered starts and billing-labelled app model choices, see
+[API-first profiles](api-first-profiles.md). Saving API credentials does not create a profile
+or approve spending.
+
 Proposers and the PM choose a configured profile from task meaning. Corral supplies
 current guidance and validates the structured Auto receipt; these operations make
 no model calls, contact no terminal engine, and do not dispatch.

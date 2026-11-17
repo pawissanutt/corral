@@ -171,6 +171,11 @@ fn base_row(ctx: &Ctx, session: &AssistantSession, head: Option<Thread>) -> Resu
             AssistantLocation::None
         },
         profile: Some(session.profile.clone()),
+        connection: container
+            .state
+            .current_generation()
+            .and_then(|generation| generation.connection.as_ref())
+            .map(|binding| binding.connection.id().to_owned()),
         focus: (session.focus != "workspace").then(|| session.focus.clone()),
         pending: head.as_ref().map_or(0, |h| h.pending.len() as u32),
         turn,

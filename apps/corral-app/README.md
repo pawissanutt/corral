@@ -225,9 +225,13 @@ Ask uses one composer for questions and ideas, addressed to the assistant or PM.
 threads use a supervised daemon-hosted assistant and stream actual replies; PM messages enter
 the PM inbox rather than steering supervision. Settings › Assistant manages configured profiles
 and the assistant profile. The model selector offers `corral-pi` profiles that name a model;
-changing it applies to the next message. Provider setup and authentication must work on the
-daemon host; discovery or a configured model does not prove access or execution. See
-[profile setup](../../docs/profile-setup.md). Settings also supports optional
+changing it applies to the next message. Choices distinguish **Anthropic · API (metered)**
+from **Anthropic · subscription**, including when they name the same model. Session facts
+show the frozen connection used by the host. Saving an API key or selecting its profile does
+not authorize spending: configure a separate finite `metadata.api_start` approval as described
+in [API-first profiles](../../docs/guide/api-first-profiles.md). Provider setup and authentication
+must work on the daemon host; discovery or a configured model does not prove access or execution.
+See [profile setup](../../docs/profile-setup.md). Settings also supports optional
 `assistant.summary_profile` for quick-thread compaction. It applies at the next
 assistant-host start; unset uses the session model. Paid-API summary profiles are
 refused because they have no separate spending authority. Summary usage retains

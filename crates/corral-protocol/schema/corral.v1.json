@@ -824,6 +824,13 @@
       },
       "AssistantRow": {
         "properties": {
+          "connection": {
+            "description": "Frozen host billing/auth route, not inferred from mutable profile configuration.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cost_basis": {
             "anyOf": [
               {

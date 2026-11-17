@@ -306,9 +306,15 @@ pub fn profiles(settings: &SettingsSnapshot) -> Vec<LiveProfile> {
         .iter()
         .map(|choice| LiveProfile {
             name: choice.name.clone(),
-            model: match &choice.effort {
-                Some(effort) => format!("{} · {effort}", choice.model),
-                None => choice.model.clone(),
+            model: {
+                let model = match &choice.effort {
+                    Some(effort) => format!("{} · {effort}", choice.model),
+                    None => choice.model.clone(),
+                };
+                match &choice.note {
+                    Some(note) => format!("{model} · {note}"),
+                    None => model,
+                }
             },
             default: settings.assistant_profile.as_deref() == Some(choice.name.as_str()),
         })

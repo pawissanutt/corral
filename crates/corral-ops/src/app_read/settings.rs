@@ -123,12 +123,37 @@ fn models(config: &Config) -> Vec<ModelChoice> {
                 name: exact(name, 96)?,
                 model: exact(profile.model.as_deref()?, 192)?,
                 effort,
-                note: None,
+                note: model_connection_note(profile),
             })
         })
         .take(MODEL_CHOICES)
         .collect()
 }
+
+fn model_connection_note(profile: &corral_core::Profile) -> Option<String> {
+    use corral_core::connection::ConnectionId;
+    let inferred = profile.model.as_deref().and_then(corral_core::infer_vendor);
+    let connection = ConnectionId::resolve(
+        profile.connection,
+        profile.vendor.as_deref().or(inferred.as_deref()),
+    )
+    .ok()?;
+    Some(
+        match connection {
+            ConnectionId::AnthropicApi => "Anthropic · API (metered)",
+            ConnectionId::AnthropicSubscription => "Anthropic · subscription",
+            ConnectionId::OpenaiApi => "OpenAI · API (metered)",
+            ConnectionId::OpenaiSubscription => "OpenAI · subscription",
+            ConnectionId::AmazonBedrock => "Amazon Bedrock · metered",
+            ConnectionId::LlamaCpp => "llama.cpp · local",
+        }
+        .into(),
+    )
+}
+
+#[cfg(test)]
+#[path = "settings_tests.rs"]
+mod tests;
 
 fn grants(
     config: &Config,

@@ -72,6 +72,7 @@ fn assistant(id: &str, kind: AssistantKind) -> AssistantRow {
         state: AssistantState::Ready,
         live_in: AssistantLocation::Daemon,
         profile: None,
+        connection: None,
         focus: None,
         pending: 0,
         turn: None,

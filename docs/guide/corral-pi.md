@@ -1189,8 +1189,9 @@ Logout removes that connection's stored credential, leaving other connections un
 
 These are **metered** API connections, separate from subscription OAuth. Storing a key or
 checking its presence does not authorize paid requests or grant spending consent. Paid use
-requires the explicit policy and finite spending approval described below; direct API starts
-without a prepared continuation remain refused.
+requires explicit policy and finite spending approval. To start directly with a saved API
+credential, configure an [API-first profile](api-first-profiles.md) with a separate `api_start`
+approval. A key or profile selection alone never approves spending.
 
 ### Paid continuation after subscription quota
 
@@ -1199,7 +1200,8 @@ on the current subscription binding may continue on one approved same-vendor API
 after it in the profile. The profile's automatic fallback must explicitly include the role
 in `paid_roles`, permit the candidate, and have an approved finite USD spending bound.
 The default role set is empty. Credentials alone and profile setup alone grant no spending.
-Direct API starts without a prepared continuation remain refused. See the
+API-first starts use the separate explicit [`api_start` approval](api-first-profiles.md), not
+this quota-triggered fallback policy. See the
 [profile setup field reference](../profile-setup.md#template-and-field-reference).
 
 | `paid_roles` value | Continuation |
@@ -1234,7 +1236,7 @@ model or defaults to `claude-opus-5-5`; `corral pi --provider openai-codex` simi
 `gpt-6.1-sol`. An explicitly incompatible `--provider`/`--model` pair is refused before launch,
 with a corrected command. A model-only override infers the provider for known model families.
 
-Anthropic profiles run on your Claude Pro/Max subscription through the official Claude Agent SDK
+Anthropic subscription profiles run on your Claude Pro/Max subscription through the official Claude Agent SDK
 (`@anthropic-ai/claude-agent-sdk`, pinned in `package.json` and `compat.json`). Pi keeps the
 conversation and runs every tool. Eligible sessions keep a disposable SDK `query()` process,
 spawned from the SDK's platform package (for example `@anthropic-ai/claude-agent-sdk-linux-x64`).
