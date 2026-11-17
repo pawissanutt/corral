@@ -248,8 +248,8 @@ fn api_first_hello_activates_one_sticky_episode_and_resume_cannot_refresh_exhaus
             )
             .unwrap()
     );
-    fx.ctx.store.save_paid_episode(&episode).unwrap();
     with_state(&fx.ctx, &container, |state| {
+        fx.ctx.store.save_paid_episode(&episode)?;
         state.binding.health = HostHealth::Fenced;
         Ok(())
     })
