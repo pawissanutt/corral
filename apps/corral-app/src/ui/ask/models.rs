@@ -284,7 +284,10 @@ fn row(
         .test_id(&format!("model-{index}"))
         .element_ref(&handle)
         .role(AccessibilityRole::Option)
-        .label(option.name.clone())
+        .label(format!(
+            "{} · {} · {}",
+            option.name, option.model, option.note
+        ))
         .accessibility_state(AccessibilityState {
             selected: option.selected,
             ..AccessibilityState::default()

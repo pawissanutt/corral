@@ -472,6 +472,7 @@ pub(super) fn assistant(
             state: AssistantState::Ready,
             live_in: AssistantLocation::Daemon,
             profile,
+            connection: None,
             focus: focus.map(str::to_owned),
             pending: 0,
             turn: None,

@@ -105,8 +105,10 @@ pub struct ModelList {
 /// The list's footer: where the profiles are configured.
 pub(super) fn model_footer() -> Rich {
     vec![
-        span("Applies to your next message; the conversation is kept. List: "),
-        span("[assistant.quick] models").mono(),
+        span(
+            "Applies to your next message; the conversation is kept. API spending needs separate finite approval. List: ",
+        ),
+        span("profiles").mono(),
         span(" · Settings › Assistant"),
     ]
 }

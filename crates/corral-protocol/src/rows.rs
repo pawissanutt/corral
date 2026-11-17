@@ -355,6 +355,9 @@ pub struct AssistantRow {
     pub state: AssistantState,
     pub live_in: AssistantLocation,
     pub profile: Option<String>,
+    /// Frozen host billing/auth route, not inferred from mutable profile configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<String>,
     pub focus: Option<String>,
     pub pending: u32,
     pub turn: Option<u64>,

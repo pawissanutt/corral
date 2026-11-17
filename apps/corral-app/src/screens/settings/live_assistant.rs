@@ -28,7 +28,7 @@ use crate::ui::kit::text::h3;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
-const INTRO: &str = "Assistants answer with the assistant profile. The composer's model selector offers every corral-pi profile that names a model; a switch applies to the next message and keeps the conversation.";
+const INTRO: &str = "Assistants answer with the assistant profile. The composer's model selector offers every corral-pi profile that names a model; a switch applies to the next message and keeps the conversation. API (metered) and subscription routes stay separate. Selecting a profile does not approve API spending; configure a finite api_start approval separately.";
 
 const PROFILES_NOTE: &str = "Every profile corral can dispatch with. A new profile is a copy of a configured one under a new name; corrald previews each add and removal for you to confirm here, and refuses to remove a profile the configuration or open work still uses.";
 
