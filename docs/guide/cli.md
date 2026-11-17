@@ -1358,8 +1358,11 @@ Provision the corral-owned Pi credentials with one interactive owner login
 Usage: corral agent login [OPTIONS]
 
 Options:
-      --provider <PROVIDER>        Provider to log in; without it a terminal shows an arrow-key picker [possible values: openai-codex, anthropic, amazon-bedrock]
+      --provider <PROVIDER>        Provider to log in; without it a terminal shows an arrow-key picker [possible values: openai-codex, anthropic, amazon-bedrock, openai-api, anthropic-api]
       --root <ROOT>                Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --key-file <KEY_FILE>        Owner-only 0600 file containing a literal API key (never the key itself)
+      --status                     Report API connection credential presence without authorizing spending
+      --logout                     Remove only the selected API connection credential
       --aws-profile <AWS_PROFILE>  Named AWS profile for Amazon Bedrock (never ambient credentials)
       --region <REGION>            Standard AWS region for Amazon Bedrock
   -h, --help                       Print help
@@ -2048,7 +2051,7 @@ Commands:
   finding        Append a structured observation; matching is host-derived from exact identity
   diagnose       Consume the single PM diagnosis allowance and return the full history
   diagnosed      Finish diagnosis with a concrete bounded proposal and evidence, never a coding retry
-  renew          Explicit owner-approved allowance renewal, bound to the prior ledger digest
+  renew          Explicit owner or PM allowance renewal, bound to the prior ledger digest
   help           Print this message or the help of the given subcommand(s)
 
 Options:
@@ -2099,7 +2102,7 @@ Arguments:
 Options:
       --file <FILE>
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --owner        Explicit owner investigation, required to revise an earlier attribution
+      --owner        Explicit owner or PM investigation, required to revise an earlier attribution
   -h, --help         Print help
 ```
 
@@ -2130,7 +2133,7 @@ Arguments:
   <ID>
 
 Options:
-      --owner        Explicit owner request in Assist; unavailable to PM/agent entry points
+      --owner        Explicit owner or PM request in Assist; unavailable to worker/assistant entry points
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -2154,7 +2157,7 @@ Options:
 ### `corral repair renew`
 
 ```text
-Explicit owner-approved allowance renewal, bound to the prior ledger digest
+Explicit owner or PM allowance renewal, bound to the prior ledger digest
 
 Usage: corral repair renew [OPTIONS] --file <FILE> <ID>
 
