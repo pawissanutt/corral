@@ -58,6 +58,12 @@ model = "claude-sonnet-4-6"
 args = []
 evidence = "manually configured"
 cost = { kind = "metered", currency = "USD", maximum_micros = 1000000 }
+
+# Explicit spending opt-in: uncomment these four lines only after choosing a budget.
+# [profiles.anthropic-api-sonnet.metadata.api_start]
+# roles = ["assistant"]
+# approval = "owner-approved-api-assistant-5-usd"
+# spending = { currency = "USD", maximum_micros = 5000000 }
 ```
 
 The preferred candidate must exactly match the profile's connection, model and effort. If you
@@ -69,14 +75,9 @@ with `vendor`/candidate `provider = "openai"` and an exact supported API model.
 ## 3. Explicitly approve a finite allowance
 
 The profile above can be listed but cannot make paid requests. Only after deciding your
-budget, add an approval such as:
-
-```toml
-[profiles.anthropic-api-sonnet.metadata.api_start]
-roles = ["assistant"]
-approval = "owner-approved-api-assistant-5-usd"
-spending = { currency = "USD", maximum_micros = 5000000 }
-```
+budget, explicitly uncomment the four `metadata.api_start` lines in that complete profile
+example (the table header, roles, approval and spending). They are commented out by default
+so copying the example does not approve spending.
 
 This example explicitly approves **up to USD 5 per assistant session lineage**, not USD 5
 across all sessions. One USD is 1,000,000 micros. Choose your own finite positive allowance;
