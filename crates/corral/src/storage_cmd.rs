@@ -1,16 +1,24 @@
 //! `corral storage`: integrity check, garbage collection by class and verified backups (plan
 //! T-253 sections 7, 8 and 10).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
+use corral_core::Store;
+use corral_core::sqlite::{SqliteBackend, SqliteOptions};
 use corral_ops::Ctx;
 use corral_ops::storage_gc::{GcReport, backup_storage, check_storage, storage_gc};
+use corral_protocol::cmd::{ClientKind, Principal, Via};
 
 #[derive(clap::Subcommand)]
 pub enum StorageCmd {
     /// Verify database integrity and that every live blob decodes to its hash; exits 1 on a problem
     Check {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Repair stale sequence and derived status-count metadata; requires the owner's local CLI
+    RepairMetadata {
         #[arg(long)]
         json: bool,
     },
@@ -48,7 +56,22 @@ pub enum StorageCmd {
     },
 }
 
-pub fn run(ctx: &Ctx, cmd: StorageCmd) -> Result<()> {
+pub fn run(start: &Path, cmd: StorageCmd, entry: &crate::entry::Entry) -> Result<()> {
+    let ctx = if matches!(cmd, StorageCmd::RepairMetadata { .. }) {
+        let caller = &entry.invoker().caller;
+        if caller.client == ClientKind::App
+            || caller.via == Via::App
+            || matches!(&caller.principal, Principal::Device { .. })
+        {
+            bail!("metadata repair requires the owner's local CLI");
+        }
+        // Ordinary opens may observe config edits before the counter can be repaired.
+        let store = Store::open_unobserved(&Store::find_root(start)?)?;
+        corral_ops::require_automation_owner(&store, entry.invoker())?;
+        Ctx::from_store(store)
+    } else {
+        entry.open(start)?
+    };
     match cmd {
         StorageCmd::Check { json } => {
             let check = check_storage(&ctx.store)?;
@@ -75,8 +98,25 @@ pub fn run(ctx: &Ctx, cmd: StorageCmd) -> Result<()> {
             }
             Ok(())
         }
+        StorageCmd::RepairMetadata { json } => {
+            let backend = SqliteBackend::open(ctx.store.dir(), SqliteOptions::default())?;
+            let report = backend.repair_metadata()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else if report.previous_change_seq == report.change_seq
+                && !report.status_counts_rebuilt
+            {
+                println!("storage metadata is consistent; no repair needed");
+            } else {
+                println!(
+                    "repaired storage metadata: change sequence {} -> {}, status counts rebuilt={} (audit recorded)",
+                    report.previous_change_seq, report.change_seq, report.status_counts_rebuilt
+                );
+            }
+            Ok(())
+        }
         StorageCmd::Gc { yes, json, .. } => {
-            let report = storage_gc(ctx, yes)?;
+            let report = storage_gc(&ctx, yes)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -86,9 +126,9 @@ pub fn run(ctx: &Ctx, cmd: StorageCmd) -> Result<()> {
         }
         StorageCmd::Outputs { yes, json, due, .. } => {
             if due {
-                return corral_ops::storage_gc::outputs::output_pass(ctx, ctx.store.now());
+                return corral_ops::storage_gc::outputs::output_pass(&ctx, ctx.store.now());
             }
-            let entries = corral_ops::storage_gc::outputs::output_gc(ctx, yes)?;
+            let entries = corral_ops::storage_gc::outputs::output_gc(&ctx, yes)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&entries)?);
             } else {

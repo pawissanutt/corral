@@ -114,3 +114,36 @@ fn gc_needs_dry_run_or_yes() {
     let out = command(&root, &["storage", "gc"]).output().unwrap();
     assert!(!out.status.success());
 }
+
+#[test]
+fn metadata_repair_is_an_owner_only_noop_on_a_consistent_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let seq = Store::init(&root).unwrap().view().unwrap().seq().0;
+    let args = ["storage", "repair-metadata", "--json"];
+    let owner = command(&root, &args)
+        .env_remove("AI_AGENT")
+        .env_remove("PI_CODING_AGENT")
+        .output()
+        .unwrap();
+    assert!(owner.status.success(), "{owner:?}");
+    assert_eq!(
+        json_of(&owner),
+        json!({"previous_change_seq": seq, "change_seq": seq, "status_counts_rebuilt": false})
+    );
+    let pm = command(&root, &args)
+        .env("CORRAL_PM", "1")
+        .env("AI_AGENT", "test-pm")
+        .output()
+        .unwrap();
+    assert!(!pm.status.success(), "{pm:?}");
+    assert_eq!(
+        Store::open_unobserved(&root)
+            .unwrap()
+            .view()
+            .unwrap()
+            .seq()
+            .0,
+        seq
+    );
+}

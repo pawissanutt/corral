@@ -23,6 +23,7 @@ pub(super) const ROWS: &[(&str, &[&str], Class)] = &[
     ("storage outputs", &["--yes"], Refused),
     ("storage outputs", &["--due"], Refused),
     ("storage backup", &["out"], Refused),
+    ("storage repair-metadata", &[], Refused),
     ("migrate", &["--status"], Refused),
     ("migrate", &["--dry-run"], Refused),
     ("migrate", &["--apply"], Refused),

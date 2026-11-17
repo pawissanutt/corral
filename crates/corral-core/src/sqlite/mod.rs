@@ -22,6 +22,8 @@ mod lesson_approvals;
 mod lesson_artifacts;
 mod load;
 mod maintenance;
+#[cfg(test)]
+mod metadata_repair_tests;
 pub mod migrate;
 mod native_retention;
 mod plans;
@@ -151,6 +153,14 @@ pub struct SqliteBackend {
 
 /// Anything a handle's views keep alive until they close.
 pub type Keepalive = Arc<dyn std::any::Any + Send + Sync>;
+
+/// The result of explicit metadata maintenance; an unchanged sequence means no repair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct MetadataRepair {
+    pub previous_change_seq: u64,
+    pub change_seq: u64,
+    pub status_counts_rebuilt: bool,
+}
 
 thread_local! {
     static BUSY_WAITS: Cell<u64> = const { Cell::new(0) };
@@ -329,6 +339,146 @@ impl SqliteBackend {
         );
         self.give_back(conn);
         value
+    }
+
+    /// Repairs the change high-water mark and status counts derived from task heads.
+    /// Other integrity problems refuse the repair. Existing changes/scopes are preserved
+    /// and the counter never decreases, including after pruning. The final sequence includes
+    /// the atomic audit event/change; consistent metadata is left unchanged.
+    pub fn repair_metadata(&self) -> Result<MetadataRepair> {
+        let mut conn = self.writer();
+        let transaction = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("begin metadata repair")?;
+        let in_write = guard::WriteScope::enter();
+        let old = load::meta_u64(&transaction, "change_seq")
+            .context("read change sequence before repair")?;
+        codec::int(old).context("validate change sequence range")?;
+        let floor = load::meta_u64(&transaction, "feed_floor")
+            .context("read change feed floor before repair")?;
+        codec::int(floor).context("validate change feed floor range")?;
+        let newest: i64 = transaction
+            .query_row("SELECT COALESCE(MAX(seq), 0) FROM changes", [], |row| {
+                row.get(0)
+            })
+            .context("read newest existing change")?;
+        let newest = codec::uint(newest).context("validate newest existing change")?;
+        if newest > old {
+            let updated = transaction
+                .execute(
+                    "UPDATE meta SET value = ?1 WHERE key = 'change_seq'",
+                    params![newest.to_string()],
+                )
+                .context("advance stale change sequence")?;
+            anyhow::ensure!(updated == 1, "change sequence metadata was not updated");
+        }
+        let stored_counts =
+            load::status_counts(&transaction).context("read stored status counts")?;
+        let derived_counts = load::all(
+            &transaction,
+            "SELECT status, COALESCE(project, ''), COUNT(*) FROM tasks GROUP BY 1, 2 ORDER BY 1, 2",
+            [],
+            |row| {
+                Ok(StatusCount {
+                    status: load::text(row, 0)?,
+                    project: load::text(row, 1)?,
+                    n: load::num(row, 2)?,
+                })
+            },
+        )
+        .context("derive status counts from task heads")?;
+        let status_counts_rebuilt = stored_counts != derived_counts;
+        if status_counts_rebuilt {
+            transaction
+                .execute("DELETE FROM status_counts", [])
+                .context("clear stale status counts")?;
+            transaction
+                .execute(
+                    "INSERT INTO status_counts(status, project, n) \
+                     SELECT status, COALESCE(project, ''), COUNT(*) FROM tasks GROUP BY 1, 2",
+                    [],
+                )
+                .context("rebuild status counts from task heads")?;
+        }
+        // Repairs are provisional until every remaining integrity invariant and the audit
+        // append succeed. Validate the normalized snapshot rather than suppress diagnostics.
+        let report = check::check(&transaction).context("validate database before repair")?;
+        anyhow::ensure!(
+            report.problems.is_empty(),
+            "refusing metadata repair: {}",
+            report.problems.join("; ")
+        );
+        if newest <= old && !status_counts_rebuilt {
+            return Ok(MetadataRepair {
+                previous_change_seq: old,
+                change_seq: old,
+                status_counts_rebuilt,
+            });
+        }
+        let final_seq = newest
+            .max(old)
+            .checked_add(1)
+            .context("change sequence exhausted before repair audit")?;
+        codec::int(final_seq).context("validate repair audit sequence range")?;
+        let now = self.options.clock.now();
+        let hooks = Hooks {
+            faults: Arc::clone(&self.options.faults),
+            barrier: self.options.barrier.clone(),
+            op: OpKind::AppendEvents,
+        };
+        let committed = tx::run(
+            &transaction,
+            Operation::AppendEvents(AppendEvents {
+                events: vec![NewEvent {
+                    ts: now,
+                    task: None,
+                    kind: "storage_metadata_repaired".into(),
+                    actor: None,
+                    via: Some("storage".into()),
+                    run: None,
+                    detail: serde_json::json!({
+                        "old_change_seq": old,
+                        "max_change_seq": newest,
+                        "new_change_seq": final_seq,
+                        "status_counts_rebuilt": status_counts_rebuilt,
+                        "status_counts_repair": status_counts_rebuilt.then(|| serde_json::json!({
+                            "before": stored_counts,
+                            "after": derived_counts,
+                        })),
+                    }),
+                }],
+                reservations: Vec::new(),
+            }),
+            now,
+            &hooks,
+        )
+        .context("append metadata repair audit")?;
+        if status_counts_rebuilt {
+            let scope = ChangeScope::Aggregate {
+                name: AggregateName::StatusCounts,
+            };
+            transaction
+                .execute(
+                    "INSERT INTO change_scopes(seq, kind, key) VALUES (?1, ?2, ?3)",
+                    params![
+                        codec::int(committed.seq.0)?,
+                        tx::scope_kind(&scope),
+                        codec::json(&scope)?
+                    ],
+                )
+                .context("publish rebuilt status counts")?;
+        }
+        hooks.point("commit");
+        transaction
+            .commit()
+            .context("commit metadata repair and audit")?;
+        drop(in_write);
+        hooks.point("committed");
+        Ok(MetadataRepair {
+            previous_change_seq: old,
+            change_seq: committed.seq.0,
+            status_counts_rebuilt,
+        })
     }
 
     /// Removes a task and every row of it as a lost or foreign deletion would, recording one
