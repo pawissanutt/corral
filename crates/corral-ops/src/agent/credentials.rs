@@ -314,9 +314,9 @@ pub fn login_with_options(
     let is_api = matches!(chosen.id, "openai-api" | "anthropic-api");
     let actions =
         usize::from(api.key_file.is_some()) + usize::from(api.status) + usize::from(api.logout);
-    if is_api && actions != 1 {
+    if is_api && (actions > 1 || (actions == 0 && !terminal)) {
         bail!(
-            "usage_error: rerun with --provider {} and exactly one of --key-file <protected-0600-file>, --status or --logout; key presence does not authorize paid requests",
+            "usage_error: use a terminal to enter the API key, or rerun with --provider {} and exactly one of --key-file <protected-0600-file>, --status or --logout; key presence does not authorize paid requests",
             chosen.id
         );
     }
@@ -414,7 +414,7 @@ fn api_login_supported(assets: &Path, connection: &str) -> bool {
         .is_some_and(|connections| connections.iter().any(|id| id.as_str() == Some(connection)))
 }
 
-// Only the protected file path crosses argv; Rust never reads the key.
+// Only the prompt action or protected file path crosses argv; Rust never reads the key.
 fn login_arguments(
     command: &mut std::process::Command,
     dir: &Path,
@@ -428,8 +428,10 @@ fn login_arguments(
             command.arg("--key-file").arg(file);
         } else if api.status {
             command.arg("--status");
-        } else {
+        } else if api.logout {
             command.arg("--logout");
+        } else {
+            command.arg("--prompt");
         }
     } else {
         command.arg("--provider").arg(provider);
@@ -466,6 +468,7 @@ mod tests {
         assert!(provider_status(tmp.path(), "anthropic-api").present);
         assert!(!provider_status(tmp.path(), "anthropic").present);
         for (options, expected) in [
+            (ApiLoginOptions::default(), vec!["--prompt"]),
             (
                 ApiLoginOptions {
                     key_file: Some(Path::new("/protected/input")),

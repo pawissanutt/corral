@@ -229,7 +229,7 @@ export function runLogin(argv: readonly string[]): void {
       }
       return apiKeyCommand(dir, connection, argv);
     }).then(() => process.exit(0), () => {
-      process.stderr.write("corral API key setup refused: check connection and protected input file; no credential content is shown\n");
+      process.stderr.write("corral API key setup refused or cancelled: use a terminal to enter a platform API key, or --key-file with a protected 0600 file; no credential content is shown\n");
       process.exit(1);
     });
     return;
