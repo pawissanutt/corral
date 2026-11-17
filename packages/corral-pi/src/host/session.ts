@@ -121,6 +121,9 @@ import { holdContextOnly } from "./lifecycle.ts";
 import { RemotePrompts } from "./remote-prompts.ts";
 import { HostContinuation } from "./continuation.ts";
 import { createSummaryRequest, summarizeQuick, type SummaryOptions, type SummaryRequest } from "./summary.ts";
+import { BoundProfileController } from "./profiles.ts";
+import { BuildProfileController } from "./build-profile-controller.ts";
+import { installProfileControls } from "./profile-controls.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -172,6 +175,8 @@ export interface HostSessionOptions {
   readonly resumeAssistant?: () => void;
   /** Requests a drained quota continuation; Rust alone selects and authorizes its successor. */
   readonly continueAssistant?: () => void;
+  /** The supervisor restarts on a revalidated named profile; never replaces a billing route in-process. */
+  readonly switchProfile?: () => void;
 }
 
 type TurnOrigin = { kind: "bridge" | "continuation"; idempotency_key: string } | { kind: "owner_terminal" }
@@ -546,6 +551,7 @@ export class HostSession {
       unbounded: !isApiConnection(resolveConnection(this.provider, options.binding?.connection)) && PROVIDERS[this.provider].lane !== undefined,
       sessionId: () => this.sessionId(),
       record: async (payload) => {
+        if (options.build?.paidRecord) return options.build.paidRecord(payload);
         if (!this.bound) throw new Error("host_not_bound");
         await this.drained();
         const event = options.events.emit("budget", payload);
@@ -559,7 +565,14 @@ export class HostSession {
         if (this.open) this.stopCause ??= "budget";
         if (this.open) this.report("budget_exhausted", { budget: this.budget.state() });
       },
-      cancel: () => { void this.cancelRun(this.currentTurn(), "budget"); void this.auxiliary?.cancelAll(); void this.fleet?.cancelAll(); },
+      cancel: () => {
+        void this.cancelRun(this.currentTurn(), "budget");
+        void this.auxiliary?.cancelAll();
+        void this.fleet?.cancelAll();
+        if (this.buildControls) {
+          for (const child of this.buildControls.fleet.snapshot().children) this.buildControls.fleet.cancel(child.id);
+        }
+      },
     });
     const registerCapability = capabilityRegistry(() => this.session?.sessionFile);
     const remotePrompts = this.remotePrompts;
@@ -1223,6 +1236,26 @@ export class HostSession {
       return Reflect.get(target, property, receiver);
     } }) : api;
     this.dialogPi = pi;
+    if (this.options.switchProfile && this.options.runtimeDir) {
+      const blocked = () => {
+        if (!this.bound || this.closing) return "The session is not ready for a profile switch";
+        if (this.open || this.session.isStreaming || this.session.isBashRunning || this.commands?.pending()
+            || this.session.getSteeringMessages().length || this.session.getFollowUpMessages().length) {
+          return "Wait for the current work and queued input to finish";
+        }
+        if (this.buildControls?.fleet.snapshot().children.some(child => ["queued", "running", "needs"].includes(child.state))) {
+          return "Wait for the build's child agents to finish";
+        }
+        return undefined;
+      };
+      const restart = () => { this.closing = true; this.options.switchProfile?.(); };
+      const controller = this.options.build
+        ? new BuildProfileController({ build: this.options.build, auth: this.options.modules.auth, blocked, restart })
+        : new BoundProfileController({ identity: this.options.identity, runtimeDir: this.options.runtimeDir,
+          auth: this.options.modules.auth, blocked, restart });
+      const installed = installProfileControls(pi, controller);
+      this.panels?.attachProfiles(installed);
+    }
     this.paidContinuation.extend(pi, this.roleContext);
     registerCacheStats(pi);
     if (this.options.quickSummary) pi.on("session_before_compact", async event => {

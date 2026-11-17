@@ -11,6 +11,7 @@ workspace-scoped assistant identity and its corral interactions are needed.
 corral pi --build
 corral pi --build --here
 corral pi --build --name example
+corral pi --build --profile pi-sonnet-api
 corral pi --resume B-<id>
 ```
 
@@ -29,8 +30,9 @@ The session record and local data live under the corral-pi data root at `build/B
 including `session.json`, the parent transcript, child transcripts and local receipts. The
 data root is normally `$XDG_DATA_HOME/corral/corral-pi` or
 `~/.local/share/corral/corral-pi`; existing legacy installations can be used in place.
-Starting a build does not create workspace store records. Worktree creation requires an
-existing HEAD commit.
+Subscription builds do not create workspace store records on startup. A metered API build
+creates only its durable financial ledger; it still has no board task or coding slot.
+Worktree creation requires an existing HEAD commit.
 
 In a workspace, the parent uses the assistant profile, falling back to the PM profile. It
 must be a corral-pi profile with a model and known provider. Outside a workspace the default
@@ -44,6 +46,31 @@ cannot supply a corral-pi model or provider, `usage_error` covers invalid argume
 settings, `assets_unavailable` and `build_unavailable` indicate missing host assets, and
 `bun_unavailable` or `bun_version_unsupported` can prevent an uncompiled host from starting.
 Local inference through `llama.cpp` is unavailable in build sessions.
+
+### Named profiles and metered APIs
+
+`--profile <name>` selects a named corral-pi profile without changing defaults; it cannot
+be combined with `--model`, `--provider` or `--effort`. The launcher has an optional Profile
+line: leave it at default to preserve the mode's existing selection. `/profiles` opens the
+same named choices in a running session; `/profiles <name>` selects directly, and Alt+R
+cycles available choices. A switch waits for idle work and restarts on the same worktree
+and transcript. Resume retains the selected route instead of applying current defaults.
+
+A workspace Build can start directly on `anthropic-api` or `openai-api` when the profile
+has an exact preferred API candidate, a saved platform key, and explicit finite
+`metadata.api_start` spending approval for `assistant`. No subscription exhaustion or
+fallback policy is required. See [API-first profiles](api-first-profiles.md).
+
+The Rust-owned ledger reserves a conservative priced bound before every physical request.
+Parent, children and compaction share one allowance; API children use the parent's exact
+route. Failed or uncertain requests retain their reservation, and resume never replenishes
+the allowance. An established paid build cannot switch profiles, even back to subscription.
+Changing its approval requires a new explicitly approved build, not a retry.
+
+Bare and non-workspace sessions cannot use metered API profiles. Missing credentials,
+unsupported model/effort, changed approval or insufficient allowance refuse rather than
+silently choosing a subscription route.
+
 
 ## Local state and capabilities
 

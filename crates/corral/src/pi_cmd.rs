@@ -17,7 +17,9 @@ use corral_ops::agent::hooks::preflight;
 use corral_ops::agent::launch::host_provider;
 use corral_ops::agent::pi::{self, BareArgs};
 use corral_ops::agent::pi_build::{self, BuildArgs, BuildSessionSummary};
-use corral_tui::launcher::{self, LauncherContext, LauncherEntry, Login, ProviderLogin, Section};
+use corral_tui::launcher::{
+    self, Billing, LauncherContext, LauncherEntry, LauncherProfile, Login, ProviderLogin, Section,
+};
 
 use crate::entry::Entry;
 
@@ -60,6 +62,9 @@ pub struct PiArgs {
     /// Preload bounded read-only context for this task in a new assistant
     #[arg(long, value_name = "TASK-ID", conflicts_with_all = ["bare", "pm", "resume"])]
     task: Option<String>,
+    /// Select a named corral-pi profile for this launch without changing defaults
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["model", "provider", "effort"])]
+    profile: Option<String>,
     /// Override the model (bare defaults to the built-in model for its provider)
     #[arg(long)]
     model: Option<String>,
@@ -166,6 +171,7 @@ pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
         terminal,
     )?;
     let mut overrides = Overrides {
+        profile: args.profile,
         model: args.model,
         provider: args.provider,
         effort: args.effort,
@@ -183,12 +189,23 @@ pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
             let ctx = entry.open(start)?;
             let top = git_top_level(start);
             let entries = launcher_entries(&ctx, top.as_deref())?;
-            let context = launcher_context(start, &ctx, top.as_deref(), &overrides);
-            let Some((id, option)) = launcher::pick(&entries, &context)? else {
+            let context = launcher_context(start, &ctx, top.as_deref(), &overrides)?;
+            if let Some(name) = &overrides.profile
+                && !context.profiles.iter().any(|profile| &profile.name == name)
+            {
+                bail!("corral pi refused: unknown corral-pi profile '{name}'");
+            }
+            let Some(launcher::Launch {
+                id,
+                option,
+                profile,
+            }) = launcher::pick(&entries, &context)?
+            else {
                 return Ok(());
             };
             let (next, continue_session) = chosen(&id, option)?;
             overrides.continue_session = continue_session;
+            overrides.profile = profile;
             match launcher_dispatch(next) {
                 LauncherDispatch::Bare => {
                     drop(ctx);
@@ -233,6 +250,7 @@ fn launcher_dispatch(next: Invocation) -> LauncherDispatch {
 
 fn start_bare(overrides: Overrides, here: bool, name: Option<String>) -> Result<()> {
     pi::bare(&BareArgs {
+        profile: overrides.profile,
         model: overrides.model,
         provider: overrides.provider,
         effort: overrides.effort,
@@ -250,6 +268,7 @@ fn start_build(
     resume: Option<String>,
 ) -> Result<()> {
     pi_build::build(&BuildArgs {
+        profile: overrides.profile,
         model: overrides.model,
         provider: overrides.provider,
         effort: overrides.effort,
@@ -452,7 +471,7 @@ fn launcher_context(
     ctx: &Ctx,
     top: Option<&Path>,
     overrides: &Overrides,
-) -> LauncherContext {
+) -> Result<LauncherContext> {
     let project = corral_ops::infer_project(ctx, top.unwrap_or(start));
     let config = ctx
         .store
@@ -482,7 +501,39 @@ fn launcher_context(
             id,
         })
         .collect();
-    LauncherContext { project, providers }
+    let current = assistant_provider(&config, overrides).unwrap_or_default();
+    let rows = pi::profile::choices(
+        ctx,
+        corral_core::agent::AgentRole::Assistant,
+        &current,
+        None,
+    )?;
+    let pm_rows = pi::profile::choices(ctx, corral_core::agent::AgentRole::Pm, &current, None)?;
+    let profiles = rows
+        .into_iter()
+        .map(|row| {
+            let connection = corral_core::connection::ConnectionId::parse(&row.connection)?;
+            let billing = match connection.billing() {
+                corral_core::connection::BillingMode::Subscription => Billing::Subscription,
+                corral_core::connection::BillingMode::Metered => Billing::Metered,
+                corral_core::connection::BillingMode::Local => Billing::Local,
+            };
+            let available =
+                row.available || pm_rows.iter().any(|pm| pm.name == row.name && pm.available);
+            Ok(LauncherProfile {
+                name: row.name,
+                model: row.model,
+                billing,
+                unavailable: if available { None } else { row.reason },
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(LauncherContext {
+        project,
+        providers,
+        profiles,
+        profile: overrides.profile.clone(),
+    })
 }
 
 /// The provider the assistant profile, which a build session's parent runs, uses with this launch's
@@ -491,7 +542,11 @@ fn assistant_provider(config: &Config, overrides: &Overrides) -> Option<String> 
     if let Some(id) = &overrides.provider {
         return Some(id.clone());
     }
-    let name = config.assistant.agent.as_ref().unwrap_or(&config.pm.agent);
+    let name = overrides
+        .profile
+        .as_ref()
+        .or(config.assistant.agent.as_ref())
+        .unwrap_or(&config.pm.agent);
     let choice = ProfileChoice {
         profile: Some(name.clone()),
         ..ProfileChoice::default()

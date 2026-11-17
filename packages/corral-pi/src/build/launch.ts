@@ -4,6 +4,10 @@ import type { AwsBinding } from "../auth/aws.ts";
 import { isAwsRegion, isProviderId } from "../auth/providers.ts";
 import { capabilityGuidance, capabilitySet, LaunchMessageInvalid } from "../host/config.ts";
 import { EXIT_POLICIES, MAX_PARALLEL_LIMIT, type BuildLaunch, type ExitPolicy } from "./types.ts";
+import { isApiConnection } from "../auth/connections.ts";
+import { parseBinding } from "../host/connections.ts";
+import { parseBuildProfileRoute } from "./profiles.ts";
+import type { BuildPaidLaunch } from "./types.ts";
 
 type Json = Record<string, unknown>;
 const MAX_BYTES = 64 * 1024;
@@ -93,6 +97,28 @@ export function readBuildLaunch(fd: number): BuildLaunch {
     if (!/^[A-Za-z0-9_.+=,@-]{1,64}$/.test(profile)) throw new LaunchMessageInvalid("profile is missing or malformed");
     aws = { profile, region };
   }
+  const effort = wire.effort != null ? token(wire, "effort") : undefined;
+  const selectedModel = model(wire, false);
+  const binding = parseBinding(wire.binding, wire.provider, selectedModel, effort);
+  const route = wire.route == null ? undefined : parseBuildProfileRoute(wire.route);
+  if (route && (route.provider !== wire.provider || route.model !== selectedModel || route.effort !== effort
+      || route.binding?.digest !== binding?.digest)) throw new LaunchMessageInvalid("selected route differs from launch binding");
+  let paid: BuildPaidLaunch | undefined;
+  if (wire.paid != null) {
+    const value = object(wire.paid, "paid");
+    const session = token(value, "session");
+    if (!/^B-[a-z0-9]{6,16}$/.test(session) || !Number.isSafeInteger(value.generation) || Number(value.generation) < 1
+        || typeof value.cap !== "string" || !/^[a-f0-9]{64}$/.test(value.cap)) throw new LaunchMessageInvalid("paid capability is malformed");
+    paid = { session, generation: Number(value.generation), cap: value.cap };
+    if (resume && resume !== session) throw new LaunchMessageInvalid("paid lineage differs from resumed session");
+  }
+  if (Boolean(binding && isApiConnection(binding.connection)) !== Boolean(paid)
+      || Boolean(route?.paid) !== Boolean(paid) || (paid && (bare || wire.workspace_root == null))) {
+    throw new LaunchMessageInvalid("API Build requires an exact binding and durable workspace admission");
+  }
+  if (paid && profiles.length) throw new LaunchMessageInvalid("metered Build children must use the exact parent route");
+  if (wire.profile_catalog != null && !Array.isArray(wire.profile_catalog)) throw new LaunchMessageInvalid("profile_catalog must be a list");
+  const profileCatalog = Array.isArray(wire.profile_catalog) ? wire.profile_catalog.map(parseBuildProfileRoute) : undefined;
   return {
     version: 1, assets: path(wire, "assets"), dataRoot: path(wire, "data_root"),
     ...(bare ? { bare: true } : { corral: path(wire, "corral") }),
@@ -102,6 +128,9 @@ export function readBuildLaunch(fd: number): BuildLaunch {
     ...(resume ? { resume } : {}), ...(wire.effort != null ? { effort: token(wire, "effort") } : {}),
     ...(capabilities ? { capabilities } : {}), ...(guidance ? { guidance } : {}),
     ...(aws ? { aws } : {}),
+    ...(route ? { route } : {}), ...(binding ? { binding } : {}), ...(paid ? { paid } : {}),
+    ...(profileCatalog ? { profileCatalog } : {}),
+    ...(wire.profile_request_path != null ? { profileRequestPath: path(wire, "profile_request_path") } : {}),
     settings: { exitPolicy: settings.exit_policy as ExitPolicy, maxParallel: settings.max_parallel as number, profiles },
   };
 }

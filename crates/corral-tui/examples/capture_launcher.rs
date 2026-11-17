@@ -1,10 +1,14 @@
 //! Prints the `corral pi` launcher as it first opens, as a text grid, for comparison with the
 //! launch scene of `docs/mockup/corral-pi-build.html`. The rows are the mock's: Build with where it
 //! writes, the Assistant and the PM, then the stopped sessions it lists under Resume; the option
-//! block shows the mock's project and two providers with a login.
-//! Usage: capture_launcher COLS ROWS
+//! block shows the mock's project and two providers with a login. With PROFILE the launcher also
+//! offers fixture profiles (a subscription one, metered API ones, two that cannot open) and opens
+//! on that one; `default` opens on the default.
+//! Usage: capture_launcher COLS ROWS [PROFILE]
 use anyhow::{Context, Result};
-use corral_tui::launcher::{self, LauncherContext, LauncherEntry, Login, ProviderLogin, Section};
+use corral_tui::launcher::{
+    self, Billing, LauncherContext, LauncherEntry, LauncherProfile, Login, ProviderLogin, Section,
+};
 use ratatui::{Terminal, backend::TestBackend};
 use unicode_width::UnicodeWidthStr;
 
@@ -20,7 +24,51 @@ fn context() -> LauncherContext {
     LauncherContext {
         project: Some("mitiplay".into()),
         providers: vec![present("openai-codex"), present("anthropic")],
+        ..LauncherContext::default()
     }
+}
+
+/// Fixture profiles: no config is read and nothing is resolved or spent.
+fn profiles() -> Vec<LauncherProfile> {
+    let profile = |name: &str, model: &str, billing, unavailable: Option<&str>| LauncherProfile {
+        name: name.into(),
+        model: model.into(),
+        billing,
+        unavailable: unavailable.map(Into::into),
+    };
+    let no_key = Some("no OpenAI API key");
+    vec![
+        profile(
+            "pi-sonnet",
+            "anthropic/claude-sonnet",
+            Billing::Subscription,
+            None,
+        ),
+        profile(
+            "pi-sonnet-api",
+            "anthropic/claude-sonnet",
+            Billing::Metered,
+            None,
+        ),
+        profile(
+            "pi-opus-api",
+            "anthropic/claude-opus",
+            Billing::Metered,
+            None,
+        ),
+        profile(
+            "pi-sol-6-2-api",
+            "openai/gpt-6.2-sol",
+            Billing::Metered,
+            no_key,
+        ),
+        profile(
+            "pi-astra-6-2-api",
+            "openai/gpt-6.2-astra",
+            Billing::Metered,
+            no_key,
+        ),
+    ]
 }
 
 fn start(id: &str, key: char, name: &str, detail: &str) -> LauncherEntry {
@@ -101,7 +149,11 @@ fn main() -> Result<()> {
         .parse()
         .context("parsing ROWS")?;
     let list = entries();
-    let context = context();
+    let mut context = context();
+    if let Some(profile) = args.get(3) {
+        context.profiles = profiles();
+        context.profile = (profile != "default").then(|| profile.clone());
+    }
     let mut terminal = Terminal::new(TestBackend::new(cols, rows))?;
     terminal.draw(|f| launcher::preview(f, &list, PLACE, &context))?;
     let buffer = terminal.backend().buffer();

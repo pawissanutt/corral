@@ -1477,6 +1477,7 @@ Options:
       --resume <ID>          Resume a stopped assistant A-<n> (fencing its previous generation), build B-<id>, or local bare B-<id> session in this pane
       --over-cap             Open an assistant even when assistant.max_live assistants are already live
       --task <TASK-ID>       Preload bounded read-only context for this task in a new assistant
+      --profile <NAME>       Select a named corral-pi profile for this launch without changing defaults
       --model <MODEL>        Override the model (bare defaults to the built-in model for its provider)
       --provider <PROVIDER>  Provider whose `corral agent login` runs the session (bare default: openai-codex) [possible values: openai-codex, anthropic]
       --effort <EFFORT>      Override reasoning effort (also accepted with --bare)

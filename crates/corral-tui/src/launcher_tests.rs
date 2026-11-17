@@ -4,8 +4,8 @@ use ratatui::{Terminal, backend::TestBackend};
 
 use crate::hit::press;
 use crate::launcher::{
-    ACCENT, KEY, LauncherContext, LauncherEntry, Login, OK, ProviderLogin, SELECTED, Section,
-    State, Step, WARN, draw,
+    ACCENT, Billing, KEY, Launch, LauncherContext, LauncherEntry, LauncherProfile, Login, OK,
+    ProviderLogin, SELECTED, Section, State, Step, WARN, draw,
 };
 use crate::{Hit, HitMap};
 
@@ -143,6 +143,7 @@ fn mock_context() -> LauncherContext {
             provider("openai-codex", Login::Present),
             provider("anthropic", Login::Present),
         ],
+        ..LauncherContext::default()
     }
 }
 
@@ -329,13 +330,22 @@ fn left_and_right_cycle_the_option_only_on_a_row_that_has_options() {
 #[test]
 fn the_opened_row_carries_its_chosen_option() {
     let list = with_build();
+    let context = LauncherContext::default();
     let mut state = State::default();
     state.key(&list, press(KeyCode::Left));
     state.key(&list, press(KeyCode::Down));
     assert_eq!(state.key(&list, press(KeyCode::Char('b'))), Step::Open(0));
-    assert_eq!(state.picked(&list, 0), Some(("build".into(), 1)));
-    assert_eq!(state.picked(&list, 1), Some(("assistant".into(), 0)));
-    assert_eq!(state.picked(&list, list.len()), None);
+    let launch = |id: &str, option| Launch {
+        id: id.into(),
+        option,
+        profile: None,
+    };
+    assert_eq!(state.picked(&list, &context, 0), Some(launch("build", 1)));
+    assert_eq!(
+        state.picked(&list, &context, 1),
+        Some(launch("assistant", 0))
+    );
+    assert_eq!(state.picked(&list, &context, list.len()), None);
 }
 
 #[test]
@@ -488,6 +498,7 @@ fn project_and_models_rows_frame_where_it_writes_in_the_label_column() {
             provider("anthropic", Login::Missing),
             provider("llama.cpp", Login::Unknown),
         ],
+        ..LauncherContext::default()
     };
     let shown = screen_with(100, 24, &list, &unsure, &mut State::default());
     let models = shown.row("Models");
@@ -504,6 +515,7 @@ fn project_and_models_rows_frame_where_it_writes_in_the_label_column() {
     let one = LauncherContext {
         project: Some("mitiplay".into()),
         providers: vec![provider("openai-codex", Login::Present)],
+        ..LauncherContext::default()
     };
     let shown = screen_with(100, 24, &list, &one, &mut State::default());
     let models = &shown.rows[shown.row("Models")].0;
@@ -546,6 +558,7 @@ fn the_option_block_wraps_its_values_in_their_column_at_46_columns() {
             provider("anthropic", Login::Present),
             provider("amazon-bedrock", Login::Missing),
         ],
+        ..LauncherContext::default()
     };
     let shown = screen_with(46, 40, &with_build(), &context, &mut State::default());
     let rows = &shown.rows;
@@ -576,4 +589,183 @@ fn the_option_block_wraps_its_values_in_their_column_at_46_columns() {
             .any(|(line, _)| line.contains("agents may use either")),
         "folded rows drop the note: {rows:#?}"
     );
+}
+
+fn profile(
+    name: &str,
+    model: &str,
+    billing: Billing,
+    unavailable: Option<&str>,
+) -> LauncherProfile {
+    LauncherProfile {
+        name: name.into(),
+        model: model.into(),
+        billing,
+        unavailable: unavailable.map(Into::into),
+    }
+}
+
+/// [`mock_context`] offering a subscription profile, a metered one and one that cannot open now,
+/// opening on `initial`.
+fn profile_context(initial: Option<&str>) -> LauncherContext {
+    LauncherContext {
+        profiles: vec![
+            profile(
+                "pi-sonnet",
+                "anthropic/claude-sonnet-4-5",
+                Billing::Subscription,
+                None,
+            ),
+            profile(
+                "pi-opus-api",
+                "anthropic/claude-opus-4-5",
+                Billing::Metered,
+                None,
+            ),
+            profile(
+                "pi-sol-api",
+                "openai/gpt-6.2",
+                Billing::Metered,
+                Some("no API key"),
+            ),
+        ],
+        profile: initial.map(Into::into),
+        ..mock_context()
+    }
+}
+
+#[test]
+fn tab_cycles_the_profile_from_default_on_any_row_and_the_opened_row_carries_it() {
+    let list = with_build();
+    let context = profile_context(None);
+    let mut state = State::new(&context);
+    assert_eq!(state.profile(), None, "the launcher opens on default");
+    assert_eq!(
+        state.picked(&list, &context, 2).map(|l| l.profile),
+        Some(None),
+        "default returns no profile"
+    );
+    state.key(&list, press(KeyCode::Down));
+    assert_eq!(state.key(&list, press(KeyCode::Tab)), Step::Stay);
+    assert_eq!(state.profile(), Some(0));
+    assert_eq!(state.selected, 1, "Tab never moves the selection");
+    state.key(&list, press(KeyCode::BackTab));
+    state.key(&list, press(KeyCode::BackTab));
+    assert_eq!(
+        state.profile(),
+        Some(2),
+        "Shift+Tab wraps past default to the last"
+    );
+    state.key(&list, press(KeyCode::Tab));
+    assert_eq!(state.profile(), None, "and Tab wraps back to default");
+    state.key(&list, press(KeyCode::Tab));
+    state.key(&list, press(KeyCode::Tab));
+    assert_eq!(
+        state.option(0),
+        0,
+        "the profile never changes where Build writes"
+    );
+    assert_eq!(state.key(&list, press(KeyCode::Char('b'))), Step::Open(0));
+    assert_eq!(
+        state.picked(&list, &context, 0),
+        Some(Launch {
+            id: "build".into(),
+            option: 0,
+            profile: Some("pi-opus-api".into()),
+        })
+    );
+    let explicit = State::new(&profile_context(Some("pi-opus-api")));
+    assert_eq!(
+        explicit.profile(),
+        Some(1),
+        "--profile opens on that profile"
+    );
+}
+
+#[test]
+fn no_row_opens_while_an_unavailable_profile_is_chosen_and_leaving_still_works() {
+    let list = with_build();
+    let mut state = State::new(&profile_context(Some("pi-sol-api")));
+    assert_eq!(state.key(&list, press(KeyCode::Enter)), Step::Stay);
+    assert_eq!(state.key(&list, press(KeyCode::Char('p'))), Step::Stay);
+    assert_eq!(state.selected, 2, "the row key still selects its row");
+    assert_eq!(state.click(2), Step::Stay);
+    for key in [
+        press(KeyCode::Esc),
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    ] {
+        assert_eq!(state.clone().key(&list, key), Step::Leave, "{key:?}");
+    }
+    state.key(&list, press(KeyCode::Tab));
+    assert_eq!(state.profile(), None);
+    assert_eq!(state.key(&list, press(KeyCode::Enter)), Step::Open(2));
+}
+
+#[test]
+fn the_profile_line_sits_over_the_block_names_billing_and_cycles_on_a_click() {
+    let list = with_build();
+    let context = profile_context(None);
+    let mut state = State::new(&context);
+    let shown = screen_with(100, 30, &list, &context, &mut state);
+    let rows = &shown.rows;
+    let line = shown.row("Profile");
+    assert!(
+        line > shown.row("A-29") && rows[line - 1].0.is_empty(),
+        "{rows:#?}"
+    );
+    assert_eq!(shown.row("Project"), line + 1, "{rows:#?}");
+    assert!(
+        rows[line]
+            .0
+            .contains("Profile   ‹ default › each mode keeps its own profile"),
+        "{rows:#?}"
+    );
+    let back = shown.col(line, "‹");
+    assert_eq!(back, COLUMN_X + 10);
+    assert_eq!(shown.buffer[(back, line as u16)].fg, ACCENT);
+    assert_eq!(
+        shown.hit(back, line),
+        Some(&Hit::Key(press(KeyCode::BackTab)))
+    );
+    assert_eq!(
+        shown.hit(back + 4, line),
+        Some(&Hit::Key(press(KeyCode::Tab)))
+    );
+    let footer = rows.len() - 1;
+    let cap = shown.col(footer, "tab");
+    assert!(rows[footer].0.contains("tab  profile"), "{rows:#?}");
+    assert_eq!(shown.hit(cap, footer), Some(&Hit::Key(press(KeyCode::Tab))));
+
+    state.key(&list, press(KeyCode::Tab));
+    let shown = screen_with(100, 30, &list, &context, &mut state);
+    let text = &shown.rows[line].0;
+    assert!(
+        text.contains("‹ pi-sonnet › anthropic/claude-sonnet-4-5 · subscription"),
+        "{text:?}"
+    );
+    state.key(&list, press(KeyCode::Tab));
+    let shown = screen_with(100, 30, &list, &context, &mut state);
+    let text = &shown.rows[line].0;
+    assert!(
+        text.contains("‹ pi-opus-api › anthropic/claude-opus-4-5 · API · metered"),
+        "{text:?}"
+    );
+    let metered = shown.col(line, "API");
+    assert_eq!(shown.buffer[(metered, line as u16)].fg, WARN);
+    state.key(&list, press(KeyCode::Tab));
+    let shown = screen_with(100, 30, &list, &context, &mut state);
+    let text = &shown.rows[line].0;
+    assert!(text.contains("· unavailable: no API key"), "{text:?}");
+    let reason = shown.col(line, "unavailable");
+    assert_eq!(shown.buffer[(reason, line as u16)].fg, WARN);
+
+    let narrow = screen_with(46, 40, &list, &context, &mut State::new(&context));
+    let line = narrow.row("Profile");
+    assert_eq!(
+        narrow.rows[line + 1].0.trim(),
+        "own profile",
+        "{:#?}",
+        narrow.rows
+    );
+    assert_eq!(narrow.col(line + 1, "own"), COLUMN_X + 10);
 }

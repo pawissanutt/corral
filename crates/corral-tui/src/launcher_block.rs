@@ -5,7 +5,9 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{ACCENT, LauncherEntry, MUTED, OK, Part, State, TEXT, WARN, fg, padded};
+use super::{
+    ACCENT, LauncherEntry, LauncherProfile, MUTED, OK, Part, State, TEXT, WARN, fg, padded,
+};
 use crate::overlays::truncate;
 
 /// The label column of the option block.
@@ -17,13 +19,20 @@ const MODELS_LABEL: &str = "Models";
 /// Between two providers on the Models row.
 const PROVIDER_GAP: &str = "   ";
 
-/// What the launcher shows about the build session it would open.
+/// What the launcher shows about the build session it would open, and the profiles it offers for
+/// whatever it opens.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LauncherContext {
     /// The project the starting directory resolves to; `None` in a directory of no project.
     pub project: Option<String>,
     /// The model providers the session's agents can use, in the order shown; none hides the row.
     pub providers: Vec<ProviderLogin>,
+    /// The profiles the owner may choose for the session the launcher opens, in the order offered,
+    /// unavailable ones included; none hides the Profile line and the launcher returns no profile.
+    pub profiles: Vec<LauncherProfile>,
+    /// The profile chosen when the launcher opens (`corral pi --profile`). It names one of
+    /// `profiles`; `None`, or a name that is not among them, opens on `default`.
+    pub profile: Option<String>,
 }
 
 /// A model provider with what is known of its login.
@@ -160,7 +169,7 @@ pub(super) fn spans(pieces: Vec<Piece>) -> Vec<Span<'static>> {
 
 /// `label` in the label column, then `value` wrapped in the `cols` after it; `part` says what line
 /// `n` of the value is to the mouse.
-fn labelled(
+pub(super) fn labelled(
     out: &mut Vec<(Line<'static>, Part)>,
     label: &str,
     value: &[Piece],

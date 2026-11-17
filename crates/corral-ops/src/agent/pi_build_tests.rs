@@ -110,8 +110,85 @@ fn build_cannot_reinterpret_an_api_profile_as_a_subscription() {
         );
         let error = model(&config, true, &BuildArgs::default()).unwrap_err();
         assert_eq!(code(&error), Some("paid_admission_required"));
-        assert!(error.to_string().contains("daemon assistant"));
     }
+}
+
+#[test]
+fn old_build_host_cannot_reinterpret_approved_api_profile_or_create_a_balance() {
+    let mut fx = fixture();
+    let data = tempfile::tempdir().unwrap();
+    let assets = fx.ctx.store.config.agent.assets_dir.clone().unwrap();
+    source_assets(&assets); // Bound API support alone must not imply Build paid-protocol support.
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(assets.join("compat.json")).unwrap()).unwrap();
+    manifest["connections"] = json!(["anthropic-api"]);
+    std::fs::write(
+        assets.join("compat.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    fx.ctx.store.config.profiles.insert("api-build".into(), serde_json::from_value(json!({
+        "harness":"corral-pi", "vendor":"anthropic", "model":"claude-sonnet-4-6", "connection":"anthropic-api",
+        "metadata":{"display_name":"fixture","purpose":"fixture","guidance":{},"instructions":"fixture","revision":"fixture",
+            "eligibility":{"enabled":true,"automatic":false,"roles":["implementation"],"projects":[]},"evidence":"synthetic",
+            "candidates":[{"id":"exact-api","harness":"corral-pi","connection":"anthropic-api","provider":"anthropic","model":"claude-sonnet-4-6",
+                "args":[],"evidence":"synthetic","cost":{"kind":"metered","currency":"USD","maximum_micros":50000000}}],
+            "api_start":{"roles":["assistant"],"spending":{"currency":"USD","maximum_micros":50000000},"approval":"explicit-fixture"}}}
+    )).unwrap());
+    fx.ctx.store.save_config().unwrap();
+    let error = build_command(
+        data.path(),
+        &BuildArgs {
+            profile: Some("api-build".into()),
+            ..Default::default()
+        },
+        &fx.root().join("app"),
+        Some(fake_bun(data.path())),
+        Some(fx.ctx.store.root()),
+    )
+    .unwrap_err();
+    assert_eq!(code(&error), Some("build_protocol_unsupported"));
+    assert!(error.to_string().contains("build_paid=1"));
+    assert!(
+        fx.ctx
+            .store
+            .record_rows("build_paid_ledgers")
+            .unwrap()
+            .is_empty()
+    );
+    manifest["build_paid"] = json!(1);
+    manifest["build_profiles"] = json!(1);
+    std::fs::write(
+        assets.join("compat.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let auth_dir = data.path().join("auth");
+    std::fs::create_dir_all(&auth_dir).unwrap();
+    std::fs::set_permissions(&auth_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let key = auth_dir.join("anthropic-api.json");
+    std::fs::write(&key, "{}").unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let launch = message(
+        build_command(
+            data.path(),
+            &BuildArgs {
+                profile: Some("api-build".into()),
+                ..Default::default()
+            },
+            &fx.root().join("app"),
+            Some(fake_bun(data.path())),
+            Some(fx.ctx.store.root()),
+        )
+        .unwrap()
+        .1,
+    );
+    assert_eq!(launch["binding"]["connection"], "anthropic-api");
+    assert_eq!(launch["settings"]["profiles"], json!([]));
+    let id = launch["paid"]["session"].as_str().unwrap();
+    let ledger = fx.ctx.store.build_paid_ledger(id).unwrap().unwrap();
+    assert_eq!(ledger.profile, "api-build");
+    assert_eq!(ledger.approval.allowance_nanos, 50_000_000_000);
 }
 
 #[test]
@@ -377,6 +454,7 @@ fn bare_command_ignores_workspace_configuration_and_omits_all_workspace_bindings
     )
     .unwrap();
     let args = super::super::pi::BareArgs {
+        profile: None,
         model: None,
         provider: None,
         effort: None,

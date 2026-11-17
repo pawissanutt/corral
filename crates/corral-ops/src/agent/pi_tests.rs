@@ -335,7 +335,7 @@ fn fake_bun(dir: &Path) -> std::path::PathBuf {
 }
 
 #[test]
-fn bound_mode_execs_in_process_and_leaves_no_bootstrap_on_disk() {
+fn bound_mode_supervises_the_host_and_leaves_no_bootstrap_on_disk() {
     let fx = fixture();
     owner_pane(&fx);
     let assets = fx.root().join("assets");
@@ -376,17 +376,17 @@ fn bound_mode_execs_in_process_and_leaves_no_bootstrap_on_disk() {
 }
 
 #[test]
-#[ignore = "exec child of bound_mode_execs_in_process_and_leaves_no_bootstrap_on_disk"]
+#[ignore = "subprocess child of bound_mode_supervises_the_host_and_leaves_no_bootstrap_on_disk"]
 fn bound_exec_child() {
     let root = std::path::PathBuf::from(std::env::var("CORRAL_PI_TEST_ROOT").unwrap());
-    let error = bound(&root, &f::ctx_at(&root), &Overrides::default()).unwrap_err();
-    panic!("bound returned instead of exec: {error:#}");
+    bound(&root, &f::ctx_at(&root), &Overrides::default()).unwrap();
 }
 
 #[test]
 fn bare_refuses_without_an_installation_or_with_an_unknown_provider() {
     let data = tempfile::tempdir().unwrap();
     let args = |provider: Option<&str>| BareArgs {
+        profile: None,
         model: None,
         provider: provider.map(str::to_owned),
         effort: None,
@@ -436,6 +436,7 @@ fn bare_runs_a_compiled_installation_without_bun_or_source_modules() {
     assert!(!assets.join("src").exists());
     // When bare mode prepares its launch with no Bun on PATH.
     let args = BareArgs {
+        profile: None,
         model: Some("gpt-6.1-sol".into()),
         provider: None,
         effort: None,

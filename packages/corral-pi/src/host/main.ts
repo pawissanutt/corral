@@ -45,6 +45,7 @@ import { RemoteOwner } from "./remote-owner.ts";
 import { summaryOptions } from "./summary.ts";
 import { bareProviders, requireBareProvider } from "./bare.ts";
 import { providerTransport } from "./capabilities.ts";
+import { PROFILE_EXIT } from "./profiles.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -151,6 +152,8 @@ export async function runHost(config: HostConfig, overrides: {
     root: config.root, exportDir: join(config.sessionDir, "exports"), runtimeDir: config.runtimeDir,
     modules, client, events, network,
     ...(overrides.build ? { build: overrides.build } : {}),
+    ...(!config.daemonHosted && (overrides.build || config.identity.role === "assistant" || config.identity.role === "pm")
+      ? { switchProfile: () => restart(PROFILE_EXIT) } : {}),
     ...(config.identity.role === "assistant" && process.argv.includes("--assistant-new")
       ? { relinkAssistant: () => restart(RELINK_ASSISTANT_EXIT),
         continueAssistant: () => restart(CONTINUE_ASSISTANT_EXIT),
@@ -211,7 +214,7 @@ export async function runHost(config: HostConfig, overrides: {
     await session.runtime.dispose();
     await session.drained();
     await bridge?.close();
-    process.exit(code); // 75 = /new, 76 = relink, 77 = /resume, 78 = quota continuation request.
+    process.exit(code); // 75 /new, 76 relink, 77 /resume, 78 quota continuation, 79 profile selection.
   }
   await session.hello(config.secrets.bindNonce, config.pane, sha256Hex(config.secrets.ctlCap));
   if (overrides.build) {

@@ -66,7 +66,10 @@ pub fn live(store: &Store) -> Result<Vec<LiveAssistant>> {
 /// PM's profile, with this launch's overrides and the role's asset and credential preflight.
 pub fn profile(ctx: &Ctx, name: Option<&str>, overrides: &Overrides) -> Result<ResolvedProfile> {
     let config = ctx.store.config_layers()?.config()?;
-    let name = name
+    let name = overrides
+        .profile
+        .as_deref()
+        .or(name)
         .map(str::to_owned)
         .or_else(|| config.assistant.agent.clone())
         .unwrap_or_else(|| config.pm.agent.clone());
@@ -248,6 +251,14 @@ pub(crate) fn launch_session(
     let target = BindTarget::Assistant { session: id.into() };
     let prepared = launch::prepare_bootstrap_host(ctx, &target, pane, &spec)?;
     record_assets(ctx, id, &prepared)?;
+    let state = ctx.store.get_assistant_container(id)?;
+    crate::agent::pi::profile::write_catalog(
+        ctx,
+        &prepared,
+        AgentRole::Assistant,
+        &resolved.profile,
+        Some(&state.state),
+    )?;
     if resolved.vendor.as_deref() == Some("amazon-bedrock") {
         let binding =
             crate::agent::aws_profile::read_binding(&crate::agent::install::data_root()?)?
@@ -347,19 +358,50 @@ pub(crate) fn open_observed(
             session.project = project;
             Ok(())
         })?;
-        Ok((session, prepare(ctx, &created.id, Some(pane), &resolved)?))
+        let prepared = prepare(ctx, &created.id, Some(pane), &resolved)?;
+        ctx.store.log_event(
+            None,
+            "assistant_launched",
+            json!({"session": session.id, "generation": 1, "pane": pane,
+                "profile": resolved.profile, "over_cap": warning.is_some()}),
+        )?;
+        Ok((session, prepared))
     })();
     match prepared {
-        Ok((session, prepared)) => {
-            ctx.store.log_event(
-                None,
-                "assistant_launched",
-                json!({"session": session.id, "generation": 1, "pane": pane,
-                    "profile": resolved.profile, "over_cap": warning.is_some()}),
-            )?;
-            Ok((session, prepared, warning, claim))
-        }
+        Ok((session, prepared)) => Ok((session, prepared, warning, claim)),
         Err(error) => {
+            let reference = ContainerRef::Assistant {
+                session: created.id.clone(),
+            };
+            let uncertain =
+                || crate::agent::pi::profile::FinancialStartUncertain(created.id.clone());
+            let state = ctx
+                .store
+                .get_assistant_container(&created.id)
+                .with_context(uncertain)?
+                .state;
+            if crate::agent::pi::profile::lineage(ctx, &reference, &state)
+                .with_context(uncertain)?
+            {
+                let mut error = error;
+                for n in [
+                    state.binding.generation,
+                    state.binding.generation.saturating_add(1),
+                ] {
+                    if let Err(cleanup) =
+                        crate::availability::continuation::failed_start(ctx, &reference, n)
+                    {
+                        error =
+                            error.context(format!("financial startup cleanup failed: {cleanup:#}"));
+                        break;
+                    }
+                }
+                return Err(
+                    error.context(crate::agent::pi::profile::FinancialStartUncertain(
+                        created.id,
+                    )),
+                );
+            }
             // Still claimed by this supervisor: nobody else can own what is ended here.
             ctx.store.end_assistant(&created.id)?;
             Err(error)
@@ -425,11 +467,42 @@ pub(crate) fn resume_admitted(
             ),
         ));
     }
+    let selected = overrides.profile.as_deref().unwrap_or(&session.profile);
+    let lineage = crate::agent::pi::profile::lineage(
+        ctx,
+        &ContainerRef::Assistant { session: id.into() },
+        &container.state,
+    )?;
+    anyhow::ensure!(
+        !lineage || selected == session.profile,
+        "paid route is sticky; start a new session to change profiles"
+    );
+    anyhow::ensure!(
+        !lineage || crate::agent::pi::profile::paid(&container.state),
+        "paid preparation remains unresolved; resume the original paid binding explicitly"
+    );
+    anyhow::ensure!(
+        selected == session.profile,
+        "profile_change_requires_new_session: open `corral pi --assistant --profile {selected}`"
+    );
     if let Some(prepared) = crate::assistant::continuation::recover(ctx, id, pane, &container)? {
         return Ok((container.state.binding.generation, prepared));
     }
     crate::assistant::workflow::boundary::require_resume(&ctx.store, id, &container)?;
     let resolved = profile(ctx, Some(&session.profile), overrides)?;
+    if let Some(previous) = container
+        .state
+        .generations
+        .iter()
+        .filter(|g| g.bound.is_some())
+        .max_by_key(|g| g.n)
+    {
+        corral_core::connection::ConnectionBinding::continue_from(
+            previous.connection.as_ref(),
+            crate::agent::connections::explicit(&resolved)?.as_ref(),
+            false,
+        )?;
+    }
     let fenced = container.state.binding.generation;
     let reference = ContainerRef::Assistant { session: id.into() };
     if fenced > 0 {
@@ -674,8 +747,10 @@ pub fn run_host(prepared: &Prepared) -> Result<std::process::ExitStatus> {
     let secrets = launch::Secrets::generate()?;
     launch::write_ctl_cap(&ready.generation_dir, &secrets.ctl_cap)?;
     let (mut command, inherited) = launch::host_command(&bootstrap, &ready, &secrets)?;
-    // This child has a `corral pi` supervisor handling /new (75) and idle scratch relink (76).
-    command.arg("--assistant-new");
+    // Only assistant hosts expose /new; PM shares the supervised profile boundary.
+    if bootstrap.role == AgentRole::Assistant {
+        command.arg("--assistant-new");
+    }
     wait_host(command, inherited)
 }
 

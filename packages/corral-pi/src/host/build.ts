@@ -14,6 +14,7 @@ import type { BuildContext, BuildLaunch, BuildSessionRecord } from "../build/typ
 import { LaunchMessageInvalid, type HostCapabilities, type HostConfig } from "./config.ts";
 import { runHost } from "./main.ts";
 import { requireBareProvider } from "./bare.ts";
+import { createBuildBudgetRecord } from "../build/paid.ts";
 
 // Everything here runs in the host, its own managed processes, or the local receipt plane.
 // write_permissions needs assistant scratch ownership; checkpoints needs a worker run;
@@ -109,7 +110,9 @@ export function buildHostConfig(launch: BuildLaunch, record: BuildSessionRecord,
     sessionDir: join(dir, "sessions"), runtimeDir: join(dir, "runtime"), ui: "rich",
     ...(record.sessionFile ? { resumeSession: record.sessionFile } : {}), capabilities,
     ...(guidance ? { guidance } : {}), todo: capabilities.enabled.includes("todo"),
-    provider: launch.provider as ProviderId, model: launch.model, ...(launch.effort ? { effort: launch.effort } : {}),
+    provider: (record.route?.provider ?? launch.provider) as ProviderId, model: record.route?.model ?? launch.model,
+    ...((record.route?.effort ?? launch.effort) ? { effort: record.route?.effort ?? launch.effort } : {}),
+    ...((record.route?.binding ?? launch.binding) ? { binding: record.route?.binding ?? launch.binding } : {}),
     ...(launch.aws ? { aws: launch.aws } : {}),
   };
 }
@@ -167,6 +170,13 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
         throw new LaunchRefused("The build session has no recorded transcript to resume", `Build ${id} has no recorded conversation to resume.`,
           "Start a new build with `corral pi --build`.");
       }
+      if (launch.paid && launch.paid.session !== record.id) throw new LaunchMessageInvalid("paid Build session differs from saved lineage");
+      if (record.route?.paid && (!launch.route?.paid || record.route.binding?.digest !== launch.route.binding?.digest
+          || JSON.stringify(record.route.paid) !== JSON.stringify(launch.route.paid))) {
+        throw new LaunchMessageInvalid("paid Build route cannot change or refresh its allowance");
+      }
+      record = { ...record, ...(launch.route ? { route: launch.route } : {}) };
+      saveSession(launch.dataRoot, record);
     } else {
       const draft = createSession(launch, { worktree: launch.repoRoot, branch: null, base: null });
       try {
@@ -193,7 +203,11 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
       saveSession(launch.dataRoot, record);
     }
     const dir = sessionDir(launch.dataRoot, record.id);
-    const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral ?? "" };
+    const paidRecord = createBuildBudgetRecord(launch);
+    const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral ?? "",
+      ...(paidRecord ? { paidRecord } : {}),
+      ...(launch.profileCatalog ? { profileCatalog: launch.profileCatalog } : {}),
+      ...(launch.profileRequestPath ? { profileRequestPath: launch.profileRequestPath } : {}) };
     const config = buildHostConfig(launch, record, assets);
     const ledger = createTodoLedger(dir);
     // Pi ends an ordinary quit with process.exit(0); this prints after the terminal is restored.

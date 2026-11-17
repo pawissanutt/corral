@@ -18,6 +18,7 @@ pub mod availability;
 pub mod backend;
 pub mod blob;
 pub mod blob_ref;
+pub mod build_paid;
 pub mod build_record;
 pub mod capacity;
 pub mod card;

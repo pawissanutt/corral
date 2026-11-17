@@ -3,6 +3,8 @@
   "memory_projection": 1,
   "source_boundary": 1,
   "summary_profile": 1,
+  "build_profiles": 1,
+  "build_paid": 1,
   "verdict": "GO",
   "source": {
     "file": "tools/pi-probe/bun-go.json",

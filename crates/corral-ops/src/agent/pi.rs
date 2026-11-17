@@ -2,14 +2,14 @@
 //!
 //! In a workspace `corral pi --assistant` (or the launcher's Assistant row) opens a new assistant
 //! session in the owner's herdr pane and `--resume A-<n>` continues one there (T-544); both run the
-//! host as a child so a clean exit suspends the session for later resume. `--pm` is the PM's bound
-//! mode below, unchanged.
+//! host as a child so a clean exit suspends the session for later resume. `--pm` likewise
+//! supervises its bound child for generation-fenced profile changes.
 //!
 //! Bound mode adopts the herdr pane it runs in as the PM pane. It resolves the PM profile through
 //! the `corral pm` and resume checks, opens the next PM generation in that pane (taking over a dead
 //! PM with resume's fencing, never a rival generation), writes the one-shot bootstrap and launches
-//! it in-process: the same consume, check and exec `corral agent launch` performs, so no bootstrap
-//! path is shown or typed. The adopted pane is recorded (`AgentPm::adopted_pane`): corral never
+//! a supervised child through the same consume and check path as `corral agent launch`.
+//! The adopted pane is recorded (`AgentPm::adopted_pane`): corral never
 //! closes it, and types into it only after verifying its live host.
 //!
 //! `--bare` runs the build host without any corral workspace binding or state commands.
@@ -18,12 +18,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use corral_core::agent::{AgentRunState, ContainerRef, pm_state};
 
-use super::bridge::assets::find_bun;
 use super::bridge::liveness::{bound_host, gone};
 use super::hooks::pm::Overrides;
 use super::launch::Prepared;
 use super::ops::assistant::Claim;
 use crate::Ctx;
+
+#[path = "pi_profile.rs"]
+pub mod profile;
 
 /// The variable herdr sets in every pane: the pane bound mode adopts.
 pub const PANE_ENV: &str = "HERDR_PANE_ID";
@@ -106,10 +108,32 @@ pub(crate) fn refuse_dead_adopted(adopted: bool, alive: bool, pane: &str) -> Res
     Ok(())
 }
 
-/// Bound mode up to the exec: every check, then generation n+1 in `pane` and its bootstrap.
+/// Bound mode up to child launch: every check, then generation n+1 in `pane` and its bootstrap.
 pub fn adopt(ctx: &Ctx, pane: &str, overrides: &Overrides) -> Result<Prepared> {
     platform()?;
-    let resolved = super::hooks::pm::profile_with(ctx, overrides)?;
+    let current = pm_state::load_current(&ctx.store)?;
+    let resolved = if let Some(pm) = current.as_ref()
+        && profile::lineage(ctx, &ContainerRef::Pm, &pm.state)?
+    {
+        let retained = profile::pm_current(ctx)?;
+        anyhow::ensure!(
+            overrides
+                .profile
+                .as_ref()
+                .is_none_or(|name| name == &retained)
+                && overrides.model.is_none()
+                && overrides.provider.is_none()
+                && overrides.effort.is_none(),
+            "paid route is sticky; start a new session to change profiles"
+        );
+        anyhow::ensure!(
+            profile::paid(&pm.state),
+            "paid PM preparation remains unresolved; resume its original paid binding explicitly"
+        );
+        crate::pm::continuation::recovery_profile(ctx, &pm.state)?
+    } else {
+        super::hooks::pm::profile_with(ctx, overrides)?
+    };
     if ctx.herdr.pane_get(pane)?.is_none() {
         return Err(refuse(
             "pane_unknown",
@@ -136,12 +160,12 @@ pub fn adopt(ctx: &Ctx, pane: &str, overrides: &Overrides) -> Result<Prepared> {
     })
 }
 
-/// `corral pi [--model M] [--provider P] [--effort E]`: adopt this pane and exec the host.
-pub fn bound(start: &Path, ctx: &Ctx, overrides: &Overrides) -> Result<()> {
+/// `corral pi [--profile NAME]`: adopt this pane and supervise the PM host.
+pub fn bound(_start: &Path, ctx: &Ctx, overrides: &Overrides) -> Result<()> {
     platform()?;
     let pane = current_pane(std::env::var(PANE_ENV).ok().as_deref())?;
     let prepared = adopt(ctx, &pane, overrides)?;
-    super::launch::launch(start, &prepared.launch_args())
+    profile::supervise_pm(ctx, &pane, prepared, super::ops::assistant::run_host)
 }
 
 /// `corral pi [--over-cap]` in a workspace: a new assistant session in this pane.
@@ -261,7 +285,7 @@ pub(crate) fn supervise_with(
                     // A fresh host that could not start is not left half-open. A resumed
                     // conversation remains recoverable, including when /new failed while
                     // shutting it down.
-                    if generation == 1 {
+                    if generation == 1 && !paid {
                         ctx.store.end_assistant(&id)?;
                     }
                     return Err(error);
@@ -294,6 +318,26 @@ pub(crate) fn supervise_with(
             crate::assistant::continuation::failed_start(ctx, &id, generation)?;
         }
         match status.code() {
+            Some(profile::PROFILE_EXIT) => {
+                match profile::switch_assistant(
+                    ctx,
+                    pane,
+                    &id,
+                    generation,
+                    &prepared,
+                    &overrides_for(&opened, &id),
+                    over_cap,
+                )? {
+                    profile::AssistantSwitch::Resumed(next) => prepared = next,
+                    profile::AssistantSwitch::New {
+                        claim: next,
+                        prepared: next_prepared,
+                    } => {
+                        claim = next;
+                        prepared = next_prepared;
+                    }
+                }
+            }
             Some(CONTINUE_ASSISTANT_EXIT) => {
                 let Some(next) =
                     crate::assistant::continuation::resume(ctx, &id, pane, generation)?
@@ -453,6 +497,7 @@ pub fn end_assistant(ctx: &Ctx, id: &str) -> Result<corral_core::assistant::Assi
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BareArgs {
+    pub profile: Option<String>,
     pub model: Option<String>,
     pub provider: Option<String>,
     pub effort: Option<String>,
@@ -472,6 +517,7 @@ pub fn bare_command(
     super::pi_build::bare_build_command(
         data_root,
         &super::pi_build::BuildArgs {
+            profile: args.profile.clone(),
             model: args.model.clone(),
             provider: args.provider.clone(),
             effort: args.effort.clone(),
@@ -487,13 +533,15 @@ pub fn bare_command(
 /// `corral pi --bare`: build in Git, or the current directory outside a repository.
 #[cfg(unix)]
 pub fn bare(args: &BareArgs) -> Result<()> {
-    use std::os::unix::process::CommandExt;
-    let cwd = std::env::current_dir().context("reading the current directory")?;
-    let (mut command, reader) =
-        bare_command(&super::install::data_root()?, args, &cwd, find_bun())?;
-    let _reader = reader;
-    let error = command.exec();
-    Err(error).context("executing the bare Pi host")
+    super::pi_build::bare(&super::pi_build::BuildArgs {
+        profile: args.profile.clone(),
+        model: args.model.clone(),
+        provider: args.provider.clone(),
+        effort: args.effort.clone(),
+        here: args.here,
+        name: args.name.clone(),
+        resume: args.resume.clone(),
+    })
 }
 
 #[cfg(not(unix))]

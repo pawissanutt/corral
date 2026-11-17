@@ -5,19 +5,26 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use corral_core::agent::AgentRole;
 use corral_core::config::{BuildExit, Config};
-use corral_core::{ConfigLayers, ProfileChoice, Store};
+use corral_core::{ConfigLayers, Store};
 use serde_json::json;
 
 use super::bridge::assets::{bun_version, compiled_host, find_bun, read_compat, version_satisfies};
 use super::hooks::pm::Overrides;
-use super::launch::{capabilities_payload, host_provider};
+use super::launch::capabilities_payload;
 use super::pi::{DEFAULT_PROVIDER, platform, refuse};
 
 const BUILD_ENTRY: &str = "src/host/build.ts";
 const MESSAGE_MAX_BYTES: usize = 32 * 1024;
 
+#[path = "pi_build_profiles.rs"]
+mod profiles;
+#[cfg(unix)]
+#[path = "pi_build_supervisor.rs"]
+mod supervisor;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BuildArgs {
+    pub profile: Option<String>,
     pub model: Option<String>,
     pub provider: Option<String>,
     pub effort: Option<String>,
@@ -27,6 +34,14 @@ pub struct BuildArgs {
 }
 
 fn validate_args(args: &BuildArgs) -> Result<()> {
+    if args.profile.is_some()
+        && (args.model.is_some() || args.provider.is_some() || args.effort.is_some())
+    {
+        return Err(refuse(
+            "usage_error",
+            "--profile conflicts with --model, --provider and --effort",
+        ));
+    }
     if let Some(name) = &args.name {
         let bytes = name.as_bytes();
         if !(1..=40).contains(&bytes.len())
@@ -76,56 +91,14 @@ fn model(
     workspace: bool,
     args: &BuildArgs,
 ) -> Result<(String, String, Option<String>)> {
-    if workspace {
-        // Match assistant::profile's selection, using only its pure config resolution and overrides.
-        let name = config.assistant.agent.as_ref().unwrap_or(&config.pm.agent);
-        let mut resolved = config.resolve_profile(
-            &ProfileChoice {
-                profile: Some(name.clone()),
-                ..ProfileChoice::default()
-            },
-            None,
-            None,
-        )?;
-        if !super::hooks::is_corral_pi(&resolved.harness) {
-            return Err(refuse(
-                "assistant_profile",
-                format!("profile '{name}' is not corral-pi"),
-            ));
-        }
-        super::hooks::pm::apply(
-            &mut resolved,
-            &Overrides {
-                model: args.model.clone(),
-                provider: args.provider.clone(),
-                effort: args.effort.clone(),
-                ..Overrides::default()
-            },
-        )
-        .map_err(|error| refuse("usage_error", format!("{error:#}")))?;
-        if resolved
-            .connection
-            .is_some_and(|connection| connection.api_key())
-        {
-            return Err(refuse(
-                "paid_admission_required",
-                "API-first profiles require a canonically bound role and finite metadata.api_start approval; use a daemon assistant instead of an untethered build session",
-            ));
-        }
-        let model = resolved.model.ok_or_else(|| {
-            refuse(
-                "assistant_profile",
-                format!("profile '{name}' names no model"),
-            )
-        })?;
-        let provider = host_provider(resolved.vendor.as_deref(), &model).ok_or_else(|| {
-            refuse(
-                "assistant_profile",
-                format!("profile '{name}' has no known provider"),
-            )
-        })?;
-        require_provider(&provider)?;
-        return Ok((provider, model, resolved.effort));
+    if workspace || args.profile.is_some() {
+        let name = args
+            .profile
+            .as_ref()
+            .or(config.assistant.agent.as_ref())
+            .unwrap_or(&config.pm.agent);
+        let route = profiles::resolve(config, name, args, false)?;
+        return Ok((route.provider, route.model, route.effort));
     }
     let provider = args.provider.as_deref().unwrap_or(DEFAULT_PROVIDER);
     require_provider(provider)?;
@@ -211,7 +184,7 @@ pub fn build_command(
     bun: Option<PathBuf>,
     workspace: Option<&Path>,
 ) -> Result<(std::process::Command, std::io::PipeReader)> {
-    command(data_root, args, cwd, bun, workspace, false)
+    command(data_root, args, cwd, bun, workspace, false, None)
 }
 
 #[cfg(unix)]
@@ -221,7 +194,7 @@ pub(crate) fn bare_build_command(
     cwd: &Path,
     bun: Option<PathBuf>,
 ) -> Result<(std::process::Command, std::io::PipeReader)> {
-    command(data_root, args, cwd, bun, None, true)
+    command(data_root, args, cwd, bun, None, true, None)
 }
 
 #[cfg(unix)]
@@ -232,6 +205,7 @@ fn command(
     bun: Option<PathBuf>,
     workspace: Option<&Path>,
     bare: bool,
+    profile_request: Option<&Path>,
 ) -> Result<(std::process::Command, std::io::PipeReader)> {
     use std::io::Write;
     use std::os::fd::AsRawFd;
@@ -272,6 +246,16 @@ fn command(
         Some(root) => ConfigLayers::load(&root.join(".corral/corral.toml"))?.config()?,
         None => Config::default_for(&repo_root),
     };
+    // Personal profiles are available without adopting personal build policy/assets/defaults.
+    let personal = if workspace.is_none() {
+        ConfigLayers::user_path()
+            .filter(|path| path.is_file())
+            .map(|path| Config::load(&path))
+            .transpose()?
+    } else {
+        None
+    };
+    let profile_config = personal.as_ref().unwrap_or(&config);
     let problems = config.build.problems();
     if !problems.is_empty() {
         return Err(refuse("usage_error", problems.join("; ")));
@@ -342,12 +326,55 @@ fn command(
             command
         }
     };
-    let (provider, model, effort) = if bare {
-        bare_model(args)?
+    let recorded = args
+        .resume
+        .as_deref()
+        .map(|id| profiles::recorded(data_root, id))
+        .transpose()?
+        .flatten();
+    let recorded_paid = recorded.as_ref().is_some_and(|route| route.paid.is_some());
+    let route = if let Some(name) = &args.profile {
+        profiles::resolve(profile_config, name, args, bare)?
+    } else if let Some(route) = recorded {
+        profiles::validate_recorded(profile_config, &route, bare)?;
+        profiles::override_recorded(route, args)?
+    } else if workspace.is_some() && !bare {
+        let name = config.assistant.agent.as_ref().unwrap_or(&config.pm.agent);
+        profiles::resolve(&config, name, args, false)?
     } else {
-        model(&config, workspace.is_some(), args)?
+        let (provider, model, effort) = if bare {
+            bare_model(args)?
+        } else {
+            model(&config, false, args)?
+        };
+        profiles::Route {
+            name: "default".into(),
+            label: "Default".into(),
+            provider,
+            model,
+            effort,
+            binding: None,
+            paid: None,
+        }
     };
-    super::hooks::preflight::credential(data_root, Some(require_provider(&provider)?.vendor))?;
+    profiles::require_host(&assets, args.profile.is_some(), route.paid.is_some())?;
+    let provider = route.provider.clone();
+    let model = route.model.clone();
+    let effort = route.effort.clone();
+    if route.paid.is_some() && workspace.is_none() {
+        return Err(refuse(
+            "paid_admission_required",
+            "metered Build profiles require a corral workspace for durable spending accounting",
+        ));
+    }
+    if let Some(binding) = &route.binding {
+        if binding.connection.api_key() {
+            super::connections::compatible(&assets, binding)?;
+        }
+        super::hooks::preflight::connection_credential(data_root, binding.connection)?;
+    } else {
+        super::hooks::preflight::credential(data_root, Some(require_provider(&provider)?.vendor))?;
+    }
     let aws = if workspace.is_some() && provider == "amazon-bedrock" {
         super::aws_profile::read_binding(data_root)?
     } else {
@@ -387,6 +414,23 @@ fn command(
         "capabilities": capabilities_payload(&snapshot, Some(&repo_root)),
         "settings": {"exit_policy": policy, "max_parallel": config.build.max_parallel, "profiles": profiles},
     });
+    message["route"] = json!(route);
+    if let Some(binding) = &route.binding {
+        message["binding"] = json!(binding);
+    }
+    let catalog: Vec<_> = profile_config
+        .profiles
+        .keys()
+        .filter_map(|name| {
+            profiles::resolve(profile_config, name, &BuildArgs::default(), bare)
+                .ok()
+                .map(|route| json!(route))
+        })
+        .collect();
+    message["profile_catalog"] = json!(catalog);
+    if let Some(path) = profile_request {
+        message["profile_request_path"] = json!(path);
+    }
     if bare {
         message["bare"] = json!(true);
     } else {
@@ -410,12 +454,51 @@ fn command(
     if let Some(aws) = aws {
         message["aws"] = json!(aws);
     }
-    let bytes = serde_json::to_vec(&message)?;
-    if bytes.len() > MESSAGE_MAX_BYTES {
+    if route.paid.is_some() {
+        message["settings"]["profiles"] = json!([]);
+    }
+    let mut bytes = serde_json::to_vec(&message)?;
+    // The fixed-shape capability adds at most 160 bytes; refuse before creating/fencing its ledger.
+    if bytes.len() + usize::from(route.paid.is_some()) * 160 > MESSAGE_MAX_BYTES {
         return Err(refuse(
             "launch_too_large",
             format!("the launch message exceeds {MESSAGE_MAX_BYTES} bytes"),
         ));
+    }
+    if let Some(root) = &workspace
+        && (route.paid.is_some() || args.resume.is_some())
+    {
+        let store = Store::open(root)?;
+        if recorded_paid
+            && let Some(resume) = &args.resume
+            && store.build_paid_ledger(resume)?.is_none()
+        {
+            return Err(refuse(
+                "paid_admission_required",
+                "recorded Build allowance is missing; recovery cannot initialize a fresh balance",
+            ));
+        }
+        if let Some(resume) = &args.resume
+            && let Some(sticky) = crate::build_session::paid::sticky(&store, resume)?
+            && (sticky != route.name || route.paid.is_none())
+        {
+            return Err(refuse(
+                "paid_admission_required",
+                "paid Build route is sticky; selecting another profile cannot refresh its allowance",
+            ));
+        }
+        if let Some(binding) = route.binding.as_ref().filter(|b| b.connection.api_key()) {
+            let paid = crate::build_session::paid::open(
+                &store,
+                &route.name,
+                binding,
+                args.resume.as_deref(),
+            )?;
+            bytes.pop();
+            bytes.extend_from_slice(b",\"paid\":");
+            serde_json::to_writer(&mut bytes, &paid)?;
+            bytes.push(b'}');
+        }
     }
     let (reader, mut writer) = std::io::pipe().context("creating the launch pipe")?;
     writer
@@ -445,24 +528,20 @@ pub fn build_command(
     ))
 }
 
-/// Execs the build host, keeping its launch descriptor alive through exec.
+/// Supervises rich Build profile handoffs without nesting host processes.
 #[cfg(unix)]
 pub fn build(args: &BuildArgs) -> Result<()> {
-    use std::os::unix::process::CommandExt;
-    let cwd = std::env::current_dir().context("reading the current directory")?;
-    let workspace = if args.resume.is_some() {
-        None
-    } else {
-        workspace_for(&cwd)?
-    };
-    let (mut command, _reader) = build_command(
-        &super::install::data_root()?,
-        args,
-        &cwd,
-        find_bun(),
-        workspace.as_deref(),
-    )?;
-    Err(command.exec()).context("executing the build Pi host")
+    supervisor::run(args, false)
+}
+
+#[cfg(unix)]
+pub fn bare(args: &BuildArgs) -> Result<()> {
+    supervisor::run(args, true)
+}
+
+#[cfg(not(unix))]
+pub fn bare(_args: &BuildArgs) -> Result<()> {
+    platform()
 }
 
 #[cfg(not(unix))]

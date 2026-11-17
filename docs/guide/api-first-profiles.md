@@ -94,6 +94,27 @@ approval and does not replenish an existing episode. Remove `api_start` to withd
 API-first permission; in-flight requests cannot be recalled.
 
 ## 4. Select the profile
+For a terminal session, select the profile for one launch without changing defaults:
+
+```sh
+corral pi --assistant --profile anthropic-api-sonnet
+corral pi --pm --profile anthropic-api-sonnet
+corral pi --build --profile anthropic-api-sonnet
+```
+
+The profile must approve the corresponding role; Build uses the `assistant` spending
+approval. `--profile` cannot be combined with `--model`, `--provider` or `--effort`: an API
+approval names the exact preferred connection, model and effort.
+
+Plain `corral pi` also offers an optional **Profile** choice. Leave it at **default** to
+retain each mode's existing default. Inside a supervised terminal session, `/profiles`
+opens the profile picker, `/profiles <name>` selects an exact name, and **Alt+R** cycles
+the available profiles. Billing labels distinguish subscription and metered API routes.
+Switching waits for idle work. Bound profile changes ask before opening a new conversation;
+an assistant's previous session stays resumable. The confirmation names any new session's
+own spending allowance. Build changes retain the worktree and transcript, but an established
+paid build or PM cannot change its frozen route or replenish its allowance.
+
 
 In corral-app, open the composer's model selector and select `anthropic-api-sonnet`.
 It is labelled **Anthropic · API (metered)**; subscription profiles are labelled
@@ -109,10 +130,12 @@ facts show the host's recorded connection, not whatever a profile may have becom
 A retained session cannot silently change billing routes; use a new session when a frozen
 binding prevents a switch. A refused selection leaves the existing route unchanged.
 
-API-first admission applies to canonically bound native roles, including daemon assistants.
-Untethered `corral pi` build sessions and bare sessions have no canonical paid-role ledger and
-remain refused rather than reinterpreting an API profile as subscription billing. Use a
-daemon assistant for API-first chat. Paid summary profiles remain separately restricted.
+API-first admission applies to canonically bound native roles, including daemon assistants,
+and workspace Build sessions. Build keeps its ordinary worktree, off-board tools and exit
+workflow; its finite paid ledger lives in the workspace store. Parent, child and compaction
+requests share that allowance. Resume fences the previous host and retains consumed and
+uncertain reservations. Bare and non-workspace builds still refuse API profiles.
+Paid summary profiles remain separately restricted.
 
 ## Refusals and recovery
 

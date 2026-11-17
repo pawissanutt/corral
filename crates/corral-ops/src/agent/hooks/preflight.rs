@@ -189,7 +189,12 @@ pub(crate) fn connection_credential(
     data_root: &Path,
     connection: corral_core::connection::ConnectionId,
 ) -> Result<(), Refusal> {
-    let provider = super::super::credentials::provider(connection.id()).ok_or_else(|| {
+    let id = if connection.api_key() {
+        connection.id()
+    } else {
+        connection.provider()
+    };
+    let provider = super::super::credentials::provider(id).ok_or_else(|| {
         refuse(
             "credentials_unavailable",
             format!("no credential provider for {}", connection.id()),
