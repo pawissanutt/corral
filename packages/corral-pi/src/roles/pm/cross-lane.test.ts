@@ -8,6 +8,8 @@ import { EventLog } from "../../bridge/events.ts";
 import { loadModules } from "../../host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../../host/restrict.ts";
 import { HostSession } from "../../host/session.ts";
+import { OwnerAskMirror } from "../../host/owner-ask-mirror.ts";
+import { answerMarker, PendingQuestions, QUESTION_ENTRY, type QuestionEntry } from "../../host/pending-questions.ts";
 import { CorralClient, sha256Hex } from "../../tools/corral.ts";
 import { record } from "../../tools/presentation.ts";
 import { type FakeTransport, fakeCodexTransport } from "../../../test/fixtures/auth/fake-transport.ts";
@@ -47,6 +49,7 @@ let assets: FixtureInstall | undefined;
 let transport: FakeTransport;
 let events: EventLog;
 let host: HostSession;
+let client: CorralClient;
 
 function show(task: string): TaskReadback {
   return JSON.parse(ok([corral, "show", task, "--json"], { cwd: workspace }));
@@ -101,7 +104,7 @@ beforeAll(async () => {
   globalThis.fetch = network.fetch;
   events = new EventLog(lane.generation);
   const identity = { store: lane.store, project: lane.project, role: "pm" as const, generation: lane.generation };
-  const client = new CorralClient({
+  client = new CorralClient({
     corral, root: workspace, identity, hostCap: "e".repeat(64), sessionId: () => host.sessionId(),
   });
   const sdk = await import("@earendil-works/pi-coding-agent");
@@ -190,4 +193,35 @@ test("a model-issued PM todo survives fresh state reads without changing a task"
   expect(human).toContain("Review the brief");
   expect(human).toContain("No further triage needed");
   process.stdout.write("PASS PM todo: real host -> own receipted ledger -> fresh human/JSON state; task unchanged\n");
+}, 600_000);
+
+test("a pane PM question is answerable by the owner on the board, and a pane answer is recorded there", async () => {
+  if (!isolated) return;
+  // Given the bound production PM's question store mirroring through the real Rust binary:
+  const entries: QuestionEntry[] = [], delivered: string[] = [], failures: string[] = [];
+  const questions = new PendingQuestions({ session: () => host.sessionId(), generation: lane.generation, entries: () => entries,
+    append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
+    record: async text => text, deliver: async text => { delivered.push(text); return true; },
+    mirror: new OwnerAskMirror(client, () => host.sessionId(), () => undefined),
+    mirrorFailed: error => { failures.push(String(error)); }, defer: () => () => {} });
+  questions.restore();
+  const choice = [{ question: "Which scope?", options: ["Small", "Large"], freeText: true }];
+  const fromApp = questions.ask("from-app", choice).id, fromPane = questions.ask("from-pane", choice).id;
+  expect(await questions.reconcile()).toBeTrue();
+  expect(failures).toEqual([]);
+  const [appKey, paneKey] = [fromApp, fromPane].map(id => questions.get(id)?.canonical?.[0] ?? "");
+  const board = (key: string) => JSON.parse(ok([corral, "question", "show", key, "--json"], { cwd: workspace })).question;
+  expect(appKey).toMatch(/^pm\/Q\d+$/);
+  expect(board(appKey ?? "")).toMatchObject({ key: appKey, state: "open", text: "Which scope?", options: ["Small", "Large"] });
+  // When the owner answers one on the board and the other in the pane:
+  ok([corral, "question", "answer", appKey ?? "", "--rev", String(board(appKey ?? "").revision), "--owner",
+    "--text", "Ship the large one", "--option", "Large", "--json"], { cwd: workspace });
+  await questions.answer(fromPane, [{ option: "Small" }]);
+  expect(await questions.reconcile()).toBeFalse();
+  // Then the model receives both answers once, and the board holds the pane's as the owner's answer.
+  expect(delivered.toSorted()).toEqual([`${answerMarker(fromApp)}\nWhich scope?: Large\nShip the large one`,
+    `${answerMarker(fromPane)}\nWhich scope?: Small`].toSorted());
+  expect(board(paneKey ?? "")).toMatchObject({ state: "answered", answer: { by: "owner", text: "Small", option: "Small" } });
+  expect(failures).toEqual([]);
+  process.stdout.write("PASS PM owner ask: pane question -> canonical record -> owner CLI answer -> follow-up; pane answer -> board\n");
 }, 600_000);

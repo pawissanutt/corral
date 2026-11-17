@@ -57,6 +57,7 @@ import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { askUserEnabled, askUserTool } from "./ask-user.ts";
 import { PendingQuestions, QUESTION_ENTRY } from "./pending-questions.ts";
+import { OwnerAskMirror } from "./owner-ask-mirror.ts";
 import { recordQuestionOwnerInput } from "./question-owner-input.ts";
 import { OwnerQuestionUi } from "../ui/owner-questions.ts";
 import { registerCacheStats } from "../ui/cache-stats.ts";
@@ -770,7 +771,13 @@ export class HostSession {
       error: error => { options.events.emit("local_plan_review_error", { message: error instanceof Error ? error.message : String(error) }); },
     }) : undefined;
     const dialogEnabled = options.daemonHosted || askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
+    // Only the PM's questions are board records: an assistant's pane answers are cited owner input.
+    const askMirror = dialogEnabled && !options.daemonHosted && options.identity.role === "pm"
+      ? new OwnerAskMirror(options.client, () => this.sessionId(), () => this.currentTurn()) : undefined;
     this.ownerQuestions = dialogEnabled && !options.daemonHosted ? new PendingQuestions({
+      ...(askMirror ? { mirror: askMirror, mirrorFailed: (error: unknown) => {
+        options.events.emit("owner_question_mirror_error", { message: error instanceof Error ? error.message : String(error) });
+      } } : {}),
       session: () => options.sessionManager.getSessionId(), generation: options.identity.generation,
       entries: () => options.sessionManager.getEntries(),
       append: value => { options.sessionManager.appendCustomEntry(QUESTION_ENTRY, value); },
@@ -798,7 +805,7 @@ export class HostSession {
         const message = id ? ownerInputText(answer, id) : answer;
         this.dialogPi.sendUserMessage(message, { deliverAs: "steer" });
         return message;
-      }, this.ownerQuestions, () => this.questionUi?.busy === true, () => this.dialogPresentation(), this.remotePrompts?.ask)] : []),
+      }, this.ownerQuestions, () => this.questionUi?.busy === true, () => this.dialogPresentation(), this.remotePrompts?.ask, askMirror)] : []),
       ...(this.additionalLsp?.tools ?? []).map(tool => ({ ...tool, execute: (...args: Parameters<ToolDefinition["execute"]>) => {
         const current = this.additionalLsp?.tools.find(candidate => candidate.name === tool.name);
         if (!current) throw new Error("LSP runtime unavailable; no effect started");
