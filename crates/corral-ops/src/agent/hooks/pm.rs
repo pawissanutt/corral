@@ -69,6 +69,8 @@ pub fn project(_ctx: &Ctx) -> Result<String> {
 /// What `corral pi` may change of the configured PM profile for one launch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Overrides {
+    /// Explicit named profile for this launch; never changes configured defaults.
+    pub profile: Option<String>,
     pub model: Option<String>,
     /// A Pi provider id (`openai-codex`, `anthropic`); it selects the vendor whose login runs.
     pub provider: Option<String>,
@@ -85,15 +87,12 @@ pub fn profile(ctx: &Ctx) -> Result<ResolvedProfile> {
 /// asset and credential checks as `corral pm` and resume.
 pub fn profile_with(ctx: &Ctx, overrides: &Overrides) -> Result<ResolvedProfile> {
     let config = ctx.store.config_layers()?.config()?;
-    config.check_profile_eligibility(
-        &config.pm.agent,
-        corral_core::ProfileRole::Pm,
-        None,
-        false,
-    )?;
+    let retained = crate::agent::pi::profile::pm_current(ctx)?;
+    let name = overrides.profile.as_ref().unwrap_or(&retained);
+    config.check_profile_eligibility(name, corral_core::ProfileRole::Pm, None, false)?;
     let mut resolved = config.resolve_profile(
         &ProfileChoice {
-            profile: Some(config.pm.agent.clone()),
+            profile: Some(name.clone()),
             ..ProfileChoice::default()
         },
         None,
@@ -193,6 +192,15 @@ pub fn prepared(
         fresh_session: !continue_session,
     };
     let prepared = super::super::launch::prepare_bootstrap(ctx, &target, pane, &spec)?;
+    crate::agent::pi::profile::remember_pm(ctx, &resolved.profile)?;
+    let state = corral_core::agent::pm_state::load_current(&ctx.store)?;
+    crate::agent::pi::profile::write_catalog(
+        ctx,
+        &prepared,
+        AgentRole::Pm,
+        &resolved.profile,
+        state.as_ref().map(|pm| &pm.state),
+    )?;
     if resolved.vendor.as_deref() == Some("amazon-bedrock") {
         let binding =
             crate::agent::aws_profile::read_binding(&crate::agent::install::data_root()?)?

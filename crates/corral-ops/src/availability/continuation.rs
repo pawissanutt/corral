@@ -32,6 +32,7 @@ mod api_start;
 #[path = "continuation_context.rs"]
 mod context_cache;
 pub(crate) use api_start::prepare_launch;
+pub(crate) use api_start::approval as api_start_approval;
 
 pub(crate) const INTENTS: RecordArea<ContinuationIntent> = RecordArea::new("role-continuations");
 

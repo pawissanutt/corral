@@ -27,10 +27,11 @@ struct QuotaSignal {
 
 /// Publish from the native event transaction; never discover quota by scanning PM history.
 pub(crate) fn record_signal(ctx: &Ctx, state: &AgentRunState) -> Result<()> {
+    if state.binding.role != AgentRole::Pm { return Ok(()); }
     let config = &ctx.store.config;
-    if state.binding.role != AgentRole::Pm
-        || (!policy::profile_configured(config, &config.pm.agent, AgentRole::Pm)
-            && state.paid_episode.is_none())
+    let profile = crate::agent::pi::profile::pm_current(ctx)?;
+    if !policy::profile_configured(config, &profile, AgentRole::Pm)
+        && state.paid_episode.is_none()
     {
         return Ok(());
     }
@@ -123,7 +124,8 @@ pub(crate) fn advance_held(
         return Ok(false);
     }
     let config = &ctx.store.config;
-    if !policy::profile_configured(config, &config.pm.agent, AgentRole::Pm)
+    let selected_profile = crate::agent::pi::profile::pm_current(ctx)?;
+    if !policy::profile_configured(config, &selected_profile, AgentRole::Pm)
         && !has_paid_state(&current.state)
     {
         return Ok(false);
@@ -203,7 +205,7 @@ pub(crate) fn advance_held(
     else {
         return refuse(PauseReason::LegacyBinding);
     };
-    let profile = ctx.store.config_layers()?.config()?.pm.agent;
+    let profile = crate::agent::pi::profile::pm_current(ctx)?;
     if policy::approval(ctx, &profile, AgentRole::Pm).is_err() {
         return refuse(PauseReason::PolicyNotApproved);
     }
@@ -360,10 +362,11 @@ pub(crate) fn recovery_profile(ctx: &Ctx, state: &AgentRunState) -> Result<Resol
         return crate::agent::hooks::pm::profile(ctx);
     };
     let config = ctx.store.config_layers()?.config()?;
-    config.check_profile_eligibility(&config.pm.agent, ProfileRole::Pm, None, false)?;
+    let profile = crate::agent::pi::profile::pm_current(ctx)?;
+    config.check_profile_eligibility(&profile, ProfileRole::Pm, None, false)?;
     let candidate = config
         .profiles
-        .get(&config.pm.agent)
+        .get(&profile)
         .and_then(|p| p.metadata.as_ref())
         .and_then(|m| {
             m.candidates
@@ -371,7 +374,7 @@ pub(crate) fn recovery_profile(ctx: &Ctx, state: &AgentRunState) -> Result<Resol
                 .find(|c| Some(c.id.as_str()) == binding.candidate.as_deref())
         })
         .context("paid PM frozen candidate is missing")?;
-    let resolved = config.resolve_candidate(&config.pm.agent, candidate)?;
+    let resolved = config.resolve_candidate(&profile, candidate)?;
     ensure!(
         resolved.connection_binding()?.as_ref() == Some(binding),
         "paid PM frozen binding changed"

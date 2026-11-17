@@ -2,17 +2,21 @@
 //! `docs/mockup/corral-pi-build.html`. A header row names `corral / pi` and the directory it started
 //! in. Under the question its rows sit under their section's heading in the order given (start a
 //! build session, an assistant or the PM, resume a stopped session): a bar that marks the
-//! selection, an 11-cell name column, the description and the row's key as a key cap. A block under
-//! the list shows what the row with options (a build session) would open with: the project, where it
-//! writes and the model providers its agents may use ([`LauncherContext`]). The footer, under a
-//! rule, names the keys as key caps.
+//! selection, an 11-cell name column, the description and the row's key as a key cap. Under the
+//! list, when the launcher offers profiles, the Profile line names the profile the opened session
+//! runs: `default` (each mode keeps its own) until the owner picks one. A block under it shows what
+//! the row with options (a build session) would open with: the project, where it writes and the
+//! model providers its agents may use ([`LauncherContext`]). The footer, under a rule, names the
+//! keys as key caps.
 //!
 //! `↑↓` or `j`/`k` select, `⏎` opens, a row's key opens that row directly, `q`, Esc or Ctrl+C leave
 //! without opening anything. While the row with options is selected `←→` cycle its option, and a
-//! click on the option line moves to the next option (on `‹`, the previous one). A click selects a
-//! row and a click on the selected row opens it; the wheel moves the selection and every footer key
-//! cap presses its key. Below [`FOLD_BELOW`] columns each row folds: the name and key cap on one
-//! line, the description wrapped under it.
+//! click on the option line moves to the next option (on `‹`, the previous one). `Tab` and
+//! `Shift+Tab` cycle the profile whatever row is selected, as a click on the Profile line does (on
+//! `‹`, backwards); no row opens while a profile that cannot open a session is chosen. A click
+//! selects a row and a click on the selected row opens it; the wheel moves the selection and every
+//! footer key cap presses its key. Below [`FOLD_BELOW`] columns each row folds: the name and key
+//! cap on one line, the description wrapped under it.
 //!
 //! [`State`] and [`draw`] are pure so tests drive them on a `TestBackend`; [`pick`] owns the
 //! terminal.
@@ -54,9 +58,13 @@ pub(crate) const WARN: Color = Color::Rgb(0xe3, 0xbd, 0x7c);
 
 #[path = "launcher_block.rs"]
 mod block;
+#[path = "launcher_profile.rs"]
+mod profile;
 
 use block::option_block;
 pub use block::{LauncherContext, Login, ProviderLogin};
+use profile::profile_line;
+pub use profile::{Billing, LauncherProfile};
 
 /// The heading a launcher row sits under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +98,15 @@ pub struct LauncherEntry {
     pub options: Vec<String>,
 }
 
+/// What the owner opened: the row's id, the index of its chosen option (0 for rows without
+/// options) and the profile chosen for the session, `None` while it reads `default`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launch {
+    pub id: String,
+    pub option: usize,
+    pub profile: Option<String>,
+}
+
 /// Terminals narrower than this fold each row: name and key cap, then the wrapped description.
 pub const FOLD_BELOW: u16 = 76;
 /// The launcher column never grows wider than this; wider terminals center it.
@@ -114,6 +131,8 @@ const HEADING: &str = "What do you want to open?";
 const MARKER: &str = "▌";
 /// What a row's options choose; it names the footer's `←→`.
 const OPTION_LABEL: &str = "where it writes";
+/// What `Tab` chooses, as the footer names it.
+const PROFILE_HINT: &str = "profile";
 /// Mouse zone of the rows ([`Hit::Item`]).
 pub(crate) const Z_ROW: u8 = 1;
 
@@ -127,16 +146,39 @@ pub(crate) enum Step {
     Leave,
 }
 
-/// The selected row, each row's chosen option and the first visible body line.
+/// The selected row, each row's chosen option, the chosen profile and the first visible body line.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct State {
     pub(crate) selected: usize,
     /// Chosen option per row index; rows past its end have chosen their first option.
     chosen: Vec<usize>,
     offset: usize,
+    /// The chosen profile: 0 is `default`, `n` the context's profile `n - 1`.
+    profile: usize,
+    /// Per offered profile, whether it can open a session.
+    openable: Vec<bool>,
 }
 
 impl State {
+    /// The launcher as it opens on `context`: the first row selected, every row on its first option
+    /// and the profile it names chosen (`default` when it names none it offers).
+    pub(crate) fn new(context: &LauncherContext) -> Self {
+        let profile = context
+            .profile
+            .as_deref()
+            .and_then(|name| context.profiles.iter().position(|p| p.name == name))
+            .map_or(0, |i| i + 1);
+        State {
+            profile,
+            openable: context
+                .profiles
+                .iter()
+                .map(|p| p.unavailable.is_none())
+                .collect(),
+            ..State::default()
+        }
+    }
+
     pub(crate) fn key(&mut self, entries: &[LauncherEntry], key: KeyEvent) -> Step {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return if key.code == KeyCode::Char('c') {
@@ -154,19 +196,48 @@ impl State {
             KeyCode::Down | KeyCode::Char('j') => self.selected = (self.selected + 1).min(last),
             KeyCode::Left => self.cycle(entries, false),
             KeyCode::Right => self.cycle(entries, true),
+            KeyCode::Tab => self.cycle_profile(true),
+            KeyCode::BackTab => self.cycle_profile(false),
             KeyCode::Home => self.selected = 0,
             KeyCode::End => self.selected = last,
-            KeyCode::Enter if !entries.is_empty() => return Step::Open(self.selected),
+            KeyCode::Enter if !entries.is_empty() => return self.open(self.selected),
             KeyCode::Esc | KeyCode::Char('q') => return Step::Leave,
             KeyCode::Char(c) => {
                 if let Some(i) = entries.iter().position(|e| e.key == Some(c)) {
                     self.selected = i;
-                    return Step::Open(i);
+                    return self.open(i);
                 }
             }
             _ => {}
         }
         Step::Stay
+    }
+
+    /// Opens row `index`, unless the chosen profile cannot open a session: its line says why.
+    fn open(&self, index: usize) -> Step {
+        let blocked = self
+            .profile()
+            .is_some_and(|i| !self.openable.get(i).copied().unwrap_or(false));
+        if blocked {
+            Step::Stay
+        } else {
+            Step::Open(index)
+        }
+    }
+
+    /// Moves the profile one step through `default` and the offered profiles, wrapping.
+    fn cycle_profile(&mut self, forward: bool) {
+        let count = self.openable.len() + 1;
+        self.profile = if forward {
+            (self.profile + 1) % count
+        } else {
+            (self.profile + count - 1) % count
+        };
+    }
+
+    /// The chosen profile's index among the context's profiles; `None` while it is `default`.
+    pub(crate) fn profile(&self) -> Option<usize> {
+        self.profile.checked_sub(1)
     }
 
     /// Moves the selected row's option one step, wrapping; rows without options ignore it.
@@ -191,21 +262,28 @@ impl State {
         self.chosen.get(index).copied().unwrap_or(0)
     }
 
-    /// What [`pick`] returns when row `index` opens: its id and chosen option.
+    /// What [`pick`] returns when row `index` opens: its id, chosen option and chosen profile.
     pub(crate) fn picked(
         &self,
         entries: &[LauncherEntry],
+        context: &LauncherContext,
         index: usize,
-    ) -> Option<(String, usize)> {
-        entries
-            .get(index)
-            .map(|entry| (entry.id.clone(), self.option(index)))
+    ) -> Option<Launch> {
+        let entry = entries.get(index)?;
+        Some(Launch {
+            id: entry.id.clone(),
+            option: self.option(index),
+            profile: self
+                .profile()
+                .and_then(|i| context.profiles.get(i))
+                .map(|p| p.name.clone()),
+        })
     }
 
-    /// A click selects a row; a click on the selected row opens it.
+    /// A click selects a row; a click on the selected row opens it, as `⏎` does.
     pub(crate) fn click(&mut self, index: usize) -> Step {
         if index == self.selected {
-            Step::Open(index)
+            self.open(index)
         } else {
             self.selected = index;
             Step::Stay
@@ -245,6 +323,9 @@ enum Part {
     /// A line of the selected row's option block: a click moves to the next option, or to the
     /// previous one on `‹`, which sits at this column when the line carries it.
     Option(Option<usize>),
+    /// A line of the Profile line: a click moves to the next profile, or to the previous one on
+    /// `‹`, which sits at this column when the line carries it.
+    Profile(Option<usize>),
 }
 
 fn fg(color: Color) -> Style {
@@ -350,10 +431,11 @@ fn body_lines(
                 .map(|line| (line, Part::Row(i))),
         );
     }
-    let block = option_block(entries, state, context, width, folded);
-    if !block.is_empty() {
+    let mut facts = profile_line(state, context, width);
+    facts.extend(option_block(entries, state, context, width, folded));
+    if !facts.is_empty() {
         out.push((Line::default(), Part::Gap));
-        out.extend(block);
+        out.extend(facts);
     }
     out
 }
@@ -387,9 +469,9 @@ fn hint_label(name: &str) -> String {
     }
 }
 
-/// The footer's hints in the mock's order: selecting, opening, the selected row's options, each
-/// row key, then leaving.
-fn hints(entries: &[LauncherEntry], selected: usize) -> Vec<Hint> {
+/// The footer's hints in the mock's order: selecting, opening, the selected row's options, the
+/// profile when the launcher offers any, each row key, then leaving.
+fn hints(entries: &[LauncherEntry], selected: usize, profiles: bool) -> Vec<Hint> {
     let mut hints = vec![
         Hint::new(
             &[("↑", KeyCode::Up), ("↓", KeyCode::Down)],
@@ -403,6 +485,13 @@ fn hints(entries: &[LauncherEntry], selected: usize) -> Vec<Hint> {
             &[("←", KeyCode::Left), ("→", KeyCode::Right)],
             OPTION_LABEL,
             KeyCode::Right,
+        ));
+    }
+    if profiles {
+        hints.push(Hint::new(
+            &[("tab", KeyCode::Tab)],
+            PROFILE_HINT,
+            KeyCode::Tab,
         ));
     }
     hints.extend(entries.iter().filter_map(|e| {
@@ -470,8 +559,8 @@ fn draw_header(f: &mut Frame, place: &str, row: Rect) {
 }
 
 /// Draws the launcher over the whole frame, `place` (the directory it started in) in the header and
-/// `context` in the option block, and registers its rows, its live option line and its footer key
-/// caps in `hits`.
+/// `context` in the Profile line and the option block, and registers its rows, its live option and
+/// profile lines and its footer key caps in `hits`.
 pub(crate) fn draw(
     f: &mut Frame,
     entries: &[LauncherEntry],
@@ -509,7 +598,7 @@ pub(crate) fn draw(
         } else {
             (COMPACT_HINTS, 1)
         };
-        let shown: Vec<Hint> = hints(entries, state.selected)
+        let shown: Vec<Hint> = hints(entries, state.selected, !context.profiles.is_empty())
             .into_iter()
             .take(kept)
             .collect();
@@ -542,11 +631,11 @@ pub(crate) fn draw(
             .iter()
             .rposition(|(_, part)| *part == Part::Row(selected)),
     ) {
-        // The selected row's live option block, the last lines, comes into view with it when both
-        // fit.
+        // The live Profile line and option block, the last lines, come into view with the selected
+        // row when both fit.
         let live = lines
             .iter()
-            .any(|(_, part)| matches!(part, Part::Option(_)));
+            .any(|(_, part)| matches!(part, Part::Option(_) | Part::Profile(_)));
         let end = lines.len().saturating_sub(1);
         let last = if live && end >= first && end + 1 - first <= height {
             last.max(end)
@@ -582,31 +671,42 @@ pub(crate) fn draw(
         match part {
             Part::Gap => {}
             Part::Row(i) => hits.push(rect, Hit::Item(Z_ROW, i)),
-            Part::Option(back) => {
-                hits.push(rect, Hit::Key(hit::press(KeyCode::Right)));
-                if let Some(col) = back.and_then(|col| u16::try_from(col).ok())
-                    && col < width
-                {
-                    hits.push(
-                        Rect::new(x + col, rect.y, 1, 1),
-                        Hit::Key(hit::press(KeyCode::Left)),
-                    );
-                }
-            }
+            Part::Option(back) => cycle_hits(hits, rect, back, KeyCode::Right, KeyCode::Left),
+            Part::Profile(back) => cycle_hits(hits, rect, back, KeyCode::Tab, KeyCode::BackTab),
         }
     }
 }
 
-/// Draws the launcher as it first opens (the first row selected, every row on its first option)
-/// with `place` in the header and `context` in the option block, for captures that compare it with
-/// the mock.
+/// A cycling line's click targets: the line presses `next`, and `‹` at column `back` of it, when
+/// the line carries it, presses `previous`.
+fn cycle_hits(
+    hits: &mut HitMap,
+    rect: Rect,
+    back: Option<usize>,
+    next: KeyCode,
+    previous: KeyCode,
+) {
+    hits.push(rect, Hit::Key(hit::press(next)));
+    if let Some(col) = back.and_then(|col| u16::try_from(col).ok())
+        && col < rect.width
+    {
+        hits.push(
+            Rect::new(rect.x + col, rect.y, 1, 1),
+            Hit::Key(hit::press(previous)),
+        );
+    }
+}
+
+/// Draws the launcher as it first opens (the first row selected, every row on its first option, the
+/// profile `context` names chosen) with `place` in the header and `context` in the Profile line and
+/// the option block, for captures that compare it with the mock.
 pub fn preview(f: &mut Frame, entries: &[LauncherEntry], place: &str, context: &LauncherContext) {
     draw(
         f,
         entries,
         place,
         context,
-        &mut State::default(),
+        &mut State::new(context),
         &mut HitMap::default(),
     );
 }
@@ -628,14 +728,11 @@ fn start_place() -> String {
     dir.display().to_string()
 }
 
-/// Shows the launcher on the alternate screen, `context` in its option block, and returns the id of
-/// the row the owner opened with the index of its chosen option (0 for rows without options), or
-/// `None` when they left. The terminal is restored on every return, including errors; a panic is
-/// restored by ratatui's hook.
-pub fn pick(
-    entries: &[LauncherEntry],
-    context: &LauncherContext,
-) -> Result<Option<(String, usize)>> {
+/// Shows the launcher on the alternate screen, `context` in its Profile line and option block, and
+/// returns the row the owner opened with its chosen option and profile ([`Launch`]), or `None` when
+/// they left. The terminal is restored on every return, including errors; a panic is restored by
+/// ratatui's hook.
+pub fn pick(entries: &[LauncherEntry], context: &LauncherContext) -> Result<Option<Launch>> {
     let mut terminal = ratatui::try_init().context("initializing the terminal")?;
     let picked = run(&mut terminal, entries, context);
     ratatui::restore();
@@ -646,12 +743,12 @@ fn run(
     terminal: &mut ratatui::DefaultTerminal,
     entries: &[LauncherEntry],
     context: &LauncherContext,
-) -> Result<Option<(String, usize)>> {
+) -> Result<Option<Launch>> {
     let env = std::env::var("CORRAL_MOUSE").ok();
     let mouse = crate::term::mouse_wanted(false, env.as_deref(), true);
     let _mouse = mouse.then(crate::term::MouseGuard::enable).transpose()?;
     let place = start_place();
-    let mut state = State::default();
+    let mut state = State::new(context);
     let mut hits = HitMap::default();
     loop {
         terminal
@@ -667,7 +764,7 @@ fn run(
         };
         match step {
             Step::Stay => {}
-            Step::Open(i) => return Ok(state.picked(entries, i)),
+            Step::Open(i) => return Ok(state.picked(entries, context, i)),
             Step::Leave => return Ok(None),
         }
     }

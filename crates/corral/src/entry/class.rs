@@ -220,7 +220,10 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             | crate::annotation_cmd::AnnotationCmd::Reopen(_) => Refused,
         },
         Cmd::Build { cmd } => match cmd {
-            BuildCmd::Gate { .. } | BuildCmd::Land { .. } | BuildCmd::Record { .. } => Refused,
+            BuildCmd::Gate { .. }
+            | BuildCmd::Land { .. }
+            | BuildCmd::Record { .. }
+            | BuildCmd::Budget => Refused,
             BuildCmd::List { .. } | BuildCmd::Show { .. } => Read,
         },
         Cmd::Plan { cmd } => match cmd {

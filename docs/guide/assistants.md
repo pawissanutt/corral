@@ -75,7 +75,15 @@ has one, its key as a key cap on the right. The selected row is highlighted.
   updated and, once it has ended, its outcome. Opening a build row is
   `--resume B-<id>`.
 
-Under the rows a block shows what a build session would open with:
+When profiles are offered, a **Profile** line comes first under the rows: `‹ default › each mode
+keeps its own profile` until you pick one. `Tab` and `Shift+Tab` cycle the default and each
+offered profile whatever row is selected, and a click on the line moves to the next one (a click on
+`‹` moves back). A chosen profile reads its exact model and how it is paid for: `subscription`,
+`API · metered` (in the warning colour) or `local`. A profile that cannot open a session now adds
+`unavailable: <reason>`, and no row opens while it is chosen; choose another or the default. The
+chosen profile applies to whichever row opens; the default leaves each mode on its own profile.
+
+Under them a block shows what a build session would open with:
 
 - **Project**: the project this directory belongs to (`<project> from this directory`), or
   `none · the workspace root`.
@@ -89,8 +97,9 @@ Under the rows a block shows what a build session would open with:
   out.
 
 The footer, under a rule, names the keys as key caps: `↑ ↓ select`, `⏎ open`,
-`← → where it writes` (while Build is selected), `b build`, `a assistant`, `p PM` and
-`esc leave`; below 105 columns it keeps the first four, below 64 columns the first two.
+`← → where it writes` (while Build is selected), `tab profile` (when profiles are offered),
+`b build`, `a assistant`, `p PM` and `esc leave`; below 105 columns it keeps the first four,
+below 64 columns the first two.
 `↑↓` or `j`/`k` select a row (Home and End the first and last), `⏎` opens it, a row's key opens
 that row directly, and `q`, `Esc` or `Ctrl+C` leave without opening anything (exit status 0, no
 message). A click selects a row, a click on the selected row opens it, the mouse wheel moves the
@@ -103,6 +112,23 @@ Any of `--build`, `--assistant`, `--pm`, `--resume`, `--task`, `--over-cap` or `
 the launcher.
 Without a terminal (a script or a pipe), plain `corral pi` opens an assistant as
 `--assistant` does, so scripts that start an assistant should pass `--assistant`.
+
+### Changing the profile in a session
+
+`/profiles` shows the profile the session runs (or that it runs its mode's default) and one row
+per offered profile: its name, exact model and `subscription`, `API · metered` or `local`, marked
+`current`, `new conversation` or `unavailable: <reason>`. `/profiles <name>` switches to exactly
+that profile, and `Alt+R` (unless you bound it to something else) moves to the next available
+one. Esc changes nothing; an unavailable, blocked or refused switch says why in a notice and the
+profile stays as it was.
+
+Some switches cannot continue the current conversation. Switching a bound assistant to a different
+profile opens a new assistant session, and the previous one stays resumable; the PM may need a
+fresh conversation. Such a switch, from `/profiles` or `Alt+R` alike, first asks you to confirm
+that a new conversation opens and, for an API profile, that its USD allowance belongs to that new
+session alone rather than to a shared or daily budget. Declining changes nothing. A build session
+that moves from a subscription to an API profile keeps its worktree and transcript; one already
+running on a paid profile cannot switch to another.
 
 ### Admission
 

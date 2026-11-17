@@ -1,7 +1,7 @@
 // First-party native panels over the existing InteractiveMode, never a second agent/editor loop.
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionUIContext, InteractiveChatPresentation, InteractiveModeOptions } from "@earendil-works/pi-coding-agent";
-import { decodeKittyPrintable, isKeyRelease, matchesKey, TuiAltScreen, visibleWidth, type Component, type OverlayHandle, type Terminal, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, isKeyRelease, matchesKey, TuiAltScreen, visibleWidth, type Component, type KeyId, type OverlayHandle, type Terminal, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import { LIVE_CHILD_STATES, type BuildUi, type FleetControl } from "../build/types.ts";
 import { PanelTerminal, PANEL_BREAKPOINT, PANEL_WIDTH, RAIL_MIN, RAIL_MAX, MIN_MAIN, type PanelSurface } from "./panel-terminal.ts";
@@ -149,6 +149,8 @@ export class NativePanels implements PanelSurface {
   readonly questionDock: QuestionDock;
   private questions: QuestionSource | undefined;
   private unsubscribeQuestions: (() => void) | undefined;
+  /** Profile controls the host installed (`installProfileControls`): F1 lists `/profiles` and their key. */
+  private profiles: { readonly key: KeyId | undefined } | undefined;
   /** After an Esc that navigated, a further Esc this soon is ignored instead of stopping the turn. */
   private readonly escGuard: EscGuard;
   /** The terminal title and the bell, from the session's attention state; set once the session starts. */
@@ -315,6 +317,10 @@ export class NativePanels implements PanelSurface {
     this.questions = source;
     this.unsubscribeQuestions = source.subscribe(() => this.refresh());
     this.refresh();
+  }
+  /** The host installed `/profiles` with `installed.key` (undefined when no next-profile key was registered). */
+  attachProfiles(installed: { readonly key: KeyId | undefined }): void {
+    this.profiles = installed;
   }
   layoutChanged(): void { this.refresh(); }
   refresh(): void {
@@ -1192,7 +1198,8 @@ export class NativePanels implements PanelSurface {
     const identity = this.options.identity, answerKey = this.questions ? questionsKey() : undefined;
     const groups = keyGroups({ taskBound: !!identity.task, answer: identity.role === "pm" || identity.role === "assistant",
       jobs: this.snapshot()?.jobs != null, queueControl: this.queue.controllable, lifecycle: !!identity.task,
-      sidebarKey: this.sidebarToggle, ...(answerKey ? { questionsKey: answerKey } : {}), ...(this.build ? { build: true, board: !!this.options.build?.board } : {}) });
+      sidebarKey: this.sidebarToggle, ...(answerKey ? { questionsKey: answerKey } : {}), ...(this.build ? { build: true, board: !!this.options.build?.board } : {}),
+      ...(this.profiles ? { profiles: true, ...(this.profiles.key ? { profileKey: this.profiles.key } : {}) } : {}) });
     this.overlay = "keys"; this.refresh();
     let data: string | undefined;
     try {

@@ -1,6 +1,7 @@
 //! Task-independent build-session gates, owner landing and durable records.
 pub mod gate;
 pub mod land;
+pub mod paid;
 pub mod record;
 pub mod stats;
 

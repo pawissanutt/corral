@@ -2,7 +2,7 @@
 use super::*;
 use corral_core::{Config, paid_episode::PaidApproval};
 
-fn approval(config: &Config, profile: &str, role: AgentRole) -> Result<PaidApproval> {
+pub(crate) fn approval(config: &Config, profile: &str, role: AgentRole) -> Result<PaidApproval> {
     let configured = config
         .profiles
         .get(profile)

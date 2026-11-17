@@ -1,4 +1,5 @@
 //! Task-independent build session commands. Mutating verbs never use assistant shell authority.
+use std::io::Read;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -7,6 +8,9 @@ use corral_ops::build_session::{gate, land, record};
 
 #[derive(Subcommand)]
 pub enum BuildCmd {
+    /// Internal capability-authenticated paid Build request; JSON on stdin
+    #[command(hide = true)]
+    Budget,
     /// Run a project's configured gate on a clean session candidate, without a task slot
     Gate {
         #[arg(long)]
@@ -73,6 +77,24 @@ pub fn run(inv: &crate::invocation::Invocation<'_>, cmd: BuildCmd) -> Result<()>
 fn execute(inv: &crate::invocation::Invocation<'_>, cmd: BuildCmd) -> Result<()> {
     let ctx = inv.ctx()?;
     match cmd {
+        BuildCmd::Budget => {
+            const MAX_BYTES: u64 = 64 * 1024;
+            let mut input = String::new();
+            std::io::stdin()
+                .take(MAX_BYTES + 1)
+                .read_to_string(&mut input)
+                .context("reading build budget request")?;
+            anyhow::ensure!(
+                input.len() as u64 <= MAX_BYTES,
+                "build budget request exceeds 64 KiB"
+            );
+            let call = serde_json::from_str(&input).context("decoding build budget request")?;
+            let reply = corral_ops::build_session::paid::budget(&ctx.store, call)?;
+            println!(
+                "{}",
+                serde_json::to_string(&reply).context("encoding build budget reply")?
+            );
+        }
         BuildCmd::Gate {
             session,
             worktree,

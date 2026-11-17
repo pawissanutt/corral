@@ -3,6 +3,31 @@
 import type { AwsBinding } from "../auth/aws.ts";
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
 import type { BuildRecord } from "./record-types.ts";
+import type { ConnectionBinding } from "../host/connections.ts";
+import type { BudgetOptions } from "../capabilities/budget.ts";
+
+export interface BuildPaidApproval {
+  readonly policy_digest: string;
+  readonly approval: string;
+  readonly allowance_nanos: number;
+  readonly candidates: readonly ConnectionBinding[];
+}
+export interface BuildProfileRoute {
+  readonly name: string;
+  readonly label: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly effort?: string;
+  readonly binding?: ConnectionBinding;
+  readonly paid?: BuildPaidApproval;
+  readonly available?: boolean;
+  readonly reason?: string;
+}
+export interface BuildPaidLaunch {
+  readonly session: string;
+  readonly generation: number;
+  readonly cap: string;
+}
 
 /** What landing from the session requires for a project: an approving in-session review and the full gate, the full gate alone, or no landing. */
 export type ExitPolicy = "review" | "gate" | "none";
@@ -56,6 +81,11 @@ export interface BuildLaunch {
   readonly provider: string;
   readonly model: string;
   readonly effort?: string;
+  readonly route?: BuildProfileRoute;
+  readonly binding?: ConnectionBinding;
+  readonly paid?: BuildPaidLaunch;
+  readonly profileCatalog?: readonly BuildProfileRoute[];
+  readonly profileRequestPath?: string;
   readonly capabilities?: unknown;
   /** Required when the profile's provider is Amazon Bedrock; the same field the bound launch carries. */
   readonly aws?: AwsBinding;
@@ -86,6 +116,8 @@ export interface BuildSessionRecord {
   readonly baseBranch?: string | null;
   readonly project?: string;
   readonly workspaceRoot?: string;
+  /** Frozen route identity; resume does not consult mutable profile defaults. */
+  readonly route?: BuildProfileRoute;
   /** The Pi transcript of the parent conversation. */
   readonly sessionFile?: string;
   readonly exit?: ExitRecord;
@@ -98,6 +130,9 @@ export interface BuildContext {
   /** `<dataRoot>/build/<id>`: transcripts, journal and child session files. */
   readonly dir: string;
   readonly corral: string;
+  readonly paidRecord?: BudgetOptions["record"];
+  readonly profileCatalog?: readonly BuildProfileRoute[];
+  readonly profileRequestPath?: string;
 }
 
 // ---------- children ----------
