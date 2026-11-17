@@ -67,6 +67,7 @@ fn strict_reviewer() -> Profile {
             revision: "r1".into(),
             evidence: None,
             candidates: vec![],
+            api_start: None,
             fallback: None,
         }),
     }

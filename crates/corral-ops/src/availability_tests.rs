@@ -74,6 +74,7 @@ fn pm_sessions_open_on_the_next_approved_candidate_when_the_preferred_is_unavail
                 revision: "pm-r1".into(),
                 evidence: Some("fixture-evidence".into()),
                 candidates,
+                api_start: None,
                 fallback: Some(AvailabilityFallback {
                     automatic: true,
                     paid_roles: BTreeSet::new(),

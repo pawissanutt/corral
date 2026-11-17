@@ -50,6 +50,7 @@ fn general() -> (tempfile::TempDir, Config, ProfileMetadata) {
             candidate("sol-mini", "omo", "openai", "owner-openai"),
             candidate("opus", "claude", "anthropic", "owner-anthropic"),
         ],
+        api_start: None,
         fallback: Some(AvailabilityFallback {
             automatic: true,
             paid_roles: BTreeSet::new(),

@@ -190,7 +190,7 @@ pub(crate) fn target(
     selected.context("NoApprovedCandidate: no approved same-vendor API target after source")
 }
 
-fn role(container: &ContainerRef) -> AgentRole {
+pub(crate) fn role(container: &ContainerRef) -> AgentRole {
     match container {
         ContainerRef::Worker { .. } => AgentRole::Worker,
         ContainerRef::Reviewer { .. } => AgentRole::Reviewer,

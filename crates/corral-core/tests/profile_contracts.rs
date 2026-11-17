@@ -57,6 +57,7 @@ fn metadata() -> ProfileMetadata {
         revision: "profile-r1".into(),
         evidence: Some("evidence-1".into()),
         candidates: vec![candidate("preferred")],
+        api_start: None,
         fallback: None,
     }
 }

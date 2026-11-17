@@ -79,6 +79,7 @@ fn pi_command<T: corral_core::TaskRef + ?Sized>(
         .and_then(crate::reviewer::review_callback_token)
         .context("the review has no callback token")?;
     let spec = HostSpec {
+        profile: Some(resolved.profile.clone()),
         binding: crate::agent::connections::explicit(resolved)?,
         cwd: child.worktree.clone(),
         model: child

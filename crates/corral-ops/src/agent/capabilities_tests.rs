@@ -100,6 +100,7 @@ impl Fixture {
 
     fn spec(&self) -> HostSpec {
         HostSpec {
+            profile: None,
             binding: None,
             cwd: self.tmp.path().join("worktree"),
             model: "gpt-6.1-sol".into(),
@@ -515,6 +516,7 @@ fn the_workspace_pm_bootstrap_names_workspace_root_for_guidance() {
         project: String::new(),
     };
     let spec = HostSpec {
+        profile: None,
         cwd: fx.tmp.path().to_path_buf(),
         ..fx.spec()
     };

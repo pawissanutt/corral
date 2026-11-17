@@ -45,6 +45,7 @@ pub fn profile(provider: &str) -> Profile {
                 evidence: "e1".into(),
                 cost: CandidateCost::Subscription,
             }],
+            api_start: None,
             fallback: None,
         }),
     }

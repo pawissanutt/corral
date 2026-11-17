@@ -74,10 +74,42 @@ pub fn resume_claimed(ctx: &Ctx, id: &str, overrides: &Overrides) -> Result<(Pre
         !crate::agent::pi::host_alive(&container.state)?,
         "assistant_alive: {id} is running"
     );
-    let resolved = assistant::profile(ctx, Some(&session.profile), overrides)?;
+    let resolved = if let Some(binding) = container
+        .state
+        .current_generation()
+        .and_then(|g| g.connection.as_ref())
+        .filter(|b| b.connection.api_key())
+    {
+        let config = ctx.store.config_layers()?.config()?;
+        let candidate = config.profiles.get(&session.profile).and_then(|p| p.metadata.as_ref())
+            .and_then(|m| m.candidates.iter().find(|c| Some(&c.id) == binding.candidate.as_ref()))
+            .context("PolicyNotApproved: frozen API candidate missing; start a new session to change routes")?;
+        let mut resolved = config.resolve_candidate(&session.profile, candidate)?;
+        crate::agent::hooks::pm::apply(&mut resolved, overrides)?;
+        ensure!(
+            resolved.connection_binding()?.as_ref() == Some(binding),
+            "paid route is sticky; start a new session to change connection/model"
+        );
+        crate::agent::hooks::preflight::check(
+            ctx,
+            corral_core::agent::AgentRole::Assistant,
+            &resolved,
+        )?;
+        resolved
+    } else {
+        assistant::profile(ctx, Some(&session.profile), overrides)?
+    };
     assistant::admit(ctx, false)?;
     let previous = container.state.binding.generation;
     let result: Result<_> = (|| {
+        if previous > 0 && container.state.paid_episode.is_some() {
+            fence_generation(
+                &ctx.store,
+                &ContainerRef::Assistant { session: id.into() },
+                previous,
+                "paid daemon recovery",
+            )?;
+        }
         let prepared = assistant::prepare(ctx, id, None, &resolved)?;
         if previous > 0 {
             assistant::remove_control(&ctx.store, id, previous)?;

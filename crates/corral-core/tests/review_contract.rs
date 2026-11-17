@@ -232,6 +232,7 @@ fn reviewer_profile(roles: &[ProfileRole]) -> Profile {
             revision: "r1".into(),
             evidence: None,
             candidates: vec![],
+            api_start: None,
             fallback: None,
         }),
         harness: "omo".into(),

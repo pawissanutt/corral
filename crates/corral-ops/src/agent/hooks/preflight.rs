@@ -61,7 +61,17 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
     consulted("preflight");
     let connection = crate::agent::connections::explicit(resolved)?;
     if let Some(binding) = &connection {
-        crate::availability::continuation::require_preflight(&ctx.store, role, binding)?;
+        crate::availability::continuation::require_preflight(
+            &ctx.store,
+            role,
+            binding,
+            &resolved.profile,
+        )?;
+    }
+    if connection.as_ref().is_some_and(|b| b.connection.api_key())
+        && let Some(reason) = crate::routing::known_model_unavailability(ctx, resolved)
+    {
+        anyhow::bail!("model_unavailable: {reason}");
     }
     corral_core::check_corral_pi_vendor(&resolved.profile, resolved.vendor.as_deref())?;
     corral_core::check_corral_pi_metered_opt_in(
@@ -103,10 +113,12 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
     // A development or fixture `[agent] assets_dir` brings its own auth module; only the managed
     // installation reads the corral-owned login, so only it is checked here.
     if explicit.is_none() {
-        credential(
-            &super::super::install::data_root()?,
-            resolved.vendor.as_deref(),
-        )?;
+        let root = super::super::install::data_root()?;
+        if let Some(binding) = connection.as_ref().filter(|b| b.connection.api_key()) {
+            connection_credential(&root, binding.connection)?;
+        } else {
+            credential(&root, resolved.vendor.as_deref())?;
+        }
     }
     if resolved.vendor.as_deref() == Some("amazon-bedrock") {
         let home = std::env::var_os("HOME")
@@ -166,10 +178,31 @@ pub fn metered_notice(
 /// Refuses a vendor whose provider has no usable corral-owned login, naming the provider and the
 /// command that provisions it. Reads file metadata only.
 pub fn credential(data_root: &Path, vendor: Option<&str>) -> Result<(), Refusal> {
-    use super::super::credentials::{provider_for_vendor, provider_status};
+    use super::super::credentials::provider_for_vendor;
     let Some(provider) = vendor.and_then(provider_for_vendor) else {
         return Ok(());
     };
+    credential_provider(data_root, provider)
+}
+
+pub(crate) fn connection_credential(
+    data_root: &Path,
+    connection: corral_core::connection::ConnectionId,
+) -> Result<(), Refusal> {
+    let provider = super::super::credentials::provider(connection.id()).ok_or_else(|| {
+        refuse(
+            "credentials_unavailable",
+            format!("no credential provider for {}", connection.id()),
+        )
+    })?;
+    credential_provider(data_root, provider)
+}
+
+fn credential_provider(
+    data_root: &Path,
+    provider: &super::super::credentials::Provider,
+) -> Result<(), Refusal> {
+    use super::super::credentials::provider_status;
     let status = provider_status(data_root, provider.id);
     let login = format!("run `corral agent login --provider {}`", provider.id);
     match (status.present, status.problem) {
@@ -360,6 +393,20 @@ mod tests {
         let path = auth_dir(root).join(file);
         std::fs::write(&path, "{\"type\":\"oauth\"}").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn api_credential_is_selected_by_connection_not_subscription_vendor() {
+        use corral_core::connection::ConnectionId;
+        let tmp = tempfile::tempdir().unwrap();
+        login(tmp.path(), "auth.json");
+        assert!(credential(tmp.path(), Some("openai")).is_ok());
+        let refused = connection_credential(tmp.path(), ConnectionId::OpenaiApi).unwrap_err();
+        assert_eq!(refused.code, "credentials_unavailable");
+        assert!(refused.detail.contains("--provider openai-api"));
+        login(tmp.path(), "openai-api.json");
+        assert!(connection_credential(tmp.path(), ConnectionId::OpenaiApi).is_ok());
+        assert!(connection_credential(tmp.path(), ConnectionId::AnthropicApi).is_err());
     }
 
     #[test]

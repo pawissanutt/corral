@@ -27,8 +27,11 @@ pub(crate) use startup::{
     activate_ready, automation_may_start, failed_start, require_automation_start,
 };
 
+#[path = "continuation_api_start.rs"]
+mod api_start;
 #[path = "continuation_context.rs"]
 mod context_cache;
+pub(crate) use api_start::prepare_launch;
 
 pub(crate) const INTENTS: RecordArea<ContinuationIntent> = RecordArea::new("role-continuations");
 
@@ -44,6 +47,7 @@ pub(crate) enum ContextSource {
         reason: String,
     },
     ResumedSession,
+    ApiStart,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -178,6 +182,9 @@ fn approved(store: &Store, episode: &PaidEpisode, source: &ConnectionBinding) ->
         episode.approval.policy_digest == config.profile_setup_revision()?,
         "PolicyNotApproved"
     );
+    if source.connection.api_key() && api_start::approved(store, episode, source).is_ok() {
+        return Ok(());
+    }
     let mut refusal = None;
     for (profile, configured) in &config.profiles {
         let Some(policy) = configured
@@ -278,6 +285,10 @@ fn same_lineage(source: &ContainerRef, successor: &ContainerRef) -> bool {
 }
 fn context_valid(store: &Store, intent: &ContinuationIntent) -> Result<()> {
     match &intent.context {
+        ContextSource::ApiStart => ensure!(
+            intent.source == intent.successor && intent.source.binding.connection.api_key(),
+            "invalid API start context"
+        ),
         ContextSource::Checkpoint { digest } => {
             checkpoint::load(store, digest, &intent.source, &intent.subject)?;
         }
@@ -336,8 +347,12 @@ pub(crate) fn prepare(ctx: &Ctx, mut transfer: Transfer) -> Result<ContinuationI
         // Search by predecessor before any mutation, including after a retained generation
         // advanced. A different successor or checkpoint must not rewrite any durable bytes.
         let previous = from_source(&ctx.store, &transfer.source)?.filter(|i| {
-            i.source.generation == state.binding.generation
-                || i.phase == IntentPhase::Prepared && state.paid_episode.as_ref() == Some(&i.link)
+            // An API start has no predecessor: its self-source is the incoming
+            // admission, not an already-selected outgoing recovery generation.
+            i.context != ContextSource::ApiStart
+                && (i.source.generation == state.binding.generation
+                    || i.phase == IntentPhase::Prepared
+                        && state.paid_episode.as_ref() == Some(&i.link))
         });
         if let Some(intent) = previous {
             return index::matching(
@@ -374,9 +389,19 @@ pub(crate) fn prepare(ctx: &Ctx, mut transfer: Transfer) -> Result<ContinuationI
             );
         }
         approved(&ctx.store, &episode, &source.binding)?;
+        ensure!(
+            episode.ledger.totals().1 < episode.approval.allowance_nanos,
+            "paid allowance exhausted; restart cannot refresh allowance"
+        );
         ensure!(!state.binding.closing, "TerminalResult");
         subject_current(&ctx.store, &source.container, &transfer.subject)?;
-        checkpoint::quiescent(state, source.generation).map_err(|r| anyhow::anyhow!("{r:?}"))?;
+        if matches!(transfer.context, ContextSource::ResumedSession) {
+            checkpoint::resumed_quiescent(state, source.generation)
+                .map_err(|r| anyhow::anyhow!("{r:?}"))?;
+        } else {
+            checkpoint::quiescent(state, source.generation)
+                .map_err(|r| anyhow::anyhow!("{r:?}"))?;
+        }
         let generation = if transfer.source == transfer.successor {
             source
                 .generation
@@ -502,18 +527,23 @@ pub(crate) fn require_launch(
 ) -> Result<()> {
     binding.validate()?;
     if !binding.connection.api_key() {
+        if let Some(state) = state_for(store, container)?
+            && let Some(link) = &state.paid_episode
+        {
+            // A prepared policy root on a subscription source is not a paid switch.
+            // Refusals before transfer must still be able to resume that subscription.
+            ensure!(
+                state
+                    .current_generation()
+                    .and_then(|g| g.connection.as_ref())
+                    .is_none_or(|b| !b.connection.api_key())
+                    && store.paid_episode(&link.episode)?.switches == 0,
+                "paid route is sticky; start a new session to change billing connection"
+            );
+        }
         return binding.connection.require_admission();
     }
-    let generation = state_for(store, container)?.map_or(Ok(1), |s| {
-        s.generations
-            .iter()
-            .map(|g| g.n)
-            .max()
-            .unwrap_or(0)
-            .max(s.retired.as_ref().map_or(0, |r| r.floor.saturating_sub(1)))
-            .checked_add(1)
-            .context("continuation generation overflow")
-    })?;
+    let generation = next_generation(store, container)?;
     let intent = intent_for(store, container, generation)?.context("paid_admission_required")?;
     ensure!(
         intent.phase == IntentPhase::Prepared && intent.successor.binding == *binding,
@@ -521,6 +551,10 @@ pub(crate) fn require_launch(
     );
     let episode = store.paid_episode(&intent.link.episode)?;
     approved(store, &episode, &intent.source.binding)?;
+    ensure!(
+        episode.ledger.totals().1 < episode.approval.allowance_nanos,
+        "paid allowance exhausted; cannot refresh allowance by restarting"
+    );
     ensure!(
         episode.epoch == intent.link.epoch
             && matches!(&episode.phase,
@@ -530,14 +564,37 @@ pub(crate) fn require_launch(
     subject_current(store, container, &intent.subject)?;
     context_valid(store, &intent)
 }
+fn next_generation(store: &Store, container: &ContainerRef) -> Result<u32> {
+    state_for(store, container)?.map_or(Ok(1), |s| {
+        s.generations
+            .iter()
+            .map(|g| g.n)
+            .max()
+            .unwrap_or(0)
+            .max(s.retired.as_ref().map_or(0, |r| r.floor.saturating_sub(1)))
+            .checked_add(1)
+            .context("continuation generation overflow")
+    })
+}
 pub(crate) fn require_preflight(
     store: &Store,
     role: AgentRole,
     binding: &ConnectionBinding,
+    profile: &str,
 ) -> Result<()> {
     binding.validate()?;
     if !binding.connection.api_key() {
         return binding.connection.require_admission();
+    }
+    if store
+        .config_layers()?
+        .config()?
+        .profiles
+        .get(profile)
+        .is_some_and(|p| p.connection.is_some_and(|c| c.api_key()))
+    {
+        api_start::for_profile(store, profile, role, binding)?;
+        return Ok(());
     }
     for row in store.record_rows(corral_core::paid_episode::AREA)? {
         let episode = store.paid_episode(&row.key)?;
@@ -556,7 +613,9 @@ pub(crate) fn require_preflight(
             return Ok(());
         }
     }
-    bail!("paid_admission_required")
+    bail!(
+        "paid_admission_required: configure metadata.api_start roles, finite USD spending and explicit approval for this exact preferred API route"
+    )
 }
 
 /// Intent ContextSource::Checkpoint.digest identifies the immutable manifest; the returned
@@ -649,9 +708,13 @@ pub(crate) fn activate(ctx: &Ctx, container: &ContainerRef, generation: u32) -> 
                 .generation(generation)
                 .and_then(|g| g.bound.as_ref())
                 .context("MissingCheckpoint")?;
+            let empty_start = state.turns.is_empty()
+                && state.retired.is_none()
+                && episode.ledger.requests.is_empty();
             ensure!(
-                previous.session_id == next.session_id
-                    && previous.session_file == next.session_file,
+                empty_start
+                    || previous.session_id == next.session_id
+                        && previous.session_file == next.session_file,
                 "MissingCheckpoint"
             );
         }

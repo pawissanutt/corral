@@ -81,8 +81,18 @@ fn gate(ctx: &Ctx, id: &str, container: &AssistantContainer) -> Result<()> {
         )),
         "EnteringEffect"
     );
-    checkpoint::quiescent(&container.state, container.state.binding.generation)
-        .map_err(|r| anyhow!("{r:?}"))?;
+    if container
+        .state
+        .current_generation()
+        .and_then(|g| g.connection.as_ref())
+        .is_some_and(|b| b.connection.api_key())
+    {
+        checkpoint::resumed_quiescent(&container.state, container.state.binding.generation)
+            .map_err(|r| anyhow!("{r:?}"))?;
+    } else {
+        checkpoint::quiescent(&container.state, container.state.binding.generation)
+            .map_err(|r| anyhow!("{r:?}"))?;
+    }
     Ok(())
 }
 
@@ -254,14 +264,23 @@ pub(crate) fn recover(
     let source = reference(id);
     let recovered = (|| {
         gate(ctx, id, container)?;
+        let empty_start = container.state.turns.is_empty()
+            && container.state.retired.is_none()
+            && container
+                .state
+                .paid_episode
+                .as_ref()
+                .map(|link| ctx.store.paid_episode(&link.episode))
+                .transpose()?
+                .is_some_and(|episode| episode.ledger.requests.is_empty());
         ensure!(
-            ops::continued_session(ctx, id)?.is_some(),
+            empty_start || ops::continued_session(ctx, id)?.is_some(),
             "MissingCheckpoint"
         );
         let session = ctx.store.get_assistant(id)?;
         let config = ctx.store.config_layers()?.config()?;
-        let approval = policy::approval(ctx, &session.profile, AgentRole::Assistant)?;
-        ensure!(approval.candidates.contains(binding), "PolicyNotApproved");
+        // Regeneration below revalidates the frozen canonical approval (API-start or
+        // fallback). API-start permission must not be mistaken for fallback policy.
         let candidate = config
             .profiles
             .get(&session.profile)

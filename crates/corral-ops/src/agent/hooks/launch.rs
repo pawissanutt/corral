@@ -26,6 +26,7 @@ pub fn worker_command(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     let pane = &run.herdr.as_ref().context("launch pane missing")?.pane_id;
     let resolved = run.execution.as_ref().map(|execution| &execution.resolved);
     let spec = HostSpec {
+        profile: resolved.map(|r| r.profile.clone()),
         binding: crate::agent::connections::snapshot(run.execution.as_ref())?,
         cwd: run.worktree.clone(),
         model: run.model.clone().context("a corral-pi run needs a model")?,
@@ -64,6 +65,7 @@ pub fn plan_command(
         .clone()
         .context("a corral-pi planner needs a model")?;
     let spec = HostSpec {
+        profile: Some(resolved.profile.clone()),
         binding: crate::agent::connections::explicit(resolved)?,
         cwd: cwd.to_path_buf(),
         provider: crate::agent::connections::provider(resolved)?,

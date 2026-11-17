@@ -447,6 +447,37 @@ pub(crate) fn known_model_unavailability(
     profile: &corral_core::ResolvedProfile,
 ) -> Option<String> {
     let model = profile.model.as_deref()?;
+    if let Some(connection) = profile.connection.filter(|c| c.api_key()) {
+        // Subscription discovery does not attest API access. Only a cache containing
+        // this exact API provider's catalog may exclude an API model.
+        let provider = connection.provider();
+        let selector = if model.contains('/') {
+            model.to_owned()
+        } else {
+            format!("{provider}/{model}")
+        };
+        if model
+            .split_once('/')
+            .is_some_and(|(prefix, _)| prefix != provider)
+        {
+            return Some(format!(
+                "model '{model}' names another provider; use {provider}/<model> or a bare model ID"
+            ));
+        }
+        let report = harness::cached_harness_report(ctx)?;
+        let info = report.get(&profile.harness)?;
+        let prefix = format!("{provider}/");
+        return (matches!(
+            info.model_source,
+            ModelSource::Listed | ModelSource::Builtin
+        ) && info.models.iter().any(|m| m.starts_with(&prefix))
+            && !info.models.contains(&selector))
+        .then(|| {
+            format!(
+                "model '{model}' is not an exact discovered model ID for API provider '{provider}'"
+            )
+        });
+    }
     let is_omo = ctx
         .store
         .config

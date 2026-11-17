@@ -403,6 +403,12 @@ pub fn session(
                 head.pending.is_empty() && !matches!(head.state.as_str(), "working" | "starting"),
                 "assistant_busy"
             );
+            let retained = ctx.store.get_assistant_container(&head.session)?;
+            ensure!(
+                retained.state.paid_episode.is_none()
+                    || ctx.store.get_assistant(&head.session)?.profile == *profile,
+                "paid route is sticky; create a new assistant session to change profiles"
+            );
             ctx.store.update_assistant(&head.session, |s| {
                 s.profile = profile.clone();
                 Ok(())

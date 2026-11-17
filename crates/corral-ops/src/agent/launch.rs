@@ -249,6 +249,8 @@ pub fn command(recipient: &Recipient) -> Result<String> {
 /// What a container's host runs with, besides its bound identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostSpec {
+    /// Trusted selected profile provenance, required for a first paid API launch.
+    pub profile: Option<String>,
     pub cwd: PathBuf,
     pub model: String,
     pub provider: Option<String>,
@@ -346,6 +348,12 @@ pub(crate) fn prepare_bootstrap_host(
         std::path::absolute(&assets).with_context(|| format!("resolving {}", assets.display()))?;
     let asset_sha256 = asset_digest(&assets)?;
     if let Some(binding) = &spec.binding {
+        crate::availability::continuation::prepare_launch(
+            ctx,
+            &target.container(),
+            binding,
+            spec.profile.as_deref(),
+        )?;
         require_launch(&ctx.store, &target.container(), binding)?;
         super::connections::compatible(&assets, binding)?;
     }

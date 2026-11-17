@@ -47,6 +47,7 @@ fn reviewer(model: &str, vendor: &str, roles: &[ProfileRole]) -> Profile {
             revision: "r1".into(),
             evidence: None,
             candidates: vec![],
+            api_start: None,
             fallback: None,
         }),
         harness: "h".into(),
