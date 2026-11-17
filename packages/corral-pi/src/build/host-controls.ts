@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import type { ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { FleetRuntime, type FleetOptions } from "../extensions/fleet/runtime.ts";
 import { fleetTools } from "../extensions/fleet/tools.ts";
+import type { InputWake } from "../extensions/input-wake.ts";
 import { createSdkRunner, type ChildRunner } from "../extensions/fleet/child.ts";
 import { createBoard } from "./board.ts";
 import { gitRun, ownerRun, type Run } from "./corral-cli.ts";
@@ -19,6 +20,8 @@ export interface BuildControlsOptions extends Omit<FleetOptions, "models" | "app
   readonly localTools: () => readonly ToolDefinition[];
   readonly run?: Run;
   readonly git?: Run;
+  /** Ends the parent's agent_wait when input is queued for its next turn boundary. */
+  readonly wake?: InputWake;
 }
 
 export interface BuildControls {
@@ -75,7 +78,7 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     },
   });
   const board = context.session.bare ? undefined : createBoard({ context, run, tmpDir: join(context.dir, "board"), changed: options.changed, now: options.now });
-  const fleetDefinitions = fleetTools(fleet);
+  const fleetDefinitions = fleetTools(fleet, undefined, options.wake);
   const task = fleetDefinitions.find(tool => tool.name === "task")!;
   const start = task.execute;
   const previousIds = new Set(buildJournal.record().slices.map(child => child.id));

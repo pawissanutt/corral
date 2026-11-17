@@ -316,7 +316,7 @@ the item `escalated_to_owner`.
 
 **Outcomes.** When an assistant's item is resolved, corral publishes one
 `pm_inbox_outcome` message keyed `pmi:<id>:<revision>` into that session's native agent
-inbox and delivers it as a follow-up turn. A host that is down gets the message when sync
+inbox and delivers it as a steer. A host that is down gets the message when sync
 finds it live again; the key and the host's idempotency keep it to one delivery. An ended
 session receives nothing: the outcome stays in the item, which its session record lists.
 The daemon, or the board/sync worker when no daemon owns the loop, owns automatic transitions.

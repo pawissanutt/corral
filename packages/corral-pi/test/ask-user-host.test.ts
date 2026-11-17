@@ -78,7 +78,8 @@ for (const role of ["assistant", "pm"] as const) {
       const ask = (id: string) => ({ toolCalls: [{ callId: id, name: "ask_user", arguments: {
         questions: [{ question: "Which?", options: ["One", "Two"], freeText: true }],
       } }] });
-      fixtureTransport().script([ask("answer"), { text: "Understood." }, { text: "Noted." }]);
+      // The recorded answer steers in beside the tool result, so one reply reads both.
+      fixtureTransport().script([ask("answer"), { text: "Understood." }]);
       await live.session.prompt("Ask a choice", { source: "extension" });
       await live.drained();
       const answer = "Which?: Two\nExtra detail";

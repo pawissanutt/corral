@@ -112,15 +112,19 @@ pub enum DeliveryStatus {
     Sent { envelope: u64 },
 }
 
-/// An unknown metadata value is an ordinary legacy message, never a delivery blocker.
-pub(crate) fn explicit_busy_policy(message: &corral_core::inbox::Message) -> Option<&'static str> {
-    if message.kind == "agent_message" {
-        return Some("follow_up");
-    }
-    match message.subject.as_ref()?.get("busy_policy")?.as_str()? {
-        "steer" => Some("steer"),
-        "follow_up" => Some("follow_up"),
-        _ => None,
+/// corral-pi delivery mode: everything steers into the next turn boundary, because a run that
+/// keeps working never reaches the stop where follow-ups drain. Only the owner's explicit
+/// `follow_up` choice queues behind the run; agent messages never carry owner choices.
+pub(crate) fn pi_busy_policy(message: &corral_core::inbox::Message) -> &'static str {
+    let explicit = message
+        .subject
+        .as_ref()
+        .and_then(|subject| subject.get("busy_policy"))
+        .and_then(serde_json::Value::as_str);
+    if message.kind != "agent_message" && explicit == Some("follow_up") {
+        "follow_up"
+    } else {
+        "steer"
     }
 }
 
@@ -294,8 +298,7 @@ pub fn deliver_at(
                 inbox.flush_requested(),
                 |message| {
                     (selected.harness() == crate::agent::delivery::ADAPTER)
-                        .then(|| explicit_busy_policy(message))
-                        .flatten()
+                        .then(|| pi_busy_policy(message))
                 },
             )?
             else {

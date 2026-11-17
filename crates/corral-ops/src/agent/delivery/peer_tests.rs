@@ -53,7 +53,7 @@ fn bound_peers_admit_information_in_the_posting_call_without_owner_effects() {
     let sent = ts::committed(&request(&fx, &a, "peer_send", "send", input.clone()));
     assert_eq!(sent.result["state"], "delivered");
     assert_eq!(fake.submits().len(), 1);
-    assert_eq!(fake.submits()[0]["busy_policy"], "follow_up");
+    assert_eq!(fake.submits()[0]["busy_policy"], "steer");
     let inbox = Inbox::new(&fx.ctx.store, recipient.clone()).unwrap();
     let message = inbox.message(1).unwrap();
     assert_eq!(message.kind, "agent_message");
