@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { AGENT_MESSAGE_MAX, MAX_CHILDREN_PER_CALL, type ChildKind, type ChildSnapshot, type ChildSpec, type FleetControl, type MessageOutcome } from "../../build/types.ts";
+import { AGENT_MESSAGE_MAX, LIVE_CHILD_STATES, MAX_CHILDREN_PER_CALL, type ChildKind, type ChildSnapshot, type ChildSpec, type FleetControl, type MessageOutcome } from "../../build/types.ts";
+import { INPUT_QUEUED_NOTICE, type InputWake, wakeableWait } from "../input-wake.ts";
 import type { FleetRuntime } from "./runtime.ts";
 
 /** Shared report format for automatic delivery and explicit collection. */
@@ -36,7 +37,7 @@ export function agentCommunicationTools(control: AgentCommunication): ToolDefini
   }];
 }
 /** Model-callable controls only; exit and board decisions remain owner-only. */
-export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKind[] = ["slice", "explore", "review"]): ToolDefinition[] {
+export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKind[] = ["slice", "explore", "review"], wake?: InputWake): ToolDefinition[] {
   const communication = agentCommunicationTools({ message: (to, text, options) => runtime.message("parent", to, text, options), roster: signal => runtime.rosterText(signal) });
   if (!allowedKinds.length) return communication;
   return [
@@ -71,13 +72,18 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
     ...communication,
     {
       name: "agent_wait", label: "Collect child reports",
-      description: "Wait for named children (default: every live child) to settle, or until the timeout. Returned settlements are collected and are not delivered again as messages.",
+      description: "Wait for named children (default: every live child) to settle, or until the timeout. Newly queued input ends the wait early. "
+        + "Returned settlements are collected and are not delivered again as messages.",
       parameters: Type.Object({ ids: Type.Optional(Type.Array(Type.String())), timeout_secs: Type.Optional(Type.Number({ minimum: 0, maximum: 3600 })) }, { additionalProperties: false }),
-      async execute(_id, params: { ids?: string[]; timeout_secs?: number }, signal) {
+      async execute(id, params: { ids?: string[]; timeout_secs?: number }, signal) {
         const timeout = AbortSignal.timeout(Math.ceil((params.timeout_secs ?? 600) * 1000));
-        const children = await runtime.wait(params.ids ?? runtime.snapshot().children.filter(child => ["queued", "running", "needs"].includes(child.state)).map(child => child.id),
-          signal ? AbortSignal.any([signal, timeout]) : timeout);
-        return { content: [{ type: "text", text: children.map(formatChildReport).join("\n\n") || "No children to collect." }], details: { children } };
+        const wait = wakeableWait(wake, "agent_wait", id, signal);
+        const children = await runtime.wait(params.ids ?? runtime.snapshot().children.filter(child => LIVE_CHILD_STATES.includes(child.state)).map(child => child.id),
+          wait.signal ? AbortSignal.any([wait.signal, timeout]) : timeout);
+        const interrupted = wait.interrupted() && children.some(child => LIVE_CHILD_STATES.includes(child.state));
+        const reports = children.map(formatChildReport).join("\n\n") || "No children to collect.";
+        return { content: [{ type: "text", text: interrupted ? `${INPUT_QUEUED_NOTICE}\n\n${reports}` : reports }],
+          details: { children, ...(interrupted ? { interrupted: true } : {}) } };
       },
     },
     {

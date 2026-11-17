@@ -161,7 +161,7 @@ explicit owner action; it never replaces an already-open confirmation/permission
 Continue unrelated reads, research or implementation. Stop only steps dependent on the
 answer, especially permission/scope decisions. With Todo enabled, use its existing `wait`
 operation on those steps, naming the pending ID; when everything remaining waits, end the
-turn. The answer's normal follow-up resumes the conversation; do not busy-poll. Without
+turn. The answer's normal steer resumes the conversation; do not busy-poll. Without
 interactive TUI support (including headless/RPC), the deferred call returns `no answer` and
 an unavailable-UI reason, not a fabricated pending question or approval.
 
@@ -182,7 +182,7 @@ Lifecycle and recovery:
   late reply. A canonically ended Corral session cannot rebind or restart from a reply.
 - Only an actual complete UI answer enters the authenticated host owner-input event path
   (assistant `dialog` provenance). It includes the question ID, option and optional text,
-  then arrives via the existing delivery module and a normal follow-up user message. PM
+  then arrives via the existing delivery module and a normal steered user message. PM
   answers remain PM-session input, not assistant owner-action authority. Status notifications
   and pending IDs are never citable owner input. Current-generation owner-input receipts
   are replayed with the same saved event ID after uncertain acknowledgement.
@@ -911,7 +911,7 @@ separate host event. Notifications never replay commands or mutating hooks.
 
 Completion is journaled before automatic delivery. A foreground result, explicit wait/stop
 or exit monitor claims the completion instead of also posting an automatic duplicate. Notices
-use the existing follow-up delivery path, queue during work and wake idle sessions. Failed
+steer like other corral input, queue during work and wake idle sessions. Failed
 submissions retry with the same identity; bind/turn end also retries pending delivery.
 Already-ready completions coalesce in groups of at most four without waiting for other work;
 notice excerpts are capped at 2 KiB each while full retained pages remain available through peek.
@@ -1644,13 +1644,22 @@ completion. IDs have the form `q-g<generation>-<bind-prefix>-<counter>`; checks 
 committed binding, not the display prefix. Ledger appends persist before queue mutations,
 including before the first conversational message. A write failure fences further progress.
 
-Follow-ups drain as one batch: when the agent would otherwise stop, every follow-up queued by then
-(inbox envelopes, code-cell results, command notices, owner input) enters the conversation
-together, in queue order, and one run answers them. Each drained item still gets its own
-`started` entry, all naming the same turn. Withdraw, edit and reorder therefore apply only until
-that stop, and a cancel ends the run for the whole batch: none of it is redelivered. Steering is
-unchanged, one item per turn boundary. On PM and assistant hosts, `corral_cost_turn` writes one
-`queued` start marker per keyed item in the batch; usage attributes the run to the last one.
+Corral input steers: inbox envelopes, agent messages and child reports, code-cell and command
+notices, and owner answers reach a working run at its next turn boundary, after the current tool
+batch, rather than waiting for a stop that a long run may not reach for hours. Steering drains as
+one batch: every steer queued by that boundary enters the conversation together, in queue order.
+The owner's explicit follow-ups (the pane's follow-up key, `session send --policy follow-up`)
+still queue behind the run, and also drain as one batch when the agent would otherwise stop.
+Each drained item gets its own `started` entry, all naming the same turn. Withdraw, edit and
+reorder therefore apply only until that drain, and a cancel ends the run for the whole batch:
+none of it is redelivered. On PM and assistant hosts, `corral_cost_turn` writes one `queued`
+start marker per keyed item in the batch; usage attributes the run to the last one.
+
+Queued steering also ends a top-level `job_wait` or `agent_wait` at once (or as soon as it is
+called while input waits), so the input is read after that tool result instead of after the
+wait budget. The result names the early end; the awaited job or children keep running and
+deliver normally. Waits nested in a Code Mode cell keep their budget, so a waiting loop never
+spins.
 
 `queue_control` requires catalog 10 and host support (strict/standard/full defaults off/on/on).
 Older snapshots remain off. Bridge v1 adds `queue_state {limit?:1..64}` (default 64) with

@@ -79,6 +79,7 @@ import { McpAccess } from "../capabilities/mcp.ts";
 import { MCP_CONTROLS } from "./mcp-tools.ts";
 import { toolSearch } from "./tool-search.ts";
 import { JOB_MONITOR_TOOL, jobTools } from "../extensions/jobs/index.ts";
+import { InputWake } from "../extensions/input-wake.ts";
 import { JobRuntime } from "../extensions/jobs/runtime.ts";
 import { COMMAND_ENTRY, Commands, type CommandFact } from "../extensions/jobs/commands.ts";
 import { MONITOR_ENTRY, type MonitorFact } from "../extensions/jobs/monitors.ts";
@@ -370,7 +371,9 @@ export class HostSession {
   private attached: "interactive" | "headless" | undefined;
   private guidance: Guidance = { skillPaths: [], promptPaths: [], contextFiles: [] };
   private readonly settings: ReturnType<typeof restrictedSettings> & ReturnType<typeof compactionSettings>
-    & { readonly followUpMode: "all" };
+    & { readonly steeringMode: "all"; readonly followUpMode: "all" };
+  /** Ends the model's job_wait/agent_wait once input is queued for the next turn boundary. */
+  private readonly inputWake = new InputWake(() => this.session.getSteeringMessages().length > 0);
   private summaryRequest: SummaryRequest | undefined;
   private readonly controls: HostControls;
   private readonly hooks: Hooks | undefined;
@@ -487,11 +490,11 @@ export class HostSession {
       },
       approved: () => this.buildProviders,
       parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
-      agentDir: options.agentDir,
+      agentDir: options.agentDir, wake: this.inputWake,
       localTools: () => this.localTools.filter(tool => !this.buildControls?.tools.includes(tool)).map(tool => this.planningTool(tool)),
       deliverToParent: async text => {
         const key = `fleet:${crypto.randomUUID()}`;
-        const result = await this.submit({ text, busyPolicy: "follow_up", idempotencyKey: key, origin: "command" }, key);
+        const result = await this.submit({ text, busyPolicy: "steer", idempotencyKey: key, origin: "command" }, key);
         if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
       },
       shellRefusal: options.modules.role.shellRefusal, changed: () => {
@@ -645,7 +648,7 @@ export class HostSession {
         entry.type === "custom" && (entry.customType === "corral_code_cell" || entry.customType === CODE_CALL_ENTRY) ? [entry.data] : []),
       // A detached cell's one notice enters like bridge input: journaled delivery, its own turn origin.
       notify: async (key, text) => {
-        const sent = await this.submit({ text, busyPolicy: "follow_up", idempotencyKey: key, origin: "code-cell" }, key);
+        const sent = await this.submit({ text, busyPolicy: "steer", idempotencyKey: key, origin: "code-cell" }, key);
         return sent.reason === undefined ? sent.disposition : `${sent.disposition}: ${sent.reason}`;
       },
     }) : undefined;
@@ -690,7 +693,7 @@ export class HostSession {
         }, record,
         deliverToParent: async text => {
           const key = `fleet:${crypto.randomUUID()}`;
-          const result = await this.submit({ text, busyPolicy: "follow_up", idempotencyKey: key, origin: "command" }, key);
+          const result = await this.submit({ text, busyPolicy: "steer", idempotencyKey: key, origin: "command" }, key);
           if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
         },
       });
@@ -783,7 +786,7 @@ export class HostSession {
         }) : text;
       },
       deliver: async (text, key) => {
-        const result = await this.submit({ text, idempotencyKey: key, origin: "ask-user", busyPolicy: "follow_up" }, key);
+        const result = await this.submit({ text, idempotencyKey: key, origin: "ask-user", busyPolicy: "steer" }, key);
         return result.disposition === "started" || result.disposition === "queued";
       },
     }) : undefined;
@@ -793,7 +796,7 @@ export class HostSession {
         if (!this.dialogPi) throw new Error("dialog session is unavailable");
         const id = options.identity.role === "assistant" ? await this.journalOwnerInput("dialog", answer) : undefined;
         const message = id ? ownerInputText(answer, id) : answer;
-        this.dialogPi.sendUserMessage(message, { deliverAs: "followUp" });
+        this.dialogPi.sendUserMessage(message, { deliverAs: "steer" });
         return message;
       }, this.ownerQuestions, () => this.questionUi?.busy === true, () => this.dialogPresentation(), this.remotePrompts?.ask)] : []),
       ...(this.additionalLsp?.tools ?? []).map(tool => ({ ...tool, execute: (...args: Parameters<ToolDefinition["execute"]>) => {
@@ -805,14 +808,14 @@ export class HostSession {
           if (!this.auxiliary) throw new Error("subscription search is disabled");
           return (await this.auxiliary.run("web_search", id, JSON.stringify({ query, count }), signal)).text;
         } : undefined) : []),
-      ...(this.jobs ? jobTools(this.jobs, true, this.commands).filter(tool => tool.name !== "bash" || role.upstreamTools.includes("bash")) : []),
+      ...(this.jobs ? jobTools(this.jobs, true, this.commands, this.inputWake).filter(tool => tool.name !== "bash" || role.upstreamTools.includes("bash")) : []),
       ...(this.fleet && auxiliary.explore ? [exploreTool(this.fleet)] : []),
       ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
       ...(this.auxiliary && auxiliary.expert ? [expertTool(this.auxiliary)] : []),
       ...(browser ? browserTools(browser, { cwd: options.cwd, registerCapability }) : [])];
     if (this.buildControls) this.localTools = [...this.localTools, ...this.buildControls.tools];
     if (this.fleet) this.localTools = [...this.localTools, ...fleetTools(this.fleet,
-      boundFleetSettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings).allowedKinds)];
+      boundFleetSettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings).allowedKinds, this.inputWake)];
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
     if (mcp !== (options.capabilities?.mcp !== undefined)) {
@@ -826,8 +829,11 @@ export class HostSession {
     this.settings = {
       ...restrictedSettings(), ...compactionSettings(options.capabilities, options.guidance),
       enableSkillCommands: options.capabilities?.enabled.includes("skills") === true && options.guidance !== undefined,
-      // Everything queued by the time the agent would stop arrives as one batch: a backlog of
-      // envelopes and notices is read together, not one run per item. Steering stays one per turn.
+      // Corral input (inbox envelopes, agent messages, notices, answers) steers: a run that keeps
+      // working never reaches the stop where follow-ups drain, so it would hold them for the whole
+      // run. Everything queued by a turn boundary arrives together. Follow-ups remain only the
+      // owner's explicit queue-behind-the-run choice and drain as one batch too.
+      steeringMode: "all",
       followUpMode: "all",
     };
     try {
@@ -1592,6 +1598,8 @@ export class HostSession {
       ...this.queue.observer,
       queue: change => {
         this.queue.observer.queue(change);
+        // Wake waits only after the synchronous queue mutation has returned.
+        if (change.action === "enqueue" && change.mode === "steer") queueMicrotask(() => this.inputWake.notify());
         if (change.action !== "drain" || change.nextRun || !this.open) return;
         for (const { tag } of change.entries) {
           if (typeof tag === "object" && tag !== null && "idempotency_key" in tag && typeof tag.idempotency_key === "string") {
@@ -2005,7 +2013,7 @@ export class HostSession {
   private async commandNotice(key: string, text: string): Promise<string> {
     if (this.commandNoticeSeen(key)) return "duplicate";
     const tagged = `[corral notice ${key}]\n${text}`;
-    const sent = await this.submit({ text: tagged, busyPolicy: "follow_up", idempotencyKey: key, origin: "command" }, key);
+    const sent = await this.submit({ text: tagged, busyPolicy: "steer", idempotencyKey: key, origin: "command" }, key);
     return sent.disposition;
   }
 

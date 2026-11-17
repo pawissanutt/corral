@@ -63,7 +63,8 @@ the sender's recipient key is derived from the authenticated caller binding, not
 and review children, assistants or `pm`; the sender's key appears as the message author and
 as the last column of `corral inbox` list output.
 
-Agent messages are always follow-up, never interruptions. They carry no owner authority:
+Agent messages carry no owner choice of busy policy; on a corral-pi host they steer at the next
+turn boundary, like other corral input. They carry no owner authority:
 they are not owner replies, cannot lift a pause or answer a decision, and do not block
 `corral done`. A sender may post at most 60 per generation across recipients; further sends
 refuse `agent_message_limit`. The posting call performs a delivery pass; sync reconciliation
@@ -78,14 +79,14 @@ typing into the pane. It binds the container's current generation: its Pi sessio
 its current generation is bound, healthy and answers `hello`. A message that was never sent
 to a lost host stays pending and goes to the next generation.
 
-Delivery is one bridge `submit_input` with origin `corral-inbox`: existing owner messages
-steer and other messages follow up. `session send --policy follow-up` explicitly queues
-behind the current turn; `--policy steer` interrupts it. That override is immutable message
-subject metadata (`busy_policy: follow_up|steer`); unknown values retain the default.
+Delivery is one bridge `submit_input` with origin `corral-inbox`. Messages steer by default: a
+busy host reads them at its next turn boundary, after the current tool batch. An owner message
+posted with an explicit follow-up policy (`session send --policy follow-up`, the CLI default)
+queues behind the current run instead; `--policy steer` steers. That override is immutable
+message subject metadata (`busy_policy: follow_up|steer`); agent messages and unknown values steer.
 Policy-aware publication takes only the leading contiguous batch with the same mode,
 never pulling a later steer ahead of an earlier follow-up. The mode is frozen in the envelope
-and survives pause, retries and daemon restarts. Existing publishers without an explicit
-override keep their original owner-wins batching.
+and survives pause, retries and daemon restarts.
 
 Worker session chat enters the same owner-reply admission, pending-reply view, reply event
 and receipt-driven effects as `corral reply`. Planner, reviewer, plan-reviewer and PM

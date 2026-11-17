@@ -373,7 +373,7 @@ fn a_reviewer_and_a_bound_pm_receive_through_the_same_adapter() {
         "Q1: the cited plan says yes.",
     );
     deliver(&fx.ctx, &reviewer, &CorralPiAdapter, None).unwrap();
-    assert_eq!(fake.submits()[0]["busy_policy"], json!("follow_up"));
+    assert_eq!(fake.submits()[0]["busy_policy"], json!("steer"));
     assert!(!observed(&fx, &reviewer, answer));
     fake.flush();
     deliver(&fx.ctx, &reviewer, &CorralPiAdapter, None).unwrap();
@@ -392,7 +392,7 @@ fn a_reviewer_and_a_bound_pm_receive_through_the_same_adapter() {
     deliver(&fx.ctx, &Recipient::Pm, &CorralPiAdapter, None).unwrap();
     deliver(&fx.ctx, &Recipient::Pm, &CorralPiAdapter, None).unwrap();
     assert!(observed(&fx, &Recipient::Pm, wake));
-    assert_eq!(pm_host.submits()[0]["busy_policy"], json!("follow_up"));
+    assert_eq!(pm_host.submits()[0]["busy_policy"], json!("steer"));
     assert!(
         pm_host.submits()[0]["idempotency_key"]
             .as_str()

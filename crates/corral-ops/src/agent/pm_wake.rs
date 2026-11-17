@@ -714,7 +714,7 @@ mod tests {
         // Then one submit_input starts a turn and the adapter observes its delivery entry.
         let submits = bridge.stop();
         assert_eq!(submits.len(), 1);
-        assert_eq!(submits[0]["busy_policy"], "follow_up");
+        assert_eq!(submits[0]["busy_policy"], "steer");
         assert!(
             submits[0]["text"]
                 .as_str()

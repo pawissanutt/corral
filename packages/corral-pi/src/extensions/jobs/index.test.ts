@@ -6,6 +6,7 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runChild } from "../codemode/child.ts";
+import { INPUT_QUEUED_NOTICE, InputWake } from "../input-wake.ts";
 import { Commands } from "./commands.ts";
 import { jobTools } from "./index.ts";
 import { JobRuntime } from "./runtime.ts";
@@ -16,7 +17,7 @@ afterEach(async () => {
   for (const stop of cleanup.splice(0)) await stop();
 });
 
-function fixture() {
+function fixture(wake?: InputWake) {
   const dir = mkdtempSync(join(tmpdir(), "corral-command-progress-"));
   const jobs = new JobRuntime({ cwd: dir, runtimeDir: join(dir, "runtime"), generation: 3,
     settings: { max_jobs: 2, max_output_bytes: 4096, max_runtime_secs: 60 },
@@ -24,7 +25,7 @@ function fixture() {
   const commands = new Commands({ jobs, generation: 3, worker: true, waitMs: 0,
     journal: () => {}, monitorJournal: () => {}, notify: async () => "queued" });
   commands.bound();
-  const tools = jobTools(jobs, false, commands);
+  const tools = jobTools(jobs, false, commands, wake);
   const bash = tools.find(tool => tool.name === "bash");
   const wait = tools.find(tool => tool.name === "job_wait");
   if (!bash || !wait) throw new Error("managed command tools missing");
@@ -110,6 +111,30 @@ test("job_wait streams one job and removes progress on cancellation and observat
   await late;
   jest.advanceTimersByTime(300);
   expect(updates).toHaveLength(2);
+  await writeFile(done, "go");
+  await fx.jobs.settled(job);
+});
+
+test("queued input ends a top-level job_wait at once but never a Code Mode cell's nested wait", async () => {
+  let queued = false;
+  const wake = new InputWake(() => queued);
+  const fx = fixture(wake);
+  const ready = fx.line("ready"), done = fx.fifo("done");
+  const launched = await fx.bash.execute("background", { command: `echo ready; cat ${done} >/dev/null`, wait_ms: 0 },
+    undefined, undefined, undefined as never);
+  const details = launched.details;
+  if (!details || typeof details !== "object" || !("job" in details) || typeof details.job !== "string") throw new Error("job missing");
+  const job = details.job;
+  await ready;
+  const waiting = fx.wait.execute("wait", { job, wait_ms: 600000 }, undefined, undefined, undefined as never);
+  wake.notify();
+  const interrupted = { job, state: "running", interrupted: INPUT_QUEUED_NOTICE };
+  expect((await waiting).details).toEqual(interrupted);
+  queued = true;
+  expect((await fx.wait.execute("again", { job, wait_ms: 600000 }, undefined, undefined, undefined as never)).details).toEqual(interrupted);
+  const nested = await runChild({ tool: "job_wait", key: "cell/1", parent: { tool_call_id: "cell", cell: "c1", call: "c1.1" } },
+    () => fx.wait.execute("cell/1", { job, wait_ms: 50 }, undefined, undefined, undefined as never));
+  expect(nested.details).toEqual({ job, state: "running" });
   await writeFile(done, "go");
   await fx.jobs.settled(job);
 });

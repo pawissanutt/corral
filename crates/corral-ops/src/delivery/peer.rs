@@ -189,9 +189,7 @@ pub(crate) fn post(ctx: &Ctx, request: PostRequest<'_>) -> Result<Message> {
             author: &author,
             body: &body,
             binding: MessageBinding::default(),
-            subject: Some(
-                json!({"busy_policy":"follow_up", "sender_generation":request.generation}),
-            ),
+            subject: Some(json!({"busy_policy":"steer", "sender_generation":request.generation})),
             max_payload: INPUT_MAX_BYTES,
         },
         request.generation,

@@ -646,7 +646,7 @@ can post and withdraw from a plain shell too.
 
 When the PM resolves an item, the author session gets the outcome once, as a native agent
 inbox message keyed `pmi:<id>:<revision>` (for example `pmi:PMI-1:2`). It arrives as a
-follow-up turn, like any corral message, never as owner input. If the host is down, the
+steer at the next turn boundary, like any corral message, never as owner input. If the host is down, the
 message waits in the session's inbox (`.corral/inbox/assistant_A-<n>/`) and is delivered
 once sync finds the host live, for example after `corral pi --resume`. An ended session
 gets no message; the outcome stays in the item. The

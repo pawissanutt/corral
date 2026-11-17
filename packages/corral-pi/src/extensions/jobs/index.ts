@@ -2,6 +2,7 @@ import type { AgentToolUpdateCallback, ToolDefinition } from "@earendil-works/pi
 import { Type } from "typebox";
 
 import { callKey, nestedChild } from "../codemode/child.ts";
+import { INPUT_QUEUED_NOTICE, type InputWake, wakeableWait } from "../input-wake.ts";
 import { type Commands } from "./commands.ts";
 import { JobError, type JobRuntime, OUTPUT_READ_MAX } from "./runtime.ts";
 import type { OutputOptions } from "./output.ts";
@@ -36,7 +37,7 @@ async function guarded(name: string, id: string, run: () => Promise<unknown> | u
 }
 const waitBudget = Type.Optional(Type.Integer({ minimum: 0, maximum: 600000 }));
 
-export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands): readonly ToolDefinition[] {
+export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands, wake?: InputWake): readonly ToolDefinition[] {
   const tools: ToolDefinition[] = [
     ...(commands ? [{
       name: "bash", label: "Run a managed command",
@@ -79,10 +80,16 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands):
     ...(commands ? [{
       name: "job_wait", label: "Await command completion",
       description: "Await one owned job, or omit job for the next unconsumed completion. Return immediately if none exist. "
-        + "wait_ms (default 60000) limits observation only: expiry or cancellation never kills work. Completed output remains readable; no polling is needed.",
+        + "wait_ms (default 60000) limits observation only: expiry, cancellation or newly queued input never kills work. "
+        + "Completed output remains readable; no polling is needed.",
       parameters: Type.Object({ job: Type.Optional(Type.String()), wait_ms: waitBudget }),
       async execute(id: string, params: { job?: string; wait_ms?: number }, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>) {
-        return guarded("job_wait", id, () => commands.wait(params.job, params.wait_ms, signal, onUpdate), true);
+        const wait = wakeableWait(wake, "job_wait", id, signal);
+        return guarded("job_wait", id, async () => {
+          const result = await commands.wait(params.job, params.wait_ms, wait.signal, onUpdate);
+          return wait.interrupted() && result.state === "wait_cancelled"
+            ? { ...result, state: params.job === undefined ? "waiting" : "running", interrupted: INPUT_QUEUED_NOTICE } : result;
+        }, true);
       },
     } satisfies ToolDefinition] : []),
     {

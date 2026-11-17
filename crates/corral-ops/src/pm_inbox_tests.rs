@@ -167,10 +167,10 @@ fn c7_resolve_starts_one_native_turn_in_the_live_author_and_sync_never_repeats_i
     claim_and_resolve(&fx);
     sweep(&fx.ctx).unwrap();
     sweep(&fx.ctx).unwrap();
-    // Then exactly one native input named pmi:PMI-1:2 reached A-1, as a follow-up turn.
+    // Then exactly one native input named pmi:PMI-1:2 reached A-1, as a steer.
     let submits = bridge.stop();
     assert_eq!(submits.len(), 1);
-    assert_eq!(submits[0]["busy_policy"], "follow_up");
+    assert_eq!(submits[0]["busy_policy"], "steer");
     let text = submits[0]["text"].as_str().unwrap();
     assert!(text.contains("pmi:PMI-1:2"), "{text}");
     assert!(text.contains("Landed T-5."), "{text}");
