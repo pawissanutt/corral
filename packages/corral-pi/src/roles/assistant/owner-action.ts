@@ -45,7 +45,8 @@ export function finishHereEvidence(fleet: FleetSnapshot | undefined): Record<str
       ...(child.startedAt !== undefined ? { started: new Date(child.startedAt).toISOString() } : {}),
       ...(child.endedAt !== undefined ? { ended: new Date(child.endedAt).toISOString() } : {}),
       usage: { input: child.usage.input, output: child.usage.output, turns: child.usage.turns,
-        ...(child.usage.cost !== undefined ? { cost: child.usage.cost } : {}) },
+        // The authenticated envelope permits only integer numbers; preserve decimal USD as text.
+        ...(child.usage.cost !== undefined ? { cost: String(child.usage.cost) } : {}) },
       outside: [...new Set(child.edits.filter(edit => edit.outside).map(edit => edit.path))],
       ...(child.report !== undefined ? { report: utf8Prefix(child.report, 8192) } : {}),
     })) } : {}),

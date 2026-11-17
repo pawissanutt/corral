@@ -53,10 +53,34 @@ struct Payload {
     /// Host fields, deliberately absent from the model's tool schema and command flags.
     #[serde(default)]
     review: Option<AttachedReview>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_slices")]
     slices: Vec<corral_core::build_record::RecordSlice>,
     #[serde(default)]
     messages: Vec<corral_core::build_record::RecordMessage>,
+}
+
+/// Decimal USD travels as text through the integer-only authenticated envelope. Keep the
+/// build-record schema numeric and continue accepting older numeric slice costs.
+fn deserialize_slices<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<corral_core::build_record::RecordSlice>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    let mut slices = Vec::<Value>::deserialize(deserializer)?;
+    for slice in &mut slices {
+        if let Some(cost) = slice.pointer_mut("/usage/cost")
+            && let Some(decimal) = cost.as_str()
+        {
+            *cost = Value::Number(decimal.parse().map_err(D::Error::custom)?);
+        }
+    }
+    slices
+        .into_iter()
+        .map(|slice| serde_json::from_value(slice).map_err(D::Error::custom))
+        .collect()
 }
 
 fn reject(code: RejectCode, reason: impl Into<String>) -> anyhow::Error {
