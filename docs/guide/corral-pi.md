@@ -1139,8 +1139,17 @@ Corral records the active provider and model on each turn, not just on the initi
 
 ### Metered API keys
 
-For the separate OpenAI and Anthropic platform API connections, put the literal key in an
-owner-owned regular file with mode `0600`, then supply the file path (not the key) to login:
+For the separate OpenAI and Anthropic platform API connections, run `corral agent login`,
+select the API connection, and paste the key into the hidden prompt. Press Enter to save or
+Ctrl-C to cancel without changing the stored key. You can also open the prompt directly:
+
+```sh
+corral agent login --provider openai-api
+corral agent login --provider anthropic-api
+```
+
+For scripts, put the literal key in an owner-owned regular file with mode `0600`, then supply
+the file path (not the key):
 
 ```sh
 corral agent login --provider openai-api --key-file /path/to/protected-key-file
@@ -1149,8 +1158,9 @@ corral agent login --provider openai-api --status
 corral agent login --provider openai-api --logout
 ```
 
-Choose exactly one of `--key-file`, `--status` or `--logout` per invocation; the latter two
-also work for `anthropic-api`. Setup reads the protected file and stores the key separately in
+With no action flag, login prompts only on a terminal. Otherwise choose exactly one of
+`--key-file`, `--status` or `--logout`; the latter two also work for `anthropic-api`.
+Setup reads the hidden input or protected file and stores the key separately in
 `auth/openai-api.json` or `auth/anthropic-api.json` under the corral-pi data directory, with a
 `0700` auth directory and `0600` credential file. Remove the input file securely when it is no
 longer needed. Never put the key itself in command arguments or environment variables.

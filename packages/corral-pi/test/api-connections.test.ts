@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { CONNECTIONS, connectionRules, resolveConnection } from "../src/auth/connections.ts";
 import { apiKeyCommand, installApiKey } from "../src/auth/api-key.ts";
 import { FileCredentialStore } from "../src/auth/store.ts";
@@ -121,6 +122,46 @@ test("offline login entry stores, reports and removes a protected API key withou
     check(run("--status"), 0, "present");
     check(run("--logout"), 0, "removed");
     check(run("--status"), 0, "absent");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("interactive API login accepts a hidden key and cancels without overwriting credentials", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "corral-api-prompt-"));
+  const terminal = () => {
+    const input = Object.assign(new PassThrough(), {
+      isTTY: true, isRaw: false,
+      setRawMode(raw: boolean) { this.isRaw = raw; return this; },
+    });
+    const output = Object.assign(new PassThrough(), { isTTY: true });
+    let screen = "";
+    output.on("data", chunk => { screen += chunk.toString(); });
+    return { input, output, screen: () => screen };
+  };
+  try {
+    for (const connection of ["openai-api", "anthropic-api"] as const) {
+      const tty = terminal();
+      const login = apiKeyCommand(dir, connection, ["--prompt"], tty);
+      tty.input.write(`${KEY}x\x7f\r`);
+      await login;
+      const store = new FileCredentialStore(dir, CONNECTIONS[connection].provider, {}, connection);
+      expect(await store.read(CONNECTIONS[connection].provider)).toEqual({ type: "api_key", key: KEY });
+      expect(tty.screen()).not.toContain(KEY);
+      expect(tty.input.isRaw).toBe(false);
+      const before = readFileSync(store.file);
+      for (const ending of ["\x03", "\x04", "\x1b", "\r", "sk-ant-oat-SYNTHETIC\r", "x".repeat(4097), null]) {
+        const cancelled = terminal();
+        const attempt = apiKeyCommand(dir, connection, ["--prompt"], cancelled);
+        if (ending === null) cancelled.input.end();
+        else cancelled.input.write(ending);
+        await expect(attempt).rejects.toThrow();
+        expect(cancelled.input.isRaw).toBe(false);
+        expect(readFileSync(store.file)).toEqual(before);
+      }
+      const nonTerminal = terminal();
+      nonTerminal.input.isTTY = false;
+      await expect(apiKeyCommand(dir, connection, ["--prompt"], nonTerminal)).rejects.toThrow("terminal");
+      expect(nonTerminal.screen()).toBe("");
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
