@@ -103,6 +103,15 @@ fn model(
             },
         )
         .map_err(|error| refuse("usage_error", format!("{error:#}")))?;
+        if resolved
+            .connection
+            .is_some_and(|connection| connection.api_key())
+        {
+            return Err(refuse(
+                "paid_admission_required",
+                "API-first profiles require a canonically bound role and finite metadata.api_start approval; use a daemon assistant instead of an untethered build session",
+            ));
+        }
         let model = resolved.model.ok_or_else(|| {
             refuse(
                 "assistant_profile",

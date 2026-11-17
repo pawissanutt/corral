@@ -54,6 +54,7 @@ fn same_model_candidates_match_the_frozen_connection_not_list_order() {
         revision: "fixture".into(),
         evidence: Some("synthetic".into()),
         candidates: vec![sub, api.clone()],
+        api_start: None,
         fallback: Some(AvailabilityFallback {
             automatic: true,
             paid_roles: BTreeSet::new(),
@@ -191,7 +192,7 @@ fn candidate_less_assistant_source_selects_prepares_launches_and_activates_witho
         subscription,
         api,
     } = prepared_assistant();
-    require_preflight(&fx.ctx.store, AgentRole::Assistant, &api).unwrap();
+    require_preflight(&fx.ctx.store, AgentRole::Assistant, &api, "pi").unwrap();
     require_launch(&fx.ctx.store, &container, &api).unwrap();
     let mut successor = host.clone();
     successor.identity.generation = 2;

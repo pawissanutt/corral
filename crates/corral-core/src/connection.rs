@@ -90,12 +90,12 @@ impl ConnectionId {
         Ok(connection)
     }
 
-    /// Context-free launch/preflight cannot prove an episode or a safe role continuation.
+    /// Context-free launch/preflight cannot prove an approved API-start or continuation episode.
     /// Canonical budget admission uses its authenticated native binding instead.
     pub fn require_admission(self) -> Result<()> {
         ensure!(
             !self.api_key(),
-            "paid_admission_required: API launch requires an approved canonical episode and configured role continuation lifecycle"
+            "paid_admission_required: API launch requires a canonical API-start or continuation episode; configure metadata.api_start with a finite USD allowance for a bound role"
         );
         Ok(())
     }

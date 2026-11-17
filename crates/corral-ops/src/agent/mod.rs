@@ -82,6 +82,8 @@ pub use crate::{
     progress::save_checkpoint_request, progress::update_progress_request, review::done_request,
     reviewer::verdict_request,
 };
+#[cfg(test)]
+pub(crate) use admission::open_generation_bound;
 pub use admission::{BindTarget, GenerationGrant, fence_generation, open_generation};
 pub use call::{AgentOp, CallResponse, RejectCode, Rejection, call};
 pub(crate) use effects::failpoint;

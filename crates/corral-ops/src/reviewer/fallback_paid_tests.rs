@@ -63,6 +63,7 @@ fn review() -> Review {
         revision: "fixture".into(),
         evidence: Some("synthetic".into()),
         candidates: vec![sub.clone(), api.clone()],
+        api_start: None,
         fallback: Some(AvailabilityFallback {
             automatic: true,
             paid_roles: BTreeSet::from([AgentRole::Reviewer]),

@@ -96,6 +96,7 @@ fn fixture() -> (tempfile::TempDir, Store, SetupProposalInput) {
             revision: "database-r1".into(),
             evidence: Some(evidence.id.clone()),
             candidates: vec![candidate],
+            api_start: None,
             fallback: None,
         }),
     };

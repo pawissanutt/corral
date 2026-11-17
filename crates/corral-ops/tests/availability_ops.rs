@@ -90,6 +90,7 @@ fn profile(candidates: Vec<ExecutionCandidate>, role: ProfileRole) -> Profile {
             revision: "fixture-r1".into(),
             evidence: Some("fixture-evidence".into()),
             candidates,
+            api_start: None,
             fallback: (switches > 0).then(|| AvailabilityFallback {
                 automatic: true,
                 paid_roles: BTreeSet::new(),

@@ -111,6 +111,15 @@ pub struct SpendingBound {
     pub maximum_micros: u64,
 }
 
+/// Explicit first-launch permission, independent of automatic fallback approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApiStartApproval {
+    pub roles: BTreeSet<crate::agent::AgentRole>,
+    pub spending: SpendingBound,
+    pub approval: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileMetadata {
@@ -126,6 +135,8 @@ pub struct ProfileMetadata {
     #[serde(default)]
     pub candidates: Vec<ExecutionCandidate>,
     pub fallback: Option<AvailabilityFallback>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_start: Option<ApiStartApproval>,
 }
 
 impl ExecutionCandidate {
@@ -238,6 +249,24 @@ impl ProfileMetadata {
                     "preferred candidate connection differs from profile binding"
                 );
             }
+        }
+        if let Some(start) = &self.api_start {
+            ensure!(
+                !start.roles.is_empty()
+                    && !start.approval.trim().is_empty()
+                    && start.spending.currency == "USD"
+                    && start.spending.maximum_micros > 0
+                    && start.spending.maximum_micros <= 9_007_199_254_740,
+                "api_start requires roles, nonempty approval and a positive finite safe USD allowance"
+            );
+            ensure!(
+                profile.connection.is_some_and(|c| c.api_key())
+                    && self
+                        .candidates
+                        .first()
+                        .is_some_and(crate::paid_fallback::is_api),
+                "api_start requires an explicit API profile connection and preferred API candidate"
+            );
         }
         if self.candidates.len() > 1 {
             ensure!(

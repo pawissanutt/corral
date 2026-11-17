@@ -138,6 +138,7 @@ fn plan_reviewer_metadata(ctx: &mut Ctx, roles: &[corral_core::ProfileRole]) {
         revision: "r1".into(),
         evidence: None,
         candidates: vec![],
+        api_start: None,
         fallback: None,
     });
     ctx.store.config.review.reviewer = Some("gpt-review".into());
@@ -239,6 +240,7 @@ fn auto_plan_fixture(
         revision: "a1".into(),
         evidence: None,
         candidates: vec![],
+        api_start: None,
         fallback: None,
     });
     ctx.store

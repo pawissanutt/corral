@@ -71,6 +71,7 @@ fn setup() -> (Fx, Prepared, ConnectionBinding) {
             projects: BTreeSet::new(),
         },
         candidates: vec![sub.clone(), api.clone()],
+        api_start: None,
         fallback: Some(AvailabilityFallback {
             automatic: true,
             paid_roles: BTreeSet::from([AgentRole::Assistant]),

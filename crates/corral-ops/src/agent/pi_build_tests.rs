@@ -94,6 +94,27 @@ fn listing(root: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
+fn build_cannot_reinterpret_an_api_profile_as_a_subscription() {
+    let mut config = Config::default_for(Path::new("/offline-fixture"));
+    config.assistant.agent = Some("api".into());
+    for (connection, vendor, model_id) in [
+        ("anthropic-api", "anthropic", "claude-sonnet-4-6"),
+        ("openai-api", "openai", "gpt-5.4"),
+    ] {
+        config.profiles.insert(
+            "api".into(),
+            serde_json::from_value(json!({
+                "harness":"corral-pi", "connection":connection, "vendor":vendor, "model":model_id,
+            }))
+            .unwrap(),
+        );
+        let error = model(&config, true, &BuildArgs::default()).unwrap_err();
+        assert_eq!(code(&error), Some("paid_admission_required"));
+        assert!(error.to_string().contains("daemon assistant"));
+    }
+}
+
+#[test]
 fn workspace_launch_carries_project_policy_profiles_and_capabilities_without_writes() {
     let mut fx = fixture();
     let data = tempfile::tempdir().unwrap();

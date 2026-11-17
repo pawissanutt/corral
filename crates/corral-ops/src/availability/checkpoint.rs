@@ -120,6 +120,28 @@ pub(crate) fn quiescent(
     frontier(state, generation)
 }
 
+/// A retained API conversation can be idle before its first turn. There is no
+/// checkpoint frontier to carry, but unresolved effects still forbid recovery.
+pub(crate) fn resumed_quiescent(
+    state: &AgentRunState,
+    generation: u32,
+) -> std::result::Result<(), PauseReason> {
+    if state.turns.iter().any(|t| t.generation == generation) {
+        return quiescent(state, generation).map(|_| ());
+    }
+    settled(state)?;
+    if generation == 0
+        || state.binding.generation != generation
+        || state
+            .generation(generation)
+            .and_then(|g| g.bound.as_ref())
+            .is_none_or(|b| b.session_id.is_empty())
+    {
+        return Err(PauseReason::MissingCheckpoint);
+    }
+    Ok(())
+}
+
 fn refs_for(
     state: &AgentRunState,
     frontier: &TurnFrontier,

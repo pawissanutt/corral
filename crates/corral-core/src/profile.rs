@@ -812,10 +812,29 @@ impl Config {
             );
         }
         let connection = self.profiles.get(&name).and_then(|p| p.connection);
+        // Direct API starts must retain the exact preferred metadata identity. Overrides
+        // do not inherit approval for another model/effort/route.
+        let candidate = if connection.is_some_and(|id| id.api_key()) {
+            self.profiles
+                .get(&name)
+                .and_then(|p| p.metadata.as_ref())
+                .and_then(|m| m.candidates.first())
+                .filter(|c| {
+                    c.harness == harness
+                        && Some(&c.model) == model.as_ref()
+                        && c.effort.as_deref().map(normalize_effort)
+                            == effort.as_deref().map(normalize_effort)
+                        && Some(c.provider.as_str()) == vendor.as_deref()
+                        && c.native_connection(connection).ok() == connection
+                })
+                .map(|c| c.id.clone())
+        } else {
+            None
+        };
         let resolved = ResolvedProfile {
             connection,
             connection_identity: connection.map(|id| id.id().to_owned()),
-            candidate: None,
+            candidate,
             profile: name,
             harness,
             command,

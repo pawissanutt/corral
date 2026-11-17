@@ -236,6 +236,7 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
     };
     let resolved = run.execution.as_ref().map(|execution| &execution.resolved);
     let spec = HostSpec {
+        profile: resolved.map(|r| r.profile.clone()),
         binding: crate::agent::connections::snapshot(run.execution.as_ref())?,
         cwd: run.worktree.clone(),
         provider: match resolved {

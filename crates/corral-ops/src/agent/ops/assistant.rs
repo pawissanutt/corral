@@ -220,6 +220,7 @@ pub(crate) fn launch_session(
         .clone()
         .context("an assistant needs a model")?;
     let spec = HostSpec {
+        profile: Some(resolved.profile.clone()),
         binding: crate::agent::connections::explicit(resolved)?,
         cwd: crate::assistant::directory(&ctx.store, &session)?.path,
         provider: crate::agent::connections::provider(resolved)?,

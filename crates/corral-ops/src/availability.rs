@@ -15,6 +15,8 @@ use serde_json::json;
 
 use crate::Ctx;
 
+#[cfg(test)]
+mod api_start_tests;
 pub(crate) mod checkpoint;
 pub(crate) mod continuation;
 #[cfg(test)]

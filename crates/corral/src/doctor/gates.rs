@@ -251,6 +251,7 @@ mod tests {
                 revision: "1".into(),
                 evidence: None,
                 candidates: Vec::new(),
+                api_start: None,
                 fallback: None,
             }),
             harness: "h".into(),

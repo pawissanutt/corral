@@ -178,6 +178,7 @@ pub fn prepared(
         project: project(ctx)?,
     };
     let spec = super::super::launch::HostSpec {
+        profile: Some(resolved.profile.clone()),
         binding: crate::agent::connections::explicit(resolved)?,
         cwd: ctx.store.root().to_path_buf(),
         model: resolved

@@ -59,6 +59,7 @@ pub(super) fn configure(
         revision: "fixture".into(),
         evidence: Some("synthetic".into()),
         candidates: vec![sub.clone(), api.clone()],
+        api_start: None,
         fallback: Some(AvailabilityFallback {
             automatic: true,
             paid_roles,
@@ -183,6 +184,9 @@ fn prepared_with_cap(cap: Option<u64>) -> Prepared {
         policy::ensure_root(&fx.ctx, &container, "pi", &subject).unwrap(),
         link
     );
+    // A subscription-root approval is not itself a paid route change. A refusal
+    // before transfer must still permit the source's normal subscription resume.
+    require_launch(&fx.ctx.store, &container, &sub).unwrap();
     let state = state(&fx, &container);
     assert_eq!(state.turns[0].class, Some(TurnClass::ProviderFailed));
     let owner = PaidBinding {
@@ -353,8 +357,8 @@ fn subscription_transfer_fences_replays_activates_and_rejects_ambiguous_successo
     )
     .unwrap();
     assert!(require_launch(&p.fx.ctx.store, &p.intent.successor.container, &wrong).is_err());
-    require_preflight(&p.fx.ctx.store, AgentRole::Worker, &p.api).unwrap();
-    assert!(require_preflight(&p.fx.ctx.store, AgentRole::Reviewer, &p.api).is_err());
+    require_preflight(&p.fx.ctx.store, AgentRole::Worker, &p.api, "pi").unwrap();
+    assert!(require_preflight(&p.fx.ctx.store, AgentRole::Reviewer, &p.api, "pi").is_err());
     let host = bind_successor(&p);
     let hello = committed(&paid_hello(&p, &host));
     assert_eq!(hello.result["continuation"]["binding_digest"], p.api.digest);
@@ -501,7 +505,7 @@ fn all_container_kinds_refuse_unprepared_api_launches() {
         );
     }
     for role in ROLES {
-        assert!(require_preflight(&fx.ctx.store, role, &api).is_err());
+        assert!(require_preflight(&fx.ctx.store, role, &api, "pi").is_err());
     }
 }
 
