@@ -172,6 +172,45 @@ describe("shared model catalog", () => {
 });
 
 describe("supplemental models", () => {
+  for (const provider of ["openai-codex", "openai"] as const) test(`resolves and lists GPT-6.2 metadata for ${provider} offline`, async () => {
+    const policy = { providers: [provider], modelsPath: null,
+      ...(provider === "openai" ? { apiConnection: "openai-api" as const } : {}) };
+    const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, policy);
+    const listed = await listModels([provider], policy);
+    for (const [id, input, output, cacheRead, cacheWrite] of [
+      ["gpt-6.2-astra", 8, 40, 0.4, 10], ["gpt-6.2-sol", 2, 10, 0.1, 2.5],
+    ] as const) {
+      expect(runtime.getModel(provider, id)).toMatchObject({
+        api: provider === "openai-codex" ? "openai-codex-responses" : "openai-responses",
+        provider, reasoning: true, input: ["text", "image"], maxTokens: 128000,
+        contextWindow: provider === "openai-codex" && id === "gpt-6.2-sol" ? 500000 : 272000,
+        cost: { input, output, cacheRead, cacheWrite },
+        thinkingLevelMap: { off: null, minimal: provider === "openai-codex" ? "low" : null, max: "max" },
+        compat: { supportsMidConvoSystemMessages: true, supportsToolSearch: true },
+      });
+      expect(listed.find(model => model.selector === `${provider}/${id}`)).toEqual({ selector: `${provider}/${id}`, provider, id });
+      expect(runtime.getModel("anthropic", id)).toBeUndefined();
+    }
+    expect(runtime.getModel(provider, "gpt-9-missing")).toBeUndefined();
+    expect(await runtime.getAvailable()).toEqual([]);
+  });
+
+  test("GPT-6.2 model overrides compose before refresh and full entries win", async () => {
+    const modelsPath = config([]);
+    for (const provider of ["openai-codex", "openai"] as const) {
+      writeFileSync(modelsPath, JSON.stringify({ providers: { [provider]: {
+        modelOverrides: { "gpt-6.2-astra": { contextWindow: 400000, cost: { input: 7 } } },
+      } } }));
+      const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, { providers: [provider], modelsPath });
+      expect(runtime.getModel(provider, "gpt-6.2-astra")).toMatchObject({ contextWindow: 400000, cost: { input: 7, output: 40 } });
+      writeFileSync(modelsPath, JSON.stringify({ providers: { [provider]: { models: [{ id: "gpt-6.2-sol" }] } } }));
+      await runtime.refresh();
+      expect(runtime.getModels(provider).filter(model => model.id === "gpt-6.2-sol")).toHaveLength(1);
+      expect(runtime.getModel(provider, "gpt-6.2-sol")?.contextWindow).toBe(128000);
+      expect(runtime.getModel(provider, "gpt-6.2-astra")?.contextWindow).toBe(272000);
+    }
+  });
+
   test("resolves gpt-6.1-terra without models.json and still refuses unknown models", async () => {
     // Given
     const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, { providers: ["openai-codex"], modelsPath: null });

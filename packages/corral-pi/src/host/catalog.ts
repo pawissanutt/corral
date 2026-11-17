@@ -76,13 +76,20 @@ export async function createModelCatalog(
       refreshOnCreate: false,
       allowModelNetwork: false,
     });
-    // Correct the bundled subscription limit before Pi composes models.json, so explicit
-    // user overrides still win. Keep all other model metadata and native behavior intact.
+    // Add missing metadata and correct the old Astra subscription limit before Pi
+    // composes models.json, so explicit user entries and overrides still win.
     const { openaiCodexProvider } = await import("@earendil-works/pi-ai/providers/openai-codex");
-    const codex = openaiCodexProvider();
-    const getModels = () => codex.getModels().map((model) => model.id === "gpt-6-astra"
-      ? { ...model, contextWindow: 600000 } : model);
-    loaded.registerNativeProvider({ ...codex, getModels, getAllModels: getModels });
+    for (const id of ["openai-codex", "openai"] as const) {
+      const provider = id === "openai-codex" ? openaiCodexProvider() : loaded.getProvider(id);
+      if (!provider) throw new ModelCatalogInvalid(`missing native provider ${id}`);
+      const getModels = () => {
+        const listed = provider.getModels().map((model) => id === "openai-codex" && model.id === "gpt-6-astra"
+          ? { ...model, contextWindow: 600000 } : model);
+        const extra = (SUPPLEMENTAL_MODELS[id] ?? []).filter(model => !listed.some(entry => entry.id === model.id));
+        return [...listed, ...extra];
+      };
+      loaded.registerNativeProvider({ ...provider, getModels, getAllModels: getModels });
+    }
     const error = loaded.getError();
     if (error !== undefined) throw new ModelCatalogInvalid(error);
     // Native registration starts an unawaited SDK refresh. It may reload this file after
@@ -100,12 +107,7 @@ export async function createModelCatalog(
   for (const provider of runtime.getProviders()) {
     if (isProviderId(provider.id) && approved.has(provider.id)) {
       const id = provider.id;
-      const getModels = () => {
-        const listed = (metadata.models.get(id) ?? []).filter((model) => model.api === PROVIDERS[id].modelApi);
-        const extra = (SUPPLEMENTAL_MODELS[id] ?? [])
-          .filter((model) => model.api === PROVIDERS[id].modelApi && !listed.some((entry) => entry.id === model.id));
-        return [...listed, ...extra];
-      };
+      const getModels = () => (metadata.models.get(id) ?? []).filter((model) => model.api === PROVIDERS[id].modelApi);
       runtime.registerNativeProvider({
         ...provider,
         auth: id === paidProvider ? {} : provider.auth.oauth ? { oauth: provider.auth.oauth } : {},

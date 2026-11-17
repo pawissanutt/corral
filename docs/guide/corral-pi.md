@@ -1559,6 +1559,16 @@ Cloud launch and model listing share a corral-owned catalog, including models ad
 `$XDG_DATA_HOME/corral/corral-pi/models.json`, or
 `~/.local/share/corral/corral-pi/models.json` when `XDG_DATA_HOME` is unset or relative.
 Ambient Pi configuration (`~/.pi/agent` and `PI_CODING_AGENT_DIR`) is not loaded.
+
+GPT-6.2 Astra and Sol are included as `openai-codex/gpt-6.2-astra` and
+`openai-codex/gpt-6.2-sol` for ChatGPT subscriptions, with corresponding `openai/` IDs
+for the explicit metered API connection. Existing profile defaults are unchanged.
+Select one with `/model` or launch, for example,
+`corral pi --provider openai-codex --model gpt-6.2-sol`.
+The published Pi catalog gives Astra a 272,000-token context and subscription Sol
+500,000 (API Sol: 272,000); both allow up to 128,000 output tokens. These new Astra
+entries do not inherit the older `gpt-6-astra` context correction.
+
 Add a model under an existing subscription provider with that provider's model API;
 no corral source change is needed. Pi's model refresh reloads this file offline.
 Cloud remote catalog requests remain disabled and model endpoint restrictions remain in force.
