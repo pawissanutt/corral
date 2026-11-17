@@ -202,7 +202,7 @@ PM questions in the app Inbox:
 - A deferred question opens on the board as soon as it is asked and stays there while it is
   pending in the pane, including while the PM host is down. The host polls its open records
   (every 2 seconds after a change, backing off to 15) and delivers an app answer through the
-  same follow-up as a `/questions` answer. Withdrawing, cancelling or expiring the pane
+  same steered message as a `/questions` answer. Withdrawing, cancelling or expiring the pane
   question withdraws its record; cancelling the record in the app cancels the pane question.
   Neither is an answer.
 - A synchronous dialog is on the board only while it is open: an app answer closes the dialog
