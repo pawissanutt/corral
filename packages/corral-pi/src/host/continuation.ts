@@ -28,6 +28,7 @@ const Notice = z.object({
       bytes: integer.max(CONTEXT_MAX) }).strict(),
     z.object({ kind: z.literal("fresh-read-only"), reason: text(4096) }).strict(),
     z.object({ kind: z.literal("resumed-session") }).strict(),
+    z.object({ kind: z.literal("api-start") }).strict(),
   ]),
 }).strict();
 
@@ -45,6 +46,9 @@ export function parseNotice(value: unknown, identity: HostIdentity, binding: Con
       || CONNECTIONS[notice.source_connection].vendor !== CONNECTIONS[notice.target_connection].vendor) {
     throw new Error("continuation_invalid: connection or candidate mismatch");
   }
+  if (notice.context.kind === "api-start" && notice.source_connection !== notice.target_connection) {
+    throw new Error("continuation_invalid: API start cannot have a predecessor connection");
+  }
   if (notice.context.kind === "fresh-read-only" && !["reviewer", "planner", "plan_reviewer"].includes(identity.role)) {
     throw new Error("continuation_invalid: role requires committed context");
   }
@@ -55,6 +59,11 @@ export function parseNotice(value: unknown, identity: HostIdentity, binding: Con
 }
 
 export function noticeText(notice: ContinuationNotice): string {
+  if (notice.context.kind === "api-start") {
+    return `corral: metered API start on ${notice.target_connection}: ${notice.reason}; `
+      + `candidate ${notice.candidate ?? "none"}, episode ${notice.episode}; `
+      + `approved allowance ${notice.allowance_nanos} nanos, consumed/reserved ${notice.consumed_or_reserved_nanos} nanos`;
+  }
   return `corral: ${notice.source_connection} → ${notice.target_connection}: ${notice.reason}; `
     + `candidate ${notice.candidate ?? "none"}, episode ${notice.episode}; `
     + `allowance ${notice.allowance_nanos} nanos, consumed/reserved ${notice.consumed_or_reserved_nanos} nanos`;
@@ -96,7 +105,7 @@ export class HostContinuation {
     const binding = o.binding();
     const notice = parseNotice(value, o.identity, binding);
     if (!notice && binding && isApiConnection(binding.connection)) {
-      throw new Error("paid_admission_required: API hello has no continuation notice");
+      throw new Error("paid_admission_required: API hello requires a canonical API-start or continuation approval notice");
     }
     // Verify before publishing the bound state, notice marker or model context.
     const context = notice ? readContext(notice) : undefined;

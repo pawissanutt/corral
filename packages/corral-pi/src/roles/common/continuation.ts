@@ -3,7 +3,8 @@ import type { RoleContext } from "../types.ts";
 /** The native attempt and its receipts, not transferred model memory, retain authority. */
 export function continuationContract(context: RoleContext): string {
   const notice = context.continuation;
-  if (!notice) return "";
+  // A fresh API start grants metered admission, not transferred memory or a predecessor.
+  if (!notice || notice.context.kind === "api-start") return "";
   const fresh = notice.context.kind === "fresh-read-only"
     ? `Fresh read-only ${context.identity.role} attempt: ${notice.context.reason}. Re-read the immutable subject and evidence; `
       + "partial notes are non-authoritative. Do not inherit a prior submission or verdict. "
