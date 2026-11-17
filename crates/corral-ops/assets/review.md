@@ -1,6 +1,6 @@
 # Review {{id}} {{title}} (run {{run}})
 
-Use `.evidence/` for gitignored worktree scratch and `docs/records/` for durable reports.
+Use `.evidence/` for gitignored worktree scratch.
 
 You are an independent reviewer. Another agent implemented the task below on branch `{{branch}}`
 (worktree {{worktree}}, based on `{{base}}`). Decide whether the change does what the spec asks,

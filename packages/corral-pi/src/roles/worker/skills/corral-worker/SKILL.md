@@ -3,7 +3,7 @@ name: corral-worker
 description: Procedure for a dispatched corral coding run - implement one task in its worktree, run the gate, attach evidence and finish with corral done. Use when your prompt carries a corral Run contract.
 ---
 <!-- managed by `corral skill install`; local edits are overwritten -->
-<!-- corral-skill: corral-worker version=0.4.0 sha256=20d820ca4084d510471cc2f8da6b937d0a561efab2a8e3655eb1bf31aeae63af -->
+<!-- corral-skill: corral-worker version=0.4.0 sha256=09760859b2f9b096f142ef5284f21b8dbb22e9f7584b3867e1085eb696e54180 -->
 
 # corral worker
 
@@ -12,33 +12,6 @@ prompt is authoritative: it names your worktree, branch, base, gate command, art
 artifact globs and the `done` result and summary shapes. This skill explains how to carry it out. Where a
 step says "contract step N", follow that numbered step of the Run contract as written; this skill never
 restates or relaxes it. Read `corral <verb> --help` for exact flags.
-
-## Language server workflow
-
-When LSP tools are available, prefer `lsp_definition` and `lsp_references` for symbol
-navigation over grep; use grep for literal text or when the server cannot answer. After
-saving code edits, call `lsp_diagnostics` on the changed files before reaching for a
-compiler subprocess. It waits for indexing and fresh diagnostics with a bounded deadline.
-A timeout is not a clean result: retry when the server is ready or run the cheapest
-targeted compiler check and report the limitation. LSP does not replace the run’s gate
-or required tests. If LSP is disabled or unavailable, use the targeted check directly.
-
-## Test cost and placement
-
-When fixing a test listed in `.config/gate-quarantine.toml`, remove its entry when the fix lands.
-
-Test at the lowest layer that can catch a named defect. A bug fix needs one failing-first
-regression, not a matrix of overlapping end-to-end tests. Keep one end-to-end test per user
-journey; use cheaper unit/contract tests for variants. Refactors add no tests; prose/docs add
-no tests and must never pin wording. Logs and attached command output are valid evidence;
-they need not become committed tests.
-
-Use the smallest fixture that proves the invariant. Prove history independence with exact
-work counters at two small sizes, never large histories. Put race/crash/torture/large-perf
-cases in the explicit slow profile with a one-line reason and an owning-module trigger.
-Review the gate's added-test count and added suite seconds; over 30 seconds requires a
-`Test-cost justification:` line in the change report naming the defect and cheaper
-alternatives considered. Never relax a failing test to go green.
 
 ## Lifecycle
 
@@ -61,8 +34,8 @@ alternatives considered. Never relax a failing test to go green.
    failures it puts outside your scope instead of fixing them. Otherwise follow contract step 2 and
    keep the gate's output in a log file for step 3; if you pipe it through `tee`, set
    `set -o pipefail` first so the gate's exit status is not masked.
-5. **Attach proof** (contract step 3). Use gitignored `.evidence/` for scratch and tracked
-   `docs/records/` for durable reports. Give each artifact a title that names what it proves. List the
+5. **Attach proof** (contract step 3). Use gitignored `.evidence/` for scratch; commit a durable
+   report only where the project keeps its records. Give each artifact a title that names what it proves. List the
    refs you attached with `corral artifact list --task <id> --json`; a ref is what
    `corral artifact set-tier <ref> keep` takes when a log that would otherwise be eligible for
    retention is the proof you need to keep.
@@ -91,7 +64,7 @@ alternatives considered. Never relax a failing test to go green.
 
 The default lifecycle. For a bug fix, show one regression failing before the fix and passing
 after it. Reuse existing tests and attach targeted command output for other criteria; do not
-add tests merely to increase evidence volume. Keep every file inside the module ceiling.
+add tests merely to increase evidence volume. Keep every file inside the project's module ceiling.
 
 ### Spike or research
 
@@ -105,8 +78,7 @@ findings). Contract steps 2 to 5 apply as for any other run.
 ### Docs
 
 Check every claim against the code or `--help` output, not memory, and run the project's docs checker
-if it has one (corral's gate validates every documented `corral` command and flag). Prose changes need
-no new tests; never pin wording with a test.
+if it has one. Prose changes need no new tests; never pin wording with a test.
 
 ### Flaky-test fix
 
@@ -137,23 +109,16 @@ and "Previous run" sections naming the earlier branch.
 
 ## Known failure modes
 
-Each item cites the corral project lesson or run record it comes from.
-
-- **Treating a green gate as acceptance.** A passing gate missed a reproduced criterion variant twice;
-  map every criterion, including auxiliary and automatic variants, to its own check. Lesson
-  `green-gate-not-acceptance` (T-093 R3, T-177 R1).
-- **Dropping the base's invariant during a conflict.** T-177 R1 conflicted with main at the same
-  boundaries main had just changed; review required keeping both invariants plus a fresh gate on the
-  resolved tree. Lesson `plan-target-rebase-preserves-execution-snapshot`.
-- **Crossing the size ceiling after a clean rebase.** T-026 went through three integration-conflict
-  rounds, then was rejected at 821 SLOC despite a clean rebase and a green gate
-  (docs/records/T-045-per-task-automation-report.md, row E2). Check file sizes on the rebased tree.
-- **Testing only the main path.** A foreign-session sync passed worker-path tests but still mutated
-  state on a gate-only run. Assert unchanged state for every variant the criterion names. Lesson
-  `foreign-session-sync-is-noop` (T-093 R3).
-- **Sleeps or zero grace periods in race tests.** Rejected in review; the accepted fixes used barriers,
-  fake servers and explicit timestamps. Lesson `race-tests-use-barriers-and-explicit-clocks` (T-093 R3);
-  accepted deterministic fixes T-061, T-074 and T-076.
+- **Treating a green gate as acceptance.** A passing gate can miss a criterion variant; map every
+  criterion, including auxiliary and automatic variants, to its own check.
+- **Dropping the base's invariant during a conflict.** When your change conflicts with the base at
+  boundaries the base just changed, keep both invariants and run a fresh gate on the resolved tree.
+- **Crossing the module ceiling after a clean rebase.** A clean rebase and a green gate do not prove
+  the rebased files still fit the project's module ceiling. Check file sizes on the rebased tree.
+- **Testing only the main path.** Assert unchanged state for every variant the criterion names, not
+  only the path your change targets.
+- **Sleeps or zero grace periods in race tests.** Use barriers, fake servers and explicit timestamps
+  instead.
 - **Hanging on a foreground command.** A pager or hung test makes the run look idle; the watchdog flags
   it as stuck (docs/guide/automation.md, "The watchdog: stuck commands"). Contract step 2 covers stdin.
 

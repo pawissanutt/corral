@@ -43,6 +43,7 @@ not a workspace member, and not built or tested by `scripts/gate.sh`. It depends
 - Reviewers flag duplicates, prose pins, oversized fixtures and unclassified slow tests.
   Request tests only for a named defect, never for evidence volume. Review the gate's added
   count/seconds; >30s needs a `Test-cost justification:` in the change report.
+- When fixing a test listed in `.config/gate-quarantine.toml`, remove its entry when the fix lands.
 
 ## Build and test
 
