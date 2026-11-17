@@ -3680,11 +3680,12 @@ Check storage integrity, report or reclaim storage by class, and take verified b
 Usage: corral storage [OPTIONS] <COMMAND>
 
 Commands:
-  check    Verify database integrity and that every live blob decodes to its hash; exits 1 on a problem
-  gc       Report storage by class with bytes (--dry-run changes nothing) or reclaim it (--yes)
-  outputs  Inspect or reclaim only explicitly declared private rebuildable outputs of inactive tasks
-  backup   Copy the database and every live blob into DIR/.corral under a storage lease, each blob verified against its hash; the copy opens with `corral --root DIR`
-  help     Print this message or the help of the given subcommand(s)
+  check            Verify database integrity and that every live blob decodes to its hash; exits 1 on a problem
+  repair-metadata  Repair stale sequence and derived status-count metadata; requires the owner's local CLI
+  gc               Report storage by class with bytes (--dry-run changes nothing) or reclaim it (--yes)
+  outputs          Inspect or reclaim only explicitly declared private rebuildable outputs of inactive tasks
+  backup           Copy the database and every live blob into DIR/.corral under a storage lease, each blob verified against its hash; the copy opens with `corral --root DIR`
+  help             Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -3697,6 +3698,19 @@ Options:
 Verify database integrity and that every live blob decodes to its hash; exits 1 on a problem
 
 Usage: corral storage check [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral storage repair-metadata`
+
+```text
+Repair stale sequence and derived status-count metadata; requires the owner's local CLI
+
+Usage: corral storage repair-metadata [OPTIONS]
 
 Options:
       --json

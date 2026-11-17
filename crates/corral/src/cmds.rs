@@ -385,7 +385,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         Cmd::Init => init(&root, &entry),
         Cmd::Import(args) => crate::import_cmd::run(&root, args, &entry),
         Cmd::Export { what } => crate::export_cmd::run(&open(&root)?, what),
-        Cmd::Storage { cmd } => crate::storage_cmd::run(&open(&root)?, cmd),
+        Cmd::Storage { cmd } => crate::storage_cmd::run(&start_dir(&root)?, cmd, &entry),
         Cmd::Migrate(args) => {
             crate::migrate_cmd::run(&corral_core::Store::find_root(&start_dir(&root)?)?, args)
         }

@@ -91,7 +91,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             StorageCmd::Check { .. } => Read,
             StorageCmd::Gc { yes, .. } => read_unless(*yes),
             StorageCmd::Outputs { yes, due, .. } => read_unless(*yes || *due),
-            StorageCmd::Backup { .. } => Refused,
+            StorageCmd::Backup { .. } | StorageCmd::RepairMetadata { .. } => Refused,
         },
         Cmd::Assistant(args) => match &args.cmd {
             AssistantCmd::List { .. } | AssistantCmd::Show { .. } => Read,
@@ -418,6 +418,15 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
 mod planning_tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn metadata_repair_is_not_an_assistant_or_planning_command() {
+        let cli =
+            crate::Cli::try_parse_from(["corral", "storage", "repair-metadata", "--json"]).unwrap();
+        let cmd = cli.cmd.unwrap();
+        assert_eq!(of(&cmd, "A-1"), CommandClass::Refused);
+        assert!(!planning_safe(&cmd));
+    }
 
     #[test]
     fn managed_assistant_cannot_reach_owner_handoff_entry() {

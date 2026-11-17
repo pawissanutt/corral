@@ -736,6 +736,7 @@ corral storage check [--json]
 corral storage gc --dry-run [--json]
 corral storage gc --yes [--json]
 corral storage backup DIR [--json]
+corral storage repair-metadata [--json]
 ```
 
 `storage check` verifies database integrity and reads every live blob back to its hash; it exits 1
@@ -743,6 +744,56 @@ on a problem. `storage backup DIR` copies the database and every blob it referen
 `DIR/.corral` under a storage lease, verifying each hash, so blob GC can't delete anything the copy
 needs; `corral --root DIR storage check` verifies the copy. `storage gc` is covered in
 [cleanup](cleanup.md#corral-storage-gc).
+
+### Recovering stale storage metadata
+
+`storage repair-metadata` is an explicit local owner-only recovery command, not an automatic
+startup repair. It refuses PM, worker and assistant shells and app commands. It opens without
+observing configuration edits and validates database integrity. It can repair a change-sequence
+counter that trails committed history and rebuild derived status counts from authoritative task
+heads. Any other integrity problem refuses the entire repair. It never lowers the counter, deletes
+history or changes task status; one transaction repairs metadata and appends a
+`storage_metadata_repaired` audit event and change. The audit records old/final sequences and,
+when counts are rebuilt, their before/after values. Already consistent metadata is a no-op.
+JSON reports `previous_change_seq`, `change_seq` (including the audit change), and
+`status_counts_rebuilt`. Count-only repairs also append an audit event and advance the sequence.
+
+For `UNIQUE constraint failed: changes.seq`, first preserve the evidence and investigate the
+writer. Normal operations commit their change row and counter together; direct database edits
+bypass that invariant. A metadata repair does **not** undo or validate the intent of an external
+task or record edit. Never edit the live database with SQL or delete the colliding change.
+
+Run recovery from an owner terminal, replacing the workspace and installed service name below.
+Close other corral clients and stop the daemon to prevent background work resuming mid-recovery.
+The snapshot uses SQLite's online backup API with a read-only source, so it includes committed
+WAL data; do not copy just `corral.db` while any process may still have it open.
+
+```sh
+set -e
+export CORRAL_WORKSPACE=/path/to/workspace
+export CORRAL_SERVICE=corrald@YOUR-WORKSPACE-ID.service
+systemctl --user stop "$CORRAL_SERVICE"
+export CORRAL_RECOVERY="$(mktemp -d "${TMPDIR:-/tmp}/corral-sequence-recovery-XXXXXXXX")"
+python3 - <<'PY'
+import os, pathlib, sqlite3
+source = pathlib.Path(os.environ["CORRAL_WORKSPACE"]) / ".corral/db/corral.db"
+snapshot = pathlib.Path(os.environ["CORRAL_RECOVERY"]) / "corral-before-repair.db"
+snapshot.touch(mode=0o600, exist_ok=False)
+with sqlite3.connect(source.as_uri() + "?mode=ro", uri=True) as src:
+    with sqlite3.connect(snapshot) as dst:
+        src.backup(dst)
+print(snapshot)
+PY
+corral --root "$CORRAL_WORKSPACE" storage repair-metadata --json
+corral --root "$CORRAL_WORKSPACE" storage check --json
+systemctl --user start "$CORRAL_SERVICE"
+corral --root "$CORRAL_WORKSPACE" daemon status
+```
+
+If snapshotting, repair or checking fails, leave the daemon stopped and investigate before
+continuing. The snapshot above preserves the database only; retain the existing blob store and
+configuration too. After recovery, use `storage backup DIR` for a verified full storage backup.
+Restoring a snapshot discards subsequent writes and must not be done while clients are open.
 
 ### Blob GC
 
