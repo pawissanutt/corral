@@ -9,7 +9,7 @@ import type { Fetch } from "../auth/types.ts";
 import { createModelCatalog } from "./catalog.ts";
 import { type ConnectionBinding, parseBinding } from "./connections.ts";
 import { guardedFetch } from "./restrict.ts";
-import { withProviderFailures } from "./provider-failure.ts";
+import { normalizeFailure, withProviderFailures } from "./provider-failure.ts";
 
 /** Invoked at EACH physical POST, including a pinned client's internal compatibility retry. */
 export interface ApiPermit { settle(message: AssistantMessage): Promise<void> }
@@ -59,7 +59,7 @@ export async function createApiCatalog(
     // Auth is pinned, not merely prefix checked: remove OAuth, env, headers and base-URL overrides.
     // Each actual POST gets its own permit. Failed/compatibility attempts stay reserved;
     // only the last physical attempt can own the successful stream completion.
-    const admission: { permit: ApiPermit | undefined } = { permit: undefined };
+    const admission: { permit: ApiPermit | undefined; refusal?: string } = { permit: undefined };
     const fetch: Fetch = async (input, init) => {
       if (await key() !== apiKey) throw new Error("credentials_unavailable: selected API credential changed before dispatch");
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
@@ -80,7 +80,18 @@ export async function createApiCatalog(
         throw new Error("connection_invalid: request changed the approved model/output bound");
       }
       if (!admit) requirePaidAdmission(connection);
-      else admission.permit = await admit({ binding, model, context, options: { ...options, maxTokens: output } }) || undefined;
+      else {
+        try {
+          admission.permit = await admit({ binding, model, context, options: { ...options, maxTokens: output } }) || undefined;
+        } catch (error) {
+          // SDKs can replace a fetch exception with generic connection prose. Retain only
+          // fixed local diagnostics, never the exception suffix or provider/credential text.
+          admission.refusal = error instanceof Error && error.message.startsWith("budget_exhausted:")
+            ? "budget_exhausted: canonical API allowance refused this request; review the approved spending bound"
+            : "paid_admission_required: canonical per-request API approval refused; check the active episode and binding";
+          throw error;
+        }
+      }
       return guarded.fetch(input, init);
     };
     const pinnedOptions = {
@@ -94,6 +105,10 @@ export async function createApiCatalog(
         // Provider/SDK error bodies may echo request auth; neither UI nor receipts may retain it.
         if (event.type === "error") {
           const error: typeof event.error = JSON.parse(JSON.stringify(event.error).replaceAll(apiKey, "<redacted>"));
+          if (admission.refusal) {
+            error.errorMessage = admission.refusal;
+            Object.assign(error, { providerFailure: normalizeFailure(connection, { message: admission.refusal }) });
+          }
           yield { ...event, error };
         } else yield event;
       }

@@ -7,9 +7,10 @@ import * as sdk from "@earendil-works/pi-coding-agent";
 import { EventLog } from "../src/bridge/events.ts";
 import { bindingDigest } from "../src/host/connections.ts";
 import type { ConnectionBinding } from "../src/host/connections.ts";
-import { CONTINUE_ASSISTANT_EXIT, HostContinuation, parseNotice, readContext } from "../src/host/continuation.ts";
+import { CONTINUE_ASSISTANT_EXIT, HostContinuation, noticeText, parseNotice, readContext } from "../src/host/continuation.ts";
 import type { ContinuationNotice } from "../src/host/continuation.ts";
 import { loadModules } from "../src/host/modules.ts";
+import { continuationContract } from "../src/roles/common/continuation.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
 import { HostSession } from "../src/host/session.ts";
 import type { HostSessionOptions } from "../src/host/session.ts";
@@ -63,6 +64,24 @@ test("notice parsing refuses stale authority and malformed native fields", () =>
   }
 });
 
+test("API-first notices admit native roles without claiming a predecessor or transferred context", () => {
+  const start = { ...notice, source_connection: binding.connection, context: { kind: "api-start" as const } };
+  for (const role of ["worker", "reviewer", "planner", "plan_reviewer", "pm", "assistant"] as const) {
+    const current = { ...identity, role };
+    expect(parseNotice(start, current, binding)).toEqual(start);
+    expect(readContext(start)).toBeUndefined();
+    expect(continuationContract({ identity: current, cwd: "/fixture", model: binding.model, continuation: start })).toBe("");
+  }
+  for (const invalid of [
+    { ...start, source_connection: "openai-subscription" },
+    { ...start, source_connection: "anthropic-api" },
+    { ...start, context: { kind: "api-start", reason: "predecessor" } },
+  ]) expect(() => parseNotice(invalid, identity, binding)).toThrow("continuation_invalid");
+  expect(noticeText(start)).toContain("metered API start");
+  expect(noticeText(start)).toContain("approved allowance");
+  expect(noticeText(start)).not.toContain("→");
+});
+
 test("context reader verifies artifact bytes rather than a manifest digest", () => {
   const dir = mkdtempSync(join(tmpdir(), "corral-continuation-context-"));
   const path = join(dir, "context");
@@ -82,7 +101,7 @@ test("context reader verifies artifact bytes rather than a manifest digest", () 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("committed hello refuses invalid paid context before binding and consumes its switch notice once", async () => {
+test("committed hello refuses invalid paid context before binding and consumes its API-start notice once", async () => {
   const assets = buildFixtureInstall();
   const dir = mkdtempSync(join(tmpdir(), "corral-continuation-hello-"));
   let host: HostSession | undefined;
@@ -113,8 +132,7 @@ test("committed hello refuses invalid paid context before binding and consumes i
       expect(host.bound).toBeFalse();
     }
     expect(fake.calls().some(call => call.envelope.payload.kind === "turn_started")).toBeFalse();
-    writeFileSync(contextPath, manifest);
-    client.continuation = checkpoint;
+    client.continuation = { ...notice, source_connection: binding.connection, context: { kind: "api-start" } };
     process.stderr.write = ((chunk: string | Uint8Array) => { shown.push(String(chunk)); return true; }) as typeof process.stderr.write;
     await hello();
     host.markAttached("headless");

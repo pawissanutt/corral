@@ -88,6 +88,14 @@ for (const connection of ["anthropic-api", "openai-api"] as const) test(`${conne
     expect(failure.stopReason).toBe("error");
     expect(JSON.stringify(failure)).not.toContain(KEY);
     expect(admitted).toBe(2); expect(sent).toBe(2); // No hidden Pi/SDK transient retries.
+    const exhausted = await createApiCatalog(selectedCredentials, selected, send, async () => {
+      throw new Error(`budget_exhausted: synthetic private diagnostic ${KEY}`);
+    });
+    const blocked = await exhausted.models.streamSimple(exhausted.model, context).result();
+    expect(blocked.stopReason).toBe("error");
+    expect(blocked.errorMessage).toContain("budget_exhausted");
+    expect(JSON.stringify(blocked)).not.toContain(KEY);
+    expect(sent).toBe(2); // An approved startup notice never replaces per-POST admission.
     expect(readFileSync(subscriptions.file)).toEqual(before);
     await store.delete(provider);
     expect(subscriptions.present()).toBe(true);
