@@ -39,25 +39,15 @@ pub fn preflight(ctx: &Ctx, bootstrap: Option<&ResolvedProfile>) -> Result<()> {
     Ok(())
 }
 
-/// Stable workspace identity, deliberately independent of the mutable approved scope.
+/// Stable workspace identity, deliberately independent of automation grants.
 /// Empty project is reserved for workspace roles, never a configured project name.
 /// Legacy project-bound PM records remain readable until their next launch.
 pub(crate) const WORKSPACE: &str = "";
 
+/// Conversation visibility follows workspace configuration, not executor authorization.
 pub(crate) fn projects(store: &corral_core::Store) -> Result<std::collections::BTreeSet<String>> {
     let config = store.config_layers()?.config()?;
-    let effective = store.effective_operating_policy()?;
-    ensure!(
-        effective.authorization.is_some(),
-        "pm_scope_unapproved: approve a scope with `corral mode autopilot --project <project>`; review the preview and repeat with --confirm <digest>"
-    );
-    let scope = &config.automation.scope;
-    Ok(scope
-        .projects
-        .keys()
-        .chain(scope.tasks.values().map(|task| &task.project))
-        .cloned()
-        .collect())
+    Ok(config.projects.keys().cloned().collect())
 }
 
 pub(crate) fn contains(
@@ -71,12 +61,8 @@ pub(crate) fn contains(
     Ok(project.is_some_and(|project| projects(store).is_ok_and(|set| set.contains(project))))
 }
 
-/// Validate approval without selecting one project's identity or guidance.
-pub fn project(ctx: &Ctx) -> Result<String> {
-    ensure!(
-        !projects(&ctx.store)?.is_empty(),
-        "pm_scope_empty: add and approve a project with `corral mode autopilot --project <project>`; review the preview and repeat with --confirm <digest>"
-    );
+/// Select the workspace identity even before any projects or automation grants exist.
+pub fn project(_ctx: &Ctx) -> Result<String> {
     Ok(WORKSPACE.into())
 }
 
@@ -96,7 +82,7 @@ pub fn profile(ctx: &Ctx) -> Result<ResolvedProfile> {
 }
 
 /// The configured PM profile with `overrides` applied, through the same eligibility, harness,
-/// scope, asset and credential checks as `corral pm` and resume.
+/// asset and credential checks as `corral pm` and resume.
 pub fn profile_with(ctx: &Ctx, overrides: &Overrides) -> Result<ResolvedProfile> {
     let config = ctx.store.config_layers()?.config()?;
     config.check_profile_eligibility(
@@ -494,9 +480,18 @@ pub(crate) mod tests {
             )
             .unwrap();
             assert_eq!(input, launch_input);
-            assert_eq!(input["projects"].as_object().unwrap().len(), 1);
-            assert!(input["projects"].get("other").is_some());
-            assert!(input["projects"].get("corral").is_none());
+            let configured = fx.ctx.store.config_layers().unwrap().config().unwrap();
+            assert_eq!(
+                input["projects"]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                configured
+                    .projects
+                    .keys()
+                    .collect::<std::collections::BTreeSet<_>>()
+            );
             assert_eq!(bootstrap.project_dir.as_deref(), Some(fx.root()));
             assert!(bootstrap.project.is_empty());
             assert_eq!(bootstrap.capabilities.unwrap().project_text, Some(true));

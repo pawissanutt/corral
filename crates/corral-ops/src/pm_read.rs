@@ -265,13 +265,13 @@ pub fn brief(ctx: &Ctx) -> Result<PmReadout> {
     })
 }
 
-/// The workspace PM agent's bounded next card, independent of its session.
+/// The workspace PM agent's bounded next card across configured projects, independent of its session.
 pub fn agent_next(ctx: &Ctx) -> Result<Value> {
     let projects = crate::agent::hooks::pm::projects(&ctx.store)?;
     agent_next_for_projects(ctx, &projects)
 }
 
-/// The workspace PM agent's bounded brief, including its observational digest.
+/// The workspace PM agent's bounded brief across configured projects, including its observational digest.
 pub fn agent_brief(ctx: &Ctx) -> Result<Value> {
     let projects = crate::agent::hooks::pm::projects(&ctx.store)?;
     agent_brief_for_projects(ctx, crate::agent::hooks::pm::WORKSPACE, &projects)
