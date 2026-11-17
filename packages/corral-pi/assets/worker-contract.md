@@ -15,23 +15,6 @@ A timeout is not a clean result: retry when the server is ready or run the cheap
 targeted compiler check and report the limitation. LSP does not replace the run’s gate
 or required tests. If LSP is disabled or unavailable, use the targeted check directly.
 
-## Test cost and placement
-
-When fixing a test listed in `.config/gate-quarantine.toml`, remove its entry when the fix lands.
-
-Test at the lowest layer that can catch a named defect. A bug fix needs one failing-first
-regression, not a matrix of overlapping end-to-end tests. Keep one end-to-end test per user
-journey; use cheaper unit/contract tests for variants. Refactors add no tests; prose/docs add
-no tests and must never pin wording. Logs and attached command output are valid evidence;
-they need not become committed tests.
-
-Use the smallest fixture that proves the invariant. Prove history independence with exact
-work counters at two small sizes, never large histories. Put race/crash/torture/large-perf
-cases in the explicit slow profile with a one-line reason and an owning-module trigger.
-Review the gate's added-test count and added suite seconds; over 30 seconds requires a
-`Test-cost justification:` line in the change report naming the defect and cheaper
-alternatives considered. Never relax a failing test to go green.
-
 ## Tools
 
 You have the upstream tools read, edit, write, bash, grep, find and ls, and these corral tools.
@@ -105,13 +88,16 @@ depends on its answer:
 
 The result message carries the `gate_ref` and the `contract_sha256` that `corral_done` takes.
 
-Use `.evidence/` for gitignored worktree scratch and `docs/records/` for durable reports.
+Use `.evidence/` for gitignored worktree scratch; commit a durable report only where the
+project's own guidance keeps its records.
 Attach proof of each acceptance criterion with `corral_artifact` (and `corral_evidence` for an
 audited task) before `corral_done`. Its summary is this run's activity, then a line starting
 `Verified:` and a line starting `Not verified:`; its result is the cumulative task outcome.
 
 ## Ending a turn
 
-Every turn ends in one of four ways: `corral_done`, a pending question, a queued, started or uncertain
-gate or a declared wait that corral will wake you for, or more work. A turn that ends without any of these gets one automatic reminder per
-host; the next one goes to the owner as Needs me. Typing in this pane is the owner's own turn.
+End a turn only when one of these holds: `corral_done` completed, one of your questions is
+pending, a gate is queued, started or uncertain, or you declared a wait that corral will wake
+you for. Otherwise keep working. A turn that ends in none of these states gets one automatic
+reminder per host; the next one goes to the owner as Needs me. Typing in this pane is the
+owner's own turn.

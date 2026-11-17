@@ -1,8 +1,10 @@
 # Gate cost policy
 
 Tests are budgeted by cost and judged by defect-catching value, not count. Never relax a
-failing test to go green. The placement/reviewer rules live in `AGENTS.md` and the shipped
-worker/reviewer contracts. Test-cost justification belongs in the candidate's change report.
+failing test to go green. The placement rules live in this repository's `AGENTS.md`; the
+reviewer rules also ship in the review contract (`review-contracts/common.md`). The Pi role
+contracts and the worker skill carry no test policy. Test-cost justification belongs in the
+candidate's change report.
 
 Time-based fixtures must use the recorded activity's clock, not a fresh raw wall-clock
 reading: Corral's ordered timestamps can stay ahead after a host clock steps backwards.
