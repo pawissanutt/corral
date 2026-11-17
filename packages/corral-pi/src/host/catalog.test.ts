@@ -183,7 +183,7 @@ describe("supplemental models", () => {
       expect(runtime.getModel(provider, id)).toMatchObject({
         api: provider === "openai-codex" ? "openai-codex-responses" : "openai-responses",
         provider, reasoning: true, input: ["text", "image"], maxTokens: 128000,
-        contextWindow: provider === "openai-codex" && id === "gpt-6.2-sol" ? 500000 : 272000,
+        contextWindow: provider === "openai-codex" ? (id === "gpt-6.2-astra" ? 600000 : 500000) : 272000,
         cost: { input, output, cacheRead, cacheWrite },
         thinkingLevelMap: { off: null, minimal: provider === "openai-codex" ? "low" : null, max: "max" },
         compat: { supportsMidConvoSystemMessages: true, supportsToolSearch: true },
@@ -207,7 +207,7 @@ describe("supplemental models", () => {
       await runtime.refresh();
       expect(runtime.getModels(provider).filter(model => model.id === "gpt-6.2-sol")).toHaveLength(1);
       expect(runtime.getModel(provider, "gpt-6.2-sol")?.contextWindow).toBe(128000);
-      expect(runtime.getModel(provider, "gpt-6.2-astra")?.contextWindow).toBe(272000);
+      expect(runtime.getModel(provider, "gpt-6.2-astra")?.contextWindow).toBe(provider === "openai-codex" ? 600000 : 272000);
     }
   });
 

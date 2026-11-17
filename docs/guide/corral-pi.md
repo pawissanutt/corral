@@ -1565,9 +1565,11 @@ GPT-6.2 Astra and Sol are included as `openai-codex/gpt-6.2-astra` and
 for the explicit metered API connection. Existing profile defaults are unchanged.
 Select one with `/model` or launch, for example,
 `corral pi --provider openai-codex --model gpt-6.2-sol`.
-The published Pi catalog gives Astra a 272,000-token context and subscription Sol
-500,000 (API Sol: 272,000); both allow up to 128,000 output tokens. These new Astra
-entries do not inherit the older `gpt-6-astra` context correction.
+Subscription contexts match the previous models: Astra 600,000 tokens and Sol
+500,000. Astra's 600,000 is a local owner-selected limit above Pi's published
+272,000-token catalog value, not a newly verified provider guarantee. Both API
+entries retain the published 272,000-token context. All allow up to 128,000 output
+tokens; explicit `models.json` overrides still win.
 
 Add a model under an existing subscription provider with that provider's model API;
 no corral source change is needed. Pi's model refresh reloads this file offline.

@@ -4,11 +4,12 @@ import type { ProviderId } from "../auth/providers.ts";
 
 // Published metadata: https://pi.dev/models/openai-codex/gpt-6-2-astra and
 // https://pi.dev/models/openai-codex/gpt-6-2-sol (API variants under /models/openai/).
+// Owner-selected subscription contexts match the previous Astra (600k) and Sol (500k).
 const codexModels: readonly Model<"openai-codex-responses">[] = [
   {
     id: "gpt-6.2-astra", name: "GPT-6.2 Astra", api: "openai-codex-responses", provider: "openai-codex",
     baseUrl: "https://chatgpt.com/backend-api", reasoning: true, input: ["text", "image"],
-    contextWindow: 272000, maxTokens: 128000,
+    contextWindow: 600000, maxTokens: 128000,
     cost: { input: 8, output: 40, cacheRead: 0.4, cacheWrite: 10,
       tiers: [{ inputTokensAbove: 272000, input: 16, output: 60, cacheRead: 0.8, cacheWrite: 20 }] },
     thinkingLevelMap: { off: null, minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
