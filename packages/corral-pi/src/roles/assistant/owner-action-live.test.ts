@@ -258,7 +258,8 @@ test("live private-pane owner authority: landing, synthetic inputs, do it, confi
     } }] });
     const dialogText = "What next?: Land\nPlease proceed";
     const beforeDialog = journal().length;
-    await turn("Ask me what to do", [dialog("dialog-answer"), { text: "Understood." }, { text: "Noted." }]);
+    // The recorded answer steers in beside the tool result, so one reply reads both.
+    await turn("Ask me what to do", [dialog("dialog-answer"), { text: "Understood." }]);
     const entry = journal().slice(beforeDialog).find((e) => e.source === "dialog");
     expect(entry?.text).toBe(dialogText);
     expect(entry?.id).toMatch(new RegExp(`^${fixture.session}/g${identity.generation}/i[0-9]+$`));
