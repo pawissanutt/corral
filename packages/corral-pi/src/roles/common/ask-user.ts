@@ -9,9 +9,12 @@ export const ASK_USER_GUIDELINES = [
   "An unavailable UI, cancellation, timeout or missing response is never approval. State the limitation and unresolved decision truthfully; do not proceed with dependent work or repeatedly bury/re-ask the question in prose.",
 ];
 
+/** The pane PM's questions are also board records the owner can answer in the app (host/owner-ask-mirror.ts). */
+const PM_INBOX = "Your ask_user questions also open in the owner's Inbox in the Corral app. The owner may answer in this pane or in the app; the first answer recorded is the one you receive, as a dialog result or as the answer follow-up. A dialog that closes unanswered leaves the Inbox, so use nonBlocking:true for anything the owner may answer later: it stays in the Inbox until answered, cancelled or withdrawn.";
+
 export function askUserContract(context: RoleContext): string {
   if (!context.capabilities?.enabled.includes("ask_user")) {
     return "ask_user is disabled for this generation. State any unresolved owner decision and the UI limitation truthfully; no missing answer is approval. Do not repeatedly re-ask in prose.";
   }
-  return "## Owner questions\n\n" + ASK_USER_GUIDELINES.join("\n\n");
+  return "## Owner questions\n\n" + [...ASK_USER_GUIDELINES, ...(context.identity.role === "pm" ? [PM_INBOX] : [])].join("\n\n");
 }

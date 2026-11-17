@@ -190,8 +190,29 @@ Lifecycle and recovery:
   generation journals that genuine saved selection in its own generation before delivery.
   The persisted user message is the consumption receipt: a consumed answer is never resent,
   even after compaction/reload/resume. Delivery failures leave an answer-recorded indicator;
-  `/questions` or resume reconciles it without asking for another answer. Terminal records
-  remain in the session journal, not a second board-question store.
+  `/questions` or resume reconciles it without asking for another answer. An assistant's
+  terminal records remain in the session journal, not a second board-question store.
+
+PM questions in the app Inbox:
+
+- A pane PM's `ask_user` questions are also canonical owner asks (`pm/Q<n>`, the `owner_ask`
+  operation), so the app Inbox lists them as **PM asks** and the owner can answer there. The
+  pane and the app answer the same revision; the first recorded answer is what the model
+  receives, and a pane answer that loses that race is replaced by the board's answer.
+- A deferred question opens on the board as soon as it is asked and stays there while it is
+  pending in the pane, including while the PM host is down. The host polls its open records
+  (every 2 seconds after a change, backing off to 15) and delivers an app answer through the
+  same follow-up as a `/questions` answer. Withdrawing, cancelling or expiring the pane
+  question withdraws its record; cancelling the record in the app cancels the pane question.
+  Neither is an answer.
+- A synchronous dialog is on the board only while it is open: an app answer closes the dialog
+  and becomes its result, and a dialog that closes unanswered withdraws its records.
+- When corral is unreachable the question still works in the pane, and the host retries the
+  mirror on its next poll (`owner_question_mirror_error` in the bridge events).
+- A pending record blocks `corral pm rotate` as `board_question`, alongside `owner_dialog`.
+  If a host could not withdraw a record before it stopped, cancel it from the Inbox.
+- Assistant questions are not mirrored: an assistant's pane answer is cited owner input, and
+  a daemon-hosted assistant already asks through the board alone.
 
 Unavailable/disabled UI, missing answers, cancellation and timeout are never approval.
 Report the limitation and unresolved decision truthfully; do not silently proceed or

@@ -4,6 +4,7 @@ import { OWNER_INPUT_TEXT_MAX } from "../roles/assistant/owner-action.ts";
 import { ASK_USER_GUIDELINES } from "../roles/common/ask-user.ts";
 import { AskDialog, type Choice, type DialogAnswer, type DialogOptions, type DialogQuestion, type DialogResult } from "./ask-user-dialog.ts";
 import type { ChoiceQuestion, PendingQuestions } from "./pending-questions.ts";
+import { mirroredDialog, type QuestionMirror } from "./owner-ask-mirror.ts";
 
 const choice = Type.Union([
   Type.String({ minLength: 1, maxLength: 300 }),
@@ -110,9 +111,11 @@ export type RemoteAsk = (id: string, params: unknown, signal?: AbortSignal) => P
   content: { type: "text"; text: string }[]; details: Record<string, unknown>;
 }>;
 
-/** Dialogs are local to the owner's interactive pane, never a worker question flow. */
+/** Dialogs are local to the owner's interactive pane, never a worker question flow. A `mirror` (the
+ * pane PM) also opens each question in the owner's Inbox, where the app can answer it first. */
 export function askUserTool(record: (answer: string) => Promise<string>, pending?: Pick<PendingQuestions, "ask" | "withdraw">,
-  dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource, remote?: RemoteAsk): ToolDefinition {
+  dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource, remote?: RemoteAsk,
+  mirror?: QuestionMirror): ToolDefinition {
   return {
     name: "ask_user", label: "Ask the owner", exposure: "model-only", executionMode: "sequential",
     description: "Ask the owner 1-4 focused choice questions together in one dialog instead of asking only in chat; "
@@ -156,14 +159,17 @@ export function askUserTool(record: (answer: string) => Promise<string>, pending
           if (new Set(q.options).size !== q.options.length) throw new Error("Options must be distinct");
         }
         const q = pending.ask(_id, params.questions, params.key, params.supersedes);
-        return { content: [{ type: "text", text: `${q.id}: ${q.status}. Owner UI: /questions. Continue only independent work; no answer authorizes anything.` }],
+        return { content: [{ type: "text", text: `${q.id}: ${q.status}. Owner UI: /questions${mirror ? " and the app Inbox" : ""}. Continue only independent work; no answer authorizes anything.` }],
           details: { id: q.id, status: q.status, expires: q.expires } };
       }
       if (dialogBusy()) return { ...noAnswer(), details: { status: "no answer", reason: "another owner/permission dialog is open" } };
       const questions = params.questions.map(normalize);
-      const shown = (await askDialog(ctx.ui, questions, signal, presentation?.()))?.answers;
-      if (signal?.aborted && shown === undefined) return noAnswer();
-      const raw = shown ?? await sequential(ctx.ui, questions, signal);
+      const show = async (shownSignal?: AbortSignal): Promise<(DialogAnswer | undefined)[]> => {
+        const shown = (await askDialog(ctx.ui, questions, shownSignal, presentation?.()))?.answers;
+        if (shown !== undefined) return shown;
+        return shownSignal?.aborted ? questions.map(() => undefined) : sequential(ctx.ui, questions, shownSignal);
+      };
+      const raw = mirror ? await mirroredDialog(mirror, _id, questions, signal, show) : await show(signal);
       const answers: Answer[] = [];
       const unanswered: string[] = [];
       raw.forEach((a, i) => {
