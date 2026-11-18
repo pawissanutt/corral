@@ -29,7 +29,7 @@ test("early strict/standard static profiles retain raw prompts and schemas for e
       "---\nname: baseline\ndescription: Fixed checkpoint skill\n---\nCheck evidence before reporting success.\n");
     writeFileSync(join(cwd, "AGENTS.md"), "Use targeted tests. Do not change unrelated files.\n");
     restrictEnvironment(process.env);
-    for (const role of ["worker", "reviewer", "pm"] as const) {
+    for (const role of ["worker", "reviewer", "assistant", "build"] as const) {
       for (const preset of ["strict", "standard"] as const) {
         const dir = join(work, `${role}-${preset}`);
         mkdirSync(dir);
@@ -42,15 +42,15 @@ test("early strict/standard static profiles retain raw prompts and schemas for e
         const enabled = preset === "strict" ? [] : [...early,
           ...(role === "worker" ? ["todo", "background_shell", "codemode"] :
             role === "reviewer" ? ["codemode"] : ["todo"])];
-        const identity = { store: "st-baseline", project: "baseline", role, generation: 1 };
+        const identity = { store: "st-baseline", project: "baseline", role };
         const host = await HostSession.create({
           sdk, identity, cwd, root: cwd, home, agentDir: join(dir, "agent"), model: "gpt-6.1-sol",
           capabilities: { catalog: 4, digest: sha256Hex(JSON.stringify(enabled)), preset, enabled },
           runtimeDir: join(dir, "runtime"),
           guidance: { projectText: true, settings: { skills: { user_dirs: ["~/.agents/skills"] },
             background_shell: { max_jobs: 2, max_output_bytes: 4096, max_runtime_secs: 60 } } },
-          modules, network, events: new EventLog(1),
-          client: new CorralClient({ corral: "/unused", root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => "" }),
+          modules, network, events: new EventLog(),
+          client: new CorralClient({ corral: "", root: cwd, cwd, identity }),
           sessionManager: sdk.SessionManager.inMemory(cwd),
         });
         try {
@@ -70,15 +70,10 @@ test("early strict/standard static profiles retain raw prompts and schemas for e
             prompt_sha256: sha256Hex(prompt), tools_sha256: sha256Hex(toolJson),
           })}`);
           expect(tools.length).toBeGreaterThan(0);
-          expect(host.loadout.includes("codemode")).toBe(preset === "standard" && role !== "pm");
+          expect(host.loadout.includes("codemode")).toBe(preset === "standard" && (role === "worker" || role === "reviewer"));
           expect(host.loadout.includes("corral_todo")).toBe(preset === "standard" && role !== "reviewer");
         } finally { await host.close(); }
       }
-    }
-    for (const role of ["planner", "plan_reviewer"]) {
-      console.log(`EARLY_STATIC ${JSON.stringify({ role, runnable: false,
-        reason: "excluded from frozen early cohort; strict disabled-role trial is not a zero-cost success",
-        prompt_tokens_estimate: null, tool_tokens_estimate: null })}`);
     }
   } finally {
     globalThis.fetch = originalFetch;

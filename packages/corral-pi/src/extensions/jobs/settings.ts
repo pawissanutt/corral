@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-/** Rust resolves these bounds once per generation; the host only parses the supplied values. */
+/** Bounds for host-local commands. */
 export const JobSettingsSchema = z.object({
   max_jobs: z.number().int().min(1).max(16),
   max_output_bytes: z.number().int().min(1024).max(1024 * 1024 * 1024),

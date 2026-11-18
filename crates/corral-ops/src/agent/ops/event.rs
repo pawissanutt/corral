@@ -176,6 +176,9 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     if envelope.payload.get("kind").and_then(|v| v.as_str()) == Some("assistant_boundary") {
         return super::assistant_workflow::boundary(ctx, envelope);
     }
+    if envelope.payload.get("kind").and_then(|v| v.as_str()) == Some("handoff_choice") {
+        return super::assistant_workflow::handoff_choice(ctx, envelope);
+    }
     if envelope.payload.get("kind").and_then(|v| v.as_str()) == Some("budget") {
         return super::budget::budget(ctx, envelope);
     }

@@ -1,7 +1,5 @@
-// One upstream AgentSessionRuntime under the role's restrictions. It reports host turns
-// (agent_start to agent_settled) and provider errors to corral as `event` calls, and answers
-// bridge input with upstream's own dispositions: started, queued, handled or rejected.
-import { existsSync, readFileSync } from "node:fs";
+// One upstream AgentSessionRuntime, with local session state and engine CLI board access.
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -15,8 +13,6 @@ import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 
 import type { AwsBinding, AwsCredentialResolver } from "../auth/aws.ts";
-import { RunBudget } from "../capabilities/budget.ts";
-import { BashPermissions } from "../capabilities/bash-rules.ts";
 import { compactionSettings } from "../capabilities/compaction.ts";
 import { codemodeTool } from "../capabilities/codemode.ts";
 import { nestedChild } from "../extensions/codemode/child.ts";
@@ -27,45 +23,38 @@ import { jobControl, type JobControl } from "./job-controls.ts";
 import { type HostControls, installToolControls, parseControls } from "./tool-controls.ts";
 import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
 import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
-import type { AuthContext } from "../auth/types.ts";
+import type { AuthContext, Fetch } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
 import { LiveEvents } from "./live-events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
 import { closeResidentSession, residentLifecycle } from "../claude/resident.ts";
-import type { QuestionUpdate, SubmitInput, SubmitResult } from "../bridge/protocol.ts";
-import type { DeliveryHost } from "../delivery/types.ts";
-import { scratchRoots, writeSettings } from "../roles/assistant/paths.ts";
-import { investigationTool } from "../roles/assistant/investigate.ts";
-import { AssistantShell, assistantShellBackend, requireVerifiedPlanningDrain } from "../roles/assistant/shell.ts";
+import { BridgeRefusal, type AnswerInput, type RewindInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
+import { listRewinds, parseRewindCommand, recordRewind, restoreRewind, rewindPoint } from "./rewind.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import type { BuildContext } from "../build/types.ts";
 import { createBuildControls, type BuildControls } from "../build/host-controls.ts";
-import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
+import { type CorralClient, type ModelUsage } from "../tools/corral.ts";
+import { observeUsage } from "./model-usage.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
 import { NativePanels } from "../ui/panels.ts";
 import { persistedBases } from "../ui/review-store.ts";
 import { sidebarToggleKey } from "../ui/herdr-keys.ts";
 import type { PanelJob, PanelSnapshot } from "../ui/panels-view.ts";
-import { InspectorActivity } from "../ui/inspector.ts";
 import { buildToolRenderers } from "../ui/build/tool-renderers.ts";
 import { installToolRenderers, type ToolRenderDeps } from "../ui/tool-rendering.ts";
 import { installMarkRows } from "../ui/mark-rows.ts";
 import { TodoLedger, installPlanCommand } from "../ui/todo.ts";
-import { type DueContinuation, RequestContext, continuationText } from "./request.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
-import { askUserEnabled, askUserTool } from "./ask-user.ts";
-import { PendingQuestions, QUESTION_ENTRY } from "./pending-questions.ts";
-import { OwnerAskMirror } from "./owner-ask-mirror.ts";
-import { recordQuestionOwnerInput } from "./question-owner-input.ts";
+import { askUserTool, localQuestionAsk } from "./ask-user.ts";
+import { PendingQuestions, QUESTION_ENTRY, validAnswer } from "./pending-questions.ts";
 import { OwnerQuestionUi } from "../ui/owner-questions.ts";
 import { registerCacheStats } from "../ui/cache-stats.ts";
-import { type HerdrLifecycle, answeredKeys } from "./herdr.ts";
+import type { HerdrLifecycle } from "./herdr.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
-import { createApiCatalog } from "./api-connections.ts";
 import { installModelSelection, subscriptionRoutes } from "./subscriptions.ts";
 import { bareProviders } from "./bare.ts";
 import { observeTerminalInput, type InputObservation } from "./input-observation.ts";
@@ -85,8 +74,7 @@ import { JobRuntime } from "../extensions/jobs/runtime.ts";
 import { COMMAND_ENTRY, Commands, type CommandFact } from "../extensions/jobs/commands.ts";
 import { MONITOR_ENTRY, type MonitorFact } from "../extensions/jobs/monitors.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
-import { toolRequestId } from "../tools/corral.ts";
-import { AuxiliaryRuntime, ShadowDispatcher } from "../extensions/subagent/runtime.ts";
+import { AuxiliaryRuntime } from "../extensions/subagent/runtime.ts";
 import { auxiliarySettings } from "../extensions/subagent/settings.ts";
 import { expertTool, exploreTool } from "../extensions/subagent/index.ts";
 import { oracleTool } from "../extensions/oracle/index.ts";
@@ -94,57 +82,48 @@ import { runAuxiliarySession } from "../extensions/subagent/session.ts";
 import { FleetRuntime } from "../extensions/fleet/runtime.ts";
 import { fleetTools } from "../extensions/fleet/tools.ts";
 import { boundFleetSettings } from "../extensions/fleet/settings.ts";
-import { createPeerTransport } from "../extensions/peers/transport.ts";
-import { executionRefusal, exploreLoadout, nestedCorralRead } from "../roles/common/execution.ts";
-import { OWNER_INPUT_TEXT_MAX, ownerInputText, utf8Prefix } from "../roles/assistant/owner-action.ts";
-import type { ConfirmUi, GateTriageProposal, TriageUi } from "../tools/define.ts";
+import { executionRefusal, exploreLoadout } from "../roles/common/execution.ts";
 import { workerDoneTool } from "../roles/worker/tools.ts";
-import { askGateTriage } from "./triage-dialog.ts";
-import { memoryContext } from "./memory.ts";
 import { transcriptPreview } from "./transcript-preview.ts";
-import { AssistantRelink } from "./assistant-relink.ts";
-import { AssistantResume } from "./assistant-resume.ts";
-import { chooseResume } from "../ui/resume-list.ts";
-import { PlanningPolicy, type AdmissionHandle, type PlanningState, type WorkflowExpected } from "./planning-policy.ts";
-import { ManagedEffects, type Lifecycle } from "./managed-effects.ts";
-import { PlanReviews, reviewAssociation } from "./plan-review.ts";
-import { type ConnectionBinding, admitConnection, parseBinding } from "./connections.ts";
-import { CONNECTIONS, type ConnectionId, isApiConnection, resolveConnection } from "../auth/connections.ts";
+import { ManagedEffects } from "./managed-effects.ts";
+import { LocalControlPlane } from "./local.ts";
+import { type ConnectionBinding, parseBinding } from "./connections.ts";
+import { CONNECTIONS, type ApiConnectionId, type ConnectionId, isApiConnection, resolveConnection } from "../auth/connections.ts";
 import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
-import type { ProviderFailure } from "./provider-failure.ts";
+import { createApiCatalog, type ApiCatalog } from "./api-connections.ts";
+import { paidRoute, withPaidContinuation } from "./continuation.ts";
+import type { Spending } from "../capabilities/budget.ts";
 import { HostQueue } from "./queue.ts";
-import { pmCacheKeyMode } from "../roles/pm/context.ts";
-import { pmCacheKeyStream } from "./pm-cache-key.ts";
 import { recordTranscriptMark, type MarkSink, type ModelMark, type TranscriptMark, type TurnStopCause, type TurnWait } from "./transcript-marks.ts";
 import { TurnFacts, turnWaits } from "./turn-facts.ts";
-import { holdContextOnly } from "./lifecycle.ts";
 import { RemotePrompts } from "./remote-prompts.ts";
-import { HostContinuation } from "./continuation.ts";
 import { createSummaryRequest, summarizeQuick, type SummaryOptions, type SummaryRequest } from "./summary.ts";
-import { BoundProfileController } from "./profiles.ts";
-import { BuildProfileController } from "./build-profile-controller.ts";
-import { installProfileControls } from "./profile-controls.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
   readonly identity: HostIdentity;
   readonly build?: BuildContext;
-  readonly daemonHosted?: boolean;
+  readonly paneInput?: (text: string, images?: ImageContent[]) => Promise<boolean>;
+  readonly transcriptRewound?: () => void;
+  readonly automatedInput?: (input: SessionInput) => Promise<SubmitResult> | undefined;
   readonly cwd: string;
   readonly agentDir: string;
   readonly model: string;
   /** The bound profile's provider; absent means OpenAI Codex, the only pre-T-479 route. */
   readonly provider?: ProviderId;
   readonly binding?: ConnectionBinding;
+  readonly connection?: ConnectionId;
+  readonly spending?: Spending;
+  readonly apiFetch?: Fetch;
+  readonly sessionDir?: string;
   /** The Bedrock binding and its credential resolver; required for an AWS-profile provider. */
   readonly aws?: AwsRoute;
   readonly effort?: string;
   readonly quickSummary?: boolean;
   readonly summary?: SummaryOptions;
   readonly promptFile?: string;
-  readonly memoryFile?: string;
   readonly todo?: boolean;
-  /** The generation's recorded snapshot; when present it decides todo. */
+  /** The session's recorded snapshot; when present it decides todo. */
   readonly capabilities?: HostCapabilities;
   /** The snapshot's settings and project-text trust; absent loads no optional guidance. */
   readonly guidance?: CapabilityGuidance;
@@ -154,7 +133,7 @@ export interface HostSessionOptions {
   readonly home?: string;
   /** The private directory `/corral-export` writes into; absent disables the command. */
   readonly exportDir?: string;
-  /** The generation's runtime directory; background job output files live under it. */
+  /** The session's runtime directory; background job output files live under it. */
   readonly runtimeDir?: string;
   /** Absent means rich: corral's header, footer status and compact corral_* rendering. */
   readonly ui?: UiMode;
@@ -167,28 +146,12 @@ export interface HostSessionOptions {
   readonly sessionManager: SessionManager;
   /** The pane's herdr projection; absent for a headless host or one outside its bound pane. */
   readonly herdr?: HerdrLifecycle;
-  /** Present only under the `corral pi` assistant supervisor; never switches Pi files in-process. */
-  readonly newAssistant?: () => void;
-  /** The supervisor restarts this assistant on its linked directory, preserving its Pi file. */
-  readonly relinkAssistant?: () => void;
-  /** The supervisor resumes the session named in this generation's switch request (`/resume`). */
-  readonly resumeAssistant?: () => void;
-  /** Requests a drained quota continuation; Rust alone selects and authorizes its successor. */
-  readonly continueAssistant?: () => void;
-  /** The supervisor restarts on a revalidated named profile; never replaces a billing route in-process. */
-  readonly switchProfile?: () => void;
 }
 
-type TurnOrigin = { kind: "bridge" | "continuation"; idempotency_key: string } | { kind: "owner_terminal" }
-  | { kind: "unknown" };
+type TurnOrigin = { kind: "bridge" } | { kind: "owner_terminal" } | { kind: "unknown" };
 
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 const STATE_SECTION_MAX_BYTES = 8 * 1024;
-/** A lifecycle report keeps its request ID, so retrying it is safe; back off from contention. */
-const REPORT_ATTEMPTS = 6;
-const REPORT_BACKOFF_MS = 250;
-/** Withdraw refusals that mean corral already holds the question as not pending. */
-const NOT_PENDING = new Set(["question_withdrawn", "question_state", "question_closed", "question_not_found"]);
 
 /** A module's own readback, replaced by its size once it could crowd a bridge frame. */
 function bounded(value: Record<string, unknown> | null): Record<string, unknown> | null {
@@ -328,7 +291,7 @@ export function providerErrorClass(message: string): string {
 const REVIEW_BASE_ENTRY = "corral_review_base";
 const panelStats = (stats: { readonly tokens: { readonly total: number }; readonly cost: number }) => ({ tokens: stats.tokens.total, cost: stats.cost });
 
-// allow: SIZE_OK - Generation-bound Pi lifecycle state machine; relink decisions live in assistant-relink.ts.
+// allow: SIZE_OK - Pi lifecycle adapter.
 
 export class HostSession {
   runtime!: AgentSessionRuntime;
@@ -345,21 +308,19 @@ export class HostSession {
   private readonly localTools: readonly ToolDefinition[];
   private dialogPi: ExtensionAPI | undefined;
   private readonly ownerQuestions: PendingQuestions | undefined;
-  private readonly remotePrompts: RemotePrompts | undefined;
+  private readonly remotePrompts: RemotePrompts;
+  private readonly local: LocalControlPlane;
   private questionUi: OwnerQuestionUi | undefined;
   private readonly jobs: JobRuntime | undefined;
-  private readonly assistantShell: AssistantShell | undefined;
   private readonly commands: Commands | undefined;
   private readonly controlJob: JobControl | undefined;
-  /** The generation's Code Mode kernel and its nested-call bridge (T-683); absent when disabled. */
+  /** The session's Code Mode kernel and its nested-call bridge (T-683); absent when disabled. */
   private readonly code: CodeRuntime | undefined;
-  private writePermissionNotice: (() => Promise<void>) | undefined;
-  private writeAbort = new AbortController();
   private turn = 0;
   private open = false;
   private cancelRequested: number | undefined;
   private stopCause: TurnStopCause | undefined;
-  private deliveredTextHashes: Set<string> | undefined;
+  private turnError: string | null = null;
   private nextTurnOrigin: TurnOrigin | undefined;
   private lastInputSource: string | undefined;
   /** The owner typed into the pane while the current turn was open (a steer into it). */
@@ -367,9 +328,7 @@ export class HostSession {
   private boundSessionId: string | undefined;
   private unsubscribe: (() => void) | undefined;
   private calls: Promise<unknown> = Promise.resolve();
-  private readonly stats = { sent: 0, committed: 0, rejected: 0, failed: 0, lastError: undefined as string | undefined };
   private deniedTools = 0;
-  private inspector: InspectorActivity | undefined;
   private panelStats: { readonly tokens: number; readonly cost: number } | undefined;
   private panelTokenLeaf: string | null | undefined;
   private sessionsCreated = 0;
@@ -385,37 +344,20 @@ export class HostSession {
   private readonly hooks: Hooks | undefined;
   private additionalLsp: LspToolkit | undefined;
   private readonly additionalLspFactory: (() => LspToolkit) | undefined;
-  private readonly permissions: BashPermissions | undefined;
+  private readonly bashQuestions = new Map<string, string>();
   private readonly checkpoints: Checkpoints | undefined;
+  private rewinding = false;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
   private readonly fleet: FleetRuntime | undefined;
   private readonly buildControls: BuildControls | undefined;
-  private readonly shadow: ShadowDispatcher | undefined;
-  private nextTurnInbox = false;
-  private readonly planReviews: PlanReviews | undefined;
   private auxiliaryModels: Models | undefined;
   private buildProviders: readonly string[] = [];
+  private readonly apiCatalogs = new Map<string, Promise<ApiCatalog>>();
   private searchModels: Models | undefined;
-  private readonly budget: RunBudget;
   private ledger: TodoLedger | undefined;
-  /** PM and assistant with todo on: the request summary and continuation (T-679). */
-  private request: RequestContext | undefined;
-  /** Continuation rechecks, kept off `calls` so lifecycle reports and budget records never wait on one. */
-  private continuations: Promise<void> = Promise.resolve();
   private closing = false;
   private closeResult: Promise<void> | undefined;
-  private readonly managedEffects = new ManagedEffects(
-    resource => this.resourceEvidence(resource, { action: "seal" }),
-    resource => this.releasePlanningResource(resource),
-  );
-  private readonly relink: AssistantRelink | undefined;
-  private readonly resume: AssistantResume | undefined;
-  private readonly paidContinuation: HostContinuation;
-  private continuationUi: { notify(message: string, type?: "info" | "warning" | "error"): void } | undefined;
-  private readonly planning: PlanningPolicy | undefined;
-  private planningRead = 0;
-  private readonly planningResources = new Map<string, Promise<AdmissionHandle>>();
-  private readonly resourcePublicationFailures = new Map<string, unknown[]>();
+  private readonly managedEffects = new ManagedEffects();
   private readonly marks: MarkSink | undefined;
   /** The transcript's own sink, once the rich UI registered its mark rows; `options.marks` replaces it. */
   private markRows: MarkSink | undefined;
@@ -424,70 +366,24 @@ export class HostSession {
   private readonly monitorFacts = new Map<string, MonitorFact>();
 
   readonly provider: ProviderId;
+  private readonly connection: ConnectionId;
 
   private constructor(private readonly options: HostSessionOptions) {
     const host = this;
-    this.liveEvents = new LiveEvents(options.identity.generation);
+    this.liveEvents = new LiveEvents();
     this.provider = options.provider ?? "openai-codex";
-    this.paidContinuation = new HostContinuation({
-      identity: options.identity, binding: () => options.binding, manager: options.sessionManager, events: options.events,
-      notify: text => this.notice(text, "warning", this.continuationUi
-        ?? { notify: message => { process.stderr.write(`${message}\n`); } }),
-      ...(options.identity.role === "assistant" && options.continueAssistant
-        ? { restart: () => { this.closing = true; options.continueAssistant?.(); } } : {}),
-    });
-    this.remotePrompts = options.daemonHosted ? new RemotePrompts(options.client, options.events,
-      () => this.sessionId(), () => this.currentTurn(), () => this.writeAbort.signal) : undefined;
+    this.connection = resolveConnection(this.provider, options.connection ?? options.binding?.connection);
+    this.local = new LocalControlPlane(options.build?.dir ?? options.runtimeDir ?? options.agentDir, options.identity);
+    this.remotePrompts = new RemotePrompts(this.liveEvents.events);
     this.marks = options.ui === "plain" ? undefined : { add: mark => this.addMark(mark) };
     this.turnFacts = new TurnFacts(this.marks);
     this.queue = new HostQueue({
-      generation: options.identity.generation, session: () => this.session,
+      session: () => this.session,
       enabled: () => (options.capabilities?.catalog ?? 0) >= 10 && options.capabilities?.enabled.includes("queue_control") === true,
       interactive: () => this.attached === "interactive",
-      current: () => !this.closing && this.bound && this.session.sessionId === this.boundSessionId,
       turn: next => next || !this.open ? this.turn + 1 : this.turn,
       emit: (kind, data) => options.events.emit(kind, data),
-      fence: () => { this.stopCause ??= "host"; this.closing = true; this.writeAbort.abort(); void this.fleet?.close(); this.session.agent.abort(); },
     });
-    this.planning = options.identity.role === "assistant" ? new PlanningPolicy({
-      read: async () => {
-        // Bootstrap has no authenticated session yet. Once bound, use the dedicated,
-        // receipt-free workflow projection, independently of Todo continuation reads.
-        if (!this.bound) return options.client.todoSnapshot();
-        const receipt = await options.client.call("assistant_plan", {
-          requestId: toolRequestId(this.sessionId(), `workflow-read:${options.identity.generation}:${++this.planningRead}`),
-          payload: { action: "read", limit: 1 }, turn: this.currentTurn(),
-        });
-        if (receipt.state !== "committed") throw new Error(`planning read refused: ${JSON.stringify(receipt.result)}`);
-        const phase = (receipt.result as { phase?: string } | undefined)?.phase;
-        if (phase && ["handoff_preparing", "handoff_reconciling", "board_owned", "closed"].includes(phase)) this.planReviews?.cancelAll();
-        return receipt.result;
-      },
-      record: async transition => {
-        if (!this.bound) throw new Error("host_not_bound");
-        const event = options.events.emit("assistant_boundary", { transition });
-        const receipt = await options.client.call("event", {
-          requestId: eventRequestId(options.identity.generation, event.seq),
-          payload: { kind: "assistant_boundary", transition }, turn: this.currentTurn(),
-        });
-        if (receipt.state !== "committed") throw new Error(`planning boundary refused: ${JSON.stringify(receipt.result)}`);
-        return receipt.result;
-      },
-      fence: () => { this.writeAbort.abort(); },
-    }) : undefined;
-    this.relink = options.identity.role === "assistant" && options.identity.assistant && options.relinkAssistant
-      ? new AssistantRelink({
-        assistant: options.identity.assistant, generation: options.identity.generation, cwd: options.cwd,
-        manager: options.sessionManager, client: options.client, events: options.events,
-        request: () => { this.closing = true; options.relinkAssistant?.(); },
-      }) : undefined;
-    this.resume = options.identity.role === "assistant" && options.identity.assistant && options.resumeAssistant && options.runtimeDir
-      ? new AssistantResume({
-        assistant: options.identity.assistant, generation: options.identity.generation, runtimeDir: options.runtimeDir,
-        events: options.events, read: request => options.client.history(request),
-        idle: () => this.bound && !this.closing && !this.open && !this.session.isBashRunning,
-        request: () => { this.closing = true; options.resumeAssistant?.(); }, choose: chooseResume,
-      }) : undefined;
     this.buildControls = options.build ? createBuildControls({
       sdk: options.sdk, context: options.build,
       models: () => {
@@ -495,12 +391,13 @@ export class HostSession {
         return this.auxiliaryModels;
       },
       approved: () => this.buildProviders,
-      parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
+      parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model,
+        effort: options.effort, ...(isApiConnection(this.connection) ? { connection: this.connection } : {}) },
+      apiModels: async choice => (await this.apiCatalog(choice.connection!, choice.model, choice.effort)).models,
       agentDir: options.agentDir, wake: this.inputWake,
-      localTools: () => this.localTools.filter(tool => !this.buildControls?.tools.includes(tool)).map(tool => this.planningTool(tool)),
+      localTools: () => this.localTools.filter(tool => !this.buildControls?.tools.includes(tool)),
       deliverToParent: async text => {
-        const key = `fleet:${crypto.randomUUID()}`;
-        const result = await this.submit({ text, busyPolicy: "steer", idempotencyKey: key, origin: "command" }, key);
+        const result = await this.submitAutomated(text);
         if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
       },
       shellRefusal: options.modules.role.shellRefusal, changed: () => {
@@ -522,18 +419,16 @@ export class HostSession {
       },
       ...(options.identity.project && options.guidance?.projectDir && options.guidance.projectDir !== options.client.workspaceRoot
         ? { projectDir: options.guidance.projectDir } : {}),
-      readProjects: signal => options.client.projectScopes(signal),
+      readProjects: () => options.client.projectScopes(),
       jobControl: (target, action) => this.controlJob?.(target, action) ?? Promise.resolve({ state: "denied", reason: "managed commands are unavailable" }),
       reviewBases: persistedBases(
         () => options.sessionManager.getEntries().flatMap(entry => entry.type === "custom" && entry.customType === REVIEW_BASE_ENTRY ? [entry.data] : []),
         data => options.sessionManager.appendCustomEntry(REVIEW_BASE_ENTRY, data)),
       canRenderTool: name => exploreLoadout(this.loadout).includes(name),
-      inspection: () => options.client.inspectionSnapshot(),
-      lifecycle: () => options.client.inspectionSnapshot("lifecycle"),
-      artifacts: () => options.client.inspectionSnapshot("artifacts"),
-      artifactViewer: (reference, viewer) => options.client.artifactViewer(reference, viewer),
+      artifacts: () => options.client.artifacts(),
+      artifactFile: reference => options.client.artifactFile(reference),
+      rewind: input => this.rewind(input),
       exportSession: async () => (await this.reportedExport()).text,
-      readInbox: signal => options.client.attentionSnapshot(signal),
       readHistory: request => options.client.history(request),
       readTranscript: id => this.readAgentTranscript(id),
       ...(options.identity.task ? { readTask: () => options.client.taskSnapshot() } : {}),
@@ -547,40 +442,9 @@ export class HostSession {
       }
       this.panels?.refresh();
     }) : undefined;
-    this.budget = new RunBudget({
-      unbounded: !isApiConnection(resolveConnection(this.provider, options.binding?.connection)) && PROVIDERS[this.provider].lane !== undefined,
-      sessionId: () => this.sessionId(),
-      record: async (payload) => {
-        if (options.build?.paidRecord) return options.build.paidRecord(payload);
-        if (!this.bound) throw new Error("host_not_bound");
-        await this.drained();
-        const event = options.events.emit("budget", payload);
-        const receipt = await options.client.call("event", {
-          requestId: eventRequestId(options.identity.generation, event.seq), payload, turn: this.currentTurn(),
-        });
-        if (receipt.state !== "committed") throw new Error(`budget record refused: ${JSON.stringify(receipt.result)}`);
-        return (receipt.result ?? {}) as Record<string, unknown>;
-      },
-      onStop: () => {
-        if (this.open) this.stopCause ??= "budget";
-        if (this.open) this.report("budget_exhausted", { budget: this.budget.state() });
-      },
-      cancel: () => {
-        void this.cancelRun(this.currentTurn(), "budget");
-        void this.auxiliary?.cancelAll();
-        void this.fleet?.cancelAll();
-        if (this.buildControls) {
-          for (const child of this.buildControls.fleet.snapshot().children) this.buildControls.fleet.cancel(child.id);
-        }
-      },
-    });
     const registerCapability = capabilityRegistry(() => this.session?.sessionFile);
-    const remotePrompts = this.remotePrompts;
-    const continuation = this.paidContinuation;
     this.roleContext = {
       identity: options.identity, cwd: options.cwd, workspaceRoot: options.client.workspaceRoot,
-      get continuation() { return continuation.notice; },
-      ...(options.daemonHosted ? { daemonHosted: true } : {}),
       model: options.model, registerCapability,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
       ...(options.capabilities ? { capabilities: options.capabilities } : {}),
@@ -588,26 +452,6 @@ export class HostSession {
       ...(options.guidance?.settings.lsp ? { lspSettings: options.guidance.settings.lsp } : {}),
       ...(options.effort ? { effort: options.effort } : {}),
       ...(options.promptFile ? { promptFile: options.promptFile } : {}),
-      ...(options.identity.role === "assistant" ? {
-        scratchRoots: async () => scratchRoots(await options.client.todoSnapshot(), options.identity.assistant ?? ""),
-      } : {}),
-      ...(options.identity.role === "assistant" && options.capabilities?.enabled.includes("write_permissions") ? {
-        writePermission: {
-          settings: writeSettings(options.guidance?.settings.write_permissions),
-          onBound: async (notice: () => Promise<void>) => {
-            this.writePermissionNotice = notice;
-            if (this.bound) await notice();
-          },
-          sessionId: () => this.sessionId(),
-          turn: () => ({ id: this.currentTurn(), signal: this.writeAbort.signal }),
-          call: (requestId: string, payload: Record<string, unknown>) => options.client.call("write_permission", {
-            requestId, payload, turn: this.currentTurn(),
-          }),
-          emit: (kind: string, data: Record<string, unknown>) => { options.events.emit(kind, data); },
-          ...(remotePrompts ? { remote: (payload: Record<string, unknown>, signal: AbortSignal) =>
-            remotePrompts.permission(payload, signal) } : {}),
-        },
-      } : {}),
     };
     const role = options.modules.role;
     const specs = role.tools(this.roleContext);
@@ -618,7 +462,7 @@ export class HostSession {
     }
     const webEnabled = options.capabilities?.enabled.includes("web.enabled") === true;
     if (webEnabled && (!options.network.web || !options.capabilities?.web)) {
-      throw new Error("module_invalid: web.enabled needs an eligible role and its generation-bound web transport");
+      throw new Error("module_invalid: web.enabled needs an eligible role and its configured web transport");
     }
     let browser: ReturnType<typeof browserSettings>;
     try {
@@ -629,18 +473,12 @@ export class HostSession {
     const lspEnabled = !options.capabilities || options.capabilities.catalog < 5
       ? options.identity.role === "worker" : options.capabilities.enabled.includes("lsp");
     if (lspEnabled && options.identity.role !== "worker") {
-      this.additionalLspFactory = () => lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability,
-        ...(this.planning ? { evidence: (event: Lifecycle) => this.resourceEvidence("lsp", event) } : {}) });
+      this.additionalLspFactory = () => lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability });
       this.additionalLsp = this.additionalLspFactory();
     }
     this.jobs = this.jobRuntime(registerCapability);
-    this.assistantShell = this.planning ? new AssistantShell({
-      generation: options.identity.generation, runtimeDir: options.runtimeDir, registerCapability,
-      admit: id => this.planningResource(`foreground:${id}`, "bash"),
-      settle: id => this.releasePlanningResource(`foreground:${id}`),
-    }) : undefined;
     this.commands = this.jobs ? new Commands({
-      jobs: this.jobs, generation: options.identity.generation, worker: options.identity.role === "worker",
+      jobs: this.jobs,
       waitMs: JobSettingsSchema.parse(options.guidance?.settings.background_shell).wait_ms,
       journal: fact => options.sessionManager.appendCustomEntry(COMMAND_ENTRY, fact),
       monitorJournal: fact => {
@@ -655,30 +493,21 @@ export class HostSession {
       notify: (key, text) => this.commandNotice(key, text),
     }) : undefined;
     this.code = options.capabilities?.enabled.includes("codemode") ? new CodeRuntime({
-      generation: options.identity.generation,
       emit: (kind, data) => { options.events.emit(kind, data); },
       journal: (data, customType = CODE_CALL_ENTRY) => { this.session.sessionManager.appendCustomEntry(customType, data); },
       history: () => options.sessionManager.getEntries().flatMap(entry =>
         entry.type === "custom" && (entry.customType === "corral_code_cell" || entry.customType === CODE_CALL_ENTRY) ? [entry.data] : []),
-      // A detached cell's one notice enters like bridge input: journaled delivery, its own turn origin.
-      notify: async (key, text) => {
-        const sent = await this.submit({ text, busyPolicy: "steer", idempotencyKey: key, origin: "code-cell" }, key);
-        return sent.reason === undefined ? sent.disposition : `${sent.disposition}: ${sent.reason}`;
-      },
+      notify: (key, text) => this.commandNotice(key, text),
     }) : undefined;
     const subscriptionSearch = webEnabled && options.capabilities?.web?.search_provider === "subscription";
     const auxiliary = { ...auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings),
       ...(subscriptionSearch ? { web_search: { model: null, timeout_secs: (options.capabilities?.web?.timeout_ms ?? 15000) / 1000 } } : {}),
     };
     const record = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
-      if (!this.bound) throw new Error("host_not_bound");
-      await this.drained();
-      const event = options.events.emit("auxiliary", payload);
-      const receipt = await options.client.call("event", {
-        requestId: eventRequestId(options.identity.generation, event.seq), payload, turn: this.currentTurn(),
-      });
-      if (receipt.state !== "committed") throw new Error(`auxiliary record refused: ${JSON.stringify(receipt.result)}`);
-      return receipt.result as Record<string, unknown>;
+      options.events.emit("auxiliary", payload);
+      if (payload.action !== "prepare") return {};
+      if (typeof payload.request !== "string") throw new Error("Invalid auxiliary session id");
+      return { session_id: payload.request, session_file: this.local.auxiliaryTranscript(payload.request) };
     };
     if (!options.build) {
       const host = this;
@@ -692,29 +521,27 @@ export class HostSession {
         get approved() { return host.buildProviders; },
         parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
         context: { session: { worktree: options.cwd, name: `${options.identity.role} session` },
-          dir: options.runtimeDir ?? join(options.agentDir, "runtime", String(options.identity.generation)),
+          dir: options.runtimeDir ?? join(options.agentDir, "runtime"),
           settings: { maxParallel: settings.maxParallel, profiles: [] } },
         agentDir: options.agentDir, bound: true, allowedKinds: settings.allowedKinds,
         maxTurns: settings.maxTurns, timeoutSecs: settings.timeoutSecs,
-        ...(auxiliary.explore ? { research: { settings: auxiliary.explore, generation: options.identity.generation, sessionId: () => this.sessionId() } } : {}),
-        identity: { generation: options.identity.generation, sessionId: () => this.sessionId() },
-        get parentLoadout() { return host.loadout.filter(name => host.planning?.visible(name) !== false); },
-        get localTools() { return host.localTools.map(tool => host.planningTool(tool)); },
+        ...(auxiliary.explore ? { research: { settings: auxiliary.explore } } : {}),
+        get parentLoadout() { return host.loadout; },
+        get localTools() { return host.localTools; },
         shellRefusal: options.modules.role.shellRefusal,
-        peers: createPeerTransport(options.client), changed: () => {
+        changed: () => {
           this.liveEvents.observeFleet(this.fleet?.snapshot());
           this.panels?.refresh();
         }, record,
         deliverToParent: async text => {
-          const key = `fleet:${crypto.randomUUID()}`;
-          const result = await this.submit({ text, busyPolicy: "steer", idempotencyKey: key, origin: "command" }, key);
+          const result = await this.submitAutomated(text);
           if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
         },
       });
     }
-    if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search || auxiliary.shadow || auxiliary.expert) {
+    if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search || auxiliary.expert) {
       this.auxiliary = new AuxiliaryRuntime({
-        settings: auxiliary, generation: options.identity.generation, provider: this.provider, model: options.model,
+        settings: auxiliary, provider: this.provider, model: options.model,
         changed: () => this.panels?.refresh(),
         sessionId: () => this.sessionId(),
         searchModel: () => {
@@ -732,93 +559,35 @@ export class HostSession {
           if (!this.auxiliaryModels) throw new Error("auxiliary model runtime is not ready");
           return runAuxiliarySession({ sdk: options.sdk, models: this.auxiliaryModels, provider: this.provider,
             cwd: options.cwd, agentDir: options.agentDir,
-            parentLoadout: this.loadout.filter(name => this.planning?.visible(name) !== false),
-            localTools: this.localTools.map(tool => this.planningTool(tool)) }, invocation, signal);
+            parentLoadout: this.loadout, localTools: this.localTools }, invocation, signal);
         },
       });
     }
-    if (auxiliary.shadow && this.auxiliary) {
-      const configured = auxiliary.shadow.model;
-      const prefix = `${this.provider}/`;
-      this.shadow = new ShadowDispatcher({
-        runtime: this.auxiliary, maxPerHour: auxiliary.shadow.max_per_hour,
-        model: configured.startsWith(prefix) ? configured : prefix + configured,
-        call: async (op, payload) => {
-          if (this.closing || !this.bound) throw new Error("shadow host is closed/unbound");
-          // Do not enqueue on the PM's report chain or expose the receipt to the PM.
-          await this.drained();
-          const receipt = await options.client.call(op, {
-            requestId: toolRequestId(this.sessionId(), `shadow:${op}:${crypto.randomUUID()}`),
-            payload, turn: this.currentTurn(),
-          });
-          if (receipt.state !== "committed") throw new Error(`shadow ${op} refused: ${JSON.stringify(receipt.result)}`);
-          return receipt.result;
-        },
-        diagnostic: error => { options.events.emit("shadow_failed", { error: String(error).slice(0, 500) }); },
-      });
-    }
-    this.planReviews = options.identity.role === "assistant" ? new PlanReviews({
-      auxiliary: auxiliary.explore ? this.auxiliary : undefined,
-      call: async (id, payload) => {
-        if (!this.bound) throw new Error("host_not_bound");
-        const receipt = await options.client.call("assistant_plan_review", {
-          requestId: toolRequestId(this.sessionId(), `local-review:${id}:${++this.planningRead}`), payload, turn: this.currentTurn(),
-        });
-        if (receipt.state !== "committed") throw new Error(`local review refused: ${JSON.stringify(receipt.result)}`);
-        return receipt.result;
-      },
-      event: async (review, review_event) => {
-        const payload = { kind: "auxiliary", action: "review", usage_kind: "explore", request: review.invocation,
-          plan_review: reviewAssociation(review), review_event };
-        const event = options.events.emit("local_plan_review", payload);
-        const receipt = await options.client.call("event", {
-          requestId: eventRequestId(options.identity.generation, event.seq), payload, turn: this.currentTurn(),
-        });
-        if (receipt.state !== "committed") throw new Error(`local review lifecycle refused: ${JSON.stringify(receipt.result)}`);
-        return receipt.result;
-      },
-      notify: async (key, text) => {
-        const disposition = await this.commandNotice(key, text);
-        return ["started", "queued", "duplicate"].includes(disposition);
-      },
-      error: error => { options.events.emit("local_plan_review_error", { message: error instanceof Error ? error.message : String(error) }); },
-    }) : undefined;
-    const dialogEnabled = options.daemonHosted || askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
-    // Only the PM's questions are board records: an assistant's pane answers are cited owner input.
-    const askMirror = dialogEnabled && !options.daemonHosted && options.identity.role === "pm"
-      ? new OwnerAskMirror(options.client, () => this.sessionId(), () => this.currentTurn()) : undefined;
-    this.ownerQuestions = dialogEnabled && !options.daemonHosted ? new PendingQuestions({
-      ...(askMirror ? { mirror: askMirror, mirrorFailed: (error: unknown) => {
-        options.events.emit("owner_question_mirror_error", { message: error instanceof Error ? error.message : String(error) });
-      } } : {}),
-      session: () => options.sessionManager.getSessionId(), generation: options.identity.generation,
+    const dialogEnabled = options.capabilities?.enabled.includes("ask_user") === true;
+    const questions = dialogEnabled || options.capabilities?.enabled.includes("bash_rules") ? new PendingQuestions({
+      session: () => options.sessionManager.getSessionId(),
       entries: () => options.sessionManager.getEntries(),
-      append: value => { options.sessionManager.appendCustomEntry(QUESTION_ENTRY, value); },
+      append: value => { options.sessionManager.appendCustomEntry(QUESTION_ENTRY, value, { immediate: true }); },
       changed: question => {
-        if (question) options.events.emit("owner_question", { id: question.id, status: question.status });
+        if (question) {
+          this.remotePrompts.changed(question);
+          options.events.emit("owner_question", { id: question.id, status: question.status });
+          options.herdr?.questionChanged(question.id, question.status === "pending");
+        }
         this.questionUi?.changed(question);
       },
-      record: async (text, question) => {
-        if (!this.bound || this.closing) throw new Error("question_host_unbound_or_closing");
-        return options.identity.role === "assistant" ? recordQuestionOwnerInput({
-          manager: options.sessionManager, client: options.client, events: options.events,
-          generation: options.identity.generation, turn: this.currentTurn(), question, text,
-        }) : text;
-      },
-      deliver: async (text, key) => {
-        const result = await this.submit({ text, idempotencyKey: key, origin: "ask-user", busyPolicy: "steer" }, key);
+      deliver: async text => {
+        const result = await this.submitLocal({ text, origin: "owner", busyPolicy: "steer" });
         return result.disposition === "started" || result.disposition === "queued";
       },
     }) : undefined;
+    this.ownerQuestions = questions;
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
-      ...(options.identity.role === "assistant" ? [investigationTool(options.cwd)] : []),
-      ...(dialogEnabled ? [askUserTool(async (answer) => {
+      ...(dialogEnabled && questions ? [askUserTool(async answer => {
         if (!this.dialogPi) throw new Error("dialog session is unavailable");
-        const id = options.identity.role === "assistant" ? await this.journalOwnerInput("dialog", answer) : undefined;
-        const message = id ? ownerInputText(answer, id) : answer;
-        this.dialogPi.sendUserMessage(message, { deliverAs: "steer" });
-        return message;
-      }, this.ownerQuestions, () => this.questionUi?.busy === true, () => this.dialogPresentation(), this.remotePrompts?.ask, askMirror)] : []),
+        this.dialogPi.sendUserMessage(answer, { deliverAs: "steer" });
+        return answer;
+      }, questions, () => this.questionUi?.busy === true, () => this.dialogPresentation(), localQuestionAsk(questions))] : []),
       ...(this.additionalLsp?.tools ?? []).map(tool => ({ ...tool, execute: (...args: Parameters<ToolDefinition["execute"]>) => {
         const current = this.additionalLsp?.tools.find(candidate => candidate.name === tool.name);
         if (!current) throw new Error("LSP runtime unavailable; no effect started");
@@ -839,7 +608,7 @@ export class HostSession {
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
     if (mcp !== (options.capabilities?.mcp !== undefined)) {
-      throw new Error("module_invalid: mcp.enabled needs its generation-bound settings");
+      throw new Error("module_invalid: mcp.enabled needs its configured settings");
     }
     const search = options.capabilities?.enabled.includes("tool_search") === true;
     this.baseLoadout = [...role.upstreamTools.filter(name => !local.includes(name)), ...corralToolNames(specs), ...local,
@@ -863,15 +632,13 @@ export class HostSession {
     }
     // Recovery attributes a lost hook only through this record, so it precedes every launch.
     this.hooks = this.controls.hooks && new Hooks(this.controls.hooks, {
-      cwd: options.cwd, generation: options.identity.generation,
+      cwd: options.cwd,
       record: (entry) => this.session.sessionManager.appendCustomEntry(HOOK_ENTRY, entry),
     });
-    this.permissions = this.controls.bashRules && new BashPermissions();
     this.controlJob = this.jobs && this.commands ? jobControl({
-      jobs: this.jobs, commands: this.commands, generation: options.identity.generation,
+      jobs: this.jobs, commands: this.commands,
       session: () => !this.closing && this.bound && this.session.sessionId === this.boundSessionId ? this.boundSessionId : undefined,
-      allowed: tool => this.loadout.includes(tool) && this.session.getActiveToolNames().includes(tool)
-        && this.planning?.refusal(tool) === undefined,
+      allowed: tool => this.loadout.includes(tool) && this.session.getActiveToolNames().includes(tool),
       record: entry => { options.sessionManager.appendCustomEntry("corral_job_control", entry); options.events.emit("job_control", entry); },
       before: (toolCallId, job) => this.hooks?.wraps("job_kill")
         ? this.hooks.before({ tool: "job_kill", toolCallId, input: { job }, ...(this.currentTurn() === undefined ? {} : { turn: this.currentTurn() }) })
@@ -885,7 +652,7 @@ export class HostSession {
     if (options.capabilities?.enabled.includes("checkpoints") === true) {
       if (options.identity.role !== "worker" || !run) throw new Error("module_invalid: checkpoints needs a worker run");
       this.checkpoints = new Checkpoints({
-        cwd: options.cwd, generation: options.identity.generation, run,
+        cwd: options.cwd, run,
         record: (entry) => this.session.sessionManager.appendCustomEntry(CHECKPOINT_ENTRY, entry),
       });
     }
@@ -899,73 +666,19 @@ export class HostSession {
     const { options } = this;
     if (options.capabilities?.enabled.includes("background_shell") !== true) return undefined;
     const settings = JobSettingsSchema.safeParse(options.guidance?.settings.background_shell);
-    const worker = options.identity.role === "worker";
-    if ((!worker && options.identity.role !== "pm" && options.identity.role !== "assistant" && options.identity.role !== "build") || !settings.success || !options.runtimeDir) {
+    if (options.identity.role === "reviewer" || !settings.success || !options.runtimeDir) {
       throw new Error("module_invalid: background_shell needs an eligible role, settings and a runtime directory");
     }
-    const ops = options.modules.role.corralOps;
-    if (worker && (!ops.includes("job") || !ops.includes("job_monitor"))) return undefined;
     return new JobRuntime({
-      cwd: options.cwd, runtimeDir: options.runtimeDir, generation: options.identity.generation,
+      cwd: options.cwd, runtimeDir: options.runtimeDir,
       settings: settings.data, registerCapability,
       environment: () => ({ ...process.env, PI_SESSION_ID: this.sessionId(), PI_SESSION_FILE: this.session.sessionFile,
         PI_PROVIDER: this.session.model?.provider, PI_MODEL: this.session.model?.id, PI_REASONING_LEVEL: this.session.thinkingLevel }),
       onPrepared: job => options.sessionManager.appendCustomEntry(COMMAND_ENTRY, {
-        job, generation: options.identity.generation, consumed: false,
+        job, consumed: false,
       } satisfies CommandFact),
       onEvent: (kind, data) => options.events.emit(kind, data),
-      call: (op, key, payload) => worker || options.identity.role === "build" ? options.client.call(op, {
-        requestId: toolRequestId(this.sessionId(), key), payload, turn: this.currentTurn(),
-      }) : this.planningJob(payload),
     });
-  }
-
-  private async planningJob(payload: Record<string, unknown>): Promise<{ state: string; result: unknown }> {
-    const id = `job:${String(payload.job)}`;
-    if (payload.action === "prepare") await this.planningResource(id, "job_start");
-    if (payload.action === "exited" && payload.group_clear === true) await this.releasePlanningResource(id);
-    return { state: "committed", result: {} };
-  }
-
-  private async planningResource(id: string, tool: string): Promise<void> {
-    if (!this.planning) return;
-    if (id === "mcp" || id === "lsp") this.managedEffects.requireOpen(id);
-    let pending = this.planningResources.get(id);
-    if (!pending) {
-      pending = this.planning.begin(`${this.options.identity.generation}:${id}`, tool);
-      this.planningResources.set(id, pending);
-    }
-    await pending;
-    if (id === "mcp" || id === "lsp") this.managedEffects.requireOpen(id);
-  }
-
-  private async resourceEvidence(id: string, event: Lifecycle): Promise<void> {
-    if (!this.planning) return;
-    // Target validation may reject an LSP call without preparing any executor. Admit
-    // the manager only at its awaited preparation fence, before publication/spawn.
-    if (id === "lsp" && event.action === "prepare") await this.planningResource(id, "lsp_startup");
-    const pending = this.planningResources.get(id);
-    if (!pending) {
-      if (event.action === "seal") return; // no admission in THIS manager lifetime
-      throw new Error("managed executor has no local admission; proof publication refused");
-    }
-    const handle = await pending;
-    this.options.sessionManager.appendCustomEntry("corral_effect_lifecycle", {
-      version: 1, assistant: this.options.identity.assistant, generation: this.options.identity.generation,
-      session_id: this.sessionId(), admission: handle.id, event,
-    });
-    try { await handle.evidence(event); }
-    catch (error) {
-      if (event.action !== "terminal" && event.action !== "seal") throw error;
-      const failures = this.resourcePublicationFailures.get(id) ?? [];
-      failures.push(error); this.resourcePublicationFailures.set(id, failures);
-      // Terminal observation is retained even when publication lost a CAS. Allow every
-      // owning executor to finish and journal its aggregate seal, but never release it.
-    }
-    const failures = this.resourcePublicationFailures.get(id);
-    if (event.action === "seal" && failures) {
-      throw new AggregateError(failures, "retained terminal proof needs supported metadata reconciliation");
-    }
   }
 
   private stopManagedResources(): Promise<void> {
@@ -975,112 +688,26 @@ export class HostSession {
     ]);
   }
 
-  private async releasePlanningResource(id: string): Promise<void> {
-    const pending = this.planningResources.get(id);
-    if (!pending) return;
-    await (await pending)();
-    this.planningResources.delete(id);
-  }
-
-  private planningTool(tool: ToolDefinition): ToolDefinition {
-    const policy = this.planning;
-    if (!policy) return tool;
-    const original = tool;
-    if (tool.name === "corral_assistant_plan_review" && this.planReviews) tool = { ...tool, execute: async (...args) => {
-      const lifetime = this.planReviews?.lifetime();
-      const result = await original.execute(...args);
-      const receipt = result.details as { state?: string; result?: unknown } | undefined;
-      if (receipt?.state === "committed") {
-        const action = (args[1] as Record<string, unknown>).action;
-        if (action === "start") await this.planReviews?.launch(receipt.result, lifetime);
-        if (action === "cancel") this.planReviews?.cancelOwned(receipt.result);
-      }
-      return result;
-    } };
-    else if (tool.name === "bash" || tool.name === "job_start") tool = { ...tool, execute: async (...args) => {
-      assistantShellBackend(this.assistantShell?.verifiedDrain === true, policy.snapshot());
-      const result = await original.execute(...args);
-      const details = result.details as { job?: unknown; state?: unknown } | undefined;
-      // shutdownEpoch can fence a prepared launcher before it exists. This is positive
-      // runtime proof of not-started, unlike a timeout, missing PID or aborted Promise.
-      if (details?.state === "not_started" && typeof details.job === "string") await this.releasePlanningResource(`job:${details.job}`);
-      return result;
-    } };
-    return policy.wrap(policy.visible(tool.name) ? tool : { ...tool, defaultActive: false });
-  }
-
-  private async planningMcp(): Promise<void> {
-    if (!this.mcp) return;
-    if (this.mcp.state().configured === false) { await this.mcp.refresh(); return; }
-    await this.planningResource("mcp", "mcp_connect");
-    await this.mcp.refresh();
-  }
-
-  private foregroundShellOperations(): Sdk.BashOperations {
-    const policy = this.planning, managed = this.assistantShell;
-    if (!policy || !managed) throw new Error("assistant shell controller unavailable; no effect started");
-    const local = this.options.sdk.createLocalBashOperations();
-    // Both callers run this selector after actual-dispatch policy admission/readback.
-    return { exec: (...args) => (assistantShellBackend(managed.verifiedDrain, policy.snapshot()) === "managed"
-      ? managed.operations : local).exec(...args) };
-  }
-
-  private async recoverPlanReviews(): Promise<void> {
-    // A legacy/ordinary assistant without a workflow has no review lifecycle to recover.
-    if (this.planning?.snapshot().expected) await this.planReviews?.recover();
-  }
-
-  /** Internal integration seam. Public entry/choice UI is deliberately not exposed here. */
-  async enterPlanning(input: string): Promise<PlanningState> {
-    if (!this.planning || !this.bound) throw new Error("planning requires a bound assistant");
-    requireVerifiedPlanningDrain(this.assistantShell?.verifiedDrain === true); // before the mode/fence changes
-    const result = await this.planning.enter(input, async () => {
-      await this.stopManagedResources();
-      await this.jobs?.shutdown();
-      await this.assistantShell?.shutdown();
-    });
-    this.session.setActiveToolsByName([...this.initialTools]);
-    return result;
-  }
-
-  /** Internal C4 consumer seam: no new command, question store or execution authority. */
-  async reviewPlan(input: string, expected: WorkflowExpected, id: string) {
-    if (!this.bound || !this.planReviews) throw new Error("local review requires bound assistant");
-    return this.planReviews.start(id, expected, input);
-  }
-
-  async drainPlanning(): Promise<PlanningState> {
-    if (!this.planning) throw new Error("planning requires an assistant");
-    requireVerifiedPlanningDrain(this.assistantShell?.verifiedDrain === true);
-    const result = await this.planning.drained();
-    this.session.setActiveToolsByName([...this.initialTools]);
-    return result;
-  }
-
   private exportable(): boolean {
     return this.options.exportDir !== undefined && this.options.guidance !== undefined &&
       this.options.capabilities?.enabled.includes("session_export") === true &&
-      this.options.modules.role.corralOps.includes("artifact");
+      this.options.identity.task !== undefined && this.options.client.configured;
   }
 
   /** `/corral-export`: the current snapshot as one attached offline HTML artifact. */
   async exportSession(): Promise<SessionExport> {
-    if (this.planning) return this.planning.execute("session_export", {}, "export", () => this.exportUnchecked());
-    return this.exportUnchecked();
-  }
-
-  private async exportUnchecked(): Promise<SessionExport> {
-    if (!this.exportable() || this.options.exportDir === undefined) throw new Error("session_export is not enabled for this role");
-    if (!this.bound) throw new Error("host_not_bound");
-    return exportSnapshot(this.session, this.sessionId(), this.options.exportDir, this.options.client);
+    const { exportDir, identity, client } = this.options;
+    if (!this.exportable() || !exportDir || !identity.task) throw new Error("session_export is not enabled for this role");
+    if (!this.bound) throw new Error("session is not ready");
+    return exportSnapshot(this.session, this.sessionId(), identity.task, exportDir, client);
   }
 
   /** `/corral-export` and the artifact panel's export action share one gated, journaled path. */
   private async reportedExport(): Promise<{ readonly text: string; readonly committed: boolean }> {
     try {
-      const { path, receipt } = await this.exportSession();
-      this.options.events.emit("session_exported", { path, state: receipt.state, replayed: receipt.replayed === true });
-      return { text: `corral: session export ${receipt.state}${receipt.replayed ? " (already attached)" : ""}: ${path}`, committed: receipt.state === "committed" };
+      const { path } = await this.exportSession();
+      this.options.events.emit("session_exported", { path });
+      return { text: `corral: session export attached: ${path}`, committed: true };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.options.events.emit("session_export_failed", { reason: reason.slice(0, 512) });
@@ -1092,46 +719,61 @@ export class HostSession {
 
   private get initialTools(): readonly string[] {
     const tools = this.options.capabilities?.enabled.includes("tool_search") ? this.baseLoadout : this.loadout;
-    return tools.filter(name => this.planning?.visible(name) !== false);
+    return tools;
+  }
+
+  private apiCatalog(connection: ApiConnectionId, model: string, effort?: string): Promise<ApiCatalog> {
+    const { modules, spending, apiFetch } = this.options;
+    if (!spending) throw new Error("API models require --max-usd");
+    const provider = CONNECTIONS[connection].provider;
+    const key = JSON.stringify([connection, model, effort]);
+    let catalog = this.apiCatalogs.get(key);
+    if (!catalog) {
+      const context = authContext(provider, connection);
+      catalog = createApiCatalog({ connection, model, effort, spending, credentials: modules.auth.credentials(context),
+        send: modules.auth.transport?.(context) ?? apiFetch ?? this.options.network.fetch,
+        report: usage => this.reportUsage(usage) });
+      this.apiCatalogs.set(key, catalog);
+    }
+    return catalog;
   }
 
   static async create(options: HostSessionOptions): Promise<HostSession> {
     parseBinding(options.binding, options.provider ?? "openai-codex", options.model, options.effort);
-    const connection = admitConnection(options.provider ?? "openai-codex", options.binding, true);
+    const connection = resolveConnection(options.provider ?? "openai-codex", options.connection ?? options.binding?.connection);
     if (options.binding?.origin === "registered" && !options.modules.auth.connections?.includes(options.binding.connection)) {
       throw new Error("connection_unsupported_by_auth: installed auth module does not implement the explicit binding");
     }
     const host = new HostSession(options);
-    // Before optional MCP/LSP startup and before any model request, not a cached widget flag.
-    await host.planning?.refresh();
+    host.restoreTurn(options.sessionManager);
     const { sdk } = options;
     const route = PROVIDERS[host.provider];
     const local = host.provider === "llama.cpp" && options.capabilities?.enabled.includes("llama_cpp.enabled") === true
       ? options.capabilities.llama_cpp : undefined;
     if (host.provider === "llama.cpp" && local === undefined) {
-      throw new Error("module_invalid: llama.cpp requires its explicit generation-bound capability");
+      throw new Error("module_invalid: llama.cpp requires its explicit configured capability");
     }
     const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
-    const apiBinding = isApiConnection(connection) ? options.binding : undefined;
-    const subscriptions = options.build?.session.bare ? await bareProviders(options.modules.auth, route.id) : apiBinding
-      ? { providers: [route.id], credentials: options.modules.auth.credentials(authContext(route.id, connection)) }
+    const api = isApiConnection(connection);
+    if (options.spending && !api && route.lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
+    if (options.build?.settings.profiles.some(profile => profile.connection) && !options.spending) {
+      throw new Error("API children require a Build with --max-usd");
+    }
+    const direct = api ? await host.apiCatalog(connection, options.model, options.effort) : undefined;
+    const subscriptions = direct ? undefined : options.build?.session.bare
+      ? await bareProviders(options.modules.auth, route.id)
       : await subscriptionRoutes(options.modules.auth, route.id, options.binding ? "worker" : options.identity.role);
-    const apiModels = apiBinding ? await createApiCatalog(subscriptions.credentials, apiBinding, options.network.fetch,
-      request => host.budget.physical(request)) : undefined;
-    const models = apiModels?.models ?? localModels?.models ?? await createModelCatalog(subscriptions.credentials, {
-      providers: subscriptions.providers,
+    // A capped session must not switch to the unmeterable Claude SDK subprocess lane.
+    const providers = subscriptions?.providers.filter(id => !options.spending || !PROVIDERS[id].lane) ?? [route.id];
+    const models = direct?.models ?? localModels?.models ?? await createModelCatalog(subscriptions!.credentials, {
+      providers,
       ...(options.build?.session.bare ? { modelsPath: join(options.build.dir, "..", "..", "models.json") } : {}),
     });
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
-    const model = apiModels?.model ?? localModels?.model ?? models.getModel(route.id, modelId);
+    const model = direct?.model ?? localModels?.model ?? models.getModel(route.id, modelId);
     if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
-    const cacheMode = options.identity.role === "pm" ? pmCacheKeyMode(options.promptFile) : "session";
-    if (cacheMode === "stable" && model.api !== "openai-codex-responses") {
-      console.warn(`pm_cache_key_unsupported: ${model.provider}/${model.id}; keeping provider cache defaults`);
-    }
-    const cacheKey = { mode: cacheMode, identity: options.identity, sessionId: () => host.sessionId() };
-    for (const id of subscriptions.providers) {
-      if (!localModels && !apiBinding) {
+    for (const id of direct ? [] : providers) {
+      if (!localModels) {
         const fetch = PROVIDERS[id].auth === "oauth"
           ? guardedFetch(options.network.fetch, (destination) => { options.network.refuse?.(destination); }, id).fetch
           : options.network.fetch;
@@ -1141,43 +783,42 @@ export class HostSession {
               ? options.binding.identity : resolveConnection(id) }, options.aws);
       }
       const restricted = models.getProvider(id);
-      if (!restricted) throw new Error("budget: approved provider is unavailable");
-      const budgeted = !apiBinding && (options.capabilities?.catalog ?? 0) >= 7;
-      if (budgeted || cacheMode === "stable") {
-        const unbounded = PROVIDERS[id].lane !== undefined;
-        const stream = pmCacheKeyStream(restricted.stream.bind(restricted), cacheKey);
-        const streamSimple = pmCacheKeyStream(restricted.streamSimple.bind(restricted), cacheKey);
-        models.registerNativeProvider({ ...restricted,
-          stream: budgeted ? host.budget.wrap(stream, unbounded) : stream,
-          streamSimple: budgeted ? host.budget.wrap(streamSimple, unbounded) : streamSimple,
-        });
-      }
+      if (!restricted) throw new Error("model provider is unavailable");
+      const billing = id === "llama.cpp" ? undefined : PROVIDERS[id].auth === "aws-profile" ? "api" : "subscription";
+      const report = (usage: ModelUsage) => host.reportUsage(usage);
+      models.registerNativeProvider({ ...restricted,
+        stream: observeUsage(restricted.stream.bind(restricted), billing, report, options.spending),
+        streamSimple: observeUsage(restricted.streamSimple.bind(restricted), billing, report, options.spending),
+      });
     }
     host.auxiliaryModels = models;
-    host.summaryRequest = await createSummaryRequest(options, host.budget);
-    host.buildProviders = subscriptions.providers;
-    if (!apiBinding && options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
-      const providers = subscriptions.providers.filter((id) => id === "openai-codex" || id === "anthropic");
-      const search = await createModelCatalog(subscriptions.credentials, { providers });
-      for (const id of providers) {
+    host.summaryRequest = await createSummaryRequest(options, options.spending, usage => host.reportUsage(usage));
+    host.buildProviders = providers;
+    const continuationRoute = options.spending?.continuation;
+    if (continuationRoute && CONNECTIONS[connection].billing !== "subscription") {
+      throw new Error("--paid-route requires a subscription model");
+    }
+    const fallbackRoute = continuationRoute ? paidRoute(continuationRoute) : undefined;
+    const fallback = fallbackRoute ? await host.apiCatalog(fallbackRoute.connection, fallbackRoute.model) : undefined;
+    if (subscriptions && options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
+      const searchProviders = providers.filter((id) => id === "openai-codex" || id === "anthropic");
+      const search = await createModelCatalog(subscriptions.credentials, { providers: searchProviders });
+      for (const id of searchProviders) {
         const fetch = guardedFetch(options.network.fetch, (destination) => { options.network.refuse?.(destination); }, id).fetch;
         restrictProvider(search, id, fetch as typeof globalThis.fetch,
           { configDir: join(options.agentDir, "claude-search"), cwd: options.cwd, searchOnly: true });
         const restricted = search.getProvider(id);
         if (!restricted) throw new Error("subscription search provider is unavailable");
-        // Hosted searches/subprocess loops have no priced finite reservation. Hard budgets
-        // fail closed rather than pretending a model-token bound covers service charges.
         search.registerNativeProvider({ ...restricted,
-          stream: host.budget.wrap(restricted.stream.bind(restricted), true),
-          streamSimple: host.budget.wrap(restricted.streamSimple.bind(restricted), true),
+          stream: observeUsage(restricted.stream.bind(restricted), "subscription", usage => host.reportUsage(usage)),
+          streamSimple: observeUsage(restricted.streamSimple.bind(restricted), "subscription", usage => host.reportUsage(usage)),
         });
       }
       host.searchModels = search;
     }
     const thinkingLevel = options.effort && THINKING.has(options.effort)
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
-    const contract = [options.modules.role.contract(host.roleContext),
-      memoryContext(options.identity.role, options.memoryFile, options.runtimeDir)].filter(Boolean).join("\n\n");
+    const contract = options.modules.role.contract(host.roleContext);
     const factory: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
       const settingsManager = sdk.SettingsManager.inMemory(host.settings);
       const guidance = selectGuidance({
@@ -1199,7 +840,16 @@ export class HostSession {
         ...(sessionStartEvent ? { sessionStartEvent } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
       });
-      if (!localModels && !apiBinding) installModelSelection(result.session, models, subscriptions.providers);
+      if (!localModels && !direct) installModelSelection(result.session, models, providers);
+      if (fallback && continuationRoute && options.spending) {
+        const agent = result.session.agent;
+        agent.streamFunction = withPaidContinuation(agent.streamFunction, connection, options.spending, continuationRoute,
+          (_model, context, streamOptions) => fallback.models.streamSimple(fallback.model, context, streamOptions as never), () => {
+            const text = `Subscription quota exhausted; continuing on ${continuationRoute} under the same spending cap.`;
+            void result.session.sendCustomMessage({ customType: "corral_paid_continuation", content: text, display: true }, { triggerTurn: false });
+            options.events.emit("paid_continuation", { model: continuationRoute, text });
+          });
+      }
       result.session.setActiveToolsByName([...host.initialTools]);
       host.watch(result.session);
       host.sessionsCreated++;
@@ -1229,34 +879,8 @@ export class HostSession {
 
   private async extension(api: ExtensionAPI): Promise<void> {
     residentLifecycle(api);
-    await this.planning?.refresh(); // reload never resets authority to ordinary
-    const policy = this.planning;
-    const pi = policy ? new Proxy(api, { get: (target, property, receiver) => {
-      if (property === "registerTool") return (tool: ToolDefinition) => target.registerTool(this.planningTool(tool));
-      return Reflect.get(target, property, receiver);
-    } }) : api;
+    const pi = api;
     this.dialogPi = pi;
-    if (this.options.switchProfile && this.options.runtimeDir) {
-      const blocked = () => {
-        if (!this.bound || this.closing) return "The session is not ready for a profile switch";
-        if (this.open || this.session.isStreaming || this.session.isBashRunning || this.commands?.pending()
-            || this.session.getSteeringMessages().length || this.session.getFollowUpMessages().length) {
-          return "Wait for the current work and queued input to finish";
-        }
-        if (this.buildControls?.fleet.snapshot().children.some(child => ["queued", "running", "needs"].includes(child.state))) {
-          return "Wait for the build's child agents to finish";
-        }
-        return undefined;
-      };
-      const restart = () => { this.closing = true; this.options.switchProfile?.(); };
-      const controller = this.options.build
-        ? new BuildProfileController({ build: this.options.build, auth: this.options.modules.auth, blocked, restart })
-        : new BoundProfileController({ identity: this.options.identity, runtimeDir: this.options.runtimeDir,
-          auth: this.options.modules.auth, blocked, restart });
-      const installed = installProfileControls(pi, controller);
-      this.panels?.attachProfiles(installed);
-    }
-    this.paidContinuation.extend(pi, this.roleContext);
     registerCacheStats(pi);
     if (this.options.quickSummary) pi.on("session_before_compact", async event => {
       try {
@@ -1281,15 +905,6 @@ export class HostSession {
       const model = this.session.model;
       if (model) this.modelChanged(`${model.provider}/${model.id}`, event.level);
     });
-    if (policy) pi.on("context_with_system", async event => {
-      await policy.refresh();
-      const state = policy.snapshot();
-      if (state.phase === "ordinary" && !state.expected) return undefined;
-      return { messages: [...event.messages, { role: "user" as const, timestamp: Date.now(),
-        content: `[corral canonical assistant workflow] ${JSON.stringify(state)}\n`
-          + "Managed effects remain fenced until their exact typed transition is available. Entering/recovering is not settled read-only. "
-          + "This state report is not owner input, execution consent, review approval or a filesystem grant." }] };
-    });
     if (this.ownerQuestions) {
       this.questionUi = new OwnerQuestionUi(this.ownerQuestions, () => this.bound && !this.closing,
         message => { this.session.sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, undefined); },
@@ -1305,9 +920,8 @@ export class HostSession {
       if (text) event.systemPromptOptions.sections.model_calibration = text;
       else delete event.systemPromptOptions.sections.model_calibration;
     });
-    pi.on("session_start", async (_event, ctx) => {
-      this.continuationUi = ctx.hasUI ? ctx.ui : undefined;
-      if (this.bound) { this.commands?.bound(); await this.recoverPlanReviews(); }
+    pi.on("session_start", () => {
+      if (this.bound) this.commands?.bound();
     });
     const code = this.code;
     if (code) {
@@ -1321,7 +935,7 @@ export class HostSession {
     }
     if (this.additionalLsp) {
       if (this.managedEffects.newLifetime("lsp")) this.additionalLsp = this.additionalLspFactory?.();
-      pi.on("session_start", () => { if (!policy) void this.additionalLsp?.warm(); });
+      pi.on("session_start", () => { void this.additionalLsp?.warm(); });
       pi.on("session_shutdown", async () => {
         await this.managedEffects.stop("lsp", async () => { await this.additionalLsp?.shutdown(); });
       });
@@ -1331,9 +945,8 @@ export class HostSession {
     if (settings) {
       this.managedEffects.newLifetime("mcp");
       this.mcp = new McpAccess(settings, this.options.identity.role, this.options.identity.project,
-        this.options.cwd, this.options.network.mcp, this.planning ? event => this.resourceEvidence("mcp", event) : undefined);
-      if (!policy) await this.mcp.refresh();
-      else if (this.bound && !policy.restricted) await this.planningMcp();
+        this.options.cwd, this.options.network.mcp);
+      await this.mcp.refresh();
       this.mcp.attach(pi, search);
       const access = this.mcp;
       pi.on("session_shutdown", async () => {
@@ -1343,36 +956,34 @@ export class HostSession {
     if (search) pi.registerTool(toolSearch(pi, (name) => this.loadout.includes(name)));
     const specs = this.options.modules.role.tools(this.roleContext);
     const corral = new Set([...corralToolNames(specs), ...(this.jobs && this.options.identity.role === "worker" ? [JOB_MONITOR_TOOL] : [])]);
-    const reads = new Set(specs.filter((spec) => nestedCorralRead(spec.op)).map((spec) => spec.name));
     const rich = this.options.ui !== "plain";
-    this.inspector ??= new InspectorActivity(this.options.events, () => this.panels?.refresh());
-    this.inspector.extend(pi, corral);
     const role = this.options.identity.role;
     this.ledger = this.loadout.includes("corral_todo")
-      ? new TodoLedger(this.options.identity, () => this.options.client.todoSnapshot()) : undefined;
+      ? new TodoLedger(this.options.identity, async () => this.local.todoSnapshot()) : undefined;
     this.ledger?.extend(pi);
-    this.request = this.ledger && (role === "pm" || role === "assistant") ? new RequestContext(this.ledger,
-      (message) => { this.session.sessionManager.appendCustomMessageEntry(message.customType,
-        message.content, message.display, message.details); }, this.marks) : undefined;
-    this.request?.extend(pi);
     for (const spec of specs) {
       const tool = defineCorralTool(spec, {
-        client: this.options.client, allowedOps: this.options.modules.role.corralOps,
-        sessionId: () => this.sessionId(), currentTurn: () => this.currentTurn(),
-        fleetSnapshot: () => this.fleet?.snapshot(),
-        ...(this.options.identity.role === "assistant"
-          ? { confirm: (command: string, context: ConfirmUi, requestId: string) =>
-            this.confirmOwnerAction(command, context, requestId) } : {}),
-        ...(role === "pm" || role === "assistant" ? { triage: { generation: this.options.identity.generation,
-          ask: (proposal: GateTriageProposal, context: TriageUi, signal: AbortSignal | undefined) =>
-            askGateTriage(proposal, context, signal ? AbortSignal.any([this.writeAbort.signal, signal]) : this.writeAbort.signal,
-              () => this.planning?.refusal("corral_gate_triage")) } } : {}),
+        client: this.options.client, identity: this.options.identity,
+        todo: async payload => {
+          const result = this.local.todo(payload);
+          await this.ledger?.restore();
+          return result;
+        },
+        checkpoint: note => {
+          this.session.sessionManager.appendCustomEntry("corral_checkpoint_note", { turn: this.turn, note }, { immediate: true });
+          return { note, turn: this.turn };
+        },
       });
       pi.registerTool(role === "worker" && spec.op === "done" && this.fleet
         ? workerDoneTool(tool, {
-          client: this.options.client, sessionId: () => this.sessionId(), currentTurn: () => this.currentTurn(),
+          attachArtifact: async ({ path, kind, title }) => {
+            const task = this.options.identity.task;
+            if (!task) throw new Error("No task is attached to this session");
+            await this.options.client.artifact(task, path, kind, title);
+          },
           task: this.options.identity.task, run: this.options.identity.run, fleet: () => this.fleet!.snapshot(),
-          recordDir: join(this.options.runtimeDir ?? join(this.options.agentDir, "runtime", String(this.options.identity.generation)), "session-records"),
+          recordDir: join(this.options.runtimeDir ?? join(this.options.agentDir, "runtime"), "session-records"),
+          ...(this.options.sessionDir && this.options.client.configured ? { usageArtifact: () => this.usageArtifact() } : {}),
         }) : tool);
     }
     if (rich) {
@@ -1380,7 +991,7 @@ export class HostSession {
         identity: this.options.identity, provider: this.provider, model: this.options.model,
         cwd: this.options.cwd, ...(this.options.effort ? { effort: this.options.effort } : {}),
       }, this.options.events, () => this.bound, this.options.sdk.Theme);
-      if (this.ledger) installPlanCommand(pi, this.ledger, this.request === undefined, () => this.panels?.planSurface());
+      if (this.ledger) installPlanCommand(pi, this.ledger, true, () => this.panels?.planSurface());
       this.panels?.install(pi, this.options.sdk);
       this.markRows = installMarkRows(pi);
       // Every other tool call is one kit row; build cards and corral operations keep their renderers.
@@ -1388,7 +999,7 @@ export class HostSession {
       const openView: ToolRenderDeps["openView"] = panels ? (view, select) => panels.openView(view, select) : undefined;
       installToolRenderers(pi, {
         cwd: this.options.cwd, ticker: () => this.panels?.ticker, corralSpecs: specs,
-        job: id => this.jobs?.inspection().find(job => job.job === id),
+        job: id => this.commands?.inspection().find(job => job.job === id),
         code: () => this.code, ledger: () => this.ledger, ...(openView ? { openView } : {}),
       });
       const unsubscribe = this.ledger?.onChange(() => this.panels?.refresh());
@@ -1404,13 +1015,10 @@ export class HostSession {
     // One execution check for model-issued and nested calls; a Code Mode child it refuses is
     // reported as denied with no effect.
     pi.on("tool_call", async (event) => {
-      await policy?.refresh();
       const allowed = new Set(this.loadout);
       const nested = event.parentToolCallId !== undefined;
       const child = nested ? nestedChild(event.toolName, event.toolCallId) : undefined;
-      const unjournaled = corral.has(event.toolName) && !reads.has(event.toolName) && child === undefined;
-      const reason = policy?.refusal(event.toolName, event.input as Record<string, unknown>)
-        ?? executionRefusal(event.toolName, nested, allowed, unjournaled);
+      const reason = executionRefusal(event.toolName, nested, allowed);
       if (!reason) return undefined;
       if (child) child.denied = reason;
       this.deniedTools++;
@@ -1425,22 +1033,9 @@ export class HostSession {
       ...(fixed ? { fixed } : {}),
       ...(this.hooks ? { hooks: this.hooks } : {}),
       ...(this.controls.bashRules ? { rules: this.controls.bashRules } : {}),
-      ...(this.permissions ? { permissions: this.permissions } : {}),
+      confirmBash: command => this.confirmBash(command),
       events: this.options.events, corral, currentTurn: () => this.currentTurn(),
-      ...(policy ? { planning: policy } : {}),
     });
-    if (policy) {
-      // ! and !! bypass tool_call in upstream Pi. Keep the same actual admission boundary
-      // AND verified process-group ownership as model shell calls; shell exit is not drain.
-      pi.on("user_bash", async () => {
-        await policy.refresh();
-        const reason = policy.refusal("user_bash");
-        if (reason) return { result: { output: reason, exitCode: 1, cancelled: false, truncated: false } };
-        const operations = this.foregroundShellOperations();
-        return { operations: { exec: (command, cwd, options) =>
-          policy.execute("user_bash", {}, "user-bash", () => operations.exec(command, cwd, options)) } };
-      });
-    }
     if (!this.loadout.includes("bash")) {
       pi.on("user_bash", () => ({
         result: { output: "bash is not in this role's loadout", exitCode: 1, cancelled: false, truncated: false },
@@ -1450,34 +1045,28 @@ export class HostSession {
     // every in-process replacement (/new, /resume, /fork, import) is refused before it happens.
     const refuse = (operation: string, ui: { notify(message: string, type?: "info" | "warning" | "error"): void }) => {
       if (!this.bound) return undefined;
-      const role = this.options.identity.role;
-      const guidance = role === "assistant"
-        ? (this.resume ? "use /new for a new assistant or /resume to pick another assistant session" : "quit and run `corral pi` or `corral pi --resume A-<n>`")
-        : role === "pm" ? "continue here; a stopped PM resumes with `corral agent resume --pm`"
-        : "continue here; a stopped run resumes with `corral agent resume`";
-      const message = `corral: ${operation} is refused while this pane is bound to corral session ${this.boundSessionId}; ` +
-        `corral observes and recovers only that session. ${guidance[0]?.toUpperCase()}${guidance.slice(1)}.`;
+      const message = `corral: ${operation} would replace this session transcript; restart corral-pi to open a different session.`;
       this.options.events.emit("session_replacement_refused", { operation, session_id: this.boundSessionId, message });
       this.notice(message, "warning", ui);
       return { cancel: true };
     };
     pi.on("session_before_switch", (event, ctx) => {
-      if (event.reason === "new" && this.bound && this.options.identity.role === "assistant"
-          && this.options.newAssistant && ctx.mode === "tui") {
-        if (this.closing) return { cancel: true };
-        if (!ctx.isIdle() || this.open || this.session.isBashRunning) {
-          this.notice("corral: wait for the current work to finish before /new", "warning", ctx.ui);
-          return { cancel: true };
-        }
-        this.closing = true;
-        this.options.events.emit("assistant_new_requested", { session_id: this.boundSessionId });
-        this.options.newAssistant();
-        // The supervisor, not Pi's runtime, creates the new identity after this host exits.
-        return { cancel: true };
-      }
       return refuse(event.reason === "new" ? "a new session" : "switching or importing a session", ctx.ui);
     });
     pi.on("session_before_fork", (_event, ctx) => refuse("forking the session", ctx.ui));
+    if (this.checkpoints) pi.registerCommand("rewind", {
+      description: "Restore the worktree and conversation to the start of a turn; /rewind --list",
+      handler: async (args, ctx) => {
+        try {
+          const input = parseRewindCommand(args);
+          const result = await this.rewind(input);
+          if ("list" in input) this.notice(JSON.stringify(result, null, 2), "text", ctx.ui);
+          else this.notice(`Rewound to the start of turn ${input.turn}. Saved work: ${result.rescue_ref}`, "text", ctx.ui);
+        } catch (error) {
+          this.notice(error instanceof Error ? error.message : String(error), "error", ctx.ui);
+        }
+      },
+    });
     if (this.buildControls) {
       const { exit, board } = this.buildControls;
       pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { if (!this.panels?.finish()) exit.open(); } });
@@ -1496,95 +1085,35 @@ export class HostSession {
         },
       });
     }
-    pi.on("tool_result", (event) => this.observeQuestion(event.toolName, event.input, event.details));
     pi.on("input", async (event) => {
-      if (this.closing) return { action: "handled" as const };
+      if (this.closing || this.rewinding) return { action: "handled" as const };
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
       // A build session's record keeps what the owner asked for, verbatim.
-      if (event.source === "interactive" && !event.text.startsWith("/")) this.buildControls?.noteOwnerInput(event.text);
-      // Only text the owner typed into this pane is journaled, before the model sees it.
-      if (event.source !== "interactive" || this.options.identity.role !== "assistant" || event.text.startsWith("/")) {
-        return { action: "continue" as const };
+      if (event.source === "interactive" && !event.text.startsWith("/")) {
+        this.buildControls?.noteOwnerInput(event.text);
+        if (await this.options.paneInput?.(event.text, event.images)) return { action: "handled" as const };
       }
-      const id = await this.journalOwnerInput("pane", event.text);
-      return id === undefined
-        ? { action: "continue" as const }
-        : { action: "transform" as const, text: ownerInputText(event.text, id) };
+      return { action: "continue" as const };
     });
     this.options.modules.role.extend?.(pi, this.roleContext);
-    if (policy) {
-      // Event preflight alone is insufficient: permission dialogs and sibling preflights
-      // can yield before execution. Override only the actual built-in mutation dispatches.
-      if (!this.localTools.some(tool => tool.name === "bash")) {
-        pi.registerTool(this.options.sdk.createBashToolDefinition(this.options.cwd, { operations: this.foregroundShellOperations() }));
-      }
-      pi.registerTool(this.options.sdk.createEditToolDefinition(this.options.cwd));
-      pi.registerTool(this.options.sdk.createWriteToolDefinition(this.options.cwd));
-    }
-    this.relink?.extend(pi);
-    this.resume?.extend(pi);
     // Registered after the role's own handler: upstream keeps the first skill of each name, so
     // a home or repository skill can never replace the role's packaged one (corral-worker).
     pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
     pi.on("session_shutdown", async (event) => {
-      this.shadow?.cancel();
       // InteractiveMode exits the process after runtime disposal; main's finally never runs.
       // Await the release here, but keep reporting through extension reloads.
       if (event.reason === "quit") await this.options.herdr?.close();
-      await this.planReviews?.close(event.reason === "reload");
       if (event.reason === "reload") await this.auxiliary?.cancelAll(); else await this.auxiliary?.close();
       if (event.reason === "reload") await this.fleet?.cancelAll(); else await this.fleet?.close();
       this.commands?.pause();
       await this.jobs?.shutdown();
-      if (event.reason === "reload") await this.assistantShell?.shutdown(); else await this.assistantShell?.close();
     });
   }
 
   /**
-   * Records owner text (typed into the pane, or the owner's y/n to a confirmation) in the
-   * session's owner-input journal and returns its ID; undefined when it was not journaled,
-   * so an owner action cannot cite it.
+   * Presentation cannot affect prompts, session state, or tool results.
    */
-  private async journalOwnerInput(
-    source: "pane" | "dialog" | "confirmation", text: string, command?: string, answers?: string,
-  ): Promise<string | undefined> {
-    if (!this.bound || this.options.daemonHosted) return undefined;
-    const sha256 = sha256Hex(text);
-    const kept = utf8Prefix(text, OWNER_INPUT_TEXT_MAX);
-    const event = this.options.events.emit("owner_input", { source, sha256, bytes: Buffer.byteLength(text) });
-    const payload = {
-      kind: "owner_input", source, text: kept, sha256,
-      ...(kept !== text ? { truncated: true } : {}), ...(command !== undefined ? { command } : {}),
-      ...(answers !== undefined ? { answers } : {}),
-    };
-    try {
-      const receipt = await this.options.client.call("event", {
-        requestId: eventRequestId(this.options.identity.generation, event.seq), payload, turn: this.currentTurn(),
-      });
-      const id = (receipt.result as { input?: unknown } | undefined)?.input;
-      if (receipt.state === "committed" && typeof id === "string") return id;
-      this.options.events.emit("owner_input_unjournaled", { seq: event.seq, result: JSON.stringify(receipt.result).slice(0, 256) });
-    } catch (error) {
-      this.options.events.emit("owner_input_unjournaled", { seq: event.seq, reason: (error instanceof Error ? error.message : String(error)).slice(0, 256) });
-    }
-    return undefined;
-  }
-
-  /** Shows the owner a confirm-class command in the pane and journals the answer for the request. */
-  private async confirmOwnerAction(command: string, context: ConfirmUi, requestId: string): Promise<boolean> {
-    if (this.remotePrompts) {
-      if (this.planning?.refusal("corral_owner_action")) return false;
-      return this.remotePrompts.confirmation(command, requestId);
-    }
-    if (!context.hasUI || this.planning?.refusal("corral_owner_action")) return false;
-    const signal = this.writeAbort.signal;
-    const yes = await context.ui.confirm("corral: confirm owner action", command, { signal });
-    if (signal.aborted || this.planning?.refusal("corral_owner_action")) return false;
-    return await this.journalOwnerInput("confirmation", yes ? "y" : "n", command, requestId) !== undefined;
-  }
-
-  /** Never let presentation recording affect prompts, lifecycle receipts or tool results. */
   private addMark(mark: TranscriptMark): boolean {
     return recordTranscriptMark(this.options.marks ?? this.markRows, mark, {
       attached: this.attached, plain: this.options.ui === "plain", bound: this.bound,
@@ -1611,7 +1140,7 @@ export class HostSession {
     const cells = this.code?.state().cells;
     const ownerKeys = this.options.herdr?.readback().blocked_on;
     return turnWaits({
-      jobs: this.jobs?.inspection(),
+      jobs: this.commands?.inspection(),
       questions: this.ownerQuestions?.list(),
       ownerKeys: Array.isArray(ownerKeys) ? ownerKeys.filter((key): key is string => typeof key === "string") : [],
       cells: Array.isArray(cells) ? cells.flatMap((cell: unknown) => {
@@ -1624,7 +1153,6 @@ export class HostSession {
         ...((this.buildControls?.fleet ?? this.fleet)?.snapshot().children ?? []).map(child => ({ id: child.id, state: child.state, label: `agent ${child.id}: ${child.title}` })),
       ],
       events: [
-        ...(this.request?.waits() ?? []),
         ...[...this.monitorFacts.values()].filter(fact => !fact.result && !fact.delivered)
           .map((fact): TurnWait => ({ kind: "event", id: fact.key, label: `monitor ${fact.key} on ${fact.job}` })),
       ],
@@ -1633,19 +1161,12 @@ export class HostSession {
 
   private watch(session: AgentSession): void {
     this.unsubscribe?.();
-    this.deliveredTextHashes = undefined;
     session.setQueueObserver({
       ...this.queue.observer,
       queue: change => {
         this.queue.observer.queue(change);
         // Wake waits only after the synchronous queue mutation has returned.
         if (change.action === "enqueue" && change.mode === "steer") queueMicrotask(() => this.inputWake.notify());
-        if (change.action !== "drain" || change.nextRun || !this.open) return;
-        for (const { tag } of change.entries) {
-          if (typeof tag === "object" && tag !== null && "idempotency_key" in tag && typeof tag.idempotency_key === "string") {
-            this.costTurn({ phase: "start", key: tag.idempotency_key, queued: true });
-          }
-        }
       },
     });
     this.terminalInputSequence = 0;
@@ -1654,7 +1175,7 @@ export class HostSession {
     // Pi's Esc path calls abort directly, before a cancelled retry emits its final event.
     const abort = session.abort.bind(session);
     session.abort = () => {
-      if (this.open) this.stopCause ??= this.closing ? "host" : this.budget.state().stopped ? "budget" : "owner";
+      if (this.open) this.stopCause ??= this.closing ? "host" : "owner";
       return abort();
     };
     this.panelStats = undefined;
@@ -1662,6 +1183,9 @@ export class HostSession {
     this.unsubscribe = session.subscribe((event) => {
       if (event.type === "message_end") {
         this.panelStats = undefined;
+        if (event.message.role === "assistant" && event.message.stopReason !== "aborted") {
+          this.turnError = event.message.stopReason === "error" ? (event.message.errorMessage || "provider_error").slice(0, 512) : null;
+        }
         if (event.message.role === "assistant" && event.message.stopReason === "aborted") {
           this.stopCause ??= this.closing ? "host" : "owner";
         }
@@ -1685,7 +1209,7 @@ export class HostSession {
         this.turnStarted();
       } else if (event.type === "agent_end" && this.marks && this.attached !== "headless") {
         this.turnFacts.end(this.turn, Date.now(), session.getSessionStats().cost, this.currentWaits(),
-          { stopCause: this.stopCause, error: this.budget.state().stopped });
+          { stopCause: this.stopCause, error: !!this.turnError });
       } else if (event.type === "tool_execution_start") {
         this.turnFacts.toolStarted(this.turn, event.toolCallId);
       } else if (event.type === "agent_settled") this.turnEnded(event.aborted);
@@ -1694,13 +1218,11 @@ export class HostSession {
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
         const message = event.message.errorMessage ?? "";
         const provider = session.model?.provider as ProviderId | undefined;
-        const connection = resolveConnection(provider ?? this.options.provider ?? "openai-codex", this.options.binding?.connection);
+        const connection = this.currentConnection(provider);
         const failure = messageFailure(event.message, connection);
-        if ((!message.includes("budget_exhausted") && failure.category !== "local_budget") || !this.budget.state().stopped) {
-          this.report("provider_error", { class: provider === "amazon-bedrock" || provider === "llama.cpp"
-            ? providerErrorClass(message) : failureClass(failure),
-            ...(provider === "amazon-bedrock" || provider === "llama.cpp" ? {} : { failure }) });
-        }
+        this.report("provider_error", { class: provider === "amazon-bedrock" || provider === "llama.cpp"
+          ? providerErrorClass(message) : failureClass(failure),
+          ...(provider === "amazon-bedrock" || provider === "llama.cpp" ? {} : { failure }) });
       }
       this.liveEvents.observe(event, this.turn);
     });
@@ -1708,12 +1230,11 @@ export class HostSession {
   }
 
   private turnStarted(): void {
-    this.writeAbort.abort();
-    this.writeAbort = new AbortController();
     this.turn++;
-    this.paidContinuation.started();
+    this.session.sessionManager.appendCustomEntry("corral_turn", this.turn, { immediate: true });
     this.open = true;
-    this.stopCause = this.budget.state().stopped ? "budget" : undefined;
+    this.turnError = null;
+    this.stopCause = undefined;
     if (this.marks && this.attached !== "headless") this.turnFacts.start(this.turn, Date.now(), this.session.getSessionStats().cost);
     const origin: TurnOrigin = this.nextTurnOrigin
       ?? (this.lastInputSource === "interactive" ? { kind: "owner_terminal" } : { kind: "unknown" });
@@ -1722,40 +1243,11 @@ export class HostSession {
     this.ownerInput = false;
     // Before the prompt is recorded: its parent is the cursor a rewind to this turn restores.
     if (this.bound) this.checkpoint("start");
-    this.costTurn({ phase: "start",
-      key: origin.kind === "bridge" || origin.kind === "continuation" ? origin.idempotency_key : null });
     this.report("turn_started", { origin, provider: this.session.model?.provider, model: this.session.model?.id });
-    if (this.budget.state().stopped) this.report("budget_exhausted", { budget: this.budget.state() });
     this.options.herdr?.turnStarted();
-    const inbox = this.nextTurnInbox;
-    this.nextTurnInbox = false;
-    this.shadow?.start(inbox && origin.kind === "bridge" ? "inbox" : origin.kind === "continuation" ? "continuation" : "other");
-  }
-
-  /** Only corral's receipts open or settle a question in the herdr projection. */
-  private observeQuestion(tool: string, input: Record<string, unknown>, details: unknown): void {
-    const receipt = details as Partial<CorralReceipt> | undefined;
-    const result = (receipt?.result ?? {}) as { key?: unknown; blocking?: unknown; code?: unknown; revision?: unknown };
-    const revision = typeof result.revision === "number" ? result.revision : undefined;
-    if (tool === "corral_ask" && receipt?.state === "committed" && receipt.replayed !== true &&
-        typeof result.key === "string" && typeof input.kind === "string") {
-      const blocking = typeof result.blocking === "boolean" ? result.blocking : input.blocking === true;
-      this.options.herdr?.asked({ key: result.key, kind: input.kind, blocking, revision: revision ?? 1 });
-    }
-    if (tool !== "corral_withdraw" || typeof input.key !== "string") return;
-    if (receipt?.state === "committed") this.options.herdr?.resolved(input.key, revision);
-    else if (receipt?.state === "rejected" && NOT_PENDING.has(String(result.code))) this.options.herdr?.resolved(input.key);
-  }
-
-  /** Bridge `questions`: corral's question states, including transitions this host did not make. */
-  questionsChanged(updates: readonly QuestionUpdate[]): Record<string, unknown> {
-    if (!this.options.herdr) return { applied: false };
-    this.options.herdr.apply(updates);
-    return { applied: true, blocked_on: this.options.herdr.readback().blocked_on };
   }
 
   private turnEnded(aborted: boolean): void {
-    this.writeAbort.abort();
     if (!this.open) return;
     if (aborted) this.stopCause ??= this.closing ? "host" : "owner";
     this.open = false;
@@ -1764,25 +1256,13 @@ export class HostSession {
     const ownerInput = this.ownerInput;
     this.ownerInput = false;
     if (this.bound) this.checkpoint("end");
-    this.costTurn({ phase: "end" });
     // agent_end normally captured the run already. A startup abort can settle without it.
     if (this.marks && this.attached !== "headless") this.turnFacts.end(this.turn, Date.now(), this.session.getSessionStats().cost, this.currentWaits(),
-      { stopCause: this.stopCause, error: this.budget.state().stopped });
+      { stopCause: this.stopCause, error: !!this.turnError });
     this.report("turn_ended", { aborted, cancelled, owner_input: ownerInput });
     this.options.herdr?.turnEnded();
     this.commands?.flush();
-    if (!this.bound) this.turnFacts.finish(this.turn);
-  }
-
-  private costTurn(marker: { phase: "start"; key: string | null; queued?: true } | { phase: "end" }): void {
-    if (this.options.identity.role !== "pm" && this.options.identity.role !== "assistant") return;
-    try {
-      this.session.sessionManager.appendCustomEntry("corral_cost_turn", {
-        generation: this.options.identity.generation, turn: this.turn, ...marker,
-      }, { immediate: true });
-    } catch {
-      // Cost attribution is best-effort reporting, never turn admission.
-    }
+    this.turnFacts.finish(this.turn);
   }
 
   private checkpoint(phase: "start" | "end"): void {
@@ -1794,124 +1274,8 @@ export class HostSession {
     });
   }
 
-  private report(kind: "turn_started" | "turn_ended" | "provider_error" | "budget_exhausted", data: Record<string, unknown>): void {
-    const turn = this.turn;
-    const event = this.options.events.emit(kind, { turn, ...data });
-    if (!this.bound) return;
-    const payload: Record<string, unknown> = { kind, turn };
-    if (kind === "turn_started") {
-      payload.origin = data.origin;
-      payload.provider = data.provider;
-      payload.model = data.model;
-    }
-    if (kind === "provider_error") { payload.class = data.class; payload.failure = data.failure; }
-    if (kind === "budget_exhausted") payload.budget = data.budget;
-    if (kind === "turn_ended" && data.owner_input === true) payload.owner_input = true;
-    if (kind === "turn_ended" && data.cancelled === true) payload.cancelled = true;
-    if (kind === "turn_ended" && this.commands?.pending()) payload.pending_commands = true;
-    const role = this.options.identity.role;
-    if (kind === "turn_ended" && data.aborted === true && (role === "pm" || role === "assistant")) payload.aborted = true;
-    const requestId = eventRequestId(this.options.identity.generation, event.seq);
-    this.calls = this.calls.then(() => this.send(requestId, payload, turn));
-  }
-
-  private async send(requestId: string, payload: Record<string, unknown>, turn: number): Promise<void> {
-    this.stats.sent++;
-    let last: unknown;
-    for (let attempt = 0; attempt < REPORT_ATTEMPTS; attempt++) {
-      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, REPORT_BACKOFF_MS * 2 ** (attempt - 1)));
-      try {
-        const receipt: CorralReceipt = await this.options.client.call("event", { requestId, payload, turn });
-        if (receipt.state === "rejected") {
-          this.stats.rejected++;
-          this.stats.lastError = JSON.stringify(receipt.result).slice(0, 256);
-        } else {
-          this.stats.committed++;
-          if (payload.kind === "provider_error" && receipt.state === "committed") {
-            const failure = payload.failure as ProviderFailure | undefined;
-            if (failure) this.paidContinuation.failed(turn, failure);
-          }
-          if (payload.kind === "turn_ended" && receipt.state === "committed") {
-            const relinked = await this.relink?.check(() => !this.closing && !this.open && this.turn === turn
-              && !this.session.isStreaming && !this.session.isBashRunning);
-            if (relinked) { this.turnFacts.finish(turn); return; }
-            if (this.paidContinuation.quota(turn)) {
-              this.continuations = this.continuations.then(async () => {
-                await this.drained();
-                const requested = this.paidContinuation.request(turn, () => !this.closing && !this.open && this.turn === turn
-                  && !this.session.isStreaming && !this.session.isBashRunning && !this.commands?.pending()
-                  && this.session.getSteeringMessages().length === 0 && this.session.getFollowUpMessages().length === 0
-                  && this.currentWaits().length === 0);
-                if (requested) this.turnFacts.finish(turn); else this.turnRecorded(receipt.result, turn);
-              });
-              return;
-            }
-            this.turnRecorded(receipt.result, turn);
-          }
-        }
-        if (payload.kind === "turn_ended" && receipt.state !== "committed") this.turnFacts.finish(turn);
-        return;
-      } catch (error) {
-        last = error;
-        this.stats.lastError = error instanceof Error ? error.message.slice(0, 256) : String(error);
-      }
-    }
-    this.stats.failed++;
-    this.stats.lastError = last instanceof Error ? last.message.slice(0, 256) : String(last);
-    if (payload.kind === "turn_ended") this.turnFacts.finish(turn);
-  }
-
-  /** Corral's request decision for ended turn `turn`: a stop is shown, a due continuation queued. */
-  private turnRecorded(result: unknown, turn: number): void {
-    const stopped = this.request?.stopped(result);
-    const continuation = (result as { request?: { continuation?: { state?: string; reason?: string } } } | null)?.request?.continuation;
-    const recorded = this.turnFacts.finish(turn, { continuationStopped: continuation?.state === "stopped" ? continuation.reason : undefined });
-    if (stopped) {
-      this.options.events.emit("continuation_stopped", { reason: stopped });
-      if (!recorded) this.request?.notify(`corral: automatic continuation stopped (${stopped.replace("_", " ")}); `
-        + "the plan still has open steps.", false);
-    }
-    const due = this.request?.due(result);
-    if (due) this.continuations = this.continuations.then(() => this.continueRequest(due, turn));
-  }
-
-  /**
-   * Starts the continuation that ended turn `granted` earned, only while that turn is still the
-   * latest, the pane is idle, the budget holds and the canonical plan is still the granted
-   * revision, each checked again after the ledger read: a turn that started (and perhaps was
-   * cancelled or failed) meanwhile voids it.
-   */
-  private async continueRequest(due: DueContinuation, granted: number): Promise<void> {
-    const key = due.continuation.key;
-    const skip = (reason: string) => {
-      this.options.events.emit("continuation_skipped", { key, reason });
-      if (this.marks) this.request?.notify(`corral: automatic continuation refused (${reason.replace(/_/g, " ")})`);
-    };
-    const ledger = this.ledger;
-    const blocked = () => this.closing ? "closing" : this.open ? "busy"
-      : this.budget.state().stopped ? "budget_exhausted" : this.turn !== granted ? "superseded_by_turn" : undefined;
-    const before = ledger ? blocked() : "closing";
-    if (before || !ledger) return skip(before ?? "closing");
-    try {
-      await ledger.restore();
-    } catch {
-      return skip("recheck_failed");
-    }
-    const after = blocked();
-    if (after) return skip(after);
-    const current = ledger.current;
-    if (current?.plan !== due.plan || current.revision !== due.revision) return skip("superseded");
-    this.options.events.emit("continuation", { key, attempt: due.continuation.attempt, plan: due.plan,
-      revision: due.revision });
-    this.session.prompt(continuationText(due), {
-      source: "rpc",
-      preflightResult: (disposition) => {
-        if (disposition === "started") this.nextTurnOrigin = { kind: "continuation", idempotency_key: key };
-        else skip(disposition);
-      },
-    }).catch((error: unknown) => {
-      skip(`refused: ${(error instanceof Error ? error.message : String(error)).slice(0, 128)}`);
-    });
+  private report(kind: "turn_started" | "turn_ended" | "provider_error", data: Record<string, unknown>): void {
+    this.options.events.emit(kind, { turn: this.turn, ...data });
   }
 
   /** A child-targeted composer never submits its text to the parent conversation. */
@@ -1925,16 +1289,31 @@ export class HostSession {
   markAttached(mode: "interactive" | "headless"): void {
     this.attached = mode;
     this.options.events.emit(mode);
-    if (this.bound) this.paidContinuation.show();
+  }
+
+  private usageArtifact(): string {
+    const path = join(this.options.sessionDir!, "usage.json");
+    const { tokens } = this.session.getSessionStats();
+    writeFileSync(path, `${JSON.stringify({ transcriptTokens: tokens, budget: this.options.spending?.snapshot }, null, 2)}\n`, { mode: 0o600 });
+    return path;
+  }
+
+  private reportUsage(usage: ModelUsage): void {
+    if (!this.options.client.configured) return;
+    this.calls = this.calls.then(() => this.options.client.usage(usage)).catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.options.events.emit("usage_report_failed", { reason: reason.slice(0, 512) });
+    });
+  }
+
+  private currentConnection(provider?: ProviderId): ConnectionId {
+    const active = this.options.spending?.activeRoute;
+    if (active) return paidRoute(active).connection;
+    return !provider || provider === this.provider ? this.connection : resolveConnection(provider);
   }
 
   drained(): Promise<unknown> {
     return this.calls;
-  }
-
-  /** Every continuation recheck queued so far has decided (and, if due, submitted its prompt). */
-  continued(): Promise<void> {
-    return this.continuations;
   }
 
   /** Native panels frame the dialog and give its row budget; every other host keeps the plain dialog. */
@@ -1943,8 +1322,6 @@ export class HostSession {
     return panels ? { surface: "panels", rows: () => panels.dialogRows() } : { surface: "plain" };
   }
 
-  /** Local review lifetimes started so far have settled and their notices were attempted. */
-  async reviewNoticed(): Promise<void> { await this.planReviews?.drained(); }
 
   /** Every detached Code Mode cell's notice started so far has been delivered or refused. */
   async codeNoticed(): Promise<void> {
@@ -1955,7 +1332,6 @@ export class HostSession {
     closeResidentSession(this.sessionId());
     if (this.open) this.stopCause ??= "host";
     this.closing = true;
-    this.shadow?.cancel();
     // Close both resource admission barriers synchronously, even if another cleanup fails.
     const resources = this.stopManagedResources();
     void resources.catch(() => {}); // observed below, without an early unhandled rejection
@@ -1969,194 +1345,146 @@ export class HostSession {
     this.panels?.dispose();
     const released = this.options.herdr?.close();
     // Stop the parent's follow-up loop before cancelled children can return tool results.
-    this.writeAbort.abort();
     await this.code?.close();
     const aborted = this.session.abort();
-    await this.planReviews?.close();
     await this.auxiliary?.close();
     await this.buildControls?.close();
     await this.fleet?.close();
     await this.jobs?.shutdown();
-    await this.assistantShell?.close();
     await aborted;
     await resources;
     this.session.dispose();
     await released;
   }
 
-  async hello(bindNonce: string, pane: string | null, ctlCapSha256: string): Promise<CorralReceipt> {
-    const sessionId = this.session.sessionId;
-    const sessionFile = this.session.sessionFile;
-    if (!sessionFile) throw new Error("hello_failed: the Pi session has no session file");
-    const receipt = await this.options.client.call("hello", {
-      requestId: eventRequestId(this.options.identity.generation, 0),
-      bindNonce,
-      payload: {
-        ctl_cap_sha256: ctlCapSha256, session_file: sessionFile, pid: process.pid,
-        start_time: processStartTime(), pane,
-        ...(this.options.binding ? { binding_digest: this.options.binding.digest } : {}),
-      },
-    });
-    if (receipt.state !== "committed") {
-      const result = receipt.result as { code?: string; reason?: string } | undefined;
-      throw new Error(`hello_refused: ${result?.code ?? receipt.state}: ${result?.reason ?? ""}`);
+  private restoreTurn(manager: SessionManager): void {
+    for (const entry of manager.getEntries()) {
+      if (entry.type === "custom" && entry.customType === "corral_turn" && typeof entry.data === "number"
+        && Number.isSafeInteger(entry.data) && entry.data > this.turn) this.turn = entry.data;
     }
-    const result = receipt.result;
-    this.paidContinuation.accept(typeof result === "object" && result !== null && "continuation" in result
-      ? result.continuation : undefined);
-    // Session order, unlike cross-process wall clocks, is a stable recovery boundary.
-    // The one-shot nonce distinguishes children that reuse this session and restart at g1.
-    // No turn is admitted until this generation's committed hello has been recorded.
-    this.session.sessionManager.appendCustomEntry("corral_host_bound", {
-      generation: this.options.identity.generation, session_id: sessionId,
-      bind_nonce_sha256: sha256Hex(bindNonce),
-      ...(this.options.binding ? { binding: this.options.binding } : {}),
-    }, { immediate: true });
+  }
+
+  /** Open the local transcript and runtime. */
+  async startLocal(): Promise<void> {
+    const { sessionId, sessionFile, sessionManager } = this.session;
+    if (!sessionFile) throw new Error("the Pi session has no transcript path");
+    // Pi defers a new transcript until the first message unless an entry is flushed explicitly.
+    if (!existsSync(sessionFile)) sessionManager.appendCustomEntry("corral_host_started", { pid: process.pid }, { immediate: true });
     this.boundSessionId = sessionId;
-    this.queue.bind(sessionId, sha256Hex(bindNonce));
     const commandFacts: CommandFact[] = [], monitorFacts: MonitorFact[] = [];
     for (const entry of this.session.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === COMMAND_ENTRY) commandFacts.push(entry.data as CommandFact);
       if (entry.type === "custom" && entry.customType === MONITOR_ENTRY) monitorFacts.push(entry.data as MonitorFact);
     }
-    const bound = (receipt.result ?? {}) as { herdr_seq_epoch_ms?: unknown; questions?: unknown };
-    this.options.herdr?.bind({ sessionId, sessionFile, epochMs: bound.herdr_seq_epoch_ms, questions: bound.questions });
-    await this.planning?.refresh();
-    if (this.planning && !this.planning.restricted) await this.planningMcp();
-    if ((this.options.capabilities?.catalog ?? 0) >= 7) await this.budget.refresh();
-    await this.writePermissionNotice?.();
-    this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
+    this.options.herdr?.bind({ sessionId, sessionFile });
+    this.options.events.emit("bound", { session_id: sessionId });
     this.commands?.bound(commandFacts, monitorFacts);
     await this.questionUi?.recover();
-    await this.recoverPlanReviews();
-    return receipt;
   }
 
-  /** Only a journaled command-origin input can acknowledge a completion, never quoted log text. */
   private commandNoticeSeen(key: string): boolean {
-    const hashes = new Set<string>();
-    for (const entry of this.session.sessionManager.getEntries()) {
-      if (entry.type !== "custom" || !["corral_delivery", "corral_fixture_delivery"].includes(entry.customType)) continue;
-      const data = entry.data;
-      if (!data || typeof data !== "object" || !("origin" in data) || data.origin !== "command") continue;
-      const hash = "text_sha256" in data ? data.text_sha256 : "textSha256" in data ? data.textSha256 : undefined;
-      if (typeof hash === "string") hashes.add(hash);
-    }
     const marker = `[corral notice ${key}]`;
-    const texts = [...this.session.getFollowUpMessages(), ...this.session.getSteeringMessages(),
+    return [...this.session.getFollowUpMessages(), ...this.session.getSteeringMessages(),
       ...this.session.messages.flatMap(message => message.role === "user" ? [typeof message.content === "string" ? message.content
-        : message.content.filter(part => part.type === "text").map(part => part.text).join("\n")] : [])];
-    return texts.some(text => text.split("\n").includes(marker) && hashes.has(sha256Hex(text)));
+        : message.content.filter(part => part.type === "text").map(part => part.text).join("\n")] : [])]
+      .some(text => text.split("\n").includes(marker));
   }
 
-  /** Queued notices are retried on restart unless the actual transcript already contains them. */
   private async commandNotice(key: string, text: string): Promise<string> {
     if (this.commandNoticeSeen(key)) return "duplicate";
-    const tagged = `[corral notice ${key}]\n${text}`;
-    const sent = await this.submit({ text: tagged, busyPolicy: "steer", idempotencyKey: key, origin: "command" }, key);
+    const sent = await this.submitAutomated(`[corral notice ${key}]\n${text}`);
     return sent.disposition;
   }
 
-  deliveryHost(): DeliveryHost {
-    return {
-      appendEntry: (customType, data) => {
-        this.session.sessionManager.appendCustomEntry(customType, data);
-      },
-      sessionId: () => this.sessionId(),
-    };
+  private submitAutomated(text: string): Promise<SubmitResult> {
+    const input: SessionInput = { text, busyPolicy: "steer", origin: "auto" };
+    return this.options.automatedInput?.(input) ?? this.submitLocal(input);
   }
 
-  /** Journal provenance, never an interpretation of words that look like a host envelope. */
-  hostDelivered(text: string): boolean {
-    if (!this.deliveredTextHashes) {
-      const hashes = new Set<string>();
-      let delivery = false;
-      for (const entry of this.session.sessionManager.getEntries()) {
-        if (entry.type === "custom" && (entry.customType === "corral_delivery" || entry.customType === "corral_fixture_delivery")) {
-          const data: unknown = entry.data;
-          if (data && typeof data === "object") {
-            const hash = "text_sha256" in data ? data.text_sha256 : "textSha256" in data ? data.textSha256 : undefined;
-            if (typeof hash === "string") hashes.add(hash);
-          }
-          delivery = true;
-        } else if (delivery && entry.type === "message" && entry.message.role === "user") {
-          const content = entry.message.content;
-          hashes.add(sha256Hex(typeof content === "string" ? content
-            : content.filter(part => part.type === "text").map(part => part.text).join("\n")));
-          delivery = false;
+  submitLocal(input: SessionInput, images?: ImageContent[]): Promise<SubmitResult> {
+    if (!this.bound || this.closing) return Promise.resolve({ disposition: "rejected", reason: "host_not_ready" });
+    if (this.rewinding) return Promise.resolve({ disposition: "rejected", reason: "rewind_in_progress" });
+    return this.promptInput(input, this.queue.bridgeInput(input), images);
+  }
+
+  private promptInput(input: SessionInput,
+    queueTag: unknown, images?: ImageContent[]): Promise<SubmitResult> {
+    const { promise, resolve } = Promise.withResolvers<SubmitResult>();
+    this.session.prompt(input.text, {
+      source: "rpc", queueTag, ...(images ? { images } : {}),
+      ...(input.busyPolicy === "steer" ? { streamingBehavior: "steer" as const } : {}),
+      ...(input.busyPolicy === "follow_up" ? { streamingBehavior: "followUp" as const } : {}),
+      preflightResult: (disposition) => {
+        if (disposition !== "started") {
+          resolve({ disposition });
+          return;
         }
-      }
-      this.deliveredTextHashes = hashes;
-    }
-    return this.deliveredTextHashes.has(sha256Hex(text));
-  }
-
-  async submit(input: SubmitInput, requestId: string, images?: ImageContent[]): Promise<SubmitResult> {
-    if (!this.bound) return { disposition: "rejected", reason: "host_not_bound" };
-    if (this.closing) return { disposition: "rejected", reason: "host_closing" };
-    // Lifecycle transitions are the owner's: only text typed in the pane runs /resume.
-    if (this.resume && /^\/resume(\s|$)/.test(input.text.trim())) return { disposition: "rejected", reason: "owner_only_command" };
-    const queueTag = this.queue.bridgeInput(input, images);
-    try {
-      await this.options.modules.delivery.accept({
-        requestId, idempotencyKey: input.idempotencyKey, origin: input.origin, busyPolicy: input.busyPolicy,
-        text: input.text, textSha256: sha256Hex(input.text), generation: this.options.identity.generation,
-      }, this.deliveryHost());
-      if (this.deliveredTextHashes) {
-        this.deliveredTextHashes.add(sha256Hex(input.text));
-        const split = holdContextOnly(input.text);
-        if (split) this.deliveredTextHashes.add(sha256Hex(split.text));
-      }
-    } catch (error) {
-      this.queue.observer.lifecycle({ tag: queueTag, event: "rejected", reason: `delivery_refused: ${String(error).slice(0, 256)}` });
-      return { disposition: "rejected", reason: `delivery_refused: ${error instanceof Error ? error.message : error}` };
-    }
-    // Only a corral inbox delivery can carry the owner's answer to a bound permission question.
-    const permission = input.origin === "corral-inbox" ? this.permissions?.observeAnswer(input.text) : undefined;
-    if (permission) this.options.events.emit("bash_permission_answer", { decision: permission });
-    if (input.origin === "corral-inbox") {
-      for (const { key, revision } of answeredKeys(input.text)) this.options.herdr?.resolved(key, revision);
-    }
-    if (this.closing) {
-      this.queue.observer.lifecycle({ tag: queueTag, event: "rejected", reason: "host_closing" });
-      return { disposition: "rejected", reason: "host_closing" };
-    }
-    return new Promise<SubmitResult>((resolve) => {
-      let settled = false;
-      const settle = (result: SubmitResult) => {
-        if (settled) return;
-        settled = true;
-        resolve(result);
-      };
-      this.session.prompt(input.text, {
-        source: "rpc", queueTag, ...(images ? { images } : {}),
-        ...(input.busyPolicy === "steer" ? { streamingBehavior: "steer" as const } : {}),
-        ...(input.busyPolicy === "follow_up" ? { streamingBehavior: "followUp" as const } : {}),
-        preflightResult: (disposition) => {
-          if (disposition !== "started") {
-            settle({ disposition });
-            return;
-          }
-          this.nextTurnOrigin = { kind: "bridge", idempotency_key: input.idempotencyKey };
-          this.nextTurnInbox = input.origin === "corral-inbox";
-          settle({ disposition, turn: this.turn + 1 });
-        },
-      }).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        settle({ disposition: "rejected", reason: /already processing/i.test(message) ? "busy" : message.slice(0, 256) });
-      });
+        this.nextTurnOrigin = { kind: "bridge" };
+        resolve({ disposition, turn: this.turn + 1 });
+      },
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      resolve({ disposition: "rejected", reason: /already processing/i.test(message) ? "busy" : message.slice(0, 256) });
     });
+    return promise;
   }
-  /** Remote input IDs originate only in the daemon's journal; never create an owner-input event. */
-  remoteOwnerInput(input: string): void { this.remotePrompts?.setInput(input); }
+  private confirmBash(command: string): string | undefined {
+    const questions = this.ownerQuestions;
+    const text = `Run this command?\n${command}`;
+    if (!questions || text.length > 1000) return "bash rule requires owner confirmation; use a shorter command; nothing ran";
+    const id = this.bashQuestions.get(command);
+    if (id) {
+      const prior = questions.get(id);
+      if (prior?.status === "pending") return `Waiting for owner question ${id}; nothing ran`;
+      this.bashQuestions.delete(command);
+      if (prior?.answers?.[0]?.option === "allow") return;
+      return "The owner did not allow this command; nothing ran";
+    }
+    const question = questions.ask(crypto.randomUUID(), [{ question: text, options: ["allow", "deny"], freeText: false }]);
+    this.bashQuestions.set(command, question.id);
+    return `Waiting for owner question ${question.id}; nothing ran`;
+  }
 
-  /** Select only a model already in this generation's admitted provider catalog. */
+  pendingOwnerQuestions() {
+    return this.ownerQuestions?.pending().flatMap(record => {
+      const question = record.questions[0];
+      return question && record.questions.length === 1 ? [{ id: record.id, question: question.question,
+        options: question.options, free_text: question.freeText !== false, status: "pending" }] : [];
+    }) ?? [];
+  }
+
+  async answerQuestion({ question, option, text }: AnswerInput, before: () => Promise<unknown>): Promise<string> {
+    const pending = this.ownerQuestions;
+    const record = pending?.get(question);
+    if (!pending || !record) return "missing";
+    if (record.status !== "pending") return pending.status(question);
+    const choice = record.questions[0];
+    if (!choice || record.questions.length !== 1 || !validAnswer(choice, { option, text })) {
+      throw new BridgeRefusal("invalid_question_answer", "choose a listed option or use free text if allowed");
+    }
+    await before();
+    return pending.answer(question, [{ option, text }]);
+  }
+
+  async replyToQuestion(text: string): Promise<boolean> {
+    const pending = this.ownerQuestions;
+    const records = pending?.pending() ?? [];
+    const record = records[0], question = record?.questions[0];
+    if (!pending || !record || records.length !== 1 || !question || record.questions.length !== 1 || text.startsWith("/")) return false;
+    const option = text.trim();
+    const answer = question.options.includes(option) ? { option } : { text };
+    if (!validAnswer(question, answer)) return false;
+    await pending.answer(record.id, [answer]);
+    return true;
+  }
+
+  /** Select a model in the provider catalog already configured for this process. */
   async selectRemoteModel(name: string, effort?: string): Promise<void> {
-    if (!this.options.daemonHosted || this.open || this.closing) throw new Error("remote_model_selection_unavailable");
+    if (this.open || this.closing) throw new Error("remote_model_selection_unavailable");
     const slash = name.indexOf("/");
     const provider = slash < 0 ? this.provider : name.slice(0, slash);
     const id = slash < 0 ? name : name.slice(slash + 1);
-    if (provider !== this.provider) throw new Error("provider_change_requires_new_generation");
+    if (provider !== this.provider) throw new Error("provider change requires relaunching corral-pi with --provider and --model");
     const model = this.auxiliaryModels?.getModel(provider, id);
     if (!model) throw new Error(`model_unavailable: ${name}`);
     if (effort !== undefined && !THINKING.has(effort)) throw new Error("thinking_level_invalid");
@@ -2178,9 +1506,45 @@ export class HostSession {
     this.cancelRequested = this.turn;
     const cancelled = this.turn;
     this.options.events.emit("cancel", { turn: cancelled });
-    this.writeAbort.abort();
     await this.session.abort();
     return { cancelled: true, turn: cancelled };
+  }
+
+  async rewind(input: RewindInput): Promise<Record<string, unknown>> {
+    const snapshots = this.checkpoints;
+    if (!snapshots || !this.bound || this.closing) {
+      throw new BridgeRefusal("rewind_unavailable", "rewind is available in a running worker with turn checkpoints");
+    }
+    if (this.rewinding) throw new BridgeRefusal("busy", "a rewind is already in progress");
+    const session = this.session;
+    const manager = session.sessionManager;
+    if ("list" in input) return listRewinds(manager);
+    const point = rewindPoint(manager, input.turn);
+    this.rewinding = true;
+    try {
+      session.clearQueue();
+      if (this.open) await this.cancel(undefined);
+      else await session.abort();
+      const result = restoreRewind(session, snapshots, point);
+      this.turn = 0;
+      this.restoreTurn(manager);
+      this.turnError = null;
+      this.stopCause = undefined;
+      this.bashQuestions.clear();
+      for (const question of this.ownerQuestions?.list() ?? []) {
+        if (question.status === "pending") this.options.herdr?.questionChanged(question.id, false);
+      }
+      this.ownerQuestions?.restore();
+      this.options.events.emit("rewound", { ...result });
+      this.liveEvents.rewound(result.turn);
+      this.options.transcriptRewound?.();
+      const file = manager.getSessionFile()!;
+      try { recordRewind(file, result); }
+      catch (error) { throw new Error(`rewound but could not record history; saved work is at ${result.rescue_ref}: ${String(error)}`); }
+      return { ...result };
+    } finally {
+      this.rewinding = false;
+    }
   }
 
   private panelSnapshot(): PanelSnapshot | null {
@@ -2188,13 +1552,13 @@ export class HostSession {
     const session = this.session;
     const leaf = session.sessionManager.getLeafId();
     if (leaf !== this.panelTokenLeaf) { this.panelTokenLeaf = leaf; this.panelStats = undefined; }
-    const jobs: PanelJob[] | null = this.jobs ? [...this.jobs.inspection().map(detail => ({ job: detail.job, state: detail.state, detail })),
+    const jobs: PanelJob[] | null = this.jobs ? [...(this.commands?.inspection() ?? []).map(detail => ({ job: detail.job, state: detail.state, detail })),
       ...this.commands?.recovered() ?? []] : null;
     return {
       ...(this.buildControls ? { build: this.buildControls.panelState() } : {}),
       ...(this.fleet ? { fleet: this.fleet.snapshot() } : {}),
-      budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : undefined,
-      bound: this.bound, model: session.model ? `${session.model.provider}/${session.model.id}` : null,
+      ...(this.options.spending ? { budget: this.options.spending.snapshot } : {}),
+      bound: this.bound, model: this.options.spending?.activeRoute ?? (session.model ? `${session.model.provider}/${session.model.id}` : null),
       effort: session.thinkingLevel, effortAvailable: session.supportsThinking(),
       ...(this.terminalInput ? { input: this.terminalInput } : {}),
       streaming: session.isStreaming, context: session.getContextUsage(),
@@ -2215,9 +1579,8 @@ export class HostSession {
         },
         // Only effective SDK settings, never raw capability/MCP settings or credentials.
         settings: Object.entries(this.settings).map(([key, value]) => `${key}: ${JSON.stringify(value)}`),
-        budget: [(this.options.capabilities?.catalog ?? 0) >= 7
-          ? `Budget: ${JSON.stringify(this.budget.state())}` : "Budget unavailable · legacy generation"],
-        ...(this.inspector?.snapshot() ?? { events: this.options.events.since(0, 512 * 8192, 512), receipts: [], receiptsOmitted: 0 }),
+        budget: [],
+        events: this.options.events.since(0, 512 * 8192, 512),
       },
       agents: [{ id: session.sessionId, session: session.sessionId, kind: this.options.identity.role,
         state: session.isStreaming ? "streaming" : this.open ? "turn open" : "settled locally",
@@ -2246,7 +1609,7 @@ export class HostSession {
       role: this.options.identity.role,
       identity: this.options.identity,
       binding: this.options.binding ?? null,
-      connection: resolveConnection((session.model?.provider ?? this.provider) as ProviderId, this.options.binding?.connection),
+      connection: this.currentConnection(session.model?.provider as ProviderId | undefined),
       native_children: this.auxiliary?.inspection().map(({ sessionFile: _file, ...child }) => child) ?? null,
       fleet: this.fleet?.snapshot() ?? null,
       todo: this.loadout.includes("corral_todo"),
@@ -2254,7 +1617,6 @@ export class HostSession {
       ledger: this.ledger?.current ? { plan: this.ledger.current.plan ?? null, revision: this.ledger.current.revision } : null,
       capabilities: this.options.capabilities ?? null,
       mcp: this.mcp?.state() ?? null,
-      generation: this.options.identity.generation,
       bound: this.bound,
       interactive: this.attached === "interactive",
       mode: this.attached ?? null,
@@ -2262,8 +1624,9 @@ export class HostSession {
         created: this.sessionsCreated },
       streaming: session.isStreaming,
       turn: { current: this.turn, open: this.open },
+      last_error: this.turnError,
       last_seq: this.options.events.last,
-      model: session.model ? `${session.model.provider}/${session.model.id}` : null,
+      model: this.options.spending?.activeRoute ?? (session.model ? `${session.model.provider}/${session.model.id}` : null),
       loadout: [...this.loadout],
       active_tools: session.getActiveToolNames(),
       denied_tools: this.deniedTools,
@@ -2276,12 +1639,10 @@ export class HostSession {
       jobs: this.jobs?.state() ?? null,
       commands: this.commands?.state() ?? null,
       codemode: this.code?.state() ?? null,
-      planning: this.planning?.snapshot() ?? null,
       owner_questions: this.ownerQuestions?.list().map(q => ({ id: q.id, status: this.ownerQuestions?.status(q.id),
-        session: q.session, generation: q.generation, expires: q.expires })) ?? null,
+        session: q.session, expires: q.expires })) ?? null,
       checkpoints: this.checkpoints !== undefined,
       auxiliary: this.auxiliary?.state() ?? null,
-      budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : { unavailable: "legacy generation predates budget accounting" },
       guidance: {
         project_text: this.options.guidance?.projectText ?? false,
         skill_paths: [...this.guidance.skillPaths], prompt_paths: [...this.guidance.promptPaths],
@@ -2294,17 +1655,9 @@ export class HostSession {
         allowed_destinations: [...(this.options.network.destinations ?? hostDestinations(this.provider))],
         ...this.options.network.ledger(),
       },
-      corral_calls: { ...this.stats },
       herdr: this.options.herdr?.readback() ?? null,
-      delivery: bounded(this.options.modules.delivery.state?.() ?? null),
       auth: bounded(this.options.modules.auth.state?.() ?? null),
     };
   }
 }
 
-/** Linux process start time in clock ticks since boot (/proc/self/stat field 22). */
-export function processStartTime(): string {
-  const stat = existsSync("/proc/self/stat") ? readFileSync("/proc/self/stat", "utf8") : "";
-  const value = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-  return value && /^\d+$/.test(value) ? value : String(Math.floor(Date.now() / 1000 - process.uptime()));
-}

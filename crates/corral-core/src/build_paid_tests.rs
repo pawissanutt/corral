@@ -1,14 +1,44 @@
 use super::*;
 use crate::connection::ConnectionId;
 fn ledger() -> BuildPaidLedger {
-    BuildPaidLedger { version: 1, store: "fixture".into(), session: "B-fixture1".into(), profile: "api".into(),
-        approval: PaidApproval { policy_digest: "11".repeat(32), approval: "explicit".into(), allowance_nanos: 100,
-            candidates: vec![ConnectionBinding::new(ConnectionId::OpenaiApi, Some("exact".into()), "fixture".into(), None).unwrap()] },
-        generation: 1, cap_sha256: "22".repeat(32), ledger: BudgetLedger::default(), bounds: vec![] }
+    BuildPaidLedger {
+        version: 1,
+        store: "fixture".into(),
+        session: "B-fixture1".into(),
+        profile: "api".into(),
+        approval: PaidApproval {
+            policy_digest: "11".repeat(32),
+            approval: "explicit".into(),
+            allowance_nanos: 100,
+            candidates: vec![
+                ConnectionBinding::new(
+                    ConnectionId::OpenaiApi,
+                    Some("exact".into()),
+                    "fixture".into(),
+                    None,
+                )
+                .unwrap(),
+            ],
+        },
+        generation: 1,
+        cap_sha256: "22".repeat(32),
+        ledger: BudgetLedger::default(),
+        bounds: vec![],
+        mixed: None,
+        reservation_routes: vec![],
+    }
 }
 fn request(id: &str, nanos: u64) -> BudgetRequest {
-    BudgetRequest { connection: Some(ConnectionId::OpenaiApi), request: id.into(), generation: 1, tokens: 10,
-        usd_nanos: nanos, priced: true, unbounded: false, response: None }
+    BudgetRequest {
+        connection: Some(ConnectionId::OpenaiApi),
+        request: id.into(),
+        generation: 1,
+        tokens: 10,
+        usd_nanos: nanos,
+        priced: true,
+        unbounded: false,
+        response: None,
+    }
 }
 #[test]
 fn build_uncertain_physical_retry_cannot_overspend_or_recover_a_fresh_allowance() {
@@ -34,4 +64,58 @@ fn build_uncertain_physical_retry_cannot_overspend_or_recover_a_fresh_allowance(
     let mut reset = before.clone();
     reset.approval.allowance_nanos += 1;
     assert!(reset.follows(&before).is_err());
+}
+
+#[test]
+fn mixed_routes_share_cap_and_settle_only_their_own_reservation() {
+    let mut paid = ledger();
+    let first = paid.route().unwrap().digest.clone();
+    let mut second_approval = paid.approval.clone();
+    second_approval.candidates[0] = ConnectionBinding::new(
+        ConnectionId::OpenaiApi,
+        Some("other".into()),
+        "second-model".into(),
+        None,
+    )
+    .unwrap();
+    let second = second_approval.candidates[0].digest.clone();
+    paid.mixed = Some(MixedBuildApproval {
+        approval: "explicit shared cap".into(),
+        presets: [("child".into(), "second".into())].into(),
+        allowance_nanos: 80,
+        routes: [
+            ("first".into(), paid.approval.clone()),
+            ("second".into(), second_approval),
+        ]
+        .into(),
+    });
+    assert!(
+        paid.reserve_for(request("pending", 50), Some(&first))
+            .unwrap()
+    );
+    assert!(
+        !paid
+            .reserve_for(request("second", 31), Some(&second))
+            .unwrap()
+    );
+    assert!(
+        paid.reserve_for(request("second", 30), Some(&second))
+            .unwrap()
+    );
+    assert!(
+        paid.reserve_for(request("pending", 50), Some(&second))
+            .is_err()
+    );
+    assert!(
+        paid.settle_for("second", "id".into(), 5, 20, Some(&first))
+            .is_err()
+    );
+    paid.settle_for("second", "id".into(), 5, 20, Some(&second))
+        .unwrap();
+    paid.validate().unwrap();
+    let before = paid.clone();
+    paid.generation += 1;
+    paid.cap_sha256 = "33".repeat(32);
+    paid.follows(&before).unwrap();
+    assert_eq!(paid.ledger.totals().1, 70);
 }

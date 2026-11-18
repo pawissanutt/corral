@@ -1,16 +1,16 @@
-// Private offline fixture installer for the real production host/main.ts PTY check.
+// Private offline fixture installer for the real production CLI PTY check.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildFixtureInstall } from "./fixture-install.ts";
-import { writeFakeCorral } from "./fake-corral.ts";
+import { writeFakeEngine } from "./fake-engine.ts";
 
 const work = process.argv[2];
 if (!work) throw new Error("private fixture directory required");
 const assets = buildFixtureInstall({ parent: work, isolatePiState: true });
-const corral = writeFakeCorral(work);
+const corral = writeFakeEngine(work);
 const path = join(assets.dir, "src/roles/fixture-role.ts");
 const source = readFileSync(path, "utf8");
-const marker = "    extend(pi) {";
+const marker = "    extend(pi, context) {";
 if (source.split(marker).length !== 2) throw new Error("fixture extension hook changed");
 writeFileSync(path, source.replace(marker, `${marker}
       pi.on("ui_prompt_end", async () => {

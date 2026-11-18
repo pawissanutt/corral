@@ -6,25 +6,15 @@ import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { askUserEnabled, askUserTool } from "./ask-user.ts";
+import { askUserTool } from "./ask-user.ts";
 import { AskDialog, type DialogResult } from "./ask-user-dialog.ts";
-
-test("only interactive roles can enable the dialog in the host loadout", () => {
-  for (const role of ["assistant", "pm"]) {
-    expect(askUserEnabled(role, ["ask_user"])).toBeTrue();
-    expect(askUserEnabled(role, [])).toBeFalse();
-  }
-  for (const role of ["worker", "reviewer", "planner", "plan-reviewer"]) {
-    expect(askUserEnabled(role, ["ask_user"])).toBeFalse();
-  }
-});
 
 const params = { questions: [{ question: "Which?", options: ["One", "Two"], freeText: true }] };
 
 test("non-blocking clarification returns pending without opening a modal", async () => {
   const ctx = { hasUI: true, mode: "tui", ui: { select: async () => { throw new Error("modal opened before owner requested it"); } } } as unknown as ExtensionToolContext;
   const pending = { ask: () => ({ version: 1 as const, id: "Q1", status: "pending" as const,
-    session: "test", generation: 1, key: "id", questions: params.questions, expires: 123 }), withdraw: () => "withdrawn" };
+    session: "test", questions: params.questions, expires: 123 }), withdraw: () => "withdrawn" };
   const tool = askUserTool(async () => { throw new Error("no answer exists"); }, pending);
   const [model] = anthropicProvider().getModels();
   if (!model) throw new Error("Anthropic fixture model unavailable");
@@ -49,6 +39,8 @@ test("non-blocking clarification returns pending without opening a modal", async
   const rich = { questions: [{ question: "Which?", options: [{ label: "One", description: "First" }, "Two"], multiSelect: true }] };
   expect(Check(tool.parameters, rich)).toBeTrue();
   expect(Check(tool.parameters, { ...rich, nonBlocking: true })).toBeFalse();
+  expect(Check(tool.parameters, { ...params, key: "legacy" })).toBeFalse();
+  expect(Check(tool.parameters, { ...params, supersedes: "legacy" })).toBeFalse();
   await expect(tool.execute("rich", { ...rich, nonBlocking: true }, undefined, undefined, ctx))
     .rejects.toThrow("deferred_questions_require_plain_single_selection");
 });
@@ -82,7 +74,7 @@ test("cancel or timeout at either dialog is no answer and records no consent", a
   }
   const busy = await askUserTool(async () => "not called", undefined, () => true)
     .execute("busy", params, undefined, undefined, duringText);
-  expect(busy.details).toMatchObject({ status: "no answer", reason: "another owner/permission dialog is open" });
+  expect(busy.details).toMatchObject({ status: "no answer", reason: "another owner dialog is open" });
   expect(recorded).toEqual([]);
 });
 

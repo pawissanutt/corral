@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { JobError, type JobRuntime, type JobReceipt } from "./runtime.ts";
+import { JobError, type JobRuntime } from "./runtime.ts";
 import { deliverNotice } from "./notices.ts";
 
 export const MONITOR_ENTRY = "corral_command_monitor";
@@ -14,7 +14,7 @@ interface Options {
   readonly notify: (key: string, text: string) => Promise<string>;
 }
 
-/** Session-scoped line watches. Worker monitors continue using corral's canonical run wait. */
+/** Session-scoped watches for any role. */
 export class SessionMonitors {
   private readonly watches = new Map<string, Watch>();
   private enabled = false;
@@ -26,7 +26,8 @@ export class SessionMonitors {
       }
     });
   }
-  arm(job: string, on: "exit" | "line", pattern: string | undefined, timeout: number, key: string): JobReceipt {
+  arm(job: string, on: "exit" | "line", pattern: string | undefined, timeout: number) {
+    const key = crypto.randomUUID();
     if (on === "line" && !pattern) throw new JobError("a line monitor needs a pattern");
     let regex: RegExp;
     try { regex = new RegExp(pattern ?? ""); } catch { throw new JobError("invalid line pattern"); }
@@ -37,7 +38,7 @@ export class SessionMonitors {
       fact: { key, job, on, deadline: new Date(Date.now() + timeout * 1000).toISOString(), pattern: pattern ?? "", delivered: false } };
     this.watches.set(key, watch);
     this.options.journal(watch.fact);
-    return { state: "committed", result: { job, on, wait: key, deadline: watch.fact.deadline } };
+    return { state: "armed", job, on, wait: key, deadline: watch.fact.deadline };
   }
   private settle(watch: Watch, result: string): void {
     if (watch.fact.result) return;
@@ -58,6 +59,12 @@ export class SessionMonitors {
         this.watches.delete(watch.fact.key);
       }
     }).catch(() => {}).finally(() => { watch.sending = false; });
+  }
+  inspection(job: string) {
+    return [...this.watches.values()].filter(watch => watch.fact.job === job).map(({ fact }) => ({
+      wait: fact.key, pattern: fact.pattern, armed: fact.result === undefined, reportQueued: fact.result !== undefined,
+      matched: fact.result?.startsWith("matched: ") ? fact.result.slice(9) : undefined, deadline: fact.deadline,
+    }));
   }
   exited(job: string): void {
     for (const watch of this.watches.values()) if (watch.fact.job === job) this.settle(watch, watch.fact.on === "exit" ? "job exited; use job_output for its retained result" : "job exited without a matching line");

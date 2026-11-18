@@ -22,6 +22,7 @@ use crate::git_watch::{GitChanges, GitTarget, GitWatch, stat_fingerprint};
 mod attention;
 mod parts;
 mod plan;
+use crate::assistant::workflow::handoff::status::Responsibility as Handoff;
 pub use parts::gauges;
 #[cfg(test)]
 mod tests;
@@ -51,6 +52,8 @@ pub struct ClassicFrame {
     pub stages: BTreeMap<String, String>,
     pub automation_blocks: BTreeMap<String, String>,
     pub plan_review_waits: BTreeMap<String, String>,
+    #[serde(default)]
+    pub handoffs: BTreeMap<String, Handoff>,
 }
 
 /// A pin and what it resolved to when the frame was computed.
@@ -114,6 +117,7 @@ enum Part {
     Stages,
     Automation,
     PlanReview,
+    Handoffs,
     Attention,
 }
 
@@ -160,6 +164,7 @@ pub struct ClassicCache {
     gating: bool,
     automation: BTreeMap<String, String>,
     plan_review: BTreeMap<String, String>,
+    handoffs: BTreeMap<String, Handoff>,
     attention: Option<Attention>,
     attention_at: Option<Timestamp>,
     /// Frames carry an empty `operating` and never evaluate the PM workset.
@@ -194,6 +199,7 @@ struct Computed {
     stages: Option<(BTreeMap<String, String>, bool, bool)>,
     automation: Option<BTreeMap<String, String>>,
     plan_review: Option<BTreeMap<String, String>>,
+    handoffs: Option<BTreeMap<String, Handoff>>,
     /// The attention board this read computed (None when supplied or not dirty).
     attention: Option<Result<AttentionBoard, String>>,
     /// `(content, workset inputs)` of the supplied or computed attention.
@@ -487,6 +493,14 @@ impl ClassicCache {
                 |task| parts::plan_review(read, task),
             )
         });
+        // Responsibility carries the code pin of a continuation, so worktree changes count.
+        let handoffs = (full || !changed.is_empty() || !plan.git.tasks.is_empty()).then(|| {
+            let dirty =
+                |t: &Task| full || changed.contains(&t.id) || plan.git.tasks.contains(&t.id);
+            parts::per_task(&tasks, &self.handoffs, "classic.handoffs", dirty, |task| {
+                parts::handoff(read, task)
+            })
+        });
         let attention = match plan.supplied {
             Some(_) => None,
             None if full || delta.any() || plan.attention_due => {
@@ -533,6 +547,7 @@ impl ClassicCache {
             stages,
             automation,
             plan_review,
+            handoffs,
             attention,
             identities,
             operating,
@@ -554,6 +569,7 @@ impl ClassicCache {
             stages,
             automation,
             plan_review,
+            handoffs,
             attention: _,
             identities: _,
             operating: _,
@@ -602,6 +618,10 @@ impl ClassicCache {
         if let Some(plan_review) = plan_review {
             changed |= self.settle(Part::PlanReview, digest(&plan_review)?);
             self.plan_review = plan_review;
+        }
+        if let Some(handoffs) = handoffs {
+            changed |= self.settle(Part::Handoffs, digest(&handoffs)?);
+            self.handoffs = handoffs;
         }
         if let Some(attention) = attention {
             changed |= self.settle(
@@ -678,6 +698,7 @@ impl ClassicCache {
             stages: self.stages.clone(),
             automation_blocks: self.automation.clone(),
             plan_review_waits: self.plan_review.clone(),
+            handoffs: self.handoffs.clone(),
         })
     }
 

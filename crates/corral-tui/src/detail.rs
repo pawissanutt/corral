@@ -20,6 +20,7 @@ use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
 mod acceptance;
 mod comments;
+mod handoff;
 mod header;
 mod hints;
 mod lessons;
@@ -118,6 +119,8 @@ pub struct DetailView {
     recover: Option<Box<crate::recovery::RecoverySheet>>,
     /// Durable owner-recovery history; loaded with the Acceptance tab, reset on refresh.
     recoveries: Option<Result<Vec<corral_core::RecoveryRecord>, String>>,
+    /// Shared assistant/board responsibility (same projection as the board card).
+    handoff: Option<corral_ops::assistant::workflow::handoff::status::Responsibility>,
 }
 
 impl DetailView {
@@ -133,7 +136,9 @@ impl DetailView {
         routing.refresh(ctx, &task);
         let tab = if task.tracker { PLAN } else { 0 };
         let operating = acceptance::effective_lines(ctx, &task);
+        let handoff = corral_ops::assistant::workflow::handoff::status::project(ctx, &task);
         Ok(DetailView {
+            handoff,
             attention: crate::attention::load(ctx, jiff::Timestamp::now()),
             overview: true,
             show_live: false,
@@ -662,6 +667,9 @@ impl View for DetailView {
             }
             KeyCode::Char('F') if self.recover_available() => self.open_recover(ctx),
             KeyCode::Char('a') => Action::Jump(self.task.id.clone()),
+            KeyCode::Char(c @ ('W' | 'K')) if self.handoff.is_some() => {
+                self.transfer_key(ctx, c == 'W')
+            }
             KeyCode::Char('c') if self.tab == COMMENTS => {
                 self.comment = Some(comments::Composer::new(&self.task));
                 Action::None
@@ -797,6 +805,8 @@ impl DetailView {
                 self.scroll = Scroll::default();
             }
             self.task = t;
+            self.handoff =
+                corral_ops::assistant::workflow::handoff::status::project(ctx, &self.task);
             self.operating = acceptance::effective_lines(ctx, &self.task);
             self.routing.refresh(ctx, &self.task);
             self.stages = crate::stages::load_strip(ctx, &self.task);

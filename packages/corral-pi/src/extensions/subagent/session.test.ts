@@ -13,7 +13,7 @@ function assistant(content: string, id = "write-1"): AssistantMessage {
 
 test("a child call grows in one history entry, then streams its result tail before settlement", () => {
   const history = new AuxiliaryHistory();
-  history.begin("r", "explore", "fixture/model", 1, "Write a file");
+  history.begin("r", "explore", "fixture/model", "Write a file");
   const events: HelperEvent[] = [];
   const emit = (event: HelperEvent) => { events.push(event); history.observe("r", event); };
   let now = 0;

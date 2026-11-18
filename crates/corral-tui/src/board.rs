@@ -100,6 +100,8 @@ pub struct BoardView {
     automation_blocks: HashMap<String, String>,
     /// Submitted plans whose review automation will not start, with the refusal.
     plan_review_waits: HashMap<String, String>,
+    /// Shared assistant/board responsibility projection (canonical journal only).
+    handoffs: HashMap<String, corral_ops::assistant::workflow::handoff::status::Responsibility>,
     plan_progress: HashMap<String, crate::plan::tracker::Progress>,
     /// The shelf: every pin in order, resolved against `tasks`.
     pins: Vec<shelf::Entry>,
@@ -144,6 +146,7 @@ impl BoardView {
             waits: HashMap::new(),
             automation_blocks: HashMap::new(),
             plan_review_waits: HashMap::new(),
+            handoffs: HashMap::new(),
             plan_progress: HashMap::new(),
             now,
             finishes: HashMap::new(),

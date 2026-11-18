@@ -20,8 +20,8 @@ function delta(live: LiveEvents, text: string): void {
 }
 
 test("live deltas do not evict or renumber events of the existing ring", () => {
-  const lifecycle = new EventLog(3, 2);
-  const live = new LiveEvents(3, 2);
+  const lifecycle = new EventLog(2);
+  const live = new LiveEvents(2);
   const input = lifecycle.emit("input", { idempotency_key: "owner" });
   start(live);
   for (let i = 0; i < 4; i++) delta(live, "answer");
@@ -34,7 +34,7 @@ test("live deltas do not evict or renumber events of the existing ring", () => {
 });
 
 test("a multi-byte character is never split across two live_text chunks", () => {
-  const live = new LiveEvents(3);
+  const live = new LiveEvents();
   start(live);
   const text = "a".repeat(1023) + "💬" + "\u0000".repeat(2048);
   delta(live, text);
@@ -55,12 +55,12 @@ test("a multi-byte character is never split across two live_text chunks", () => 
 });
 
 test("a lagging live reader gets a gap marker instead of silent loss", () => {
-  const live = new LiveEvents(3, 2);
+  const live = new LiveEvents(2);
   start(live);
   for (const text of ["a", "b", "c"]) delta(live, text);
   const page = live.events.since(0, EVENT_PAGE_BYTES, 1);
   expect(page.gap).toEqual({ after: 0, resumed: 3, missing: 2, reconcile: true });
-  expect(page).toMatchObject({ generation: 3, last: 4, next: 3, more: true });
+  expect(page).toMatchObject({ last: 4, next: 3, more: true });
   expect(page.events.map(event => event.seq)).toEqual([3]);
   const next = live.events.since(page.next, EVENT_PAGE_BYTES);
   expect(next.events.map(event => event.seq)).toEqual([4]);
@@ -69,7 +69,7 @@ test("a lagging live reader gets a gap marker instead of silent loss", () => {
 });
 
 test("a completing live event never precedes its session-file entry", () => {
-  const live = new LiveEvents(3);
+  const live = new LiveEvents();
   start(live);
   const result = { role: "toolResult" as const, toolCallId: "call", toolName: "read",
     content: [{ type: "text" as const, text: "done" }], isError: false, timestamp: 0 };
@@ -87,7 +87,7 @@ test("a completing live event never precedes its session-file entry", () => {
   live.observe({ type: "agent_settled", aborted: false }, 7);
   expect(live.events.since(0, EVENT_PAGE_BYTES).events.at(-1)).toMatchObject({ kind: "live_turn", state: "ended" });
 
-  const failedAppend = new LiveEvents(3);
+  const failedAppend = new LiveEvents();
   start(failedAppend);
   failedAppend.observe({ type: "message_end", message }, 7);
   failedAppend.observe({ type: "agent_settled", aborted: false }, 7);
@@ -95,7 +95,7 @@ test("a completing live event never precedes its session-file entry", () => {
 });
 
 test("fleet pages cap Unicode text and shed complete oldest messages before children", () => {
-  const live = new LiveEvents(3);
+  const live = new LiveEvents();
   live.observeFleet({ children: [], maxParallel: 3, mail: Array.from({ length: 5 }, (_, index) => ({
     seq: index + 1, at: index, from: "parent", to: "all",
     text: "\0".repeat(2050), delivery: "delivered" as const,

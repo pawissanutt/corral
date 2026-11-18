@@ -8,10 +8,10 @@ import { EventLog } from "../src/bridge/events.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
+import { CorralClient } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 import { RecordingTerminal } from "./support/panel-terminal.ts";
 import { ScreenModel } from "./support/screen.ts";
 import { within } from "./support/wait.ts";
@@ -74,7 +74,7 @@ test("a write call is visible while its content is still being written, then set
   try {
     restrictEnvironment(process.env); process.env.PI_CODING_AGENT_DIR = join(work, "pi-state");
     const sdk = await import("@earendil-works/pi-coding-agent");
-    const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
+    const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
     const original = await loadModules(assets.dir, "worker");
     // The fixture worker only reads; this journey needs Pi's own `write` in the loadout.
     const modules = { ...original, role: { ...original.role, upstreamTools: [...original.role.upstreamTools, "write" as const] } };
@@ -88,20 +88,20 @@ test("a write call is visible while its content is still being written, then set
       armed = false;
       return streamedWrite(argumentPieces(target), gates);
     };
-    const events = new EventLog(1), network = guardedFetch(send);
+    const events = new EventLog(), network = guardedFetch(send);
     globalThis.fetch = network.fetch as typeof globalThis.fetch;
-    const corral = writeFakeCorral(work);
-    const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
+    const engine = writeFakeEngine(work);
+    const client = new CorralClient({ corral: engine.path, root: work, cwd: work, identity });
     host = await HostSession.create({ sdk, identity, cwd: work, agentDir: join(work, "agent"), model: "gpt-6.1-sol", modules, client, events, network,
       sessionManager: sdk.SessionManager.create(work, join(work, "sessions")) });
-    await host.hello("n".repeat(64), "fixture-pane", sha256Hex("c".repeat(64)));
+    await host.startLocal();
     const panels = host.panels;
     if (!panels) throw new Error("rich host did not install native panels");
     const physical = new RecordingTerminal(), terminal = panels.wrap(physical), screen = new ScreenModel(physical.columns, physical.rows);
     mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", readOnlyQueue: true, verbose: false, mainView: transcript => panels.mainView(transcript) });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
-    await physical.untilVisible("WORKER  ● bound");
+    await physical.untilVisible("WORKER  │");
     physical.send("\x1b[20~"); // F9: Chat, where every session starts; the transcript stays in front
 
     const lines = () => screen.sync(physical.writes).lines();

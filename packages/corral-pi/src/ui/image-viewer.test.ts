@@ -23,7 +23,7 @@ test("image activation is scoped and removable; modified/double clicks retain na
 });
 test("expanded image respects real dock viewport, retains draft and restores transcript on Escape", () => {
   const caps = getCapabilities(); setCapabilities({ ...caps, images: "kitty" });
-  const wb = new NativeWorkbench({ cwd: "/tmp", identity: { store: "s", project: "p", role: "assistant", assistant: "A-test", generation: 1 }, snapshot: () => null, changed() {}, canInteract: () => true });
+  const wb = new NativeWorkbench({ cwd: "/tmp", identity: { store: "s", project: "p", role: "assistant", assistant: "A-test" }, snapshot: () => null, changed() {}, canInteract: () => true });
   try {
     const viewport = createChatViewport({ document: new Text("ORIGINAL_TRANSCRIPT", 0, 0), pendingMessages: new Text("", 0, 0), status: new Text("", 0, 0), editor: new Text(Array(9).fill("REAL_DRAFT").join("\n"), 0, 0), footer: new Text("FOOTER", 0, 0), mainView: transcript => wb.mount(transcript) });
     wb.images.activate({ data, mimeType: "image/png", dimensions: { widthPx: 960, heightPx: 480 } });

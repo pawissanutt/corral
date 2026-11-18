@@ -1,4 +1,4 @@
-// Metadata-only bridge boundary. Bytes come only from the generation's digest-addressed store.
+// Metadata-only bridge boundary. Bytes come only from the session's digest-addressed store.
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";

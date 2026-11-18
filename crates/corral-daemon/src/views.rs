@@ -1,8 +1,10 @@
 //! Read-only, bounded application projections over the simple engine.
+mod chat;
 mod details;
 mod review;
 pub(crate) mod rows;
 mod terminal_screen;
+mod transcript;
 
 #[cfg(test)]
 mod board_wire_tests;
@@ -21,6 +23,7 @@ use corral_protocol::{
 use serde::Serialize;
 
 use crate::state::Shared;
+pub(crate) use chat::{ThreadStamp, thread};
 pub(crate) use rows::{RowCache, Rows};
 
 // The transport reserves room for the response envelope and bounded request id.
@@ -38,7 +41,11 @@ impl std::fmt::Display for NotFound {
 impl std::error::Error for NotFound {}
 
 pub(crate) fn detail(shared: &Shared, query: DetailGet) -> Result<DetailReply> {
-    details::read(&shared.engine()?, query)
+    let engine = shared.engine()?;
+    if let Some(reply) = chat::detail(shared, &engine, &query)? {
+        return Ok(reply);
+    }
+    details::read(&engine, query)
 }
 
 pub(crate) struct ChangesRequest {
@@ -129,12 +136,21 @@ pub(crate) fn terminal(engine: &Engine, id: &str) -> Result<TerminalSnapshot> {
         .store
         .get_run(task, run)?
         .context("terminal run not found")?;
-    match run.session.context("run has no terminal session")? {
+    placed_terminal(
+        engine,
+        &run.session.context("run has no terminal session")?,
+        run.ended.is_none(),
+    )
+}
+
+fn placed_terminal(engine: &Engine, session: &SessionRef, live: bool) -> Result<TerminalSnapshot> {
+    match session {
+        SessionRef::Pi { inner, .. } => placed_terminal(engine, inner, live),
         SessionRef::Herdr { pane, .. } => {
             let text = crate::health::herdr(&engine.config.runner)
-                .pane_terminal(&pane, TERMINAL_ROWS_MAX)?
+                .pane_terminal(pane, TERMINAL_ROWS_MAX)?
                 .context("terminal pane is no longer available")?;
-            terminal_screen::snapshot(&text, run.ended.is_none())
+            terminal_screen::snapshot(&text, live)
         }
         SessionRef::Process { dir, .. } => {
             let path = dir.join("session.log");
@@ -159,8 +175,7 @@ pub(crate) fn terminal(engine: &Engine, id: &str) -> Result<TerminalSnapshot> {
                 .join("exit_code")
                 .try_exists()
                 .context("inspect process exit marker")?;
-            let live = run.ended.is_none() && !exited;
-            terminal_screen::snapshot(text, live)
+            terminal_screen::snapshot(text, live && !exited)
         }
     }
 }

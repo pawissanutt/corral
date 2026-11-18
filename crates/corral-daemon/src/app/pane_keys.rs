@@ -53,6 +53,14 @@ esac
         )
         .unwrap();
         fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        // A test thread forking mid-write briefly holds the script open for writing, and running
+        // it then fails with "text file busy". Probe without arguments (no call is recorded).
+        while matches!(
+            std::process::Command::new(&bin).output(),
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+        ) {
+            std::thread::yield_now();
+        }
         let herdr = Herdr::with_bin(bin, None).with_poll_wait(|_| {});
         let calls = root.path().join("calls");
         let pane = "w1:p1";

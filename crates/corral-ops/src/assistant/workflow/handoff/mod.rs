@@ -22,6 +22,14 @@ pub mod continuation;
 mod continuation_seed;
 pub use code_pin::CodePin;
 pub mod lifecycle;
+pub mod native;
+pub mod native_implement;
+pub mod native_local;
+#[cfg(test)]
+mod native_local_tests;
+#[cfg(test)]
+mod native_tests;
+pub mod native_view;
 pub(crate) mod plan_adoption;
 #[cfg(test)]
 mod plan_adoption_tests;
@@ -36,6 +44,9 @@ mod retreat_tests;
 mod settlement;
 mod source;
 mod source_boundary;
+pub mod status;
+#[cfg(test)]
+mod status_tests;
 pub(crate) mod takeback;
 #[cfg(test)]
 mod takeback_tests;

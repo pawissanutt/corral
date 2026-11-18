@@ -1,31 +1,35 @@
-// A real HostSession with Code Mode enabled for one role, a receipt-keeping fake corral, scripted
-// fixture-provider turns and in-process fixture tools whose completion the test controls
-// (`fixture_hold`), so every interleaving is driven by barriers, never by timing.
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+// A real HostSession with a fake engine, scripted fixture-provider turns and in-process
+// fixture tools whose completion the test controls (`fixture_hold`).
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ExtensionAPI, ExtensionUIContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { type BridgeEvent, EventLog } from "../../src/bridge/events.ts";
-import { loadModules } from "../../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../../src/host/restrict.ts";
-import { HostSession, authContext } from "../../src/host/session.ts";
+import { HostSession } from "../../src/host/session.ts";
+import { assistantRole } from "../../src/roles/assistant/index.ts";
+import { reviewerRole } from "../../src/roles/reviewer/index.ts";
 import type { CapabilitySet, HostIdentity, RoleContext } from "../../src/roles/types.ts";
-import { CorralClient, sha256Hex } from "../../src/tools/corral.ts";
-import { fixtureTransport } from "../fixtures/auth/index.ts";
-import { buildFixtureInstall, PACKAGE_ROOT } from "./fixture-install.ts";
-import { type ReceiptCorral, writeReceiptCorral } from "./receipt-corral.ts";
+import { workerRole } from "../../src/roles/worker/index.ts";
+import { CorralClient } from "../../src/tools/corral.ts";
+import { type FakeStep, type FakeTransport, fakeCodexTransport } from "../fixtures/auth/fake-transport.ts";
+import fixtureAuth from "../fixtures/auth/index.ts";
+import { type FakeEngine, writeFakeEngine } from "./fake-engine.ts";
+import { PACKAGE_ROOT } from "./fixture-install.ts";
 import { nextEvent } from "./wait.ts";
 
-export type CodeRole = "worker" | "pm" | "assistant";
+export type CodeRole = "worker" | "reviewer" | "assistant";
 
-export const IDENTITIES: Record<CodeRole, HostIdentity> = {
-  worker: { store: "st-demo", project: "demo", role: "worker", generation: 1, task: "T-683", run: "R1" },
-  pm: { store: "st-demo", project: "demo", role: "pm", generation: 1 },
-  assistant: { store: "st-demo", project: "", role: "assistant", assistant: "A-1", generation: 1 },
+const IDENTITIES: Record<CodeRole, HostIdentity> = {
+  worker: { store: "st-demo", project: "demo", role: "worker", task: "T-683", run: "R1" },
+  reviewer: { store: "st-demo", project: "demo", role: "reviewer", task: "T-683", run: "R1" },
+  assistant: { store: "st-demo", project: "", role: "assistant", assistant: "A-1" },
 };
+
+const roles = { worker: workerRole, reviewer: reviewerRole, assistant: assistantRole };
 
 interface Gate {
   readonly started: Promise<void>;
@@ -35,23 +39,19 @@ interface Gate {
 /** Each `fixture_hold({name})` call waits until the test releases that name. */
 class Holds {
   private readonly gates = new Map<string, { started: () => void; release: (text: string) => void; at: Promise<void>; done: Promise<string> }>();
-  runs = 0;
 
   private gate(name: string) {
     let entry = this.gates.get(name);
     if (!entry) {
-      let started!: () => void;
-      let release!: (text: string) => void;
-      const at = new Promise<void>((resolve) => { started = resolve; });
-      const done = new Promise<string>((resolve) => { release = resolve; });
-      entry = { started, release, at, done };
+      const at = Promise.withResolvers<void>();
+      const done = Promise.withResolvers<string>();
+      entry = { started: at.resolve, release: done.resolve, at: at.promise, done: done.promise };
       this.gates.set(name, entry);
     }
     return entry;
   }
 
   wait(name: string): Promise<string> {
-    this.runs++;
     const entry = this.gate(name);
     entry.started();
     return entry.done;
@@ -61,30 +61,26 @@ class Holds {
     const entry = this.gate(name);
     return { started: entry.at, release: entry.release };
   }
-}
 
-export interface Confirmations {
-  readonly asked: string[];
-  /** Resolves the oldest pending owner confirmation. */
-  answer(yes: boolean): void;
-  readonly pending: () => number;
-  next(): Promise<void>;
+  releaseAll(): void {
+    for (const gate of this.gates.values()) gate.release("fixture closed");
+  }
 }
 
 export interface CodeFixture {
   readonly host: HostSession;
   readonly events: EventLog;
-  readonly corral: ReceiptCorral;
+  readonly engine: FakeEngine;
   readonly cwd: string;
+  readonly transport: FakeTransport;
   readonly holds: Holds;
-  readonly confirmations: Confirmations;
   readonly big: string;
   forbiddenRuns(): number;
-  /** Scripts the provider and submits one prompt; resolves after its turn ended and reported. */
-  turn(steps: unknown[], text?: string): Promise<void>;
+  /** Scripts the provider and submits one prompt; resolves after its turn and usage report. */
+  turn(steps: readonly FakeStep[], text?: string): Promise<void>;
   /** The model-visible description of the codemode tool as last prepared. */
   description(): string;
-  /** The model-visible result of the codemode call whose scripted ID is `callId`. */
+  /** The model-visible tool result whose scripted ID is `callId`. */
   result(callId: string): { text: string; isError: boolean; details: unknown };
   journal(): Record<string, unknown>[];
   since(from: number): readonly BridgeEvent[];
@@ -92,37 +88,30 @@ export interface CodeFixture {
 }
 
 export interface CodeFixtureOptions {
+  readonly engineReplies?: Parameters<typeof writeFakeEngine>[1];
   readonly enabled?: readonly string[];
   readonly catalog?: number;
   readonly extend?: (pi: ExtensionAPI) => void;
-  readonly bigBytes?: number;
-  readonly ui?: "plain" | "rich";
 }
 
 export async function codeHost(role: CodeRole, options: CodeFixtureOptions = {}): Promise<CodeFixture> {
-  const assets = buildFixtureInstall();
   const work = mkdtempSync(join(tmpdir(), `corral-code-${role}-`));
   const originalFetch = globalThis.fetch;
-  for (const tree of [`src/roles/${role}`, "src/roles/common", "src/extensions", "assets"]) {
-    cpSync(join(PACKAGE_ROOT, tree), join(assets.dir, tree), { recursive: true });
-  }
   const cwd = join(work, "cwd");
-  mkdirSync(join(cwd, ".corral"), { recursive: true });
+  mkdirSync(cwd);
   for (const name of ["one.txt", "two.txt"]) {
     writeFileSync(join(cwd, name), `${"discard this line\n".repeat(50)}keep: ${name}\n`);
   }
   restrictEnvironment(process.env);
   const identity = IDENTITIES[role];
-  const modules = await loadModules(assets.dir, role);
-  const transport = modules.auth.transport?.(authContext());
-  if (!transport) throw new Error("fixture transport missing");
-  const network = guardedFetch(transport);
+  const transport = fakeCodexTransport();
+  const network = guardedFetch(transport.send);
   globalThis.fetch = network.fetch;
   const sdk = await import("@earendil-works/pi-coding-agent");
-  const events = new EventLog(1);
-  const corral = writeReceiptCorral(work);
+  const events = new EventLog();
+  const engine = writeFakeEngine(work, options.engineReplies);
   const holds = new Holds();
-  const big = "x".repeat(options.bigBytes ?? 400 * 1024);
+  const big = "x".repeat(400 * 1024);
   let forbiddenRuns = 0;
   const local: ToolDefinition[] = [
     {
@@ -138,6 +127,12 @@ export async function codeHost(role: CodeRole, options: CodeFixtureOptions = {})
         return { content: [{ type: "text", text: `${big}\nneedle: the selected line\n${big}` }], details: undefined };
       },
     },
+    {
+      name: "fixture_fail", label: "Fail", description: "Returns a nested tool error.", parameters: Type.Object({}),
+      async execute() {
+        return { content: [{ type: "text", text: "fixture failure" }], details: undefined, isError: true };
+      },
+    },
   ];
   // Registered and callable upstream, but not in the role's loadout: the host must refuse it.
   const forbidden: ToolDefinition = {
@@ -148,8 +143,8 @@ export async function codeHost(role: CodeRole, options: CodeFixtureOptions = {})
       return { content: [{ type: "text", text: "must never run" }], details: undefined };
     },
   };
-  const base = modules.role;
-  const wrapped = { ...modules, role: { ...base,
+  const base = roles[role](PACKAGE_ROOT);
+  const wrapped = { auth: fixtureAuth, role: { ...base,
     localToolNames: [...(base.localToolNames ?? []), ...local.map((tool) => tool.name)],
     localTools: (context: RoleContext) => [...(base.localTools?.(context) ?? []), ...local],
     extend(pi: Parameters<NonNullable<typeof base.extend>>[0], context: RoleContext) {
@@ -158,43 +153,27 @@ export async function codeHost(role: CodeRole, options: CodeFixtureOptions = {})
       pi.registerTool(forbidden);
     },
   } };
-  const capabilities: CapabilitySet = { catalog: options.catalog ?? 4, digest: "a".repeat(64), preset: role === "pm" ? "full" : "standard",
+  const capabilities: CapabilitySet = { catalog: options.catalog ?? 4, digest: "a".repeat(64), preset: "standard",
     enabled: [...(options.enabled ?? ["codemode"])] };
-  let host: HostSession | undefined;
-  const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64),
-    sessionId: () => host?.sessionId() ?? "" });
+  const client = new CorralClient({ corral: engine.path, root: work, cwd, identity });
   const live = await HostSession.create({
-    // A late/foreign extension makes the forbidden tool callable upstream; only host policy refuses it.
+    // Pi only registers tools in its SDK allowlist. Admit this one there, but not to the host loadout.
     sdk: { ...sdk, createAgentSessionFromServices(opts) {
       return sdk.createAgentSessionFromServices({ ...opts, tools: [...opts.tools ?? [], forbidden.name] });
-    } }, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol", capabilities, ui: options.ui ?? "plain",
-    guidance: { projectText: false, settings: {} as never }, modules: wrapped, events, network, client,
+    } }, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol", capabilities, ui: "plain",
+    guidance: { projectText: false, settings: {} }, modules: wrapped, events, network, client,
     sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
   });
-  host = live;
-  const asked: string[] = [];
-  const pending: ((yes: boolean) => void)[] = [];
-  const waiters: (() => void)[] = [];
-  const ui = { confirm: (_title: string, message: string) => new Promise<boolean>((resolve) => {
-    asked.push(message);
-    pending.push(resolve);
-    for (const waiter of waiters.splice(0)) waiter();
-  }) };
-  await live.session.bindExtensions({ uiContext: ui as unknown as ExtensionUIContext });
-  await live.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
-  let seq = 0;
+  // A headless binding, like the CLI's, makes Pi emit session_start on reload.
+  await live.session.bindExtensions({ onError: error => { throw error.error; } });
+  await live.startLocal();
   return {
-    host: live, events, corral, cwd, holds, big,
-    confirmations: {
-      asked, answer: (yes) => pending.shift()?.(yes), pending: () => pending.length,
-      next: () => pending.length > 0 ? Promise.resolve() : new Promise<void>((resolve) => waiters.push(resolve)),
-    },
+    host: live, events, engine, transport, cwd, holds, big,
     forbiddenRuns: () => forbiddenRuns,
     async turn(steps, text = "go") {
-      fixtureTransport().script(steps as never);
+      transport.script(steps);
       const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-      const key = `turn-${++seq}`;
-      const submitted = await live.submit({ text, busyPolicy: "prompt", idempotencyKey: key, origin: "test" }, `rq-${key}`);
+      const submitted = await live.submitLocal({ text, busyPolicy: "prompt", origin: "owner" });
       if (submitted.disposition !== "started") throw new Error(`turn not started: ${JSON.stringify(submitted)}`);
       await ended;
       await live.drained();
@@ -211,10 +190,14 @@ export async function codeHost(role: CodeRole, options: CodeFixtureOptions = {})
         ? [entry.data as Record<string, unknown>] : []),
     since: (from) => events.since(from, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events,
     async close() {
-      await live.close();
-      globalThis.fetch = originalFetch;
-      assets.cleanup();
-      rmSync(work, { recursive: true, force: true });
+      try {
+        const closed = live.close();
+        holds.releaseAll();
+        await closed;
+      } finally {
+        globalThis.fetch = originalFetch;
+        rmSync(work, { recursive: true, force: true });
+      }
     },
   };
 }

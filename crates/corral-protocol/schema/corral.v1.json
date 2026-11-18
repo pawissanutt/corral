@@ -120,6 +120,17 @@
         ],
         "type": "object"
       },
+      "AssistantCancelRequest": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SessionCancel"
+          },
+          {
+            "$ref": "#/components/schemas/AssistantCancel"
+          }
+        ],
+        "description": "Input cancellation names the submitted message; direct cancellation\nnames the session and optionally the turn."
+      },
       "AssistantKind": {
         "enum": [
           "quick",
@@ -2813,6 +2824,16 @@
         ],
         "type": "object"
       },
+      "PromptAnswerRequest": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SessionPromptAnswer"
+          },
+          {
+            "$ref": "#/components/schemas/PromptAnswer"
+          }
+        ]
+      },
       "PromptChoice": {
         "enum": [
           "once",
@@ -3191,6 +3212,133 @@
         ],
         "type": "object"
       },
+      "RewindCheckpoint": {
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "leaf": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "type": "string"
+          },
+          "ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turn": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "phase",
+          "turn"
+        ],
+        "type": "object"
+      },
+      "RewindReply": {
+        "oneOf": [
+          {
+            "properties": {
+              "checkpoints": {
+                "items": {
+                  "$ref": "#/components/schemas/RewindCheckpoint"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "list",
+                "type": "string"
+              },
+              "rewinds": {
+                "items": {
+                  "$ref": "#/components/schemas/Rewound"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "checkpoints",
+              "rewinds"
+            ],
+            "type": "object"
+          },
+          {
+            "$ref": "#/components/schemas/Rewound",
+            "properties": {
+              "kind": {
+                "const": "turn",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "Rewound": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "checkpoint": {
+            "type": "string"
+          },
+          "from_head": {
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          },
+          "rescue_ref": {
+            "type": "string"
+          },
+          "turn": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn",
+          "checkpoint",
+          "rescue_ref",
+          "from_head",
+          "head",
+          "at"
+        ],
+        "type": "object"
+      },
       "Run": {
         "type": "object",
         "x-rust-type": "corral_types::Run"
@@ -3338,6 +3486,51 @@
           "to",
           "text",
           "delivery"
+        ],
+        "type": "object"
+      },
+      "SessionCancel": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "turn": {
+            "description": "If present, cancel only this turn.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "SessionCancelReply": {
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turn": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cancelled"
         ],
         "type": "object"
       },
@@ -4370,12 +4563,156 @@
         ],
         "type": "object"
       },
+      "SessionPauseReply": {
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turn": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "paused",
+          "cancelled"
+        ],
+        "type": "object"
+      },
+      "SessionPromptAnswer": {
+        "description": "`prompt.answer` accepts a Pi question ID and a choice, free text, or both.",
+        "properties": {
+          "option": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "question": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "session",
+          "question"
+        ],
+        "type": "object"
+      },
+      "SessionPromptAnswered": {
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "SessionRelaunched": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "SessionResumeReply": {
+        "properties": {
+          "paused": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "paused"
+        ],
+        "type": "object"
+      },
+      "SessionRewind": {
+        "oneOf": [
+          {
+            "properties": {
+              "action": {
+                "const": "list",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "turn",
+                "type": "string"
+              },
+              "turn": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "action",
+              "turn"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "SessionStatus": {
         "type": [
           "string",
           "object"
         ],
         "x-rust-type": "corral_types::SessionStatus"
+      },
+      "SessionTarget": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
       },
       "SessionToolState": {
         "enum": [
@@ -7780,15 +8117,7 @@
     },
     {
       "name": "assistant.cancel",
-      "params": [
-        {
-          "name": "cmd_id",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
+      "params": [],
       "result": {
         "name": "result",
         "schema": {
@@ -7797,7 +8126,7 @@
       },
       "x-notification": false,
       "x-params-schema": {
-        "$ref": "#/components/schemas/AssistantCancel"
+        "$ref": "#/components/schemas/AssistantCancelRequest"
       },
       "x-wire-errors": [
         {
@@ -8252,45 +8581,16 @@
     },
     {
       "name": "prompt.answer",
-      "params": [
-        {
-          "name": "choice",
-          "required": true,
-          "schema": {
-            "$ref": "#/components/schemas/PromptChoice"
-          }
-        },
-        {
-          "name": "cmd_id",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "key",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "rev",
-          "required": true,
-          "schema": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          }
-        }
-      ],
+      "params": [],
       "result": {
         "name": "result",
-        "schema": true
+        "schema": {
+          "$ref": "#/components/schemas/SessionPromptAnswered"
+        }
       },
       "x-notification": false,
       "x-params-schema": {
-        "$ref": "#/components/schemas/PromptAnswer"
+        "$ref": "#/components/schemas/PromptAnswerRequest"
       },
       "x-wire-errors": [
         {
@@ -8316,6 +8616,256 @@
         {
           "code": "unavailable",
           "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.cancel",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "turn",
+          "required": false,
+          "schema": {
+            "description": "If present, cancel only this turn.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionCancelReply"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionCancel"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.pause",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionPauseReply"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionTarget"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.resume",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionResumeReply"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionTarget"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.terminate",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionTarget"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.relaunch",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionRelaunched"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionTarget"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.rewind",
+      "params": [
+        {
+          "name": "action",
+          "required": true,
+          "schema": {
+            "anyOf": [
+              {
+                "const": "list",
+                "type": "string"
+              },
+              {
+                "const": "turn",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        {
+          "name": "turn",
+          "required": false,
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "x-required-in": [
+            1
+          ]
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/RewindReply"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionRewind"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
         },
         {
           "code": "internal",

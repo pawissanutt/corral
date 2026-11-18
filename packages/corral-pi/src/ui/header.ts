@@ -19,7 +19,7 @@ export function chromeTier(columns: number): ChromeTier {
   return columns >= WIDE_COLUMNS ? "wide" : columns >= RAIL_COLUMNS ? "mid" : columns >= COMPACT_COLUMNS ? "narrow" : "tiny";
 }
 
-export type TabId = "task" | "conversation" | "agents" | "changes" | "evidence" | "inbox" | "board";
+export type TabId = "task" | "conversation" | "agents" | "changes" | "evidence" | "board";
 export type BadgeTone = "text" | "accent" | "success" | "warning" | "error";
 /** A tab's badge: `text` where the row has room, `short` (when given) once it must shorten. */
 export interface TabBadge { readonly text: string; readonly short?: string; readonly tone: BadgeTone }
@@ -35,7 +35,7 @@ export interface Notice { readonly text: string; readonly tone: "text" | "succes
 export interface HeaderStatus { readonly long: string; readonly short: string; readonly tone: BadgeTone | "muted"; readonly clickable: boolean }
 export interface HeaderInput {
   readonly title: string; readonly state: "Working" | "Idle" | "Unavailable";
-  /** The reversed chip at the right edge: `text` when it fits (`⚑ 3 decisions`), else `short` (`⚑ 3`). */
+  /** The reversed chip at the right edge: `text` when it fits (`▲ 2 needs you`), else `short` (`▲ 2`). */
   readonly attention?: { readonly text: string; readonly short?: string; readonly tone: BadgeTone }; readonly notice?: Notice;
   /** Row 2: `left` keeps most of the row; `right` reads `rightShort` (when given) once both do not fit. */
   readonly context?: { readonly left: string; readonly right?: string; readonly rightShort?: string };
@@ -80,17 +80,13 @@ const TAB_TEXT: Readonly<Record<TabId, { readonly key: string; readonly label: s
   agents: { key: "F8", label: "Agents" },
   changes: { key: "F7", label: "Changes", short: "Diff" },
   evidence: { key: "F10", label: "Proof" },
-  inbox: { key: "F11", label: "Inbox" },
   board: { key: "F10", label: "Board" },
 };
-const TASK_TABS: readonly TabId[] = ["task", "conversation", "agents", "changes", "evidence", "inbox"];
-const SESSION_TABS: readonly TabId[] = ["conversation", "agents", "changes", "inbox"];
+const TASK_TABS: readonly TabId[] = ["task", "conversation", "agents", "changes", "evidence"];
+const SESSION_TABS: readonly TabId[] = ["conversation", "agents", "changes"];
 const BUILD_TABS: readonly TabId[] = ["conversation", "agents", "changes", "board"];
 
-/**
- * Task-bound roles keep Task and Proof; assistant and PM sessions have neither, and both have Inbox. A build
- * session has Board in Proof's place on F10 and no Inbox.
- */
+/** Task-bound roles keep Task and Proof; assistant sessions have neither. A build session has Board in Proof's place on F10. */
 export function mainTabs(identity: HostIdentity): readonly TabId[] {
   return identity.role === "build" ? BUILD_TABS : identity.task ? TASK_TABS : SESSION_TABS;
 }
@@ -116,24 +112,23 @@ export function boardBadge(input: { readonly open: number; readonly alert: boole
 }
 
 /**
- * The gate in words, so colour is never the only signal: `gate ✓` a fresh pass, `gate ✗` a failure,
- * `gate …` running, `gate !` any other or stale result, `no gate`. The long form adds the review where the
- * row has room (`reviewed` for a fresh verdict, `review …` pending or stale) and ` · stale` for a stale read;
- * the short form keeps the gate and `stale`. A failed read with nothing retained reads `proof?`.
+ * The newest gate in words, so colour is never the only signal: `gate ✓` a pass, `gate ✗` a failure, `no gate`.
+ * The long form adds the newest review where the row has room (`approved` or `changes`) and ` · stale` for a
+ * stale read; the short form keeps the gate and `stale`. A failed read with nothing retained reads `proof?`.
  */
 export function proofBadge(input: {
-  readonly gate?: { readonly result: string; readonly fresh: boolean };
-  readonly review?: { readonly verdict?: string | null; readonly fresh: boolean };
+  readonly gate?: { readonly result: "pass" | "fail" };
+  readonly review?: { readonly result: "pass" | "fail" };
   readonly stale: boolean; readonly error: boolean;
 }): TabBadge | undefined {
   const { gate, review } = input;
   if (!gate && !review) return input.error ? { text: "proof?", tone: "warning" } : undefined;
-  const mark = !gate ? "" : gate.result === "pass" && gate.fresh ? "✓" : gate.result === "fail" ? "✗" : gate.result === "running" ? "…" : "!";
+  const mark = !gate ? "" : gate.result === "pass" ? "✓" : "✗";
   const gateText = gate ? `gate ${mark}` : "no gate";
-  const reviewText = !review ? "" : review.fresh && review.verdict ? "reviewed" : "review …";
+  const reviewText = !review ? "" : review.result === "pass" ? "approved" : "changes";
   const tone: BadgeTone = mark === "✗" ? "error"
-    : mark === "!" || reviewText === "review …" || input.stale ? "warning"
-    : mark === "…" ? "accent" : mark === "✓" && reviewText === "reviewed" ? "success" : "text";
+    : reviewText === "changes" || input.stale ? "warning"
+    : mark === "✓" && reviewText === "approved" ? "success" : "text";
   const text = [gateText, reviewText].filter(Boolean).join(" · ") + (input.stale ? " · stale" : "");
   const short = gateText + (input.stale ? " stale" : "");
   return text === short ? { text, tone } : { text, short, tone };
@@ -291,7 +286,7 @@ export function headerFrame(input: HeaderInput, width: number, options: { readon
   const word = (small ? input.state.toLowerCase() : input.state) + (mark?.elapsed && !options.tiny ? " · " + mark.elapsed : "");
   const statusText = notice ? plainLabel(notice.text) : !status ? word
     : !small && visibleWidth(chipShort) + chipGap + markWidth + visibleWidth(plainLabel(status.long)) + 2 + keep <= inner ? plainLabel(status.long) : plainLabel(status.short);
-  // The chip says what it counts (`⚑ 3 decisions`) while that leaves the title its room, else its short form.
+  // The chip says what it counts (`▲ 2 needs you`) while that leaves the title its room, else its short form.
   const chipText = visibleWidth(chipLong) + chipGap + markWidth + visibleWidth(statusText) + 2 + keep <= inner ? chipLong : chipShort;
   const chipWidth = visibleWidth(chipText);
   const state = (mark ? mark.glyph + " " : "") + (notice ? toneColor(notice.tone) : status ? toneColor(status.tone) : PANEL_MUTED) + statusText;

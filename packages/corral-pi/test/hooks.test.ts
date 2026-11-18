@@ -15,7 +15,7 @@ function fixture(hooks: HookSettings) {
   const records: HookRecord[] = [];
   const launchedBeforeRecord: boolean[] = [];
   const runner = new Hooks(hooks, {
-    cwd, generation: 3,
+    cwd,
     record: (entry) => {
       if (entry.state === "prepared") launchedBeforeRecord.push(existsSync(join(cwd, "marker")));
       records.push(entry);
@@ -40,15 +40,18 @@ test("each hook is recorded prepared before launch, then started and completed, 
     // Then the hooks mutated the worktree, and every launch was preceded by its durable record.
     expect(readFileSync(join(fx.cwd, "marker"), "utf8")).toBe("pre_tool read\npost_tool read\nturn_end \n");
     expect(fx.launchedBeforeRecord).toEqual([false, true, true]);
+    const pre = fx.records[0]?.invocation, post = fx.records[3]?.invocation, end = fx.records[6]?.invocation;
+    for (const id of [pre, post, end]) expect(id).toMatch(/^hk-/);
+    expect(new Set([pre, post, end]).size).toBe(3);
     expect(fx.records.map((r) => `${r.invocation} ${r.phase} ${r.state}`)).toEqual([
-      "hk-3-1 pre_tool prepared", "hk-3-1 pre_tool started", "hk-3-1 pre_tool completed",
-      "hk-3-2 post_tool prepared", "hk-3-2 post_tool started", "hk-3-2 post_tool completed",
-      "hk-3-3 turn_end prepared", "hk-3-3 turn_end started", "hk-3-3 turn_end completed",
+      `${pre} pre_tool prepared`, `${pre} pre_tool started`, `${pre} pre_tool completed`,
+      `${post} post_tool prepared`, `${post} post_tool started`, `${post} post_tool completed`,
+      `${end} turn_end prepared`, `${end} turn_end started`, `${end} turn_end completed`,
     ]);
     expect(fx.records[0]).toEqual({
-      invocation: "hk-3-1", phase: "pre_tool", hook: "pre", tool: "read", tool_call_id: "call-1", turn: 2, state: "prepared",
+      invocation: pre, phase: "pre_tool", hook: "pre", tool: "read", tool_call_id: "call-1", turn: 2, state: "prepared",
     });
-    expect(fx.records[6]).toEqual({ invocation: "hk-3-3", phase: "turn_end", hook: "end", turn: 2, state: "prepared" });
+    expect(fx.records[6]).toEqual({ invocation: end, phase: "turn_end", hook: "end", turn: 2, state: "prepared" });
     expect(fx.records[2]?.exit_code).toBe(0);
     // And scoping keeps the pre hook off other tools and every hook off corral operations.
     expect(fx.runner.wraps("edit")).toBeTrue();

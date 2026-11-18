@@ -467,6 +467,7 @@ pub fn answer(
                         command: prompt.command.clone(),
                         answers: Some(prompt.request.clone()),
                         request: format!("app-prompt:{}", answer.cmd_id),
+                        binding: None,
                     },
                 )
             } else {

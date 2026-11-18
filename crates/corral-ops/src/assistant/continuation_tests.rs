@@ -174,7 +174,7 @@ fn seed(ctx: &crate::Ctx, bootstrap: &Bootstrap, quota: bool, active: bool) -> t
         }))?);
         c.journal_owner_input("A-1", NewOwnerInput { generation: 1, turn: Some(1), source: OwnerInputSource::Pane,
             text: "Continue the agreed work".into(), sha256: corral_core::agent::paths::sha256_hex(b"Continue the agreed work"),
-            truncated: false, command: None, answers: None, request: "ev-1-1".into() });
+            truncated: false, command: None, answers: None, request: "ev-1-1".into(), binding: None });
         c.state.questions.push(serde_json::from_value(json!({"version":1,"key":"A-1/Q1","revision":1,
             "asked":{"request_id":"rq-question","payload_sha256":"digest","session_id":"same","generation":1,"at":now},
             "kind":"clarification","blocking":false,"text":"Which scope?","state":"answered",

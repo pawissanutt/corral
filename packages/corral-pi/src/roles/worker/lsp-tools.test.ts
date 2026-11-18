@@ -11,15 +11,14 @@ import { EventLog } from "../../bridge/events.ts";
 import { ModuleInvalid, loadModules } from "../../host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../../host/restrict.ts";
 import { HostSession, authContext } from "../../host/session.ts";
-import { CorralClient, sha256Hex } from "../../tools/corral.ts";
+import { CorralClient } from "../../tools/corral.ts";
 import { fixtureTransport } from "../../../test/fixtures/auth/index.ts";
-import { writeFakeCorral } from "../../../test/support/fake-corral.ts";
 import { type FixtureInstall, buildFixtureInstall } from "../../../test/support/fixture-install.ts";
 import { nextEvent } from "../../../test/support/wait.ts";
 
 import { workerRole } from "./index.ts";
 
-const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-009", run: "R1", generation: 1 };
+const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-009", run: "R1" };
 const FAKE = fileURLToPath(new URL("../../extensions/lsp/testing/fake-server.ts", import.meta.url));
 const originalFetch = globalThis.fetch;
 const installs: FixtureInstall[] = [];
@@ -37,7 +36,7 @@ afterAll(() => {
 });
 
 const ROLE = (local: string) => `export default {
-  role: "worker", upstreamTools: ["read"], corralOps: ["hello", "event", "receipt_lookup"],
+  role: "worker", upstreamTools: ["read"],
   tools: () => [], contract: () => "", ${local}
 };\n`;
 
@@ -78,16 +77,14 @@ test("a worker turn calls lsp_definition on the configured server and gets lsp_s
   const fixture = await loadModules(assets.dir, "worker");
   const role = workerRole(fileURLToPath(new URL("../../..", import.meta.url)), { limits: { quietMs: 0 } });
   const modules = { ...fixture, role };
-  const events = new EventLog(identity.generation);
+  const events = new EventLog();
   const transport = modules.auth.transport?.(authContext());
   if (!transport) throw new Error("the fixture auth module supplies a transport");
   const network = guardedFetch(transport);
   globalThis.fetch = network.fetch as typeof globalThis.fetch;
   const sdk = await import("@earendil-works/pi-coding-agent");
-  const corral = writeFakeCorral(work);
-  let host: HostSession | undefined;
-  const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
-  host = await HostSession.create({
+  const client = new CorralClient({ corral: "", root: work, cwd, identity });
+  const host = await HostSession.create({
     sdk, identity, cwd, agentDir: join(work, "pi-agent"), model: "gpt-6.1-sol", modules, client, events, network,
     capabilities: { catalog: 5, digest: "d".repeat(64), preset: "standard", enabled: ["lsp"] },
     guidance: { projectText: false, settings: { lsp: { languages: {
@@ -97,7 +94,7 @@ test("a worker turn calls lsp_definition on the configured server and gets lsp_s
     sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
   });
   await host.session.bindExtensions({});
-  await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+  await host.startLocal();
   expect(host.session.getActiveToolNames()).toContain("lsp_definition");
 
   fixtureTransport().script([
@@ -106,7 +103,7 @@ test("a worker turn calls lsp_definition on the configured server and gets lsp_s
     { text: "DONE" },
   ]);
   const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 1);
-  const submitted = await host.submit({ text: "Look it up.", busyPolicy: "prompt", idempotencyKey: "k-lsp", origin: "test" }, "rq-lsp");
+  const submitted = await host.submitLocal({ text: "Look it up.", busyPolicy: "prompt", origin: "owner" });
   expect(submitted).toEqual({ disposition: "started", turn: 1 });
   await ended;
   await host.drained();

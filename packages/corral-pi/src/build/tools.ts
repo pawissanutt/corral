@@ -1,9 +1,9 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { validatePlan } from "./board.ts";
-import { checked, json, type Run } from "./corral-cli.ts";
+import { checked, type Run } from "./corral-cli.ts";
 import type { BuildJournal } from "./record.ts";
-import type { GateReceipt } from "./record-types.ts";
+import { verifyBuild } from "./gate.ts";
 import type { FleetRuntime } from "../extensions/fleet/runtime.ts";
 import type { BoardPlan, BuildContext } from "./types.ts";
 
@@ -25,28 +25,24 @@ export function buildFinishTool(open: () => void, journal: BuildJournal): ToolDe
 }
 
 /** Verification and review collect evidence only; the owner alone can land. */
-export function buildEvidenceTools(options: { context: BuildContext; run: Run; git: Run; fleet: FleetRuntime; journal: BuildJournal }): ToolDefinition[] {
-  const { context, run, git, fleet, journal } = options;
+export function buildEvidenceTools(options: { context: BuildContext; git: Run; fleet: FleetRuntime; journal: BuildJournal }): ToolDefinition[] {
+  const { context, git, fleet, journal } = options;
   const session = context.session;
   let reviewNumber = Math.max(0, ...journal.record().reviews.map(review => Number(review.reviewer.replace(/^review-/, "")) || 0));
   const tools: ToolDefinition[] = [{
     name: "build_verify", label: "Verify the build",
-    description: "Run the quick gate (or full tier) after committing. Record its result, failed command and log. Does not choose an exit.",
-    parameters: Type.Object({ tier: Type.Optional(Type.Union([Type.Literal("quick"), Type.Literal("full")])) }, { additionalProperties: false }),
-    async execute(_id, params: { tier?: "quick" | "full" }) {
+    description: "Run the project's configured gate after committing. Record its result, failed command and log. Does not choose an exit.",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    async execute(_id, _params, signal) {
       if (!session.workspaceRoot || !session.project) return { content: [{ type: "text", text: "build_verify requires a corral workspace and configured project." }], details: {}, isError: true };
       try {
-        const receipt = await json<GateReceipt>(run, ["build", "gate", "--session", session.id, "--worktree", session.worktree, "--project", session.project,
-          "--tier", params.tier ?? "quick", ...(session.base ? ["--base", session.base] : []), "--json"], session.workspaceRoot, 2 * 60 * 60 * 1000);
-        journal.gate(receipt);
+        const gate = await verifyBuild(context, git, journal, signal);
         let detail = "";
         try { await journal.refresh(); } catch (error) { detail = `\nBuild record Git snapshot failed: ${String(error)}`; }
-        const publication = await journal.publish();
-        return { content: [{ type: "text", text: `${receipt.attempt}: ${receipt.result}${receipt.failed_command ? `\nFailed command: ${receipt.failed_command}` : ""}${receipt.log ? `\nLog: ${receipt.log}` : ""}${detail}${publication ? `\n${publication}` : ""}` }],
-          details: { receipt }, isError: receipt.result === "fail" };
+        return { content: [{ type: "text", text: `${gate.attempt}: ${gate.result}${gate.failed_command ? `\nFailed command: ${gate.failed_command}` : ""}${gate.log ? `\nLog: ${gate.log}` : ""}${detail}` }],
+          details: { gate }, isError: gate.result === "fail" };
       } catch (error) {
-        const text = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: "text", text: text.startsWith("worktree_dirty:") ? `${text}\nCommit your changes first, then call build_verify again.` : text }], details: {}, isError: true };
+        return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], details: {}, isError: true };
       }
     },
   }, {
@@ -81,8 +77,7 @@ export function buildEvidenceTools(options: { context: BuildContext; run: Run; g
         const review = journal.review(child, head);
         let detail = "";
         try { await journal.refresh(); } catch (error) { detail = `\nBuild record Git snapshot failed: ${String(error)}`; }
-        const publication = await journal.publish();
-        return { content: [{ type: "text", text: `${review.verdict}: ${review.summary ?? ""}\n${review.findings.map(finding => `${finding.id} [${finding.severity}] ${finding.path ?? ""}${finding.line ? `:${finding.line}` : ""} ${finding.text}`).join("\n")}${detail}${publication ? `\n${publication}` : ""}` }],
+        return { content: [{ type: "text", text: `${review.verdict}: ${review.summary ?? ""}\n${review.findings.map(finding => `${finding.id} [${finding.severity}] ${finding.path ?? ""}${finding.line ? `:${finding.line}` : ""} ${finding.text}`).join("\n")}${detail}` }],
           details: { round: review.round, review } };
       } catch (error) { return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], details: {}, isError: true }; }
     },
@@ -106,7 +101,7 @@ export function boardPlanTool(propose: (plan: BoardPlan) => void, available: () 
     name: "board_plan", label: "Propose board tasks",
     description: "Propose a bounded plan of at most 20 follow-on tasks for the owner to confirm. "
       + "Give each task a unique key, a concrete title and body, and dependencies naming local keys or existing T-<n> tasks. "
-      + "Dependencies must be acyclic. This tool previews intent only; it never imports or queues tasks and grants no board authority.",
+      + "The owner must confirm before the tasks are filed.",
     parameters: Type.Object({
       title: Type.String({ minLength: 1 }), project: Type.Optional(Type.String()), why: Type.String(),
       tasks: Type.Array(Type.Object({

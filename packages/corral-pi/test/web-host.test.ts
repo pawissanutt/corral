@@ -10,14 +10,14 @@ import { z } from "zod";
 import { EventLog } from "../src/bridge/events.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
-import { HostSession, authContext } from "../src/host/session.ts";
+import { HostSession } from "../src/host/session.ts";
 import { reviewerRole } from "../src/roles/reviewer/index.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
 import type { CapabilitySet, RoleContext } from "../src/roles/types.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
-import { fixtureTransport } from "./fixtures/auth/index.ts";
+import { CorralClient } from "../src/tools/corral.ts";
+import { fakeCodexTransport } from "./fixtures/auth/fake-transport.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 import { nextEvent } from "./support/wait.ts";
 
 const settings = { hosts: ["*"], max_bytes: 1024, timeout_ms: 5000, max_redirects: 3 };
@@ -37,10 +37,9 @@ test("worker and reviewer web calls use the same transport directly and nested a
       const cwd = join(work, roleName);
       mkdirSync(cwd);
       const modules = await loadModules(assets.dir, roleName);
-      const transport = modules.auth.transport?.(authContext());
-      if (!transport) throw new Error("fixture transport missing");
+      const transport = fakeCodexTransport();
       const requested: string[] = [];
-      const network = guardedFetch(transport, undefined, "openai-codex", undefined, {
+      const network = guardedFetch(transport.send, undefined, "openai-codex", undefined, {
         settings, lookup: async () => [{ address: "93.184.216.34", family: 4 }],
         send: async (url) => { requested.push(String(url)); return new Response("public documentation"); },
       });
@@ -56,14 +55,10 @@ test("worker and reviewer web calls use the same transport directly and nested a
           return (await ctx.executeTool("web_read", { content_id, limit: 4 }, { signal })).result;
         },
       };
-      const identity = { store: "st-demo", project: "demo", role: roleName, generation: 1, task: "T-568", run: "R1" };
-      const events = new EventLog(1);
-      const corral = writeFakeCorral(cwd);
-      let host: HostSession | undefined;
-      const client = new CorralClient({
-        corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
-      });
-      host = await HostSession.create({
+      const identity = { store: "st-demo", project: "demo", role: roleName, task: "T-568", run: "R1" };
+      const events = new EventLog();
+      const client = new CorralClient({ corral: writeFakeEngine(cwd).path, root: work, cwd, identity });
+      const host = await HostSession.create({
         sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", capabilities, client, events, network,
         modules: { ...modules, role: {
           ...role, localToolNames: [...role.localToolNames ?? [], nested.name],
@@ -73,12 +68,12 @@ test("worker and reviewer web calls use the same transport directly and nested a
       });
       try {
         await host.session.bindExtensions({});
-        await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+        await host.startLocal();
         expect(host.state().capabilities).toEqual(capabilities);
         for (const stage of ["startup", "reload"]) {
           if (stage === "reload") await host.session.reload();
           // When the model issues direct and nested public reads, search, and a private read.
-          fixtureTransport().script([
+          transport.script([
             { toolCalls: [{ callId: `${stage}-fetch`, name: "web_fetch", arguments: { url: "https://docs.example.org/" } }] },
             { toolCalls: [{ callId: `${stage}-search`, name: "web_search", arguments: { query: "docs" } }] },
             { toolCalls: [{ callId: `${stage}-nested`, name: nested.name, arguments: {} }] },
@@ -86,8 +81,7 @@ test("worker and reviewer web calls use the same transport directly and nested a
             { text: "Finished" },
           ]);
           const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-          expect((await host.submit({ text: stage, busyPolicy: "prompt", idempotencyKey: stage, origin: "test" },
-            `rq-${stage}`)).disposition).toBe("started");
+          expect((await host.submitLocal({ text: stage, busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
           await ended;
           await host.drained();
           // Then successful reads and setup reach the transcript; private requests fail locally.

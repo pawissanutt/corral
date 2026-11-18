@@ -15,12 +15,12 @@ import { BrowserError, browserTarget, checkLanded, inside } from "./target.ts";
 export const BROWSER_TOOL_NAMES = ["browser_navigate", "browser_screenshot"] as const;
 const TEXT_MAX = 64 * 1024;
 
-/** The generation's browser settings when enabled; throws for another role or malformed settings. */
+/** Browser settings when enabled; throws for an unsupported role or malformed settings. */
 export function browserSettings(
   role: Role, enabled: readonly string[], settings: Readonly<Record<string, unknown>> | undefined,
 ): BrowserSettings | undefined {
   if (!enabled.includes("browser")) return undefined;
-  if (role !== "worker" && role !== "assistant" && role !== "build" && role !== "pm") throw new Error(`browser is not available to the ${role} role`);
+  if (role === "reviewer") throw new Error(`browser is not available to the ${role} role`);
   const parsed = BrowserSettingsSchema.safeParse(settings?.browser);
   if (!parsed.success) throw new Error("capabilities.settings.browser is missing or malformed");
   return parsed.data;

@@ -3,7 +3,7 @@
 //! A process session owns its run directory. Its `exit_code` is the durable completion
 //! marker, including when the command outlives the caller that launched it.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, process::Command};
 
 use anyhow::Result;
 use corral_types::Origin;
@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 mod fake;
 mod herdr;
+pub mod pi;
 mod process;
 
 pub use corral_types::{SessionRef, SessionStatus};
@@ -31,6 +32,10 @@ pub struct LaunchSpec {
 
 pub trait Runner: Send + Sync {
     fn start(&self, spec: &LaunchSpec) -> Result<SessionRef>;
+    /// Start an engine-owned command directly rather than evaluating a harness shell line.
+    fn start_process(&self, _command: Command, _dir: PathBuf) -> Result<SessionRef> {
+        anyhow::bail!("runner does not support direct process placement")
+    }
     fn status(&self, session: &SessionRef) -> Result<SessionStatus>;
     /// Owner replies and automatic input share the transport. Runners that can
     /// pause a session may defer automatic input.

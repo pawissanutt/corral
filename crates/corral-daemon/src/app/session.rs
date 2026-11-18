@@ -161,6 +161,12 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
                     if pair.is_some() {
                         hello.caps.clear();
                     }
+                    topics.set_session_fleet(
+                        hello
+                            .caps
+                            .iter()
+                            .any(|cap| cap == wire::app::SESSION_FLEET_V1),
+                    );
                     reply(&mut conn, id, dispatch::welcome(&shared, hello))?;
                     welcomed = true;
                 }

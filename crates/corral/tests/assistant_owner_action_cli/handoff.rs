@@ -60,6 +60,7 @@ fn guarded_owner_cli_saves_continues_and_returns_same_plan_only_scope_without_la
                         command: None,
                         answers: None,
                         request: "fixture-input-1".into(),
+                        binding: None,
                     },
                 )
                 .id;

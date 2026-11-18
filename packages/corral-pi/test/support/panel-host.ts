@@ -6,12 +6,11 @@ import { EventLog } from "../../src/bridge/events.ts";
 import { loadModules } from "../../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../../src/host/restrict.ts";
 import { HostSession, authContext } from "../../src/host/session.ts";
-import { CorralClient, sha256Hex } from "../../src/tools/corral.ts";
+import { CorralClient } from "../../src/tools/corral.ts";
 import type { CapabilitySet } from "../../src/roles/types.ts";
 import type { NativePanels } from "../../src/ui/panels.ts";
 import { presentHostNotice } from "../../src/ui/host-notices.ts";
 import { buildFixtureInstall } from "./fixture-install.ts";
-import { writeFakeCorral } from "./fake-corral.ts";
 import { RecordingTerminal } from "./panel-terminal.ts";
 import { ScreenModel } from "./screen.ts";
 
@@ -49,19 +48,18 @@ export async function startPanelHost(extend?: (...args: Parameters<Extend>) => v
   try {
     restrictEnvironment(process.env); process.env.PI_CODING_AGENT_DIR = join(work, "pi-state");
     const sdk = await import("@earendil-works/pi-coding-agent");
-    const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
+    const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
     const original = await loadModules(assets.dir, "worker");
     const modules: Modules = { ...original, role: { ...original.role, extend(pi, context) { original.role.extend?.(pi, context); extend?.(pi, context); } } };
     const send = modules.auth.transport?.(authContext());
     if (!send) throw new Error("fixture transport unavailable");
-    const events = new EventLog(1), network = guardedFetch(send);
+    const events = new EventLog(), network = guardedFetch(send);
     globalThis.fetch = network.fetch as typeof globalThis.fetch;
-    const corral = writeFakeCorral(work);
-    const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
+    const client = new CorralClient({ corral: "", root: work, cwd: work, identity });
     host = await HostSession.create({ sdk, identity, cwd: work, agentDir: join(work, "agent"), model: "gpt-6.1-sol", modules, client, events, network,
       ...(options.capabilities ? { capabilities: options.capabilities } : {}),
       sessionManager: sdk.SessionManager.create(work, join(work, "sessions")) });
-    await host.hello("n".repeat(64), "fixture-pane", sha256Hex("c".repeat(64)));
+    await host.startLocal();
     const panels = host.panels;
     if (!panels) throw new Error("rich host did not install native panels");
     const physical = new RecordingTerminal(), terminal = panels.wrap(physical);
@@ -72,7 +70,7 @@ export async function startPanelHost(extend?: (...args: Parameters<Extend>) => v
       userPresentation: presentHostNotice });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
-    await physical.untilVisible("WORKER  ● bound"); // the status bar's role pill and bound dot
+    await physical.untilVisible("WORKER  │"); // the status bar's role pill and its first separator
     physical.send("\x1b[20~"); // F9: Chat, where every session starts; the transcript stays in front
     const view: Component | undefined = transcript;
     if (!(view instanceof ScrollView)) throw new Error("transcript is not a ScrollView");

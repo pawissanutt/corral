@@ -3,11 +3,10 @@
 // worker thread (kernel-worker.ts); tool calls inside one cell may overlap. Tools enter only
 // through the injected ToolBridge, which applies the host's normal checks to every call.
 //
-// Lifecycle: top-level variables, functions and classes survive from cell to cell within one
-// worker generation. They do not survive reset, recovery, close or a host/process restart, and
-// nothing is snapshotted or replayed: a new generation starts empty, `state_lost` reports every
-// discarded generation, and each CellResult names the generation that ran it. Canonical state
-// (todos, receipts) never lives in the heap. Cancelling a queued cell removes it. An active cell
+// Lifecycle: top-level variables, functions and classes survive from cell to cell in one
+// worker. They do not survive reset, recovery, close or a host restart. Nothing is snapshotted
+// or replayed: a replacement worker starts empty. Tool state such as todos never lives in
+// the heap. Cancelling a queued cell removes it. An active cell
 // cannot be stopped in place, because code it left suspended in the shared heap could resume
 // later, so cancelling it or reaching its deadline terminates and replaces the worker: the cell
 // settles with `stateLost` and `state_lost` names the reason. A cell is reported finished only
@@ -46,7 +45,6 @@ export const DEFAULT_KERNEL_LIMITS: KernelLimits = {
 
 export interface ToolRequest {
   readonly session: string;
-  readonly generation: number;
   readonly cell: string;
   readonly call: string;
   readonly tool: string;
@@ -64,13 +62,12 @@ export type StateLossReason = "reset" | "cancelled" | "timeout" | "worker_failed
 export interface CellResult {
   readonly cell: string;
   readonly status: CellStatus;
-  readonly generation: number;
   /** The rendered value of an explicit `return`; undefined when the cell returned nothing. */
   readonly value?: string;
   readonly outputs: readonly KernelOutput[];
   readonly error?: WireError;
   readonly truncated: boolean;
-  /** The generation that ran this cell was discarded while it ran: its variables are gone. */
+  /** The worker that ran this cell was discarded while it ran: its variables are gone. */
   readonly stateLost: boolean;
 }
 
@@ -79,7 +76,7 @@ export interface CellHandle {
   readonly result: Promise<CellResult>;
 }
 
-export type KernelEvent = { readonly session: string; readonly generation: number } & (
+export type KernelEvent = { readonly session: string } & (
   | { readonly kind: "kernel_started"; readonly module: string }
   | { readonly kind: "cell_queued" | "cell_started"; readonly cell: string }
   | { readonly kind: "call_started" | "call_discarded"; readonly cell: string; readonly call: string; readonly tool: string }
@@ -89,7 +86,7 @@ export type KernelEvent = { readonly session: string; readonly generation: numbe
   | { readonly kind: "kernel_closed"; readonly cells: number }
 );
 
-type EventBody = KernelEvent extends infer E ? E extends KernelEvent ? Omit<E, "session" | "generation"> : never : never;
+type EventBody = KernelEvent extends infer E ? E extends KernelEvent ? Omit<E, "session"> : never : never;
 
 export type KernelErrorCode = "kernel_closed" | "queue_full" | "code_too_large" | "invalid_cell";
 
@@ -110,7 +107,6 @@ export interface CodeKernelOptions {
 }
 
 export interface KernelStatus {
-  readonly generation: number;
   readonly cells: number;
   readonly running: string | undefined;
   readonly queued: readonly string[];
@@ -128,7 +124,6 @@ interface Queued {
 }
 
 interface Running extends Queued {
-  readonly generation: number;
   readonly budget: OutputBudget;
   readonly outputs: KernelOutput[];
   readonly calls: Map<string, AbortController>;
@@ -147,7 +142,6 @@ function errorFields(error: unknown): WireError {
 export class CodeKernel {
   readonly session: string;
   private readonly limits: KernelLimits;
-  private generation = 0;
   private cells = 0;
   private sequence = 0;
   private worker: Worker | undefined;
@@ -169,7 +163,7 @@ export class CodeKernel {
 
   status(): KernelStatus {
     return {
-      generation: this.generation, cells: this.cells, running: this.running?.cell, queued: this.queue.map(({ cell }) => cell),
+      cells: this.cells, running: this.running?.cell, queued: this.queue.map(({ cell }) => cell),
       worker: this.worker !== undefined, retiring: this.exits.size, closed: this.isClosed,
     };
   }
@@ -212,7 +206,7 @@ export class CodeKernel {
     return true;
   }
 
-  /** Discards the current generation and its state; the active cell settles as `reset`. */
+  /** Discards the current worker and its state; the active cell settles as `reset`. */
   async reset(): Promise<void> {
     if (this.isClosed) throw new KernelError("kernel_closed", `the kernel of session ${this.session} is closed`);
     if (this.worker) this.lose("reset");
@@ -238,7 +232,7 @@ export class CodeKernel {
   }
 
   private emit(event: EventBody): void {
-    this.options.onEvent?.({ session: this.session, generation: this.generation, ...event } as KernelEvent);
+    this.options.onEvent?.({ session: this.session, ...event } as KernelEvent);
   }
 
   private send(worker: Worker, message: HostMessage): void {
@@ -246,7 +240,6 @@ export class CodeKernel {
   }
 
   private spawn(): Worker {
-    this.generation++;
     this.cells = 0;
     const worker = new Worker(this.options.worker ?? KERNEL_WORKER, { env: {} });
     const failed = (message: string) => {
@@ -267,7 +260,7 @@ export class CodeKernel {
     if (!next) return;
     const worker = this.worker ?? this.spawn();
     const running: Running = {
-      ...next, generation: this.generation, budget: new OutputBudget(this.limits.output), outputs: [], calls: new Map(),
+      ...next, budget: new OutputBudget(this.limits.output), outputs: [], calls: new Map(),
       deadline: setTimeout(() => { if (this.running === running) this.lose("timeout"); }, next.timeoutMs),
     };
     this.running = running;
@@ -319,7 +312,7 @@ export class CodeKernel {
       return;
     }
     const request: ToolRequest = {
-      session: this.session, generation: running.generation, cell, call, tool, input, signal: controller.signal,
+      session: this.session, cell, call, tool, input, signal: controller.signal,
     };
     void Promise.resolve().then(() => this.options.tools(request)).then(
       (value) => this.answer(worker, running, call, tool, { ok: true, value }),
@@ -358,7 +351,7 @@ export class CodeKernel {
     for (const controller of running.calls.values()) controller.abort();
     running.calls.clear();
     running.resolve({
-      cell: running.cell, status, generation: running.generation, outputs: running.outputs,
+      cell: running.cell, status, outputs: running.outputs,
       truncated: result.truncated === true || running.budget.truncated, stateLost: result.stateLost,
       ...(result.value === undefined ? {} : { value: result.value }), ...(result.error ? { error: result.error } : {}),
     });
@@ -367,7 +360,7 @@ export class CodeKernel {
   }
 
   private finishQueued(queued: Queued, status: "cancelled" | "closed"): void {
-    queued.resolve({ cell: queued.cell, status, generation: this.generation, outputs: [], truncated: false, stateLost: false });
+    queued.resolve({ cell: queued.cell, status, outputs: [], truncated: false, stateLost: false });
     this.emit({ kind: "cell_finished", cell: queued.cell, status });
   }
 

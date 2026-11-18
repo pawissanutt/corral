@@ -43,13 +43,13 @@ async function discover(settings: LlamaCppSettings, send: Fetch): Promise<readon
   return [...new Set(parsed.data.data.map(({ id }) => id))];
 }
 
-/** A generation-local, chat-only catalog. No upstream llama extension or model manager is enabled. */
+/** A host-local, chat-only catalog. No upstream llama extension or model manager is enabled. */
 export async function createLocalModels(settings: LlamaCppSettings, selected: string, send: Fetch) {
   const selectedId = selected.startsWith("llama.cpp/") ? selected.slice("llama.cpp/".length) : selected;
   if (!ModelId.safeParse(selectedId).success) throw new LocalModelUnavailable("invalid configured model ID");
   const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, { providers: [], modelsPath: null });
   const origin = new URL(settings.endpoint).origin;
-  // Discovery is refreshed explicitly; an individual generation keeps its configured transport.
+  // Discovery is refreshed explicitly; the host keeps its configured transport.
   let ids: readonly string[] = settings.discover ? await discover(settings, send) : [selectedId];
   const metadata = (id: string): Model<"openai-completions"> => ({
     id, name: id, provider: "llama.cpp", api: "openai-completions", baseUrl: `${origin}/v1`,
@@ -70,7 +70,7 @@ export async function createLocalModels(settings: LlamaCppSettings, selected: st
   const provider: Provider = {
     id: "llama.cpp", name: "llama.cpp", baseUrl: `${origin}/v1`,
     auth: { apiKey: { name: "configured local inference", resolve: async () => ({
-      auth: { apiKey: "local", baseUrl: `${origin}/v1` }, source: "generation configuration",
+      auth: { apiKey: "local", baseUrl: `${origin}/v1` }, source: "host configuration",
     }) } },
     getModels: () => ids.map(metadata),
     stream: (model, context, options) => api.stream(bound(model), context, {

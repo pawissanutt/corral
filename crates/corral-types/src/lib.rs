@@ -228,8 +228,19 @@ impl Artifact {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionRef {
-    Herdr { workspace: String, pane: String },
-    Process { pid: u32, dir: PathBuf },
+    Herdr {
+        workspace: String,
+        pane: String,
+    },
+    Process {
+        pid: u32,
+        dir: PathBuf,
+    },
+    Pi {
+        socket: PathBuf,
+        inner: Box<SessionRef>,
+        dir: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

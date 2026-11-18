@@ -1,4 +1,4 @@
-// One owner per ambient datum: role, binding, session cost, context window and alerts in the status bar.
+// One owner per ambient datum: role, session cost, context window and alerts in the status bar.
 import { stripTerminalSequences, visibleWidth, Text } from "@earendil-works/pi-tui";
 import type { HostIdentity, Role } from "../roles/types.ts";
 import { STATUS_BINDING, STATUS_ALERTS } from "./chrome.ts";
@@ -54,47 +54,34 @@ export function contextSegment(snapshot: PanelSnapshot | null, room: number, for
 }
 /** The role pill's three-letter form below 64 columns. */
 const ROLE_SHORT: Readonly<Record<Role, string>> = {
-  worker: "WRK", reviewer: "REV", pm: "PM", planner: "PLN", plan_reviewer: "PRV", assistant: "AST", build: "BLD",
+  worker: "WRK", reviewer: "REV", assistant: "AST", build: "BLD",
 };
 /** The model and effort the folded composer bar no longer shows (below 28 rows); `model` is `provider/id`. */
 export interface FoldedComposer { readonly model: string | null; readonly effort?: string }
-/** One step of the status bar's measured drop order. */
-interface BarLevel { readonly gen: boolean; readonly word: boolean; readonly composer: 0 | 1 | 2 | 3 }
+/** How much of the folded composer the bar keeps, measured in order: `effort` word, effort, model, then nothing. */
+type ComposerLevel = 0 | 1 | 2 | 3;
+const LEVELS: readonly ComposerLevel[] = [0, 1, 2, 3];
 /**
- * Measured in order: `gen N` goes (it shows only from 105 columns), then the folded composer's `effort`
- * word, then its effort, then the model, and last the binding's word.
- */
-const LEVELS: readonly BarLevel[] = [
-  { gen: true, word: true, composer: 0 }, { gen: false, word: true, composer: 0 }, { gen: false, word: true, composer: 1 },
-  { gen: false, word: true, composer: 2 }, { gen: false, word: true, composer: 3 }, { gen: false, word: false, composer: 3 },
-];
-/**
- * The status bar owns only what matters in every view: the role as a filled accent pill and the binding,
- * session cost, the context window and alerts, separated by `│` in the line colour. A build session is
- * never bound, so it has no binding segment; a bound role reads `● bound` (` · gen <n>` from 105 columns),
- * an unbound one `○ unbound`. Below 64 columns the pill keeps a three-letter form (`WRK`, `BLD`). While the
- * composer bar is folded, `folded` appends `<model> · effort <value>` after the meter. Every width keeps the
- * measured drop order of `LEVELS`; when the row still cannot hold the meter it takes a second row; alerts
- * that do not fit wrap, never drop. `partialCost` marks a cost that leaves out unknown parts with `+`.
+ * The status bar owns only what matters in every view: the role as a filled accent pill, session cost, the context
+ * window and alerts, separated by `│` in the line colour. Below 64 columns the pill keeps a three-letter form
+ * (`WRK`, `BLD`). While the composer bar is folded, `folded` appends `<model> · effort <value>` after the meter.
+ * Every width keeps the measured drop order of `LEVELS`; when the row still cannot hold the meter it takes a second
+ * row; alerts that do not fit wrap, never drop. `partialCost` marks a cost that leaves out unknown parts with `+`.
  */
 export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null,
   statuses: ReadonlyMap<string, string>, width: number, partialCost = false, folded?: FoldedComposer): string[] {
   const tiny = width < 64, small = width < 105;
   const role = tiny ? ROLE_SHORT[identity.role] : identity.role.replaceAll("_", " ").toUpperCase();
   const pill = `${PANEL_ON_ACCENT} ${role} \x1b[22m${PANEL_BG}`;
-  const bound = snapshot?.bound ?? false;
-  const binding = (level: BarLevel) => identity.role === "build" ? ""
-    : " " + (bound ? PANEL_SUCCESS + "●" + (level.word ? PANEL_MUTED + " bound" : "") : PANEL_WARNING + "○" + (level.word ? " unbound" : ""))
-      + (level.gen && !small ? PANEL_MUTED + ` · gen ${identity.generation}` : "");
   const model = folded?.model ? plainLabel(folded.model.slice(folded.model.indexOf("/") + 1)) : "";
   const effort = folded?.effort ? plainLabel(folded.effort) : "";
-  const composer = (level: BarLevel) => {
-    const effortText = level.composer === 0 && effort ? "effort " + effort : level.composer <= 1 ? effort : "";
-    const modelText = level.composer <= 2 ? model : "";
+  const composer = (level: ComposerLevel) => {
+    const effortText = level === 0 && effort ? "effort " + effort : level <= 1 ? effort : "";
+    const modelText = level <= 2 ? model : "";
     if (!modelText && !effortText) return "";
     return PANEL_LINE + " │ " + PANEL_TEXT + modelText + (modelText && effortText ? PANEL_MUTED + " · " : "") + PANEL_MUTED + effortText;
   };
-  // Binding is the dot; every other status (refusals first) is kept.
+  // The plain chrome's binding status is not drawn; every other status (refusals first) is kept.
   const alerts = [...statuses].filter(([key]) => key !== STATUS_BINDING)
     .sort(([a], [b]) => Number(b === STATUS_ALERTS) - Number(a === STATUS_ALERTS))
     .map(([, value]) => plainLabel(stripTerminalSequences(value))).filter(Boolean).join(" · ");
@@ -105,14 +92,13 @@ export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null
   const form = tiny ? "tiny" : small ? "mid" : "full";
   // The folded composer stays only beside a meter that still reads `ctx ▰▰▱▱▱▱▱▱ 24%`; without it the meter may shorten further.
   const shortest = visibleWidth(contextSegment(snapshot, 0, form)), meter = visibleWidth(contextSegment(snapshot, width, "tiny"));
-  const roomFor = (level: BarLevel) => width - 1 - visibleWidth(pill + binding(level) + cost + composer(level)) - 3;
+  const roomFor = (level: ComposerLevel) => width - 1 - visibleWidth(pill + cost + composer(level)) - 3;
   const level = LEVELS.find(candidate => roomFor(candidate) >= (composer(candidate) ? Math.max(meter, shortest) : shortest));
-  if (!level) {
-    const last: BarLevel = LEVELS[LEVELS.length - 1] ?? { gen: false, word: false, composer: 3 };
-    return [row(pill + binding(last) + cost + (alerts ? sep + PANEL_WARNING + alerts : "")), row(contextSegment(snapshot, width - 1, form))];
+  if (level === undefined) {
+    return [row(pill + cost + (alerts ? sep + PANEL_WARNING + alerts : "")), row(contextSegment(snapshot, width - 1, form))];
   }
   const room = roomFor(level), tail = composer(level);
   const inline = alerts && visibleWidth(alerts) + 3 + shortest <= room;
   const context = contextSegment(snapshot, room - (inline ? visibleWidth(alerts) + 3 : 0), form);
-  return [row(pill + binding(level) + cost + sep + context + tail + (inline ? sep + PANEL_WARNING + alerts : "")), ...(alerts && !inline ? wrapped(alerts) : [])];
+  return [row(pill + cost + sep + context + tail + (inline ? sep + PANEL_WARNING + alerts : "")), ...(alerts && !inline ? wrapped(alerts) : [])];
 }

@@ -14,7 +14,7 @@ import { parseStatus, readPanelDiff, readPanelFiles } from "./panels-git.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
 
 const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const,
-  task: "T-001", run: "R1", generation: 3 };
+  task: "T-001", run: "R1" };
 const snapshot: PanelSnapshot = {
   bound: true, model: "openai-codex/example", effort: "high", streaming: true,
   context: { tokens: 1234, contextWindow: 10000, percent: 12.34 }, tokens: 5678,
@@ -113,7 +113,7 @@ test("view data uses measured values and explicit unavailable/empty states, neve
   expect(contextLabel(null)).toBe("Context unavailable");
   expect(contextLabel(snapshot)).toBe("1.2k/10k · 12% context");
 });
-test("the status bar is the one home of session cost and context, with the role pill, binding and refusals", () => {
+test("the status bar is the one home of session cost and context, with the role pill and refusals", () => {
   for (const width of [40, 52, 61, 80, 92, 105, 140, 185]) {
     const statuses = new Map([[STATUS_BINDING, "● corral g3"], [STATUS_ALERTS, "2 tool denied"]]);
     const bar = statusBar(identity, { ...snapshot, cost: 1.234 }, statuses, width);
@@ -123,20 +123,15 @@ test("the status bar is the one home of session cost and context, with the role 
     if (width >= 64) expect(screen).toMatch(/1\.2k \/ 10k|1k\/10k/);
     expect(screen).toContain("2 tool denied");
     expect(screen).toContain("$1.23");
-    expect(screen).toContain("●");
-    expect(screen).not.toContain("● corral g3");
+    expect(screen).not.toMatch(/corral g3|[●○]|bound/);
     // The role is a filled accent pill: the full word from 64 columns, a three-letter form below.
     expect(bar[0]).toContain(PANEL_ON_ACCENT);
     expect(screen.startsWith(width >= 64 ? "  WORKER " : "  WRK ")).toBeTrue();
-    // Extension alerts are never dropped: below 52 columns they take a second row.
-    expect(bar).toHaveLength(width >= 52 ? 1 : 2);
+    // Extension alerts are never dropped: when they do not fit beside the meter they take a second row.
+    expect(bar.length).toBeLessThanOrEqual(width >= 52 ? 1 : 2);
     for (const line of bar) expect(visibleWidth(line)).toBe(width);
-    const unbound = stripTerminalSequences(statusBar(identity, { ...snapshot, bound: false }, new Map(), width).join("\n"));
-    expect(unbound).toContain("○ unbound");
-    // A build session has no corral binding, so it draws no binding segment at all.
     const build = stripTerminalSequences(statusBar({ ...identity, role: "build" as const }, snapshot, new Map(), width).join("\n"));
     expect(build).toContain(width >= 64 ? "BUILD" : "BLD");
-    expect(build).not.toContain("○"); expect(build).not.toContain("●"); expect(build).not.toContain("unbound"); expect(build).not.toMatch(/g\d|gen \d/);
   }
 });
 test("context segment shortens in steps, warns at 80% and stays explicit when unknown", () => {

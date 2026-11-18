@@ -13,7 +13,7 @@ import { fleetExtras } from "./build/fleet-rows.ts";
 
 const NOW = 1_000_000;
 function helper(request: string, phase: HelperInspection["phase"], createdAt: number, extra: Partial<HelperInspection> = {}): HelperInspection {
-  return { request, kind: "explore", model: "provider/model-a", generation: 1, phase, createdAt,
+  return { request, kind: "explore", model: "provider/model-a", phase, createdAt,
     ...(phase === "queued" ? {} : { startedAt: createdAt + 2000 }), ...(phase === "completed" ? { endedAt: createdAt + 30_000, result: "Answer line" } : {}),
     prompt: `Find ${request} callers\nsecond line`, truncated: false,
     messages: phase === "running" ? [{ id: "t", kind: "tool", tool: "read", phase: "running", arguments: JSON.stringify({ path: "src/a.ts" }), text: "" }] : [], ...extra };

@@ -1,12 +1,9 @@
-// Local assistant-session todo semantics, without a corral store or receipt history.
+// The session-local todo list shares a file format across roles.
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import type { CorralCall } from "../tools/corral.ts";
-
-export type LocalOpHandler = (call: CorralCall) => unknown | Promise<unknown>;
 
 const Step = z.object({ id: z.string(), label: z.string(), criteria: z.array(z.string()).default([]) }).strict();
 const Phase = z.object({ id: z.string(), label: z.string(), steps: z.array(Step) }).strict();
@@ -150,7 +147,7 @@ function validateCheck(input: string): void {
   }
 }
 
-function apply(state: State, action: z.infer<typeof Action>, spec: string): void {
+function apply(state: State, action: z.infer<typeof Action>, spec: string, taskScoped: boolean): void {
   const previous = state.progress;
   if (previous && previous.spec_revision !== spec) refuse("stale_todo_spec");
   if (action.op !== "init" && action.plan != null && action.plan !== previous?.plan) refuse("stale_todo_plan");
@@ -215,22 +212,15 @@ function apply(state: State, action: z.infer<typeof Action>, spec: string): void
   validate(progress);
   if (!Number.isSafeInteger(progress.revision + 1)) refuse("progress_revision_exhausted");
   progress.revision++;
-  if (steps(progress).some((step) => step.criteria.length)) {
+  if (!taskScoped && steps(progress).some((step) => step.criteria.length)) {
     refuse("a PM or assistant todo cannot link task acceptance criteria");
   }
 }
 
-/**
- * Every action returns { revision, progress, plan, disposition, closed_plans }, matching
- * an assistant todo receipt's result. The directory names the local assistant spec scope.
- * Snapshot exposes container.state.todo and todo_requests with plans/history and explicit
- * turn: null, continued: null. No request record exists, so no continuation is due or stopped.
- * Wait deadlines/checks persist privately; wire waits contain only step/on, like corral.
- * There is no board or PM wake publisher here. Waits remain until start/done/drop clears them.
- */
-export function createTodoLedger(dir: string): { handle: LocalOpHandler; snapshot(): unknown } {
+/** Writes one local todo transition and returns the resulting progress and disposition. */
+export function createTodoLedger(dir: string, task?: string) {
   const path = join(dir, "todo.json");
-  const spec = `assistant:${basename(resolve(dir))}`;
+  const spec = task ?? `session:${basename(resolve(dir))}`;
   let state: State;
   try {
     state = State.parse(JSON.parse(readFileSync(path, "utf8")));
@@ -238,9 +228,9 @@ export function createTodoLedger(dir: string): { handle: LocalOpHandler; snapsho
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     state = { version: 1, plans: 0, progress: null, history: [], deadlines: [] };
   }
-  const handle: LocalOpHandler = (call) => {
+  const handle = (payload: Record<string, unknown>) => {
     const next = structuredClone(state);
-    apply(next, parseAction(call.payload), spec);
+    apply(next, parseAction(payload), spec, task !== undefined);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const temporary = join(dir, `.todo-${randomUUID()}.tmp`);
     const fd = openSync(temporary, "wx", 0o600);
@@ -259,8 +249,8 @@ export function createTodoLedger(dir: string): { handle: LocalOpHandler; snapsho
     return { revision: progress.revision, progress: publicProgress(progress), plan: progress.plan,
       disposition: disposition(progress), closed_plans: state.history.length };
   };
-  return { handle, snapshot: () => ({ container: { state: {
-    todo: state.progress ? publicProgress(state.progress) : null,
-    todo_requests: { plans: state.plans, history: structuredClone(state.history), turn: null, continued: null },
-  } } }) };
+  return { handle, snapshot: () => ({
+    progress: state.progress ? publicProgress(state.progress) : null,
+    plans: state.plans, history: structuredClone(state.history),
+  }) };
 }

@@ -236,7 +236,7 @@ async function childGuard(kind: ChildKind = "slice"): Promise<Guard> {
       shellRefusal: command => command.includes(".corral") ? "Reserved .corral path" : undefined });
     const handle = runner.run(spec("guard", { kind }), { profile: "default", provider: "approved", model: "parent" },
       { onEvent() {}, onToolStart() {}, onTurn() {}, async ask() { return ""; },
-        openingPrompt: () => "", roster: async () => "", message: (to, text, options) => runtime.message("parent", to, text, options), reviewVerdict() {} }, new AbortController().signal);
+        openingPrompt: () => "", roster: () => "", message: (to, text, options) => runtime.message("parent", to, text, options), reviewVerdict() {} }, new AbortController().signal);
     const result = await handle.done;
     expect(result.failed).toBeUndefined();
     expect(guard).toBeDefined();

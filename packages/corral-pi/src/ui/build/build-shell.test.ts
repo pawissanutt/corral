@@ -27,7 +27,7 @@ afterAll(() => rmSync(work, { recursive: true, force: true }));
 const BINDINGS = new KeybindingsManager();
 const KEY = { f7: "\x1b[18~", f8: "\x1b[19~", f9: "\x1b[20~", f10: "\x1b[21~", esc: "\x1b", enter: "\r", altT: "\x1bt",
   followUp: keyData(BINDINGS.getKeys("app.message.followUp")[0] ?? "alt+enter") ?? "\x1b\r" };
-const identity = { store: "build", project: "", role: "build", generation: 1 } as const;
+const identity = { store: "build", project: "", role: "build" } as const;
 const NOW = Date.now();
 const plain = (lines: readonly string[]) => lines.map(line => stripTerminalSequences(line)).join("\n");
 /** Drains the promise continuations and microtasks the panels queue; no wall-clock wait. */

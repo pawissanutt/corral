@@ -21,6 +21,8 @@ use serde_json::{Value, json};
 
 use crate::{server, state::Shared};
 
+mod pi_chat;
+
 pub(super) struct Fixture {
     dir: tempfile::TempDir,
     shared: Arc<Shared>,
@@ -28,23 +30,18 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new() -> Self {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .unwrap();
+        let runner = FakeRunner::new();
+        Self::with_runner(Arc::new(move || Box::new(runner.clone())))
+    }
+
+    fn with_runner(runner: crate::state::RunnerFactory) -> Self {
+        // Leave headroom under sockaddr_un's path limit and clean up on unwind.
         let dir = tempfile::Builder::new()
-            .prefix(".d-")
-            .tempdir_in(workspace)
+            .prefix("corral-d-")
+            .tempdir_in("/tmp")
             .unwrap();
         Engine::init(dir.path(), None).unwrap();
-        let runner = FakeRunner::new();
-        let shared = Arc::new(
-            Shared::new(
-                dir.path().to_path_buf(),
-                Some(Arc::new(move || Box::new(runner.clone()))),
-            )
-            .unwrap(),
-        );
+        let shared = Arc::new(Shared::new(dir.path().to_path_buf(), Some(runner)).unwrap());
         Self { dir, shared }
     }
 
@@ -57,6 +54,11 @@ impl Fixture {
 
     fn with_repository() -> Self {
         let fixture = Self::new();
+        Self::init_repository(&fixture);
+        fixture
+    }
+
+    fn init_repository(fixture: &Self) {
         let repo = fixture.root().join("repo");
         fs::create_dir(&repo).unwrap();
         git(&repo, &["init", "-b", "main"]);
@@ -77,7 +79,6 @@ impl Fixture {
             "[projects.demo]\npath = 'repo'\nprofile = 'generic'\ngate = ['test -s note']\n",
         )
         .unwrap();
-        fixture
     }
 
     pub(super) fn unix_server(&self) -> PathBuf {
@@ -90,6 +91,7 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         self.shared.close();
+        crate::topics::join_session_live(&self.shared);
         self.shared.wait_ops();
         self.shared.wait_workers(Duration::from_secs(3));
     }

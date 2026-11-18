@@ -6,11 +6,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { EventLog } from "../bridge/events.ts";
 import {
-  type BashPermissions, type BashRuleSettings, BashRuleSettingsSchema, decideBash,
+  type BashRuleSettings, BashRuleSettingsSchema, decideBash,
 } from "../capabilities/bash-rules.ts";
 import { type HookSettings, HookSettingsSchema, type Hooks } from "../capabilities/hooks.ts";
 import type { Role } from "../roles/types.ts";
-import type { PlanningPolicy } from "./planning-policy.ts";
 
 export interface HostControls {
   readonly hooks?: HookSettings;
@@ -20,10 +19,10 @@ export interface HostControls {
 /** Roles each control may serve; the Rust catalog applies the same ceilings. */
 const CONTROL_ROLES: Readonly<Record<"hooks" | "bash_rules", readonly Role[]>> = {
   hooks: ["worker"],
-  bash_rules: ["worker", "reviewer", "assistant", "build", "pm"],
+  bash_rules: ["worker", "reviewer", "assistant", "build"],
 };
 
-/** The enabled controls of a generation, from its snapshot's resolved settings; throws when malformed. */
+/** Parse the enabled controls from resolved capability settings; throws when malformed. */
 export function parseControls(
   role: Role, enabled: readonly string[], settings: Readonly<Record<string, unknown>> | undefined,
 ): HostControls {
@@ -44,8 +43,7 @@ export interface ToolControls {
   readonly fixed?: (command: string) => string | undefined;
   readonly hooks?: Hooks;
   readonly rules?: BashRuleSettings;
-  readonly permissions?: BashPermissions;
-  readonly planning?: PlanningPolicy;
+  readonly confirmBash?: (command: string) => string | undefined;
   readonly events: EventLog;
   readonly corral: ReadonlySet<string>;
   currentTurn(): number | undefined;
@@ -62,8 +60,6 @@ function commandOf(input: unknown): string {
 export function installToolControls(pi: ExtensionAPI, controls: ToolControls): void {
   const hooked = new Set<string>();
   pi.on("tool_call", async (event) => {
-    const planning = controls.planning?.refusal(event.toolName, event.input as Record<string, unknown>);
-    if (planning) return { block: true, reason: planning };
     const nested = event.parentToolCallId !== undefined;
     const secondsField = event.toolName === "bash" ? "timeout"
       : event.toolName === "corral_job_monitor" ? "timeout_secs" : undefined;
@@ -89,16 +85,15 @@ export function installToolControls(pi: ExtensionAPI, controls: ToolControls): v
           + `${JSON.stringify(decision.segment ?? command)}; nothing ran` };
       }
       if (decision.action === "ask") {
-        if (!controls.permissions?.consume(command)) {
+        const reason = controls.confirmBash ? controls.confirmBash(command) : "bash rule requires owner confirmation; nothing ran";
+        if (reason) {
           controls.events.emit("bash_permission_required", detail);
-          return { block: true, reason: controls.permissions?.request(command, decision)
-            ?? "bash rule requires owner permission; nothing ran" };
+          return { block: true, reason };
         }
-        controls.events.emit("bash_permission_used", detail);
       }
     }
     const hooks = controls.hooks;
-    if (controls.planning?.restricted || !hooks || nested || controls.corral.has(event.toolName) || !hooks.wraps(event.toolName)) return undefined;
+    if (!hooks || nested || controls.corral.has(event.toolName) || !hooks.wraps(event.toolName)) return undefined;
     const refusal = await hooks.before({
       tool: event.toolName, toolCallId: event.toolCallId, input: event.input,
       ...(controls.currentTurn() !== undefined ? { turn: controls.currentTurn() } : {}),
@@ -108,12 +103,7 @@ export function installToolControls(pi: ExtensionAPI, controls: ToolControls): v
     return undefined;
   });
   pi.on("tool_result", async (event) => {
-    if (event.toolName === "corral_ask" && event.parentToolCallId === undefined && controls.permissions) {
-      if (controls.permissions.observeAsk(event.input, event.details)) {
-        controls.events.emit("bash_permission_asked", { tool_call_id: event.toolCallId });
-      }
-    }
-    if (!controls.hooks || !hooked.delete(event.toolCallId) || controls.planning?.restricted) return undefined;
+    if (!controls.hooks || !hooked.delete(event.toolCallId)) return undefined;
     const notes = await controls.hooks.after({
       tool: event.toolName, toolCallId: event.toolCallId, input: event.input,
       ...(controls.currentTurn() !== undefined ? { turn: controls.currentTurn() } : {}),
@@ -123,7 +113,6 @@ export function installToolControls(pi: ExtensionAPI, controls: ToolControls): v
   if (controls.hooks) {
     const hooks = controls.hooks;
     pi.on("agent_settled", async () => {
-      if (controls.planning?.restricted) return;
       await hooks.turnEnd(controls.currentTurn());
     });
   }
