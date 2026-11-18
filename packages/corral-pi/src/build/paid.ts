@@ -6,7 +6,7 @@ import type { BuildLaunch } from "./types.ts";
 export function createBuildBudgetRecord(launch: BuildLaunch, run: Run = ownerRun(launch.corral ?? "")): BudgetOptions["record"] | undefined {
   const paid = launch.paid;
   if (!paid) return undefined;
-  if (!launch.workspaceRoot || !launch.corral || !launch.binding) throw new Error("paid_admission_required: Build financial authority is missing");
+  if (!launch.workspaceRoot || !launch.corral || (!launch.binding && !paid.mixed)) throw new Error("paid_admission_required: Build financial authority is missing");
   const root = launch.workspaceRoot;
   return async payload => {
     const result = await run(["--root", root, "build", "budget"], { cwd: root, timeoutMs: 30_000,

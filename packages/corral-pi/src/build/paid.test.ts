@@ -11,6 +11,7 @@ import { mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readBuildLaunch } from "./launch.ts";
+import { resolveModel } from "../extensions/fleet/profiles.ts";
 
 const model: Model<Api> = { id: "gpt-5.4", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1",
   name: "fixture", input: ["text"], reasoning: false, contextWindow: 20, maxTokens: 5,
@@ -53,6 +54,34 @@ test("Build paid profile previews are sticky and cannot mutate the saved route",
   expect((await selectBuildProfile(context, "api")).binding?.digest).toBe(binding.digest);
   await expect(selectBuildProfile(context, "sub")).rejects.toThrow("sticky");
   expect(context.session.route).toBe(route);
+});
+
+test("a subscription Build admits named API children without changing the parent route", async () => {
+  const secondBase = { ...base, candidate: "other-api", model: "other-model" };
+  const second = { ...secondBase, digest: bindingDigest(secondBase) };
+  const profiles = [binding, second].map((route, index) => ({ name: `child-${index}`, model: `openai/${route.model}`, binding: route }));
+  const wire = { version: 1, assets: launch.assets, data_root: launch.dataRoot, corral: launch.corral, repo_root: launch.repoRoot,
+    workspace_root: launch.workspaceRoot, here: false, provider: "openai-codex", model: "subscription-model",
+    settings: { exit_policy: "none", max_parallel: 3, profiles } };
+  const dir = mkdtempSync(join(tmpdir(), "corral-build-mixed-launch-"));
+  const file = join(dir, "launch.json");
+  try {
+    writeFileSync(file, JSON.stringify(wire));
+    expect(() => readBuildLaunch(openSync(file, "r"))).toThrow();
+    writeFileSync(file, JSON.stringify({ ...wire, paid: { ...launch.paid, mixed: true } }));
+    const parsed = readBuildLaunch(openSync(file, "r"));
+    expect(parsed.provider).toBe("openai-codex");
+    expect(resolveModel("child-0", parsed.settings.profiles, ["openai-codex"]).binding).toEqual(binding);
+    expect(resolveModel("child-1", parsed.settings.profiles, ["openai-codex"]).binding).toEqual(second);
+    expect(() => resolveModel("openai/other-model", parsed.settings.profiles, ["openai-codex"])).toThrow();
+    const record = createBuildBudgetRecord(parsed, async (_argv, options) => {
+      const payload = JSON.parse(options.input!);
+      expect(payload.session).toBe(launch.paid!.session);
+      expect(payload.binding_digest).toBe(second.digest);
+      return { code: 0, stderr: "", stdout: JSON.stringify({ admitted: true }) };
+    });
+    expect(await record!({ kind: "budget", action: "reserve", binding_digest: second.digest })).toMatchObject({ admitted: true });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("API Build launch refuses a route without its Rust-issued financial lineage", () => {

@@ -77,7 +77,14 @@ export function readBuildLaunch(fd: number): BuildLaunch {
     const name = text(profile, "name", 128);
     if (names.has(name)) throw new LaunchMessageInvalid("profile names must be unique");
     names.add(name);
-    return { name, model: model(profile, true), ...(profile.effort != null ? { effort: token(profile, "effort") } : {}),
+    const qualified = model(profile, true);
+    const effort = profile.effort != null ? token(profile, "effort") : undefined;
+    const slash = qualified.indexOf("/");
+    const provider = qualified.slice(0, slash);
+    if (profile.binding != null && !isProviderId(provider)) throw new LaunchMessageInvalid("paid child provider is unknown");
+    const binding = isProviderId(provider) ? parseBinding(profile.binding, provider, qualified.slice(slash + 1), effort) : undefined;
+    if (binding && (!isApiConnection(binding.connection) || name === "default")) throw new LaunchMessageInvalid("invalid paid child binding");
+    return { name, model: qualified, ...(effort !== undefined ? { effort } : {}), ...(binding ? { binding } : {}),
       ...(profile.description != null ? { description: text(profile, "description") } : {}) };
   });
   const resume = wire.resume == null ? undefined : token(wire, "resume");
@@ -109,14 +116,19 @@ export function readBuildLaunch(fd: number): BuildLaunch {
     const session = token(value, "session");
     if (!/^B-[a-z0-9]{6,16}$/.test(session) || !Number.isSafeInteger(value.generation) || Number(value.generation) < 1
         || typeof value.cap !== "string" || !/^[a-f0-9]{64}$/.test(value.cap)) throw new LaunchMessageInvalid("paid capability is malformed");
-    paid = { session, generation: Number(value.generation), cap: value.cap };
+    if (value.mixed !== undefined && value.mixed !== true) throw new LaunchMessageInvalid("unknown Build financial mode");
+    paid = { session, generation: Number(value.generation), cap: value.cap, ...(value.mixed === true ? { mixed: true } : {}) };
     if (resume && resume !== session) throw new LaunchMessageInvalid("paid lineage differs from resumed session");
   }
-  if (Boolean(binding && isApiConnection(binding.connection)) !== Boolean(paid)
-      || Boolean(route?.paid) !== Boolean(paid) || (paid && (bare || wire.workspace_root == null))) {
+  const apiParent = Boolean(binding && isApiConnection(binding.connection));
+  if (apiParent !== Boolean(route?.paid) || (apiParent && !paid) || (paid && (bare || wire.workspace_root == null))) {
     throw new LaunchMessageInvalid("API Build requires an exact binding and durable workspace admission");
   }
-  if (paid && profiles.length) throw new LaunchMessageInvalid("metered Build children must use the exact parent route");
+  if (paid?.mixed) {
+    if (!profiles.some(profile => profile.binding)) throw new LaunchMessageInvalid("mixed Build requires admitted child routes");
+  } else if (profiles.some(profile => profile.binding) || (paid && (!apiParent || profiles.length))) {
+    throw new LaunchMessageInvalid("metered Build children must use the exact parent route");
+  }
   if (wire.profile_catalog != null && !Array.isArray(wire.profile_catalog)) throw new LaunchMessageInvalid("profile_catalog must be a list");
   const profileCatalog = Array.isArray(wire.profile_catalog) ? wire.profile_catalog.map(parseBuildProfileRoute) : undefined;
   return {
