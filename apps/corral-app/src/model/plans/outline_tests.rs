@@ -81,6 +81,7 @@ fn path_to_done_lists_open_members_and_runs_a_blocked_ones_served_next_step() {
             stuck,
             task("T-4", Status::Dropped),
         ],
+        child_rows: None,
     };
     let path = path_to_done(&feed, &Id::new("T-1"), &detail);
     assert_eq!((path.done, path.total), (1, 2));

@@ -670,6 +670,7 @@ mod tests {
                     id: project.into(),
                     config: serde_json::Map::new(),
                     open: 1,
+                    ..ProjectRow::default()
                 },
             );
         }

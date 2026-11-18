@@ -348,7 +348,11 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
             record.task.blocked = Some(Blocked {
                 reason: "worker needs a reply".into(),
                 detail: Some("Should a paused session stay paused after corrald restarts, or resume its queue? Resuming may deliver queued messages twice.".into()),
-                next: vec![Next::run(Op::Reply { id: id.clone(), text: String::new() })],
+                next: vec![
+                    Next::run(Op::Reply { id: id.clone(), text: String::new() }),
+                    Next::run(Op::Retry { id: id.clone(), profile: None, fresh: false, note: None }),
+                    Next::run(Op::Stop { id: id.clone() }),
+                ],
             });
         }
         "T-9" => {
@@ -451,6 +455,10 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
             ));
         }
         "T-12" => record.task.depends_on = vec!["T-14".into()],
+        // A done, a dropped and a mistyped dependency, each shown with what corrald knows.
+        "T-16" => {
+            record.task.depends_on = vec!["T-2".into(), "T-3".into(), "T-41".into()];
+        }
         "T-13" => {
             let mut worker = run(feed, record, Role::Worker, "omp-sol", 5 * HOUR);
             finish(feed, &mut worker, HOUR, Outcome::Done);

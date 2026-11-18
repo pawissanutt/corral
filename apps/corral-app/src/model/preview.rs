@@ -102,6 +102,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         last_sync_error: None,
         pid: 0,
         version: "preview".into(),
+        slots: None,
     });
     for capability in [
         corral_protocol::TASKS_V1,

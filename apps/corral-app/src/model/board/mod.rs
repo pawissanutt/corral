@@ -84,15 +84,6 @@ impl Actor {
     }
 }
 
-/// `$3.90`, `$18`, or nothing without a cost.
-pub fn money(cost: Option<f32>) -> String {
-    match cost {
-        None => String::new(),
-        Some(cost) if cost >= 10.0 => format!("${cost:.0}"),
-        Some(cost) => format!("${cost:.2}"),
-    }
-}
-
 /// What kind of change a feed line reports; the feed draws a mark for each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeKind {

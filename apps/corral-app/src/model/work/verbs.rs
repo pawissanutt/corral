@@ -173,7 +173,14 @@ pub struct VerbField {
     pub required: bool,
     pub value: String,
     /// A closed set of values drawn as one button each; empty for free text.
-    pub choices: &'static [&'static str],
+    pub choices: Vec<Choice>,
+}
+
+/// One value a choice field offers: what is sent, and what its button says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Choice {
+    pub value: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

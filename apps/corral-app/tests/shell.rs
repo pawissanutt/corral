@@ -7,6 +7,15 @@ use nsh_core::{
 use nsh_engine::{EngineConfig, Root};
 use nsh_testing::{Headless, MemoryStorage};
 
+/// A terminal 80 columns wide and 24 rows high, in 8 × 16 pt Cells.
+fn terminal_80() -> EngineConfig {
+    let mut config = phone();
+    config.viewport = Size::new(Points(640.0), Points(384.0));
+    config.environment.os = Os::Linux;
+    config.environment.idiom = Idiom::Terminal;
+    config.environment.cell = Some(Size::new(Points(8.0), Points(16.0)));
+    config
+}
 fn desktop() -> EngineConfig {
     let mut config = phone();
     config.viewport = Size::new(Points(1440.0), Points(900.0));
@@ -276,22 +285,76 @@ fn destination_is_restored_from_storage() {
     }
 }
 
+fn selected(app: &Headless, id: &str) -> bool {
+    app.screen()
+        .accessibility_state(&format!("id:{id}"))
+        .is_ok_and(|state| state.selected)
+}
+
+/// Now opens at what needs you: the sample's first blocked task is selected beside the list
+/// with its reply box, and opening Now again comes back to it from another selection.
 #[test]
-fn tab_moves_the_keyboard_focus_instead_of_being_swallowed() {
+fn now_opens_at_needs_you_each_time_it_is_opened() {
     let mut app = preview(desktop(), &[("corral.destination", "now")]);
-    app.wait_for("id:now-main").unwrap();
-    let expanded = |app: &Headless| {
-        app.screen()
-            .accessibility_state("id:sidebar-toggle")
-            .unwrap()
-            .expanded
-    };
-    assert_eq!(expanded(&app), Some(true));
-    // The first stop is the top bar's sidebar toggle: Enter presses it there, and Now stays.
-    app.press_key("tab").unwrap();
-    app.press_key("enter").unwrap();
-    assert_eq!(expanded(&app), Some(false));
-    app.wait_for("id:now-main").unwrap();
+    app.wait_for("id:field-reply").unwrap();
+    assert!(selected(&app, "task-T-8"));
+    select(&mut app, "T-12 Timeline zoom presets");
+    app.wait_for_gone("id:field-reply", Duration::from_secs(5))
+        .unwrap();
+    app.press("id:nav-plans").unwrap();
+    app.wait_for("id:plans-list").unwrap();
+    app.press("id:nav-now").unwrap();
+    app.wait_for("id:field-reply").unwrap();
+    assert!(selected(&app, "task-T-8"));
+}
+
+/// The successor of answering an Inbox question: the words typed in a Blocked card's reply box
+/// go out as its reply step, the task runs again and leaves Needs you.
+#[test]
+fn replying_from_a_blocked_cards_box_sends_the_reply_and_the_task_leaves_needs_you() {
+    let mut app = preview(desktop(), &[("corral.destination", "now")]);
+    app.wait_for("id:field-reply").unwrap();
+    assert_text(&mut app, "count-now", "3");
+    assert!(!app.screen().enabled("id:btn-next-0").unwrap());
+    app.type_text("id:field-reply", "Stay paused; never deliver twice.")
+        .unwrap();
+    app.press("id:btn-next-0").unwrap();
+    app.wait_for_gone("id:field-reply", Duration::from_secs(5))
+        .unwrap();
+    assert_text(&mut app, "count-now", "2");
+}
+
+/// The successor of the phone's question page: a Blocked task's page shows its reply box, and
+/// Back returns to Now's list.
+#[test]
+fn phone_blocked_task_page_goes_back_to_nows_list() {
+    let mut app = preview(phone(), &[]);
+    app.press("id:task-T-8").unwrap();
+    app.wait_for("id:field-reply").unwrap();
+    app.press("id:page-back").unwrap();
+    app.wait_for("id:task-T-8").unwrap();
+    assert_eq!(app.screen().count("id:field-reply").unwrap(), 0);
+    assert_text(&mut app, "page-title", "Now");
+}
+
+/// The successor of the 80-column Inbox: at 80 × 24 Now keeps what needs you on the page, its
+/// heading and its first row in view, rather than hiding the list behind the side panel.
+#[test]
+fn terminal_80_columns_keeps_what_needs_you_in_view() {
+    let mut app = preview(terminal_80(), &[]);
+    app.wait_for("id:section-you").unwrap();
+    let nodes = app.screen().layout_nodes();
+    for id in ["section-you", "task-T-8"] {
+        let node = nodes
+            .iter()
+            .find(|node| node.test_id.as_deref() == Some(id))
+            .unwrap_or_else(|| panic!("id:{id} is on the page"));
+        let bounds = &node.bounds;
+        assert!(
+            bounds.size.height.0 > 0.0 && bounds.origin.y.0 + bounds.size.height.0 <= 384.0,
+            "id:{id} is in view: {bounds:?}"
+        );
+    }
 }
 
 /// The engine refuses dispatching T-12 while T-14 is not done. The sheet offers "Dispatch

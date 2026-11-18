@@ -647,6 +647,7 @@ mod tests {
                 last_sync_error: None,
                 pid: 1,
                 version: "1".into(),
+                slots: None,
             }),
             ..Feed::default()
         };

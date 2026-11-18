@@ -21,10 +21,6 @@ pub struct TaskLine {
     pub now_hue: Hue,
     /// `4m`, or empty when unknown.
     pub age: String,
-    /// A cost, or empty: the engine serves no cost per task, so daemon rows leave it empty.
-    pub cost: String,
-    /// Above the cost warning.
-    pub cost_high: bool,
 }
 
 /// The colour of a now-phrase for a task `actor` acts on next.
@@ -63,8 +59,6 @@ impl TaskLine {
             now_hue: now_hue(actor, &phrase),
             now: phrase,
             age: daemon::age(task.since(), now),
-            cost: String::new(),
-            cost_high: false,
         }
     }
 
@@ -73,21 +67,12 @@ impl TaskLine {
         matches!(self.actor, Actor::Queued | Actor::Parked)
     }
 
-    /// The phone's second-line `age · cost`, either alone, or nothing.
-    pub fn meta(&self) -> String {
-        [self.age.as_str(), self.cost.as_str()]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(" · ")
-    }
-
-    /// What a screen reader hears: id, title, the rail, the now-phrase, age, cost, and whether
-    /// it changed since the last visit; missing parts are left out rather than left empty.
+    /// What a screen reader hears: id, title, the rail, the now-phrase, age, and whether it
+    /// changed since the last visit; missing parts are left out rather than left empty.
     pub fn label(&self) -> String {
         let mut parts = vec![format!("{} {}", self.id, self.title), rail_label(self.rail)];
         parts.extend(
-            [&self.now, &self.age, &self.cost]
+            [&self.now, &self.age]
                 .into_iter()
                 .filter(|part| !part.is_empty())
                 .cloned(),
@@ -116,7 +101,7 @@ mod tests {
     use super::{Actor, Hue, Mark, TaskLine};
 
     #[test]
-    fn row_label_leaves_out_a_missing_age_and_cost_instead_of_empty_parts() {
+    fn row_label_leaves_out_a_missing_age_instead_of_an_empty_part() {
         let label = TaskLine {
             id: "T-1".into(),
             title: "Task".into(),
@@ -126,8 +111,6 @@ mod tests {
             now: "queued".into(),
             now_hue: Hue::Neutral,
             age: String::new(),
-            cost: String::new(),
-            cost_high: false,
         }
         .label();
         assert!(!label.contains(", ,"));

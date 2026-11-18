@@ -563,9 +563,10 @@ fn composer(app: AppState) -> Modal {
     }
 }
 
-/// A closed set of values (a status, a verdict, yes or no) as one button each, the chosen one
+/// A closed set of values (a status, a verdict, a profile) as one button each, the chosen one
 /// filled: a press picks it, Tab walks them, and Return or Space presses the focused one.
-/// test_id `seg-<field>-<value>`, the field label lower-cased with dashes.
+/// test_id `seg-<field>-<value>`, the field label lower-cased with dashes, `none` for an empty
+/// value.
 fn choice_row(
     app: AppState,
     field: &work::VerbField,
@@ -577,14 +578,20 @@ fn choice_row(
     let buttons: Vec<AnyElement> = field
         .choices
         .iter()
-        .map(|&choice| {
-            let id = format!("seg-{group}-{choice}");
+        .map(|choice| {
+            let shown = if choice.value.is_empty() {
+                "none"
+            } else {
+                choice.value.as_str()
+            };
+            let id = format!("seg-{group}-{shown}");
+            let work::Choice { value, label } = choice.clone();
             dynamic(move || {
-                let chosen =
-                    values.with(|values| values.get(index).map(String::as_str) == Some(choice));
+                let chosen = values.with(|values| values.get(index) == Some(&value));
+                let value = value.clone();
                 button_with(
                     app,
-                    choice,
+                    label.clone(),
                     if chosen {
                         ButtonKind::Primary
                     } else {
@@ -594,8 +601,8 @@ fn choice_row(
                     id.clone(),
                     move || {
                         values.update(|values| {
-                            if let Some(value) = values.get_mut(index) {
-                                *value = choice.to_owned();
+                            if let Some(slot) = values.get_mut(index) {
+                                slot.clone_from(&value);
                             }
                         })
                     },

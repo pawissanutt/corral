@@ -44,6 +44,8 @@ pub struct NowSection {
     pub count: usize,
     pub hue: Hue,
     pub hint: String,
+    /// Running slots in use of the limit (`3 of 5 slots`), on the section of running work.
+    pub slots: Option<String>,
     pub rows: Vec<NowTaskRow>,
 }
 
@@ -91,6 +93,8 @@ pub struct NowPage {
     pub scope_action: Option<NowScopeAction>,
     pub loop_band: LoopBand,
     pub sections: Vec<NowSection>,
+    /// The task Now opens at: the first that needs you, in list order.
+    pub opens_at: Option<crate::model::Id>,
     pub waiting: NowWaiting,
     pub closed: Option<ClosedView>,
     /// Landed tasks on the loaded Closed page, or recorded landings since the seen cursor.
@@ -131,6 +135,7 @@ pub fn now_page(
     let filter = filter.resolved(feed);
     let NowList {
         sections,
+        opens_at,
         waiting_groups,
         verifying,
         workers,
@@ -256,6 +261,7 @@ pub fn now_page(
         scope_note,
         loop_band,
         sections,
+        opens_at,
         waiting: NowWaiting {
             label: "Waiting",
             total,
@@ -278,11 +284,35 @@ pub fn now_page(
 
 pub(super) struct NowList {
     pub sections: Vec<NowSection>,
+    pub opens_at: Option<crate::model::Id>,
     pub waiting_groups: Vec<NowWaitingGroup>,
     pub verifying: usize,
     pub workers: usize,
     pub loading_rows: usize,
     pub notice: Option<&'static str>,
+}
+
+/// `3 of 5 slots` and its sentence, from the daemon's served slot counts.
+fn slot_words(count: &corral_protocol::health::SlotCount, scope: &str) -> (String, String) {
+    (
+        format!("{} of {} slots", count.used, count.limit),
+        format!(
+            "{} of {} running slots in use{scope}: a Running or Blocked task holds one",
+            count.used, count.limit
+        ),
+    )
+}
+
+/// The running slots of Now's scope: a project with its own limit counts its own, else the
+/// workspace's.
+fn slots(feed: &Feed, filter: &ProjectFilter) -> Option<(String, String)> {
+    let slots = feed.health.as_ref()?.slots.as_ref()?;
+    if let ProjectFilter::Project(project) = filter
+        && let Some(count) = slots.projects.get(project.as_str())
+    {
+        return Some(slot_words(count, &format!(" in {project}")));
+    }
+    Some(slot_words(&slots.global, ""))
 }
 
 /// Rendering and keyboard traversal share the same row projection and section order.
@@ -338,12 +368,18 @@ pub(super) fn now_list(
     let verifying_count = verifying.len();
     let worker_count = workers.len();
     let sections = if grouping == NowGroup::Project {
-        by_project(needs, verifying, workers)
+        by_project(feed, needs, verifying, workers)
     } else {
-        by_actor(needs, verifying, workers)
+        by_actor(needs, verifying, workers, slots(feed, filter))
     };
+    let opens_at = sections
+        .iter()
+        .flat_map(|section| &section.rows)
+        .find(|row| row.line.actor == crate::model::board::Actor::You)
+        .map(|row| crate::model::Id::new(&row.line.id));
     NowList {
         sections,
+        opens_at,
         waiting_groups,
         verifying: verifying_count,
         workers: worker_count,
@@ -388,6 +424,7 @@ fn by_actor(
     needs: Vec<NowTaskRow>,
     verifying: Vec<NowTaskRow>,
     workers: Vec<NowTaskRow>,
+    slots: Option<(String, String)>,
 ) -> Vec<NowSection> {
     [
         (
@@ -396,6 +433,7 @@ fn by_actor(
             Hue::You,
             "Blocked, or reviewed and ready to land: you move next",
             needs,
+            None,
         ),
         (
             "corral",
@@ -403,6 +441,7 @@ fn by_actor(
             Hue::Corral,
             "Corral is gating or reviewing these tasks",
             verifying,
+            None,
         ),
         (
             "workers",
@@ -410,22 +449,28 @@ fn by_actor(
             Hue::Worker,
             "Workers are producing these tasks",
             workers,
+            slots,
         ),
     ]
     .into_iter()
-    .filter(|(_, _, _, _, rows)| !rows.is_empty())
-    .map(|(key, label, hue, hint, rows)| NowSection {
+    .filter(|(_, _, _, _, rows, _)| !rows.is_empty())
+    .map(|(key, label, hue, hint, rows, slots)| NowSection {
         key: key.into(),
         label: label.into(),
         count: rows.len(),
         hue,
-        hint: format!("{}: {hint}", rows.len()),
+        hint: match &slots {
+            Some((_, sentence)) => format!("{}: {hint}. {sentence}", rows.len()),
+            None => format!("{}: {hint}", rows.len()),
+        },
+        slots: slots.map(|(words, _)| words),
         rows,
     })
     .collect()
 }
 
 fn by_project(
+    feed: &Feed,
     needs: Vec<NowTaskRow>,
     verifying: Vec<NowTaskRow>,
     workers: Vec<NowTaskRow>,
@@ -439,19 +484,38 @@ fn by_project(
             .or_default()
             .push(row);
     }
+    let limited = |project: &str| {
+        let count = feed
+            .health
+            .as_ref()?
+            .slots
+            .as_ref()?
+            .projects
+            .get(project)?;
+        Some(slot_words(count, &format!(" in {project}")))
+    };
     projects
         .into_iter()
-        .map(|((unassigned, label), rows)| NowSection {
-            key: if unassigned {
-                "unassigned".into()
-            } else {
-                format!("project-{label}")
-            },
-            hint: format!("{} moving tasks in {label}", rows.len()),
-            count: rows.len(),
-            label,
-            hue: Hue::Neutral,
-            rows,
+        .map(|((unassigned, label), rows)| {
+            let slots = (!unassigned).then(|| limited(&label)).flatten();
+            NowSection {
+                key: if unassigned {
+                    "unassigned".into()
+                } else {
+                    format!("project-{label}")
+                },
+                hint: match &slots {
+                    Some((_, sentence)) => {
+                        format!("{} moving tasks in {label}. {sentence}", rows.len())
+                    }
+                    None => format!("{} moving tasks in {label}", rows.len()),
+                },
+                slots: slots.map(|(words, _)| words),
+                count: rows.len(),
+                label,
+                hue: Hue::Neutral,
+                rows,
+            }
         })
         .collect()
 }

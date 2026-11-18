@@ -106,13 +106,39 @@ pub struct SentLine {
     pub hue: Hue,
 }
 
-/// Why a Blocked task stopped and what gets it moving: the engine's reason, its detail, and one
-/// button per served next step, the first one primary.
+/// Why a Blocked task stopped and what gets it moving: the engine's reason, its detail, the
+/// reply box when the recommended step is a reply, and one button per other served next step,
+/// the first one primary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockedCard {
     pub reason: String,
     pub detail: Option<String>,
+    pub reply: Option<ReplyBox>,
     pub next: Vec<Button>,
+}
+
+/// The recommended reply step in place: what the owner types goes out as that step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyBox {
+    pub task: Id,
+    /// The step's place in the served `next` list.
+    pub index: usize,
+    /// The field's spoken name.
+    pub label: String,
+    pub placeholder: &'static str,
+    /// The send button: the step as the refusal sheet would name it ("Reply", "Reply anyway").
+    pub send: String,
+}
+
+impl ReplyBox {
+    /// What pressing send runs with `text`.
+    pub fn press(&self, text: String) -> Press {
+        Press::Answer {
+            task: self.task.clone(),
+            index: self.index,
+            text,
+        }
+    }
 }
 
 /// The selected daemon task's story.
@@ -363,9 +389,21 @@ pub fn task_buttons(feed: &Feed, task: &daemon::Task, phone: bool) -> Vec<Button
 }
 
 /// The Blocked card of a task: its reason, detail and one button per next step, labelled as
-/// the operation it runs ("Dispatch anyway" for a forced one).
+/// the operation it runs ("Dispatch anyway" for a forced one). A recommended reply is the reply
+/// box instead of a button.
 fn blocked_card(task: &daemon::Task) -> Option<BlockedCard> {
     let blocked = task.blocked()?;
+    let reply = blocked
+        .next
+        .first()
+        .filter(|next| matches!(next.op, corral_types::Op::Reply { .. }))
+        .map(|next| ReplyBox {
+            task: task.id.clone(),
+            index: 0,
+            label: format!("Reply to {}", task.id),
+            placeholder: "What the worker should hear",
+            send: act::label(&next.op, next.force),
+        });
     Some(BlockedCard {
         reason: blocked.reason.clone(),
         detail: blocked.detail.clone(),
@@ -373,6 +411,7 @@ fn blocked_card(task: &daemon::Task) -> Option<BlockedCard> {
             .next
             .iter()
             .enumerate()
+            .skip(usize::from(reply.is_some()))
             .map(|(index, next)| {
                 Button::new(
                     act::label(&next.op, next.force),
@@ -388,6 +427,7 @@ fn blocked_card(task: &daemon::Task) -> Option<BlockedCard> {
                 )
             })
             .collect(),
+        reply,
     })
 }
 
@@ -403,20 +443,50 @@ fn standing(task: &daemon::Task) -> (&'static str, Hue) {
     }
 }
 
-/// What the task waits on, each id opening its task: an open dependency is still to do; one
-/// the open tasks no longer list is closed, its outcome unknown here.
+/// A dependency's status in a word and a mark: done, dropped, still to do, or moving.
+fn dependency_state(status: Status) -> (Mark, &'static str) {
+    let mark = match status {
+        Status::Done => Mark::Done,
+        Status::Dropped => Mark::Na,
+        Status::Running | Status::Blocked | Status::Review => Mark::Active,
+        Status::Idea | Status::Backlog | Status::Ready => Mark::Next,
+    };
+    (mark, status.as_str())
+}
+
+/// What the task waits on, each with its status as corrald serves it (Done and Dropped ones
+/// included); an id corrald does not know is said plainly and opens nothing.
 fn needs(feed: &Feed, task: &daemon::Task) -> Fact {
     let ids = &task.task().depends_on;
     if ids.is_empty() {
         return Fact::Text(vec![span("nothing")]);
     }
+    let served = task.row.dependencies.as_ref();
     Fact::Tasks(
         ids.iter()
-            .map(|id| Dependency {
-                id: id.clone(),
-                mark: Mark::Next,
-                show_mark: feed.board.task(id).is_some(),
-                action: Press::Open(Live::Task(Id::new(id))),
+            .map(|id| {
+                let status = match served {
+                    Some(served) => served
+                        .iter()
+                        .find(|dependency| dependency.id == *id)
+                        .and_then(|dependency| dependency.status),
+                    None => feed.board.task(id).map(daemon::Task::status),
+                };
+                let known = status.is_some() || served.is_none();
+                let (mark, word) = match status {
+                    Some(status) => {
+                        let (mark, word) = dependency_state(status);
+                        (Some(mark), word)
+                    }
+                    None if known => (None, "not open"),
+                    None => (None, "unknown task"),
+                };
+                Dependency {
+                    id: id.clone(),
+                    mark,
+                    status: word,
+                    action: known.then(|| Press::Open(Live::Task(Id::new(id)))),
+                }
             })
             .collect(),
     )

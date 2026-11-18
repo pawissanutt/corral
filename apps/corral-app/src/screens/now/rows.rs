@@ -236,12 +236,14 @@ pub(crate) fn pressable_line(
 }
 
 /// A task (`.row`): selected while it holds the side panel; its verb menu on the context
-/// press (desktop, terminal) or a held finger (phone). test id `task-<id>`.
+/// press (desktop, terminal) or a held finger (phone). test id `task-<id>`. `handle`, when
+/// given, names the pressable line, so the list can give it the keyboard focus.
 pub(crate) fn task_row(
     app: AppState,
     row: &NowTaskRow,
     selected: Memo<bool>,
     fit: Memo<Fit>,
+    handle: Option<ElementRef>,
 ) -> AnyElement {
     let form = app.form;
     let label = match &row.project_chip {
@@ -261,7 +263,8 @@ pub(crate) fn task_row(
         row.action.clone(),
         content,
         true,
-    );
+    )
+    .when_some(handle, |line, handle| line.element_ref(&handle));
     let line = match form {
         Form::Desktop => line
             .px(px(DESK_PAD))

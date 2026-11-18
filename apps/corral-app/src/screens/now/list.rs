@@ -126,12 +126,16 @@ pub(crate) fn board_status(app: AppState, page: Memo<NowPage>) -> AnyElement {
 }
 
 /// The keyboard list on every form: the sections, Waiting and Closed. It measures its width
-/// once, and its rows give way by it ([`rows::fit`]).
+/// once, and its rows give way by it ([`rows::fit`]). Now opens at what needs you
+/// ([`open_at_needs_you`]).
 pub(super) fn list(app: AppState, page: Memo<NowPage>) -> AnyElement {
     let form = app.form;
     let width = signal(0.0_f32);
     let fit = computed(move || rows::fit(form, width.get()));
     let shape = computed(move || page.with(shape));
+    let head = element_ref();
+    let focus = signal(None::<String>);
+    open_at_needs_you(app, page, head, focus);
     view()
         .element_ref(&app.list_keys)
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
@@ -139,13 +143,62 @@ pub(super) fn list(app: AppState, page: Memo<NowPage>) -> AnyElement {
         .label(work::NowPage::LIST_LABEL)
         .pb(px(if form == Form::Terminal { 0.0 } else { 14.0 }))
         .child(dynamic(move || {
-            shape.with(|shape| body(app, shape, page, fit))
+            shape.with(|shape| body(app, shape, page, fit, head, focus))
         }))
         .child(closed_section(app, page))
         .into_element()
 }
 
-fn body(app: AppState, shape: &Shape, page: Memo<NowPage>, fit: Memo<Fit>) -> AnyElement {
+/// Each time Now is opened (a destination press, its key, the phone's tab) and its rows are in,
+/// the first task that needs you is selected beside the list (the phone keeps its list), its
+/// group's heading is scrolled into view and its row takes the keyboard focus, so the list
+/// keys and the Actions menu work at once; with nothing waiting on the owner the selected row
+/// takes it. A data source switch counts as opening Now again.
+fn open_at_needs_you(
+    app: AppState,
+    page: Memo<NowPage>,
+    head: ElementRef,
+    focus: Signal<Option<String>>,
+) {
+    let opened = computed(move || (app.nav.with(|nav| nav.goes), app.data.get()));
+    let ready = computed(move || page.with(|page| page.loading_rows == 0));
+    let handled = stored(None);
+    effect(move || {
+        let now = opened.get();
+        if !ready.get() || handled.replace(Some(now)) == Some(now) {
+            return;
+        }
+        untracked(|| {
+            let opens_at = page.with(|page| page.opens_at.clone());
+            if app.form != Form::Phone
+                && let Some(id) = opens_at.clone()
+            {
+                press(app, work::Press::Select(id));
+            }
+            focus.set(opens_at.map(|id| id.to_string()).or_else(|| {
+                page.with(|page| {
+                    page.sections
+                        .iter()
+                        .flat_map(|section| &section.rows)
+                        .find(|row| row.selected)
+                        .map(|row| row.line.id.clone())
+                })
+            }));
+            after_answer(move || {
+                head.reveal(RevealOptions::default().vertical(ScrollAlignment::Nearest));
+            });
+        });
+    });
+}
+
+fn body(
+    app: AppState,
+    shape: &Shape,
+    page: Memo<NowPage>,
+    fit: Memo<Fit>,
+    head: ElementRef,
+    focus: Signal<Option<String>>,
+) -> AnyElement {
     if shape.loading_rows != 0 {
         return loading(app, shape.loading_rows);
     }
@@ -153,16 +206,33 @@ fn body(app: AppState, shape: &Shape, page: Memo<NowPage>, fit: Memo<Fit>) -> An
     if let Some(words) = &shape.notice {
         out.push(quiet(app, words.clone()));
     }
-    for section in &shape.sections {
-        out.push(section_head(
+    // The heading Now opens at: the group holding the first task that needs you.
+    let opens_in = shape.sections.iter().position(|section| {
+        section
+            .rows
+            .iter()
+            .any(|row| row.line.actor == crate::model::board::Actor::You)
+    });
+    for (index, section) in shape.sections.iter().enumerate() {
+        let heading = section_head(
             app,
             &section.label,
             section.count.to_string(),
             section.hue,
             &section.hint,
-        ));
+            section.slots.as_deref(),
+        );
+        out.push(if opens_in == Some(index) {
+            view()
+                .element_ref(&head)
+                .test_id(&format!("section-{}", section.key))
+                .child(heading)
+                .into_element()
+        } else {
+            heading
+        });
         for row in &section.rows {
-            out.push(task(app, row, page, fit));
+            out.push(task(app, row, page, fit, Some(focus)));
         }
     }
     if shape.waiting.total > 0 {
@@ -171,10 +241,28 @@ fn body(app: AppState, shape: &Shape, page: Memo<NowPage>, fit: Memo<Fit>) -> An
     view().children(out).into_element()
 }
 
-fn task(app: AppState, row: &work::NowTaskRow, page: Memo<NowPage>, fit: Memo<Fit>) -> AnyElement {
+/// A row of the list; while `focus` names it, it takes the keyboard focus and lets go of the
+/// name.
+fn task(
+    app: AppState,
+    row: &work::NowTaskRow,
+    page: Memo<NowPage>,
+    fit: Memo<Fit>,
+    focus: Option<Signal<Option<String>>>,
+) -> AnyElement {
     let id = row.line.id.clone();
+    let handle = element_ref();
+    if let Some(focus) = focus {
+        let me = id.clone();
+        effect(move || {
+            if focus.with(|named| named.as_deref() == Some(me.as_str())) {
+                untracked(|| focus.set(None));
+                after_answer(move || handle.focus());
+            }
+        });
+    }
     let selected = computed(move || page.with(|page| task_selected(page, &id)));
-    revealing(selected, task_row(app, row, selected, fit))
+    revealing(selected, task_row(app, row, selected, fit, Some(handle)))
 }
 
 /// The Waiting line: its counts after the label; a press opens its groups in place.
@@ -206,8 +294,9 @@ pub(crate) fn waiting(
                 group.count.to_string(),
                 group.hue,
                 "",
+                None,
             ));
-            out.extend(group.rows.iter().map(|row| task(app, row, page, fit)));
+            out.extend(group.rows.iter().map(|row| task(app, row, page, fit, None)));
             out.extend(group.more.as_ref().map(|button| more_row(app, button)));
         }
     }
@@ -289,15 +378,31 @@ fn head_count(form: Form, count: String) -> Text {
 }
 
 /// A section heading: the label in its hue (its sentence on hover, focus or the status line),
-/// the count in mono; a terminal rules the rest of the row.
+/// the count in mono, and the running slots in use when the section holds running work; a
+/// terminal rules the rest of the row, a desktop sets the slots at its trailing edge.
 pub(crate) fn section_head(
     app: AppState,
     label: &str,
     count: String,
     hue: Hue,
     hint: &str,
+    slots: Option<&str>,
 ) -> AnyElement {
     let form = app.form;
+    let slots = slots.map(|slots| {
+        let words = head_count(form, slots.to_owned());
+        if form == Form::Terminal {
+            words.into_element()
+        } else {
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex_row()
+                .justify_end()
+                .child(words)
+                .into_element()
+        }
+    });
     head_frame(form)
         .role(AccessibilityRole::Header)
         .child(hinted(
@@ -309,6 +414,7 @@ pub(crate) fn section_head(
         .when(form == Form::Terminal, |row| {
             row.child(view().flex_1().min_w(px(0.0)).child(term::hrule()))
         })
+        .children(slots)
         .into_element()
 }
 

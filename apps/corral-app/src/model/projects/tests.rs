@@ -7,6 +7,7 @@ fn project(id: &str) -> ProjectRow {
         id: id.into(),
         config: serde_json::Map::new(),
         open: 0,
+        ..ProjectRow::default()
     }
 }
 

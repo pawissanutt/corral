@@ -49,21 +49,40 @@ fn page(state: &State, feed: &Feed, selection: &Selection, filter: &ProjectFilte
     )
 }
 
+/// Now opens at the blocked task, whose card offers its recommended reply as a reply box and
+/// its other next steps as buttons; the running work's heading reads the slots in use.
 #[test]
-fn a_blocked_task_needs_you_with_its_reason_and_one_button_per_next_step() {
-    let feed = feed(vec![
+fn a_blocked_task_needs_you_with_its_reply_box_and_its_other_next_steps() {
+    let mut feed = feed(vec![
         task("T-1", None, Status::Running),
         blocked("T-2"),
         task("T-3", None, Status::Backlog),
     ]);
+    feed.health = Some(corral_protocol::Health {
+        slots: Some(corral_protocol::health::Slots {
+            global: corral_protocol::health::SlotCount { used: 2, limit: 5 },
+            ..Default::default()
+        }),
+        ..corral_protocol::Health::down()
+    });
     let state = State::default();
+    let page = page(&state, &feed, &Selection::default(), &ProjectFilter::All);
+    assert_eq!(page.opens_at, Some(Id::from("T-2")));
     let selection = Selection {
-        task: Some(Id::from("T-2")),
+        task: page.opens_at.clone(),
         ..Selection::default()
     };
-    let page = page(&state, &feed, &selection, &ProjectFilter::All);
+    let page = super::now_page(
+        &state,
+        &feed,
+        &selection,
+        Form::Desktop,
+        &ProjectFilter::All,
+        NowGroup::State,
+    );
     let keys: Vec<_> = page.sections.iter().map(|s| s.key.as_str()).collect();
     assert_eq!(keys, ["you", "workers"]);
+    assert_eq!(page.sections[1].slots.as_deref(), Some("2 of 5 slots"));
     assert_eq!(
         page.sections[0].rows[0].line.now,
         "dependency T-1 is not done"
@@ -74,30 +93,75 @@ fn a_blocked_task_needs_you_with_its_reason_and_one_button_per_next_step() {
     };
     let card = story.blocked.as_ref().expect("blocked card");
     assert_eq!(card.detail.as_deref(), Some("T-1 is still running"));
+    let reply = card.reply.as_ref().expect("the reply step is a reply box");
+    assert_eq!((reply.index, reply.send.as_str()), (0, "Reply"));
     let next: Vec<_> = card
         .next
         .iter()
-        .map(|button| (button.label.as_ref(), button.kind, button.action.clone()))
+        .map(|button| (button.label.as_ref(), button.action.clone()))
         .collect();
     assert_eq!(
         next,
+        [(
+            "Dispatch anyway",
+            Some(Press::Next {
+                task: Id::from("T-2"),
+                index: 1
+            })
+        )]
+    );
+}
+
+/// Each dependency reads its served status, a closed one included; an id corrald does not know
+/// is said plainly and opens nothing.
+#[test]
+fn dependencies_show_their_status_and_an_unknown_id_plainly() {
+    let mut waiting = bare_task("T-5", "T-5", Status::Ready, jiff::Timestamp::UNIX_EPOCH);
+    waiting.depends_on = vec!["T-1".into(), "T-2".into(), "T-9".into()];
+    let mut row = task_row(waiting);
+    row.dependencies = Some(vec![
+        corral_protocol::rows::DependencyStatus {
+            id: "T-1".into(),
+            status: Some(Status::Done),
+        },
+        corral_protocol::rows::DependencyStatus {
+            id: "T-2".into(),
+            status: Some(Status::Dropped),
+        },
+        corral_protocol::rows::DependencyStatus {
+            id: "T-9".into(),
+            status: None,
+        },
+    ]);
+    let feed = feed(vec![Task::new(row)]);
+    let selection = Selection {
+        task: Some(Id::from("T-5")),
+        ..Selection::default()
+    };
+    let page = page(&State::default(), &feed, &selection, &ProjectFilter::All);
+    let NowPanel::Task(Inspector::LiveStory(story)) = &page.panel else {
+        panic!("the selected task shows its story");
+    };
+    let Some((_, Fact::Tasks(needs))) = story.facts.iter().find(|(label, _)| *label == "Needs")
+    else {
+        panic!("the story lists what the task needs");
+    };
+    let shown: Vec<_> = needs
+        .iter()
+        .map(|dependency| {
+            (
+                dependency.id.as_str(),
+                dependency.status,
+                dependency.action.is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
         [
-            (
-                "Reply",
-                ButtonKind::Primary,
-                Some(Press::Next {
-                    task: Id::from("T-2"),
-                    index: 0
-                })
-            ),
-            (
-                "Dispatch anyway",
-                ButtonKind::Ghost,
-                Some(Press::Next {
-                    task: Id::from("T-2"),
-                    index: 1
-                })
-            ),
+            ("T-1", "done", true),
+            ("T-2", "dropped", true),
+            ("T-9", "unknown task", false)
         ]
     );
 }
