@@ -170,11 +170,6 @@ export class ManagedEffects {
   private readonly shutdowns = new Map<string, Promise<void>>();
   private readonly closed = new Set<string>();
   private readonly completed = new Set<string>();
-  constructor(private readonly seal: (resource: string) => Promise<void>,
-    private readonly release: (resource: string) => Promise<void>) {}
-  requireOpen(resource: string): void {
-    if (this.closed.has(resource)) throw new Error(`${resource} manager stopped; no effect started`);
-  }
   /** Only explicit SDK runtime replacement, after verified settlement, opens a NEW manager.
    * Old instances remain permanently stopped. Failed/unknown shutdown cannot be replaced. */
   newLifetime(resource: string): boolean {
@@ -187,7 +182,7 @@ export class ManagedEffects {
     this.closed.add(resource); // synchronous admission barrier, before the first await
     let pending = this.shutdowns.get(resource);
     if (!pending) {
-      pending = (async () => { await shutdown(); await this.seal(resource); await this.release(resource); this.completed.add(resource); })();
+      pending = (async () => { await shutdown(); this.completed.add(resource); })();
       this.shutdowns.set(resource, pending);
     }
     return pending;

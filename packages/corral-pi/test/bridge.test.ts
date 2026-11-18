@@ -36,7 +36,7 @@ interface HarnessOptions {
 async function bridge(options: HarnessOptions = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "corral-pi-bridge-"));
   dirs.push(dir);
-  const events = new EventLog(3, options.capacity ?? 512);
+  const events = new EventLog(options.capacity);
   const submitted: SessionInput[] = [];
   const server = await startBridge({
     path: join(dir, "host.sock"), sessionId: "fixture", events,
@@ -121,15 +121,14 @@ test("submit_input accepts frame-sized text with either origin and does not repl
   client.close();
 });
 
-test("events carry the generation and a monotonic sequence, and a cursor behind the ring gets a gap", async () => {
+test("events carry a monotonic sequence, and a cursor behind the ring gets a gap", async () => {
   const { path, events } = await bridge({ capacity: 4 });
   for (let n = 0; n < 6; n++) events.emit("probe", { n });
   const client = await connect(path);
   const page = (await client.request(frame("events_since", { seq: 0 }))).result as {
-    events: { seq: number; generation: number }[]; last: number; gap?: Record<string, unknown>;
+    events: { seq: number }[]; last: number; gap?: Record<string, unknown>;
   };
   expect(page.events.map((event) => event.seq)).toEqual([3, 4, 5, 6]);
-  expect(page.events.every((event) => event.generation === 3)).toBeTrue();
   expect(page.last).toBe(6);
   expect(page.gap).toEqual({ after: 0, resumed: 3, missing: 2, reconcile: true });
   const current = (await client.request(frame("events_since", { seq: 4 }))).result as { events: { seq: number }[]; gap?: unknown };
@@ -191,7 +190,7 @@ test("a request split inside a multibyte character arrives intact", async () => 
 });
 
 test("live_since resumes the current bounded fleet after child and mail changes, including gaps", async () => {
-  const live = new LiveEvents(3, 2);
+  const live = new LiveEvents(2);
   const { path } = await bridge({ liveEvents: live });
   const client = await connect(path);
   const empty: FleetSnapshot = { children: [], mail: [], maxParallel: 3 };

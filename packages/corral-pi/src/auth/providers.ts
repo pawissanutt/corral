@@ -189,7 +189,7 @@ function hostOnly(method: "GET" | "POST", host: string, path: string, query: boo
  */
 export function hostRules(provider: ProviderId, bedrock?: BedrockRoute): readonly DestinationRule[] {
   const route = PROVIDERS[provider];
-  // Local inference receives only the generation's explicitly configured origin rules.
+  // Local inference receives only the session's explicitly configured origin rules.
   if (route.auth === "local" || route.auth === "api_key") return [];
   if (route.auth === "aws-profile") {
     if (!bedrock || !isAwsRegion(bedrock.region) || bedrock.ssoRegions.some((region) => !isAwsRegion(region))) return [];

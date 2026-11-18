@@ -8,6 +8,8 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { HostConfig } from "./config.ts";
 import type { LoadedModules } from "./modules.ts";
 import type { RunBudget } from "../capabilities/budget.ts";
+import type { ModelUsage } from "../tools/corral.ts";
+import { observeUsage } from "./model-usage.ts";
 import { bedrockRoute, createAwsCredentialResolver, type AwsBinding } from "../auth/aws.ts";
 import { PROVIDERS, type DestinationRule, type ProviderId, hostRules } from "../auth/providers.ts";
 import { connectionRules, isApiConnection } from "../auth/connections.ts";
@@ -73,7 +75,7 @@ export async function createSummaryRequest(options: {
   readonly capabilities?: HostSessionOptions["capabilities"];
   readonly agentDir: string;
   readonly cwd: string;
-}, budget: RunBudget): Promise<SummaryRequest | undefined> {
+}, budget?: RunBudget, report?: (usage: ModelUsage) => void): Promise<SummaryRequest | undefined> {
   const summary = options.summary;
   if (!summary) return undefined;
   const { provider, binding } = summary;
@@ -92,7 +94,7 @@ export async function createSummaryRequest(options: {
   const local = provider === "llama.cpp" && options.capabilities?.llama_cpp
     ? await createLocalModels(options.capabilities.llama_cpp, summary.model, summary.network.fetch) : undefined;
   const direct = api && binding ? await createApiCatalog(credentials, binding, summary.network.fetch,
-    request => budget.physical(request)) : undefined;
+    budget ? request => budget.physical(request) : undefined) : undefined;
   const models = direct?.models ?? local?.models ?? await createModelCatalog(credentials, { providers: [provider] });
   const id = summary.model.startsWith(`${provider}/`) ? summary.model.slice(provider.length + 1) : summary.model;
   const model = direct?.model ?? local?.model ?? models.getModel(provider, id);
@@ -100,12 +102,16 @@ export async function createSummaryRequest(options: {
   if (!direct && !local) restrictProvider(models, provider, summary.network.fetch as typeof globalThis.fetch,
     { configDir: join(options.agentDir, "summary-claude"), cwd: options.cwd,
       connection: binding?.identity ?? connection }, summary.awsRoute);
-  if (!direct) {
+  if (report || budget && !direct) {
     const source = models.getProvider(provider);
     if (!source) throw new Error("model_unavailable: summary provider not in catalog");
-    models.registerNativeProvider({ ...source,
-      stream: budget.wrap(source.stream.bind(source), PROVIDERS[provider].lane !== undefined),
-      streamSimple: budget.wrap(source.streamSimple.bind(source), PROVIDERS[provider].lane !== undefined) });
+    const route = PROVIDERS[provider];
+    const wrap = (stream: StreamFunction) => {
+      if (budget && !direct) return budget.wrap(stream, route.lane !== undefined);
+      return report ? observeUsage(stream, local ? undefined : api || route.auth === "aws-profile" ? "api" : "subscription", report) : stream;
+    };
+    models.registerNativeProvider({ ...source, stream: wrap(source.stream.bind(source)),
+      streamSimple: wrap(source.streamSimple.bind(source)) });
   }
   return summaryRequest(models, model, summary);
 }

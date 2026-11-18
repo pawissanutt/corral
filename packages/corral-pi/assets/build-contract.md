@@ -24,12 +24,12 @@ including destinations reached through symlinks. Other paths in the worktree nee
 permission. Never use bash, MCP or another tool to work around a write refusal. Never write
 under any .corral/ directory directly, and never send input into another herdr pane.
 
-Use corral_receipt_lookup to inspect a receipt from this session. When corral_todo is
-available, keep the request plan current as described in Request execution below.
+When `corral_todo` is available, keep the request plan current as described in Request
+execution below.
 <!-- corral-only -->
-Read-only corral commands may supply context. Never run corral commands that file, queue,
-land or change tasks, even when an owner instruction describes that outcome. The host,
-not your shell, performs the owner's confirmed exit or board action.
+Use `"$CORRAL" show <id> --json` or other read-only engine commands for context.
+Do not file, queue, land or change tasks from the shell, even when an owner instruction
+describes that outcome. The host performs the owner's confirmed exit or board action.
 <!-- /corral-only -->
 
 ## Parallel children

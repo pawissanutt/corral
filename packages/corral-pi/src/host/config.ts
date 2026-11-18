@@ -1,34 +1,20 @@
-// Flag-based launches read ordinary workspace settings. The old Rust wire decoder below is
-// retained for its direct source entry point until the local corral tool migration.
-import { writeSettings } from "../roles/assistant/paths.ts";
-import { closeSync, readFileSync } from "node:fs";
+// Flag-based launches read ordinary workspace settings.
+import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { TOML } from "bun";
 
 import type { AwsBinding } from "../auth/aws.ts";
 import type { CapabilityGuidance } from "../capabilities/guidance.ts";
 import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
-import { PLANNING_ROLES, ROLES, type CapabilitySet, type HostIdentity, type Role } from "../roles/types.ts";
+import type { CapabilitySet, HostIdentity } from "../roles/types.ts";
 import { WebSettingsSchema } from "../extensions/web/settings.ts";
-import { browserSettings } from "../extensions/browser/index.ts";
 import { McpSettingsSchema } from "./mcp-settings.ts";
-import { parseControls } from "./tool-controls.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 import { LlamaCppSettingsSchema, type LlamaCppSettings } from "../auth/local.ts";
-import { type ConnectionBinding, parseBinding } from "./connections.ts";
+import type { ConnectionBinding } from "./connections.ts";
 import type { SummaryProfile } from "./summary.ts";
-
-export const LAUNCH_VERSION = 1;
-/** Catalog keys still accepted from legacy launchers. */
-export const HOST_CAPABILITIES: readonly string[] = [
-  "budget", "todo", "ask_user", "write_permissions", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
-  "mcp.enabled", "tool_search", "codemode",
-  "hooks", "bash_rules", "background_shell", "role_enabled", "lsp", "browser", "llama_cpp.enabled", "checkpoints", "subagents", "oracle",
-  "headless", "queue_control", "shadow", "expert", "fleet",
-];
-const LAUNCH_MAX_BYTES = 64 * 1024;
 
 export type UiMode = "rich" | "plain";
 
@@ -36,30 +22,18 @@ export interface HostCapabilities extends CapabilitySet {
   readonly llama_cpp?: LlamaCppSettings;
 }
 
-export interface HostSecrets {
-  readonly hostCap: string;
-  readonly ctlCap: string;
-  readonly bindNonce: string;
-}
-
 export interface HostConfig {
   readonly identity: HostIdentity;
-  readonly secrets?: HostSecrets;
   readonly pane: string | null;
-  /** Authenticated daemon-owned assistant; no terminal and no pane-derived authority. */
-  readonly daemonHosted?: boolean;
   /** Flag launches have a run directory and public local socket, not an inherited binding. */
-  readonly local?: { dir: string; id: string; socket: string; headless: boolean };
+  readonly local: { dir: string; id: string; socket: string; headless: boolean };
   readonly cwd: string;
   readonly root: string;
   readonly corral: string;
   readonly assets: string;
   readonly runtimeDir: string;
   readonly sessionDir: string;
-  readonly resumeSession?: string;
   readonly freshSession?: boolean;
-  /** A restored rewind's session entry; the resumed session branches there (T-575). */
-  readonly resumeLeaf?: string;
   readonly todo?: boolean;
   readonly capabilities?: HostCapabilities;
   /** The snapshot's settings and project-text trust; absent from a corral that predates them. */
@@ -77,262 +51,7 @@ export interface HostConfig {
   readonly ui?: UiMode;
 }
 
-interface LegacyHostConfig extends HostConfig {
-  readonly secrets: HostSecrets;
-}
-
-export class LaunchMessageInvalid extends Error {
-  readonly code = "launch_message_invalid";
-  constructor(reason: string) {
-    super(`launch_message_invalid: ${reason}`);
-  }
-}
-
 type Json = Record<string, unknown>;
-
-function field(value: Json, key: string, pattern: RegExp, max = 4096): string {
-  const item = value[key];
-  if (typeof item !== "string" || item.length === 0 || item.length > max || !pattern.test(item)) {
-    throw new LaunchMessageInvalid(`${key} is missing or malformed`);
-  }
-  return item;
-}
-
-function optional(value: Json, key: string, pattern: RegExp): string | undefined {
-  return value[key] === undefined || value[key] === null ? undefined : field(value, key, pattern);
-}
-
-function path(value: Json, key: string): string {
-  const item = field(value, key, /^[^\0]+$/);
-  if (!isAbsolute(item)) throw new LaunchMessageInvalid(`${key} must be an absolute path`);
-  return item;
-}
-
-const SECRET = /^[A-Za-z0-9_-]{32,256}$/;
-const TOKEN = /^[A-Za-z0-9._:+-]+$/;
-const AWS_PROFILE = /^[A-Za-z0-9_.+=,@-]{1,64}$/;
-
-function awsBinding(value: unknown): AwsBinding | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== "object" || Array.isArray(value)) throw new LaunchMessageInvalid("aws must be an object");
-  const binding = value as Json;
-  const region = field(binding, "region", /^[a-z0-9-]+$/, 32);
-  if (!isAwsRegion(region)) throw new LaunchMessageInvalid("region is missing or malformed");
-  return { profile: field(binding, "profile", AWS_PROFILE, 64), region };
-}
-
-export function capabilityGuidance(value: unknown): CapabilityGuidance | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const set = value as Json;
-  if (set.settings === undefined) return undefined;
-  const settings = set.settings;
-  if (typeof settings !== "object" || settings === null || Array.isArray(settings) ||
-      Object.values(settings).some((entry) => typeof entry !== "object" || entry === null || Array.isArray(entry))) {
-    throw new LaunchMessageInvalid("capabilities.settings must map names to objects");
-  }
-  if (typeof set.project_text !== "boolean") throw new LaunchMessageInvalid("capabilities.project_text must be a boolean");
-  const projectDir = set.project_dir === undefined || set.project_dir === null ? undefined : path(set, "project_dir");
-  return { settings: settings as CapabilityGuidance["settings"], projectText: set.project_text, ...(projectDir ? { projectDir } : {}) };
-}
-
-export function capabilitySet(value: unknown): HostCapabilities | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== "object" || Array.isArray(value)) throw new LaunchMessageInvalid("capabilities must be an object");
-  const set = value as Json;
-  if (typeof set.catalog !== "number" || !Number.isSafeInteger(set.catalog) || set.catalog < 1) {
-    throw new LaunchMessageInvalid("capabilities.catalog must be a positive integer");
-  }
-  const enabled = set.enabled;
-  if (!Array.isArray(enabled) || enabled.some((key) => typeof key !== "string")) {
-    throw new LaunchMessageInvalid("capabilities.enabled must be a list of names");
-  }
-  const unknown = enabled.find((key) => !HOST_CAPABILITIES.includes(key as string));
-  if (unknown !== undefined) throw new LaunchMessageInvalid(`capability ${unknown} is not implemented by this host`);
-  const web = set.web === undefined ? undefined : WebSettingsSchema.safeParse(set.web);
-  if (web && !web.success) throw new LaunchMessageInvalid("capabilities.web settings are malformed");
-  if (enabled.includes("web.enabled") !== (web?.success === true)) {
-    throw new LaunchMessageInvalid("web.enabled requires exactly one resolved capabilities.web settings object");
-  }
-  const mcp = set.mcp === undefined ? undefined : McpSettingsSchema.safeParse(set.mcp);
-  if (mcp && !mcp.success) throw new LaunchMessageInvalid("capabilities.mcp settings are malformed");
-  if (enabled.includes("mcp.enabled") !== (mcp?.success === true)) {
-    throw new LaunchMessageInvalid("mcp.enabled requires exactly one resolved capabilities.mcp settings object");
-  }
-  const local = set.llama_cpp === undefined ? undefined : LlamaCppSettingsSchema.safeParse(set.llama_cpp);
-  if (local && !local.success) throw new LaunchMessageInvalid("capabilities.llama_cpp settings are malformed");
-  if (enabled.includes("llama_cpp.enabled") !== (local?.success === true)) {
-    throw new LaunchMessageInvalid("llama_cpp.enabled requires exactly one resolved capabilities.llama_cpp settings object");
-  }
-  return {
-    catalog: set.catalog,
-    digest: field(set, "digest", /^[0-9a-f]{64}$/, 64),
-    preset: field(set, "preset", /^[a-z_]+$/, 32),
-    enabled: [...new Set(enabled as string[])],
-    ...(web?.success ? { web: web.data } : {}),
-    ...(mcp?.success ? { mcp: mcp.data } : {}),
-    ...(local?.success ? { llama_cpp: local.data } : {}),
-  };
-}
-
-// allow: SIZE_OK - One bounded launch-message parser, including its protocol types and allowlist.
-export function parseLaunchMessage(text: string): LegacyHostConfig {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    throw new LaunchMessageInvalid("not JSON");
-  }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new LaunchMessageInvalid("not an object");
-  const message = value as Json;
-  if (message.version !== LAUNCH_VERSION) throw new LaunchMessageInvalid(`version must be ${LAUNCH_VERSION}`);
-  const role = message.role;
-  if (typeof role !== "string" || !ROLES.includes(role as Role)) throw new LaunchMessageInvalid("role is unknown");
-  if (role === "build") throw new LaunchMessageInvalid("build sessions require the build host entry");
-  const generation = message.generation;
-  if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 1) {
-    throw new LaunchMessageInvalid("generation must be a positive integer");
-  }
-  const secrets = message.secrets;
-  if (typeof secrets !== "object" || secrets === null) throw new LaunchMessageInvalid("secrets are missing");
-  const secretFields = secrets as Json;
-  const parsed: HostSecrets = {
-    hostCap: field(secretFields, "host_cap", SECRET),
-    ctlCap: field(secretFields, "ctl_cap", SECRET),
-    bindNonce: field(secretFields, "bind_nonce", SECRET),
-  };
-  if (parsed.hostCap === parsed.ctlCap) throw new LaunchMessageInvalid("host_cap and ctl_cap must differ");
-  const provider = message.provider === undefined || message.provider === null ? undefined : message.provider;
-  if (provider !== undefined && !isProviderId(provider)) throw new LaunchMessageInvalid("provider is unknown");
-  if (message.fresh_session !== undefined && typeof message.fresh_session !== "boolean") {
-    throw new LaunchMessageInvalid("fresh_session must be a boolean");
-  }
-  if (message.todo !== undefined && typeof message.todo !== "boolean") {
-    throw new LaunchMessageInvalid("todo must be a boolean");
-  }
-  if (message.daemon_hosted !== undefined && typeof message.daemon_hosted !== "boolean") {
-    throw new LaunchMessageInvalid("daemon_hosted must be a boolean");
-  }
-  const daemonHosted = message.daemon_hosted === true;
-  if (daemonHosted && (role !== "assistant" || message.pane != null)) {
-    throw new LaunchMessageInvalid("daemon_hosted requires an assistant with no pane");
-  }
-  const model = field(message, "model", provider === "llama.cpp" ? /^[^\s\0]+$/ : /^[A-Za-z0-9._:/+-]+$/, provider === "llama.cpp" ? 512 : 128);
-  const effort = optional(message, "effort", TOKEN);
-  if (message.quick_summary !== undefined && typeof message.quick_summary !== "boolean") {
-    throw new LaunchMessageInvalid("quick_summary must be a boolean");
-  }
-  let summary: SummaryProfile | undefined;
-  if (message.summary != null) {
-    if (typeof message.summary !== "object" || Array.isArray(message.summary)
-        || role !== "assistant" || message.quick_summary !== true) {
-      throw new LaunchMessageInvalid("summary requires a quick assistant thread");
-    }
-    const value = message.summary as Json;
-    const provider = value.provider;
-    if (!isProviderId(provider)) throw new LaunchMessageInvalid("summary provider is unknown");
-    const model = field(value, "model", /^[^\s\0]+$/, 512);
-    const effort = optional(value, "effort", TOKEN);
-    summary = { profile: field(value, "profile", TOKEN, 96), model, provider,
-      ...(effort ? { effort } : {}),
-      binding: parseBinding(value.binding, provider, model, effort),
-      aws: awsBinding(value.aws) };
-  }
-  const binding = parseBinding(message.binding, provider ?? "openai-codex", model, effort);
-  const aws = awsBinding(message.aws);
-  const capabilities = capabilitySet(message.capabilities);
-  if (provider === "llama.cpp" && capabilities?.enabled.includes("llama_cpp.enabled") !== true) {
-    throw new LaunchMessageInvalid("the llama.cpp provider requires llama_cpp.enabled");
-  }
-  // Corral refuses to launch a disabled planning role; a host never runs one without its snapshot.
-  if (PLANNING_ROLES.includes(role as Role) && capabilities?.enabled.includes("role_enabled") !== true) {
-    throw new LaunchMessageInvalid(`the ${role} role needs an enabled role_enabled capability`);
-  }
-  const guidance = capabilityGuidance(message.capabilities);
-  try {
-    if (capabilities?.enabled.includes("write_permissions")) {
-      if (role !== "assistant") throw new Error(`write_permissions is not available to the ${role} role`);
-      writeSettings(guidance?.settings.write_permissions);
-    }
-    parseControls(role as Role, capabilities?.enabled ?? [], guidance?.settings);
-    browserSettings(role as Role, capabilities?.enabled ?? [], guidance?.settings);
-  } catch (error) {
-    throw new LaunchMessageInvalid(error instanceof Error ? error.message : String(error));
-  }
-  if (capabilities?.enabled.includes("background_shell")) {
-    if (role !== "worker" && role !== "pm" && role !== "assistant") {
-      throw new LaunchMessageInvalid(`background_shell is not available to the ${role} role`);
-    }
-    if (!JobSettingsSchema.safeParse(guidance?.settings.background_shell).success) {
-      throw new LaunchMessageInvalid("background_shell requires its resolved settings");
-    }
-  }
-  if (capabilities?.enabled.includes("checkpoints") && role !== "worker") {
-    throw new LaunchMessageInvalid(`checkpoints is not available to the ${role} role`);
-  }
-  const resumeLeaf = optional(message, "resume_leaf", /^[A-Za-z0-9._:-]{1,128}$/);
-  if (resumeLeaf !== undefined && message.resume_session == null) {
-    throw new LaunchMessageInvalid("resume_leaf requires resume_session");
-  }
-  const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
-  if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");
-  // An assistant names its session and optional recorded project; no other role names a session.
-  const assistant = optional(message, "assistant", /^A-[1-9][0-9]{0,18}$/);
-  if ((role === "assistant") !== (assistant !== undefined)) {
-    throw new LaunchMessageInvalid("assistant names the session of the assistant role only, and that role needs it");
-  }
-  return {
-    identity: {
-      store: field(message, "store", TOKEN, 64),
-      project: (role === "assistant" && message.project == null)
-        || ((role === "assistant" || role === "pm") && message.project === "")
-        ? "" : field(message, "project", TOKEN, 128),
-      role: role as Role,
-      task: optional(message, "task", TOKEN),
-      run: optional(message, "run", TOKEN),
-      review: optional(message, "review", TOKEN),
-      callback: optional(message, "callback", TOKEN),
-      ...(assistant ? { assistant } : {}),
-      generation,
-    },
-    secrets: parsed,
-    pane: daemonHosted ? null : field(message, "pane", TOKEN, 128),
-    ...(daemonHosted ? { daemonHosted: true } : {}),
-    cwd: path(message, "cwd"),
-    root: path(message, "root"),
-    corral: path(message, "corral"),
-    assets: path(message, "assets"),
-    runtimeDir: path(message, "runtime_dir"),
-    sessionDir: path(message, "session_dir"),
-    resumeSession: message.resume_session === undefined || message.resume_session === null ? undefined : path(message, "resume_session"),
-    freshSession: message.fresh_session === true,
-    ...(resumeLeaf ? { resumeLeaf } : {}),
-    todo: capabilities ? capabilities.enabled.includes("todo") : message.todo === true,
-    ...(capabilities ? { capabilities } : {}),
-    ...(guidance ? { guidance } : {}),
-    model,
-    quickSummary: message.quick_summary === true,
-    ...(summary ? { summary } : {}),
-    ...(provider ? { provider } : {}),
-    ...(binding ? { binding } : {}),
-    ...(aws ? { aws } : {}),
-    effort,
-    ...(message.memory_file != null ? { memoryFile: path(message, "memory_file") } : {}),
-    promptFile: message.prompt_file === undefined || message.prompt_file === null ? undefined : path(message, "prompt_file"),
-    ...(ui ? { ui } : {}),
-  };
-}
-
-/** Reads the launch message from the inherited descriptor and closes it. */
-export function readLaunchMessage(fd: number): LegacyHostConfig {
-  let bytes: Buffer;
-  try {
-    bytes = readFileSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  if (bytes.length > LAUNCH_MAX_BYTES) throw new LaunchMessageInvalid("exceeds its bound");
-  return parseLaunchMessage(bytes.toString("utf8"));
-}
 
 export const modelFlags = {
   model: { type: "string" }, provider: { type: "string" }, effort: { type: "string" },
@@ -349,15 +68,21 @@ export function modelSettings(values: { model?: string; provider?: string; effor
   if (!model || /\s|\0/.test(model) || model === `${provider}/`) throw new Error(`pass --model <${provider}/id>`);
   const region = values["aws-region"];
   const profile = values["aws-profile"];
-  const aws = profile !== undefined || region !== undefined ? awsBinding({ profile, region }) : undefined;
+  let aws: AwsBinding | undefined;
+  if (profile !== undefined || region !== undefined) {
+    if (!profile || !/^[A-Za-z0-9_.+=,@-]{1,64}$/.test(profile) || !region || !isAwsRegion(region)) {
+      throw new Error("--aws-profile and --aws-region require a valid AWS profile and region");
+    }
+    aws = { profile, region };
+  }
   return { provider, model, ...(values.effort ? { effort: values.effort } : {}), ...(aws ? { aws } : {}) };
 }
 
 const COMMON_ABILITIES = ["ask_user", "todo", "queue_control", "context_files", "skills", "compaction", "tool_search"];
 const WORK_ABILITIES = ["codemode", "subagents", "oracle", "background_shell"];
 const ABILITIES: Readonly<Record<"worker" | "reviewer" | "assistant" | "build", readonly string[]>> = {
-  worker: [...COMMON_ABILITIES, ...WORK_ABILITIES, "fleet", "lsp"],
-  reviewer: COMMON_ABILITIES,
+  worker: [...COMMON_ABILITIES, ...WORK_ABILITIES, "fleet", "lsp", "session_export"],
+  reviewer: [...COMMON_ABILITIES, "session_export"],
   assistant: [...COMMON_ABILITIES, ...WORK_ABILITIES, "fleet", "lsp"],
   build: [...COMMON_ABILITIES, ...WORK_ABILITIES, "lsp"],
 };
@@ -421,7 +146,7 @@ export function parseRunFlags(command: "run" | "chat", argv: readonly string[], 
   const run = env.CORRAL_RUN || undefined;
   const id = role === "assistant" ? basename(dir) : task ? `${task}/${role === "reviewer" ? "reviewer" : run ?? basename(dir)}` : basename(dir);
   return {
-    identity: { store: "local", project: values.project ?? "", role, task, run, generation: 1,
+    identity: { store: "local", project: values.project ?? "", role, task, run,
       ...(role === "assistant" ? { assistant: id } : {}) },
     cwd, root, corral: values.corral ? resolve(cwd, values.corral) : "", assets, pane: null,
     local: { dir, id, socket: values.socket ? resolve(cwd, values.socket) : sessionSocket(dir, env),

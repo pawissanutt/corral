@@ -1,9 +1,7 @@
-// Compatibility entry for compiled hosts; bare sessions use the build host and local journal.
-import { fileURLToPath } from "node:url";
+// Local build provider defaults.
 import { PROVIDERS, type ProviderId } from "../auth/providers.ts";
 import type { AuthModule } from "../auth/types.ts";
 import { providerCapabilities } from "./capabilities.ts";
-import { buildCommand } from "./build.ts";
 
 /** Pi 1.3.0's own provider defaults, retained for bare sessions. */
 export const BARE_DEFAULT_MODEL: Readonly<Record<Exclude<ProviderId, "llama.cpp" | "openai">, string>> = {
@@ -24,8 +22,3 @@ export async function bareProviders(auth: AuthModule, initial: ProviderId) {
     (auth.providers ?? [auth.provider]).filter(provider => PROVIDERS[provider].auth === "oauth"));
 }
 
-export async function bareCommand(argv: readonly string[], assets: string): Promise<void> {
-  await buildCommand(argv, assets);
-}
-
-if (import.meta.main) await bareCommand(process.argv.slice(2), fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, ""));

@@ -82,7 +82,7 @@ export function exploreTool(runtime: Pick<FleetRuntime, "explore" | "watch">): T
       const result = await runtime.explore(id, prompt, signal, research).finally(stop);
       const status = result.report?.status ?? (result.outcome === "completed" ? "completed" : "partial");
       const header = [`Research ${status}; stop: ${result.report?.stopReason ?? result.outcome}.`,
-        `Request: ${result.request}; generation: ${result.generation}.`,
+        `Request: ${result.request}.`,
         ...(result.sessionFile ? [`Transcript: ${result.sessionFile}`] : []),
         ...(result.truncated ? ["Findings truncated to 32,768 characters; inspect the transcript for the full answer."] : []),
       ].join("\n");

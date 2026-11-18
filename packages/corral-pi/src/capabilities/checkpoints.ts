@@ -2,8 +2,8 @@
 // request is sent, and again when the turn settles, the host commits every non-ignored worktree
 // file over HEAD through a private index (the worktree's own index is untouched), points a
 // per-worktree ref at it and appends one durable `corral_checkpoint` session entry. A start
-// entry also names the session leaf the prompt goes under, which `corral agent rewind` restores
-// as the next generation's cursor. A failed snapshot records its error and the turn continues.
+// entry also records the session leaf the prompt goes under. A failed snapshot records its
+// error and the turn continues.
 import { copyFileSync, existsSync, mkdtempSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,7 +22,6 @@ export type CheckpointPhase = "start" | "end";
 export interface CheckpointRecord {
   readonly id: string;
   readonly phase: CheckpointPhase;
-  readonly generation: number;
   readonly turn: number;
   readonly commit?: string;
   readonly head?: string;
@@ -33,7 +32,6 @@ export interface CheckpointRecord {
 
 export interface CheckpointHost {
   readonly cwd: string;
-  readonly generation: number;
   readonly run: string;
   /** Appends one durable record to the bound session. */
   record(entry: CheckpointRecord): void;
@@ -71,12 +69,13 @@ export class Checkpoints {
 
   /** Takes one checkpoint synchronously, so nothing of the turn runs before it is recorded. */
   capture(phase: CheckpointPhase, turn: number, leaf?: string | null): CheckpointRecord {
-    const id = `g${this.host.generation}-t${turn}`;
-    const base = { id, phase, generation: this.host.generation, turn };
+    const key = `t${turn}-${phase}`;
+    const id = `${this.host.run}-${key}`;
+    const base = { id, phase, turn };
     let entry: CheckpointRecord;
     try {
-      const { commit, head } = this.snapshot(`corral checkpoint ${id} ${phase}`);
-      const ref = `refs/worktree/corral/checkpoints/${this.host.run}/${id}-${phase}`;
+      const { commit, head } = this.snapshot(`corral checkpoint ${id}`);
+      const ref = `refs/worktree/corral/checkpoints/${this.host.run}/${key}`;
       this.git(["update-ref", ref, commit]);
       entry = { ...base, commit, head, ref, ...(phase === "start" && leaf ? { leaf } : {}) };
     } catch (error) {

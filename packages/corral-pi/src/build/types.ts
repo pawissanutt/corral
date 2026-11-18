@@ -4,7 +4,6 @@ import type { AwsBinding } from "../auth/aws.ts";
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
 import type { BuildRecord } from "./record-types.ts";
 import type { ConnectionBinding } from "../host/connections.ts";
-import type { BudgetOptions } from "../capabilities/budget.ts";
 
 export interface BuildPaidApproval {
   readonly policy_digest: string;
@@ -22,11 +21,6 @@ export interface BuildProfileRoute {
   readonly paid?: BuildPaidApproval;
   readonly available?: boolean;
   readonly reason?: string;
-}
-export interface BuildPaidLaunch {
-  readonly session: string;
-  readonly generation: number;
-  readonly cap: string;
 }
 
 /** What landing from the session requires for a project: an approving in-session review and the full gate, the full gate alone, or no landing. */
@@ -54,11 +48,7 @@ export const MAX_PARALLEL_LIMIT = 32;
 /** Children one `task` call may start. */
 export const MAX_CHILDREN_PER_CALL = 32;
 
-/**
- * The JSON `corral pi --build` writes to the host's inherited `--launch-fd`. Snake case on the wire:
- * `data_root`, `workspace_root`, `repo_root`. `capabilities` and `guidance` carry exactly the JSON
- * the rich launch message carries under the same names, resolved for the assistant role.
- */
+/** Options derived from the local build flags. */
 export interface BuildLaunch {
   readonly version: 1;
   readonly assets: string;
@@ -83,13 +73,9 @@ export interface BuildLaunch {
   readonly effort?: string;
   readonly route?: BuildProfileRoute;
   readonly binding?: ConnectionBinding;
-  readonly paid?: BuildPaidLaunch;
   readonly profileCatalog?: readonly BuildProfileRoute[];
-  readonly profileRequestPath?: string;
-  readonly capabilities?: unknown;
   /** Required when the profile's provider is Amazon Bedrock; the same field the bound launch carries. */
   readonly aws?: AwsBinding;
-  readonly guidance?: unknown;
   readonly settings: BuildSettings;
 }
 
@@ -130,9 +116,7 @@ export interface BuildContext {
   /** `<dataRoot>/build/<id>`: transcripts, journal and child session files. */
   readonly dir: string;
   readonly corral: string;
-  readonly paidRecord?: BudgetOptions["record"];
   readonly profileCatalog?: readonly BuildProfileRoute[];
-  readonly profileRequestPath?: string;
 }
 
 // ---------- children ----------

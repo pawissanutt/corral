@@ -1,19 +1,17 @@
 import { expect, test } from "bun:test";
-import { PendingQuestions, QUESTION_ENTRY, PENDING_MAX, QUESTION_TTL, type QuestionEntry } from "./pending-questions.ts";
+import { answerMarker, PendingQuestions, QUESTION_ENTRY, PENDING_MAX, QUESTION_TTL, type QuestionEntry } from "./pending-questions.ts";
 
 const question = [{ question: "Which scope?", options: ["Small (recommended)", "Large"], freeText: true }];
 const answer = [{ option: "Small (recommended)", text: "Only the requested fix" }];
 function fixture() {
   let now = 100;
-  const entries: QuestionEntry[] = [], records: string[] = [], deliveries: string[] = [];
-  let accept = true;
-  const create = (generation = 1) => new PendingQuestions({ session: () => "owned", generation,
+  const entries: QuestionEntry[] = [], deliveries: string[] = [];
+  const create = () => new PendingQuestions({ session: () => "owned",
     entries: () => entries, append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); },
     now: () => now, changed() {},
-    record: async text => { records.push(text); return `${text}\n[owner input A-1/g${generation}/i1]`; },
-    deliver: async text => { deliveries.push(text); return accept; },
+    deliver: async text => { deliveries.push(text); return true; },
   });
-  return { create, entries, records, deliveries, tick: () => { now += QUESTION_TTL; }, reject: () => { accept = false; } };
+  return { create, entries, deliveries, tick: () => { now += QUESTION_TTL; } };
 }
 
 test("pending lifecycle is bounded, idempotent and never turns no-answer states into consent", async () => {
@@ -22,23 +20,23 @@ test("pending lifecycle is bounded, idempotent and never turns no-answer states 
   expect(q.pending()).toHaveLength(PENDING_MAX);
   expect(() => q.ask("overflow", question)).toThrow("pending_question_limit");
   expect(q.ask("call0", [{ options: question[0]!.options, freeText: true, question: "Which scope?" }]).id).toBe(ids[0]!);
-  expect(() => q.ask("call0", [{ ...question[0]!, question: "Different" }])).toThrow("question_key_conflict");
+  expect(() => q.ask("call0", [{ ...question[0]!, question: "Different" }])).toThrow("question_call_conflict");
   expect(q.cancel(ids[0]!)).toBe("cancelled");
   expect(await q.answer(ids[0]!, answer)).toBe("cancelled");
-  const replacement = q.ask("replacement", question, "stable-key", ids[1]);
-  expect(q.get(ids[1]!)?.status).toBe("withdrawn");
+  expect(q.withdraw(ids[1]!)).toBe("withdrawn");
+  const replacement = q.ask("replacement", question);
   expect(await q.answer(ids[1]!, answer)).toBe("withdrawn");
-  const resumed = f.create(2); q.close(); resumed.restore();
+  const resumed = f.create(); q.close(); resumed.restore();
   expect(resumed.pending()).toHaveLength(PENDING_MAX - 1);
-  expect(resumed.get(replacement.id)?.generation).toBe(1);
-  expect(resumed.ask("retry", question, "stable-key").id).toBe(replacement.id);
+  expect(resumed.get(replacement.id)).toEqual(replacement);
+  expect(resumed.ask("replacement", question).id).toBe(replacement.id);
   f.tick(); resumed.expire();
   expect(await resumed.answer(replacement.id, answer)).toBe("expired");
   expect(resumed.pending()).toHaveLength(0);
-  expect(f.records).toEqual([]); expect(f.deliveries).toEqual([]);
+  expect(f.deliveries).toEqual([]);
   const late = resumed.ask("late", question); resumed.close(true);
   expect(await resumed.answer(late.id, answer)).toBe("session_closed");
-  const ended = f.create(3); ended.restore();
+  const ended = f.create(); ended.restore();
   expect(ended.get(late.id)?.status).toBe("ended");
   expect(await ended.answer(late.id, answer)).toBe("ended");
 });
@@ -46,33 +44,18 @@ test("pending lifecycle is bounded, idempotent and never turns no-answer states 
 test("crash/resume retries a selected unconsumed answer but never replays a consumed answer", async () => {
   const f = fixture(), q = f.create(); q.restore();
   const id = q.ask("Q", question).id;
-  await q.answer(id, answer);
-  await q.answer(id, answer); await q.recover();
-  expect(f.records).toHaveLength(1); expect(f.deliveries).toHaveLength(1);
+  await Promise.all([q.answer(id, answer), q.answer(id, [{ option: "Large" }])]);
+  await q.recover();
+  const message = `${answerMarker(id)}\nWhich scope?: Small (recommended)\nOnly the requested fix`;
+  expect(f.deliveries).toEqual([message]);
   q.close(); // The queued follow-up was lost before the user message was persisted.
-  const resumed = f.create(2); resumed.restore(); await resumed.recover();
-  expect(f.records).toHaveLength(2); expect(f.deliveries).toHaveLength(2);
-  const message = f.deliveries[1]!;
+  const resumed = f.create(); resumed.restore(); await resumed.recover();
+  expect(f.deliveries).toEqual([message, message]);
   f.entries.push({ type: "message", message: { role: "user", content: [{ type: "text", text: message }] } });
   resumed.close();
-  const consumed = f.create(3); consumed.restore(); await consumed.recover();
+  const consumed = f.create(); consumed.restore(); await consumed.recover();
   expect(consumed.status(id)).toBe("delivered");
-  expect(f.records).toHaveLength(2); expect(f.deliveries).toHaveLength(2);
-});
-
-test("shutdown during recording fences late delivery and resume preserves the actual UI answer", async () => {
-  const entries: QuestionEntry[] = [];
-  let release!: (text: string) => void;
-  const records = new Promise<string>(resolve => { release = resolve; });
-  let sent = 0;
-  const q = new PendingQuestions({ session: () => "owned", generation: 1, entries: () => entries,
-    append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
-    record: () => records, deliver: async () => { sent++; return true; },
-  });
-  q.restore(); const id = q.ask("Q", question).id;
-  const answering = q.answer(id, answer); q.close(); release("actual owner answer"); await answering;
-  expect(sent).toBe(0);
-  expect(q.get(id)?.answers).toEqual(answer);
+  expect(f.deliveries).toEqual([message, message]);
 });
 
 test("a typed answer needs nonempty text and respects an explicit freeText prohibition", async () => {
@@ -83,5 +66,5 @@ test("a typed answer needs nonempty text and respects an explicit freeText prohi
   await expect(q.answer(open, [{ option: "A", text: "note" }])).rejects.toThrow("invalid_question_answer");
   await expect(q.answer(closed, [{ text: "mine" }])).rejects.toThrow("invalid_question_answer");
   expect(await q.answer(open, [{ text: "neither" }])).toBe("answered");
-  expect(f.records).toEqual([`[ask_user answer ${open}]\nWhich?: neither`]);
+  expect(f.deliveries).toEqual([`${answerMarker(open)}\nWhich?: neither`]);
 });

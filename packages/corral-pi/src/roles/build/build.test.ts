@@ -86,6 +86,9 @@ test("model shells cannot file board work or choose an exit through any corral i
     "corral build record --file record.json",
     "corral unknown-extension",
     "corral",
+    '"$CORRAL" --json review T-1',
+    "env -u CORRAL_ACTOR /opt/bin/corral-next --root=/workspace new 'Unconfirmed work'",
+    "corral-next artifact add T-1 /tmp/evidence.log",
   ]) {
     const refusal = buildShellRefusal(command);
     expect([command, typeof refusal]).toEqual([command, "string"]);
@@ -104,7 +107,10 @@ test("model shells cannot file board work or choose an exit through any corral i
     "printf '%s' 'corral import plan.md --origin owner'",
     "echo '$(corral new example)'",
     "# corral import plan.md\ncorral list",
+    '"${CORRAL}" --root /workspace --json show T-1',
+    "corral-next artifact list T-1; corral-next artifact show T-1:1",
   ]) {
     expect([command, buildShellRefusal(command)]).toEqual([command, undefined]);
   }
+  expect(buildShellRefusal("corral-next list", true)).toContain("bare session rule");
 });

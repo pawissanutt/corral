@@ -1,65 +1,49 @@
-// The corral-pi planner role (T-460 plan-roles): upstream read, grep, find and ls, with no shell,
-// edit or write tool, plus corral_ask, corral_withdraw, corral_plan_write and corral_plan_submit.
-// The source tree stays read-only; corral writes only this run's plan file. Submitting is the
-// planner's one completion step; it never reviews, approves or dispatches its plan.
+// The legacy planner reviews repository context without a write or shell tool.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { contentReadTool } from "../common/content.ts";
-
-import type { CorralOp, CorralToolSpec, RoleContext, RoleModule, UpstreamTool } from "../types.ts";
-import { receiptLookupTool, askTool, withdrawTool } from "../common/tools.ts";
+import type { RoleContext, RoleModule, UpstreamTool } from "../types.ts";
 import { agentCommunicationContract } from "../common/agent-communication.ts";
+import { askUserContract } from "../common/ask-user.ts";
 import { renderContract } from "../common/assets.ts";
-import { requestMarker, sendOnce } from "./kickoff.ts";
-import { CHUNK_MAX_BYTES, planSubmitTool, planWriteTool } from "./tools.ts";
+import { requestMarker, sendOnce } from "../common/kickoff.ts";
 
 const UPSTREAM: readonly UpstreamTool[] = ["read", "grep", "find", "ls"];
-const TOOLS: readonly CorralToolSpec[] = [receiptLookupTool(), contentReadTool, askTool, withdrawTool, planWriteTool("plan"), planSubmitTool];
-const OPS: readonly CorralOp[] = ["hello", "event", ...TOOLS.map((tool) => tool.op)];
 
 export const CONTRACT = `# corral planner contract (corral-pi)
 
 You are the planner of corral task {{task}}, design run {{run}}, in project {{project}}.
-You write one plan; you do not implement it, review it, approve it or dispatch work.
+You draft one plan; you do not implement it, review it, approve it or dispatch work.
 
 - The repository is read-only for you: you have read, grep, find and ls, and no shell or edit tool.
-- corral_content_read reads stored task specs, prior plans and artifacts by ref even when their
-  filesystem caches are absent. Read {{task}} for its spec and manifests; {{task}}@P1 reads plan P1.
-- corral_plan_write writes the plan file your prompt names; corral chooses that path. Write in
-  chunks of at most ${CHUNK_MAX_BYTES / 1024} KiB, each continuing at the previous receipt's \`bytes\`.
-- corral_plan_submit submits it, as \`corral plan submit\` would. Fix and resubmit a refused plan.
-- corral_ask records a question for the PM or the owner (batch independent ones in one call with
-  \`questions\`); withdraw one you no longer need.
+- Read the task spec and prior work when provided as files. Present your draft as Markdown
+  in the session; this role does not write or submit a board plan.
 - Review and owner acceptance are separate steps that are never yours.
 
 ${agentCommunicationContract()}
 `;
 
-/** The current planning request: its prompt and how its commands map to tools. */
+/** Introduce the current planning request. */
 export function kickoff(context: RoleContext): string | undefined {
   const { promptFile, identity } = context;
   if (!promptFile) return undefined;
   return `Read ${promptFile} in full and follow it: that file is your complete planning prompt for corral `
     + `task ${identity.task ?? ""}, design run ${identity.run ?? ""}. The repository is read-only and you have `
-    + "no shell. Write the plan with corral_plan_write instead of writing the file the prompt names: it writes "
-    + "exactly that file. Where the prompt tells you to finish with `corral plan submit`, call corral_plan_submit "
-    + "instead. Ask with corral_ask rather than in the pane.";
+    + "no shell. Present the plan in this session and ask owner questions with ask_user.";
 }
 
 export function plannerRole(): RoleModule {
   return {
     role: "planner",
     upstreamTools: UPSTREAM,
-    corralOps: OPS,
-    tools() {
-      return TOOLS;
-    },
+    tools: () => [],
     contract(context: RoleContext) {
-      return renderContract(CONTRACT, context.identity);
+      return `${renderContract(CONTRACT, context.identity)}\n\n${askUserContract(context)}`;
     },
     extend(pi: ExtensionAPI, context: RoleContext) {
       const { store, task, run } = context.identity;
-      if (!context.promptFile) return;
-      sendOnce(pi, kickoff(context), requestMarker("planning", [store, task, run], context.promptFile));
+      const text = kickoff(context);
+      if (text !== undefined && context.promptFile) {
+        sendOnce(pi, text, requestMarker("planning", [store, task, run], context.promptFile));
+      }
     },
   };
 }

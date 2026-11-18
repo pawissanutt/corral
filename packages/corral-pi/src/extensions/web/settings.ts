@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-/** Rust resolves defaults once per generation; the host only parses the supplied settings. */
+/** The host parses the supplied settings after defaults have been resolved. */
 export const WebSettingsSchema = z.object({
   hosts: z.array(z.string().min(1)).readonly(),
   max_bytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),

@@ -43,7 +43,7 @@ function fixture(kind: "explore" | "expert") {
   const started = Promise.withResolvers<Pick<Invocation, "observe">>();
   const child = Promise.withResolvers<AuxiliaryResult>();
   if (kind === "expert") {
-    const runtime = new WatchedRuntime({ generation: 3, provider: "fixture", model: "parent", sessionId: () => "parent",
+    const runtime = new WatchedRuntime({ provider: "fixture", model: "parent", sessionId: () => "parent",
       settings: { expert: { model: "strong", max_parallel: 1, max_turns: 4, timeout_secs: 60 } },
       record: async payload => ({ session_id: payload.request, session_file: "/unused" }),
       execute: async invocation => { started.resolve(invocation); return child.promise; },
@@ -53,7 +53,7 @@ function fixture(kind: "explore" | "expert") {
   const runtime = new WatchedFleetRuntime({ sdk: {} as typeof Sdk, models: {} as ModelRuntime,
     approved: ["fixture"], parent: { provider: "fixture", model: "parent" }, agentDir: "/unused", localTools: [],
     context: { dir: "/unused", session: { worktree: "/repo", name: "test" }, settings: { maxParallel: 2, profiles: [] } },
-    research: { generation: 3, sessionId: () => "parent", settings: { model: "child", max_parallel: 2, max_turns: 4, timeout_secs: 60 } },
+    research: { settings: { model: "child", max_parallel: 2, max_turns: 4, timeout_secs: 60 } },
     record: async payload => ({ session_id: payload.request, session_file: "/unused" }),
     changed() {}, deliverToParent() {},
     runner: { run(_spec, _model, hooks) {

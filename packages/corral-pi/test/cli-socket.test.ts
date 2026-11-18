@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
@@ -141,3 +141,75 @@ test("chat opens a socket and takes owner input without the legacy planning stor
     rmSync(dir, { recursive: true, force: true });
   }
 }, 20_000);
+
+
+test("worker relaunch repairs an interrupted transcript, then a retry inherits it unless fresh", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-retry-"));
+  const assets = buildFixtureInstall({ parent: dir });
+  const socket = join(dir, "s.sock");
+  const env = { HOME: dir, XDG_DATA_HOME: join(dir, "data"), PATH: process.env.PATH, TMPDIR: dir,
+    GIT_CEILING_DIRECTORIES: dir, CORRAL_NEXT_ROOT: dir, CORRAL_TASK: "T-1", CORRAL_ACTOR: "agent" };
+  const handles: Launch[] = [], clients: TestClient[] = [];
+  let seq = 0;
+  const call = async (client: TestClient, command: string, args?: Record<string, unknown>) => {
+    const reply = await client.request({ version: 2, id: `retry-${++seq}`, command, args });
+    if (!reply.ok || !reply.result) throw new Error(`${command}: ${JSON.stringify(reply.error)}`);
+    return reply.result;
+  };
+  const input = (client: TestClient, text: string) => call(client, "submit_input", { origin: "owner", text });
+  const start = async (run: string, fresh = false) => {
+    const runDir = join(dir, ".corral-next", "runs", "T-1", run);
+    const process = launch(assets.dir, ["run", "--dir", runDir, "--socket", socket], dir,
+      { ...env, CORRAL_RUN: run, CORRAL_FRESH: fresh ? "1" : "0" });
+    handles.push(process);
+    await process.output(/session socket ready/);
+    const client = await connect(socket);
+    clients.push(client);
+    const hello = await call(client, "hello");
+    return { client, process, transcript: String(hello.session_file) };
+  };
+  const stop = async (session: Awaited<ReturnType<typeof start>>) => {
+    await call(session.client, "shutdown");
+    expect(await within(session.process.exit, 10_000, "worker shutdown")).toBe(0);
+  };
+  try {
+    const first = await start("R1");
+    await input(first.client, "Reply only BEFORE_KILL.");
+    await first.process.output(/turn 1 ended/);
+    await input(first.client, "/fixture-hold");
+    await input(first.client, "Continue this interrupted conversation.");
+    await first.process.output(/turn 2 started/);
+    expect((await call(first.client, "get_state")).turn).toEqual({ current: 2, open: true });
+    first.process.child.kill("SIGKILL");
+    await within(first.process.exit, 10_000, "killed fixture host");
+    appendFileSync(first.transcript, '{"type":"cut-off');
+
+    const reopened = await start("R1");
+    expect(reopened.transcript).toBe(first.transcript);
+    expect((await call(reopened.client, "get_state")).turn).toEqual({ current: 2, open: false });
+    await input(reopened.client, "Reply only REOPENED.");
+    await reopened.process.output(/turn 3 ended/);
+    await stop(reopened);
+    const archived = readFileSync(first.transcript, "utf8");
+    expect(archived).not.toContain("cut-off");
+    expect(archived).toContain("BEFORE_KILL");
+    expect(archived).toContain("REOPENED");
+
+    const retry = await start("R2");
+    expect(retry.transcript).not.toBe(first.transcript);
+    expect(readFileSync(retry.transcript, "utf8")).toBe(archived);
+    await input(retry.client, "Reply only RETRIED.");
+    await retry.process.output(/turn 4 ended/);
+    await stop(retry);
+    expect(readFileSync(first.transcript, "utf8")).toBe(archived);
+
+    const fresh = await start("R3", true);
+    expect((await call(fresh.client, "get_state")).turn).toEqual({ current: 0, open: false });
+    expect(readFileSync(fresh.transcript, "utf8")).not.toMatch(/BEFORE_KILL|RETRIED/);
+    await stop(fresh);
+  } finally {
+    for (const client of clients) client.close();
+    await Promise.all(handles.map(process => process.stop()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 45_000);

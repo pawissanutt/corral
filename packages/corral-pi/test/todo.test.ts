@@ -43,14 +43,15 @@ for (const role of [worker, pm, reviewer] satisfies readonly RoleModule[]) {
   for (const todo of [undefined, false, true]) {
     test(`${role.role} todo=${String(todo)} selects only the launch-authorized loadout`, () => {
       const context = {
-        identity: { store: "s", project: "demo", role: role.role, generation: 1 },
+        identity: { store: "s", project: "demo", role: role.role },
         cwd: "/tmp", model: "m", ...(todo === undefined ? {} : { todo }),
       };
       const tools = role.tools(context);
       const enabled = todo === true && role.role !== "reviewer";
       const spec = role.role === "pm" ? sessionTodoTool : todoTool;
-      expect(tools.filter((tool) => tool.name === "corral_todo")).toEqual(enabled ? [spec] : []);
-      expect(tools.every((tool) => role.corralOps.includes(tool.op))).toBeTrue();
+      const todoTools = tools.filter((tool) => tool.name === "corral_todo");
+      expect(todoTools).toEqual(enabled ? [spec] : []);
+      expect(todoTools.map((tool) => tool.op)).toEqual(enabled ? ["todo"] : []);
     });
   }
 }

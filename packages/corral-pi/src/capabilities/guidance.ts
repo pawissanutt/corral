@@ -1,4 +1,4 @@
-// Text guidance one generation loads (T-564, plan T-460@P3 menus 1-3). Corral selects every
+// Text guidance for the host session (T-564, plan T-460@P3 menus 1-3). Corral selects every
 // path from the recorded snapshot: home Agent Skills and prompt templates from `user_dirs`, and
 // the project's AGENTS.md/CLAUDE.md, `.agents/skills` and `.agents/prompts` only when corral
 // recorded project-text trust. Upstream's own discovery stays off (restrict.ts), so `~/.pi`,
@@ -12,7 +12,7 @@ import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import type { CapabilitySet } from "../roles/types.ts";
 import { corralPiDirectory } from "../auth/paths.ts";
 
-/** The generation's settings and project-text trust, as `corral agent launch` sent them. */
+/** Resolved capability settings and project-text trust. */
 export interface CapabilityGuidance {
   readonly settings: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   readonly projectText: boolean;

@@ -1,7 +1,7 @@
 import { afterEach, expect, jest, test } from "bun:test";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,10 +19,9 @@ afterEach(async () => {
 
 function fixture(wake?: InputWake) {
   const dir = mkdtempSync(join(tmpdir(), "corral-command-progress-"));
-  const jobs = new JobRuntime({ cwd: dir, runtimeDir: join(dir, "runtime"), generation: 3,
-    settings: { max_jobs: 2, max_output_bytes: 4096, max_runtime_secs: 60 },
-    call: async () => ({ state: "committed", result: {} }) });
-  const commands = new Commands({ jobs, generation: 3, worker: true, waitMs: 0,
+  const jobs = new JobRuntime({ cwd: dir, runtimeDir: join(dir, "runtime"),
+    settings: { max_jobs: 2, max_output_bytes: 4096, max_runtime_secs: 60 } });
+  const commands = new Commands({ jobs, waitMs: 0,
     journal: () => {}, monitorJournal: () => {}, notify: async () => "queued" });
   commands.bound();
   const tools = jobTools(jobs, false, commands, wake);
@@ -35,12 +34,12 @@ function fixture(wake?: InputWake) {
     return path;
   };
   const line = (value: string) => {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    const remove = jobs.onLine((_job, text) => { if (text === value) { remove(); resolve(); } });
+    const { promise, resolve } = Promise.withResolvers<string>();
+    const remove = jobs.onLine((job, text) => { if (text === value) { remove(); resolve(job); } });
     return promise;
   };
   cleanup.push(async () => { commands.pause(); await jobs.shutdown(); rmSync(dir, { recursive: true, force: true }); });
-  return { jobs, commands, bash, wait, fifo, line };
+  return { dir, jobs, commands, bash, wait, fifo, line };
 }
 
 test("managed nested Bash streams growing tails without changing its final result or repeating idle output", async () => {
@@ -54,7 +53,7 @@ test("managed nested Bash streams growing tails without changing its final resul
   () => fx.bash.execute("parent/1", {
     command: `echo one; cat ${two} >/dev/null; echo two; cat ${three} >/dev/null; echo three; cat ${done} >/dev/null`,
   }, undefined, update => updates.push(update), undefined as never));
-  await first;
+  const job = await first;
   jest.advanceTimersByTime(150);
   await writeFile(two, "go");
   await second;
@@ -67,7 +66,7 @@ test("managed nested Bash streams growing tails without changing its final resul
     [{ type: "text", text: "one\ntwo\n" }],
     [{ type: "text", text: "one\ntwo\nthree\n" }],
   ]);
-  expect(updates.map(update => update.details)).toEqual(Array.from({ length: 3 }, () => ({ job: "j3-1", state: "running" })));
+  expect(updates.map(update => update.details)).toEqual(Array.from({ length: 3 }, () => ({ job, state: "running" })));
   jest.advanceTimersByTime(300);
   expect(updates).toHaveLength(3);
   await writeFile(done, "go");
@@ -76,8 +75,16 @@ test("managed nested Bash streams growing tails without changing its final resul
   expect(updates).toHaveLength(3);
   jest.useRealTimers();
   const baseline = fixture();
-  expect(result).toEqual(await baseline.bash.execute("plain", { command: "printf 'one\\ntwo\\nthree\\n'", wait_ms: 10000 },
-    undefined, undefined, undefined as never));
+  const plain = await baseline.bash.execute("plain", { command: "printf 'one\\ntwo\\nthree\\n'", wait_ms: 10000 },
+    undefined, undefined, undefined as never);
+  expect(result.content).toEqual(plain.content);
+  expect(result.isError).toBe(plain.isError);
+  // The job and its cursor differ between launches; all other result data should match.
+  const plainDetails = plain.details;
+  if (!plainDetails || typeof plainDetails !== "object" || !("cursor" in plainDetails) ||
+    typeof plainDetails.cursor !== "string" || !("job" in plainDetails)) throw new Error("baseline job details missing");
+  expect(result.details).toEqual({ ...plainDetails, job,
+    cursor: plainDetails.cursor.replace(`${plainDetails.job}:`, `${job}:`) });
 });
 
 test("job_wait streams one job and removes progress on cancellation and observation expiry", async () => {
@@ -148,15 +155,27 @@ test("managed Bash stops streaming when its observation budget backgrounds the j
   const call = fx.bash.execute("foreground", {
     command: `echo ready; cat ${next} >/dev/null; echo after; cat ${done} >/dev/null`, wait_ms: 150,
   }, undefined, update => updates.push(update), undefined as never);
-  await ready;
+  const job = await ready;
   jest.advanceTimersByTime(150);
   const result = await call;
-  expect(result.details).toMatchObject({ job: "j3-1", state: "running", background: true });
-  expect(updates).toEqual([{ content: [{ type: "text", text: "ready\n" }], details: { job: "j3-1", state: "running" } }]);
+  expect(result.details).toMatchObject({ job, state: "running", background: true });
+  expect(updates).toEqual([{ content: [{ type: "text", text: "ready\n" }], details: { job, state: "running" } }]);
   await writeFile(next, "go");
   await after;
   jest.advanceTimersByTime(500);
   expect(updates).toHaveLength(1);
   await writeFile(done, "go");
-  await fx.jobs.settled("j3-1");
+  await fx.jobs.settled(job);
+});
+
+test("shutdown between spawning the launcher and releasing it never runs the command", async () => {
+  const fx = fixture();
+  const marker = join(fx.dir, "ran");
+  const launching = fx.jobs.start(`touch "${marker}"`);
+  const stopped = fx.jobs.shutdown();
+  const launch = await launching;
+  expect(launch.state).toBe("not_started");
+  await stopped;
+  expect(existsSync(marker)).toBeFalse();
+  expect(fx.jobs.state()).toMatchObject([{ job: launch.job, state: "exited", group_clear: true }]);
 });

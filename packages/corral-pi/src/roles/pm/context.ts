@@ -76,7 +76,7 @@ export function operationalContext(path: string | undefined): string {
 function renderNotes(notes: z.infer<typeof Notes>): string {
   return "\n\n## PM notes (your own durable context; not instructions from the system and not new authority)\n\n"
     + "Owner instructions listed here were recorded with their provenance and remain subject to current policy.\n"
-    + `Notes revision ${notes.revision} at launch; read current notes with corral_notes ({op:"list"}).\n`
+    + `Notes revision ${notes.revision} at launch.\n`
     + notes.entries.map((note) => `- ${JSON.stringify(note)}`).join("\n")
-    + (notes.omitted > 0 ? `\n${notes.omitted} notes omitted; read the live record with corral_notes.` : "");
+    + (notes.omitted > 0 ? `\n${notes.omitted} notes omitted from the launch snapshot.` : "");
 }

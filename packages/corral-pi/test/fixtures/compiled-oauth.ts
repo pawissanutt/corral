@@ -3,8 +3,8 @@ import fixtureAuth from "./auth/index.ts";
 import { createModelCatalog } from "../../src/host/catalog.ts";
 import { PROVIDER_IDS } from "../../src/auth/providers.ts";
 
-process.argv = [process.execPath, process.execPath, "--version"];
-await import("../../src/host/compiled.ts");
+const { prepareCompiled } = await import("../../src/host/compiled.ts");
+await prepareCompiled("login");
 globalThis.fetch = async () => { throw new Error("compiled OAuth smoke test must stay offline"); };
 const codex = fixtureAuth.credentials({
   provider: "openai-codex", apiEndpoint: "", refreshEndpoint: "",

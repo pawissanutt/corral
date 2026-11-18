@@ -1,4 +1,4 @@
-// The kernel worker (T-682): one thread per CodeKernel generation, started by kernel.ts with an
+// The kernel worker (T-682) is started by kernel.ts with an
 // empty environment. Cells run in a separate node:vm realm whose globals are the language
 // intrinsics plus the bridge installed below: no Bun, process, require, fetch, worker timers or
 // module loader (dynamic import is rejected). Values reach that realm only as JSON text or as
