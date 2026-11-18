@@ -684,6 +684,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "corral-engine"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "corral-git",
+ "corral-herdr",
+ "corral-types",
+ "glob",
+ "jiff",
+ "libc",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "corral-git"
 version = "0.4.0"
 dependencies = [
@@ -699,6 +719,21 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "corral-next"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "corral-engine",
+ "jiff",
+ "serde",
+ "serde_json",
+ "shlex",
+ "tempfile",
+ "unicode-width",
 ]
 
 [[package]]
@@ -764,6 +799,15 @@ dependencies = [
  "tempfile",
  "toml_edit",
  "unicode-width",
+]
+
+[[package]]
+name = "corral-types"
+version = "0.4.0"
+dependencies = [
+ "jiff",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1568,6 +1612,12 @@ dependencies = [
  "color_quant",
  "weezl",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "group"
@@ -3431,6 +3481,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsqlite-vfs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
+dependencies = [
+ "hashbrown 0.16.1",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.40.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3442,6 +3502,7 @@ dependencies = [
  "hashlink",
  "libsqlite3-sys",
  "smallvec",
+ "sqlite-wasm-rs",
 ]
 
 [[package]]
@@ -3868,6 +3929,18 @@ name = "sponge-cursor"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
+
+[[package]]
+name = "sqlite-wasm-rs"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc3efc0da82635d7e1ced0053bbbfa8c7ab9645d0bf36ceb4f7127bb85315d75"
+dependencies = [
+ "cc",
+ "js-sys",
+ "rsqlite-vfs",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "stable_deref_trait"
