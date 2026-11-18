@@ -66,9 +66,13 @@ fn task_run_check_roundtrips_and_transaction_rollback() {
         log: None,
         by: Actor::Owner,
         at: jiff::Timestamp::now(),
+        round: None,
+        run: None,
     };
     store.insert_check(&check).unwrap();
     check.result = CheckResult::Pass;
+    check.round = Some(3);
+    check.run = Some("R1".into());
     store.insert_check(&check).unwrap();
     assert_eq!(
         store.list_latest_checks(&task.id).unwrap(),
@@ -80,7 +84,10 @@ fn task_run_check_roundtrips_and_transaction_rollback() {
             .unwrap(),
         Some(check)
     );
-    assert_eq!(store.list_checks(&task.id).unwrap().len(), 2);
+    let checks = store.list_checks(&task.id).unwrap();
+    assert_eq!(checks.len(), 2);
+    assert_eq!(checks[0].round, None);
+    assert_eq!(checks[0].run, None);
     assert!(
         store
             .latest_check(&task.id, CheckKind::Gate, "other")

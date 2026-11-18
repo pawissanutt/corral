@@ -118,6 +118,27 @@ impl crate::Engine {
         }
         Ok(settings)
     }
+
+    /// Read up to 100 local branches ordered by the tip's committer date.
+    pub fn project_local_branches(&self, path: &Path) -> Result<Vec<String>> {
+        let repo = self.root.join(path);
+        let out = output(
+            &repo,
+            &[
+                "for-each-ref",
+                "--sort=refname",
+                "--sort=-committerdate",
+                "--count=100",
+                "--format=%(refname:strip=2)",
+                "refs/heads/",
+            ],
+        )?;
+        if !out.status.success() {
+            return Err(git_failure(&repo, "for-each-ref", &out));
+        }
+        let branches = std::str::from_utf8(&out.stdout).context("decode local branch names")?;
+        Ok(branches.lines().map(str::to_owned).collect())
+    }
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<()> {

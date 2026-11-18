@@ -251,6 +251,8 @@ fn dispatch_done_green_gate_approve_cleans_up_without_requiring_clean_base() {
         .unwrap()
         .unwrap();
     assert_eq!(check.result, CheckResult::Pass);
+    assert_eq!(check.round, Some(0));
+    assert_eq!(check.run.as_deref(), Some(run.id.as_str()));
     assert!(
         String::from_utf8(
             cx.engine
@@ -378,6 +380,14 @@ fn reviewer_requests_changes_then_approves_and_auto_lands_off_base() {
             notes: Some(notes.into()),
         };
         let request = cx.apply(verdict(false, "revise the change"), false);
+        let check = cx
+            .engine
+            .store
+            .latest_check(&id, CheckKind::Review, "0")
+            .unwrap()
+            .unwrap();
+        assert_eq!(check.round, Some(0));
+        assert_eq!(check.run.as_deref(), Some(original.id.as_str()));
         assert_eq!(request.task.unwrap().status, Status::Running);
         let reviewing = reviewer();
         assert_eq!(request.run.unwrap().id, original.id);

@@ -2,7 +2,11 @@ use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context, Result, ensure};
 pub use corral_types::{UsageBy, UsageDay, UsageGroup, UsageSummary, UsageTotal};
-use jiff::{Timestamp, civil::Date, tz::Offset};
+use jiff::{
+    Timestamp,
+    civil::Date,
+    tz::{AmbiguousOffset, Offset, TimeZone},
+};
 use rusqlite::{OptionalExtension, Row, params, params_from_iter};
 
 use crate::{Engine, Store, Usage, store::encode};
@@ -40,16 +44,21 @@ const RUN_START_KEY: &str = instant_key!("json_extract(runs.document, '$.started
 const USAGE_JOIN: &str =
     "FROM usage LEFT JOIN runs ON runs.task = usage.task AND runs.id = usage.run";
 
-/// A validated range of 1–366 local days at a single fixed offset east of UTC.
+/// A validated range of 1–366 local days in a named zone or at a fixed offset.
 pub struct UsageWindow {
     from: Date,
-    offset: Offset,
+    zone: TimeZone,
     days: usize,
     bounds: [String; 2],
 }
 
 impl UsageWindow {
-    pub fn parse(from: &str, to: &str, utc_offset_minutes: i16) -> Result<Self> {
+    pub fn parse(
+        from: &str,
+        to: &str,
+        utc_offset_minutes: i16,
+        time_zone: Option<&str>,
+    ) -> Result<Self> {
         let from = parse_date(from).context("invalid usage start date")?;
         let to = parse_date(to).context("invalid usage end date")?;
         let days = from.duration_until(to).as_secs() / 86_400;
@@ -57,27 +66,49 @@ impl UsageWindow {
             (1..=366).contains(&days),
             "usage range must span 1 to 366 days"
         );
-        ensure!(
-            (-1439..=1439).contains(&utc_offset_minutes),
-            "usage UTC offset must be less than 24 hours"
-        );
-        let offset = Offset::from_seconds(i32::from(utc_offset_minutes) * 60)?;
-        let bound = |day: Date| -> Result<String> {
-            let mut text = offset.to_timestamp(day.at(0, 0, 0, 0))?.to_string();
-            let _ = text.pop();
-            Ok(text)
+        let zone = match time_zone {
+            Some(name) => {
+                TimeZone::get(name).with_context(|| format!("lookup usage time zone {name:?}"))?
+            }
+            None => {
+                ensure!(
+                    (-1439..=1439).contains(&utc_offset_minutes),
+                    "usage UTC offset must be less than 24 hours"
+                );
+                Offset::from_seconds(i32::from(utc_offset_minutes) * 60)?.to_time_zone()
+            }
         };
+        let bounds = [day_bound(&zone, from, false)?, day_bound(&zone, to, true)?];
         Ok(Self {
             from,
-            offset,
+            zone,
             days: days as usize,
-            bounds: [bound(from)?, bound(to)?],
+            bounds,
         })
     }
 
-    fn bucket(&self, day: Date) -> usize {
-        (self.from.duration_until(day).as_secs() / 86_400) as usize
+    fn bucket(&self, day: Date) -> Option<usize> {
+        let index = usize::try_from(self.from.duration_until(day).as_secs() / 86_400).ok()?;
+        (index < self.days).then_some(index)
     }
+}
+
+fn day_bound(zone: &TimeZone, day: Date, upper: bool) -> Result<String> {
+    let midnight = zone.to_ambiguous_timestamp(day.at(0, 0, 0, 0));
+    let bound = match midnight.offset() {
+        AmbiguousOffset::Gap { .. } => zone
+            .following(midnight.earlier()?)
+            .next()
+            .context("find time zone transition across midnight")?
+            .timestamp(),
+        // A rollback across midnight can interleave two dates. Fetch the full
+        // interval, then assign or exclude each instant by its actual local date.
+        AmbiguousOffset::Fold { .. } if upper => midnight.later()?,
+        _ => midnight.earlier()?,
+    };
+    let mut text = bound.to_string();
+    let _ = text.pop();
+    Ok(text)
 }
 
 fn parse_date(value: &str) -> Result<Date> {
@@ -175,11 +206,11 @@ fn text<'a>(row: &'a Row<'_>, column: usize) -> Result<Option<&'a str>> {
     Ok(row.get_ref(column)?.as_str_or_null()?)
 }
 
-fn local_start(row: &Row<'_>, column: usize, offset: Offset) -> Result<Option<Date>> {
+fn local_start(row: &Row<'_>, column: usize, zone: &TimeZone) -> Result<Option<Date>> {
     text(row, column)?
         .map(|value| {
             let start: Timestamp = value.parse().context("parse usage run start")?;
-            Ok(offset.to_datetime(start).date())
+            Ok(zone.to_datetime(start).date())
         })
         .transpose()
 }
@@ -188,14 +219,12 @@ fn select_bucket<'a>(
     buckets: &'a mut [Bucket],
     window: Option<&UsageWindow>,
     day: Option<Date>,
-) -> Result<&'a mut Bucket> {
+) -> Result<Option<&'a mut Bucket>> {
     let index = match window {
         Some(window) => window.bucket(day.context("usage is missing its local day")?),
-        None => 0,
+        None => Some(0),
     };
-    buckets
-        .get_mut(index)
-        .context("usage is outside its selected window")
+    Ok(index.and_then(|index| buckets.get_mut(index)))
 }
 
 fn add_bounds(query: &mut String, key: &str) {
@@ -319,16 +348,17 @@ impl Engine {
         window: Option<&UsageWindow>,
         buckets: &mut [Bucket],
     ) -> Result<()> {
-        let local_offset = window
-            .map(|window| window.offset)
-            .or_else(|| (by == Some(UsageBy::Day)).then_some(Offset::ZERO));
+        let utc = TimeZone::UTC;
+        let local_zone = window
+            .map(|window| &window.zone)
+            .or_else(|| (by == Some(UsageBy::Day)).then_some(&utc));
         let group = by.map_or("NULL", run_group_column);
-        let started = if local_offset.is_some() {
+        let started = if local_zone.is_some() {
             RUN_START
         } else {
             "NULL"
         };
-        self.store.tally_runs(by, window, buckets, local_offset)?;
+        self.store.tally_runs(by, window, buckets, local_zone)?;
         let mut query =
             format!("SELECT usage.document, runs.rowid, {group}, {started} {USAGE_JOIN}");
         if window.is_some() {
@@ -339,11 +369,13 @@ impl Engine {
             query.push_str(" ORDER BY usage.seq");
         }
         self.store.read_usage(&query, window, |mut usage, row| {
-            let day = local_offset.map(|offset| offset.to_datetime(usage.at).date());
-            let bucket = select_bucket(buckets, window, day)?;
+            let day = local_zone.map(|zone| zone.to_datetime(usage.at).date());
+            let Some(bucket) = select_bucket(buckets, window, day)? else {
+                return Ok(());
+            };
             add(&mut bucket.total, &usage)?;
-            let run_day = if let Some(offset) = local_offset {
-                local_start(row, 3, offset)?
+            let run_day = if let Some(zone) = local_zone {
+                local_start(row, 3, zone)?
             } else {
                 None
             };
@@ -419,10 +451,10 @@ impl Store {
         by: Option<UsageBy>,
         window: Option<&UsageWindow>,
         buckets: &mut [Bucket],
-        local_offset: Option<Offset>,
+        local_zone: Option<&TimeZone>,
     ) -> Result<()> {
         let group = by.map_or("NULL", run_group_column);
-        let started = if local_offset.is_some() {
+        let started = if local_zone.is_some() {
             RUN_START
         } else {
             "NULL"
@@ -439,12 +471,14 @@ impl Store {
             .query(bounds(window))
             .context("query usage run cohorts")?;
         while let Some(row) = rows.next().context("read usage run cohort")? {
-            let day = if let Some(offset) = local_offset {
-                local_start(row, 1, offset)?
+            let day = if let Some(zone) = local_zone {
+                local_start(row, 1, zone)?
             } else {
                 None
             };
-            let bucket = select_bucket(buckets, window, day)?;
+            let Some(bucket) = select_bucket(buckets, window, day)? else {
+                continue;
+            };
             bucket.total_runs += 1;
             if let Some(by) = by {
                 let key = match by {

@@ -67,6 +67,10 @@ list saved turns or restore the worktree and transcript to the start of a turn.
 This can overwrite hand edits; the host reports the rescue Git ref where it saved
 the current tree.
 
+The `/rewind --list` output and the daemon's `session.rewind` list reply include
+an ISO 8601 `at` string for each checkpoint and prior rewind when its time is
+available.
+
 ## API spending and paid continuation
 
 An API model needs `--max-usd <amount>`. You can put it in a profile's `args`. The

@@ -205,6 +205,12 @@ pub struct Check {
     pub log: Option<String>,
     pub by: Actor,
     pub at: Timestamp,
+    /// The task's round when this check was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<u32>,
+    /// Run that performed the check, if there was one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

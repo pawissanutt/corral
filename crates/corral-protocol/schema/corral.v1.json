@@ -3,6 +3,13 @@
     "schemas": {
       "AgentRow": {
         "properties": {
+          "paused": {
+            "description": "The live Pi host's pause flag, absent when there is no host state.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "run": {
             "$ref": "#/components/schemas/Run"
           },
@@ -20,6 +27,13 @@
         "properties": {
           "device": {
             "$ref": "#/components/schemas/DeviceInfo"
+          },
+          "local": {
+            "description": "True on the Unix socket or when the daemon's TCP peer is loopback, false otherwise.\nDescribes the immediate connection, not client location or authority. Absent on older daemons.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "seen": {
             "$ref": "#/components/schemas/SeenCursor"
@@ -195,6 +209,13 @@
             "type": "integer"
           },
           "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "question_id": {
+            "description": "Host question id for the owner prompt shown while Waiting.",
             "type": [
               "string",
               "null"
@@ -1289,12 +1310,19 @@
                 "const": "usage_series",
                 "type": "string"
               },
+              "time_zone": {
+                "description": "IANA time zone name for local day boundaries, including clock changes.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "to": {
                 "description": "Exclusive local date; a range may span at most 366 days.",
                 "type": "string"
               },
               "utc_offset_minutes": {
-                "description": "Fixed minutes east of UTC (`-1439..=1439`), applied to the entire range.",
+                "description": "Fixed minutes east of UTC (`-1439..=1439`), used when no zone is given.",
                 "format": "int16",
                 "maximum": 32767,
                 "minimum": -32768,
@@ -2776,6 +2804,16 @@
           "id": {
             "type": "string"
           },
+          "local_branches": {
+            "description": "Local branch names, most recently committed first; absent if unavailable.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "open": {
             "format": "uint64",
             "minimum": 0,
@@ -3214,6 +3252,12 @@
       },
       "RewindCheckpoint": {
         "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "commit": {
             "type": [
               "string",
@@ -3309,7 +3353,10 @@
       "Rewound": {
         "properties": {
           "at": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "checkpoint": {
             "type": "string"
@@ -3334,8 +3381,7 @@
           "checkpoint",
           "rescue_ref",
           "from_head",
-          "head",
-          "at"
+          "head"
         ],
         "type": "object"
       },
@@ -5578,6 +5624,13 @@
             "description": "Whether the pipeline appended `ready` for the current review.",
             "type": "boolean"
           },
+          "resolved_profile": {
+            "description": "Worker profile dispatch would select without an explicit override.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "review": {
             "anyOf": [
               {
@@ -7736,6 +7789,17 @@
           ]
         },
         {
+          "name": "time_zone",
+          "required": false,
+          "schema": {
+            "description": "IANA time zone name for local day boundaries, including clock changes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
           "name": "to",
           "required": false,
           "schema": {
@@ -7768,7 +7832,7 @@
           "name": "utc_offset_minutes",
           "required": false,
           "schema": {
-            "description": "Fixed minutes east of UTC (`-1439..=1439`), applied to the entire range.",
+            "description": "Fixed minutes east of UTC (`-1439..=1439`), used when no zone is given.",
             "format": "int16",
             "maximum": 32767,
             "minimum": -32768,

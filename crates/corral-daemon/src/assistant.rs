@@ -72,6 +72,7 @@ struct Turn {
 
 #[derive(Deserialize)]
 struct Question {
+    id: Option<String>,
     question: String,
 }
 
@@ -376,21 +377,34 @@ impl Chat {
         } else {
             AssistantState::Cold
         };
-        let wait = host.as_ref().and_then(|host| {
-            host.owner_questions
-                .first()
-                .map(|q| WaitReason {
+        let live_in = if host.is_some() {
+            AssistantLocation::Daemon
+        } else {
+            AssistantLocation::None
+        };
+        let turn = host
+            .as_ref()
+            .map(|host| host.turn.current)
+            .filter(|turn| *turn > 0);
+        let (wait, question_id) = host.map_or((None, None), |host| {
+            if let Some(q) = host.owner_questions.into_iter().next() {
+                let wait = WaitReason {
                     code: "owner_question".into(),
-                    text: q.question.clone(),
+                    text: q.question,
                     retry_at: None,
-                })
-                .or_else(|| {
-                    host.last_error.clone().map(|text| WaitReason {
-                        code: "host_error".into(),
-                        text,
-                        retry_at: None,
-                    })
-                })
+                };
+                (
+                    Some(wait),
+                    q.id.filter(|_| state == AssistantState::Waiting),
+                )
+            } else {
+                let wait = host.last_error.map(|text| WaitReason {
+                    code: "host_error".into(),
+                    text,
+                    retry_at: None,
+                });
+                (wait, None)
+            }
         });
         Ok(AssistantRow {
             id: chat.id(),
@@ -405,19 +419,16 @@ impl Chat {
                 format!("Chat {}", chat.number)
             },
             state,
-            live_in: if host.is_some() {
-                AssistantLocation::Daemon
-            } else {
-                AssistantLocation::None
-            },
+            live_in,
             profile: Some(chat.meta.profile),
             connection: None,
             focus: chat.meta.task,
             pending: 0,
-            turn: host.map(|host| host.turn.current).filter(|turn| *turn > 0),
+            turn,
             cost_usd: None,
             cost_basis: None,
             wait,
+            question_id,
             rev: shared.revision(),
         })
     }

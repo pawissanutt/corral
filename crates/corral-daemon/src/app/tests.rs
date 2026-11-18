@@ -195,6 +195,25 @@ fn paired_browser_is_owner_until_revocation_closes_it() {
     assert!(matches!(error, tungstenite::Error::Http(response) if response.status() == 403));
     let mut local = LocalClient::connect(fixture.root()).unwrap().unwrap();
     let wait = Duration::from_secs(5);
+    let native: DeviceInfo = local
+        .request(
+            DEVICE_ENROL,
+            DeviceEnrol {
+                name: "Native".into(),
+                app_version: "test".into(),
+            },
+            wait,
+        )
+        .unwrap();
+    let native_session: wire::app::AppSession = local
+        .request(
+            wire::app::APP_SESSION,
+            wire::app::AppSessionRequest {},
+            wait,
+        )
+        .unwrap();
+    assert_eq!(native_session.device.id, native.id);
+    assert_eq!(native_session.local, Some(true));
     let offer: PairOffer = local.request(PAIR_BEGIN, PairBegin {}, wait).unwrap();
     let code = PairCode::decode(&offer.code).unwrap();
     assert_eq!(code.port, port);
@@ -255,6 +274,7 @@ fn paired_browser_is_owner_until_revocation_closes_it() {
     );
     let app_session = browser.call(wire::app::APP_SESSION, json!({}));
     assert_eq!(app_session["result"]["device"]["id"], device.id);
+    assert_eq!(app_session["result"]["local"], true);
     let acted = browser.call(
         wire::op::OP_SUBMIT,
         wire::op::OpSubmit {

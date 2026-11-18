@@ -33,6 +33,10 @@ pub struct AppSession {
     pub device: DeviceInfo,
     pub seen: SeenCursor,
     pub server_time: String,
+    /// True on the Unix socket or when the daemon's TCP peer is loopback, false otherwise.
+    /// Describes the immediate connection, not client location or authority. Absent on older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

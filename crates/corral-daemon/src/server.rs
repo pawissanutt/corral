@@ -12,7 +12,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 
 use crate::{
     app::dispatch,
-    conn::{IO_TIMEOUT, WorkerPermit, error, notify, reply},
+    conn::{IO_TIMEOUT, Peer, WorkerPermit, error, notify, reply},
     state::Shared,
     topics::Subscriptions,
 };
@@ -250,6 +250,7 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
             }
             _ => dispatch::serve(
                 &mut stream,
+                &Peer::Unix,
                 &shared,
                 request,
                 attached.as_ref(),
