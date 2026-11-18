@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use corral_protocol::detail::{Burnup as WireBurnup, DetailRef, TimelineBy, TimelinePage};
-use corral_types::{Actor, Event, EventKind, Outcome, Role, Run};
+use corral_types::{Actor, Event, EventKind, Outcome, Role, Run, SessionRef};
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, ToSpan, Zoned};
 
@@ -162,13 +162,20 @@ fn opens_task(task: &str) -> Opens {
     }
 }
 
-/// A run's lane opens its session terminal while the run is live; an ended run has no session
-/// to show, so its lane opens the task.
+/// A run's lane opens its session terminal while the run is live, and the retained log of a
+/// headless run that ended; any other ended run has no session to show, so its lane opens the
+/// task.
 fn opens_run(run: &Run, feed: &Feed) -> Opens {
     let session = format!("{}_{}", run.task, run.id);
+    let logged = run.ended.is_some() && matches!(run.session, Some(SessionRef::Process { .. }));
     if feed.agents.contains_key(session.as_str()) {
         Opens {
             label: format!("Open the terminal of {} {}", run.task, run.id),
+            live: Live::Session(Id::from(session.as_str())),
+        }
+    } else if logged {
+        Opens {
+            label: format!("Open the log of {} {} (ended)", run.task, run.id),
             live: Live::Session(Id::from(session.as_str())),
         }
     } else {

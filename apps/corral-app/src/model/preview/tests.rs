@@ -130,3 +130,41 @@ fn ended_quick_thread_starts_a_new_session_on_the_next_send() {
             .any(|entry| entry.text.as_deref() == Some("Back again"))
     );
 }
+
+/// The sample names each event's project, a closed task's too, as the daemon serves events.
+#[test]
+fn events_of_a_closed_task_name_its_project() {
+    let feed = feed(1_800_000_000, "2027-01-15".into(), "08:00".into(), None);
+    assert!(feed.board.task("T-6").is_none());
+    let landed = feed
+        .changes
+        .values()
+        .find(|event| event.task.as_deref() == Some("T-6") && event.kind == EventKind::Landed);
+    assert_eq!(
+        landed.and_then(|event| event.project.as_deref()),
+        Some("site")
+    );
+}
+
+/// An ended headless run's terminal is its retained log, not live; once the log is pruned the
+/// answer is not found with the reason corrald gives.
+#[test]
+fn an_ended_headless_runs_log_is_served_until_it_is_pruned() {
+    let mut feed = feed(1_800_000_000, "2027-01-15".into(), "08:00".into(), None);
+    let log = DetailRef::Terminal {
+        id: "T-6_R1".into(),
+    };
+    detail(&mut feed, &log, None).unwrap();
+    assert!(matches!(
+        feed.detail(&log).and_then(|cache| cache.body()),
+        Some(DetailBody::Terminal(snapshot)) if !snapshot.live && !snapshot.lines.is_empty()
+    ));
+    let pruned = DetailRef::Terminal {
+        id: "T-7_R1".into(),
+    };
+    let error = failure(detail(&mut feed, &pruned, None).unwrap_err());
+    assert_eq!(
+        (error.code.as_str(), error.message.as_str()),
+        ("not_found", "session log not found")
+    );
+}

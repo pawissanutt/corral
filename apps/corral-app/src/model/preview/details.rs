@@ -1,12 +1,12 @@
 //! Details served from the sample records, shaped as corrald shapes them.
 
 use corral_protocol::detail::*;
-use corral_types::{EventKind, Outcome};
+use corral_types::{EventKind, Outcome, Run, SessionRef};
 use jiff::Timestamp;
 
 use super::rollup::{all_runs, closed, last_worker, local_day, row, summarize, usage_rows};
-use super::{put, record, records};
-use crate::model::daemon::Feed;
+use super::{put, record, records, stamp};
+use crate::model::daemon::{ClientError, Feed};
 
 /// Fetch `target` into `feed.details`, a walked list up to the page `page` asks for; Err for a
 /// record the sample does not hold.
@@ -20,20 +20,21 @@ pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result
             if super::pi_rows::page(feed, id) {
                 return Ok(());
             }
-            let row = feed
-                .agents
-                .get(id.as_str())
-                .ok_or_else(|| format!("Preview has no session {id}"))?;
+            let run = match feed.agents.get(id.as_str()) {
+                Some(row) => row.run.clone(),
+                None => ended_process_run(feed, id)
+                    .ok_or_else(|| format!("Preview has no session {id}"))?,
+            };
             // A run without a pi host has no transcript; corrald says why the page is empty.
             let page = SessionPage {
                 id: id.clone(),
-                role: match row.run.role {
+                role: match run.role {
                     corral_types::Role::Worker => "worker",
                     corral_types::Role::Reviewer => "reviewer",
                 }
                 .into(),
-                task: Some(row.run.task.clone()),
-                run: Some(row.run.id.clone()),
+                task: Some(run.task.clone()),
+                run: Some(run.id.clone()),
                 machine: None,
                 messages: Vec::new(),
                 older: None,
@@ -45,16 +46,73 @@ pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result
             put(feed, target.clone(), DetailBody::Session(page));
             Ok(())
         }
-        DetailRef::Terminal { id } => feed
-            .detail(target)
-            .and_then(|cache| cache.body())
-            .map(|_| ())
-            .ok_or_else(|| format!("Preview has no session {id}")),
+        DetailRef::Terminal { id } => {
+            if feed.detail(target).and_then(|cache| cache.body()).is_some() {
+                return Ok(());
+            }
+            let run = ended_process_run(feed, id)
+                .ok_or_else(|| format!("Preview has no session {id}"))?;
+            // The sample's stopped run had its log pruned: corrald answers not found, with why.
+            if run.outcome == Some(Outcome::Stopped) {
+                return Err("not_found: session log not found".into());
+            }
+            let snapshot = ended_log(feed, &run);
+            put(feed, target.clone(), DetailBody::Terminal(snapshot));
+            Ok(())
+        }
         _ => {
             let body = build(feed, target)?;
             put(feed, target.clone(), body);
             Ok(())
         }
+    }
+}
+
+/// How a failed sample read reads on the wire: `not_found: why` is corrald's `not_found` with its
+/// reason; any other message is a record the sample does not hold.
+pub fn failure(message: String) -> ClientError {
+    match message.split_once(": ") {
+        Some(("not_found", reason)) => ClientError {
+            code: "not_found".into(),
+            message: reason.into(),
+        },
+        _ => ClientError {
+            code: "preview_missing".into(),
+            message,
+        },
+    }
+}
+
+/// The ended process run behind session `id`, from its task's record.
+fn ended_process_run(feed: &Feed, id: &str) -> Option<Run> {
+    let (task, number) = id.split_once('_')?;
+    record(feed, task)?.runs.into_iter().find(|run| {
+        run.id == number
+            && run.ended.is_some()
+            && matches!(run.session, Some(SessionRef::Process { .. }))
+    })
+}
+
+/// The tail of an ended run's retained `session.log`, not live.
+fn ended_log(feed: &Feed, run: &Run) -> TerminalSnapshot {
+    let tag = format!("[{}]", run.harness);
+    let mut lines = vec![
+        format!(
+            "Preview · {} {} · {} · a sample session.log; no process is running",
+            run.task, run.id, run.profile
+        ),
+        format!("{tag} cd {}", run.worktree.display()),
+        format!("{tag} working on branch {} from {}", run.branch, run.base),
+    ];
+    if let Some(summary) = &run.summary {
+        lines.push(format!("{tag} submitted · {summary}"));
+    }
+    lines.push(format!("{tag} exit 0"));
+    TerminalSnapshot {
+        lines,
+        captured_at: stamp(feed.now),
+        live: false,
+        rows: Vec::new(),
     }
 }
 

@@ -57,10 +57,7 @@ impl AppState {
                         merged: None,
                         loading: false,
                         stale: false,
-                        error: Some(crate::model::daemon::ClientError {
-                            code: "preview_missing".into(),
-                            message,
-                        }),
+                        error: Some(preview::failure(message)),
                     },
                 );
             }

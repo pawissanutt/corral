@@ -10,7 +10,7 @@ use crate::model::projects::ProjectFilter;
 
 use super::{
     Button, ButtonKind, Changes, FeedRow, Press, State, change_row_filtered, changes_loading,
-    changes_notice, daemon_status, feed_filters, stamp,
+    changes_notice, daemon_status, event_project, feed_filters, stamp,
 };
 
 /// Whether an unseen count is canonical or only the events this device has loaded.
@@ -71,8 +71,7 @@ fn last_visit(feed: &Feed) -> Option<String> {
 }
 
 /// Changes for the authenticated device's own cursor; the shell owns back navigation.
-/// Resolve projects only from open tasks. Workspace events and events whose task has closed
-/// remain visible: missing current metadata is not proof of another project.
+/// Projects come from the event itself, else from the open task's row.
 pub fn live_changes_filtered(
     state: &State,
     feed: &Feed,
@@ -173,19 +172,17 @@ pub fn live_changes_filtered(
     }
 }
 
-/// Historical and workspace-wide events have no reliable current project without an open task,
-/// so keep them rather than silently dropping events from the retained history.
+/// The project an event is filed under (see [`event_project`]); an event with none known, a
+/// workspace event or one of a task nothing loaded names, stays in every scope rather than
+/// silently dropping from the retained history.
 pub(crate) fn change_matches_project(event: &Event, feed: &Feed, filter: &ProjectFilter) -> bool {
-    event
-        .task
-        .as_deref()
-        .and_then(|id| feed.board.task(id))
-        .is_none_or(|task| filter.matches(task.project()))
+    event_project(event, feed).is_none_or(|project| filter.matches(project))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Id;
     use crate::model::board::{ChangeKind, Mark};
     use crate::model::work::ChangeFilter;
     use corral_protocol::app::{CHANGES_V1, SeenCursor};
@@ -198,6 +195,7 @@ mod tests {
             ts: "2026-11-14T10:00:00Z".parse().unwrap(),
             task: Some(format!("T-{seq}")),
             run: None,
+            project: None,
             kind,
             actor: Actor::Owner,
             detail,
@@ -267,6 +265,56 @@ mod tests {
         assert_eq!(
             changes.recent[0].action,
             Some(Press::Open(crate::model::Live::Task("T-3".into())))
+        );
+    }
+
+    /// A Done task has no board row, so its events once read no project: they lost their label
+    /// and stayed in every project's scope. The event's own project labels them and scopes them.
+    #[test]
+    fn a_closed_tasks_event_is_labelled_with_its_project_and_stays_under_that_projects_filter() {
+        let mut feed = Feed::default();
+        feed.capabilities.insert(CHANGES_V1.into());
+        feed.capabilities
+            .insert(corral_protocol::PROJECTS_V1.into());
+        for id in ["corral", "site"] {
+            feed.projects.insert(
+                Id::from(id),
+                corral_protocol::rows::ProjectRow {
+                    id: id.into(),
+                    config: Default::default(),
+                    open: 0,
+                    open_by_status: None,
+                    effective: None,
+                    local_branches: None,
+                },
+            );
+        }
+        for (seq, project) in [(1, "corral"), (2, "site")] {
+            let landed = Event {
+                project: Some(project.into()),
+                ..event(seq, EventKind::Landed, json!({}))
+            };
+            feed.changes.insert(seq, landed);
+        }
+        let state = State::default();
+        let rows = |filter: &ProjectFilter| {
+            let changes = live_changes_filtered(&state, &feed, None, Form::Desktop, filter);
+            changes
+                .recent
+                .into_iter()
+                .map(|row| (row.id, row.project_chip))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            rows(&ProjectFilter::All),
+            [
+                ("T-2".to_owned(), Some("site".to_owned())),
+                ("T-1".to_owned(), Some("corral".to_owned())),
+            ]
+        );
+        assert_eq!(
+            rows(&ProjectFilter::Project(Id::from("site"))),
+            [("T-2".to_owned(), None)]
         );
     }
 }

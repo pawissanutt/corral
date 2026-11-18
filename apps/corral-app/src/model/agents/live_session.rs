@@ -3,7 +3,8 @@
 //! capture) with the pane's keys bar and type field (`pane`), the strip under its head, its
 //! Session menu and, from a corrald that serves them (`session.v1`), its bounded transcript
 //! page with the reply box (`live_reply`). A run without a recorded pane or process has no
-//! terminal; none is drawn for it.
+//! terminal; none is drawn for it. A headless run that has ended has no roster row; its page
+//! reads the run from its task and shows the retained log (`ended_log`).
 
 use corral_protocol::app::SESSION_V1;
 use corral_protocol::detail::{DetailBody, DetailRef, SessionPage, TerminalSnapshot};
@@ -24,7 +25,7 @@ use super::live::{
 use super::replay::transcript;
 use super::{
     Action, Bar, FactValue, Feed, Fill, LineClass, Run, RunFact, Session, State, Terminal,
-    Transcript, View, line, live_reply, pane, screen, tail_line,
+    Transcript, View, ended_log, line, live_reply, pane, screen, tail_line,
 };
 
 /// Seconds within which a screen read counts as "just now": it is read about once a second.
@@ -79,7 +80,7 @@ fn read_when(at: &str, feed: &daemon::Feed) -> String {
 
 /// The daemon's reason without its machine prefix: `session has ended` from
 /// `terminal_snapshot_unavailable: session has ended`.
-fn reason(message: &str) -> &str {
+pub(super) fn reason(message: &str) -> &str {
     message
         .split_once(": ")
         .filter(|(head, _)| {
@@ -274,16 +275,22 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str)
         .then(|| feed.detail(&DetailRef::Session { id: id.to_string() }))
         .flatten();
     let body = page(session_cache);
-    let role = row
-        .map(|row| row.run.role.as_str().to_owned())
+    let ended = row
+        .is_none()
+        .then(|| ended_log::run(feed, id.as_str()))
+        .flatten();
+    let known = row.map(|row| &row.run).or(ended);
+    let terminal_cache = feed.detail(&DetailRef::Terminal { id: id.to_string() });
+    let role = known
+        .map(|run| run.role.as_str().to_owned())
         .or_else(|| body.map(|page| page.role.clone()))
         .unwrap_or_else(|| "agent".into());
     let task = row
         .map(|row| row.run.task.clone())
         .or_else(|| body.and_then(|page| page.task.clone()))
         .or_else(|| crate::model::work::session_task(id).map(str::to_owned));
-    let run = row
-        .map(|row| row.run.id.clone())
+    let run = known
+        .map(|run| run.id.clone())
         .or_else(|| body.and_then(|page| page.run.clone()));
     let board_task = task.as_deref().and_then(|task| feed.board.task(task));
     let shown = row
@@ -293,14 +300,13 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str)
     let title = board_task
         .map(|task| task.title().to_owned())
         .unwrap_or_else(|| role_label(&role));
-    let terminal = row.filter(|row| row.run.session.is_some()).map(|row| {
-        terminal(
-            id,
-            row,
-            feed.detail(&DetailRef::Terminal { id: id.to_string() }),
-            feed,
-        )
-    });
+    let terminal = match (row, ended) {
+        (Some(row), _) if row.run.session.is_some() => {
+            Some(terminal(id, row, terminal_cache, feed))
+        }
+        (None, Some(run)) => Some(ended_log::terminal(id, run, terminal_cache, feed)),
+        _ => None,
+    };
     let mut sub = vec![
         [Some(role_label(&role)), run.clone()]
             .into_iter()
@@ -308,11 +314,12 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str)
             .collect::<Vec<_>>()
             .join(" "),
     ];
-    sub.extend(row.map(|row| row.run.profile.clone()));
+    sub.extend(known.map(|run| run.profile.clone()));
     if terminal.is_none() {
         sub.push("no terminal".into());
     }
     let notice = match (row, body) {
+        _ if ended.is_some() => ended_log::note(terminal_cache),
         (None, Some(_)) => Some((
             Hue::Neutral,
             "This run is no longer live; this is its last recorded transcript.".into(),
@@ -385,7 +392,7 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str)
         pane: row.and_then(|row| pane::input(state, id, row, feed)),
         terminal,
         reply: live_reply::reply(id, row, &shown, state, feed, env, via),
-        ended: row.is_some_and(|row| row.run.ended.is_some()),
+        ended: row.map_or(ended.is_some(), |row| row.run.ended.is_some()),
         run_details: Run {
             title: "Run",
             facts: task

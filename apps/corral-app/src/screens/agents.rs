@@ -32,6 +32,7 @@ use crate::model::Id;
 use crate::model::agents::{self, Action, View};
 use crate::model::daemon::Link;
 use crate::model::projects::FilterScreen;
+use crate::model::work::{session_task, task_ref};
 use crate::screens::PhonePage;
 use crate::state::AppState;
 
@@ -165,13 +166,31 @@ fn follow(app: AppState, id: Id) {
             }
         });
     }
-    let has_screen =
-        computed(move || row.with(|row| row.as_ref().is_some_and(|row| row.run.session.is_some())));
+    // A run that left the roster is read from its task: when it ended headless, its log is.
+    if let Some(task) = session_task(id.as_str()).map(task_ref) {
+        let lost = computed(move || row.with(Option::is_none));
+        effect(move || {
+            if lost.get() {
+                untracked(|| scoped.load(task.clone()));
+            }
+        });
+    }
+    let ended = computed({
+        let id = id.clone();
+        move || {
+            app.feed
+                .with(|feed| agents::ended_run(feed, id.as_str()).is_some())
+        }
+    });
+    let has_screen = computed(move || {
+        ended.get() || row.with(|row| row.as_ref().is_some_and(|row| row.run.session.is_some()))
+    });
+    // An ended run's log does not change, so it is read once instead of streamed or revalidated.
     let streamed = computed(move || app.feed.with(|feed| feed.capable(STREAM_TERMINAL_V1)));
     let viewed = id.clone();
     let shown = computed(move || {
         has_screen.get()
-            && !streamed.get()
+            && (ended.get() || !streamed.get())
             && (!transcripts.get()
                 || app.feed.with(|feed| {
                     app.agents
@@ -194,7 +213,7 @@ fn follow(app: AppState, id: Id) {
     });
     let tried_row = stored(None::<Option<AgentRow>>);
     effect(move || {
-        if !shown.get() {
+        if !shown.get() || ended.get() {
             return;
         }
         if tick.get().is_none() {

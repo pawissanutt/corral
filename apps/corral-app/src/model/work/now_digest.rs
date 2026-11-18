@@ -198,10 +198,14 @@ fn priority(event: &Event) -> u8 {
     }
 }
 
-/// An event with a task in scope: the open task's project, or a loaded closed page's.
+/// An event with a task in scope: the project the event names, else the open task's, or a
+/// loaded closed page's.
 fn matches_scope(event: &Event, feed: &Feed, filter: &ProjectFilter) -> bool {
     if *filter == ProjectFilter::All {
         return true;
+    }
+    if let Some(project) = event.project.as_deref() {
+        return filter.matches(Some(project));
     }
     let Some(id) = event.task.as_deref() else {
         return false;
@@ -268,6 +272,7 @@ mod tests {
             ts: jiff::Timestamp::UNIX_EPOCH,
             task: Some("T-1".into()),
             run: None,
+            project: None,
             kind,
             actor: Actor::Auto,
             detail,
