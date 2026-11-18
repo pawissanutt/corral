@@ -179,6 +179,7 @@ export function createExit(options: {
     if (option?.unavailable) throw stopped(option.unavailable);
     if (summary?.head === failure.receipt.head) throw stopped("the session made no new commit.");
     if (option?.needsReason && !record.overrideReason) throw stopped("no approving review covers the repaired head with every finding resolved.");
+    if (option?.needsReason) journal.decision("override", `Repair ${round} commits (${summary?.head}) land without review under the owner's reason: ${record.overrideReason}`);
   }
   async function execute(choice: ExitChoice, overrideReason?: string): Promise<void> {
     const warnings: string[] = [];

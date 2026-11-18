@@ -359,8 +359,8 @@ export class HostSession {
   private writeAbort = new AbortController();
   private turn = 0;
   private open = false;
-  /** Settled once by the next turn that ends. */
-  private readonly turnWaiters: ((aborted: boolean) => void)[] = [];
+  /** Each is settled once, by the first turn numbered `from` or later that ends. */
+  private turnWaiters: { readonly from: number; settle(aborted: boolean): void }[] = [];
   private cancelRequested: number | undefined;
   private stopCause: TurnStopCause | undefined;
   private deliveredTextHashes: Set<string> | undefined;
@@ -522,9 +522,10 @@ export class HostSession {
       repairLand: async text => {
         const key = `land-repair:${crypto.randomUUID()}`;
         const result = await this.submit({ text, busyPolicy: "steer", idempotencyKey: key, origin: "command" }, key);
-        if (result.disposition === "rejected") throw new Error(`Land repair delivery rejected: ${result.reason}`);
-        // Started or steered, the prompt is answered in the turn that is open now.
-        return new Promise(resolve => { this.turnWaiters.push(aborted => resolve({ aborted })); });
+        // A started prompt owns its turn; a steer queued into the open turn is answered there.
+        const from = result.disposition === "started" ? result.turn : result.disposition === "queued" && this.open ? this.turn : undefined;
+        if (from === undefined) throw new Error(`Land repair reached no turn: ${result.reason ?? result.disposition}`);
+        return new Promise(resolve => { this.turnWaiters.push({ from, settle: aborted => resolve({ aborted }) }); });
       },
       shellRefusal: options.modules.role.shellRefusal, changed: () => {
         this.liveEvents.observeFleet(this.buildControls?.fleet.snapshot());
@@ -1853,7 +1854,9 @@ export class HostSession {
     this.options.herdr?.turnEnded();
     this.commands?.flush();
     if (!this.bound) this.turnFacts.finish(this.turn);
-    for (const settle of this.turnWaiters.splice(0)) settle(aborted);
+    const due = this.turnWaiters.filter(waiter => waiter.from <= this.turn);
+    this.turnWaiters = this.turnWaiters.filter(waiter => waiter.from > this.turn);
+    for (const waiter of due) waiter.settle(aborted);
   }
 
   private costTurn(marker: { phase: "start"; key: string | null; queued?: true } | { phase: "end" }): void {

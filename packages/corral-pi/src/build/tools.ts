@@ -7,13 +7,14 @@ import type { GateReceipt } from "./record-types.ts";
 import type { FleetRuntime } from "../extensions/fleet/runtime.ts";
 import type { BoardPlan, BuildContext } from "./types.ts";
 
-export function buildFinishTool(open: () => void, journal: BuildJournal): ToolDefinition {
+export function buildFinishTool(open: () => void, journal: BuildJournal, landing: () => boolean = () => false): ToolDefinition {
   return {
     name: "build_finish", label: "Offer the build exit",
     description: "Store a real title describing what was built and open the owner's Keep / Iterate / Land choice. This tool never chooses an exit or files board work.",
     parameters: Type.Object({ title: Type.String({ minLength: 1, maxLength: 120 }), summary: Type.Optional(Type.String()) }, { additionalProperties: false }),
     async execute(_id, params: { title: string; summary?: string }) {
       try {
+        if (landing()) throw new Error("The owner's Land is already running; no exit choice was opened and the title is unchanged.");
         journal.finish(params.title, params.summary);
         let detail = "";
         try { await journal.refresh(); } catch (error) { detail = `\nBuild record Git snapshot failed: ${String(error)}`; }

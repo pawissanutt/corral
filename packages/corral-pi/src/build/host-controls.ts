@@ -91,7 +91,8 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     if (reused) return { content: [{ type: "text", text: `Child id ${reused.id} belongs to this session's saved history. Choose a new id.` }], details: {}, isError: true };
     return start(...args);
   };
-  const tools = [...fleetDefinitions, ...buildEvidenceTools({ context, run, git, fleet, journal: buildJournal }), buildFinishTool(() => exit.open(), buildJournal),
+  const tools = [...fleetDefinitions, ...buildEvidenceTools({ context, run, git, fleet, journal: buildJournal }), buildFinishTool(() => exit.open(), buildJournal,
+    () => ["rebasing", "verifying", "repairing", "landing"].includes(exit.state().phase)),
     ...(board ? [boardPlanTool(plan => board.propose(plan), () => {
       if (!session.workspaceRoot) return "This session is outside a corral workspace.";
       if (!session.project) return "This session has no configured corral project.";

@@ -68,13 +68,15 @@ New workspace Builds use mixed API child routes by default, whether the parent r
 subscription or an API route. Without a `[build.api]` section, each child preset is mapped
 to the one workspace API profile that runs the preset's exact vendor and model and carries
 API-start approval for the assistant role. A preset with no such profile, or with several,
-keeps its configured model. The derived default records the approval
+keeps its configured model. A mapped preset runs at the API profile's exact model and
+effort, not the preset's configured effort. The derived default records the approval
 `default-mixed-build` and uses the largest allowance `maximum_micros` accepts, so it does
 not cap the Build below that and does not apply each profile's own `api_start` spending
 limit. There is no setting that turns the default off; with no matching API profile it
 maps nothing and paid children use the parent's exact route. A change to the presets or
 API profiles that alters the derived mappings is a changed approval for Builds already
-running on it.
+running on it: their metered requests and resume refuse. Start a new Build, or restore the
+earlier presets and API profiles so the same mappings are derived again.
 
 If the installed host does not support mixed routes, or a mapped profile's credential or
 model is unavailable, a new Build with the derived default starts without it and prints
@@ -216,7 +218,7 @@ again by itself with a fresh rebase and full gate, for at most three repairs per
 choice. It resumes only if the session committed a fix, the worktree is clean and no child
 is live. Under `review` policy the repaired head also needs an approving review with all
 findings resolved, unless the owner gave an override reason when choosing Land; that reason
-then covers the repair commits too. Stopping the repair turn, a turn that ends without a
+then covers the repair commits too, and the build record says so. Stopping the repair turn, a turn that ends without a
 new commit, or a gate that still fails after the third repair ends Land as a failed exit.
 Rebase conflicts and landing refusals are not repaired automatically.
 
