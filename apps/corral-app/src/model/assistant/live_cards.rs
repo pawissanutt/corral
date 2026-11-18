@@ -1,98 +1,88 @@
-//! Served `EntryCard`s as the typed cards the transcript draws: filed Ideas with their real
-//! Edit/Merge/Discard commands, owner-action receipts, ask_user questions and permission or
-//! confirmation prompts, each showing the true state of any answer this device sent.
+//! Served `EntryCard`s as the typed cards the transcript draws: filed Ideas with their engine
+//! Edit and Drop operations, owner-action receipts as the thread recorded them, ask_user
+//! questions and permission or confirmation prompts, each showing the true state of any answer
+//! this device sent.
 
-use corral_protocol::app::ActClass;
 use corral_protocol::assistant::{
     ContextRef, EntryCard, MessageState as WireState, PromptChoice, ThreadEntry,
 };
-use corral_protocol::cmd::question::QuestionCommand;
-use corral_protocol::cmd::{CmdResult, CmdState, Command};
 use corral_protocol::detail::question::{QuestionAnswer, QuestionOption};
+use serde_json::Value;
 
 use super::views::button;
 use super::{
     Action, ActionCard, ActionClass, ActionOutcome, AskOption, AskUserCard, Body, Chip, DiffLine,
-    Editing, FiledCard, IdeaFields, MergeInput, PermissionCard, PermissionChoice, PromptCard,
-    PromptPane, State, TextReply, choice_label, clock, subject,
+    Editing, FiledCard, IdeaFields, PermissionCard, PermissionChoice, PromptCard, PromptPane,
+    State, choice_label, clock, subject,
 };
-use crate::model::act::{self, Act, ActStatus};
+use crate::model::act::{self, ActStatus};
 use crate::model::daemon::Feed;
-use crate::model::effect::Effect;
 use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::Live;
 use crate::model::text::span;
 
-/// The truthful status of a card command this device sent, as a chip.
+/// The truthful status of a card operation this device sent, as a chip.
 pub(super) fn act_chip(state: &State, feed: &Feed, remembered: &str, what: &str) -> Option<Chip> {
     let key = state.live.acts.get(remembered)?;
     let status = act::status(feed, key.as_str())?;
     let hue = match status {
         ActStatus::Done => Hue::Ok,
-        ActStatus::Failed(_) | ActStatus::Refused(_) | ActStatus::Conflict(_) => Hue::Fail,
-        ActStatus::Unknown | ActStatus::Queued | ActStatus::Abandoned => Hue::Held,
-        _ => Hue::Corral,
+        ActStatus::Failed(_) | ActStatus::Refused(_) => Hue::Fail,
+        ActStatus::Pending | ActStatus::Running => Hue::Corral,
     };
     Some(Chip::new(format!("{what} · {}", status.line()), hue))
 }
 
-/// Whether a card command is in flight or done, so its controls stay down.
+/// Whether a card operation is in flight or done, so its controls stay down.
 fn busy(state: &State, feed: &Feed, remembered: &str) -> bool {
     state
         .live
         .acts
         .get(remembered)
         .and_then(|key| act::status(feed, key.as_str()))
-        .is_some_and(|status| {
-            !matches!(
-                status,
-                ActStatus::Failed(_)
-                    | ActStatus::Refused(_)
-                    | ActStatus::Conflict(_)
-                    | ActStatus::Abandoned
-            )
-        })
+        .is_some_and(|status| !matches!(status, ActStatus::Failed(_) | ActStatus::Refused(_)))
 }
 
-/// The CLI line a command corresponds to: its family and verb, then the records it names.
-pub fn command_line(command: &Command) -> String {
-    let mut line = format!("corral {}", command.name().replace('.', " "));
-    if let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(command)
-        && let Some(serde_json::Value::Object(args)) = fields.get("args")
-    {
-        for name in ["id", "key", "task", "entry", "session", "into"] {
-            if let Some(serde_json::Value::String(value)) = args.get(name) {
-                line.push(' ');
-                line.push_str(value);
-            }
-        }
+/// A string field of a recorded JSON value, or nothing.
+fn field<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
+    value.get(name).and_then(Value::as_str)
+}
+
+/// The CLI line a recorded command corresponded to: its family and verb, then the records it
+/// names. The record is history: its shape is read as it was stored, never submitted again.
+pub fn command_line(command: &Value) -> String {
+    let args = command.get("args");
+    let mut line = "corral".to_owned();
+    let named = ["id", "key", "task", "entry", "session", "into"];
+    let parts = [field(command, "family"), args.and_then(|args| field(args, "verb"))]
+        .into_iter()
+        .chain(named.into_iter().map(|name| args.and_then(|args| field(args, name))))
+        .flatten();
+    for part in parts {
+        line.push(' ');
+        line.push_str(part);
     }
     line
 }
 
-/// An owner action the assistant ran or proposed, with its receipt.
+/// An owner action the assistant ran or proposed, with the receipt the thread recorded.
 pub(super) fn action_card(
     entry: &ThreadEntry,
-    command: &Command,
-    class: ActClass,
-    outcome: Option<&CmdResult>,
+    command: &Value,
+    class: &str,
+    outcome: Option<&Value>,
     input: Option<&String>,
 ) -> ActionCard {
-    let refused_by_authority = outcome
-        .and_then(|result| result.error.as_ref())
-        .is_some_and(|error| error.code.starts_with("authority"));
     let class = match (class, &entry.state) {
         (_, Some(WireState::Late)) => ActionClass::Late,
-        (ActClass::Confirm | ActClass::Admin, _) => ActionClass::Confirm,
-        (ActClass::Refused, _) if refused_by_authority => ActionClass::AskAndFileOnly,
+        ("confirm" | "admin", _) => ActionClass::Confirm,
         _ => ActionClass::Run,
     };
-    let message = |result: &CmdResult| {
-        result
-            .error
-            .as_ref()
-            .map_or_else(|| result.cmd_id.clone(), |error| error.message.clone())
+    let text = |value: &Value, name: &str| field(value, name).unwrap_or("").to_owned();
+    let message = |result: &Value| match result.get("error") {
+        Some(error) => text(error, "message"),
+        None => text(result, "cmd_id"),
     };
     let outcome = match (class, outcome) {
         (ActionClass::Late, _) => ActionOutcome::Late {
@@ -102,23 +92,19 @@ pub(super) fn action_card(
                 "Nothing ran: this input reached corrald more than 15 min after it was typed, so it cannot instruct. Say it again to act.".into()
             }),
         },
-        (ActionClass::AskAndFileOnly, Some(result)) => {
-            ActionOutcome::AskAndFileOnly(vec![span(message(result))])
-        }
-        (_, None) => ActionOutcome::Pending("running · no receipt yet".into()),
-        (_, Some(result)) => match result.state {
-            CmdState::Done => ActionOutcome::Executed(entry.text.clone().unwrap_or_else(|| {
-                format!("done · {}", result.cmd_id)
-            })),
-            CmdState::Failed | CmdState::Busy => ActionOutcome::Refused(message(result)),
-            CmdState::Conflict => {
-                ActionOutcome::Refused(format!("changed meanwhile: {}", message(result)))
-            }
-            CmdState::Running => ActionOutcome::Pending("running".into()),
-            CmdState::Abandoned => ActionOutcome::Declined("not run · corrald never executed it".into()),
-            CmdState::Unknown | CmdState::Other => {
-                ActionOutcome::Unknown("result unknown · it may have run".into())
-            }
+        (_, None) => ActionOutcome::Pending("no receipt recorded".into()),
+        (_, Some(result)) => match field(result, "state").unwrap_or("") {
+            "done" => ActionOutcome::Executed(
+                entry
+                    .text
+                    .clone()
+                    .unwrap_or_else(|| format!("done · {}", text(result, "cmd_id"))),
+            ),
+            "failed" | "busy" => ActionOutcome::Refused(message(result)),
+            "conflict" => ActionOutcome::Refused(format!("changed meanwhile: {}", message(result))),
+            "running" => ActionOutcome::Pending("running when recorded".into()),
+            "abandoned" => ActionOutcome::Declined("not run · corrald never executed it".into()),
+            _ => ActionOutcome::Unknown("result unknown · it may have run".into()),
         },
     };
     ActionCard {
@@ -132,25 +118,15 @@ pub(super) fn action_card(
     }
 }
 
-/// The assistant's ask_user question with its options and, when it takes them, a field for the
-/// owner's own words; either answers it canonically at the question's revision.
-#[allow(clippy::too_many_arguments)]
+/// The assistant's ask_user question with its options and how it was answered. Read-only:
+/// answering an assistant's question returns with the chat host.
 pub(super) fn question_card(
-    state: &State,
     feed: &Feed,
     entry: &ThreadEntry,
     key: &str,
-    rev: u32,
     options: &[QuestionOption],
     answer: Option<&QuestionAnswer>,
-    accepts_text: bool,
 ) -> AskUserCard {
-    let remembered = subject("answer", key);
-    let sending = busy(state, feed, &remembered);
-    // A cancelled or expired question is mirrored as Withdrawn and takes no answer; one another
-    // device answered first carries that answer, which closes every control here.
-    let settled = answer.is_some() || entry.state.is_some();
-    let open = !settled && !sending;
     let options = options
         .iter()
         .map(|option| {
@@ -166,37 +142,11 @@ pub(super) fn question_card(
                 consequence,
                 selected: answer.and_then(|answer| answer.option.as_deref())
                     == Some(option.label.as_str()),
-                enabled: open,
-                action: open.then(|| Action::Choose {
-                    key: key.to_owned(),
-                    rev,
-                    option: option.label.clone(),
-                }),
+                enabled: false,
+                action: None,
             }
         })
         .collect();
-    let reply = (accepts_text && !settled).then(|| {
-        let mut send = button(
-            "Send answer",
-            Action::AnswerText {
-                key: key.to_owned(),
-                rev,
-                text: String::new(),
-            },
-        );
-        send.primary = true;
-        send.enabled = open;
-        TextReply {
-            label: "Answer in your own words",
-            value: state
-                .live
-                .answer_words
-                .get(key)
-                .cloned()
-                .unwrap_or_default(),
-            send,
-        }
-    });
     let answered = answer.map(|answer| {
         vec![
             span(format!("Answered by {} · ", answer.by)),
@@ -204,63 +154,16 @@ pub(super) fn question_card(
             span(format!(" · {}", clock(&answer.at, feed))),
         ]
     });
-    let status = act_chip(state, feed, &remembered, "Your answer")
-        .map(|chip| vec![span(chip.label).hue(chip.hue)]);
     AskUserCard {
         heading: format!("assistant asks · ask_user · {}", clock(&entry.at, feed)),
         question: vec![span(entry.text.clone().unwrap_or_else(|| key.to_owned()))],
         options,
-        reply,
-        answer: answered.or(status),
-    }
-}
-
-impl State {
-    /// Answers question `key` at `rev` in the owner's own words, with no option; blank words
-    /// send nothing. The words are kept until corrald settles the answer, so a refused one is
-    /// sent again without retyping.
-    pub(super) fn answer_text(
-        &mut self,
-        key: String,
-        rev: u32,
-        text: String,
-        feed: &Feed,
-    ) -> Vec<Effect> {
-        let words = text.trim();
-        if words.is_empty() {
-            return Vec::new();
-        }
-        let words = words.to_owned();
-        let title = format!("Answer {key}");
-        let effects = self.once(subject("answer", &key), feed, |ids| {
-            Act::new(
-                ids,
-                title,
-                Command::Question(QuestionCommand::Answer {
-                    key: key.clone(),
-                    rev,
-                    text: words.clone(),
-                    option: None,
-                    basis: Vec::new(),
-                    scope_note: None,
-                    owner: true,
-                    json: false,
-                }),
-            )
-            .about(Live::Question(Id::from(key.as_str())))
-        });
-        if effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::Act(_)))
-        {
-            self.live.answer_words.insert(key, words);
-        }
-        effects
+        answer: answered,
     }
 }
 
 /// A permission or confirmation prompt. Confirm/Decline prompts draw as an owner action
-/// waiting on this device; grant prompts as the permission card.
+/// waiting on this device; grant prompts as the permission card. A press answers at once.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prompt_body(
     state: &State,
@@ -272,20 +175,18 @@ pub(super) fn prompt_body(
     path: Option<&String>,
     preview: &str,
     choices: &[PromptChoice],
-    needs_presence: bool,
 ) -> Body {
     let remembered = subject("prompt", key);
     let status = act_chip(state, feed, &remembered, "Your answer");
     let settled = choices.is_empty() || entry.state.is_some();
     let open = !settled && !busy(state, feed, &remembered);
-    let choice = |choice: PromptChoice, confirm: bool| {
+    let choice = |choice: PromptChoice| {
         let mut control = button(
             choice_label(choice),
             Action::Answer {
                 key: key.to_owned(),
                 rev,
                 choice,
-                confirm,
             },
         );
         control.enabled = open;
@@ -294,11 +195,11 @@ pub(super) fn prompt_body(
     if choices.contains(&PromptChoice::Confirm) {
         let mut buttons = Vec::new();
         if open {
-            let mut confirm = choice(PromptChoice::Confirm, true);
+            let mut confirm = choice(PromptChoice::Confirm);
             confirm.primary = true;
             buttons.push(confirm);
             if choices.contains(&PromptChoice::Decline) {
-                buttons.push(choice(PromptChoice::Decline, false));
+                buttons.push(choice(PromptChoice::Decline));
             }
         }
         let outcome = if open {
@@ -336,17 +237,10 @@ pub(super) fn prompt_body(
             .into_iter()
             .filter(|grant| choices.contains(grant))
             .map(|grant| {
-                let standing = matches!(grant, PromptChoice::Hour | PromptChoice::Session);
-                let requires_presence = needs_presence && standing;
-                let mut control = choice(grant, requires_presence);
+                let mut control = choice(grant);
                 control.primary = grant == PromptChoice::Once;
                 control.danger = grant == PromptChoice::Deny;
-                PermissionChoice {
-                    button: control,
-                    requires_presence,
-                    presence_prompt: requires_presence
-                        .then_some("a confirmation tap and daemon device-bound proof; no biometric or PIN check"),
-                }
+                PermissionChoice { button: control }
             })
             .collect()
     } else {
@@ -386,11 +280,8 @@ pub(super) fn prompt_body(
             })
             .collect(),
         choices,
-        presence_note: needs_presence.then_some(
-            "Standing grants require a confirmation tap and daemon device-bound proof; no biometric or PIN check. Allow once and Deny do not require this extra confirmation.",
-        ),
         timer_note: (!settled).then(|| {
-            "This prompt stays answerable here and in Inbox on every device; one answer wins.".into()
+            "This prompt stays answerable here on every device; one answer wins.".into()
         }),
         illustrative: None,
     })
@@ -411,8 +302,8 @@ pub(super) struct IdeaEntry<'a> {
     pub as_written: bool,
 }
 
-/// A filed Idea: the owner's words verbatim, the generated fields, and the real Edit (title
-/// only), Merge into and confirmed Discard commands with their status.
+/// A filed Idea: the owner's words verbatim, the generated fields, and the engine's Edit (title
+/// only) and Drop operations with their status.
 pub(super) fn idea_card(state: &State, feed: &Feed, idea: IdeaEntry<'_>) -> FiledCard {
     let IdeaEntry {
         entry,
@@ -426,21 +317,16 @@ pub(super) fn idea_card(state: &State, feed: &Feed, idea: IdeaEntry<'_>) -> File
         as_written,
     } = idea;
     let editing = state.live.editing.as_deref() == Some(task);
-    let merging = state.live.merging.as_deref() == Some(task);
     let title = super::idea_title(feed, task).unwrap_or_else(|| title.to_owned());
     let project = feed
         .board
         .task(task)
-        .and_then(|row| row.project.clone())
+        .and_then(|row| row.project().map(str::to_owned))
         .unwrap_or_else(|| "unknown".into());
-    let status = [
-        ("discard", "Discard"),
-        ("merge", "Merge"),
-        ("edit", "Retitle"),
-    ]
-    .into_iter()
-    .find_map(|(kind, what)| act_chip(state, feed, &subject(kind, task), what));
-    let busy = ["discard", "merge", "edit"]
+    let status = [("discard", "Discard"), ("edit", "Retitle")]
+        .into_iter()
+        .find_map(|(kind, what)| act_chip(state, feed, &subject(kind, task), what));
+    let busy = ["discard", "edit"]
         .into_iter()
         .any(|kind| busy(state, feed, &subject(kind, task)));
     let buttons = if editing {
@@ -453,14 +339,11 @@ pub(super) fn idea_card(state: &State, feed: &Feed, idea: IdeaEntry<'_>) -> File
         );
         save.primary = true;
         vec![save, button("Cancel", Action::EditIdea(None))]
-    } else if merging {
-        Vec::new()
     } else {
         let mut discard = button("Discard", Action::DiscardIdea(task.to_owned()));
         discard.danger = true;
         let mut controls = vec![
             button("Edit", Action::EditIdea(Some(task.to_owned()))),
-            button("Merge into T-…", Action::MergeIdea(Some(task.to_owned()))),
             discard,
         ];
         for control in &mut controls {
@@ -468,19 +351,6 @@ pub(super) fn idea_card(state: &State, feed: &Feed, idea: IdeaEntry<'_>) -> File
         }
         controls
     };
-    let merge = merging.then(|| {
-        let mut merge = button(
-            "Merge",
-            Action::MergeInto {
-                task: task.to_owned(),
-                into: String::new(),
-            },
-        );
-        merge.primary = true;
-        MergeInput {
-            buttons: vec![merge, button("Cancel", Action::MergeIdea(None))],
-        }
-    });
     let via = entry.via.clone().unwrap_or_else(|| "via unknown".into());
     let related = (!duplicates.is_empty()).then(|| {
         let mut runs = vec![span("· related ").dim()];
@@ -538,16 +408,15 @@ pub(super) fn idea_card(state: &State, feed: &Feed, idea: IdeaEntry<'_>) -> File
         },
         quote_label: "your words, unchanged",
         editing: if editing { Editing::Title } else { Editing::No },
-        merge,
         related,
         buttons,
-        discard_note: (!editing && !merging).then_some("Discard asks on this device"),
+        discard_note: (!editing).then_some("Discard asks on this device"),
         status,
         attached: false,
     }
 }
 
-/// An assistant prompt as Inbox's detail pane shows it, from the thread that carries it.
+/// An assistant prompt as a detail pane shows it, from the thread that carries it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LivePrompt {
     /// The thread is not loaded yet.
@@ -557,7 +426,7 @@ pub enum LivePrompt {
     Pane(PromptPane),
 }
 
-/// Builds the Inbox pane of prompt `key` in thread `scope` with its real answer controls.
+/// Builds the pane of prompt `key` in thread `scope` with its real answer controls.
 pub fn live_prompt_pane(state: &State, feed: &Feed, scope: &str, key: &str) -> LivePrompt {
     let Some(thread) = feed.threads.get(scope) else {
         return match feed
@@ -579,7 +448,7 @@ pub fn live_prompt_pane(state: &State, feed: &Feed, scope: &str, key: &str) -> L
             path,
             preview,
             choices,
-            needs_presence,
+            ..
         }) if id == key => Some((
             entry,
             prompt_body(
@@ -592,7 +461,6 @@ pub fn live_prompt_pane(state: &State, feed: &Feed, scope: &str, key: &str) -> L
                 path.as_ref(),
                 preview,
                 choices,
-                *needs_presence,
             ),
             choices.is_empty() || entry.state.is_some(),
         )),

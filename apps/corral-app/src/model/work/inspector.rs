@@ -106,12 +106,3 @@ pub struct Dependency {
     pub show_mark: bool,
     pub action: Press,
 }
-
-/// Recorded worker progress.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Progress {
-    pub label: &'static str,
-    pub done: usize,
-    pub total: usize,
-    pub figure: String,
-}

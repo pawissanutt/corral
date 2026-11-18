@@ -124,7 +124,6 @@ struct Thread<'a> {
     feed: &'a Feed,
     author: String,
     session: Option<String>,
-    can_send: bool,
     /// Tasks the owner's own message was filed as, as written, with no model.
     as_written: BTreeSet<String>,
     scope: &'a str,
@@ -211,25 +210,21 @@ impl Thread<'_> {
             } => Body::Action(action_card(
                 entry,
                 command,
-                *class,
+                class,
                 outcome.as_ref(),
                 input.as_ref(),
             )),
             EntryCard::Question {
                 key,
-                rev,
                 options,
                 answer,
-                accepts_text,
+                ..
             } => Body::AskUser(question_card(
-                self.state,
                 self.feed,
                 entry,
                 key,
-                *rev,
                 options,
                 answer.as_ref(),
-                *accepts_text,
             )),
             EntryCard::Prompt {
                 key,
@@ -238,7 +233,7 @@ impl Thread<'_> {
                 path,
                 preview,
                 choices,
-                needs_presence,
+                ..
             } => prompt_body(
                 self.state,
                 self.feed,
@@ -249,7 +244,6 @@ impl Thread<'_> {
                 path.as_ref(),
                 preview,
                 choices,
-                *needs_presence,
             ),
             EntryCard::PmItem { .. } | EntryCard::Other => return None,
         })
@@ -338,32 +332,28 @@ impl Thread<'_> {
                         turn,
                     },
                 );
-                stop.enabled = self.can_send && !stopping;
+                stop.enabled = !stopping;
                 message.stop = Some(stop);
             }
         }
     }
 
-    /// The waiting block under a stored message, with File as idea now and Withdraw.
+    /// The waiting block under a stored message, with File as idea now.
     fn waiting(
         &self,
         entry: &ThreadEntry,
         reason: &corral_protocol::rows::WaitReason,
         full: bool,
     ) -> WaitingBlock {
-        let mut buttons = Vec::new();
-        let filing = subject("file", &entry.id);
-        let withdrawing = subject("withdraw", &entry.id);
-        let status = act_chip(self.state, self.feed, &filing, "File as idea")
-            .or_else(|| act_chip(self.state, self.feed, &withdrawing, "Withdraw"));
-        for (label, action) in [
-            ("File as idea now", Action::FileEntry(entry.id.clone())),
-            ("Withdraw", Action::WithdrawEntry(entry.id.clone())),
-        ] {
-            let mut control = button(label, action);
-            control.enabled = status.as_ref().is_none_or(|chip| chip.hue == Hue::Fail);
-            buttons.push(control);
-        }
+        let status = act_chip(
+            self.state,
+            self.feed,
+            &subject("file", &entry.id),
+            "File as idea",
+        );
+        let mut file = button("File as idea now", Action::FileEntry(entry.id.clone()));
+        file.enabled = status.as_ref().is_none_or(|chip| chip.hue == Hue::Fail);
+        let buttons = vec![file];
         WaitingBlock {
             state: Chip::new(
                 format!("waiting for assistant · {}", wait_label(reason)),
@@ -379,7 +369,7 @@ impl Thread<'_> {
 }
 
 /// The served thread `scope` ("quick" or A-n) as transcript items.
-pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Vec<ThreadItem> {
+pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
     let topic = feed.topics.get(&format!("thread:{scope}"));
     let Some(snapshot) = feed.threads.get(scope) else {
         return vec![ThreadItem::Note(
@@ -405,7 +395,6 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
         feed,
         author: current.clone().unwrap_or_else(|| scope.to_owned()),
         session: current.clone(),
-        can_send,
         as_written: BTreeSet::new(),
         scope,
     };
@@ -614,38 +603,16 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
     items
 }
 
-/// A PM item, its folded reply, and Withdraw while the PM has not replied.
+/// A PM item and its folded reply, as the thread recorded them.
 fn pm_item(
     state: &State,
     feed: &Feed,
     entry: &ThreadEntry,
     replies: &BTreeMap<&str, PmReply>,
 ) -> PmMessage {
-    let (id, revision) = match &entry.card {
-        Some(EntryCard::PmItem { id, revision }) => (Some(id.clone()), *revision),
-        _ => (None, 0),
-    };
-    let open = matches!(
-        entry.state,
-        Some(WireState::QueuedForPm | WireState::PmDelivered | WireState::Delivered)
-    );
-    let remembered = id.as_deref().map(|id| subject("withdraw", id));
-    let status = remembered
-        .as_deref()
-        .and_then(|remembered| act_chip(state, feed, remembered, "Withdraw"));
-    let buttons = match &id {
-        Some(id) if open && revision > 0 => {
-            let mut withdraw = button(
-                "Withdraw",
-                Action::WithdrawPm {
-                    id: id.clone(),
-                    revision,
-                },
-            );
-            withdraw.enabled = status.as_ref().is_none_or(|chip| chip.hue == Hue::Fail);
-            vec![withdraw]
-        }
-        _ => Vec::new(),
+    let id = match &entry.card {
+        Some(EntryCard::PmItem { id, .. }) => Some(id.clone()),
+        _ => None,
     };
     let mut message = owner(state, feed, entry);
     message.tag.hue = match entry.state {
@@ -659,8 +626,6 @@ fn pm_item(
         note: matches!(entry.state, Some(WireState::QueuedForPm))
             .then_some("Delivered when the PM next takes input; supervision is not interrupted."),
         owner: message,
-        buttons,
-        status,
     }
 }
 
@@ -773,8 +738,6 @@ fn outbox(
                 id: "PMI on arrival".into(),
                 reply: None,
                 note: None,
-                buttons: Vec::new(),
-                status: None,
             }));
         } else {
             items.push(ThreadItem::Owner(message));

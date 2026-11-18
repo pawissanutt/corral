@@ -2,7 +2,7 @@ use corral_protocol::assistant::ContextRef;
 use corral_protocol::rows::{AssistantLocation, AssistantRow, AssistantState};
 
 use super::{Chip, needs_you, row, wait_label};
-use crate::model::daemon::{Feed, Link, PmLevel};
+use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 
 /// The thread's state chip from its row, its stream and its open prompts, as served.
@@ -64,33 +64,18 @@ pub(super) fn location(row: Option<&AssistantRow>) -> &'static str {
     }
 }
 
+/// The PM target's chip. corrald reports no PM state, so it stays unknown.
 pub(super) fn pm_chip(feed: &Feed) -> Chip {
     if crate::model::WorkspaceMode::of(feed) == crate::model::WorkspaceMode::AssistantOnly {
         return Chip::new("off — no projects", Hue::Neutral);
     }
-    let level = feed
-        .health
-        .as_ref()
-        .map_or(PmLevel::Unknown, |health| health.pm);
-    let (label, hue) = match level {
-        PmLevel::Live => ("live", Hue::Ok),
-        PmLevel::Relaunching => ("relaunching", Hue::Held),
-        PmLevel::Absent => ("absent", Hue::Fail),
-        PmLevel::Unknown => ("unknown", Hue::Neutral),
-    };
-    if feed.link == Link::Up {
-        return Chip::new(label, hue);
-    }
-    match &feed.synced {
-        Some(synced) => Chip::new(format!("{label} · as of {synced}"), Hue::Held),
-        None => Chip::new("unknown", Hue::Neutral),
-    }
+    Chip::new("unknown", Hue::Neutral)
 }
 
 /// The context chip's words: its kind and id, with the task's title when the board has it.
 pub(super) fn context_label(feed: &Feed, context: &ContextRef) -> String {
     match feed.board.task(&context.id) {
-        Some(task) if context.kind == "task" => format!("{} {}", context.id, task.title),
+        Some(task) if context.kind == "task" => format!("{} {}", context.id, task.title()),
         _ => context.id.clone(),
     }
 }

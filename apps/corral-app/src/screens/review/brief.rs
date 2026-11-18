@@ -1,22 +1,22 @@
 //! The Brief: "Ready to land?" as a chain (gate, independent review with its note quoted, your
 //! verdict), then what changed, one row per file that opens its patch in place; and the side
-//! facts (what was asked for, the run's facts, the session and the candidate's verbs), beside
-//! the candidate on a wide desktop, under the Brief elsewhere.
+//! facts (what the task asked for, the run's facts, the session and the task's Actions menu),
+//! beside the candidate on a wide desktop, under the Brief elsewhere.
 
 use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
 
-use crate::model::board::Mark;
 use crate::model::review::{Brief, BriefSide, ChangedFile, ReadyLink, ReviewQuote};
-use crate::model::work::{self, Record};
+use crate::model::work::{Record, VERB_MENU_LABEL};
 use crate::model::{Form, Hue};
-use crate::screens::now::verb_buttons;
+use crate::screens::markdown::{markdown, provide_styles};
+use crate::screens::now::verb_menu;
+use crate::screens::plans::menu_trigger;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::kit::glance::{stat, stat_in};
 use crate::ui::kit::hint::{hinted, tip};
 use crate::ui::kit::marks::{hue_ink, mark};
-use crate::ui::kit::table::{kv, steps};
+use crate::ui::kit::table::kv;
 use crate::ui::kit::text::{dim, mono};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
@@ -175,7 +175,6 @@ fn chain_link(app: AppState, link: &ReadyLink, last: bool) -> AnyElement {
             .clone()
             .map(|sha| mono(app, sha).text_color(color(Token::Ink3)).into_element()),
     );
-    line.extend(link.stats.iter().map(|count| stat(app, count)));
     let quote = link.quote.as_ref().map(|quote| quoted(app, quote));
     if form == Form::Terminal {
         return view()
@@ -338,7 +337,7 @@ fn changed_file(cx: &Ctx, file: &ChangedFile, ruled: bool) -> AnyElement {
 }
 
 /// `.fr`: the chevron, the file's name in mono, its directory in ink-3 cut from the left so
-/// the part nearest the name stays, `+n −m`, then its annotation threads; pressing it opens or
+/// the part nearest the name stays, then `+n −m`; pressing it opens or
 /// closes the patch in place (`btn-expand-<slug>`, `btn-collapse-<slug>`). The full path is
 /// its name for screen readers and its hint.
 fn file_row(cx: &Ctx, file: &ChangedFile) -> AnyElement {
@@ -383,14 +382,6 @@ fn file_row(cx: &Ctx, file: &ChangedFile) -> AnyElement {
             .child(counts(&file.added, Hue::Ok))
             .child(term::space(1.0))
             .child(counts(&file.deleted, Hue::Fail))
-            .children(file.stats.iter().map(|count| {
-                view()
-                    .flex_row()
-                    .flex_shrink_0()
-                    .child(term::space(1.0))
-                    .child(stat_in(app, count))
-                    .into_element()
-            }))
     } else {
         let size = if form == Form::Phone { 13.0 } else { 12.5 };
         let mono_counts = |words: &String, hue: Hue| {
@@ -435,28 +426,21 @@ fn file_row(cx: &Ctx, file: &ChangedFile) -> AnyElement {
                     .child(mono_counts(&file.added, Hue::Ok))
                     .child(mono_counts(&file.deleted, Hue::Fail)),
             )
-            .children(file.stats.iter().map(|count| stat_in(app, count)))
     };
     tip(form, row, file.hint.clone().into()).into_element()
 }
 
-/// The side facts (`.aside`): what was asked for and how much of it is done, the run's facts,
-/// then Open session and the candidate's verbs; each a section with a rule under it.
+/// The side facts (`.aside`): what the task asked for, the run's facts, then Open session and
+/// the task's Actions menu; each a section with a rule under it.
 pub(super) fn side(cx: &Ctx, side: &BriefSide) -> AnyElement {
     let app = cx.app;
     let mut sections = Vec::with_capacity(3);
     if let Some(asked) = &side.asked_for {
-        let items = asked
-            .items
-            .iter()
-            .map(|(state, title)| (*state, Hue::Neutral, step_text(app, *state, title.clone())))
-            .collect::<Vec<_>>();
+        provide_styles(app);
         sections.push(
             view()
-                .child(caption(app, asked.heading, Some(asked.count.clone()), true))
-                .when(!items.is_empty(), |section| {
-                    section.child(steps(app, items))
-                })
+                .child(caption(app, asked.heading, None, true))
+                .child(markdown(app, &asked.text, false))
                 .into_element(),
         );
     }
@@ -488,7 +472,7 @@ pub(super) fn side(cx: &Ctx, side: &BriefSide) -> AnyElement {
                     .as_ref()
                     .map(|open| view().flex_row().child(command(cx, open)).into_element()),
             )
-            .child(verb_row(cx))
+            .child(actions(cx))
             .into_element(),
     );
     view()
@@ -515,45 +499,28 @@ fn section(app: AppState, content: AnyElement) -> AnyElement {
     }
 }
 
-/// A step of what was asked for: done in ink, the one in progress in semibold ink, the rest
-/// quiet (`.steps .s-done`, `.s-now`, `.s-next`).
-fn step_text(app: AppState, state: Mark, title: String) -> AnyElement {
-    let ink = match state {
-        Mark::Done | Mark::Active => Token::Ink,
-        Mark::Next | Mark::Na => Token::Ink3,
-        Mark::Fail | Mark::Stale => Token::Ink2,
-    };
-    let words = text(title).text_color(color(ink));
-    let words = if state == Mark::Active {
-        words.font_weight(FontWeight::SEMIBOLD)
-    } else {
-        words
-    };
-    match app.form {
-        Form::Terminal => words.into_element(),
-        Form::Desktop => words
-            .font_family(FONT_TEXT)
-            .text_size(px(13.0))
-            .into_element(),
-        Form::Phone => words
-            .font_family(FONT_TEXT)
-            .text_size(px(14.0))
-            .into_element(),
-    }
-}
-
-/// The shown candidate's verbs (a candidate-bound verdict among them), from the model's table.
-fn verb_row(cx: &Ctx) -> AnyElement {
+/// The shown task's Actions menu: every engine operation, the same menu as Now's rows.
+fn actions(cx: &Ctx) -> AnyElement {
     let focus = cx.focus.clone();
     let app = cx.app;
-    let verbs = computed(move || {
+    let task = computed(move || {
         let selection = app.selection();
         let filter = scope(app);
         app.feed.with(|feed| {
-            shown_task(feed, &selection, focus.as_ref(), &filter)
-                .map(|task| work::record_verbs(feed, &Record::Review(task.id.clone())))
-                .unwrap_or_default()
+            shown_task(feed, &selection, focus.as_ref(), &filter).map(|task| task.id.clone())
         })
     });
-    dynamic(move || verb_buttons(app, verbs.get()))
+    dynamic(move || {
+        task.get().map(|id| {
+            let spoken = format!("{VERB_MENU_LABEL} for {id}");
+            view()
+                .flex_row()
+                .child(verb_menu(
+                    app,
+                    Record::Task(id),
+                    menu_trigger(app, VERB_MENU_LABEL, spoken, "btn-review-actions"),
+                ))
+                .into_element()
+        })
+    })
 }

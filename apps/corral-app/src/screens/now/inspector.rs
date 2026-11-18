@@ -1,23 +1,23 @@
 //! The selected task's story in Now's side column and on the phone's task page (`.insp`): its
-//! Story (header, stepper and key/value parts from the task detail: its body, progress, needs,
-//! holds, run and plan position, the legal task commands and this device's last command's
-//! outcome), the Evidence list of its artifacts, and the Session hand-off with the captured log
-//! tail, each with its detail's loading, stale or failed state.
+//! Story (header, a Blocked task's reason, detail and next steps, stepper, body and key/value
+//! facts, every engine operation and this device's last operation's outcome), the Evidence list
+//! of its artifacts, and the Session hand-off with the run's terminal capture, each with its
+//! detail's loading, stale or failed state.
 
 use nsh_core::prelude::*;
 
 use crate::model::board::Mark;
 use crate::model::text::span;
 use crate::model::work::{
-    self, Dependency, DetailNote, Fact, Inspector, LiveEvidence, LiveSession, LiveStory, Press,
-    Stage,
+    self, BlockedCard, Dependency, DetailNote, Fact, Inspector, LiveEvidence, LiveSession,
+    LiveStory, Press, Stage,
 };
 use crate::model::{Form, Hue};
 use crate::screens::markdown::{markdown, provide_styles};
 use crate::state::AppState;
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::{hue_ink, mark};
-use crate::ui::kit::notice::loading;
+use crate::ui::kit::notice::{loading, notice};
 use crate::ui::kit::table::{kv, steps};
 use crate::ui::kit::text::{dim, h3, mono, plain, rich, rich_small};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
@@ -114,6 +114,39 @@ fn note(app: AppState, note: &DetailNote) -> AnyElement {
         .into_element()
 }
 
+/// A Blocked task's card: the engine's reason on the needs-you ground, its detail as served, and
+/// one button per next step, the first primary (`btn-next-<n>`). A forced step reads "… anyway";
+/// the app asks once before it runs.
+fn blocked(app: AppState, card: &BlockedCard) -> AnyElement {
+    let space = |pixels: f32| px(if app.form == Form::Terminal { 0.0 } else { pixels });
+    view()
+        .gap(space(8.0))
+        .pb(space(14.0))
+        .test_id("blocked-card")
+        .child(notice(
+            app,
+            Hue::You,
+            &vec![span(card.reason.clone()).bold()],
+            None,
+        ))
+        .children(
+            card.detail
+                .as_ref()
+                .map(|detail| plain(app, detail.clone()).into_element()),
+        )
+        .when(!card.next.is_empty(), |panel| {
+            panel.child(
+                view().flex_row().flex_wrap().gap(px(8.0)).children(
+                    card.next
+                        .iter()
+                        .map(|button| pressable(app, button, false))
+                        .collect::<Vec<_>>(),
+                ),
+            )
+        })
+        .into_element()
+}
+
 /// The selected task's story: the header, title, stepper and facts from the board row and the
 /// task detail.
 fn live_story(app: AppState, story: &LiveStory) -> AnyElement {
@@ -130,16 +163,13 @@ fn live_story(app: AppState, story: &LiveStory) -> AnyElement {
     if let Some(detail) = &story.note {
         out.push(note(app, detail));
     }
+    if let Some(card) = &story.blocked {
+        out.push(blocked(app, card));
+    }
     if !story.summary.is_empty() {
         out.push(paragraph(app, rich_small(app, &story.summary)));
     }
     out.push(stepper(app, &story.stages));
-    if let Some(progress) = &story.progress {
-        out.push(h3(app, progress.label, Some(progress.figure.clone())));
-        if let Some(words) = &story.progress_note {
-            out.push(plain(app, words.clone()).into_element());
-        }
-    }
     if let Some(source) = &story.body {
         // The task's canonical Markdown, laid out as the transcripts lay out Markdown.
         provide_styles(app);
@@ -173,10 +203,6 @@ fn live_story(app: AppState, story: &LiveStory) -> AnyElement {
     if let Some(sent) = &story.sent {
         out.push(
             view()
-                .flex_row()
-                .flex_wrap()
-                .items_center()
-                .gap(px(8.0))
                 .pt(px(if app.form == Form::Terminal {
                     0.0
                 } else {
@@ -186,11 +212,6 @@ fn live_story(app: AppState, story: &LiveStory) -> AnyElement {
                     app,
                     &vec![span(sent.text.clone()).hue(sent.hue)],
                 ))
-                .children(
-                    sent.recover
-                        .as_ref()
-                        .map(|button| pressable(app, button, false)),
-                )
                 .into_element(),
         );
     }

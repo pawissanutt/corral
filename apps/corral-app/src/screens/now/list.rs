@@ -1,15 +1,15 @@
-//! Now's main column: corrald's word on a board it cannot keep current, the loop band (desktop
-//! and terminal), the sections of owner moves and moving tasks, the Waiting line that opens its
-//! queued, held and parked rows in place, then the Closed section. The rows are built again
-//! only when what they are changes; selecting another row restyles the two concerned and keeps
-//! every row, and its focus, in place. It is the destination's keyboard list
-//! (`AppState::list_keys`), and a row the keyboard selects scrolls into view.
+//! Now's main column: corrald's word on open tasks it cannot keep current, the loop band
+//! (desktop and terminal), the sections of tasks that move (needs you, corral, workers), the
+//! Waiting line that opens its queued, backlog and idea rows in place, then the Closed section.
+//! The rows are built again only when what they are changes; selecting another row restyles the
+//! two concerned and keeps every row, and its focus, in place. It is the destination's keyboard
+//! list (`AppState::list_keys`), and a row the keyboard selects scrolls into view.
 
 use nsh_core::prelude::*;
 
 use crate::model::glance::Stat;
-use crate::model::work::{self, NowPage, NowRow, NowSection, NowWaiting};
-use crate::model::{Form, Hue, Id};
+use crate::model::work::{self, NowPage, NowSection, NowWaiting};
+use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::chip::chip;
@@ -22,7 +22,7 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::closed::closed_section;
 use super::parts::{go_scoped, press, pressable, quiet};
-use super::rows::{self, Fit, ask_row, more_row, task_row};
+use super::rows::{self, Fit, more_row, task_row};
 
 const RING: f32 = 2.0;
 
@@ -41,10 +41,7 @@ fn shape(page: &NowPage) -> Shape {
         .iter_mut()
         .flat_map(|section| section.rows.iter_mut())
     {
-        match row {
-            NowRow::Ask(row) => row.selected = false,
-            NowRow::Task(row) => row.selected = false,
-        }
+        row.selected = false;
     }
     let mut waiting = page.waiting.clone();
     for row in waiting
@@ -62,26 +59,12 @@ fn shape(page: &NowPage) -> Shape {
     }
 }
 
-fn ask_selected(page: &NowPage, key: &Id) -> bool {
+fn task_selected(page: &NowPage, id: &str) -> bool {
     page.sections
         .iter()
         .flat_map(|section| &section.rows)
-        .any(|row| matches!(row, NowRow::Ask(ask) if ask.key == *key && ask.selected))
-}
-
-fn task_selected(page: &NowPage, id: &str) -> bool {
-    let moving = page
-        .sections
-        .iter()
-        .flat_map(|section| &section.rows)
-        .any(|row| matches!(row, NowRow::Task(task) if task.line.id == id && task.selected));
-    moving
-        || page
-            .waiting
-            .groups
-            .iter()
-            .flat_map(|group| &group.rows)
-            .any(|task| task.line.id == id && task.selected)
+        .chain(page.waiting.groups.iter().flat_map(|group| &group.rows))
+        .any(|task| task.line.id == id && task.selected)
 }
 
 /// The desktop and terminal main column, without its scroll: the board's notice, the loop band
@@ -179,14 +162,7 @@ fn body(app: AppState, shape: &Shape, page: Memo<NowPage>, fit: Memo<Fit>) -> An
             &section.hint,
         ));
         for row in &section.rows {
-            out.push(match row {
-                NowRow::Ask(row) => {
-                    let key = row.key.clone();
-                    let selected = computed(move || page.with(|page| ask_selected(page, &key)));
-                    revealing(selected, ask_row(app, row, selected, fit))
-                }
-                NowRow::Task(row) => task(app, row, page, fit),
-            });
+            out.push(task(app, row, page, fit));
         }
     }
     if shape.waiting.total > 0 {

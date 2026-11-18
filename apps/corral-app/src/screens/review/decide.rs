@@ -1,18 +1,18 @@
-//! The decide bar pinned under the candidate (`.decide`, `.pdecide`): Approve, Request changes
-//! and Ask from the model, a refused one dimmed with its reason as its hint, Retry and Discard
-//! at the trailing edge; above them the lines of decisions sent from here and the
-//! request-changes note while it is open.
+//! The decide bar pinned under the candidate (`.decide`, `.pdecide`): Approve and land, Request
+//! changes and Ask from the model, Run gate, Start review and (while the gate is red) Land
+//! anyway at the trailing edge; above them the lines of operations sent from here. Every
+//! operation stays pressable: the engine decides.
 
 use nsh_core::prelude::*;
 
 use crate::model::review::{Button, ButtonStyle, DecideBar};
 use crate::model::text::flat;
-use crate::model::{Form, Hue, span};
+use crate::model::Form;
 use crate::ui::kit::page::bar;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
-use super::{Ctx, command, command_hinted, compose, rich_at};
+use super::{Ctx, command, command_hinted, rich_at, status};
 
 /// A terminal button's Cells beside its label, the Cells between two actions and the bar's own
 /// Cells either side (`page::bar`, `button::button_with`).
@@ -20,15 +20,14 @@ const TERM_BUTTON: f32 = 2.0;
 const TERM_GAP: f32 = 2.0;
 const TERM_EDGES: f32 = 2.0;
 
-/// How a terminal's decide line fits its row. `Approve <sha7>` is never cut: the SHA is what
-/// it binds to.
+/// How a terminal's decide line fits its row; only a button with a short form is shortened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TermFit {
     /// Every button, whole.
     Whole,
-    /// Request changes as `Request`.
+    /// Request changes as `Changes`.
     Short,
-    /// Short, and Retry and Discard on the line below with the attribution.
+    /// Short, and the secondary operations on the line below with the attribution.
     Below,
 }
 
@@ -101,7 +100,8 @@ pub(super) fn decide(cx: Ctx) -> AnyElement {
         .into_element()
 }
 
-/// Retry and Discard, which a phone keeps in the page rather than in its bar.
+/// Run gate, Start review and Land anyway, which a phone keeps in the page rather than in its
+/// bar.
 pub(super) fn phone_secondary(cx: &Ctx) -> AnyElement {
     let page = cx.page;
     let secondary = computed(move || {
@@ -137,9 +137,9 @@ fn decide_bar(cx: &Ctx, decide: &DecideBar, fit: TermFit) -> AnyElement {
     let app = cx.app;
     let phone = app.form == Form::Phone;
     let desktop = app.form == Form::Desktop;
-    // The candidate-bound explanation is the primary's hint: it says what approving binds to
-    // where the pointer or the focus asks, and a refusal says why it cannot instead. On desktop
-    // the device the owner acts through joins it, so the bar holds its buttons alone.
+    // What approving does is the primary's hint, where the pointer or the focus asks; on
+    // desktop the device the owner acts through joins it, so the bar holds its buttons alone.
+    // Any other button's hint is its own.
     let mut primary_hint: Vec<String> = decide.explanation.iter().map(|line| flat(line)).collect();
     if desktop {
         primary_hint.extend(decide.attribution.iter().map(|line| flat(line)));
@@ -149,8 +149,8 @@ fn decide_bar(cx: &Ctx, decide: &DecideBar, fit: TermFit) -> AnyElement {
         .buttons
         .iter()
         .map(|button| {
-            let hint = match (&button.refusal, button.style) {
-                (Some(refusal), _) => Some(refusal.clone()),
+            let hint = match (&button.hint, button.style) {
+                (Some(hint), _) => Some(hint.clone()),
                 (None, ButtonStyle::Primary) => primary_hint.clone(),
                 (None, _) => None,
             };
@@ -175,16 +175,8 @@ fn decide_bar(cx: &Ctx, decide: &DecideBar, fit: TermFit) -> AnyElement {
             .map(|button| command(cx, button))
             .collect()
     };
-    // A phone has no hover: a refused primary says why on a line of its own.
-    let refusal = decide
-        .buttons
-        .iter()
-        .find(|button| button.style == ButtonStyle::Primary)
-        .and_then(|button| button.refusal.clone())
-        .filter(|_| phone)
-        .map(|line| vec![span(line).hue(Hue::Held)]);
     // A terminal keeps the attribution under its row of actions, where the bar clips it; when
-    // the row is still too tight, Retry and Discard lead that line.
+    // the row is still too tight, the secondary operations lead that line.
     let attribution = decide
         .attribution
         .as_ref()
@@ -215,29 +207,18 @@ fn decide_bar(cx: &Ctx, decide: &DecideBar, fit: TermFit) -> AnyElement {
     } else {
         (secondary, attribution)
     };
-    let above: Vec<AnyElement> = refusal
+    let above: Vec<AnyElement> = decide
+        .status
         .iter()
-        .map(|line| rich_at(app, line, 13.0, Token::Ink3, false).into_element())
-        .chain(
-            decide
-                .status
-                .iter()
-                .map(|line| compose::status_line(cx, line)),
-        )
-        .chain(
-            decide
-                .composer
-                .as_ref()
-                .map(|composer| compose::composer(cx, composer)),
-        )
+        .map(|line| status::status_line(cx, line))
         .collect();
     if decide.buttons.is_empty() && above.is_empty() {
         return view().into_element();
     }
     let actions = match app.form {
-        // One row that fills the bar: the decisions, then the room left, then Retry and Discard
-        // at the trailing edge. The room has no width of its own, so the row wraps only when
-        // the buttons themselves do not fit, and then Retry and Discard go to the next line.
+        // One row that fills the bar: the decisions, then the room left, then the secondary
+        // operations at the trailing edge. The room has no width of its own, so the row wraps
+        // only when the buttons themselves do not fit, and then those go to the next line.
         Form::Desktop => vec![
             view()
                 .w_full()

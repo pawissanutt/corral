@@ -31,7 +31,7 @@ pub fn label(kind: &PushKind) -> &'static str {
 
 pub fn detail(kind: &PushKind) -> &'static str {
     match kind {
-        PushKind::NeedsYou => "a question or decision waits for you in Inbox",
+        PushKind::NeedsYou => "a task is blocked on you or waits for your review",
         PushKind::PlanAwaitingAcceptance => "a plan is ready for you to accept or send back",
         PushKind::Stuck => "a task or agent stopped making progress",
         PushKind::Escalated => "the PM escalated something to you",
@@ -99,12 +99,12 @@ pub fn view(feed: &Feed, supported: bool, web: bool) -> PushView {
     };
     if !web {
         return unavailable(
-            "This app doesn't post system notifications. Web Push reaches a paired browser that turns it on in its own Settings › Notifications; what needs you also shows in Inbox and on its badge.".into(),
+            "This app doesn't post system notifications. Web Push reaches a paired browser that turns it on in its own Settings › Notifications; what needs you also shows first on Now.".into(),
         );
     }
     if !supported {
         return unavailable(
-            "This browser can't receive Web Push: it needs service workers and the Push API (on an iPhone, open the app from the Home Screen). What needs you still shows in Inbox and on its badge.".into(),
+            "This browser can't receive Web Push: it needs service workers and the Push API (on an iPhone, open the app from the Home Screen). What needs you still shows first on Now.".into(),
         );
     }
     let Some(status) = &feed.push else {
@@ -117,7 +117,7 @@ pub fn view(feed: &Feed, supported: bool, web: bool) -> PushView {
     };
     if !status.available {
         return unavailable(
-            "corrald has no Web Push delivery set up, so push can't be turned on. What needs you shows in Inbox and on its badge.".into(),
+            "corrald has no Web Push delivery set up, so push can't be turned on. What needs you shows first on Now.".into(),
         );
     }
     // The push service accepting a message is not proof the phone showed it.

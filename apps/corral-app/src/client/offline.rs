@@ -1,25 +1,25 @@
 //! Restart-only hints, never an authenticated transport or a live projection.
 //!
-//! Only complete wire Board/Inbox/Plans/Builds/Projects snapshots and Health are retained. Later
+//! Only complete wire Tasks/Plans/Projects snapshots and Health are retained. Later
 //! complete deltas patch their saved baseline transactionally; partial pages and
 //! deltas without a baseline are not saved. An oversized update fails without
-//! truncating or replacing the last complete snapshot (2 MiB encoded limit).
+//! truncating or replacing the last complete snapshot (2 MiB encoded limit). A snapshot
+//! saved by an older wire version is discarded, not migrated.
 //!
 //! Namespace switches and `deactivate()` discard hints, not pending owner words.
 //! Explicit `forget()` removes the active hint and namespace records and writes a
 //! persistent `forgotten/{namespace}` tombstone in one transaction, even from a
 //! fresh AppState. Reconnecting never clears that tombstone.
-use super::{core::Event, durable, map, outbox::namespace_key};
+use super::{core::Event, durable, outbox::namespace_key};
 use crate::model::{
     Id,
-    daemon::{Board, Feed, Link, TopicState},
+    daemon::{Board, Feed, Link, Task, TopicState},
     devices::DeviceLink,
 };
 use corral_protocol::{
     Health,
     app::AppSession,
-    board::BoardRow,
-    rows::{BuildRow, InboxRow, PlanRow, ProjectRow},
+    rows::{PlanRow, ProjectRow, TaskRow},
     subscription::SubDelta,
 };
 use nsh_core::prelude::Signal;
@@ -31,6 +31,8 @@ use std::{
 };
 
 const MAX_BYTES: usize = 2 * 1024 * 1024;
+/// Version 2 carries the engine's task rows.
+const SNAPSHOT_VERSION: u32 = 2;
 const ACTIVE: &str = "active";
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,11 +72,8 @@ struct TopicRows<T> {
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
     version: u32,
-    board: Option<TopicRows<BoardRow>>,
-    inbox: Option<TopicRows<InboxRow>>,
+    tasks: Option<TopicRows<TaskRow>>,
     plans: Option<TopicRows<PlanRow>>,
-    builds: Option<TopicRows<BuildRow>>,
-    #[serde(default)]
     projects: Option<TopicRows<ProjectRow>>,
     health: Option<Health>,
 }
@@ -82,15 +81,21 @@ struct Snapshot {
 impl Default for Snapshot {
     fn default() -> Self {
         Self {
-            version: 1,
-            board: None,
-            inbox: None,
+            version: SNAPSHOT_VERSION,
+            tasks: None,
             plans: None,
-            builds: None,
             projects: None,
             health: None,
         }
     }
+}
+
+/// A saved snapshot of this wire version; an older one is dropped rather than misread.
+fn stored(value: Value) -> Result<Snapshot, String> {
+    if value["version"].as_u64() != Some(u64::from(SNAPSHOT_VERSION)) {
+        return Ok(Snapshot::default());
+    }
+    decode(value)
 }
 
 /// Owned capture context. Saving always patches the latest durable DTOs, not stale memory.
@@ -152,13 +157,10 @@ impl Cache {
         let snapshot = match records.remove(&snapshot_key(&marker.namespace())) {
             Some(value) => {
                 check_bound(&value)?;
-                decode::<Snapshot>(value)?
+                stored(value)?
             }
             None => Snapshot::default(),
         };
-        if snapshot.version != 1 {
-            return Err(error("unsupported snapshot version"));
-        }
         project(feed, &marker, snapshot);
         let namespace = (marker.store.clone(), marker.device.clone());
         Ok(Some((
@@ -240,12 +242,9 @@ impl Cache {
                 return Err(error("active identity changed before snapshot persistence"));
             }
             let mut snapshot = match records.get(&key) {
-                Some(value) => decode::<Snapshot>(value.clone())?,
+                Some(value) => stored(value.clone())?,
                 None => Snapshot::default(),
             };
-            if snapshot.version != 1 {
-                return Err(error("unsupported snapshot version"));
-            }
             if !apply_event(&mut snapshot, event) {
                 return Ok(None);
             }
@@ -330,13 +329,9 @@ fn erase_namespace(records: &mut durable::Records, namespace: &str) {
 fn cacheable(event: &Event) -> bool {
     matches!(
         event,
-        Event::Board { .. }
-            | Event::Health(_)
+        Event::Health(_)
             | Event::Rows {
-                delta: SubDelta::Inbox { .. }
-                    | SubDelta::Plans { .. }
-                    | SubDelta::Builds { .. }
-                    | SubDelta::Projects { .. },
+                delta: SubDelta::Tasks { .. } | SubDelta::Plans { .. } | SubDelta::Projects { .. },
                 ..
             }
     )
@@ -348,29 +343,16 @@ fn apply_event(snapshot: &mut Snapshot, event: &Event) -> bool {
             snapshot.health = Some(health.clone());
             true
         }
-        Event::Board {
-            epoch,
-            rows,
-            left,
-            replacement,
-        } => apply_topic(
-            &mut snapshot.board,
-            *epoch,
-            rows,
-            left,
-            *replacement,
-            |row| &row.id,
-        ),
         Event::Rows {
-            delta: SubDelta::Inbox { delta },
+            delta: SubDelta::Tasks { delta },
             replacement,
         } if !delta.more => apply_topic(
-            &mut snapshot.inbox,
+            &mut snapshot.tasks,
             delta.epoch,
             &delta.rows,
             &delta.left,
             *replacement,
-            |row| &row.id,
+            |row| &row.task.id,
         ),
         Event::Rows {
             delta: SubDelta::Plans { delta },
@@ -381,18 +363,7 @@ fn apply_event(snapshot: &mut Snapshot, event: &Event) -> bool {
             &delta.rows,
             &delta.left,
             *replacement,
-            |row| &row.id,
-        ),
-        Event::Rows {
-            delta: SubDelta::Builds { delta },
-            replacement,
-        } if !delta.more => apply_topic(
-            &mut snapshot.builds,
-            delta.epoch,
-            &delta.rows,
-            &delta.left,
-            *replacement,
-            |row| &row.id,
+            |row| &row.parent.id,
         ),
         Event::Rows {
             delta: SubDelta::Projects { delta },
@@ -438,29 +409,19 @@ fn apply_topic<T: Clone>(
 fn project(feed: Signal<Feed>, marker: &Marker, snapshot: Snapshot) {
     feed.update(|feed| {
         feed.board = Board::default();
-        feed.inbox.clear();
         feed.plans.clear();
-        feed.builds.clear();
         feed.projects.clear();
-        feed.health = snapshot.health.map(map::health);
-        for topic in ["board", "inbox", "plans", "builds", "projects"] {
+        feed.health = snapshot.health;
+        for topic in ["tasks", "plans", "projects"] {
             feed.topics.remove(topic);
         }
-        if let Some(board) = snapshot.board {
+        if let Some(tasks) = snapshot.tasks {
             feed.board.apply_batch(
-                board.epoch,
-                board.rows.into_values().map(map::task).collect(),
+                tasks.epoch,
+                tasks.rows.into_values().map(Task::new).collect(),
                 &[],
             );
-            feed.topics.insert("board".into(), TopicState::default());
-        }
-        if let Some(inbox) = snapshot.inbox {
-            feed.inbox = inbox
-                .rows
-                .into_iter()
-                .map(|(id, row)| (Id::new(&id), row))
-                .collect();
-            feed.topics.insert("inbox".into(), TopicState::default());
+            feed.topics.insert("tasks".into(), TopicState::default());
         }
         if let Some(plans) = snapshot.plans {
             feed.plans = plans
@@ -469,14 +430,6 @@ fn project(feed: Signal<Feed>, marker: &Marker, snapshot: Snapshot) {
                 .map(|(id, row)| (Id::new(&id), row))
                 .collect();
             feed.topics.insert("plans".into(), TopicState::default());
-        }
-        if let Some(builds) = snapshot.builds {
-            feed.builds = builds
-                .rows
-                .into_iter()
-                .map(|(id, row)| (Id::new(&id), row))
-                .collect();
-            feed.topics.insert("builds".into(), TopicState::default());
         }
         if let Some(projects) = snapshot.projects {
             feed.projects = projects

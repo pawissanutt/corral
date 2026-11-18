@@ -2,21 +2,20 @@
 
 use crate::model::hue::Hue;
 
-/// The six who-acts-next sections, in their displayed order.
+/// The six who-moves-next sections, in their displayed order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupKey {
-    /// Questions, plan accepts and PM asks.
+    /// Blocked tasks, and reviewed tasks ready to land: the owner moves next.
     You,
-    /// Gates, reviews and landing.
+    /// Gate and review running on a task in Review.
     Corral,
-    /// Worker runs that have not ended; they may be idle or waiting.
+    /// Running worker runs.
     Worker,
-    /// Waiting for dependency or capacity.
+    /// Ready, waiting for a slot or a dispatch.
     Queued,
-    /// Held by an external operation.
-    Held,
-    /// Owner-set dispatch holds, not counted as Needs you.
-    Parked,
+    /// Filed work nobody queued yet.
+    Backlog,
+    Ideas,
 }
 
 impl GroupKey {
@@ -26,8 +25,7 @@ impl GroupKey {
             Self::You => Hue::You,
             Self::Corral => Hue::Corral,
             Self::Worker => Hue::Worker,
-            Self::Held => Hue::Held,
-            Self::Queued | Self::Parked => Hue::Neutral,
+            Self::Queued | Self::Backlog | Self::Ideas => Hue::Neutral,
         }
     }
 
@@ -38,8 +36,8 @@ impl GroupKey {
             Self::Corral => "corral",
             Self::Worker => "worker",
             Self::Queued => "queued",
-            Self::Held => "held",
-            Self::Parked => "parked",
+            Self::Backlog => "backlog",
+            Self::Ideas => "ideas",
         }
     }
 }

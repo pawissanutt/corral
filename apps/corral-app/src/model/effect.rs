@@ -37,7 +37,7 @@ pub struct Env {
 }
 
 /// What a reducer asks the app to do after it changed its own state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
     /// Show the text for a few seconds.
     Toast(String),
@@ -57,14 +57,12 @@ pub enum Effect {
         text: Option<String>,
         target: Option<AskTarget>,
     },
-    /// Run a typed canonical command (preview and fresh confirmation when it is Confirm-class).
+    /// Submit an engine operation; a destructive or forced one asks once, locally, first.
     Act(Act),
     /// Open the selected record's canonical action menu from a scoped list shortcut.
     VerbMenu(crate::model::work::Record),
-    /// Enrol, pair, revoke or edit device authority through the shared client.
+    /// Enrol, pair or revoke devices through the shared client.
     Device(crate::model::devices::DeviceOp),
-    /// Ask corrald for the result of the command with this id, without resubmitting it.
-    Recover(Id),
     /// Fetch, revalidate or page a detail.
     Detail(DetailGet),
     /// Resolve the complete recorded item behind a transcript preview.
@@ -88,11 +86,10 @@ pub enum Effect {
     /// Withdraw or discard this device's unacknowledged send under its own command id. The
     /// client removes a never-sent or refused one locally and asks corrald for the rest.
     CancelSend(Id),
-    /// Answer an assistant permission prompt, through a fresh confirmation when `confirm`.
+    /// Answer an assistant permission prompt.
     Prompt {
         answer: PromptAnswer,
         title: String,
-        confirm: bool,
     },
     /// Open or close a scoped thread subscription ("quick" or A-n).
     Thread {

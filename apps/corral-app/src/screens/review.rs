@@ -1,5 +1,5 @@
-//! Review: the candidate outline beside the selected candidate, its Brief (ready to land? and
-//! what changed) or its evidence (Diff, Gate log, Report, Artifacts), its side facts and the
+//! Review: the tasks in Review beside the selected candidate, its Brief (ready to land? and
+//! what changed) or its evidence (Diff, Gate log, Summary, Artifacts), its side facts and the
 //! pinned decide bar. Every word, count and branch comes from `model::review::loop_page_filtered`,
 //! in the Review screen's own project scope; this module lays that page out for each form and
 //! sends each control's action back through the feed-backed reducer (`apply_live_filtered`).
@@ -13,14 +13,12 @@
 //! under the Brief, the diffs unified.
 
 mod brief;
-mod compose;
 mod decide;
 mod diff;
 mod evidence;
 mod head;
 mod list;
-
-use std::collections::BTreeMap;
+mod status;
 
 use corral_protocol::detail::DetailRef;
 use nsh_core::element::StyleRefinement;
@@ -30,14 +28,15 @@ use crate::model::act;
 use crate::model::daemon::{Feed, Link, Task};
 use crate::model::projects::{FilterScreen, ProjectFilter};
 use crate::model::review::{self, Action, Body, ButtonStyle, Layout, LoopContent, LoopPage};
+use crate::model::work::{Press, Record};
 use crate::model::{Form, Hue, Id, Live, Rich, Selection};
-use crate::screens::now::parts::{keep_loaded, wanted};
+use crate::screens::now::parts::press;
 use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::glance::{page_head, stats};
-use crate::ui::kit::hint::{hint_on, hinted};
+use crate::ui::kit::hint::hint_on;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::page::{Width, bar_pane, columns, pane};
 use crate::ui::kit::project_filter::project_filter;
@@ -60,14 +59,12 @@ const STALE_OPACITY: f32 = 0.78;
 const MONO_SCALE: f32 = 0.93;
 
 /// What every piece of one Review page shares: the app, the candidate a phone page was pushed
-/// for (else the selected one), the unsent drafts of its composers (which outlive the evidence
-/// being rebuilt by a refresh), whether the candidate's column holds split diff rows, and the
+/// for (else the selected one), whether the candidate's column holds split diff rows, and the
 /// model's page.
 #[derive(Clone)]
 struct Ctx {
     app: AppState,
     focus: Option<Id>,
-    drafts: Signal<BTreeMap<String, String>>,
     /// Desktop: whether the candidate's column is wide enough for side-by-side rows, unknown
     /// until it is measured; elsewhere never.
     split: Signal<Option<bool>>,
@@ -93,7 +90,6 @@ impl Ctx {
         Ctx {
             app,
             focus,
-            drafts: signal(BTreeMap::new()),
             split,
             page,
         }
@@ -176,74 +172,71 @@ fn fits_split(app: AppState, width: f32) -> bool {
     review::effective_layout(&wanted, env, width) == Layout::Split
 }
 
-/// Runs a model action through the feed-backed reducer and the app's effects. Restoring an
-/// unsent note puts its text back into the composer's draft first.
+/// Runs a model action through the feed-backed reducer and the app's effects. A shared verb
+/// (Request changes) runs through the work state instead, whose composer asks for its words.
 fn act(cx: &Ctx, action: Action) -> impl Fn() + 'static {
     let app = cx.app;
-    let drafts = cx.drafts;
     let focus = cx.focus.clone();
     move || {
-        if let Action::Restore { draft, text, .. } = &action {
-            drafts.update(|all| {
-                all.insert(draft.clone(), text.clone());
+        let filter = untracked(|| scope(app));
+        if let Action::Verb(verb) = &action {
+            let shown = app.feed.with_untracked(|feed| {
+                let selection = untracked(|| app.selection());
+                shown_task(feed, &selection, focus.as_ref(), &filter).map(|task| task.id.clone())
             });
+            if let Some(task) = shown {
+                press(
+                    app,
+                    Press::Verb {
+                        record: Record::Task(task),
+                        verb: *verb,
+                    },
+                );
+            }
+            return;
         }
         let action = action.clone();
         let focus = focus.clone();
-        let filter = untracked(|| scope(app));
         app.reduce(app.review, move |state, feed, selection, env| {
             state.apply_live_filtered(action, feed, selection, focus.as_ref(), env, &filter)
         });
     }
 }
 
-/// Keeps the served candidate current: its details are fetched when it is first shown, and
-/// revalidated when its board row changes, the link comes back, or a command sent from here
-/// settles. Every fetch carries the cached etag, so an unchanged detail costs one small reply.
-/// While shown, the candidate's task detail (whose owner revision its commands are bound to)
-/// stays loaded, and both details stay pinned in the client's cache, through the source the
-/// page mounted on.
+/// Keeps the served candidate current: its review and task details are fetched when it is first
+/// shown, and revalidated when its board row changes, the link comes back, or an operation sent
+/// from here settles. Every fetch carries the cached etag, so an unchanged detail costs one
+/// small reply. While shown, both details stay pinned in the client's cache, through the source
+/// the page mounted on.
 fn keep_current(cx: &Ctx) {
     let focus = cx.focus.clone();
     let app = cx.app;
-    let key = {
-        let focus = focus.clone();
-        computed(move || {
-            let selection = app.selection();
-            let filter = scope(app);
-            app.feed.with(|feed| {
-                let task = shown_task(feed, &selection, focus.as_ref(), &filter)?;
-                let settled = app.review.with(|state| {
-                    state
-                        .sent
-                        .iter()
-                        .filter(|sent| {
-                            act::status(feed, &sent.key).is_some_and(|status| status.settled())
-                        })
-                        .count()
-                });
-                Some((task.id.clone(), task.rev, feed.link == Link::Up, settled))
-            })
-        })
-    };
-    let refresh = act(cx, Action::Refresh);
-    effect(move || {
-        if key.get().is_some_and(|(_, _, up, _)| up) {
-            untracked(&refresh);
-        }
-    });
-    let task = computed(move || {
+    let key = computed(move || {
         let selection = app.selection();
         let filter = scope(app);
         app.feed.with(|feed| {
-            shown_task(feed, &selection, focus.as_ref(), &filter)
-                .and_then(|task| wanted(feed, task))
+            let task = shown_task(feed, &selection, focus.as_ref(), &filter)?;
+            let settled = app.review.with(|state| {
+                state
+                    .sent
+                    .iter()
+                    .filter(|sent| {
+                        act::status(feed, &sent.key).is_some_and(|status| status.settled())
+                    })
+                    .count()
+            });
+            Some((task.id.clone(), task.row.clone(), feed.link == Link::Up, settled))
         })
     });
-    keep_loaded(app, task);
-    pin_review(
+    let refresh = act(cx, Action::Refresh);
+    effect(move || {
+        if key.with(|key| key.as_ref().is_some_and(|(_, _, up, _)| *up)) {
+            untracked(&refresh);
+        }
+    });
+    pin_details(
         untracked(|| app.scope()),
-        computed(move || task.with(|task| task.as_ref().map(|(id, ..)| id.clone()))),
+        computed(move || key.with(|key| key.as_ref().map(|(id, ..)| id.clone()))),
     );
 }
 
@@ -260,12 +253,19 @@ fn shown_task<'a>(
     }
 }
 
-/// Pins the shown candidate's review detail in the client's cache, letting go when another is
-/// shown or the page goes.
-fn pin_review(app: AppState, shown: Memo<Option<Id>>) {
+/// Pins the shown candidate's review and task details in the client's cache, letting go when
+/// another is shown or the page goes.
+fn pin_details(app: AppState, shown: Memo<Option<Id>>) {
     let pinned = stored(None::<Id>);
-    let target = |task: &Id| DetailRef::Review {
-        task: task.to_string(),
+    let targets = |task: &Id| {
+        [
+            DetailRef::Review {
+                task: task.to_string(),
+            },
+            DetailRef::Task {
+                id: task.to_string(),
+            },
+        ]
     };
     effect(move || {
         let now = shown.get();
@@ -274,18 +274,20 @@ fn pin_review(app: AppState, shown: Memo<Option<Id>>) {
         }
         let was = pinned.replace(now.clone());
         untracked(|| {
-            if let Some(gone) = was {
-                app.watch_detail(target(&gone), false);
+            for gone in was.iter().flat_map(targets) {
+                app.watch_detail(gone, false);
             }
-            if let Some(new) = &now {
-                app.watch_detail(target(new), true);
+            for new in now.iter().flat_map(targets) {
+                app.watch_detail(new, true);
             }
         });
     });
     // The owner may already be letting go of its values when this runs.
     cleanup(move || {
         if let Some(gone) = pinned.try_with(Option::take).flatten() {
-            app.watch_detail(target(&gone), false);
+            for target in targets(&gone) {
+                app.watch_detail(target, false);
+            }
         }
     });
 }
@@ -317,7 +319,7 @@ fn desktop(cx: Ctx) -> AnyElement {
     let stale = computed(move || page.with(|page| page.stale));
     let opened = signal(false);
     // Below `LIST_BESIDE` the outline comes first after a plain `go`; a candidate opened by
-    // name (from Now, Inbox, the palette) shows at once, and again on each further open. A row
+    // name (from Now, the palette) shows at once, and again on each further open. A row
     // pressed here opens it too, without moving this key.
     let arrival = computed(move || {
         app.nav.with(|nav| {
@@ -445,8 +447,9 @@ fn phone_counts(cx: &Ctx) -> AnyElement {
     })
 }
 
-/// The pushed candidate's scrolling body: its head and tabs, Retry and Discard, then the Brief
-/// with the side facts at its end, or the selected evidence.
+/// The pushed candidate's scrolling body: its head and tabs, Run gate and Start review (and Land
+/// anyway when offered), then the Brief with the side facts at its end, or the selected
+/// evidence.
 fn phone_body(cx: Ctx) -> AnyElement {
     keep_current(&cx);
     let page = cx.page;
@@ -645,15 +648,14 @@ fn evidence(cx: &Ctx, body: &Body) -> AnyElement {
     }
 }
 
-/// A model button as the kit's button, its refusal as its hint.
+/// A model button as the kit's button, with what it does beyond its label as its hint.
 fn command(cx: &Ctx, button: &review::Button) -> AnyElement {
-    command_hinted(cx, button, button.refusal.clone())
+    command_hinted(cx, button, button.hint.clone())
 }
 
 /// A model button as the kit's button (its emphasis, the decide bar's wide primary on a phone,
-/// the speech bubble on Ask, the danger outline on Discard) with `hint` on pointer rest and
-/// keyboard focus. A dimmed button takes no focus, so its hint gets a stop of its own. A phone
-/// has no hover: there the caller says what needs saying in the page.
+/// the speech bubble on Ask, the danger outline on Land anyway) with `hint` on pointer rest and
+/// keyboard focus. A phone has no hover: there the caller says what needs saying in the page.
 fn command_hinted(cx: &Ctx, button: &review::Button, hint: Option<String>) -> AnyElement {
     let app = cx.app;
     let kind = match button.style {
@@ -667,9 +669,8 @@ fn command_hinted(cx: &Ctx, button: &review::Button, hint: Option<String>) -> An
             Action::OpenSession => Some(Icon::Agents),
             _ => None,
         },
-        disabled: !button.enabled,
         wide: app.form == Form::Phone && button.style == ButtonStyle::Primary,
-        danger: button.action == Action::Discard,
+        danger: button.action == Action::LandAnyway,
         ..ButtonOptions::default()
     };
     let control = button_with(
@@ -682,11 +683,7 @@ fn command_hinted(cx: &Ctx, button: &review::Button, hint: Option<String>) -> An
     );
     match hint {
         Some(hint) if app.form != Form::Phone => {
-            if button.enabled {
-                hint_on(app, view().flex_row().flex_shrink_0().child(control), hint).into_element()
-            } else {
-                hinted(app, control, hint)
-            }
+            hint_on(app, view().flex_row().flex_shrink_0().child(control), hint).into_element()
         }
         _ => control,
     }
@@ -696,23 +693,17 @@ fn command_hinted(cx: &Ctx, button: &review::Button, hint: Option<String>) -> An
 fn button_id(action: &Action) -> String {
     match action {
         Action::Approve => "btn-approve".to_owned(),
-        Action::RequestChanges => "btn-request-changes".to_owned(),
+        Action::LandAnyway => "btn-land-anyway".to_owned(),
+        Action::Gate => "btn-gate".to_owned(),
+        Action::StartReview => "btn-review".to_owned(),
+        Action::Verb(verb) => format!("btn-{}", verb.slug()),
         Action::AskAbout { path, .. } => format!("btn-ask-{}", slug(path)),
         Action::Expand(path) => format!("btn-expand-{}", slug(path)),
         Action::Collapse(path) => format!("btn-collapse-{}", slug(path)),
         Action::Pick(id) => format!("task-{id}"),
         Action::Tab(_) => "seg-review".to_owned(),
         Action::Layout(_) => "seg-layout".to_owned(),
-        Action::Annotate { at, .. } => format!("btn-annotate-{}-{}", slug(&at.path), at.line),
-        Action::CancelCompose => "btn-cancel".to_owned(),
-        Action::Submit { .. } => "btn-send".to_owned(),
-        Action::Resolve { thread, .. } => format!("btn-resolve-{}", slug(thread)),
-        Action::Reopen { thread, .. } => format!("btn-reopen-{}", slug(thread)),
-        Action::Retry => "btn-retry".to_owned(),
-        Action::Discard => "btn-discard".to_owned(),
-        Action::Recover(_) => "btn-check-again".to_owned(),
         Action::Dismiss(_) => "btn-dismiss".to_owned(),
-        Action::Restore { .. } => "btn-edit-again".to_owned(),
         Action::OpenArtifact(key) | Action::CloseArtifact(key) => {
             format!("btn-artifact-{}", slug(key))
         }

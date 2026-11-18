@@ -1,9 +1,11 @@
 //! The roster's lines. Desktop (`.rh`, `.ar`): the column heads, then one 40 pt line per
-//! session: state chip, id, project, name, what it does, the activity strip, last output, since
-//! and cost, the last three and the project only while the roster has the room and no panel is
-//! open. Phone (the mock's `.ar` at 640 pt and under): chip, name and id; what it does; the
-//! strip. Terminal: the desktop's columns as Cells, one row each, giving way one at a time as
-//! the grid narrows; words too long for their column are cut at the character.
+//! session: state chip, task id, project, name, what it does, its profile and model, how long it
+//! has been quiet and when it started, the last two and the project only while the roster has the
+//! room and no panel is open. Phone (the mock's `.ar` at 640 pt and under): chip, name and id;
+//! what it does; profile, model and quiet time. Terminal: the desktop's columns as Cells, one row
+//! each, giving way one at a time as the grid narrows; words too long for their column are cut
+//! at the character. A run's line carries the Actions menu of its task (secondary press,
+//! Shift+F10 or the Menu key; a held finger on the phone).
 //!
 //! Rows are kept by session while the roster changes, each part following its own fact, so a
 //! row the keyboard is on keeps the focus as its times and counts tick. Every word and number is
@@ -15,10 +17,11 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::model::Form;
 use crate::model::agents::{Action, Roster, RosterRow};
+use crate::model::work::Record;
+use crate::screens::now::with_menu;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::chip::chip;
-use crate::ui::kit::glance::activity_strip;
 use crate::ui::kit::hint::hint_on_live;
 use crate::ui::term::{self, cells};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, row_height};
@@ -35,10 +38,9 @@ const RING: f32 = 2.0;
 /// Terminal column widths in Cells; the name and doing columns' least widths.
 const ID_CELLS: f32 = 8.0;
 const PROJECT_CELLS: f32 = 11.0;
-const ACTIVITY_CELLS: f32 = 21.0;
-const LAST_CELLS: f32 = 11.0;
+const AGENT_CELLS: f32 = 18.0;
+const QUIET_CELLS: f32 = 11.0;
 const SINCE_CELLS: f32 = 7.0;
-const COST_CELLS: f32 = 8.0;
 const NAME_CELLS: (f32, f32) = (16.0, 20.0);
 const DOING_CELLS: f32 = 16.0;
 /// A terminal line's selection bar, and the Cell between columns.
@@ -50,10 +52,9 @@ const GAP_CELLS: f32 = 1.0;
 pub(super) struct Columns {
     pub(super) project: bool,
     pub(super) doing: bool,
-    pub(super) activity: bool,
-    pub(super) last: bool,
+    pub(super) agent: bool,
+    pub(super) quiet: bool,
     pub(super) since: bool,
-    pub(super) cost: bool,
     /// A panel is open: the name and doing columns narrow (`.s-agents.has-sel`).
     pub(super) open: bool,
     /// The State column's Cells in a terminal: the longest chip shown and its Cell either side.
@@ -61,24 +62,23 @@ pub(super) struct Columns {
 }
 
 impl Columns {
-    /// Desktop and phone: what the session does and its activity always; the project, last
-    /// output, since and cost together while `wide`.
+    /// Desktop and phone: what the session does and its agent always; the project, quiet time
+    /// and start together while `wide`.
     pub(super) fn points(wide: bool, open: bool) -> Self {
         Self {
             project: wide,
             doing: true,
-            activity: true,
-            last: wide,
+            agent: true,
+            quiet: wide,
             since: wide,
-            cost: wide,
             open,
             state: 0,
         }
     }
 
     /// Terminal: the columns `room` Cells hold. State, id and name always; then, as long as
-    /// they fit, what the session does, its activity, the project, last output, since and
-    /// cost, so a narrowing grid gives up cost first and what the session does last.
+    /// they fit, what the session does, its agent, the project, quiet time and start, so a
+    /// narrowing grid gives up the start first and what the session does last.
     pub(super) fn cells(room: f32, state: u16, open: bool) -> Self {
         let name = if open { NAME_CELLS.0 } else { NAME_CELLS.1 };
         let mut used = BAR_CELLS + f32::from(state) + ID_CELLS + name + 3.0 * GAP_CELLS;
@@ -90,18 +90,16 @@ impl Columns {
             fits
         };
         let doing = fits(DOING_CELLS);
-        let activity = doing && fits(ACTIVITY_CELLS);
-        let project = activity && fits(PROJECT_CELLS);
-        let last = project && fits(LAST_CELLS);
-        let since = last && fits(SINCE_CELLS);
-        let cost = since && fits(COST_CELLS);
+        let agent = doing && fits(AGENT_CELLS);
+        let project = agent && fits(PROJECT_CELLS);
+        let quiet = project && fits(QUIET_CELLS);
+        let since = quiet && fits(SINCE_CELLS);
         Self {
             project,
             doing,
-            activity,
-            last,
+            agent,
+            quiet,
             since,
-            cost,
             open,
             state,
         }
@@ -116,22 +114,20 @@ enum Column {
     Project,
     Name,
     Doing,
-    Activity,
-    Last,
+    Agent,
+    Quiet,
     Since,
-    Cost,
 }
 
-const ORDER: [Column; 9] = [
+const ORDER: [Column; 8] = [
     Column::State,
     Column::Id,
     Column::Project,
     Column::Name,
     Column::Doing,
-    Column::Activity,
-    Column::Last,
+    Column::Agent,
+    Column::Quiet,
     Column::Since,
-    Column::Cost,
 ];
 
 /// The box of `column` in a line or the heads: its width (desktop points as the mock's grid,
@@ -184,10 +180,9 @@ fn slot(form: Form, column: Column, columns: Memo<Columns>) -> View {
             growing((1.6, 1.0), (150.0, DOING_CELLS), (220.0, DOING_CELLS)),
             |c| c.doing,
         ),
-        Column::Activity => optional(fixed(118.0, ACTIVITY_CELLS), |c| c.activity),
-        Column::Last => optional(fixed(100.0, LAST_CELLS), |c| c.last),
+        Column::Agent => optional(fixed(140.0, AGENT_CELLS), |c| c.agent),
+        Column::Quiet => optional(fixed(100.0, QUIET_CELLS), |c| c.quiet),
         Column::Since => optional(fixed(44.0, SINCE_CELLS).justify_end(), |c| c.since),
-        Column::Cost => optional(fixed(50.0, COST_CELLS).justify_end(), |c| c.cost),
     }
 }
 
@@ -242,19 +237,20 @@ pub(super) fn heads(app: AppState, roster: Memo<Roster>, columns: Memo<Columns>)
 /// One line per session, kept by session id, in the destination's keyboard list
 /// (`AppState::list_keys`), so j, k and the arrows move the selection while a line has the
 /// focus. Desktop and terminal lines select (the panel opens for them); a phone row opens the
-/// session page. `dash` stands for activity no one reported.
-pub(super) fn lines(
-    app: AppState,
-    roster: Memo<Roster>,
-    columns: Memo<Columns>,
-    dash: &'static str,
-) -> AnyElement {
+/// session page. A run's line carries its task's Actions menu.
+pub(super) fn lines(app: AppState, roster: Memo<Roster>, columns: Memo<Columns>) -> AnyElement {
     let rows = each(
         move || roster.with(|r| r.rows.clone()),
         |row: &RosterRow| row.id.clone(),
-        move |row, _| match app.form {
-            Form::Phone => phone_line(app, row, dash),
-            Form::Desktop | Form::Terminal => line(app, row, columns, dash),
+        move |row, _| {
+            let drawn = match app.form {
+                Form::Phone => phone_line(app, row),
+                Form::Desktop | Form::Terminal => line(app, row, columns),
+            };
+            match untracked(|| row.with(|r| r.task.clone())) {
+                Some(task) => with_menu(app, Record::Task(task), drawn),
+                None => drawn,
+            }
         },
     );
     view()
@@ -355,17 +351,13 @@ fn state_chip(app: AppState, row: ReadSignal<RosterRow>) -> AnyElement {
     dynamic(move || face.with(|(label, hue)| untracked(|| chip(app, label.clone(), *hue))))
 }
 
-/// The activity strip, or the model's dash while no activity is reported.
-fn activity(app: AppState, row: ReadSignal<RosterRow>, dash: &'static str) -> AnyElement {
-    let shown = computed(move || row.with(|r| r.activity.clone()));
-    dynamic(move || {
-        shown.with(|shown| {
-            untracked(|| match shown {
-                Some(activity) => activity_strip(app, activity),
-                None => quiet(app.form, move || dash.to_owned(), false),
-            })
-        })
-    })
+/// The run's profile and model, then how long it has been quiet: the phone's third line.
+fn agent_line(row: &RosterRow) -> String {
+    if row.quiet == "—" {
+        row.agent.clone()
+    } else {
+        format!("{} · {}", row.agent, row.quiet)
+    }
 }
 
 /// The pin before the quick thread's name (desktop and phone; a terminal shows no images and
@@ -382,13 +374,8 @@ fn pin(app: AppState, row: ReadSignal<RosterRow>, size: f32) -> AnyElement {
     })
 }
 
-/// A desktop or terminal line: the nine columns, those `columns` leaves out hidden.
-fn line(
-    app: AppState,
-    row: ReadSignal<RosterRow>,
-    columns: Memo<Columns>,
-    dash: &'static str,
-) -> AnyElement {
+/// A desktop or terminal line: the eight columns, those `columns` leaves out hidden.
+fn line(app: AppState, row: ReadSignal<RosterRow>, columns: Memo<Columns>) -> AnyElement {
     let form = app.form;
     let terminal = form == Form::Terminal;
     let action = untracked(|| row.with(|r| r.action.clone()));
@@ -432,17 +419,14 @@ fn line(
             .child(name)
             .into_element(),
         at(Column::Doing).child(doing).into_element(),
-        at(Column::Activity)
-            .child(activity(app, row, dash))
+        at(Column::Agent)
+            .child(quiet(form, fact(row, |r| r.agent.as_str()), true))
             .into_element(),
-        at(Column::Last)
-            .child(quiet(form, fact(row, |r| r.last_output.as_str()), false))
+        at(Column::Quiet)
+            .child(quiet(form, fact(row, |r| r.quiet.as_str()), false))
             .into_element(),
         at(Column::Since)
             .child(quiet(form, fact(row, |r| r.since.as_str()), true))
-            .into_element(),
-        at(Column::Cost)
-            .child(quiet(form, fact(row, |r| r.cost.as_str()), true))
             .into_element(),
     ];
     shell(app, row, move || run_roster(app, action.clone()), cells)
@@ -450,8 +434,8 @@ fn line(
 
 /// A phone row (`.ar` at 640 pt and under): the chip, the pinned mark and the name in semibold,
 /// the id at the trailing edge; what the session does, its one explanatory line, on up to two
-/// lines; then the activity strip. Pressing it opens the session page.
-fn phone_line(app: AppState, row: ReadSignal<RosterRow>, dash: &'static str) -> AnyElement {
+/// lines; then its profile, model and quiet time. Pressing it opens the session page.
+fn phone_line(app: AppState, row: ReadSignal<RosterRow>) -> AnyElement {
     let session = untracked(|| row.with(|r| r.session.clone()));
     let first = view()
         .flex_row()
@@ -498,12 +482,7 @@ fn phone_line(app: AppState, row: ReadSignal<RosterRow>, dash: &'static str) -> 
         .gap(px(4.0))
         .child(first)
         .child(doing)
-        .child(
-            view()
-                .flex_row()
-                .pt(px(2.0))
-                .child(activity(app, row, dash)),
-        )
+        .child(quiet(app.form, move || row.with(agent_line), true))
         .into_element();
     shell(
         app,

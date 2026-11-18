@@ -135,8 +135,6 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
         let env = app.env();
         let target = app.ask_target.get();
         let ThreadRef::Live(scope) = &source;
-        // Offline there is no session to refuse with: the message queues on the device.
-        let can_send = app.may_message();
         // The project brief shows as its own chip, so it is not repeated as the record chip.
         let context = app.composer_record_context();
         let project = app.composer_project();
@@ -152,7 +150,6 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
                                 target,
                                 text,
                                 context: context.as_ref(),
-                                can_send,
                                 staged,
                             },
                             project.as_ref(),

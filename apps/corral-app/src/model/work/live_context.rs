@@ -1,15 +1,17 @@
 //! What a task's context and the changes feed show in the Daemon state: the plan a task belongs
-//! to (the phone task page's plan section) and each change as a feed row, with why changes
-//! cannot be shown.
+//! to (its parent task; the phone task page's plan section) and each engine event as a feed row,
+//! with why changes cannot be shown.
 
-use corral_protocol::app::{CHANGES_PAGE, CHANGES_V1, ChangeLine};
+use corral_protocol::app::{CHANGES_PAGE, CHANGES_V1};
+use corral_types::{Actor, Event, EventKind};
+use serde_json::Value;
 
-use crate::model::board::ChangeKind;
+use crate::model::board::{ChangeKind, Mark};
 use crate::model::daemon::{Feed, Link};
 use crate::model::projects::ProjectFilter;
 use crate::model::{Id, Live};
 
-use super::{FeedRow, Press, loaded_task, stamp};
+use super::{FeedRow, Press, stamp_at};
 
 /// One quiet line in place of a panel's content, owned or fixed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,31 +46,9 @@ pub struct LivePlan {
     pub action: Option<Press>,
 }
 
-/// The plan of a task: the board's, or the detail's plan position.
-pub fn task_plan(feed: &Feed, task: &crate::model::daemon::Task) -> Option<Id> {
-    plan_of(feed, &task.id, task.plan.as_deref())
-}
-
-fn plan_of(feed: &Feed, id: &str, board: Option<&str>) -> Option<Id> {
-    board
-        .or_else(|| {
-            loaded_task(feed, id)?
-                .plan_context
-                .as_ref()
-                .map(|position| position.plan.as_str())
-        })
-        .map(Id::from)
-}
-
-/// The plan graph hand-off for a task, on the dock or the phone's task page.
-pub fn task_plan_context(feed: &Feed, task: &crate::model::daemon::Task) -> LivePlan {
-    plan_context(feed, &task.id, task.plan.as_deref())
-}
-
-/// The plan graph hand-off for a task by id; `board` is its board row's plan, absent for a
-/// task off the board.
-pub fn plan_context(feed: &Feed, id: &Id, board: Option<&str>) -> LivePlan {
-    let plan = plan_of(feed, id, board);
+/// The plan hand-off for task `id`: a plan is its parent task.
+pub fn plan_context(id: &Id, parent: Option<&str>) -> LivePlan {
+    let plan = parent.map(Id::new);
     LivePlan {
         heading: plan
             .as_ref()
@@ -82,107 +62,152 @@ pub fn plan_context(feed: &Feed, id: &Id, board: Option<&str>) -> LivePlan {
     }
 }
 
-/// The mark the feed draws for a change of `class`: a message dot for what needs the owner,
-/// a neutral stage mark for verdicts, a note for the rest.
-pub fn class_kind(class: &str) -> ChangeKind {
-    match class {
-        "attention" | "question" => ChangeKind::Message,
-        "gate" | "review" | "land" | "annotation" => {
-            ChangeKind::Mark(crate::model::board::Mark::Na)
-        }
+/// A string field of an event's detail.
+fn field<'a>(event: &'a Event, key: &str) -> Option<&'a str> {
+    event.detail.get(key).and_then(Value::as_str)
+}
+
+/// Whether an event records a failure: a red gate, a verdict asking for changes, an error.
+pub(super) fn failed(event: &Event) -> bool {
+    match event.kind {
+        EventKind::Error => true,
+        EventKind::Gate => field(event, "result") == Some("fail"),
+        EventKind::Verdict => event.detail.get("approve").and_then(Value::as_bool) == Some(false),
+        _ => false,
+    }
+}
+
+/// The mark the feed draws for an event: a failure's cross, a message dot for what needs the
+/// owner, a pass for a landing or a green check, a start for runs and moves, a note otherwise.
+fn event_mark(event: &Event) -> ChangeKind {
+    if failed(event) {
+        return ChangeKind::Mark(Mark::Fail);
+    }
+    match event.kind {
+        EventKind::Blocked | EventKind::Ready => ChangeKind::Message,
+        EventKind::Landed | EventKind::Gate | EventKind::Verdict => ChangeKind::Mark(Mark::Done),
+        EventKind::ReviewStarted | EventKind::SentBack => ChangeKind::Mark(Mark::Na),
+        EventKind::Created
+        | EventKind::Moved
+        | EventKind::Dispatched
+        | EventKind::Resumed
+        | EventKind::Reopened => ChangeKind::Start,
         _ => ChangeKind::Note,
     }
 }
 
-/// Older daemons may serve bookkeeping rows without a typed owner-feed kind.
-pub(super) fn owner_relevant(line: &ChangeLine) -> bool {
-    line.kind != corral_protocol::app::ChangeKind::Other
-        || matches!(
-            line.class.as_str(),
-            "work"
-                | "gate"
-                | "review"
-                | "land"
-                | "attention"
-                | "question"
-                | "comment"
-                | "annotation"
-                | "automation"
-                | "policy"
-                | "queue"
-                | "plan"
-        )
+/// `owner`, `agent`, `reviewer`, `assistant`, `auto`.
+pub(super) const fn actor_word(actor: Actor) -> &'static str {
+    match actor {
+        Actor::Owner => "owner",
+        Actor::Agent => "agent",
+        Actor::Reviewer => "reviewer",
+        Actor::Assistant => "assistant",
+        Actor::Auto => "auto",
+    }
 }
 
-fn event_kind(line: &ChangeLine) -> ChangeKind {
-    use corral_protocol::app::ChangeKind as Wire;
-    if line.failed {
-        return ChangeKind::Mark(crate::model::board::Mark::Fail);
-    }
-    match line.kind {
-        Wire::Attention | Wire::Question => ChangeKind::Message,
-        Wire::Gate | Wire::Review | Wire::Land | Wire::Annotation => {
-            ChangeKind::Mark(crate::model::board::Mark::Na)
+/// The first line of a free-text field, so a feed row stays one line.
+fn line(text: &str) -> &str {
+    text.lines().next().unwrap_or_default()
+}
+
+/// What an event says, from its kind and detail: `moved backlog → ready`, `gate failed`,
+/// `forced dispatch · skipped unfinished dependencies`.
+pub fn event_text(event: &Event) -> String {
+    let status = |key| field(event, key).map(|status| status.replace('_', " "));
+    match event.kind {
+        EventKind::Created => match status("status") {
+            Some(status) => format!("created as {status}"),
+            None => "created".into(),
+        },
+        EventKind::Moved => match (status("from"), status("to")) {
+            (Some(from), Some(to)) => format!("moved {from} → {to}"),
+            _ => "moved".into(),
+        },
+        EventKind::Commented => match field(event, "text") {
+            Some(text) => format!("commented: {}", line(text)),
+            None => "commented".into(),
+        },
+        EventKind::Dispatched => match field(event, "profile") {
+            Some(profile) => format!("dispatched · {profile}"),
+            None => "dispatched".into(),
+        },
+        EventKind::Blocked => match field(event, "reason") {
+            Some(reason) => format!("blocked: {}", line(reason)),
+            None => "blocked".into(),
+        },
+        EventKind::Done => "worker done".into(),
+        EventKind::Gate if failed(event) => "gate failed".into(),
+        EventKind::Gate => "gate passed".into(),
+        EventKind::ReviewStarted => "review started".into(),
+        EventKind::Verdict if failed(event) => "verdict: changes".into(),
+        EventKind::Verdict => "verdict: approve".into(),
+        EventKind::SentBack => match event.detail.get("round").and_then(Value::as_u64) {
+            Some(round) => format!("sent back · round {round}"),
+            None => "sent back".into(),
+        },
+        EventKind::Ready => "ready to land".into(),
+        EventKind::Landed => {
+            let sha: Option<String> = field(event, "sha").map(|sha| sha.chars().take(7).collect());
+            match (sha, field(event, "base")) {
+                (Some(sha), Some(base)) => format!("landed {sha} on {base}"),
+                (Some(sha), None) => format!("landed {sha}"),
+                _ => "landed".into(),
+            }
         }
-        Wire::Created | Wire::Moved | Wire::Work | Wire::Queue => ChangeKind::Start,
-        _ => class_kind(&line.class),
+        EventKind::Forced => forced_text(event),
+        EventKind::Error => match field(event, "reason") {
+            Some(reason) => format!("error: {}", line(reason)),
+            None => "error".into(),
+        },
+        EventKind::Artifact => match field(event, "title") {
+            Some(title) => format!("artifact: {title}"),
+            None => "artifact added".into(),
+        },
+        kind => kind.as_str().replace('_', " "),
     }
 }
 
-/// One daemon change as a feed row: its local time, its task (opening it), its words without
-/// the leading task id the row already shows, and corrald's attribution.
+/// `forced move · skipped status rule`: the operation and what force skipped, as recorded.
+fn forced_text(event: &Event) -> String {
+    let operation = field(event, "operation").unwrap_or("operation");
+    let skipped: Vec<&str> = event
+        .detail
+        .get("skipped")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if skipped.is_empty() {
+        format!("forced {operation} · skipped nothing")
+    } else {
+        format!("forced {operation} · skipped {}", skipped.join(", "))
+    }
+}
+
+/// One engine event as a feed row: its local time, its task (opening it), what it says and who
+/// did it.
 pub fn change_row_filtered(
-    line: &ChangeLine,
+    event: &Event,
     feed: &Feed,
     unseen: bool,
     filter: &ProjectFilter,
 ) -> FeedRow {
-    let id = line.task.clone().unwrap_or_default();
-    let words = line
-        .text
-        .strip_prefix(id.as_str())
-        .filter(|_| !id.is_empty())
-        .and_then(|rest| rest.strip_prefix(" · ").or_else(|| rest.strip_prefix(' ')))
-        .unwrap_or(&line.text);
-    let text = match (&line.kind, &line.from, &line.to) {
-        (corral_protocol::app::ChangeKind::Moved, Some(from), Some(to)) => {
-            format!(
-                "moved {} → {}",
-                from.replace('_', " "),
-                to.replace('_', " ")
-            )
-        }
-        _ if words
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') =>
-        {
-            words.replace('_', " ")
-        }
-        _ => words.to_owned(),
-    };
-    let by = match (line.actor.is_empty(), line.via.is_empty()) {
-        (true, true) => None,
-        (false, true) => Some(line.actor.clone()),
-        (true, false) => Some(format!("via {}", line.via)),
-        (false, false) => Some(format!("{} via {}", line.actor, line.via)),
-    };
     FeedRow {
-        at: stamp(&line.at, feed),
-        project_chip: line
+        at: stamp_at(event.ts, feed),
+        project_chip: event
             .task
             .as_deref()
             .and_then(|id| feed.board.task(id))
-            .and_then(|task| {
-                crate::model::projects::project_chip(feed, filter, task.project.as_deref())
-            }),
-        action: line
+            .and_then(|task| crate::model::projects::project_chip(feed, filter, task.project())),
+        action: event
             .task
             .as_deref()
-            .map(|task| Press::Open(Live::Task(Id::from(task)))),
-        id,
-        kind: event_kind(line),
-        text,
-        by,
+            .map(|task| Press::Open(Live::Task(Id::new(task)))),
+        id: event.task.clone().unwrap_or_default(),
+        kind: event_mark(event),
+        text: event_text(event),
+        by: Some(actor_word(event.actor).to_owned()),
         unseen,
         dim: !unseen,
         illustrative: false,

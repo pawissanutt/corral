@@ -1,45 +1,35 @@
 use super::*;
+use crate::model::daemon::{bare_task, task_row};
 use corral_protocol::rows::ProjectRow;
 
 fn project(id: &str) -> ProjectRow {
     ProjectRow {
         id: id.into(),
-        path: id.into(),
+        config: serde_json::Map::new(),
         open: 0,
-        running: 0,
-        review: 0,
-        needs_me: 0,
-        in_pm_scope: false,
-        autopilot: false,
-        rev: 1,
     }
 }
 
-fn board_task(id: &str, project: &str) -> crate::model::daemon::Task {
-    crate::model::daemon::Task {
-        id: Id::from(id),
-        title: id.into(),
-        project: Some(project.into()),
-        group: crate::model::daemon::Group::Producing,
-        now: "working".into(),
-        now_code: "working".into(),
-        ..unassigned_task()
-    }
+fn task(id: &str, project: Option<&str>, status: Status) -> Task {
+    let mut task = bare_task(id, id, status, jiff::Timestamp::UNIX_EPOCH);
+    task.project = project.map(str::to_owned);
+    Task::new(task_row(task))
 }
 
 #[test]
 fn project_page_rows_open_their_record_rather_than_select_into_a_panel_it_lacks() {
-    use crate::model::work::{NowPanel, NowRow, Press, State};
+    use crate::model::work::{NowPanel, Press, State};
 
     let mut feed = Feed::default();
-    feed.board_received(1, vec![board_task("T-1", "corral")], &[], true);
+    feed.board_received(
+        1,
+        vec![task("T-1", Some("corral"), Status::Running)],
+        &[],
+        true,
+    );
     feed.link = crate::model::daemon::Link::Up;
-    let state = State {
-        selected_ask: Some(Id::from("q-1")),
-        ..State::default()
-    };
     let page = project_now(
-        &state,
+        &State::default(),
         &feed,
         crate::model::Form::Desktop,
         &Id::from("corral"),
@@ -48,10 +38,7 @@ fn project_page_rows_open_their_record_rather_than_select_into_a_panel_it_lacks(
         .sections
         .iter()
         .flat_map(|section| &section.rows)
-        .filter_map(|row| match row {
-            NowRow::Task(row) => Some(row.action.clone()),
-            NowRow::Ask(_) => None,
-        })
+        .map(|row| row.action.clone())
         .collect();
     assert_eq!(
         actions,
@@ -61,46 +48,44 @@ fn project_page_rows_open_their_record_rather_than_select_into_a_panel_it_lacks(
 }
 
 #[test]
-fn project_sessions_are_those_on_its_own_tasks_without_the_workspace_pm() {
-    use corral_protocol::rows::{AgentRow, AgentStatus};
+fn project_sessions_are_the_live_runs_on_its_own_tasks() {
+    use corral_protocol::rows::AgentRow;
+    use corral_types::{Role, Run, SessionStatus};
 
-    let agent = |id: &str, role: &str, task: Option<&str>| AgentRow {
-        id: id.into(),
-        role: role.into(),
-        task: task.map(str::to_owned),
-        run: None,
-        title: id.into(),
-        profile: None,
-        runtime: None,
-        machine: None,
-        pane: None,
-        status: AgentStatus::Working,
-        now: String::new(),
-        since: None,
-        tail: vec![],
-        cost_usd: None,
-        cost_basis: None,
-        tokens: None,
-        rev: 1,
-        generation: None,
-        turn: None,
-        controls: Default::default(),
-        last_output_at: None,
-        activity: None,
-        steps: None,
+    let agent = |task: &str| AgentRow {
+        run: Run {
+            id: "R1".into(),
+            task: task.into(),
+            role: Role::Worker,
+            profile: "omp-sol".into(),
+            harness: "omp".into(),
+            model: None,
+            effort: None,
+            worktree: "/tmp/w".into(),
+            branch: "corral/t".into(),
+            base: "main".into(),
+            base_sha: "abc".into(),
+            session: None,
+            started: jiff::Timestamp::UNIX_EPOCH,
+            ended: None,
+            outcome: None,
+            summary: None,
+            head_sha: None,
+            quiet_since: None,
+        },
+        status: SessionStatus::Working,
     };
     let mut feed = Feed::default();
     feed.board.apply_batch(
         1,
-        vec![board_task("T-1", "corral"), board_task("T-2", "other")],
+        vec![
+            task("T-1", Some("corral"), Status::Running),
+            task("T-2", Some("other"), Status::Running),
+        ],
         &[],
     );
-    for row in [
-        agent("w1", "worker", Some("T-1")),
-        agent("w2", "worker", Some("T-2")),
-        agent("pm", "pm", Some("T-1")),
-    ] {
-        feed.agents.insert(Id::from(row.id.as_str()), row);
+    for task in ["T-1", "T-2"] {
+        feed.agents.insert(Id::from(format!("{task}_R1")), agent(task));
     }
     let page = page(&feed, &Id::from("corral")).expect("project page");
     let ids: Vec<_> = page
@@ -108,7 +93,7 @@ fn project_sessions_are_those_on_its_own_tasks_without_the_workspace_pm() {
         .iter()
         .map(|session| session.id.as_str())
         .collect();
-    assert_eq!(ids, vec!["w1"]);
+    assert_eq!(ids, vec!["T-1_R1"]);
 }
 
 #[test]
@@ -123,48 +108,18 @@ fn disappeared_project_filter_cannot_hide_every_row_forever() {
     assert_eq!(filter.resolved(&feed), ProjectFilter::All);
 }
 
-fn unassigned_task() -> crate::model::daemon::Task {
-    use crate::model::daemon::{Group, Step, Task};
-
-    Task {
-        id: "T-1".into(),
-        title: "Task".into(),
-        project: None,
-        plan: None,
-        goal: None,
-        group: Group::Other,
-        rail: std::array::from_fn(|_| Step {
-            mark: crate::model::board::Mark::Next,
-            sha7: None,
-            at: None,
-        }),
-        now: "queued".into(),
-        now_code: "queued".into(),
-        age_since: None,
-        since: None,
-        held_reason: None,
-        questions: 0,
-        attention: vec![],
-        agent: None,
-        cost: None,
-        cost_estimated: false,
-        rev: 1,
-    }
-}
-
 #[test]
 fn unassigned_filter_remains_accessible_when_last_open_task_is_assigned() {
     let mut feed = Feed::default();
     feed.capabilities
         .insert(corral_protocol::PROJECTS_V1.into());
     feed.projects.insert("corral".into(), project("corral"));
-    let mut task = unassigned_task();
-    feed.board.apply_batch(1, vec![task.clone()], &[]);
+    feed.board
+        .apply_batch(1, vec![task("T-1", None, Status::Ready)], &[]);
     let filter = ProjectFilter::Unassigned;
     assert_eq!(filter.resolved(&feed), filter);
-    task.project = Some("corral".into());
-    task.rev = 2;
-    feed.board.apply_batch(2, vec![task], &[]);
+    feed.board
+        .apply_batch(2, vec![task("T-1", Some("corral"), Status::Ready)], &[]);
     assert_eq!(filter.resolved(&feed), filter);
     let chips = chips(&feed, &filter, FilterScreen::Now);
     assert!(
@@ -212,7 +167,8 @@ fn persisted_filters_cannot_bleed_across_daemon_stores_or_screens() {
     for id in ["corral", "all", "unassigned"] {
         feed.projects.insert(id.into(), project(id));
     }
-    feed.board.apply_batch(1, vec![unassigned_task()], &[]);
+    feed.board
+        .apply_batch(1, vec![task("T-1", None, Status::Ready)], &[]);
     let mut filters = Filters::default();
     filters.set(
         "/one/.corral",
@@ -231,7 +187,7 @@ fn persisted_filters_cannot_bleed_across_daemon_stores_or_screens() {
     );
     filters.set(
         "/two/.corral",
-        FilterScreen::Inbox,
+        FilterScreen::Review,
         ProjectFilter::Project("unassigned".into()),
     );
     filters.set_now_group("/one/.corral", NowGroup::Project);
@@ -259,22 +215,11 @@ fn persisted_filters_cannot_bleed_across_daemon_stores_or_screens() {
 }
 
 #[test]
-fn a_project_chip_counts_what_waits_only_when_the_daemon_reports_it() {
+fn a_project_chip_counts_its_blocked_tasks_only_once_the_open_tasks_arrive() {
     let mut feed = Feed::default();
-    let filed = crate::model::daemon::Task {
-        id: "T-2".into(),
-        project: Some("corral".into()),
-        ..unassigned_task()
-    };
-    feed.board
-        .apply_batch(1, vec![unassigned_task(), filed], &[]);
-    feed.projects.insert(
-        "corral".into(),
-        ProjectRow {
-            needs_me: 3,
-            ..project("corral")
-        },
-    );
+    feed.capabilities
+        .insert(corral_protocol::PROJECTS_V1.into());
+    feed.projects.insert("corral".into(), project("corral"));
     feed.projects.insert("site".into(), project("site"));
     let needs = |feed: &Feed| {
         chips(feed, &ProjectFilter::All, FilterScreen::Now)
@@ -282,12 +227,16 @@ fn a_project_chip_counts_what_waits_only_when_the_daemon_reports_it() {
             .map(|chip| chip.needs)
             .collect::<Vec<_>>()
     };
-    // Without projects.v1 the rows carry no counts: corral gets no number, never a zero.
-    let legacy = needs(&feed);
-    assert_eq!(legacy.len(), 3, "All, corral, Unassigned");
-    assert!(legacy.iter().all(Option::is_none), "{legacy:?}");
-    feed.capabilities
-        .insert(corral_protocol::PROJECTS_V1.into());
-    // All, corral, site, Unassigned: only corral has something waiting.
-    assert_eq!(needs(&feed), vec![None, Some("3".into()), None, None]);
+    // Before the open tasks arrive nothing is counted: no number, never a zero.
+    assert!(needs(&feed).iter().all(Option::is_none));
+    feed.board.apply_batch(
+        1,
+        vec![
+            task("T-1", Some("corral"), Status::Blocked),
+            task("T-2", Some("corral"), Status::Running),
+        ],
+        &[],
+    );
+    // All, corral, site: only corral has something waiting.
+    assert_eq!(needs(&feed), vec![None, Some("1".into()), None]);
 }

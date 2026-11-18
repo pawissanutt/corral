@@ -10,8 +10,6 @@ pub enum FilterScreen {
     Now,
     Changes,
     Plans,
-    Builds,
-    Inbox,
     Review,
     Agents,
 }
@@ -21,8 +19,6 @@ impl FilterScreen {
             Self::Now => "now",
             Self::Changes => "changes",
             Self::Plans => "plans",
-            Self::Builds => "builds",
-            Self::Inbox => "inbox",
             Self::Review => "review",
             Self::Agents => "agents",
         }
@@ -32,8 +28,6 @@ impl FilterScreen {
             Destination::Now => Some(Self::Now),
             Destination::Changes => Some(Self::Changes),
             Destination::Plans => Some(Self::Plans),
-            Destination::Builds => Some(Self::Builds),
-            Destination::Inbox => Some(Self::Inbox),
             Destination::Review => Some(Self::Review),
             Destination::Agents => Some(Self::Agents),
             _ => None,
@@ -55,14 +49,14 @@ pub struct NowScope<'a> {
     pub grouping: NowGroup,
 }
 
+/// Unknown keys (the removed Inbox and Builds scopes) are ignored on read and dropped on the
+/// next write.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct StoreFilters {
     now: ProjectFilter,
     changes: ProjectFilter,
     plans: ProjectFilter,
-    builds: ProjectFilter,
-    inbox: ProjectFilter,
     review: ProjectFilter,
     agents: ProjectFilter,
     #[serde(rename = "now.group")]
@@ -74,8 +68,6 @@ impl StoreFilters {
             FilterScreen::Now => &mut self.now,
             FilterScreen::Changes => &mut self.changes,
             FilterScreen::Plans => &mut self.plans,
-            FilterScreen::Builds => &mut self.builds,
-            FilterScreen::Inbox => &mut self.inbox,
             FilterScreen::Review => &mut self.review,
             FilterScreen::Agents => &mut self.agents,
         }
@@ -85,8 +77,6 @@ impl StoreFilters {
             FilterScreen::Now => &self.now,
             FilterScreen::Changes => &self.changes,
             FilterScreen::Plans => &self.plans,
-            FilterScreen::Builds => &self.builds,
-            FilterScreen::Inbox => &self.inbox,
             FilterScreen::Review => &self.review,
             FilterScreen::Agents => &self.agents,
         }

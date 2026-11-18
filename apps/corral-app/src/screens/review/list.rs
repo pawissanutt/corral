@@ -148,7 +148,7 @@ fn outline_row(
         Form::Desktop | Form::Phone => two_lines(app, row, base),
     };
     let drawn = hint_on(app, drawn, row.hint.clone()).into_element();
-    let drawn = with_menu(app, Record::Review(Id::new(&row.id)), drawn);
+    let drawn = with_menu(app, Record::Task(Id::new(&row.id)), drawn);
     if selected {
         revealing(Id::new(&row.id), revealed, drawn)
     } else {

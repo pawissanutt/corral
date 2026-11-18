@@ -1,13 +1,13 @@
 //! App signals, persistence and effect dispatch. Domain reducers stay pure; this layer applies
-//! their effects in order and owns transient confirmations, overlays and toast timing. The live
-//! bridge to corrald (`live`) dispatches typed commands, details and assistant calls; `keys`
-//! routes the keyboard.
+//! their effects in order and owns the confirm and refusal sheets, overlays and toast timing.
+//! The live bridge to corrald (`live`) dispatches details and assistant calls, `ops` submits
+//! engine operations; `keys` routes the keyboard.
 
 mod attach;
-mod confirmation;
 mod devices;
 mod keys;
 mod live;
+mod ops;
 mod preview;
 mod projects;
 mod selection;
@@ -21,12 +21,12 @@ use corral_protocol::assistant::ContextRef;
 use nsh_core::prelude::*;
 use nsh_core::storage::Storage;
 
-use crate::model::act::{Confirmable, Confirmation};
+use crate::model::act::RefusalSheet;
 use crate::model::commands::Action;
 use crate::model::{
-    AskTarget, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay,
-    SettingsSection, SidebarPref, Snapshot, ThemeChoice, agents, assistant, daemon, inbox, plans,
-    review, settings, timeline, usage, work,
+    Act, AskTarget, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay,
+    SettingsSection, SidebarPref, Snapshot, ThemeChoice, agents, assistant, daemon, plans, review,
+    settings, timeline, usage, work,
 };
 
 const DESTINATION_KEY: &str = "corral.destination";
@@ -50,7 +50,6 @@ pub struct AppState {
     pub ask_draft: Signal<String>,
     /// Grows by one each time Ask opens, so the composer focuses its field.
     pub ask_focus: Signal<u32>,
-    pub inbox: source::StateSource<inbox::State>,
     pub work: source::StateSource<work::State>,
     pub plans: source::StateSource<plans::State>,
     pub timeline: Signal<timeline::State>,
@@ -59,8 +58,10 @@ pub struct AppState {
     pub review: source::StateSource<review::State>,
     pub settings: source::StateSource<settings::State>,
     pub assistant: source::StateSource<assistant::State>,
-    /// Fresh device confirmation shared by the daemon and the synthetic preview.
-    pub confirmation: Signal<Option<Confirmation>>,
+    /// The destructive or forced operation waiting for its one local confirmation.
+    pub confirm: Signal<Option<Act>>,
+    /// The engine's last refusal and its next steps, until one is pressed or it is closed.
+    pub refusal: Signal<Option<RefusalSheet>>,
     /// The real context "Ask about this" attached to the composer; cleared when Ask closes.
     pub ask_context: Signal<Option<ContextRef>>,
     /// Independent per-store screen scopes persisted as `corral.filters`.
@@ -78,11 +79,8 @@ pub struct AppState {
     /// The app's root owner: a picker's answer is awaited under it, so closing Ask or the
     /// sheet while the system picker is up does not drop the picked files.
     pub root: Owner,
-    /// Live commands sent from here whose receipt has not been shown yet, and where each
-    /// stands with this device's confirmation.
-    watching: Signal<BTreeMap<Id, (Confirmable, live::Watch)>>,
-    /// Revision under which the open device-bound preview was requested.
-    confirmation_revision: Signal<u64>,
+    /// Operations submitted from here whose receipt has not been shown yet.
+    watching: Signal<BTreeMap<Id, Act>>,
     device_ops: Signal<BTreeMap<Id, devices::DeviceOperation>>,
     /// Assistant session operations by their caller key, to the client's correlation.
     sessions: Signal<BTreeMap<Id, Id>>,
@@ -148,17 +146,6 @@ impl AppState {
             ask_target: signal(AskTarget::Assistant),
             ask_draft: signal(String::new()),
             ask_focus: signal(0),
-            inbox: source::StateSource::new(
-                data,
-                inbox::State {
-                    ids: crate::model::id::IdSupply::new(format!("{namespace}-id")),
-                    ..Default::default()
-                },
-                inbox::State {
-                    ids: crate::model::id::IdSupply::new(format!("{namespace}-if")),
-                    ..Default::default()
-                },
-            ),
             work: source::StateSource::new(
                 data,
                 work::State {
@@ -227,7 +214,8 @@ impl AppState {
                     ..Default::default()
                 },
             ),
-            confirmation: signal(None),
+            confirm: signal(None),
+            refusal: signal(None),
             ask_context: signal(None),
             filters: signal(projects::load_filters()),
             project_context_removed: signal(None),
@@ -237,7 +225,6 @@ impl AppState {
             ask_field_error: signal(None),
             root: Owner::current(),
             watching: signal(BTreeMap::new()),
-            confirmation_revision: signal(0),
             device_ops: signal(BTreeMap::new()),
             sessions: signal(BTreeMap::new()),
             toast: signal_with(None, SignalEquals::Never),
@@ -263,9 +250,8 @@ impl AppState {
         app.watch_receipts();
         app.follow_sidebar();
         app.follow_projects();
-        app.latch_previews();
+        app.settle_assistant_stops();
         app.follow_cached_feed();
-        app.follow_authority();
         app.watch_device_receipts();
         if form != Form::Phone {
             app.bind_keys();
@@ -392,11 +378,15 @@ impl AppState {
         }
     }
 
-    /// Escape priority: confirmation, model list, newest overlay, the selection on the Agents or
-    /// Now page in view, the narrow sidebar's labels, then top page.
+    /// Escape priority: confirm sheet, refusal sheet, model list, newest overlay, the selection
+    /// on the Agents or Now page in view, the narrow sidebar's labels, then top page.
     pub fn close_newest(&self) {
-        if self.confirmation.get_untracked().is_some() {
+        if self.confirm.get_untracked().is_some() {
             self.confirm_no();
+            return;
+        }
+        if self.refusal.get_untracked().is_some() {
+            self.close_refusal();
             return;
         }
         if self.work.with_untracked(|state| state.menu.is_some()) {
@@ -442,7 +432,8 @@ impl AppState {
             self.hotkey.set(false);
             self.share.set(false);
             self.lock.set(false);
-            self.invalidate_confirmations();
+            self.confirm.set(None);
+            self.refusal.set(None);
             let uploads = self.ask_staged.with_untracked(|staged| {
                 staged
                     .iter()
@@ -523,16 +514,6 @@ impl AppState {
     /// Shows a receipt; repeating the same text also restarts its root-owned delay.
     pub fn toast(&self, text: impl Into<String>) {
         self.toast.set(Some(text.into()));
-    }
-
-    /// Confirms the exact command shown by the shared device confirmation sheet.
-    pub fn confirm_yes(&self) {
-        self.confirm_live();
-    }
-
-    /// Cancels without applying or sending anything.
-    pub fn confirm_no(&self) {
-        self.cancel_live();
     }
 
     /// Applies reducer effects in source order through the selected feed's driver.
@@ -707,7 +688,7 @@ mod tests {
             ..Default::default()
         };
         feed.capabilities
-            .insert(corral_protocol::app::ACT_V1.into());
+            .insert(corral_protocol::TASKS_V1.into());
         feed.mark_stale();
         feed.link = daemon::Link::Down;
         assert!(feed.session.is_none());

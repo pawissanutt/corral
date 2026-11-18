@@ -1,13 +1,13 @@
-//! The Report, Artifacts and Gate log tabs: the rendered report (`.plan-doc`), the gate log's
-//! terminal capture (`.term`) with its provenance line, and the candidate's artifacts.
+//! The Summary, Artifacts and Gate log tabs: the worker run's summary (`.plan-doc`), the gate
+//! log's terminal capture (`.term`) with its provenance line, and the task's artifacts.
 
 use nsh_core::prelude::*;
 
 use crate::model::review::{ArtifactContent, ArtifactView, ArtifactsView, LogView, ReportView};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
-use crate::ui::kit::marks::{hue_ink, mark};
-use crate::ui::kit::text::{dim, h3, h3_flush, mono, plain};
+use crate::ui::kit::marks::hue_ink;
+use crate::ui::kit::text::{dim, h3_flush, mono, plain};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, Token, color, text_size};
 
@@ -24,8 +24,7 @@ const CURSOR: (f32, f32) = (7.0, 13.0);
 /// An image's frame before it has loaded and told its own proportions.
 const IMAGE_RATIO: f32 = 16.0 / 9.0;
 
-/// The rendered implementation report: heading, paragraphs, the acceptance list with its marks
-/// (a bullet where the record carries none), and the source line.
+/// The worker run's summary: heading, paragraphs and the source line.
 pub(super) fn report(app: AppState, report: &ReportView) -> AnyElement {
     let form = app.form;
     let terminal = form == Form::Terminal;
@@ -35,37 +34,6 @@ pub(super) fn report(app: AppState, report: &ReportView) -> AnyElement {
             .when(!terminal, |t| t.line_height(px(leading)))
             .into_element()
     };
-    let items = view()
-        .gap(px(if terminal { 0.0 } else { 4.0 }))
-        .map(|list| {
-            if terminal {
-                list.pl(term::cells(2.0))
-            } else {
-                list.pl(px(18.0))
-            }
-        })
-        .children(report.acceptance.iter().map(|item| {
-            let lead = match item.mark {
-                Some(state) => mark(app, state, Hue::Neutral),
-                None => text("•")
-                    .accessibility_elements_hidden(true)
-                    .text_color(color(Token::Ink3))
-                    .into_element(),
-            };
-            view()
-                .flex_row()
-                .items_start()
-                .gap(px(8.0))
-                .child(
-                    view()
-                        .flex_shrink_0()
-                        .when(!terminal && item.mark.is_some(), |m| m.pt(px(3.0)))
-                        .child(lead),
-                )
-                .when(terminal, |row| row.child(term::space(1.0)))
-                .child(paragraph(item.text.as_str()))
-                .into_element()
-        }));
     let gap = || {
         if terminal {
             term::blank()
@@ -82,16 +50,6 @@ pub(super) fn report(app: AppState, report: &ReportView) -> AnyElement {
             parts.push(gap());
         }
         parts.push(paragraph(words.as_str()));
-    }
-    if !report.acceptance.is_empty() {
-        if terminal {
-            parts.push(term::blank());
-        }
-        parts.push(h3(app, report.acceptance_heading, None));
-        if terminal {
-            parts.push(term::blank());
-        }
-        parts.push(items.into_element());
     }
     parts.push(gap());
     parts.push(rich_at(app, &report.source, 12.0, Token::Ink3, false).into_element());

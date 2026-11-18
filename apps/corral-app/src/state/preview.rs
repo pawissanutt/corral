@@ -60,12 +60,13 @@ impl AppState {
         });
     }
 
+    /// The sample engine records the outcome under the operation's key, as the client does.
     pub(super) fn simulate(&self, act: &Act) {
         let mut outcome = Ok(());
         self.feed.update(|feed| outcome = preview::act(feed, act));
-        match outcome {
-            Ok(()) => {}
-            Err(why) => self.toast(format!("Preview · {} · {why}", act.title)),
+        if let Err(why) = outcome {
+            self.watching.update(|watching| _ = watching.remove(&act.key));
+            self.toast(format!("Preview · {} · {why}", act.title));
         }
     }
 
@@ -74,14 +75,6 @@ impl AppState {
             Effect::Act(act) => self.dispatch(act),
             Effect::Detail(get) => {
                 self.preview_detail(get.target);
-            }
-            Effect::Recover(key) => {
-                let status = self.act_status(&key);
-                self.toast(
-                    status
-                        .map(|status| status.line())
-                        .unwrap_or_else(|| "Preview · no local command with this identity".into()),
-                );
             }
             Effect::Stop(stop) => {
                 let key = crate::model::Id::from(crate::client::requests::new_id());

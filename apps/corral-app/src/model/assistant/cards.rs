@@ -4,15 +4,13 @@ use super::{Action, Button, Chip};
 use crate::model::hue::Hue;
 use crate::model::text::Rich;
 
-/// Authority class displayed on an owner-action card.
+/// How a recorded owner-action card was classed when it ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionClass {
     /// Ordinary owner instruction.
     Run,
-    /// Fresh confirmation required on this device.
+    /// Confirmation on this device before it runs.
     Confirm,
-    /// This device lacks authority to run the proposed action.
-    AskAndFileOnly,
     /// Input arrived too late to instruct.
     Late,
 }
@@ -23,7 +21,6 @@ impl ActionClass {
         match self {
             Self::Run => "runs on your instruction",
             Self::Confirm => "confirm on this device",
-            Self::AskAndFileOnly => "this device may ask and file only",
             Self::Late => "late · cannot instruct",
         }
     }
@@ -56,8 +53,6 @@ pub enum ActionOutcome {
     Pending(String),
     /// The outcome was lost; it may have run.
     Unknown(String),
-    /// No command ran because this client lacks instruct permission.
-    AskAndFileOnly(Rich),
     /// No command ran because this input was delivered over fifteen minutes late.
     Late {
         typed: String,
@@ -150,18 +145,6 @@ pub struct AskOption {
     pub action: Option<Action>,
 }
 
-/// The free-text answer a question takes in the thread: the field (its name, and the words a
-/// refused answer keeps) and Send, which carries the typed words when pressed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TextReply {
-    /// The field's accessible name and placeholder.
-    pub label: &'static str,
-    /// The field's starting text: the words of an answer corrald refused, else empty.
-    pub value: String,
-    /// Send, disabled while an answer is in flight.
-    pub send: Button,
-}
-
 /// An ask_user card: the question, its options and how it was answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskUserCard {
@@ -171,8 +154,6 @@ pub struct AskUserCard {
     pub question: Rich,
     /// Choices with consequences.
     pub options: Vec<AskOption>,
-    /// The owner's own words as the answer, while the question takes them.
-    pub reply: Option<TextReply>,
     /// Answer time, input id and response surface, or the pending/refused state of an answer.
     pub answer: Option<Rich>,
 }
@@ -187,15 +168,11 @@ pub struct DiffLine {
     pub text: String,
 }
 
-/// A permission button plus its presence requirement.
+/// A permission button.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionChoice {
     /// Grant or deny button.
     pub button: Button,
-    /// Gate activation behind a fresh confirmation on this device when true.
-    pub requires_presence: bool,
-    /// Presence prompt wording, absent for one-shot approval and denial.
-    pub presence_prompt: Option<&'static str>,
 }
 
 /// File-write permission prompt, reused in the thread and Inbox.
@@ -209,10 +186,8 @@ pub struct PermissionCard {
     pub path: String,
     /// Preview lines.
     pub lines: Vec<DiffLine>,
-    /// Grants and the denial, already resolved for presence rules; empty once answered.
+    /// Grants and the denial; empty once answered.
     pub choices: Vec<PermissionChoice>,
-    /// Explanation of standing grants.
-    pub presence_note: Option<&'static str>,
     /// Prompt deadline and first-answer-wins semantics.
     pub timer_note: Option<String>,
     /// Preview disclosure (fixture only).
@@ -245,14 +220,6 @@ pub enum Editing {
     Title,
 }
 
-/// The merge destination field of a filed Idea; the field owns the typed id, and the renderer
-/// fills `MergeInto::into` from it when Merge is pressed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MergeInput {
-    /// Merge and Cancel.
-    pub buttons: Vec<Button>,
-}
-
 /// An assistant-filed Idea, with the unchanged request before editable generated fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FiledCard {
@@ -270,8 +237,6 @@ pub struct FiledCard {
     pub quote_label: &'static str,
     /// Which fields are shown as editable.
     pub editing: Editing,
-    /// The merge destination field, while merging.
-    pub merge: Option<MergeInput>,
     /// Optional related record, already linked.
     pub related: Option<Rich>,
     /// Edit/Merge/Discard, or Save/Cancel in edit state.

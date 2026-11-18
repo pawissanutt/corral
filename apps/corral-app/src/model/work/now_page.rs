@@ -1,14 +1,14 @@
-//! The main-loop Now page for every form: owner moves, moving tasks, Waiting, Closed, the loop
-//! band and one side panel driven by one selection.
-use corral_protocol::rows::PlanState;
+//! The main-loop Now page for every form: the tasks that move (needs you, corral, workers),
+//! Waiting (queued, backlog, ideas), Closed, the loop band and one side panel driven by one
+//! selection.
+use corral_types::Status;
 use std::collections::BTreeMap;
 
 use super::{
-    Action, Button, ClosedView, GroupKey, Inspector, NowAskPanel, NowAskRow, NowDigest, Press, Row,
-    State, TaskRow,
+    Action, Button, ClosedView, GroupKey, Inspector, NowDigest, Press, Row, State, TaskRow,
 };
-use crate::model::board::{Actor, Mark, TaskLine};
-use crate::model::daemon::Feed;
+use crate::model::board::{Mark, TaskLine};
+use crate::model::daemon::{self, Feed};
 use crate::model::glance::{LoopBand, LoopStage, StageRail, Stat, StatIcon};
 use crate::model::projects::{FilterScreen, NowGroup, ProjectFilter, project_chip};
 use crate::model::{Destination, Form, Hue, Selection};
@@ -30,16 +30,11 @@ pub struct NowTaskRow {
 }
 
 impl NowTaskRow {
-    /// The phone explanatory line is the daemon's now-phrase, not another stored copy.
+    /// The phone explanatory line is the row's now-phrase: a Blocked task's reason, else where
+    /// it stands.
     pub fn explanation(&self) -> &str {
         &self.line.now
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NowRow {
-    Ask(NowAskRow),
-    Task(NowTaskRow),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,10 +44,10 @@ pub struct NowSection {
     pub count: usize,
     pub hue: Hue,
     pub hint: String,
-    pub rows: Vec<NowRow>,
+    pub rows: Vec<NowTaskRow>,
 }
 
-/// One of Waiting's groups (Upcoming, Held, Parked): its rows, then the line showing its hidden
+/// One of Waiting's groups (Queued, Backlog, Ideas): its rows, then the line showing its hidden
 /// rest while the group is collapsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NowWaitingGroup {
@@ -81,7 +76,6 @@ pub struct NowWaiting {
 #[derive(Debug, Clone, PartialEq)]
 pub enum NowPanel {
     Digest(NowDigest),
-    Ask(NowAskPanel),
     Task(Inspector),
     Closed(Inspector),
 }
@@ -111,9 +105,9 @@ pub struct NowPage {
 
 impl NowPage {
     /// The list's name for screen readers.
-    pub const LIST_LABEL: &'static str = "Who acts next";
+    pub const LIST_LABEL: &'static str = "Who moves next";
     /// What screen readers hear for the placeholder rows while the board loads.
-    pub const LOADING: &'static str = "Loading the board";
+    pub const LOADING: &'static str = "Loading open tasks";
 
     /// Opening `to` from this page carries Now's scope into that destination's own filter.
     pub fn scope_for(&self, to: Destination) -> Option<NowScopeAction> {
@@ -143,21 +137,21 @@ pub fn now_page(
         loading_rows,
         notice,
     } = now_list(state, feed, selection, form, &filter, grouping);
-    let needs = crate::model::inbox::attention_counts_filtered(feed, &filter).total;
-    let elsewhere = crate::model::inbox::attention_counts_filtered(feed, &ProjectFilter::All)
-        .total
-        .saturating_sub(needs);
-    let stale = scoped_tasks(feed, &filter)
-        .filter(|task| task.rail.iter().any(|step| step.mark == Mark::Stale))
+    let needs = scoped_tasks(feed, &filter)
+        .filter(|task| task.group == daemon::Group::NeedsYou)
         .count();
+    let elsewhere = feed
+        .board
+        .count(daemon::Group::NeedsYou)
+        .saturating_sub(needs);
     let mut stats = Vec::new();
     push_count(
         &mut stats,
         "needs-you",
         StatIcon::NeedsYou,
-        needs,
+        needs as u64,
         Hue::You,
-        format!("{needs} things wait on you"),
+        format!("{needs} tasks wait on you"),
     );
     let moving = verifying + workers;
     push_count(
@@ -168,23 +162,15 @@ pub fn now_page(
         Hue::Corral,
         format!("{moving} tasks are moving: {verifying} in verification, {workers} with a worker"),
     );
-    push_count(
-        &mut stats,
-        "stale",
-        StatIcon::Stale,
-        stale as u64,
-        Hue::Held,
-        format!("{stale} tasks have a stale stage result"),
-    );
     let digest = super::now_digest::digest(feed, &filter);
     let loop_band = band(feed, &filter, digest.landed.as_ref());
     let mut closed = super::closed_offered(feed)
         .then(|| super::closed_view_filtered(state, feed, selection, form, &filter));
-    if state.selected_ask.is_some() || state.digest_only {
-        if let Some(closed) = &mut closed {
-            for row in &mut closed.rows {
-                row.selected = false;
-            }
+    if state.digest_only
+        && let Some(closed) = &mut closed
+    {
+        for row in &mut closed.rows {
+            row.selected = false;
         }
     }
     let closed_landed = closed
@@ -203,7 +189,7 @@ pub fn now_page(
                 StatIcon::Landed,
                 count.to_string(),
                 Hue::Ok,
-                format!("{count} landed tasks on this loaded closed page"),
+                format!("{count} done tasks on this loaded closed page"),
             )
         })
         .or_else(|| {
@@ -212,19 +198,8 @@ pub fn now_page(
                 ..landed
             })
         });
-    let selected_ask =
-        sections
-            .iter()
-            .flat_map(|section| &section.rows)
-            .find_map(|row| match row {
-                NowRow::Ask(ask) if state.selected_ask.as_ref() == Some(&ask.key) => Some(ask),
-                _ => None,
-            });
-    let panel = if let Some(ask) = selected_ask {
-        NowPanel::Ask(super::now_asks::panel(feed, ask.clone()))
     // A phone pushes the selected task's page instead; its Now keeps the digest's summary row.
-    } else if form != Form::Phone
-        && state.selected_ask.is_none()
+    let panel = if form != Form::Phone
         && !state.digest_only
         && selection.task.as_ref().is_some_and(|id| {
             scoped_tasks(feed, &filter).any(|task| &task.id == id)
@@ -233,8 +208,7 @@ pub fn now_page(
                         || closed
                             .as_ref()
                             .is_some_and(|closed| closed.rows.iter().any(|row| &row.id == id))))
-        })
-    {
+        }) {
         let inspector =
             super::daemon_inspector_filtered(state, feed, selection, form, &filter, grouping);
         if super::off_board(selection, feed).is_some() {
@@ -251,22 +225,17 @@ pub fn now_page(
         .sum();
     let mut waiting_stats = Vec::new();
     for group in &waiting_groups {
-        let (key, icon, noun, hue) = match group.key {
-            GroupKey::Held => ("held", StatIcon::Held, "held", Hue::Held),
-            GroupKey::Parked => ("parked", StatIcon::Parked, "parked", Hue::Neutral),
-            _ => (
-                "queued",
-                StatIcon::Queued,
-                "queued or upcoming",
-                Hue::Neutral,
-            ),
+        let (key, icon, noun) = match group.key {
+            GroupKey::Backlog => ("backlog", StatIcon::Parked, "in the backlog"),
+            GroupKey::Ideas => ("ideas", StatIcon::Parked, "ideas"),
+            _ => ("queued", StatIcon::Queued, "queued"),
         };
         push_count(
             &mut waiting_stats,
             key,
             icon,
             u64::from(group.count),
-            hue,
+            Hue::Neutral,
             format!("{} tasks are {noun}", group.count),
         );
     }
@@ -290,7 +259,7 @@ pub fn now_page(
         waiting: NowWaiting {
             label: "Waiting",
             total,
-            hint: format!("{total} tasks are queued, held or parked"),
+            hint: format!("{total} tasks are queued, in the backlog or ideas"),
             stats: waiting_stats,
             expanded: state.waiting_open,
             toggle: Press::Work(Action::ToggleWaiting),
@@ -325,24 +294,15 @@ pub(super) fn now_list(
     filter: &ProjectFilter,
     grouping: NowGroup,
 ) -> NowList {
-    let mut asks = super::now_asks::asks(state, feed, filter);
-    // A phone has no side panel: an owner move's row opens its record, as its button does.
-    if form == Form::Phone {
-        for ask in &mut asks {
-            ask.selected = false;
-            if let Some(open) = ask.button.action.clone() {
-                ask.select = open;
-            }
-        }
-    }
     let source = super::daemon_list_filtered(state, feed, selection, form, filter, NowGroup::State);
+    let mut needs = Vec::new();
     let mut verifying = Vec::new();
     let mut workers = Vec::new();
     let mut waiting_groups = Vec::new();
     for group in source.groups {
         if matches!(
             group.key,
-            GroupKey::Queued | GroupKey::Held | GroupKey::Parked
+            GroupKey::Queued | GroupKey::Backlog | GroupKey::Ideas
         ) {
             let mut rows = Vec::new();
             let mut more = None;
@@ -364,13 +324,10 @@ pub(super) fn now_list(
             });
             continue;
         }
-        if group.key == GroupKey::You {
-            continue;
-        }
-        let target = if group.key == GroupKey::Corral {
-            &mut verifying
-        } else {
-            &mut workers
+        let target = match group.key {
+            GroupKey::You => &mut needs,
+            GroupKey::Corral => &mut verifying,
+            _ => &mut workers,
         };
         for row in group.rows {
             if let Row::Task(row) = row {
@@ -381,9 +338,9 @@ pub(super) fn now_list(
     let verifying_count = verifying.len();
     let worker_count = workers.len();
     let sections = if grouping == NowGroup::Project {
-        by_project(asks, verifying, workers)
+        by_project(needs, verifying, workers)
     } else {
-        by_actor(asks, verifying, workers)
+        by_actor(needs, verifying, workers)
     };
     NowList {
         sections,
@@ -395,7 +352,7 @@ pub(super) fn now_list(
     }
 }
 
-/// A board row with its named rail, selected only while no owner move or digest holds the panel.
+/// A board row with its named rail, selected only while the digest does not hold the panel.
 fn task_row(
     state: &State,
     feed: &Feed,
@@ -407,10 +364,9 @@ fn task_row(
     let task = feed.board.task(&row.line.id)?;
     Some(NowTaskRow {
         rail: StageRail::daemon(task, row.line.actor),
-        project: task.project.clone(),
-        project_chip: project_chip(feed, filter, task.project.as_deref()),
+        project: task.project().map(str::to_owned),
+        project_chip: project_chip(feed, filter, task.project()),
         selected: form != Form::Phone
-            && state.selected_ask.is_none()
             && !state.digest_only
             && selection.task.as_ref() == Some(&task.id),
         action: row.action,
@@ -421,15 +377,15 @@ fn task_row(
 pub(super) fn scoped_tasks<'a>(
     feed: &'a Feed,
     filter: &'a ProjectFilter,
-) -> impl Iterator<Item = &'a crate::model::daemon::Task> {
+) -> impl Iterator<Item = &'a daemon::Task> {
     feed.board
         .tasks()
         .iter()
-        .filter(move |task| filter.matches(task.project.as_deref()))
+        .filter(move |task| filter.matches(task.project()))
 }
 
 fn by_actor(
-    asks: Vec<NowAskRow>,
+    needs: Vec<NowTaskRow>,
     verifying: Vec<NowTaskRow>,
     workers: Vec<NowTaskRow>,
 ) -> Vec<NowSection> {
@@ -438,22 +394,22 @@ fn by_actor(
             "you",
             "Needs you",
             Hue::You,
-            "Owner moves wait on you",
-            asks.into_iter().map(NowRow::Ask).collect::<Vec<_>>(),
+            "Blocked, or reviewed and ready to land: you move next",
+            needs,
         ),
         (
             "corral",
             "Corral",
             Hue::Corral,
-            "Corral is gating, reviewing or landing these tasks",
-            verifying.into_iter().map(NowRow::Task).collect(),
+            "Corral is gating or reviewing these tasks",
+            verifying,
         ),
         (
             "workers",
             "Workers",
             Hue::Worker,
             "Workers are producing these tasks",
-            workers.into_iter().map(NowRow::Task).collect(),
+            workers,
         ),
     ]
     .into_iter()
@@ -470,25 +426,18 @@ fn by_actor(
 }
 
 fn by_project(
-    asks: Vec<NowAskRow>,
+    needs: Vec<NowTaskRow>,
     verifying: Vec<NowTaskRow>,
     workers: Vec<NowTaskRow>,
 ) -> Vec<NowSection> {
     // The leading bool keeps Unassigned after every real project, even one named Unassigned.
-    let mut projects: BTreeMap<(bool, String), Vec<NowRow>> = BTreeMap::new();
-    for mut row in asks {
+    let mut projects: BTreeMap<(bool, String), Vec<NowTaskRow>> = BTreeMap::new();
+    for mut row in needs.into_iter().chain(verifying).chain(workers) {
         row.project_chip = None;
         projects
             .entry(project_key(row.project.as_deref()))
             .or_default()
-            .push(NowRow::Ask(row));
-    }
-    for mut row in verifying.into_iter().chain(workers) {
-        row.project_chip = None;
-        projects
-            .entry(project_key(row.project.as_deref()))
-            .or_default()
-            .push(NowRow::Task(row));
+            .push(row);
     }
     projects
         .into_iter()
@@ -498,7 +447,7 @@ fn by_project(
             } else {
                 format!("project-{label}")
             },
-            hint: format!("{} owner moves and moving tasks in {label}", rows.len()),
+            hint: format!("{} moving tasks in {label}", rows.len()),
             count: rows.len(),
             label,
             hue: Hue::Neutral,
@@ -511,35 +460,38 @@ fn project_key(project: Option<&str>) -> (bool, String) {
     (project.is_none(), project.unwrap_or("Unassigned").into())
 }
 
+/// How many of a plan's children are in `statuses`.
+fn children_in(plan: &corral_protocol::rows::PlanRow, statuses: &[Status]) -> u64 {
+    plan.child_counts
+        .iter()
+        .filter(|count| statuses.contains(&count.status))
+        .map(|count| count.count)
+        .sum()
+}
+
 fn band(feed: &Feed, filter: &ProjectFilter, landed: Option<&Stat>) -> LoopBand {
     let mut plan_stats = Vec::new();
     for (key, wanted, icon, hue, phrase) in [
         (
             "needs-you",
-            PlanState::Awaiting,
+            &[Status::Blocked][..],
             StatIcon::NeedsYou,
             Hue::You,
-            "await acceptance",
+            "have a blocked child",
         ),
         (
             "moving",
-            PlanState::Executing,
+            &[Status::Running, Status::Review][..],
             StatIcon::Moving,
             Hue::Corral,
-            "are executing",
+            "have children moving",
         ),
     ] {
         let count = feed
             .plans
             .values()
-            .filter(|plan| match filter {
-                ProjectFilter::All => true,
-                ProjectFilter::Project(id) => {
-                    plan.projects.iter().any(|project| project == id.as_str())
-                }
-                ProjectFilter::Unassigned => plan.projects.is_empty(),
-            })
-            .filter(|plan| plan.state == wanted)
+            .filter(|plan| filter.matches(plan.parent.project.as_deref()))
+            .filter(|plan| children_in(plan, wanted) > 0)
             .count();
         push_count(
             &mut plan_stats,
@@ -553,7 +505,7 @@ fn band(feed: &Feed, filter: &ProjectFilter, landed: Option<&Stat>) -> LoopBand 
     let mut stages = vec![LoopStage {
         key: "plan",
         label: "Plan",
-        hint: "Plans awaiting acceptance or executing. Opens Plans in this scope.".into(),
+        hint: "Plans with blocked or moving children. Opens Plans in this scope.".into(),
         stats: plan_stats,
         to: Some(Destination::Plans),
     }];
@@ -562,31 +514,23 @@ fn band(feed: &Feed, filter: &ProjectFilter, landed: Option<&Stat>) -> LoopBand 
         (1, "gate", "Gate", Destination::Review),
         (2, "review", "Review", Destination::Review),
     ] {
-        let mut counts = [0_u64; 3];
+        let mut counts = [0_u64; 2];
         for task in scoped_tasks(feed, filter) {
-            let group = super::served::task_group(feed, task);
-            let actor = if group == GroupKey::You {
-                Actor::You
-            } else {
-                crate::model::board::daemon_actor(task.group)
-            };
+            let actor = crate::model::board::daemon_actor(task.group);
             let rail = StageRail::daemon(task, actor);
             if rail.current != Some(index) {
                 continue;
             }
-            if actor == Actor::You {
-                counts[0] += 1;
-            } else if rail.marks[index] == Mark::Stale {
-                counts[2] += 1;
-            } else if matches!(group, GroupKey::Corral | GroupKey::Worker) {
-                counts[1] += 1;
+            match task.group {
+                daemon::Group::NeedsYou => counts[0] += 1,
+                daemon::Group::Verifying | daemon::Group::Producing => counts[1] += 1,
+                _ => {}
             }
         }
         let mut stats = Vec::new();
         for (index, stat_key, icon, hue, phrase) in [
             (0, "needs-you", StatIcon::NeedsYou, Hue::You, "wait on you"),
             (1, "moving", StatIcon::Moving, Hue::Corral, "are moving"),
-            (2, "stale", StatIcon::Stale, Hue::Held, "have stale results"),
         ] {
             push_count(
                 &mut stats,
@@ -608,7 +552,7 @@ fn band(feed: &Feed, filter: &ProjectFilter, landed: Option<&Stat>) -> LoopBand 
     stages.push(LoopStage {
         key: "land",
         label: "Land",
-        hint: "Recorded landings since your last visit in loaded history.".into(),
+        hint: "Landings since your last visit in loaded history.".into(),
         stats: landed.cloned().into_iter().collect(),
         to: None,
     });

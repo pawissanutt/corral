@@ -298,16 +298,11 @@ pub fn button_row(app: AppState, buttons: &[Button], kind: ButtonKind, gap: f32)
 pub fn test_id(button: &Button) -> String {
     let subject = match &button.action {
         Action::EditIdea(Some(id))
-        | Action::MergeIdea(Some(id))
         | Action::SaveIdea { task: id, .. }
-        | Action::MergeInto { task: id, .. }
         | Action::DiscardIdea(id)
         | Action::FileEntry(id)
-        | Action::WithdrawEntry(id)
-        | Action::WithdrawPm { id, .. }
         | Action::CancelSend(id)
-        | Action::Answer { key: id, .. }
-        | Action::AnswerText { key: id, .. } => Some(id.as_str()),
+        | Action::Answer { key: id, .. } => Some(id.as_str()),
         _ => None,
     };
     let mut slug = String::with_capacity(button.label.len() + 8);

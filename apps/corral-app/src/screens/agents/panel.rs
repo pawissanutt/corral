@@ -1,20 +1,20 @@
 //! The selected session's panel (`.apanel`, the mock's `agentPanel`), from `RosterPanel`: the
-//! head (state, role, id, project, close; the name; profile, runtime, pane and since), the
-//! Summary | Terminal tabs with Open session, then the Summary (what waits on the owner, what
-//! the session does now with its activity, its steps, what it said and did) or the pane's
-//! terminal, and the reply box pinned under them. Every press goes through the roster's
+//! head (state, role, id, project, close; the name; profile, model, harness, pane and since),
+//! the Summary | Terminal tabs with Open session and the Actions menu of the run's task, then the
+//! Summary (what waits on the owner, what the session does now, what it said and did) or the
+//! pane's terminal, and the reply box pinned under them. Every press goes through the roster's
 //! selection (`run_roster`), never the full session route.
 //!
 //! The panel keeps what it shows loaded while it stays open (`RosterPanel::wants`), as the
-//! session page does: the transcript read once and again when the session's row changes, the
-//! pane's screen streamed (or revalidated once a tick where corrald does not stream) while the
-//! Terminal tab shows, a waiting question read once.
+//! session page does: the transcript read once and again when the run's row changes, the pane's
+//! screen streamed (or revalidated once a tick where corrald does not stream) while the Terminal
+//! tab shows.
 
 use corral_protocol::detail::{DetailRef, STREAM_TERMINAL_V1};
 use nsh_core::prelude::*;
 
-use crate::model::Form;
 use crate::model::agents::{Action, RosterPanel, RosterPanelTab};
+use crate::model::{Form, Id};
 use crate::model::daemon::Link;
 use crate::model::hue::Hue;
 use crate::screens::assistant;
@@ -28,7 +28,7 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 use super::console::{self, BIG};
 use super::panel_summary::summary;
 use super::session::{self, Rows, Termbar};
-use super::{reply, run_roster, segs};
+use super::{controls, reply, run_roster, segs};
 
 /// The panel's width beside the roster (desktop points; the mock's 448 less its rule and
 /// paddings' rounding) and over it (`min(460px, 100%)`).
@@ -176,22 +176,19 @@ fn keep_loaded(app: AppState, current: Memo<RosterPanel>) {
             }
         });
     });
-    let rev = computed({
+    let row = computed({
         let id = id.clone();
-        move || {
-            app.feed
-                .with(|feed| feed.agents.get(id.as_str()).map(|row| row.rev))
-        }
+        move || app.feed.with(|feed| feed.agents.get(id.as_str()).cloned())
     });
-    let seen = stored(None::<Option<u64>>);
+    let seen = stored(None::<Option<corral_protocol::rows::AgentRow>>);
     {
         let id = id.clone();
         effect(move || {
-            let now = rev.get();
+            let now = row.get();
             let earlier = app
                 .agents
                 .with_untracked(|state| state.earlier.contains(id.as_str()));
-            if let Some(before) = seen.replace(Some(now))
+            if let Some(before) = seen.replace(Some(now.clone()))
                 && before != now
                 && !earlier
             {
@@ -236,7 +233,7 @@ fn keep_loaded(app: AppState, current: Memo<RosterPanel>) {
         app.feed
             .with(|feed| (feed.link == Link::Up).then_some(feed.now))
     });
-    let tried = stored(None::<Option<u64>>);
+    let tried = stored(None::<Option<corral_protocol::rows::AgentRow>>);
     effect(move || {
         let Some(pane) = pane.get().filter(|_| !streamed.get()) else {
             tried.replace(None);
@@ -247,8 +244,8 @@ fn keep_loaded(app: AppState, current: Memo<RosterPanel>) {
             return;
         }
         untracked(|| {
-            let row = rev.get();
-            let changed = tried.replace(Some(row)) != Some(row);
+            let now = row.get();
+            let changed = tried.replace(Some(now.clone())) != Some(now);
             let target = DetailRef::Terminal { id: pane };
             let failed = app.feed.with(|feed| {
                 feed.detail(&target)
@@ -276,6 +273,7 @@ struct Head {
     tabs: Vec<(&'static str, &'static str, Action)>,
     open_label: &'static str,
     open: Action,
+    task: Option<Id>,
 }
 
 /// The head (`.phd`): the state chip, role, id and project with close at the trailing edge (a
@@ -300,6 +298,7 @@ fn head(app: AppState, current: Memo<RosterPanel>, place: Memo<Place>) -> AnyEle
                 .collect(),
             open_label: p.open_label,
             open: p.open.clone(),
+            task: p.task.clone(),
         })
     });
     let chosen = computed(move || {
@@ -384,7 +383,8 @@ fn head_view(
             ButtonKind::Quiet,
             "btn-open-session",
             move || run_roster(app, open.clone()),
-        ));
+        ))
+        .children(head.task.clone().map(|task| controls::actions(app, task)));
     let block = view()
         .flex_none()
         .child(first)

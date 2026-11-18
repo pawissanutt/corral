@@ -12,44 +12,10 @@ impl AppState {
             feed.update(|feed| feed.problem = Some(problem));
         }
         match event {
-            Event::Notice { method, params } if method == SESSION_AUTHORITY_CHANGED => {
-                let changed: wire::device::SessionAuthorityChanged = decode(params)?;
-                let current = feed.with_untracked(|feed| {
-                    feed.session
-                        .as_ref()
-                        .map(|session| session.device.id.clone())
-                });
-                if current.as_deref() != Some(changed.device.as_str()) {
-                    return Ok(vec![]);
-                }
-                let newer = feed.with_untracked(|feed| changed.revision > feed.authority_revision);
-                if !newer {
-                    return Ok(vec![]);
-                }
-                feed.update(|feed| {
-                    feed.authority_revision = changed.revision;
-                    if let Some(session) = &mut feed.session {
-                        session.authority = DeviceAuthority::default();
-                    }
-                    feed.operations.retain(|_, op| {
-                        !matches!(
-                            op.method.as_str(),
-                            ACT_PREVIEW | PROMPT_PREVIEW | DEVICE_AUTHORITY_PREVIEW
-                        )
-                    });
-                });
-                Ok(vec![out(APP_SESSION, json!({}), None)])
-            }
             Event::Health(health) => {
-                feed.update(|feed| feed.health_received(super::super::map::health(health)));
+                feed.update(|feed| feed.health_received(health));
                 Ok(self.poll_changes(feed))
             }
-            Event::Board {
-                epoch,
-                rows,
-                left,
-                replacement,
-            } => Ok(self.board(feed, epoch, rows, left, replacement)),
             Event::Rows { delta, replacement } => self.rows(feed, delta, replacement),
             Event::Live { scope, live } => {
                 self.live(feed, scope, live)?;
@@ -94,11 +60,11 @@ impl AppState {
                 epoch,
             } => {
                 feed.update(|feed| {
-                    if topic == Topic::Board {
+                    if topic == Topic::Tasks {
                         feed.begin_epoch(epoch);
                         feed.projection_ready = false;
                         feed.link = Link::Connecting;
-                        feed.problem = Some("Waiting for the replacement board snapshot.".into());
+                        feed.problem = Some("Waiting for the replacement task snapshot.".into());
                     }
                     let state = feed
                         .topics
@@ -214,9 +180,15 @@ impl AppState {
                 if walk_failed && !params["after"].is_null() {
                     self.device_walk = None;
                 }
-                // A submission whose reply never arrived may still have run: recover it by id.
-                let uncertain = matches!(method, ACT_SUBMIT | PROMPT_ANSWER)
-                    && error.code == crate::client::core::DEADLINE_EXPIRED;
+                // The engine's refusal travels in the error's data, with the steps past it.
+                let refusal = (method == OP_SUBMIT
+                    && code == corral_protocol::rpc::ErrorCode::Refused)
+                    .then(|| {
+                        error_data
+                            .clone()
+                            .and_then(|data| serde_json::from_value::<Refusal>(data).ok())
+                    })
+                    .flatten();
                 let mut conflict = false;
                 feed.update(|feed| {
                     if let Some(id) = &id {
@@ -243,8 +215,6 @@ impl AppState {
                                 } else {
                                     CommandStatus::Unknown
                                 }
-                            } else if method == ACT_RESULT || uncertain {
-                                CommandStatus::Unknown
                             } else {
                                 error_status(&error)
                             };
@@ -254,9 +224,12 @@ impl AppState {
                         if let Some(operation) = feed.operations.get_mut(id.as_str()) {
                             operation.loading = false;
                             operation.error = Some(error.clone());
+                            operation.refusal = refusal.clone();
                         }
                     }
-                    feed.problem = Some(error.message.clone());
+                    if refusal.is_none() {
+                        feed.problem = Some(error.message.clone());
+                    }
                     if matches!(
                         method,
                         wire::device::PAIR_BEGIN
@@ -272,15 +245,8 @@ impl AppState {
                         feed.registry = Registry::Failed;
                     }
                 });
-                if uncertain {
-                    if let Some(id) = &id {
-                        return Ok(vec![recover(id)]);
-                    }
-                }
-                if method != ACT_RESULT {
-                    if let Some(id) = &id {
-                        self.settled(feed, id).await;
-                    }
+                if let Some(id) = &id {
+                    self.settled(feed, id).await;
                 }
                 return Ok(if conflict {
                     self.refresh_details(feed)
@@ -300,35 +266,19 @@ impl AppState {
         }
         match method {
             APP_SESSION => self.session(feed, decode(result)?).await,
-            ACT_SUBMIT | ACT_RESULT | PROMPT_ANSWER => {
-                let result: CmdResult = decode(result)?;
-                if result.output.is_some() {
-                    return Err("app command unexpectedly advertised DATA output".into());
+            PROMPT_ANSWER => {
+                if let Some(id) = &id {
+                    feed.update(|feed| {
+                        if let Some(state) = feed.commands.get_mut(id.as_str()) {
+                            state.status = CommandStatus::Done;
+                            state.error = None;
+                        }
+                    });
+                    self.settled(feed, id).await;
                 }
-                let cmd_id = result.cmd_id.clone();
-                let status = result_status(&result);
-                feed.update(|feed| {
-                    if let Some(state) = feed.commands.get_mut(cmd_id.as_str()) {
-                        state.status = status;
-                        state.error = result.error.as_ref().map(|error| ClientError {
-                            code: error.code.clone(),
-                            message: error.message.clone(),
-                        });
-                        state.result = Some(result);
-                    }
-                });
-                if status == CommandStatus::Running {
-                    return Ok(vec![recover(&cmd_id)]);
-                }
-                self.settled(feed, &cmd_id).await;
-                Ok(
-                    if matches!(status, CommandStatus::Done | CommandStatus::Conflict) {
-                        self.refresh_details(feed)
-                    } else {
-                        vec![]
-                    },
-                )
+                Ok(vec![])
             }
+            OP_SUBMIT => Ok(self.refresh_details(feed)),
             ASSISTANT_SEND => {
                 let ack: SendAck = decode(result)?;
                 if let Some(id) = id {
@@ -365,7 +315,7 @@ impl AppState {
                 let page: ChangesPage = decode(result)?;
                 let before = params["before"].as_u64();
                 let after = params["after"].as_u64();
-                let last = page.lines.iter().map(|line| line.seq).max();
+                let last = page.events.iter().map(|event| event.seq).max();
                 let head = page.head;
                 if before.is_none() {
                     if let Some(last) = last {
@@ -382,8 +332,8 @@ impl AppState {
                         feed.seen_received(page.seen.clone());
                         feed.changes_unseen = page.unseen.map(|unseen| (page.seen.through, unseen));
                     }
-                    for line in page.lines {
-                        feed.changes.insert(line.seq, line);
+                    for event in page.events {
+                        feed.changes.insert(event.seq, event);
                     }
                     while feed.changes.len() > 10_000 {
                         if before.is_some() {
@@ -412,7 +362,7 @@ impl AppState {
                 });
                 Ok(vec![])
             }
-            DEVICE_SET_AUTHORITY => Ok(vec![devices(), out(APP_SESSION, json!({}), None)]),
+            CONFIG_GET | CONFIG_PUT | PANE_FOCUS | PANE_KEYS => Ok(vec![]),
             PUSH_STATUS | PUSH_SUBSCRIBE | PUSH_UNSUBSCRIBE => {
                 let status: wire::device::PushStatus = decode(result)?;
                 feed.update(|feed| feed.push = Some(status));
@@ -497,7 +447,7 @@ mod tests {
                 epoch: 1,
                 rows,
                 left: Vec::new(),
-                cursor: corral_protocol::board::BoardCursor::default(),
+                cursor: corral_protocol::subscription::BoardCursor::default(),
                 more: false,
             },
             live: None,
@@ -555,7 +505,7 @@ mod tests {
         reply(&mut app, feed, sent.remove(0), ack);
         // Every corrald sync pass republishes health, and each one polls the change feed.
         let page =
-            json!({"lines": [], "head": 0, "older": null, "seen": {"through": 0, "at": null}});
+            json!({"events": [], "head": 0, "older": null, "seen": {"through": 0, "at": null}});
         for _ in 0..600 {
             for poll in app.poll_changes(feed) {
                 reply(&mut app, feed, poll, page.clone());
@@ -601,10 +551,6 @@ mod registry_tests {
             params: json!({}),
             outcome: Ok(json!({
                 "device": info("dev-1"),
-                "authority": {
-                    "reply": true, "act": true, "assistant": true,
-                    "assistant_act": false, "admin": true
-                },
                 "seen": {"through": 0, "at": null},
                 "server_time": "2026-11-14T09:00:00Z"
             })),
@@ -697,9 +643,5 @@ mod registry_tests {
 }
 
 #[cfg(test)]
-#[path = "authority_tests.rs"]
-mod authority_tests;
-
-#[cfg(test)]
-#[path = "submit_deadline_tests.rs"]
-mod submit_deadline_tests;
+#[path = "op_submit_tests.rs"]
+mod op_submit_tests;

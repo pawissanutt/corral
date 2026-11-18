@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use nsh_core::prelude::*;
 
-use crate::model::Authority;
 use crate::model::assistant::{
     AssistantMessage, Body, LABELS, OwnerMessage, PmMessage, PmReply, QueueNote, RollDivider,
     ThreadItem, ThreadRef, ToolRow, WaitingBlock, live_items,
@@ -55,10 +54,9 @@ pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
     // streamed step or a new message redraws only its own row: a field being typed in a card
     // keeps its text and focus.
     let items = computed(move || {
-        let can_send = app.can(Authority::Assistant);
         let items = app.feed.with(|feed| {
             app.assistant
-                .with(|state| live_items(state, feed, scope.as_str(), can_send))
+                .with(|state| live_items(state, feed, scope.as_str()))
         });
         items.into_iter().enumerate().collect::<Vec<_>>()
     });
@@ -365,7 +363,7 @@ fn pm_reply(app: AppState, id: &str, reply: &PmReply) -> AnyElement {
 }
 
 /// A PM item: the owner's words to the PM, then the PM's outcome folded under them, or the note
-/// of a queued item, and Withdraw while the PM has not replied.
+/// of a queued item.
 fn pm_view(app: AppState, pm: &PmMessage, inset: f32) -> AnyElement {
     let form = app.form;
     let mut body = vec![plain(app, pm.owner.text.clone()).into_element()];
@@ -374,15 +372,6 @@ fn pm_view(app: AppState, pm: &PmMessage, inset: f32) -> AnyElement {
     }
     if let Some(note) = pm.note {
         body.push(words(app, note, note_size(form), Token::Ink3).into_element());
-    }
-    if !pm.buttons.is_empty() || pm.status.is_some() {
-        let mut row = button_row(app, &pm.buttons, ButtonKind::Quiet, 6.0);
-        if let Some(status) = &pm.status {
-            row = row
-                .when(form == Form::Terminal, |r| r.child(term::space(2.0)))
-                .child(chip(app, status.label.clone(), status.hue));
-        }
-        body.push(row.into_element());
     }
     message(
         app,

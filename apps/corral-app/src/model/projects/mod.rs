@@ -6,9 +6,8 @@ mod tests;
 
 pub use filters::{FilterScreen, Filters, NowGroup, NowScope};
 pub use page::{
-    BUILDS_HEADING, FACTS_LABEL, NO_BUILDS, PLANS_HEADING, PLANS_HINT, ProjectBuild, ProjectEmpty,
-    ProjectFact, ProjectPage, ProjectPlan, ProjectSession, SESSIONS_HEADING, SESSIONS_HINT,
-    not_found, page, project_now,
+    FACTS_LABEL, PLANS_HEADING, PLANS_HINT, ProjectEmpty, ProjectFact, ProjectPage, ProjectPlan,
+    ProjectSession, SESSIONS_HEADING, SESSIONS_HINT, not_found, page, project_now,
 };
 
 /// The sidebar section's and the phone list's name.
@@ -18,16 +17,14 @@ pub const PROJECTS_MORE_SUBTITLE: &str = "Open work by project";
 
 use crate::model::{
     Id,
-    daemon::{Feed, Task},
+    daemon::{Feed, Group, Task},
 };
+use corral_types::Status;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeSet;
 
 pub(crate) fn is_open(task: &Task) -> bool {
-    !matches!(
-        task.now_code.as_str(),
-        "done" | "landed" | "dropped" | "cancelled"
-    )
+    !matches!(task.status(), Status::Done | Status::Dropped)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -84,7 +81,7 @@ pub fn contains_project(feed: &Feed, id: &str) -> bool {
         feed.board
             .tasks()
             .iter()
-            .any(|task| is_open(task) && task.project.as_deref() == Some(id))
+            .any(|task| is_open(task) && task.project() == Some(id))
     }
 }
 
@@ -96,7 +93,7 @@ pub fn known_projects(feed: &Feed) -> Vec<Id> {
             .tasks()
             .iter()
             .filter(|task| is_open(task))
-            .filter_map(|task| task.project.as_deref())
+            .filter_map(Task::project)
             .collect::<BTreeSet<_>>()
             .into_iter()
             .map(Id::from)
@@ -113,7 +110,7 @@ pub fn has_multiple_projects(feed: &Feed) -> bool {
         .tasks()
         .iter()
         .filter(|task| is_open(task))
-        .filter_map(|task| task.project.as_deref());
+        .filter_map(Task::project);
     let first = names.next();
     names.any(|name| Some(name) != first)
 }
@@ -122,7 +119,7 @@ pub fn has_unassigned(feed: &Feed) -> bool {
     feed.board
         .tasks()
         .iter()
-        .any(|task| is_open(task) && task.project.is_none())
+        .any(|task| is_open(task) && task.project().is_none())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,11 +130,10 @@ pub struct ProjectEntry {
     pub filter: ProjectFilter,
     /// Unknown on old daemons; never synthesize canonical statistics from partial lists.
     pub open: Option<u32>,
+    /// Counted from the complete open-task list; unknown until it arrives.
     pub running: Option<u32>,
     pub review: Option<u32>,
     pub needs_me: Option<u32>,
-    pub in_pm_scope: Option<bool>,
-    pub autopilot: Option<bool>,
     pub selected: bool,
 }
 
@@ -205,6 +201,20 @@ impl ProjectEntry {
 pub struct Projects {
     pub entries: Vec<ProjectEntry>,
 }
+
+/// How many of the project's open tasks are in `group`, once the open-task list is complete.
+fn count(feed: &Feed, id: &str, groups: &[Group]) -> Option<u32> {
+    feed.board.complete.then(|| {
+        let count = feed
+            .board
+            .tasks()
+            .iter()
+            .filter(|task| task.project() == Some(id) && groups.contains(&task.group))
+            .count();
+        u32::try_from(count).unwrap_or(u32::MAX)
+    })
+}
+
 impl Projects {
     pub fn build(feed: &Feed, filter: &ProjectFilter) -> Self {
         let filter = filter.resolved(feed);
@@ -219,13 +229,11 @@ impl Projects {
                     id: format!("project-{id}"),
                     label: id.to_string(),
                     selected: filter == ProjectFilter::Project(id.clone()),
+                    open: row.map(|row| u32::try_from(row.open).unwrap_or(u32::MAX)),
+                    running: count(feed, &id, &[Group::Producing]),
+                    review: count(feed, &id, &[Group::Verifying]),
+                    needs_me: count(feed, &id, &[Group::NeedsYou]),
                     filter: ProjectFilter::Project(id),
-                    open: row.map(|row| row.open),
-                    running: row.map(|row| row.running),
-                    review: row.map(|row| row.review),
-                    needs_me: row.map(|row| row.needs_me),
-                    in_pm_scope: row.map(|row| row.in_pm_scope),
-                    autopilot: row.map(|row| row.autopilot),
                 }
             })
             .collect::<Vec<_>>();
@@ -238,8 +246,6 @@ impl Projects {
                 running: None,
                 review: None,
                 needs_me: None,
-                in_pm_scope: None,
-                autopilot: None,
                 selected: filter == ProjectFilter::Unassigned,
             });
         }
@@ -265,7 +271,6 @@ pub struct FilterChip {
 
 const ALL_HINT: &str = "Every project in this workspace";
 const UNASSIGNED_HINT: &str = "Tasks filed without a project";
-const OUTSIDE_PM: &str = "outside the PM's scope";
 
 impl FilterChip {
     fn all(selected: bool) -> Self {
@@ -298,9 +303,6 @@ impl FilterChip {
                     }
                     (Some(open), _) => format!("{open} open"),
                 });
-                if entry.in_pm_scope == Some(false) {
-                    parts.push(OUTSIDE_PM.to_owned());
-                }
                 parts.join(" · ")
             }
             ProjectFilter::All | ProjectFilter::Unassigned => entry.summary(),

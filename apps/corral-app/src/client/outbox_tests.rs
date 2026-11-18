@@ -68,7 +68,7 @@ fn independent_outboxes_reload_each_transaction_and_never_revert_cancel() {
 }
 
 #[test]
-fn inactive_namespace_pruning_keeps_words_and_uncertain_recovery_ids() {
+fn pruning_keeps_owner_words_and_drops_the_retired_command_journal() {
     let mut records = durable::Records::new();
     records.insert(
         "namespace/old/message/a".into(),
@@ -80,21 +80,14 @@ fn inactive_namespace_pruning_keeps_words_and_uncertain_recovery_ids() {
     );
     records.insert(
         "namespace/old/command/running".into(),
-        serde_json::to_value(Command {
-            method: "act.submit".into(),
-            params: Value::Null,
-            result: None,
-            error: Some(("unavailable".into(), "lost reply".into())),
-        })
-        .unwrap(),
+        serde_json::json!({"method": "act.submit", "params": null}),
     );
     records.insert(
         "namespace/empty/meta".into(),
         serde_json::json!({"bytes":0}),
     );
     prune_settled(&mut records, "namespace/current/").unwrap();
-    assert_eq!(records.len(), 3);
-    assert!(records.contains_key("namespace/old/command/running"));
+    assert_eq!(records.len(), 2);
     assert!(records.contains_key("namespace/old/message/a"));
     assert!(records.contains_key("namespace/old/draft/quick"));
 }

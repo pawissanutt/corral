@@ -232,17 +232,11 @@ fn staged_chip(item: &Staged, feed: &Feed) -> StagedChip {
 
 /// The tray, the three buttons with why any is dimmed, and what holds Send. Screenshot and File
 /// upload, so they need corrald now; a link is inline, so it attaches offline too.
-pub fn tray(
-    feed: &Feed,
-    staged: &[Staged],
-    to_assistant: bool,
-    can_send: bool,
-    text_blank: bool,
-) -> Tray {
+pub fn tray(feed: &Feed, staged: &[Staged], to_assistant: bool, text_blank: bool) -> Tray {
     let capable = feed.capable(ASSISTANT_ATTACH_V1);
     let full = staged.len() >= ATTACHMENTS_PER_MESSAGE;
     let up = feed.link == Link::Up;
-    let open = can_send && capable && to_assistant && !full;
+    let open = capable && to_assistant && !full;
     let mut screenshot = button("Screenshot", Action::Attach(PickKind::Image));
     let mut link = button("Link", Action::AttachLink);
     let mut file = button("File", Action::Attach(PickKind::File));
@@ -255,8 +249,6 @@ pub fn tray(
         } else {
             "this corrald does not accept attachments; upgrade corral".to_owned()
         })
-    } else if !can_send {
-        Some("this device may not message the assistant".into())
     } else if !to_assistant {
         Some("PM messages carry no attachments".into())
     } else if full {

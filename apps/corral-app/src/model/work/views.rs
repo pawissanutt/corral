@@ -169,7 +169,6 @@ const fn bare(destination: Destination, label: &'static str) -> MoreRow {
 /// More destinations; counts and subtitles are omitted when no canonical summary is served.
 const DAEMON_MORE: &[MoreRow] = &[
     bare(Destination::Changes, "Changes"),
-    bare(Destination::Builds, "Builds"),
     bare(Destination::Review, "Review"),
     bare(Destination::Timeline, "Timeline"),
     bare(Destination::Usage, "Usage"),

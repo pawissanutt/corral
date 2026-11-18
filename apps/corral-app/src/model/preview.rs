@@ -1,29 +1,38 @@
-//! Explicit, ephemeral preview: canonical daemon DTOs and local command simulation only.
-//! The caller supplies the clock; this module never contacts a daemon or persists anything.
-mod actions;
-mod closed;
-mod content;
-mod control;
+//! Explicit, ephemeral sample preview over the same `Feed` corrald fills. The sample keeps one
+//! `TaskDetail` per task as its store, plus the event log in `Feed.changes`; the open board,
+//! plans, projects, live runs, closed page and usage totals are projected from those after every
+//! change, as the daemon projects its own store. The caller supplies the clock; nothing here
+//! contacts a daemon or persists anything.
+mod details;
 mod effects;
+mod engine;
 mod fleet;
-mod history;
-mod projects;
+mod rollup;
+mod sample;
 mod sessions;
+mod workspace;
 
 use crate::model::daemon::*;
-use corral_protocol::{app::*, detail::*, device::*};
+use crate::model::devices::DeviceLink;
+use corral_protocol::{
+    app::*,
+    detail::*,
+    device::*,
+    health::{DaemonState, Health},
+};
+use corral_types::{Actor, Event, EventKind};
+use jiff::Timestamp;
+use serde_json::Value;
 
-pub use actions::act;
-pub use effects::{confirmation, effect, operation};
+pub use details::detail;
+pub use effects::{effect, operation};
+pub use engine::act;
 
 pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZone>) -> Feed {
     let mut feed = base(now, date, clock, time_zone);
-    content::populate(&mut feed);
+    workspace::populate(&mut feed, true);
     sessions::populate(&mut feed);
-    content::refresh_plans(&mut feed);
-    history::populate(&mut feed);
-    projects::populate(&mut feed);
-    closed::populate(&mut feed);
+    rollup::rebuild(&mut feed);
     feed
 }
 
@@ -35,23 +44,13 @@ pub fn feed_no_projects(
     time_zone: Option<jiff::tz::TimeZone>,
 ) -> Feed {
     let mut feed = base(now, date, clock, time_zone);
-    if let Some(health) = &mut feed.health {
-        health.pm = PmLevel::Absent;
-    }
-    content::settings(&mut feed);
-    sessions::assistant(
-        &mut feed,
-        "A-7",
-        "Quick thread",
-        None,
-        Some("pi-sol xhigh".into()),
-    );
-    let at = stamp(&feed, now);
+    workspace::populate(&mut feed, false);
+    sessions::assistant(&mut feed, "A-7", "Quick thread", None, Some("omp-sol".into()));
     let entry = sessions::entry(
         "preview-workspace",
-        &at,
+        &stamp(now),
         corral_protocol::assistant::EntryKind::Answer,
-        "Preview · This workspace has no configured projects. Use the assistant to ask questions or discuss ideas; no project work or PM is running.",
+        "Preview · This workspace has no configured projects. Use the assistant to ask questions or discuss ideas; no project work is running.",
     );
     for scope in ["quick", "A-7"] {
         if let Some(thread) = feed.threads.get_mut(scope) {
@@ -60,27 +59,11 @@ pub fn feed_no_projects(
                 .insert(entry.id.clone().into(), entry.clone());
         }
     }
-    put(
-        &mut feed,
-        DetailRef::Filings { before: None },
-        DetailBody::Filings(FilingsPage {
-            rows: vec![],
-            total: 0,
-            older: None,
-            newer: None,
-        }),
-    );
+    rollup::rebuild(&mut feed);
     feed
 }
 
 fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZone>) -> Feed {
-    let authority = DeviceAuthority {
-        reply: true,
-        act: true,
-        assistant: true,
-        assistant_act: true,
-        admin: true,
-    };
     let mut feed = Feed {
         now,
         date,
@@ -93,70 +76,33 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         workspace: Some("/preview/corral".into()),
         host: Some("preview-workstation".into()),
         endpoint: Some("preview:local-only".into()),
-        authority_revision: 1,
         ..Feed::default()
     };
-    let at = stamp(&feed, now);
-    feed.session = Some(AppSession {
-        device: DeviceInfo {
-            id: "preview-device".into(),
-            name: "Preview desktop".into(),
-            platform: DevicePlatform::Native,
-            app_version: "preview".into(),
-            enrolled_at: at.clone(),
-            revoked_at: None,
-            authority: Some(authority.clone()),
-            last_seen: Some(at.clone()),
-            reach: Some(DeviceReach::Loopback),
-        },
-        authority: authority.clone(),
+    let devices = workspace::devices(now);
+    feed.session = devices.first().map(|device| AppSession {
+        device: device.clone(),
         seen: SeenCursor::default(),
-        server_time: at.clone(),
+        server_time: stamp(now),
     });
-    feed.device = crate::model::devices::DeviceLink::Enrolled {
+    feed.device = DeviceLink::Enrolled {
         id: "preview-device".into(),
         name: "Preview desktop".into(),
     };
-    feed.devices_received(
-        [
-            ("preview-device", "Preview · pawis-desktop", "native"),
-            ("preview-phone", "Preview · pawis-iphone", "native"),
-            ("preview-browser", "Preview · pawis-laptop", "web"),
-            ("preview-terminal", "Preview · terminal", "native"),
-        ]
-        .into_iter()
-        .map(|(id, name, platform)| crate::model::devices::DeviceRow {
-            id: id.into(),
-            name: name.into(),
-            authority: Some(authority.clone()),
-            platform,
-            enrolled: at[..10].into(),
-            revoked: None,
-            last_seen: Some(at.clone()),
-            reach: Some("preview · local only".into()),
-        })
-        .collect(),
-    );
-    feed.health = Some(DaemonHealth {
-        level: DaemonLevel::Healthy,
-        reasons: vec!["Synthetic preview · no daemon connection".into()],
-        runtimes: vec![Runtime {
-            kind: "preview".into(),
-            level: RuntimeLevel::Ok,
-        }],
-        pm: PmLevel::Live,
-        pass_seq: 1,
-        last_pass: Some(now),
-        last_pass_ms: Some(12),
+    feed.devices_received(devices.iter().map(workspace::device_row).collect());
+    feed.health = Some(Health {
+        daemon: DaemonState::Healthy,
+        runner_reachable: true,
+        last_sync_at: Some(stamp(now.saturating_sub(20))),
+        last_sync_error: None,
+        pid: 0,
         version: "preview".into(),
     });
     for capability in [
-        INBOX_V1,
+        corral_protocol::TASKS_V1,
         CHANGES_V1,
         PLANS_V1,
-        BUILDS_V1,
+        PROJECTS_V1,
         AGENTS_V1,
-        corral_protocol::AGENTS_ACTIVITY_V1,
         SESSION_V1,
         SESSION_FLEET_V1,
         REVIEW_V1,
@@ -164,55 +110,56 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         USAGE_V1,
         SETTINGS_V1,
         ASSISTANT_V1,
-        FILINGS_V1,
         CLOSED_V1,
-        ACT_V1,
         DEVICE_V1,
-        corral_protocol::BOARD_V1,
-        corral_protocol::PROJECTS_V1,
-        corral_protocol::cmd::CMD_V1,
         STREAM_TERMINAL_V1,
     ] {
         feed.capabilities.insert(capability.into());
     }
     for topic in [
-        "inbox",
+        "health",
+        "tasks",
         "plans",
-        "builds",
+        "projects",
         "agents",
         "assistant",
         "usage",
         "settings",
-        "board",
-        "projects",
         "thread:quick",
     ] {
         feed.topics.insert(topic.into(), TopicState::default());
     }
-    feed.board.apply_batch(0, vec![], &[]);
     feed.synced = Some(feed.clock.clone());
     feed
 }
 
-pub(super) fn stamp(_feed: &Feed, second: u64) -> String {
+/// RFC 3339 for a unix second.
+pub(super) fn stamp(second: u64) -> String {
+    instant(second).to_string()
+}
+
+pub(super) fn instant(second: u64) -> Timestamp {
     i64::try_from(second)
         .ok()
-        .and_then(|second| jiff::Timestamp::from_second(second).ok())
-        .map(|time| time.to_string())
-        .unwrap_or_else(|| format!("invalid-preview-clock:{second}"))
+        .and_then(|second| Timestamp::from_second(second).ok())
+        .unwrap_or(Timestamp::UNIX_EPOCH)
+}
+
+/// The instant `ago` seconds before the sample's clock.
+pub(super) fn ago(feed: &Feed, ago: u64) -> Timestamp {
+    instant(feed.now.saturating_sub(ago))
 }
 
 pub(super) fn put(feed: &mut Feed, target: DetailRef, body: DetailBody) {
-    let key = detail_key(&target);
     let reply = DetailReply {
-        etag: format!("preview-{}-{}", feed.changes_head, feed.authority_revision),
-        as_of: stamp(feed, feed.now),
+        etag: format!("preview-{}", feed.changes_head),
+        as_of: stamp(feed.now),
         seq: feed.changes_head,
         next: None,
         body: Some(body.clone()),
     };
     feed.details.insert(
-        key,
+        detail_key(&target),
         DetailCache {
             target,
             pages: vec![reply],
@@ -224,43 +171,84 @@ pub(super) fn put(feed: &mut Feed, target: DetailRef, body: DetailBody) {
     );
 }
 
-/// Full local records serve all ordinary details; range-dependent projections are built on demand.
-pub fn detail(feed: &mut Feed, target: &DetailRef) -> Result<(), String> {
-    if history::detail(feed, target)?
-        || closed::page(feed, target)?
-        || feed.detail(target).is_some()
-    {
-        return Ok(());
-    }
-    Err(format!(
-        "Preview has no local record for {target:?}; nothing was fetched."
-    ))
+/// Every sample task record, in id order.
+pub(super) fn records(feed: &Feed) -> Vec<TaskDetail> {
+    let mut records: Vec<TaskDetail> = feed
+        .details
+        .values()
+        .filter_map(|cache| match (&cache.target, cache.body()) {
+            (DetailRef::Task { .. }, Some(DetailBody::Task(record))) => Some(record.clone()),
+            _ => None,
+        })
+        .collect();
+    records.sort_by_key(|record| number(&record.task.id));
+    records
 }
 
-pub(super) fn change(feed: &mut Feed, task: Option<String>, text: String, kind: ChangeKind) {
+pub(super) fn record(feed: &Feed, id: &str) -> Option<TaskDetail> {
+    match feed
+        .detail(&DetailRef::Task { id: id.into() })
+        .and_then(DetailCache::body)
+    {
+        Some(DetailBody::Task(record)) => Some(record.clone()),
+        _ => None,
+    }
+}
+
+pub(super) fn save(feed: &mut Feed, record: TaskDetail) {
+    put(
+        feed,
+        DetailRef::Task {
+            id: record.task.id.clone(),
+        },
+        DetailBody::Task(record),
+    );
+}
+
+pub(super) fn number(id: &str) -> u64 {
+    id.strip_prefix("T-")
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(u64::MAX)
+}
+
+/// Append one event at the sample's clock, as the engine appends to its log.
+pub(super) fn event(
+    feed: &mut Feed,
+    task: Option<&str>,
+    run: Option<&str>,
+    kind: EventKind,
+    actor: Actor,
+    detail: Value,
+) {
+    let ts = ago(feed, 0);
+    append(feed, ts, task, run, kind, actor, detail);
+}
+
+pub(super) fn append(
+    feed: &mut Feed,
+    ts: Timestamp,
+    task: Option<&str>,
+    run: Option<&str>,
+    kind: EventKind,
+    actor: Actor,
+    detail: Value,
+) {
     feed.changes_head += 1;
     let seq = feed.changes_head;
     feed.changes.insert(
         seq,
-        ChangeLine {
+        Event {
             seq,
-            at: stamp(feed, feed.now),
-            class: "owner".into(),
+            ts,
+            task: task.map(str::to_owned),
+            run: run.map(str::to_owned),
             kind,
-            from: None,
-            to: None,
-            failed: false,
-            task,
-            text: format!("Preview · {text}"),
-            actor: "owner".into(),
-            via: "preview:local-only".into(),
+            actor,
+            detail,
         },
     );
     let seen = feed.seen.as_ref().map_or(0, |seen| seen.through);
-    feed.changes_unseen = Some((
-        seen,
-        feed.changes.values().filter(|line| line.seq > seen).count() as u64,
-    ));
+    feed.changes_unseen = Some((seen, feed.changes.range(seen + 1..).count() as u64));
 }
 
 #[cfg(test)]
