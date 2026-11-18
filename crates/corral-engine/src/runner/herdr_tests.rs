@@ -69,7 +69,26 @@ fn runner(root: &Path, scenario: &str) -> HerdrRunner {
     let bin = root.join("fake-herdr");
     fs::write(&bin, FAKE_HERDR).unwrap();
     fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    wait_until_executable(&bin);
     HerdrRunner::new(Herdr::with_bin(bin, Some(scenario.to_owned())))
+}
+
+/// Another test thread forking at the wrong moment briefly inherits the script's write handle,
+/// and executing the script then fails with "text file busy". Probe it without arguments (it
+/// exits before recording a call) until that handle is gone.
+fn wait_until_executable(bin: &Path) {
+    for _ in 0..100_000 {
+        match std::process::Command::new(bin).output() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::yield_now();
+            }
+            probe => {
+                probe.unwrap();
+                return;
+            }
+        }
+    }
+    panic!("fake herdr stayed busy");
 }
 
 #[test]

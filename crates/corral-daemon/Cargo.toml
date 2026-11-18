@@ -23,6 +23,8 @@ snow.workspace = true
 tungstenite.workspace = true
 getrandom = "0.4"
 base64.workspace = true
+sha2.workspace = true
+toml.workspace = true
 web-push = { version = "0.11", default-features = false, features = ["isahc-client"] }
 isahc = { version = "1.7", default-features = false }
 futures-lite = "2"

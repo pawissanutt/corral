@@ -1,6 +1,7 @@
 //! Acknowledged observations, one page in flight per subscription.
 mod app;
 pub(crate) use app::TerminalCache;
+pub(crate) use app::{SessionLive, join_session_live, start_session_live};
 
 use anyhow::{Context, Result, ensure};
 use corral_protocol::{
@@ -17,6 +18,8 @@ pub(crate) struct Subscriptions<'a> {
     shared: &'a Shared,
     rows: Vec<app::Subscriber>,
     terminals: app::TerminalTopics,
+    sessions: app::SessionTopics,
+    session_fleet: bool,
 }
 
 impl<'a> Subscriptions<'a> {
@@ -25,14 +28,39 @@ impl<'a> Subscriptions<'a> {
             shared,
             rows: Vec::new(),
             terminals: app::TerminalTopics::default(),
+            sessions: app::SessionTopics::default(),
+            session_fleet: false,
         }
+    }
+
+    pub(crate) fn set_session_fleet(&mut self, enabled: bool) {
+        self.session_fleet = enabled;
     }
 
     pub fn open(&mut self, open: SubOpen) -> Result<()> {
         if open.topic == Topic::Terminal {
             return self.terminals.open(self.shared, open);
         }
-        ensure!(open.scope.is_none(), "topic does not take a scope");
+        if open.topic == Topic::Session {
+            return self.sessions.open(self.shared, open);
+        }
+        if open.topic == Topic::Thread {
+            let scope = open.scope.as_deref().context("thread scope is required")?;
+            ensure!(
+                crate::sessions::is_chat(scope) && scope.len() <= 32,
+                "invalid thread scope"
+            );
+            ensure!(
+                self.rows.len() < 32
+                    || self
+                        .rows
+                        .iter()
+                        .any(|sub| sub.topic == open.topic && sub.scope == open.scope),
+                "too many row subscriptions"
+            );
+        } else {
+            ensure!(open.scope.is_none(), "topic does not take a scope");
+        }
         ensure!(
             matches!(
                 open.topic,
@@ -41,12 +69,15 @@ impl<'a> Subscriptions<'a> {
                     | Topic::Plans
                     | Topic::Projects
                     | Topic::Agents
+                    | Topic::Assistant
+                    | Topic::Thread
                     | Topic::Usage
                     | Topic::Settings
             ),
             "unsupported topic"
         );
-        self.rows.retain(|sub| sub.topic != open.topic);
+        self.rows
+            .retain(|sub| sub.topic != open.topic || sub.scope != open.scope);
         self.rows
             .push(app::Subscriber::new(self.shared.epoch(), open));
         Ok(())
@@ -56,10 +87,12 @@ impl<'a> Subscriptions<'a> {
         if ack.topic == Topic::Terminal {
             return self.terminals.ack(ack);
         }
-        ensure!(ack.scope.is_none(), "topic does not take a scope");
+        if ack.topic == Topic::Session {
+            return self.sessions.ack(ack);
+        }
         self.rows
             .iter_mut()
-            .find(|sub| sub.topic == ack.topic)
+            .find(|sub| sub.topic == ack.topic && sub.scope == ack.scope)
             .context("topic is not open")?
             .ack(ack.cursor)
     }
@@ -67,8 +100,11 @@ impl<'a> Subscriptions<'a> {
     pub fn close(&mut self, close: SubClose) {
         if close.topic == Topic::Terminal {
             self.terminals.close(close.scope);
-        } else if close.scope.is_none() {
-            self.rows.retain(|sub| sub.topic != close.topic);
+        } else if close.topic == Topic::Session {
+            self.sessions.close(close.scope);
+        } else {
+            self.rows
+                .retain(|sub| sub.topic != close.topic || sub.scope != close.scope);
         }
     }
 
@@ -84,7 +120,7 @@ impl<'a> Subscriptions<'a> {
                 }
                 Ok(None) => false,
                 Err(error) => {
-                    conn.send_frame(&reset(sub.topic, self.shared.epoch(), None)?)?;
+                    conn.send_frame(&reset(sub.topic, self.shared.epoch(), sub.scope.clone())?)?;
                     let mut message = format!("{error:#}");
                     message.truncate(message.floor_char_boundary(1024));
                     crate::conn::error(
@@ -102,7 +138,8 @@ impl<'a> Subscriptions<'a> {
                 i += 1;
             }
         }
-        self.terminals.flush(self.shared, conn)
+        self.terminals.flush(self.shared, conn)?;
+        self.sessions.flush(self.shared, conn, self.session_fleet)
     }
 }
 

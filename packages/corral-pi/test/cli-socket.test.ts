@@ -164,6 +164,48 @@ test("chat runs the engine as the assistant and edits plain workspace memory", a
   }
 }, 20_000);
 
+test("a warmed chat relaunches after shutdown before the first turn", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-warm-"));
+  const processes: Launch[] = [];
+  const clients: TestClient[] = [];
+  try {
+    const assets = scriptedInstall(dir, [{ text: "The relaunched chat is ready." }]);
+    const socket = join(dir, "s.sock");
+    const start = () => {
+      const chat = launch(assets, ["chat", "--dir", "A-1", "--socket", socket, "--headless"], dir,
+        { HOME: dir, PATH: process.env.PATH, XDG_DATA_HOME: join(dir, "data"), TMPDIR: dir,
+          GIT_CEILING_DIRECTORIES: dir, CORRAL_NEXT_ROOT: dir, CORRAL_ACTOR: "assistant" });
+      processes.push(chat);
+      return chat;
+    };
+    const first = start();
+    await first.output(/session socket ready/);
+    const warm = await connect(socket);
+    clients.push(warm);
+    const request = (client: TestClient, command: string, args: Record<string, unknown> = {}) =>
+      client.request({ version: 2, id: command, command, args });
+    expect((await request(warm, "get_state")).result?.turn).toEqual({ current: 0, open: false });
+    expect((await request(warm, "shutdown")).ok).toBeTrue();
+    expect(await within(first.exit, 10_000, "warmed chat shutdown")).toBe(0);
+
+    const relaunched = start();
+    await relaunched.output(/session socket ready/);
+    const chat = await connect(socket);
+    clients.push(chat);
+    const hello = (await request(chat, "hello")).result;
+    expect(hello?.session_id).toBe("A-1");
+    expect((await request(chat, "submit_input", { origin: "owner", text: "Continue." })).result?.disposition).toBe("started");
+    await relaunched.output(/turn 1 ended/);
+    expect(readFileSync(String(hello?.session_file), "utf8")).toContain("The relaunched chat is ready.");
+    expect((await request(chat, "shutdown")).ok).toBeTrue();
+    expect(await within(relaunched.exit, 10_000, "relaunched chat shutdown")).toBe(0);
+  } finally {
+    for (const client of clients) client.close();
+    await Promise.all(processes.map(chat => chat.stop()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 20_000);
+
 test("reviewer answers an automated re-review and reopens the same transcript after a kill", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-review-"));
   const processes: Launch[] = [];

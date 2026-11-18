@@ -16,6 +16,7 @@ pub mod rpc;
 #[cfg(test)]
 mod schema;
 mod schema_types;
+pub mod session;
 pub mod subscription;
 
 pub use app::{

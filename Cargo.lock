@@ -679,8 +679,10 @@ dependencies = [
  "rustix 1.1.5",
  "serde",
  "serde_json",
+ "sha2",
  "snow",
  "tempfile",
+ "toml",
  "tungstenite",
  "web-push",
 ]

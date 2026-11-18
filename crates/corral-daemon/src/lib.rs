@@ -2,6 +2,7 @@
 #![cfg(unix)]
 
 mod app;
+mod assistant;
 mod config;
 mod conn;
 mod devices;
@@ -10,6 +11,7 @@ mod identity;
 mod ops;
 mod pairing;
 mod server;
+mod sessions;
 mod state;
 mod topics;
 mod views;
@@ -102,6 +104,7 @@ fn run_with_runner(root: &Path, options: RunOptions, runner: Option<RunnerFactor
         })
         .transpose()?;
     let started = (|| -> Result<_> {
+        topics::start_session_live(&shared)?;
         if let Some(listener) = app_listener {
             app::serve_listener(
                 listener,
@@ -131,6 +134,7 @@ fn run_with_runner(root: &Path, options: RunOptions, runner: Option<RunnerFactor
     };
     shared.wait_ops();
     shared.close();
+    topics::join_session_live(&shared);
     shared.wait_workers(Duration::from_secs(3));
     drop(socket);
     result?;
