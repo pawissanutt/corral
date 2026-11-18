@@ -85,7 +85,9 @@ fn field(
     typed: impl Fn(&mut State, &str) + Copy + 'static,
 ) -> AnyElement {
     let form = app.form;
+    let handle = element_ref();
     let entry = input()
+        .element_ref(&handle)
         .test_id(test_id)
         .label(label)
         .placeholder(placeholder)
@@ -94,7 +96,12 @@ fn field(
             let words = words.to_owned();
             change(app, move |state| typed(state, &words));
         })
-        .on_submit(move |_: &str| change(app, State::apply_custom))
+        // Return applies the range and leaves the keyboard in the field, so a refused range
+        // can be corrected and the other date typed without finding the field again.
+        .on_submit(move |_: &str| {
+            change(app, State::apply_custom);
+            after_answer(move || handle.focus());
+        })
         .min_w(px(0.0))
         .text_color(color(Token::Ink))
         .placeholder_color(move || for_appearance(color(Token::Ink4)))

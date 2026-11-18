@@ -404,6 +404,8 @@ fn step(feed: &mut Feed, id: &str) {
         After::Nothing => {}
         After::Recorded => thread(feed, id),
         After::End(_) => {
+            // The turn's last words are recorded now; a chat's thread shows them.
+            thread(feed, id);
             let queued = feed
                 .hosts
                 .get_mut(id)

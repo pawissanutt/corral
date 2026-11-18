@@ -276,6 +276,7 @@ struct Head {
     name: String,
     facts: String,
     close_label: String,
+    close_short: &'static str,
     close: Action,
 }
 
@@ -306,6 +307,7 @@ fn head(app: AppState, current: Memo<RosterPanel>, place: Memo<Place>) -> AnyEle
             name: p.name.clone(),
             facts: p.facts.clone(),
             close_label: p.close_label.clone(),
+            close_short: p.close_short,
             close: p.close.clone(),
         })
     });
@@ -437,8 +439,13 @@ fn head_controls(
 }
 
 /// Close, named for the session: a cross, or a back arrow while the panel covers the roster.
+/// The terminal draws no icons, so its Close is words, short ones: the row names the session.
 fn close(app: AppState, head: &Head, place: Memo<Place>) -> AnyElement {
-    let label = head.close_label.clone();
+    let label = if app.form == Form::Terminal {
+        head.close_short.to_owned()
+    } else {
+        head.close_label.clone()
+    };
     let action = head.close.clone();
     dynamic(move || {
         let glyph = if place.get() == Place::Full {

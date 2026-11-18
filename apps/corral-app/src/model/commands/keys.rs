@@ -22,13 +22,18 @@ pub fn list_keys_live(destination: Destination, top: Option<&Live>) -> &'static 
     }
 }
 
-/// `keys` without Enter, for while the focus is on a control of the list other than the
-/// selected row: that control takes Enter as its press.
-pub fn without_open(keys: &'static [&'static str]) -> &'static [&'static str] {
-    if keys == LIVE_MOVE_OPEN {
-        MOVE_MENU
-    } else {
-        keys
+/// `keys` as the keyboard focus leaves them: Enter opens the selected task only while nothing
+/// has the focus or the selected task's row has it; on any other control of the list (a
+/// toggle, another row, a button beside it) Enter is that control's own press. `focus`: the
+/// focused control, `None` when nothing has it, `Some(None)` for one that is not a row.
+pub fn with_focus(
+    keys: &'static [&'static str],
+    focus: Option<Option<&str>>,
+    selected: Option<&str>,
+) -> &'static [&'static str] {
+    match focus {
+        Some(row) if row != selected && keys == LIVE_MOVE_OPEN => MOVE_MENU,
+        _ => keys,
     }
 }
 
@@ -78,5 +83,22 @@ mod tests {
             assert!(!keys.contains(&"tab") && !keys.contains(&"space"));
         }
         assert!(list_keys_live(Destination::Settings, None).is_empty());
+    }
+
+    /// Enter in Now opened the selected task whatever had the focus, so a focused button or
+    /// another row could not be pressed with Return.
+    #[test]
+    fn enter_in_now_presses_what_has_the_focus() {
+        let keys = list_keys_live(Destination::Now, None);
+        let opens =
+            |focus: Option<Option<&str>>| with_focus(keys, focus, Some("T-8")).contains(&"enter");
+        assert!(
+            opens(None),
+            "nothing focused: Enter opens the selected task"
+        );
+        assert!(opens(Some(Some("T-8"))), "the selected row focused");
+        assert!(!opens(Some(None)), "a button beside the list takes Enter");
+        assert!(!opens(Some(Some("T-9"))), "another row takes Enter");
+        assert!(with_focus(keys, Some(None), Some("T-8")).contains(&"j"));
     }
 }

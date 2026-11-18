@@ -73,6 +73,9 @@ pub struct RosterPanel {
     pub name: String,
     pub facts: String,
     pub close_label: String,
+    /// Close's words where the head's own row already names the session: the terminal's head,
+    /// which has no room for both.
+    pub close_short: &'static str,
     pub close: Action,
     pub tabs: Vec<RosterPanelTabItem>,
     pub tab: RosterPanelTab,
@@ -283,6 +286,7 @@ pub fn roster_panel(
         name: row.name,
         facts: facts.join(" · "),
         close_label: format!("Close {}", source.id),
+        close_short: "Close",
         close: Action::ClearRoster,
         tabs,
         tab,
