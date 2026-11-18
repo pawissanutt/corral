@@ -16,5 +16,6 @@ pub mod page;
 pub mod page_phone;
 pub mod project_filter;
 pub mod rows;
+pub mod suggest;
 pub mod table;
 pub mod text;

@@ -113,14 +113,16 @@ pub(super) fn thread(feed: &mut Feed, id: &str) {
     feed.retire_echoed_sends();
 }
 
-/// What the rows report follows the hosts: a chat's state and turn, a worker's pause and
-/// whether it is quiet.
+/// What the rows report follows the hosts: a chat's state, turn and pending question, a
+/// worker's pause and whether it is quiet.
 pub(super) fn settle(feed: &mut Feed, id: &str) {
     let Some(host) = feed.hosts.get(id) else {
         return;
     };
     let (paused, open, gone, turn) = (host.paused, host.busy(), host.gone, host.turn);
-    let wait = host.pending.first().map(|question| WaitReason {
+    let question = host.pending.first();
+    let question_id = question.map(|question| question.id.clone());
+    let wait = question.map(|question| WaitReason {
         code: "owner_question".into(),
         text: question.text.clone(),
         retry_at: None,
@@ -150,13 +152,14 @@ pub(super) fn settle(feed: &mut Feed, id: &str) {
             }
             row.turn = (turn > 0).then_some(turn);
             row.wait = wait;
+            row.question_id = question_id;
             row.rev += 1;
         }
         Role::Worker => {
-            if gone {
-                feed.paused.remove(id);
-            } else {
-                feed.paused.insert(Id::from(id), paused);
+            if let Some(row) = feed.agents.get_mut(id) {
+                row.paused = (!gone).then_some(paused);
+            }
+            if !gone {
                 super::pi_script::quiet(feed, id, !open);
             }
         }

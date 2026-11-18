@@ -138,6 +138,7 @@ fn cold_sessions_with_recorded_history_are_not_presented_as_never_started() {
             cost_usd: None,
             cost_basis: None,
             wait: None,
+            question_id: None,
             rev: 1,
         },
     );
@@ -173,6 +174,7 @@ fn quick_thread_end_closes_its_current_generation_and_frees_the_next_one() {
         cost_usd: None,
         cost_basis: None,
         wait: None,
+        question_id: None,
         rev: 1,
     };
     let mut feed = Feed {

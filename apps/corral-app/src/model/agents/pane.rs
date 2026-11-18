@@ -3,7 +3,6 @@
 //! under its own request id, and the session shows how its latest one ended, so a failure is
 //! never lost. A headless (process) session has a log, not a pane: it takes no keys.
 
-use corral_protocol::device::DeviceReach;
 use corral_protocol::pane::{PaneFocus, PaneKeys};
 use corral_protocol::rows::AgentRow;
 use corral_types::SessionRef;
@@ -169,7 +168,8 @@ fn shown(text: Option<&str>, keys: &[String]) -> String {
 }
 
 /// Why Focus pane cannot work for this run from this device, or none when it can: a herdr pane,
-/// reached over corrald's own socket or loopback, so the pane comes forward where the owner is.
+/// on a connection corrald reports as local (its socket or loopback), so the pane comes forward
+/// where the owner is.
 pub fn focus_refusal(feed: &daemon::Feed, row: Option<&AgentRow>) -> Option<String> {
     let Some(row) = row else {
         return Some("corrald lists no live run with this id now".into());
@@ -180,17 +180,13 @@ pub fn focus_refusal(feed: &daemon::Feed, row: Option<&AgentRow>) -> Option<Stri
             Some("A headless session has no pane to focus".into())
         }
         Some(SessionRef::Herdr { .. }) => {
-            match feed
-                .session
-                .as_ref()
-                .and_then(|session| session.device.reach)
-            {
-                Some(DeviceReach::Unix | DeviceReach::Loopback) => None,
-                Some(_) => Some(
+            match feed.session.as_ref().and_then(|session| session.local) {
+                Some(true) => None,
+                Some(false) => Some(
                     "The pane is on corrald's machine; this device reaches it from elsewhere"
                         .into(),
                 ),
-                None => Some("Needs this device connected to corrald on its own machine".into()),
+                None => Some("corrald did not say whether this connection is local".into()),
             }
         }
     }

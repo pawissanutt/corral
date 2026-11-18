@@ -128,6 +128,8 @@ fn a_plan_page_lists_its_children_from_their_served_rows() {
         log: None,
         by: corral_types::Actor::Auto,
         at: Timestamp::UNIX_EPOCH,
+        round: None,
+        run: None,
     });
     let landed = task_row(task("T-3", Status::Done));
     let detail = PlanDetail {

@@ -1,7 +1,9 @@
-//! What an operation's form offers beyond the task itself, read from the served configuration:
-//! the worker profiles with the one the engine would pick, the projects, and the base branch a
-//! task starts from. Resolution follows the engine's order; where the app cannot tell (a routing
-//! rule that matches titles by pattern), it says so and leaves the choice to the engine.
+//! What an operation's form offers beyond the task itself, read from the served rows and
+//! configuration: the worker profiles with the one the engine would pick, the projects, the
+//! base branch a task starts from and the project's local branches to land onto. The engine's
+//! `resolved_profile` names the default where corrald serves it; an older one is followed in
+//! the engine's order, and where the app cannot tell (a routing rule that matches titles by
+//! pattern), it says so and leaves the choice to the engine.
 use serde_json::Value;
 
 use crate::model::daemon::Feed;
@@ -11,8 +13,8 @@ use crate::model::daemon::Feed;
 pub struct FormContext {
     /// Configured worker profiles, by name.
     pub profiles: Vec<String>,
-    /// The profile a dispatch without one runs: `None` when routing decides by title pattern
-    /// or nothing names one.
+    /// The profile a dispatch without one runs: the row's `resolved_profile`, else as the app
+    /// resolves it; `None` when routing decides by title pattern or nothing names one.
     pub profile: Option<String>,
     /// Configured projects, by id.
     pub projects: Vec<String>,
@@ -21,6 +23,8 @@ pub struct FormContext {
     /// The branch the task's latest worker run started from: where approving lands unless
     /// told otherwise.
     pub landing: Option<String>,
+    /// The task project's local branches, newest tip first, offered as landing targets.
+    pub branches: Vec<String>,
 }
 
 fn config(feed: &Feed) -> Option<&serde_json::Map<String, Value>> {
@@ -109,18 +113,21 @@ impl FormContext {
                 .unwrap_or_default()
         };
         let project = task.and_then(|task| task.project.as_deref());
+        let row = task.and_then(|task| feed.board.task(&task.id));
         Self {
             profiles: names("profiles"),
-            profile: task.and_then(|task| resolved_profile(feed, task)),
+            profile: row
+                .and_then(|row| row.row.resolved_profile.clone())
+                .or_else(|| task.and_then(|task| resolved_profile(feed, task))),
             projects: feed.projects.keys().map(ToString::to_string).collect(),
             base: task
                 .and_then(|task| task.base.clone())
                 .or_else(|| effective(feed, project).and_then(|settings| settings.base.clone()))
                 .or_else(|| default_of(feed, "base")),
-            landing: task
-                .and_then(|task| feed.board.task(&task.id))
+            landing: row
                 .and_then(|row| row.row.run.as_ref())
                 .map(|run| run.base.clone()),
+            branches: crate::model::projects::branches(feed, project),
         }
     }
 }
@@ -160,7 +167,8 @@ mod tests {
     }
 
     /// The dispatch form marks the profile the engine would pick and starts from the project's
-    /// effective base; a title-pattern rule leaves the profile to the engine.
+    /// effective base; a title-pattern rule leaves the profile to the engine unless the row
+    /// names the engine's own resolution.
     #[test]
     fn the_dispatch_default_follows_the_engines_resolution_order() {
         let mut task = crate::model::daemon::bare_task(
@@ -180,10 +188,12 @@ mod tests {
             Some(&task),
         );
         assert_eq!(routed.profile.as_deref(), Some("omp-opus"));
-        let pattern = FormContext::new(
-            &feed(json!([{ "title_regex": "(?i)front", "profile": "omp-opus" }])),
-            Some(&task),
-        );
-        assert_eq!(pattern.profile, None);
+        let mut pattern = feed(json!([{ "title_regex": "(?i)front", "profile": "omp-opus" }]));
+        assert_eq!(FormContext::new(&pattern, Some(&task)).profile, None);
+        let mut row = crate::model::daemon::task_row(task.clone());
+        row.resolved_profile = Some("omp-opus".into());
+        pattern.board_received(1, vec![crate::model::daemon::Task::new(row)], &[], true);
+        let served = FormContext::new(&pattern, Some(&task));
+        assert_eq!(served.profile.as_deref(), Some("omp-opus"));
     }
 }

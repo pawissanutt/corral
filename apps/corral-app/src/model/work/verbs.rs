@@ -175,6 +175,9 @@ pub struct VerbField {
     pub value: String,
     /// A closed set of values drawn as one button each; empty for free text.
     pub choices: Vec<Choice>,
+    /// Values a free-text field offers beside what is typed (a project's local branches),
+    /// narrowed to the typed words by [`crate::model::projects::suggest`].
+    pub suggestions: Vec<String>,
 }
 
 /// One value a choice field offers: what is sent, and what its button says.

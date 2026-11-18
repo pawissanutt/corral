@@ -530,9 +530,9 @@ pub const LIVE_GAPS_NOTE: &str = "From corral's recorded runs and events: a bloc
                                   review waits until the task's next move; a run is idle from \
                                   when its output went quiet.";
 
-/// The burn-up as a step series from its first recorded `created` or `landed` event to now:
-/// scope counts the tasks created, landed the tasks landed. None when corral has recorded
-/// neither.
+/// The burn-up as a step series from its first recorded event to now: scope counts the tasks
+/// created, less those dropped; landed counts the tasks landed, less those reopened. A reopened
+/// drop comes back into scope. None when corral has recorded none of these.
 pub fn burnup_series(burnup: &WireBurnup, now: u64, feed: &Feed) -> Option<BurnupSeries> {
     let now = Timestamp::from_second(i64::try_from(now).ok()?).ok()?;
     let mut events: Vec<&Event> = burnup
@@ -556,6 +556,14 @@ pub fn burnup_series(burnup: &WireBurnup, now: u64, feed: &Feed) -> Option<Burnu
                 // A task landed without its creation in the store still counts in scope.
                 scope.insert(task);
                 landed.insert(task);
+            }
+            EventKind::Dropped => {
+                scope.remove(task);
+                landed.remove(task);
+            }
+            EventKind::Reopened => {
+                scope.insert(task);
+                landed.remove(task);
             }
             _ => continue,
         }

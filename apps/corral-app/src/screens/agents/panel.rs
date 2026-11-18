@@ -264,7 +264,7 @@ fn keep_loaded(app: AppState, current: Memo<RosterPanel>) {
     });
 }
 
-/// The head's facts, apart from which tab is chosen: the head is redrawn when these change.
+/// The head's facts, redrawn when they change.
 #[derive(Clone, PartialEq)]
 struct Head {
     chip: String,
@@ -276,6 +276,14 @@ struct Head {
     facts: String,
     close_label: String,
     close: Action,
+}
+
+/// The head's controls: the tabs, Open session and the Session menu. They are drawn apart from
+/// the facts, so a run's state changing under an open Session menu (Pause turns its chip to
+/// idle) leaves the menu and its trigger mounted, and the keyboard focus the closing menu puts
+/// back on the trigger lands on a live view.
+#[derive(Clone, PartialEq)]
+struct HeadControls {
     tabs: Vec<(&'static str, &'static str, Action)>,
     open_label: &'static str,
     open: Action,
@@ -286,6 +294,7 @@ struct Head {
 /// back arrow while the panel covers the whole roster); the name; the facts line in mono; the
 /// tabs and Open session. Desktop 14 18 12 under a rule; terminal Cells over a joined rule.
 fn head(app: AppState, current: Memo<RosterPanel>, place: Memo<Place>) -> AnyElement {
+    let terminal = app.form == Form::Terminal;
     let shown = computed(move || {
         current.with(|p| Head {
             chip: p.chip.clone(),
@@ -297,6 +306,10 @@ fn head(app: AppState, current: Memo<RosterPanel>, place: Memo<Place>) -> AnyEle
             facts: p.facts.clone(),
             close_label: p.close_label.clone(),
             close: p.close.clone(),
+        })
+    });
+    let controls = computed(move || {
+        current.with(|p| HeadControls {
             tabs: p
                 .tabs
                 .iter()
@@ -310,17 +323,32 @@ fn head(app: AppState, current: Memo<RosterPanel>, place: Memo<Place>) -> AnyEle
     let chosen = computed(move || {
         current.with(|p| p.tabs.iter().find(|tab| tab.selected).map(|tab| tab.id))
     });
-    dynamic(move || shown.with(|head| untracked(|| head_view(app, head, chosen, place))))
+    let block = view()
+        .flex_none()
+        .child(dynamic(move || {
+            shown.with(|head| untracked(|| head_facts(app, head, place)))
+        }))
+        .child(dynamic(move || {
+            controls.with(|controls| untracked(|| head_controls(app, controls, chosen)))
+        }));
+    if terminal {
+        return view()
+            .flex_none()
+            .child(block.px(cells(1.0)))
+            .child(term::hrule())
+            .into_element();
+    }
+    block
+        .px(px(SIDE))
+        .pt(px(14.0))
+        .pb(px(12.0))
+        .border_b_1()
+        .border_b_color(color(Token::Rule))
+        .into_element()
 }
 
-fn head_view(
-    app: AppState,
-    head: &Head,
-    chosen: Memo<Option<&'static str>>,
-    place: Memo<Place>,
-) -> AnyElement {
-    let form = app.form;
-    let terminal = form == Form::Terminal;
+fn head_facts(app: AppState, head: &Head, place: Memo<Place>) -> AnyElement {
+    let terminal = app.form == Form::Terminal;
     let meta = |words: String, mono: bool| {
         let t = text(words)
             .number_of_lines(1u32)
@@ -363,6 +391,19 @@ fn head_view(
             .line_height(px(21.0))
     };
     let facts = (!head.facts.is_empty()).then(|| meta(head.facts.clone(), true));
+    view()
+        .child(first)
+        .child(name)
+        .children(facts)
+        .into_element()
+}
+
+fn head_controls(
+    app: AppState,
+    head: &HeadControls,
+    chosen: Memo<Option<&'static str>>,
+) -> AnyElement {
+    let terminal = app.form == Form::Terminal;
     let options = head
         .tabs
         .iter()
@@ -376,7 +417,7 @@ fn head_view(
         })
         .collect();
     let open = head.open.clone();
-    let controls = view()
+    view()
         .flex_row()
         .flex_wrap()
         .items_center()
@@ -390,26 +431,7 @@ fn head_view(
             "btn-open-session",
             move || run_roster(app, open.clone()),
         ))
-        .children(head.menu.clone().map(|id| controls::session_menu(app, id)));
-    let block = view()
-        .flex_none()
-        .child(first)
-        .child(name)
-        .children(facts)
-        .child(controls);
-    if terminal {
-        return view()
-            .flex_none()
-            .child(block.px(cells(1.0)))
-            .child(term::hrule())
-            .into_element();
-    }
-    block
-        .px(px(SIDE))
-        .pt(px(14.0))
-        .pb(px(12.0))
-        .border_b_1()
-        .border_b_color(color(Token::Rule))
+        .children(head.menu.clone().map(|id| controls::session_menu(app, id)))
         .into_element()
 }
 

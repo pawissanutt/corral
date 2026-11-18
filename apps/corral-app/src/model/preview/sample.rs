@@ -617,7 +617,8 @@ pub(super) fn finish(feed: &Feed, run: &mut Run, ended: u64, outcome: Outcome) {
     }
 }
 
-/// A gate check on the task's latest submitted head.
+/// A gate check on the task's latest submitted head, recording the round and the worker run
+/// it gated.
 pub(super) fn gate(
     feed: &Feed,
     record: &TaskDetail,
@@ -625,11 +626,9 @@ pub(super) fn gate(
     notes: Option<&str>,
     at: u64,
 ) -> Check {
-    let head = record
-        .runs
-        .iter()
-        .rev()
-        .find_map(|run| run.head_sha.clone())
+    let submitted = record.runs.iter().rev().find(|run| run.head_sha.is_some());
+    let head = submitted
+        .and_then(|run| run.head_sha.clone())
         .unwrap_or_else(|| sha(&format!("{}/wip", record.task.id), 40));
     Check {
         task: record.task.id.clone(),
@@ -644,10 +643,12 @@ pub(super) fn gate(
         log: None,
         by: Actor::Auto,
         at: ago(feed, at),
+        round: Some(record.task.round),
+        run: submitted.map(|run| run.id.clone()),
     }
 }
 
-/// A review check for the task's current round.
+/// A review check for the task's current round, recording the reviewer run that judged it.
 pub(super) fn review(
     feed: &Feed,
     record: &TaskDetail,
@@ -655,6 +656,11 @@ pub(super) fn review(
     notes: Option<&str>,
     at: u64,
 ) -> Check {
+    let reviewer = record
+        .runs
+        .iter()
+        .rev()
+        .find(|run| run.role == Role::Reviewer);
     Check {
         task: record.task.id.clone(),
         kind: CheckKind::Review,
@@ -668,6 +674,8 @@ pub(super) fn review(
         log: None,
         by: Actor::Reviewer,
         at: ago(feed, at),
+        round: Some(record.task.round),
+        run: reviewer.map(|run| run.id.clone()),
     }
 }
 

@@ -26,6 +26,8 @@ fn gate(result: CheckResult) -> Check {
         log: None,
         by: Actor::Auto,
         at: Timestamp::UNIX_EPOCH,
+        round: None,
+        run: None,
     }
 }
 

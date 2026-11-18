@@ -121,7 +121,7 @@ impl Host {
     pub(super) fn record_turn(&mut self, at: &str, inputs: &[&str], said: Vec<SessionItem>) {
         self.turn += 1;
         self.starts.push(self.transcript.len());
-        self.checkpoint(self.turn);
+        self.checkpoint(self.turn, at);
         for text in inputs {
             self.transcript.push(input(at, text, None));
         }
@@ -131,17 +131,17 @@ impl Host {
         });
     }
 
-    fn checkpoint(&mut self, turn: u64) {
+    fn checkpoint(&mut self, turn: u64, at: &str) {
         let id = format!("cp-{}-{turn}", self.generation);
         self.checkpoints.push(RewindCheckpoint {
             commit: Some(sha(&id, 40)),
             head: Some(sha(&format!("{id}/head"), 40)),
             reference: Some(format!("refs/worktree/corral/checkpoints/{turn}-start")),
-            leaf: None,
-            error: None,
             phase: "start".into(),
             turn,
             id,
+            at: Some(at.into()),
+            ..RewindCheckpoint::default()
         });
     }
 
@@ -512,7 +512,7 @@ pub(super) fn start_with(feed: &mut Feed, id: &str, inputs: Vec<Input>, reply: V
     };
     host.turn += 1;
     host.starts.push(host.transcript.len());
-    host.checkpoint(host.turn);
+    host.checkpoint(host.turn, &at);
     for input_ in &inputs {
         host.transcript
             .push(input(&at, &input_.text, input_.entry.clone()));
@@ -694,7 +694,7 @@ fn rewind(feed: &mut Feed, id: &str, turn: u64, at: &str) -> Result<Value, Strin
         rescue_ref: format!("refs/worktree/corral/rescue/{id}/{number}"),
         from_head: sha(&format!("{id}/rescue/{number}"), 40),
         head: point.head.clone().unwrap_or_default(),
-        at: at.into(),
+        at: Some(at.into()),
     };
     host.transcript.truncate(cut);
     host.starts.truncate(cut_turns(turn));

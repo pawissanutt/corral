@@ -513,7 +513,7 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
     if let Some(message) = feed.live.get(scope).and_then(|live| thread.streaming(live)) {
         items.push(ThreadItem::Assistant(message));
     }
-    for prompt in crate::model::agents::prompts(feed, scope) {
+    if let Some(prompt) = crate::model::agents::prompt(feed, scope) {
         let mut message = thread.message(
             &thread.placeholder(format!("{scope}/ask/{}", prompt.question)),
             vec![Body::AskUser(question_card(&prompt))],

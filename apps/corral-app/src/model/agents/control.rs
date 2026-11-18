@@ -140,22 +140,22 @@ pub fn kind(feed: &Feed, session: &str) -> Option<Kind> {
 
 /// The controls that apply to the session now, in menu order. Pause is not a reviewer's:
 /// a reviewer is cancelled by its task's hold already. Rewind is a worker's. Relaunch is for a
-/// host that is lost, Cancel for one working or waiting. A worker shows Pause or Resume as
-/// `Feed.paused` says; where nothing says (corrald's rows do not carry it yet) it offers both.
-/// A chat's row says, so it offers one.
+/// host that is lost, Cancel for one working or waiting. A worker shows Pause or Resume as its
+/// row's `paused` says; a daemon that does not report it gets both. A chat's row says, so it
+/// offers one.
 pub fn controls(feed: &Feed, session: &str) -> Vec<Control> {
     match kind(feed, session) {
         Some(Kind::Chat) => chat_controls(feed, session),
         Some(kind) => feed
             .agents
             .get(session)
-            .map(|row| run_controls(row, kind, feed.paused.get(session).copied()))
+            .map(|row| run_controls(row, kind))
             .unwrap_or_default(),
         None => Vec::new(),
     }
 }
 
-fn run_controls(row: &AgentRow, kind: Kind, paused: Option<bool>) -> Vec<Control> {
+fn run_controls(row: &AgentRow, kind: Kind) -> Vec<Control> {
     let lost = matches!(row.status, SessionStatus::Gone);
     let busy = matches!(
         row.status,
@@ -166,7 +166,7 @@ fn run_controls(row: &AgentRow, kind: Kind, paused: Option<bool>) -> Vec<Control
         controls.push(Control::Cancel);
     }
     if kind == Kind::Worker && !lost {
-        match paused {
+        match row.paused {
             Some(true) => controls.push(Control::Resume),
             Some(false) => controls.push(Control::Pause),
             None => controls.extend([Control::Pause, Control::Resume]),
@@ -422,6 +422,8 @@ pub struct RewindPoint {
     pub label: String,
     /// `start a1b2c3d`, or why the checkpoint cannot be restored.
     pub detail: String,
+    /// When the host recorded the checkpoint (`14:02`), absent from hosts that do not say.
+    pub when: Option<String>,
     pub usable: bool,
 }
 
@@ -490,6 +492,7 @@ pub fn rewind_sheet(state: &State, feed: &Feed) -> Option<RewindSheet> {
                             turn: point.turn,
                             label: format!("Turn {}", point.turn),
                             detail,
+                            when: super::live::clock(point.at.as_deref(), feed),
                             usable,
                         });
                     }
@@ -499,13 +502,12 @@ pub fn rewind_sheet(state: &State, feed: &Feed) -> Option<RewindSheet> {
                         .iter()
                         .rev()
                         .map(|done| {
-                            format!(
-                                "{} · to turn {} · saved as {}",
-                                super::live::clock(Some(&done.at), feed)
-                                    .unwrap_or_else(|| done.at.clone()),
-                                done.turn,
-                                done.rescue_ref
-                            )
+                            let what =
+                                format!("to turn {} · saved as {}", done.turn, done.rescue_ref);
+                            match super::live::clock(done.at.as_deref(), feed) {
+                                Some(when) => format!("{when} · {what}"),
+                                None => what,
+                            }
                         })
                         .collect();
                     if sheet.points.is_empty() {

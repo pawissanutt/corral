@@ -179,6 +179,7 @@ fn drops_and_reopens_are_drawn_and_each_lane_opens_its_task_or_live_session() {
         corral_protocol::rows::AgentRow {
             run: run("T-1"),
             status: corral_types::SessionStatus::Working,
+            paused: None,
         },
     );
     let page = TimelinePage {
@@ -220,7 +221,7 @@ fn drops_and_reopens_are_drawn_and_each_lane_opens_its_task_or_live_session() {
 }
 
 #[test]
-fn burnup_counts_created_and_landed_tasks_once() {
+fn burnup_counts_each_task_once_and_follows_drops_and_reopens() {
     let feed = Feed {
         now: second("2026-11-15T12:00:00Z"),
         time_zone: Some(TimeZone::UTC),
@@ -257,8 +258,24 @@ fn burnup_counts_created_and_landed_tasks_once() {
                 EventKind::Landed,
                 Actor::Owner,
             ),
+            event(
+                5,
+                "2026-11-14T08:00:00Z",
+                "T-2",
+                EventKind::Dropped,
+                Actor::Owner,
+            ),
+            event(
+                6,
+                "2026-11-14T09:00:00Z",
+                "T-1",
+                EventKind::Reopened,
+                Actor::Owner,
+            ),
         ],
     };
     let series = burnup_series(&burnup, feed.now, &feed).unwrap();
-    assert_eq!(series.points.last().map(|p| (p.1, p.2)), Some((2, 1)));
+    let counts: Vec<(u32, u32)> = series.points.iter().map(|p| (p.1, p.2)).collect();
+    assert!(counts.contains(&(2, 1)));
+    assert_eq!(counts.last(), Some(&(1, 0)));
 }

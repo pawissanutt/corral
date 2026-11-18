@@ -50,7 +50,7 @@ pub(super) fn rebuild(feed: &mut Feed) {
     if let Some(health) = &mut feed.health {
         health.slots = Some(slots);
     }
-    feed.agents = agents(&records);
+    feed.agents = agents(feed, &records);
     for (id, agent) in feed.agents.clone() {
         let snapshot = terminal(feed, &records, &agent);
         put(
@@ -61,7 +61,12 @@ pub(super) fn rebuild(feed: &mut Feed) {
     }
     feed.usage = (!records.is_empty()).then(|| {
         let runs = all_runs(&records);
-        summarize(&usage_rows(feed, &runs), &runs, None, 0)
+        summarize(
+            &usage_rows(feed, &runs),
+            &runs,
+            None,
+            &jiff::tz::TimeZone::UTC,
+        )
     });
     refresh_details(feed);
 }
@@ -126,6 +131,7 @@ pub(super) fn row(feed: &Feed, record: &TaskDetail, records: &[TaskDetail]) -> T
             .find(|run| run.role == Role::Reviewer && run.ended.is_none())
             .cloned(),
         dependencies: Some(dependencies),
+        resolved_profile: workspace::resolved_profile(feed, &record.task),
     }
 }
 
@@ -198,13 +204,15 @@ fn projects(feed: &Feed, records: &[TaskDetail]) -> BTreeMap<Id, ProjectRow> {
                 Value::Object(map) => map.clone(),
                 _ => serde_json::Map::new(),
             };
+            let effective = workspace::effective(feed, &config);
             (
                 Id::new(id),
                 ProjectRow {
                     id: id.clone(),
                     open,
                     open_by_status: Some(counts.into_values().collect()),
-                    effective: Some(workspace::effective(feed, &config)),
+                    local_branches: Some(branches(records, id, effective.base.as_deref())),
+                    effective: Some(effective),
                     config,
                 },
             )
@@ -212,8 +220,28 @@ fn projects(feed: &Feed, records: &[TaskDetail]) -> BTreeMap<Id, ProjectRow> {
         .collect()
 }
 
-/// Live runs by `<task>_<run>`; a worker on a Blocked task shows the question it asked.
-fn agents(records: &[TaskDetail]) -> BTreeMap<Id, AgentRow> {
+/// The project's local branches as corrald lists them, newest tip first: each run's branch,
+/// newest run first, then the base and a release branch to land onto.
+fn branches(records: &[TaskDetail], project: &str, base: Option<&str>) -> Vec<String> {
+    let mut runs: Vec<&Run> = records
+        .iter()
+        .filter(|record| record.task.project.as_deref() == Some(project))
+        .flat_map(|record| &record.runs)
+        .collect();
+    runs.sort_by_key(|run| std::cmp::Reverse(run.started));
+    let mut names: Vec<String> = Vec::new();
+    let tips = runs.iter().map(|run| run.branch.as_str());
+    for name in tips.chain([base.unwrap_or("main"), "release/2026.11"]) {
+        if !name.is_empty() && !names.iter().any(|known| known == name) {
+            names.push(name.to_owned());
+        }
+    }
+    names
+}
+
+/// Live runs by `<task>_<run>`; a worker on a Blocked task shows the question it asked, and one
+/// with a live pi host reports whether it is paused.
+fn agents(feed: &Feed, records: &[TaskDetail]) -> BTreeMap<Id, AgentRow> {
     records
         .iter()
         .flat_map(|record| {
@@ -232,13 +260,18 @@ fn agents(records: &[TaskDetail]) -> BTreeMap<Id, AgentRow> {
                         },
                         _ => SessionStatus::Working,
                     };
-                    (
-                        Id::from(format!("{}_{}", run.task, run.id)),
-                        AgentRow {
-                            run: run.clone(),
-                            status,
-                        },
-                    )
+                    let id = Id::from(format!("{}_{}", run.task, run.id));
+                    let paused = feed
+                        .hosts
+                        .get(id.as_str())
+                        .filter(|host| !host.gone)
+                        .map(|host| host.paused);
+                    let row = AgentRow {
+                        run: run.clone(),
+                        status,
+                        paused,
+                    };
+                    (id, row)
                 })
         })
         .collect()
@@ -334,19 +367,18 @@ pub(super) fn usage_rows(feed: &Feed, runs: &[Run]) -> Vec<corral_types::Usage> 
     rows
 }
 
-/// The local calendar day of `at`, `offset` minutes east of UTC.
-pub(super) fn local_day(at: jiff::Timestamp, offset: i16) -> String {
-    let shifted = at + jiff::SignedDuration::from_secs(i64::from(offset) * 60);
-    shifted.to_string().chars().take(10).collect()
+/// The calendar day of `at` in `zone`.
+pub(super) fn local_day(at: jiff::Timestamp, zone: &jiff::tz::TimeZone) -> String {
+    zone.to_datetime(at).date().to_string()
 }
 
 /// Totals of `rows`, and the runs they cover; grouped `by` a key, each group with its own runs.
-/// Days are local, `offset` minutes east of UTC.
+/// Days are local to `zone`.
 pub(super) fn summarize(
     rows: &[corral_types::Usage],
     runs: &[Run],
     by: Option<UsageBy>,
-    offset: i16,
+    zone: &jiff::tz::TimeZone,
 ) -> UsageSummary {
     let reported = |run: &Run| {
         rows.iter().any(|row| {
@@ -363,7 +395,7 @@ pub(super) fn summarize(
                 UsageBy::Profile => row.profile.clone(),
                 UsageBy::Model => Some(row.model.clone()),
                 UsageBy::Task => row.task.clone(),
-                UsageBy::Day => Some(local_day(row.at, offset)),
+                UsageBy::Day => Some(local_day(row.at, zone)),
             };
             add(&mut groups.entry(key).or_default().total, row);
         }
@@ -374,7 +406,7 @@ pub(super) fn summarize(
                 UsageBy::Profile => Some(run.profile.clone()),
                 UsageBy::Model => run.model.clone(),
                 UsageBy::Task => Some(run.task.clone()),
-                UsageBy::Day => Some(local_day(run.started, offset)),
+                UsageBy::Day => Some(local_day(run.started, zone)),
             };
             let group = groups.entry(key).or_default();
             *group.total_runs.get_or_insert(0) += 1;

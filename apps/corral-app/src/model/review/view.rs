@@ -235,6 +235,8 @@ pub struct Target {
     pub placeholder: &'static str,
     /// What the field decides, for the pointer and the screen reader.
     pub hint: String,
+    /// The project's local branches offered for what the field holds, one press each.
+    pub branches: Vec<String>,
 }
 
 /// The decide bar: every operation that decides a candidate, always pressable.
