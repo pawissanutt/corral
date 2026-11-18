@@ -30,6 +30,67 @@ fn call(launch: &PaidLaunch, id: &str, nanos: u64) -> Value {
 }
 
 #[test]
+fn derived_mixed_approval_admits_above_the_profile_cap_until_its_mapping_changes() {
+    // Given a child preset whose model has exactly one approved API profile and no [build.api].
+    let (_dir, mut store, _) = configured();
+    let mut profile = serde_json::to_value(&store.config.profiles["build-api"]).unwrap();
+    for target in ["/vendor", "/metadata/candidates/0/provider"] {
+        *profile.pointer_mut(target).unwrap() = json!("anthropic");
+    }
+    for target in ["/connection", "/metadata/candidates/0/connection"] {
+        *profile.pointer_mut(target).unwrap() = json!("anthropic-api");
+    }
+    for target in ["/model", "/metadata/candidates/0/model"] {
+        *profile.pointer_mut(target).unwrap() = json!("claude-sonnet-4-6");
+    }
+    let profile: corral_core::Profile = serde_json::from_value(profile).unwrap();
+    store
+        .config
+        .profiles
+        .insert("claude-api".into(), profile.clone());
+    store.config.build.profiles.insert(
+        "hard".into(),
+        corral_core::BuildProfileCfg {
+            model: "anthropic/claude-sonnet-4-6".into(),
+            effort: None,
+            description: None,
+        },
+    );
+    store.save_config().unwrap();
+    let binding = ConnectionBinding::new(
+        ConnectionId::AnthropicApi,
+        Some("exact-api".into()),
+        "claude-sonnet-4-6".into(),
+        None,
+    )
+    .unwrap();
+    let presets = [("hard".to_string(), "claude-api".to_string())].into();
+    let routes = [("claude-api".to_string(), binding.clone())].into();
+    // When a subscription parent opens the default mixed Build.
+    let launch = open_mixed(&store, "subscription", None, &presets, &routes, None).unwrap();
+    assert!(launch.mixed);
+    let reserve = |store: &Store, id: &str| {
+        let mut input = call(&launch, id, 5_000);
+        input["provider"] = json!("anthropic");
+        input["model"] = json!("claude-sonnet-4-6");
+        input["binding_digest"] = json!(binding.digest);
+        budget(store, input)
+    };
+    // Then a request above the profile's own 1000-nano cap is admitted under the shared allowance.
+    let state = reserve(&store, "child").unwrap();
+    assert_eq!(state["admitted"], true);
+    assert_eq!(state["paid"]["allowance_nanos"], 9_007_199_254_740_000u64);
+    // A second approved profile for the model changes the derived mapping, so spending stops.
+    let mut changed = Store::open(store.root()).unwrap();
+    changed
+        .config
+        .profiles
+        .insert("claude-api-2".into(), profile);
+    changed.save_config().unwrap();
+    assert!(reserve(&changed, "after-change").is_err());
+}
+
+#[test]
 fn parent_child_reservations_are_serialized_and_resume_retains_uncertain_spending() {
     let (_dir, store, binding) = configured();
     let launch = open(&store, "build-api", &binding, None).unwrap();

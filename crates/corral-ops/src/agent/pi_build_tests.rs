@@ -191,6 +191,163 @@ fn old_build_host_cannot_reinterpret_approved_api_profile_or_create_a_balance() 
     assert_eq!(ledger.approval.allowance_nanos, 50_000_000_000);
 }
 
+fn api_profile(model: &str) -> corral_core::Profile {
+    serde_json::from_value(json!({
+        "harness":"corral-pi", "vendor":"anthropic", "model":model, "connection":"anthropic-api",
+        "metadata":{"display_name":"fixture","purpose":"fixture","guidance":{},"instructions":"fixture","revision":"fixture",
+            "eligibility":{"enabled":true,"automatic":false,"roles":["implementation"],"projects":[]},"evidence":"synthetic",
+            "candidates":[{"id":"exact-api","harness":"corral-pi","connection":"anthropic-api","provider":"anthropic","model":model,
+                "args":[],"evidence":"synthetic","cost":{"kind":"metered","currency":"USD","maximum_micros":50000000}}],
+            "api_start":{"roles":["assistant"],"spending":{"currency":"USD","maximum_micros":50000000},"approval":"explicit-fixture"}}}
+    )).unwrap()
+}
+
+fn preset(model: &str) -> corral_core::BuildProfileCfg {
+    corral_core::BuildProfileCfg {
+        model: model.into(),
+        effort: Some("high".into()),
+        description: None,
+    }
+}
+
+#[test]
+fn default_mixed_approval_maps_presets_to_the_single_approved_api_profile_for_their_model() {
+    let mut config = Config::default_for(Path::new("/offline-fixture"));
+    // Given no presets, nothing is derived.
+    config
+        .profiles
+        .insert("sonnet-api".into(), api_profile("claude-sonnet-4-6"));
+    assert!(mixed_api(&config).is_none());
+    // Given presets on the API profile's model, on an unapproved model and on another vendor.
+    for (name, model) in [
+        ("same", "anthropic/claude-sonnet-4-6"),
+        ("unmatched", "anthropic/claude-opus-4-8"),
+        ("other-vendor", "openai-codex/claude-sonnet-4-6"),
+        ("default", "anthropic/claude-sonnet-4-6"),
+    ] {
+        config.build.profiles.insert(name.into(), preset(model));
+    }
+    let mut unapproved = api_profile("claude-opus-4-8");
+    unapproved.metadata.as_mut().unwrap().api_start = None;
+    config.profiles.insert("opus-api".into(), unapproved);
+    // Then only the exact vendor and model with assistant API-start approval is mapped, uncapped.
+    let derived = mixed_api(&config).unwrap().into_owned();
+    assert_eq!(derived.approval, "default-mixed-build");
+    assert_eq!(derived.maximum_micros, 9_007_199_254_740);
+    assert_eq!(
+        derived.profiles,
+        [("same".to_string(), "sonnet-api".to_string())].into()
+    );
+    config.build.api = Some(derived.clone());
+    assert!(config.build.problems().is_empty());
+    // An owner's [build.api] is used as written.
+    let mut written = derived;
+    written.approval = "owner".into();
+    written.maximum_micros = 5;
+    config.build.api = Some(written.clone());
+    assert_eq!(mixed_api(&config).unwrap().into_owned(), written);
+    // Two approved API profiles for one model are ambiguous, so that preset keeps its route.
+    config.build.api = None;
+    config
+        .profiles
+        .insert("sonnet-api-2".into(), api_profile("claude-sonnet-4-6"));
+    assert!(mixed_api(&config).is_none());
+}
+
+#[test]
+fn subscription_build_launches_matching_presets_on_api_routes_by_default() {
+    let mut fx = fixture();
+    let data = tempfile::tempdir().unwrap();
+    auth(data.path());
+    let key = data.path().join("auth/anthropic-api.json");
+    std::fs::write(&key, "{}").unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let assets = fx.ctx.store.config.agent.assets_dir.clone().unwrap();
+    source_assets(&assets);
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(assets.join("compat.json")).unwrap()).unwrap();
+    manifest["connections"] = json!(["anthropic-api"]);
+    let write = |manifest: &Value| {
+        std::fs::write(
+            assets.join("compat.json"),
+            serde_json::to_vec(manifest).unwrap(),
+        )
+        .unwrap()
+    };
+    write(&manifest);
+    let config = &mut fx.ctx.store.config;
+    config
+        .profiles
+        .insert("sonnet-api".into(), api_profile("claude-sonnet-4-6"));
+    config
+        .build
+        .profiles
+        .insert("mapped".into(), preset("anthropic/claude-sonnet-4-6"));
+    config
+        .build
+        .profiles
+        .insert("kept".into(), preset("anthropic/claude-opus-4-8"));
+    fx.ctx.store.save_config().unwrap();
+    let (app, root) = (fx.root().join("app"), fx.ctx.store.root().to_path_buf());
+    let launch = || {
+        message(
+            build_command(
+                data.path(),
+                &BuildArgs::default(),
+                &app,
+                Some(fake_bun(data.path())),
+                Some(&root),
+            )
+            .unwrap()
+            .1,
+        )
+    };
+    // Given a host without the mixed protocol, the derived default steps aside.
+    let plain = launch();
+    assert!(plain.get("paid").is_none());
+    assert_eq!(
+        plain["settings"]["profiles"],
+        json!([
+            {"name":"kept","model":"anthropic/claude-opus-4-8","effort":"high"},
+            {"name":"mapped","model":"anthropic/claude-sonnet-4-6","effort":"high"},
+        ])
+    );
+    assert!(
+        fx.ctx
+            .store
+            .record_rows("build_paid_ledgers")
+            .unwrap()
+            .is_empty()
+    );
+    // When the host supports it, the matching preset is bound to the API profile's exact route.
+    manifest["build_mixed_paid"] = json!(1);
+    write(&manifest);
+    let mixed = launch();
+    assert_eq!(mixed["paid"]["mixed"], true);
+    assert!(
+        mixed
+            .get("binding")
+            .is_none_or(|b| b["connection"] != "anthropic-api")
+    );
+    let profiles = mixed["settings"]["profiles"].as_array().unwrap();
+    assert_eq!(
+        profiles[0],
+        json!({"name":"kept","model":"anthropic/claude-opus-4-8","effort":"high"})
+    );
+    assert_eq!(profiles[1]["name"], "mapped");
+    assert_eq!(profiles[1]["binding"]["connection"], "anthropic-api");
+    assert!(profiles[1].get("effort").is_none());
+    let id = mixed["paid"]["session"].as_str().unwrap();
+    let ledger = fx.ctx.store.build_paid_ledger(id).unwrap().unwrap();
+    let approval = ledger.mixed.as_ref().unwrap();
+    assert_eq!(approval.approval, "default-mixed-build");
+    assert_eq!(
+        approval.presets,
+        [("mapped".to_string(), "sonnet-api".to_string())].into()
+    );
+    assert_eq!(ledger.allowance_nanos(), 9_007_199_254_740_000);
+}
+
 #[test]
 fn workspace_launch_carries_project_policy_profiles_and_capabilities_without_writes() {
     let mut fx = fixture();
