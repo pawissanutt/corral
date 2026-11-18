@@ -50,6 +50,7 @@ export interface ChildHandle {
 export interface SdkRunnerOptions {
   readonly sdk: typeof Sdk;
   readonly models: ModelRuntime;
+  readonly paidModels?: (binding: NonNullable<ResolvedModel["binding"]>) => Promise<ModelRuntime>;
   readonly context: FleetContext;
   readonly agentDir: string;
   readonly localTools: readonly ToolDefinition[];
@@ -321,12 +322,14 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
       };
       try {
         signal.throwIfAborted();
-        const model = options.models.getModel(initialModel.provider, initialModel.model);
+        const models = initialModel.binding ? await options.paidModels?.(initialModel.binding) : options.models;
+        if (!models) throw new Error("paid_admission_required: child API catalog is unavailable");
+        const model = models.getModel(initialModel.provider, initialModel.model);
         if (!model) throw new Error(`model_unavailable: ${initialModel.provider}/${initialModel.model}`);
         if (execution?.serviceTier && (!research || initialModel.provider !== "openai-codex")) {
           throw new Error("Priority service tier is restricted to openai-codex Explore sessions");
         }
-        const level = budget?.thinkingLevel ?? thinking(initialModel.effort);
+        const level = initialModel.binding ? thinking(initialModel.effort) : budget?.thinkingLevel ?? thinking(initialModel.effort);
         snapshots = execution?.review ? reviewSnapshots(execution.review) : undefined;
         if (snapshots) {
           if (!allowed.has("read")) throw new Error("local review unavailable: parent has no file-read capability");
@@ -415,7 +418,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         const file = execution?.sessionFile ?? join(options.context.dir, "children", `${spec.id}.jsonl`);
         mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
         writeFileSync(file, JSON.stringify({ type: "session", version: sdk.CURRENT_SESSION_VERSION, id: execution?.sessionId ?? randomUUID(), timestamp: new Date().toISOString(), cwd }) + "\n", { flag: "wx", mode: 0o600 });
-        const services = await sdk.createAgentSessionServices({ cwd, agentDir: join(options.agentDir, "fleet"), modelRuntime: options.models,
+        const services = await sdk.createAgentSessionServices({ cwd, agentDir: join(options.agentDir, "fleet"), modelRuntime: models,
           settingsManager: sdk.SettingsManager.inMemory({ ...restrictedSettings(), retry: { enabled: false }, compaction: { enabled: false } }),
           resourceLoaderOptions: { ...resourceLoaderOptions([extension]), agentsFilesOverride: () => ({ agentsFiles: [] }),
             systemPromptOverride: () => research
@@ -456,6 +459,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     return { done, usage,
       async steer(text) { await ready; if (complete) throw new Error("Child is no longer running"); await session!.steer(text); },
       async setModel(provider, model, effort) {
+        if (initialModel.binding) throw new Error("A running API child keeps its approved route");
         if (!options.models.getModel(provider, model)) throw new Error(`model_unavailable: ${provider}/${model}`);
         thinking(effort);
         await ready;

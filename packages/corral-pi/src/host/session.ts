@@ -495,6 +495,17 @@ export class HostSession {
         return this.auxiliaryModels;
       },
       approved: () => this.buildProviders,
+      paidModels: async binding => {
+        const record = options.build?.paidRecord;
+        if (!record || !isApiConnection(binding.connection)) throw new Error("paid_admission_required: child has no Build allowance");
+        const provider = CONNECTIONS[binding.connection].provider;
+        const budget = new RunBudget({ sessionId: () => this.sessionId(),
+          record: payload => record({ ...payload, binding_digest: binding.digest }),
+          onStop: () => {}, cancel: () => {},
+        });
+        const credentials = options.modules.auth.credentials(authContext(provider, binding.connection));
+        return (await createApiCatalog(credentials, binding, options.network.fetch, budget.physical)).models;
+      },
       parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
       agentDir: options.agentDir, wake: this.inputWake,
       localTools: () => this.localTools.filter(tool => !this.buildControls?.tools.includes(tool)).map(tool => this.planningTool(tool)),
@@ -551,7 +562,9 @@ export class HostSession {
       unbounded: !isApiConnection(resolveConnection(this.provider, options.binding?.connection)) && PROVIDERS[this.provider].lane !== undefined,
       sessionId: () => this.sessionId(),
       record: async (payload) => {
-        if (options.build?.paidRecord) return options.build.paidRecord(payload);
+        if (options.build?.paidRecord && options.binding && isApiConnection(options.binding.connection)) {
+          return options.build.paidRecord({ ...payload, binding_digest: options.binding.digest });
+        }
         if (!this.bound) throw new Error("host_not_bound");
         await this.drained();
         const event = options.events.emit("budget", payload);

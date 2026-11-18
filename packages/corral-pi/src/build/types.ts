@@ -27,6 +27,7 @@ export interface BuildPaidLaunch {
   readonly session: string;
   readonly generation: number;
   readonly cap: string;
+  readonly mixed?: true;
 }
 
 /** What landing from the session requires for a project: an approving in-session review and the full gate, the full gate alone, or no landing. */
@@ -39,6 +40,7 @@ export interface BuildProfile {
   readonly model: string;
   readonly effort?: string;
   readonly description?: string;
+  readonly binding?: ConnectionBinding;
 }
 
 export interface BuildSettings {

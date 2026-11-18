@@ -1,6 +1,7 @@
 import type { BuildProfile, BuildSettings } from "../../build/types.ts";
 
 export interface ResolvedModel {
+  readonly binding?: BuildProfile["binding"];
   readonly profile: string;
   readonly provider: string;
   readonly model: string;
@@ -23,6 +24,6 @@ export function resolveModel(choice: string | undefined, profiles: readonly Buil
   const slash = value.indexOf("/");
   if (slash < 1 || slash === value.length - 1) throw new Error(`Invalid child model ${value}; expected <provider>/<id>`);
   const provider = value.slice(0, slash);
-  if (!approved.includes(provider)) throw new Error(`Child model provider is not approved: ${provider}`);
-  return { profile: profile?.name ?? value, provider, model: value.slice(slash + 1), effort: profile?.effort };
+  if (!profile?.binding && !approved.includes(provider)) throw new Error(`Child model provider is not approved: ${provider}`);
+  return { profile: profile?.name ?? value, provider, model: value.slice(slash + 1), effort: profile?.effort, ...(profile?.binding ? { binding: profile.binding } : {}) };
 }

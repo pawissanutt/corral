@@ -62,10 +62,29 @@ has an exact preferred API candidate, a saved platform key, and explicit finite
 fallback policy is required. See [API-first profiles](api-first-profiles.md).
 
 The Rust-owned ledger reserves a conservative priced bound before every physical request.
-Parent, children and compaction share one allowance; API children use the parent's exact
-route. Failed or uncertain requests retain their reservation, and resume never replenishes
-the allowance. An established paid build cannot switch profiles, even back to subscription.
-Changing its approval requires a new explicitly approved build, not a retry.
+By default, paid children use the parent's exact route. A workspace owner can opt new
+Builds into mixed API child routes by mapping existing child presets to approved workspace
+API profiles and setting one shared USD cap. For example, with the named presets and
+API profiles already configured:
+
+```toml
+[build.api]
+approval = "owner-approved-mixed-build"
+maximum_micros = 5_000_000 # USD 5 per Build
+
+[build.api.profiles]
+ui-easy = "pi-sonnet-api"
+ui-hard = "pi-opus-api"
+architect = "pi-fable-api"
+```
+
+The mapped presets use the API profile's exact model and effort. Other presets keep their
+configured model; the parent keeps its own route and can stay on subscription. Each API
+profile must already carry API-start approval for the assistant role. All metered requests
+in the Build share the cap, including the parent's requests if it uses the API. API routes
+must be chosen before a child starts. Failed or uncertain requests retain their reservation;
+resume requires the same approval and mappings and never replenishes the allowance.
+A new approval requires a new Build, not a retry.
 
 Bare and non-workspace sessions cannot use metered API profiles. Missing credentials,
 unsupported model/effort, changed approval or insufficient allowance refuse rather than
