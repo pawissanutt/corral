@@ -146,6 +146,125 @@ fn changes_pages_raw_event_sequences_and_device_seen_independently() {
 }
 
 #[test]
+fn landed_task_events_include_project_in_all_views() {
+    use corral_engine::{Actor, EventKind, Status, events::NewEvent};
+    use corral_protocol::detail::TimelineBy;
+
+    let fixture = Fixture::new();
+    fixture.project();
+    let id = fixture.named_task("Landed", Some("demo"));
+    let engine = fixture.shared.engine().unwrap();
+    engine
+        .store
+        .transaction(|store| {
+            let mut task = store.require_task(&id)?;
+            task.status = Status::Done;
+            store.update_task(&task)?;
+            store.append_event(&NewEvent {
+                task: Some(id.clone()),
+                run: None,
+                kind: EventKind::Landed,
+                actor: Actor::Owner,
+                detail: serde_json::Value::Null,
+            })?;
+            Ok(())
+        })
+        .unwrap();
+    let page = changes(
+        &fixture.shared,
+        ChangesRequest {
+            query: ChangesQuery {
+                after: None,
+                before: None,
+                limit: 50,
+            },
+            seen: SeenCursor {
+                through: 0,
+                at: None,
+            },
+        },
+    )
+    .unwrap();
+    let check = |events: &[corral_types::Event]| {
+        assert!(events.iter().any(|event| event.kind == EventKind::Landed));
+        assert!(
+            events
+                .iter()
+                .all(|event| event.project.as_deref() == Some("demo"))
+        );
+    };
+    check(&page.events);
+    let get = |target| {
+        detail(
+            &fixture.shared,
+            DetailGet {
+                target,
+                page: None,
+                etag: None,
+            },
+        )
+        .unwrap()
+        .body
+        .unwrap()
+    };
+    let DetailBody::Task(task) = get(DetailRef::Task { id }) else {
+        panic!("expected task")
+    };
+    check(&task.events);
+    let DetailBody::Burnup(burnup) = get(DetailRef::Burnup {
+        scope: "project:demo".into(),
+    }) else {
+        panic!("expected burnup")
+    };
+    check(&burnup.events);
+    let DetailBody::Timeline(timeline) = get(DetailRef::Timeline {
+        from: "2000-01-01T00:00:00Z".into(),
+        to: "2100-01-01T00:00:00Z".into(),
+        by: TimelineBy::Task,
+    }) else {
+        panic!("expected timeline")
+    };
+    check(&timeline.events);
+}
+
+#[test]
+fn ended_process_terminal_detail_keeps_log_and_reports_missing_file() {
+    let fixture = Fixture::new();
+    fixture.project();
+    let id = fixture.named_task("Process", Some("demo"));
+    let mut run = fixture.dispatch(&id);
+    let dir = fixture.runner.starts().pop().unwrap().dir;
+    let log = dir.join("session.log");
+    fs::write(&log, "retained output\n").unwrap();
+    run.session = Some(SessionRef::Process { pid: 1, dir });
+    run.ended = Some(jiff::Timestamp::now());
+    fixture
+        .shared
+        .engine()
+        .unwrap()
+        .store
+        .update_run(&run)
+        .unwrap();
+    let query = DetailGet {
+        target: DetailRef::Terminal {
+            id: format!("{}_{}", run.task, run.id),
+        },
+        page: None,
+        etag: None,
+    };
+    let reply = detail(&fixture.shared, query.clone()).unwrap();
+    let Some(DetailBody::Terminal(snapshot)) = reply.body else {
+        panic!("expected terminal")
+    };
+    assert_eq!(snapshot.lines, ["retained output"]);
+    assert!(!snapshot.live);
+    fs::remove_file(log).unwrap();
+    let error = detail(&fixture.shared, query).unwrap_err();
+    assert!(error.is::<NotFound>());
+    assert_eq!(error.to_string(), "session log not found");
+}
+
+#[test]
 fn artifact_chunks_preserve_utf8_boundaries_and_are_selector_bound() {
     let fixture = Fixture::new();
     let id = fixture.named_task("large artifact", None);

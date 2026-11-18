@@ -442,6 +442,9 @@ pub struct Event {
     pub seq: u64,
     pub ts: Timestamp,
     pub task: Option<String>,
+    /// Current project of the task, resolved when events are read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     pub run: Option<String>,
     pub kind: EventKind,
     pub actor: Actor,

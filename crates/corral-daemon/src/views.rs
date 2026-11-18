@@ -154,8 +154,16 @@ fn placed_terminal(engine: &Engine, session: &SessionRef, live: bool) -> Result<
         }
         SessionRef::Process { dir, .. } => {
             let path = dir.join("session.log");
-            let mut file = std::fs::File::open(&path)
-                .with_context(|| format!("open session log {}", path.display()))?;
+            let mut file = match std::fs::File::open(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return Err(NotFound("session log not found").into());
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("open session log {}", path.display()));
+                }
+            };
             let len = file.metadata().context("stat session log")?.len();
             let start = len.saturating_sub(TERMINAL_ARRAYS_MAX as u64);
             file.seek(SeekFrom::Start(start))
