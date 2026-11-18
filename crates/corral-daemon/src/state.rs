@@ -1,363 +1,220 @@
-//! In-memory coordination: no store or socket I/O while the state mutex is held.
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Condvar, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
-
-use corral_ops::boardview::Projection;
-
-use corral_protocol::{
-    DaemonState, Health, LoopFacts, NudgeAck, PmState, RuntimeHealth, RuntimeState,
+//! Daemon lifecycle, sync wakeups, and the revision of observed read models.
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Condvar, Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 
+use anyhow::{Context, Result};
+use corral_engine::{Actor, Engine, PipelineMode, Runner};
+use corral_protocol::{DaemonState, Health, NudgeAck};
+
+use crate::devices::Devices;
+
+pub(crate) type RunnerFactory = Arc<dyn Fn() -> Box<dyn Runner> + Send + Sync>;
+
 pub(crate) struct Shared {
-    pub state: Mutex<State>,
-    pub changed: Condvar,
-    pub projection: Mutex<Option<Projection>>,
-    pub board_subscribers: AtomicUsize,
-    pub health_topic: Mutex<(u64, Health)>,
-    pub reader: Mutex<Option<std::sync::mpsc::Sender<crate::reader::Job>>>,
-    pub attention: Mutex<Option<(u64, corral_ops::attention::AttentionBoard)>>,
-    /// The last published classic frame revision (reader thread writes, topics read).
-    pub classic: Mutex<Option<std::sync::Arc<crate::classic::Published>>>,
-    /// Open `classic` topic subscriptions; any keeps the frame refreshed.
-    pub classic_subscribers: AtomicUsize,
-    /// A completed owner-requested full pass asks the classic frame for a full recompute.
-    pub classic_force: AtomicBool,
-    /// The command service once `commands::start` ran; `None` answers `unavailable`.
-    #[cfg(unix)]
-    pub commands: Mutex<Option<std::sync::Arc<crate::commands::Service>>>,
-    #[cfg(unix)]
-    pub devices: Mutex<Option<std::sync::Arc<crate::devices::Devices>>>,
-    /// Lazy typed app readers; never computed on the socket, loop or projector.
-    #[cfg(unix)]
-    pub views: Mutex<Option<std::sync::Arc<crate::views::Service>>>,
-    /// Pane-less hosts outlive every individual app connection.
-    #[cfg(unix)]
-    pub assistant: Mutex<Option<std::sync::Arc<crate::assistant::Service>>>,
-    /// A single live-ring reader per watched session, independent of app row reads.
-    #[cfg(unix)]
-    pub session_live: Mutex<Option<std::sync::Arc<crate::topics::SessionLiveService>>>,
+    root: PathBuf,
+    runner: Option<RunnerFactory>,
+    devices: Arc<Devices>,
+    epoch: u64,
+    revision: AtomicU64,
+    pub(crate) latest_seq: AtomicU64,
+    pub(crate) row_cache: crate::views::RowCache,
+    pub(crate) terminal_cache: crate::topics::TerminalCache,
+    state: Mutex<State>,
+    pub(crate) changed: Condvar,
 }
 
 pub(crate) struct State {
-    pub stop: bool,
-    pub closed: bool,
-    pub upgrading: bool,
-    pub pending: bool,
-    pub started_seq: u64,
-    pub projection_wake: u64,
-    pub completed_seq: u64,
-    pub workers: usize,
-    pub app_workers: usize,
-    pub started: Option<Instant>,
-    pub started_at: Option<String>,
-    pub finished: Option<Instant>,
-    pub finished_at: Option<String>,
-    pub elapsed: Option<Duration>,
-    pub cpu: Duration,
-    pub last_error: Option<String>,
-    pub server_error: Option<String>,
-    pub failures: u8,
-    pub last_success: Instant,
-    pub foreign: bool,
-    pub stores_percent: u64,
-    pub stores_pressed: bool,
-    pub locks: Vec<String>,
-    pub runtime: RuntimeState,
-    pub pm: PmState,
-    pub supervised: bool,
-    /// A `cli` or `board` nudge asked for a full pass; taken by the next pass.
-    pub full_requested: bool,
-    /// Any nudge arrived since the last pass took the request.
-    pub nudged: bool,
+    pub(crate) stop: bool,
+    pub(crate) closed: bool,
+    pub(crate) workers: usize,
+    pub(crate) app_workers: usize,
+    pub(crate) op_workers: usize,
+    pub(crate) server_error: Option<String>,
+    pending_sync: bool,
+    started: u64,
+    completed: u64,
+    health: Health,
 }
 
 impl Shared {
-    pub fn new() -> Self {
-        Self {
-            projection: Mutex::new(None),
-            board_subscribers: AtomicUsize::new(0),
-            health_topic: Mutex::new((0, Health::down())),
-            reader: Mutex::new(None),
-            attention: Mutex::new(None),
-            classic: Mutex::new(None),
-            classic_subscribers: AtomicUsize::new(0),
-            classic_force: AtomicBool::new(false),
-            #[cfg(unix)]
-            commands: Mutex::new(None),
-            #[cfg(unix)]
-            devices: Mutex::new(None),
-            #[cfg(unix)]
-            views: Mutex::new(None),
-            #[cfg(unix)]
-            assistant: Mutex::new(None),
-            #[cfg(unix)]
-            session_live: Mutex::new(None),
+    #[cfg(test)]
+    pub(crate) fn new(root: PathBuf, runner: Option<RunnerFactory>) -> Result<Self> {
+        let devices = Devices::open(&root.join(crate::STATE_DIR))?;
+        Self::with_devices(root, runner, devices)
+    }
+
+    pub(crate) fn with_devices(
+        root: PathBuf,
+        runner: Option<RunnerFactory>,
+        devices: Devices,
+    ) -> Result<Self> {
+        let mut epoch = [0_u8; 8];
+        getrandom::fill(&mut epoch)
+            .map_err(|error| anyhow::anyhow!("generate daemon epoch: {error}"))?;
+        // Cursor epochs travel through browser clients, including implementations using JS numbers.
+        let epoch = u64::from_ne_bytes(epoch) & ((1 << 53) - 1);
+        Ok(Self {
+            root,
+            runner,
+            devices: Arc::new(devices),
+            epoch,
+            revision: AtomicU64::new(1),
+            latest_seq: AtomicU64::new(0),
+            row_cache: Default::default(),
+            terminal_cache: Default::default(),
             state: Mutex::new(State {
                 stop: false,
                 closed: false,
-                upgrading: false,
-                pending: false,
-                started_seq: 0,
-                completed_seq: 0,
-                projection_wake: 0,
                 workers: 0,
                 app_workers: 0,
-                started: None,
-                started_at: None,
-                finished: None,
-                finished_at: None,
-                elapsed: None,
-                cpu: Duration::ZERO,
-                last_error: None,
+                op_workers: 0,
                 server_error: None,
-                failures: 0,
-                last_success: Instant::now(),
-                foreign: false,
-                stores_percent: 0,
-                stores_pressed: false,
-                locks: Vec::new(),
-                runtime: RuntimeState::Unreachable,
-                pm: PmState::Absent,
-                supervised: supervised(),
-                full_requested: false,
-                nudged: false,
+                pending_sync: true,
+                started: 0,
+                completed: 0,
+                health: crate::health::initial(),
             }),
             changed: Condvar::new(),
-        }
+        })
     }
 
-    pub fn lock(&self) -> MutexGuard<'_, State> {
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+    pub(crate) fn devices(&self) -> &Arc<Devices> {
+        &self.devices
+    }
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
+    }
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn engine(&self) -> Result<Engine> {
+        let mut engine = match &self.runner {
+            Some(runner) => Engine::open_with_runner(&self.root, runner()),
+            None => Engine::open(&self.root),
+        }
+        .context("open daemon engine")?;
+        engine.actor = Actor::Owner;
+        engine.pipeline = PipelineMode::Off;
+        Ok(engine)
+    }
+
+    pub(crate) fn runner_reachable(&self, engine: &Engine) -> bool {
+        self.runner.is_some() || crate::health::runner_reachable(&engine.config.runner)
+    }
+
+    pub(crate) fn publish(&self) {
+        self.revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn health(&self) -> Health {
+        self.lock().health.clone()
+    }
+
+    pub(crate) fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    pub fn projection(&self) -> MutexGuard<'_, Option<Projection>> {
-        self.projection
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-    }
-
-    #[cfg(unix)]
-    pub fn devices(&self) -> Option<std::sync::Arc<crate::devices::Devices>> {
-        self.devices
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
-    }
-
-    pub fn epoch(&self) -> u64 {
-        self.projection()
-            .as_ref()
-            .map_or(0, |projection| projection.epoch)
-    }
-
-    pub fn wait_workers(&self, timeout: Duration) {
-        drop(
-            self.changed
-                .wait_timeout_while(self.lock(), timeout, |state| state.workers != 0)
-                .unwrap_or_else(|error| error.into_inner()),
-        );
-    }
-    pub fn begin(&self) -> bool {
-        let mut state = self.lock();
+    pub(crate) fn begin_sync(&self, interval: Duration) -> bool {
+        let mut state = self.wait_while(interval, |state| !state.stop && !state.pending_sync);
         if state.stop {
             return false;
         }
-        state.pending = false;
-        state.started_seq = state.started_seq.saturating_add(1);
-        state.started = Some(Instant::now());
-        state.started_at = Some(jiff::Timestamp::now().to_string());
+        state.started += 1;
+        state.pending_sync = false;
         true
     }
 
-    pub fn finish(&self, cpu: Duration, error: Option<String>) {
+    pub(crate) fn finish_sync(&self, runner_reachable: bool, error: Option<String>) {
         let mut state = self.lock();
-        state.elapsed = state.started.map(|started| started.elapsed());
-        state.started = None;
-        state.finished = Some(Instant::now());
-        state.finished_at = Some(jiff::Timestamp::now().to_string());
-        state.completed_seq = state.started_seq;
-        state.cpu = cpu;
-        state.failures = if error.is_some() {
-            state.failures.saturating_add(1)
+        state.health.daemon = if runner_reachable && error.is_none() {
+            DaemonState::Healthy
         } else {
-            0
+            DaemonState::Degraded
         };
-        if error.is_none() {
-            state.last_success = Instant::now();
-        }
-        state.last_error = error;
-        state.projection_wake = state.projection_wake.wrapping_add(1);
+        state.health.runner_reachable = runner_reachable;
+        state.health.last_sync_at = Some(jiff::Timestamp::now().to_string());
+        state.health.last_sync_error = error;
+        state.completed = state.started;
+        self.publish();
         self.changed.notify_all();
     }
 
-    /// Asks the projector for another fold (a command wrote the store); requests no pass.
-    pub fn wake_projection(&self) {
+    pub(crate) fn nudge(&self, wait: Option<Duration>) -> NudgeAck {
         let mut state = self.lock();
-        state.projection_wake = state.projection_wake.wrapping_add(1);
-        self.changed.notify_all();
-    }
-
-    pub fn request_nudge(&self) -> u64 {
-        let mut state = self.lock();
-        let target = state.started_seq.saturating_add(1);
+        let target = state.started + 1;
         if !state.stop {
-            state.pending = true;
-            state.projection_wake = state.projection_wake.wrapping_add(1);
+            state.pending_sync = true;
+            self.changed.notify_all();
         }
-        self.changed.notify_all();
-        target
-    }
-
-    pub fn wait_nudge(&self, target: u64, wait: Option<Duration>) -> NudgeAck {
-        let mut state = self.lock();
         if let Some(wait) = wait {
-            let (next, _) = self
+            (state, _) = self
                 .changed
-                .wait_timeout_while(state, wait, |state| {
-                    !state.stop && state.completed_seq < target
-                })
+                .wait_timeout_while(state, wait, |state| !state.stop && state.completed < target)
                 .unwrap_or_else(|error| error.into_inner());
-            state = next;
         }
         NudgeAck {
-            pass_seq: state.completed_seq,
-            completed: wait.is_some() && state.completed_seq >= target,
+            pass_seq: state.completed,
+            completed: state.completed >= target,
         }
     }
 
-    /// Requests a pass for `source`: `cli` and `board` ask for a full pass; every source
-    /// marks the pass as nudged.
-    pub fn nudge_from(&self, source: &str, wait: Option<Duration>) -> NudgeAck {
-        {
-            let mut state = self.lock();
-            state.nudged = true;
-            if matches!(source, "cli" | "board") {
-                state.full_requested = true;
-            }
-        }
-        self.wait_nudge(self.request_nudge(), wait)
-    }
-
-    /// Takes the pending request flags: (full pass requested, nudged).
-    pub fn take_request(&self) -> (bool, bool) {
-        let mut state = self.lock();
-        (
-            std::mem::take(&mut state.full_requested),
-            std::mem::take(&mut state.nudged),
-        )
-    }
-
-    pub fn fail_server(&self, error: String) {
+    pub(crate) fn fail_server(&self, error: String) {
         let mut state = self.lock();
         state.server_error.get_or_insert(error);
         state.stop = true;
         self.changed.notify_all();
     }
 
-    pub fn stop(&self, upgrading: bool) {
-        let mut state = self.lock();
-        state.stop = true;
-        state.upgrading |= upgrading;
+    pub(crate) fn stop(&self) {
+        self.lock().stop = true;
         self.changed.notify_all();
     }
 
-    pub fn close(&self) {
+    pub(crate) fn close(&self) {
         let mut state = self.lock();
-        state.stop = true;
         state.closed = true;
+        state.stop = true;
         self.changed.notify_all();
     }
 
-    pub fn wait_closed(&self, timeout: Duration) -> bool {
-        let (state, _) = self
-            .changed
-            .wait_timeout_while(self.lock(), timeout, |state| !state.closed)
-            .unwrap_or_else(|error| error.into_inner());
-        state.closed
+    pub(crate) fn wait(&self, duration: Duration) {
+        drop(self.wait_while(duration, |state| !state.stop));
     }
 
-    pub fn wait(&self, duration: Duration, nudges: bool) {
-        let state = self.lock();
+    pub(crate) fn wait_closed(&self, duration: Duration) -> bool {
+        self.wait_while(duration, |state| !state.closed).closed
+    }
+
+    pub(crate) fn wait_workers(&self, duration: Duration) {
+        drop(self.wait_while(duration, |state| state.workers != 0));
+    }
+
+    pub(crate) fn wait_ops(&self) {
         drop(
             self.changed
-                .wait_timeout_while(state, duration, |state| {
-                    !state.stop && (!nudges || !state.pending)
-                })
+                .wait_while(self.lock(), |state| state.op_workers != 0)
                 .unwrap_or_else(|error| error.into_inner()),
         );
     }
 
-    pub fn health(&self) -> Health {
-        let state = self.lock();
-        let mut reasons = Vec::new();
-        if !state.supervised {
-            reasons.push("unsupervised".into());
-        }
-        if state.foreign {
-            reasons.push("foreign runtime".into());
-        }
-        if state.stores_pressed {
-            reasons.push(format!("pm stores {}%", state.stores_percent));
-        }
-        let age = state.started.map(|start| start.elapsed());
-        if age.is_some_and(|age| age > Duration::from_secs(300)) || state.failures >= 3 {
-            let age = if state.failures >= 3 {
-                state.last_success.elapsed()
-            } else {
-                age.unwrap_or_default()
-            };
-            reasons.push(format!("sync stalled {}s", age.as_secs()));
-        }
-        reasons.extend(state.locks.iter().cloned());
-        if state.upgrading {
-            reasons.push("restarting for upgrade".into());
-        }
-        Health {
-            daemon: if reasons.is_empty() {
-                DaemonState::Healthy
-            } else {
-                DaemonState::Degraded
-            },
-            reasons,
-            runtimes: vec![RuntimeHealth {
-                kind: "herdr-tui".into(),
-                state: state.runtime,
-            }],
-            pm: state.pm,
-            loop_facts: LoopFacts {
-                pass_seq: state.completed_seq,
-                last_pass_at: state.finished_at.clone(),
-                last_pass_ms: state
-                    .elapsed
-                    .map(|elapsed| elapsed.as_millis().min(u64::MAX as u128) as u64),
-                age_secs: state.finished.map(|end| end.elapsed().as_secs()),
-            },
-            pid: std::process::id(),
-            version: env!("CARGO_PKG_VERSION").into(),
-        }
-    }
-
-    pub fn bye_reason(&self) -> &'static str {
-        if self.lock().upgrading {
-            "restarting for upgrade"
-        } else {
-            "daemon stopped"
-        }
-    }
-}
-
-fn supervised() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        std::env::var_os("INVOCATION_ID").is_some()
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::env::var_os("XPC_SERVICE_NAME").is_some_and(|value| value != "0")
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        false
+    fn wait_while(
+        &self,
+        duration: Duration,
+        predicate: impl Fn(&State) -> bool,
+    ) -> MutexGuard<'_, State> {
+        self.changed
+            .wait_timeout_while(self.lock(), duration, |state| predicate(state))
+            .unwrap_or_else(|error| error.into_inner())
+            .0
     }
 }

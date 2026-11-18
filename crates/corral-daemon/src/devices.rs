@@ -1,9 +1,8 @@
-//! Device registry authority is server-owned and editable per device.
-//! Records in `devices` retain authority and a monotonic per-device seen cursor.
-//! Callers pass only transport-authenticated ids; queued actions reload these facts.
+//! Persistent devices and the revocation flags observed by their live connections.
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex, MutexGuard,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -11,12 +10,10 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use corral_core::{Actor, Store, records::RecordArea};
-use corral_ops::Ctx;
-use corral_protocol::app::{DeviceAuthority, DeviceSetAuthority, SeenCursor};
+use corral_protocol::app::SeenCursor;
 use corral_protocol::{device::*, rpc::ErrorCode};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     conn,
@@ -25,7 +22,7 @@ use crate::{
     state::Shared,
 };
 
-const AREA: RecordArea<DeviceRecord> = RecordArea::new("devices");
+type Records = BTreeMap<String, DeviceRecord>;
 const MAX_DEVICES: usize = 256;
 
 #[path = "devices_push.rs"]
@@ -43,11 +40,7 @@ struct DeviceRecord {
     enrolled_at: String,
     revoked_at: Option<String>,
     #[serde(default)]
-    authority: Option<DeviceAuthority>,
-    #[serde(default)]
     seen: SeenCursor,
-    #[serde(default)]
-    authority_revision: u64,
     #[serde(default)]
     last_seen: Option<String>,
     #[serde(default)]
@@ -57,27 +50,15 @@ struct DeviceRecord {
 }
 
 impl DeviceRecord {
-    fn authority(&self) -> DeviceAuthority {
-        self.authority.clone().unwrap_or(DeviceAuthority {
-            reply: true,
-            act: true,
-            assistant: true,
-            assistant_act: true,
-            admin: true,
-        })
-    }
-
-    fn info(self, id: String) -> DeviceInfo {
-        let authority = self.authority();
+    fn info(&self, id: &str) -> DeviceInfo {
         DeviceInfo {
-            id,
-            name: self.name,
-            platform: self.platform,
-            app_version: self.app_version,
-            enrolled_at: self.enrolled_at,
-            revoked_at: self.revoked_at,
-            authority: Some(authority),
-            last_seen: self.last_seen,
+            id: id.into(),
+            name: self.name.clone(),
+            platform: self.platform.clone(),
+            app_version: self.app_version.clone(),
+            enrolled_at: self.enrolled_at.clone(),
+            revoked_at: self.revoked_at.clone(),
+            last_seen: self.last_seen.clone(),
             reach: self.reach,
         }
     }
@@ -86,13 +67,80 @@ impl DeviceRecord {
 struct RegisteredSession {
     device: String,
     revoked: Arc<AtomicBool>,
-    authority_revision: Arc<AtomicU64>,
+}
+
+struct Registry {
+    file: PathBuf,
+    records: Mutex<Records>,
+}
+
+impl Registry {
+    fn open(root: &Path) -> Result<Self> {
+        let file = root.join("devices.json");
+        let records = match identity::open_private(&file)? {
+            Some(input) => serde_json::from_reader(std::io::BufReader::new(input))
+                .with_context(|| format!("reading {}", file.display()))?,
+            None => Records::new(),
+        };
+        Ok(Self {
+            file,
+            records: Mutex::new(records),
+        })
+    }
+
+    fn active<'a>(records: &'a Records, device: &str) -> Result<&'a DeviceRecord, DeviceError> {
+        let record = records
+            .get(device)
+            .ok_or(DeviceError::NotFound("device_not_found"))?;
+        if record.revoked_at.is_some() {
+            return Err(DeviceError::Revoked);
+        }
+        Ok(record)
+    }
+
+    // Hold the registry mutex through the atomic replacement. On failure the
+    // in-memory view is restored before any connection can see it.
+    fn save(&self, records: &mut Records, id: &str, record: DeviceRecord) -> Result<()> {
+        let previous = match records.get_mut(id) {
+            Some(previous) => Some(std::mem::replace(previous, record)),
+            None => records.insert(id.into(), record),
+        };
+        if let Err(error) = self.persist(records) {
+            if let Some(previous) = previous {
+                records.insert(id.into(), previous);
+            } else {
+                records.remove(id);
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn persist(&self, records: &Records) -> Result<()> {
+        let root = self
+            .file
+            .parent()
+            .context("device registry has no parent")?;
+        let mut temp = tempfile::NamedTempFile::new_in(root).with_context(|| {
+            format!("creating a temporary device registry in {}", root.display())
+        })?;
+        let mut writer = std::io::BufWriter::new(temp.as_file_mut());
+        serde_json::to_writer_pretty(&mut writer, records).context("encoding device registry")?;
+        writer.write_all(b"\n").context("writing device registry")?;
+        writer.flush().context("flushing device registry")?;
+        drop(writer);
+        temp.as_file()
+            .sync_all()
+            .context("syncing device registry")?;
+        temp.persist(&self.file)
+            .with_context(|| format!("replacing {}", self.file.display()))?;
+        Ok(())
+    }
 }
 
 pub(crate) struct Devices {
-    store: Mutex<Store>,
-    state_root: Option<PathBuf>,
-    store_id: String,
+    registry: Arc<Registry>,
+    state_root: PathBuf,
     identity: Mutex<Option<Identity>>,
     listener: Mutex<Option<AppListener>>,
     push: Option<push::Service>,
@@ -106,36 +154,20 @@ pub(crate) struct SessionGuard {
     id: u64,
     pub(crate) device: String,
     pub(crate) revoked: Arc<AtomicBool>,
-    authority_revision: Arc<AtomicU64>,
-    notified_revision: AtomicU64,
     reach: DeviceReach,
     last_touch: Mutex<Instant>,
 }
 
 impl SessionGuard {
-    pub(crate) fn reach(&self) -> DeviceReach {
-        self.reach
-    }
-
-    pub(crate) fn flush_authority(&self, conn: &mut dyn conn::Conn) -> Result<()> {
+    pub(crate) fn touch(&self) -> Result<()> {
         let mut touched = lock(&self.last_touch);
         if touched.elapsed() >= Duration::from_secs(60) {
-            self.devices
-                .touch(&self.device, self.reach)
-                .map_err(|error| anyhow::anyhow!("{}", error.wire().1))?;
+            match self.devices.touch(&self.device, self.reach) {
+                // The connection's revocation flag handles its protocol close.
+                Err(DeviceError::Revoked) => {}
+                result => result?,
+            }
             *touched = Instant::now();
-        }
-        let revision = self.authority_revision.load(Ordering::Acquire);
-        if revision != self.notified_revision.load(Ordering::Relaxed) {
-            conn::notify(
-                conn,
-                SESSION_AUTHORITY_CHANGED,
-                SessionAuthorityChanged {
-                    device: self.device.clone(),
-                    revision,
-                },
-            )?;
-            self.notified_revision.store(revision, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -151,43 +183,6 @@ impl Drop for SessionGuard {
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
-}
-
-fn attribute(store: &Store, via: &str) -> Result<()> {
-    store.set_attribution(Actor::Owner, via)?;
-    if let Some(id) = via.strip_prefix("app:")
-        && let Some(record) = AREA.load(store, id)?
-    {
-        store.set_attribution_detail("device", json!({"device": id, "name": record.name}))?;
-    }
-    Ok(())
-}
-
-pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>, state_root: Option<PathBuf>) -> Result<()> {
-    let store =
-        Store::open_unobserved(ctx.store.root()).context("opening daemon device registry")?;
-    // Persist platform defaults for old enrollments so runtime citation checks use the
-    // same durable authority facts as direct app actions (missing facts fail closed).
-    for (id, mut record) in AREA.list(&store)? {
-        if record.authority.is_none() {
-            record.authority = Some(record.authority());
-            AREA.save(&store, &id, &record)?;
-        }
-    }
-    let devices = Arc::new(Devices {
-        store: Mutex::new(store),
-        state_root,
-        store_id: corral_core::agent::paths::store_id(&ctx.store),
-        identity: Mutex::new(None),
-        listener: Mutex::new(None),
-        push: push::Service::configured(&ctx.store.config.daemon.push)?,
-        pairings: Pairings::default(),
-        sessions: Mutex::new(BTreeMap::new()),
-        next: AtomicU64::new(0),
-    });
-    *lock(&shared.devices) = Some(Arc::clone(&devices));
-    push::start(&devices, shared)?;
-    Ok(())
 }
 
 pub(crate) fn validate(name: &str, app_version: &str) -> Result<(String, String), DeviceError> {
@@ -215,21 +210,33 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 }
 
 impl Devices {
+    pub(crate) fn open(state_root: &Path) -> Result<Self> {
+        std::fs::create_dir_all(state_root)
+            .with_context(|| format!("creating daemon state directory {}", state_root.display()))?;
+        Ok(Self {
+            registry: Arc::new(Registry::open(state_root)?),
+            state_root: state_root.into(),
+            identity: Mutex::new(None),
+            listener: Mutex::new(None),
+            push: None,
+            pairings: Pairings::default(),
+            sessions: Mutex::new(BTreeMap::new()),
+            next: AtomicU64::new(0),
+        })
+    }
+
     pub(crate) fn identity(&self) -> Result<Identity, DeviceError> {
         let mut identity = lock(&self.identity);
         if let Some(identity) = *identity {
             return Ok(identity);
         }
-        let root = self.state_root.as_ref().ok_or_else(|| {
-            DeviceError::Unavailable("app identity needs XDG_STATE_HOME or HOME".into())
-        })?;
-        let loaded = identity::load_or_create(root, &self.store_id)?;
+        let loaded = identity::load_or_create(&self.state_root)?;
         *identity = Some(loaded);
         Ok(loaded)
     }
 
     pub(crate) fn store_name(&self) -> String {
-        lock(&self.store).dir().display().to_string()
+        self.state_root.display().to_string()
     }
 
     fn enrol(
@@ -237,23 +244,17 @@ impl Devices {
         name: &str,
         app_version: &str,
         public: Option<&[u8; 32]>,
-        via: &str,
     ) -> Result<DeviceInfo, DeviceError> {
         let (name, app_version) = validate(name, app_version)?;
-        let base = lock(&self.store);
-        let store = base.reattributed();
-        attribute(&store, via)?;
-        let _guard = store
-            .try_lock("devices")?
-            .ok_or(DeviceError::Conflict("device_registry_busy"))?;
-        if AREA.list(&store)?.len() >= MAX_DEVICES {
+        let mut records = lock(&self.registry.records);
+        if records.len() >= MAX_DEVICES {
             return Err(DeviceError::Limit("device_limit"));
         }
         let id = loop {
             let mut bytes = [0; 8];
             getrandom::fill(&mut bytes).context("generating device id")?;
             let id = format!("dev-{}", hex(&bytes));
-            if AREA.load(&store, &id)?.is_none() {
+            if !records.contains_key(&id) {
                 break id;
             }
         };
@@ -269,59 +270,32 @@ impl Devices {
             app_version,
             enrolled_at: jiff::Timestamp::now().to_string(),
             revoked_at: None,
-            authority: Some(DeviceAuthority {
-                reply: true,
-                act: true,
-                assistant: true,
-                assistant_act: true,
-                admin: true,
-            }),
             seen: SeenCursor::default(),
-            authority_revision: 0,
             last_seen: None,
             reach: None,
             push: push::Registration::default(),
         };
-        let (event, platform) = if public.is_some() {
-            ("device_paired", "web")
-        } else {
-            ("device_enrolled", "native")
-        };
-        store.records_transaction(|| {
-            AREA.save(&store, &id, &record)?;
-            store.log_event(
-                None,
-                event,
-                json!({"device": id, "name": record.name, "platform": platform}),
-            )
-        })?;
-        Ok(record.info(id))
+        let info = record.info(&id);
+        self.registry.save(&mut records, &id, record)?;
+        Ok(info)
     }
 
     pub(crate) fn enrol_native(
         &self,
         name: &str,
         app_version: &str,
-        via: &str,
     ) -> Result<DeviceInfo, DeviceError> {
-        self.enrol(name, app_version, None, via)
+        self.enrol(name, app_version, None)
     }
 
-    fn register(
-        self: &Arc<Self>,
-        device: String,
-        revision: u64,
-        reach: DeviceReach,
-    ) -> SessionGuard {
+    fn register(self: &Arc<Self>, device: String, reach: DeviceReach) -> SessionGuard {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let revoked = Arc::new(AtomicBool::new(false));
-        let authority_revision = Arc::new(AtomicU64::new(revision));
         lock(&self.sessions).insert(
             id,
             RegisteredSession {
                 device: device.clone(),
                 revoked: Arc::clone(&revoked),
-                authority_revision: Arc::clone(&authority_revision),
             },
         );
         SessionGuard {
@@ -329,8 +303,6 @@ impl Devices {
             id,
             device,
             revoked,
-            authority_revision,
-            notified_revision: AtomicU64::new(revision),
             reach,
             last_touch: Mutex::new(Instant::now()),
         }
@@ -341,19 +313,14 @@ impl Devices {
         device: &str,
     ) -> Result<(DeviceInfo, SessionGuard), DeviceError> {
         // Registry locking serializes authentication/registration against revocation.
-        let store = lock(&self.store);
-        let mut record = AREA
-            .load(&store, device)?
-            .ok_or(DeviceError::NotFound("device_not_found"))?;
-        if record.revoked_at.is_some() {
-            return Err(DeviceError::Revoked);
-        }
-        if record.platform == DevicePlatform::Web {
+        let mut records = lock(&self.registry.records);
+        if Registry::active(&records, device)?.platform == DevicePlatform::Web {
             return Err(DeviceError::Conflict("device_is_web"));
         }
-        self.touch_record(&store, device, &mut record, DeviceReach::Unix)?;
-        let guard = self.register(device.into(), record.authority_revision, DeviceReach::Unix);
-        Ok((record.info(device.into()), guard))
+        self.touch_record(&mut records, device, DeviceReach::Unix)?;
+        let info = Registry::active(&records, device)?.info(device);
+        let guard = self.register(device.into(), DeviceReach::Unix);
+        Ok((info, guard))
     }
 
     pub(crate) fn attach_key(
@@ -361,82 +328,61 @@ impl Devices {
         public: &[u8; 32],
         reach: DeviceReach,
     ) -> Result<(DeviceInfo, SessionGuard), DeviceError> {
-        let store = lock(&self.store);
+        let mut records = lock(&self.registry.records);
         let public = hex(public);
-        for (id, mut record) in AREA.list(&store)? {
-            if record.platform == DevicePlatform::Web
-                && record.revoked_at.is_none()
-                && record.public_key.as_deref() == Some(&public)
-            {
-                self.touch_record(&store, &id, &mut record, reach)?;
-                let guard = self.register(id.clone(), record.authority_revision, reach);
-                return Ok((record.info(id), guard));
-            }
-        }
-        Err(DeviceError::NotFound("device_not_found"))
+        let id = records
+            .iter()
+            .find(|(_, record)| {
+                record.platform == DevicePlatform::Web
+                    && record.revoked_at.is_none()
+                    && record.public_key.as_deref() == Some(public.as_str())
+            })
+            .map(|(id, _)| id.clone())
+            .ok_or(DeviceError::NotFound("device_not_found"))?;
+        self.touch_record(&mut records, &id, reach)?;
+        let info = Registry::active(&records, &id)?.info(&id);
+        let guard = self.register(id, reach);
+        Ok((info, guard))
     }
 
     pub(crate) fn list(&self) -> Result<Vec<DeviceInfo>, DeviceError> {
-        // `info` always populates authority, including legacy enrolled records.
-        Ok(AREA
-            .list(&lock(&self.store))?
-            .into_iter()
+        Ok(lock(&self.registry.records)
+            .iter()
             .map(|(id, record)| record.info(id))
             .collect())
     }
 
-    pub(crate) fn revoke(&self, device: &str, via: &str) -> Result<DeviceInfo, DeviceError> {
-        let base = lock(&self.store);
-        let store = base.reattributed();
-        attribute(&store, via)?;
-        let _guard = store
-            .try_lock("devices")?
-            .ok_or(DeviceError::Conflict("device_registry_busy"))?;
-        let mut record = AREA
-            .load(&store, device)?
-            .ok_or(DeviceError::NotFound("device_not_found"))?;
+    pub(crate) fn revoke(&self, device: &str) -> Result<DeviceInfo, DeviceError> {
+        let mut records = lock(&self.registry.records);
+        let mut record = records
+            .get(device)
+            .ok_or(DeviceError::NotFound("device_not_found"))?
+            .clone();
         if record.revoked_at.is_none() {
             record.revoked_at = Some(jiff::Timestamp::now().to_string());
             record.push = push::Registration::default();
-            store.records_transaction(|| {
-                AREA.save(&store, device, &record)?;
-                store.log_event(
-                    None,
-                    "device_revoked",
-                    json!({"device": device, "name": record.name}),
-                )
-            })?;
+        } else {
+            return Ok(record.info(device));
         }
+        let info = record.info(device);
+        self.registry.save(&mut records, device, record)?;
         for session in lock(&self.sessions).values() {
             if session.device == device {
                 session.revoked.store(true, Ordering::Release);
             }
         }
-        Ok(record.info(device.into()))
+        Ok(info)
     }
 
-    /// Reloads durable authority; session-cached facts never authorize a side effect.
-    pub(crate) fn authenticated(
-        &self,
-        device: &str,
-    ) -> Result<(DeviceInfo, DeviceAuthority), DeviceError> {
-        let record = self.active(&lock(&self.store), device)?;
-        let authority = record.authority();
-        Ok((record.info(device.into()), authority))
-    }
-
-    fn active(&self, store: &Store, device: &str) -> Result<DeviceRecord, DeviceError> {
-        let record = AREA
-            .load(store, device)?
-            .ok_or(DeviceError::NotFound("device_not_found"))?;
-        if record.revoked_at.is_some() {
-            return Err(DeviceError::Revoked);
-        }
-        Ok(record)
+    pub(crate) fn authenticated(&self, device: &str) -> Result<DeviceInfo, DeviceError> {
+        let records = lock(&self.registry.records);
+        Ok(Registry::active(&records, device)?.info(device))
     }
 
     pub(crate) fn seen(&self, device: &str) -> Result<SeenCursor, DeviceError> {
-        Ok(self.active(&lock(&self.store), device)?.seen)
+        Ok(Registry::active(&lock(&self.registry.records), device)?
+            .seen
+            .clone())
     }
 
     pub(crate) fn advance_seen(
@@ -444,83 +390,24 @@ impl Devices {
         device: &str,
         through: u64,
     ) -> Result<SeenCursor, DeviceError> {
-        let store = lock(&self.store);
-        let _guard = store
-            .try_lock("devices")?
-            .ok_or(DeviceError::Conflict("device_registry_busy"))?;
-        let mut record = self.active(&store, device)?;
-        if through > record.seen.through {
-            record.seen = SeenCursor {
-                through,
-                at: Some(corral_core::clock::now().to_string()),
-            };
-            AREA.save(&store, device, &record)?;
+        let mut records = lock(&self.registry.records);
+        let record = Registry::active(&records, device)?;
+        if through <= record.seen.through {
+            return Ok(record.seen.clone());
         }
-        Ok(record.seen)
+        let mut record = record.clone();
+        record.seen = SeenCursor {
+            through,
+            at: Some(jiff::Timestamp::now().to_string()),
+        };
+        let seen = record.seen.clone();
+        self.registry.save(&mut records, device, record)?;
+        Ok(seen)
     }
 
-    /// Only an active administrator may edit device authority.
-    pub(crate) fn set_authority(
-        &self,
-        admin: &str,
-        request: DeviceSetAuthority,
-    ) -> Result<DeviceInfo, DeviceError> {
-        let base = lock(&self.store);
-        let store = base.reattributed();
-        let _guard = store
-            .try_lock("devices")?
-            .ok_or(DeviceError::Conflict("device_registry_busy"))?;
-        let caller = self.active(&store, admin)?;
-        if !caller.authority().admin {
-            return Err(DeviceError::Refused("admin_only"));
-        }
-        let mut record = self.active(&store, &request.device)?;
-        let previous = record.authority();
-        if admin == request.device
-            && [
-                (previous.reply, request.authority.reply),
-                (previous.act, request.authority.act),
-                (previous.assistant, request.authority.assistant),
-                (previous.assistant_act, request.authority.assistant_act),
-                (previous.admin, request.authority.admin),
-            ]
-            .iter()
-            .any(|(before, after)| !before && *after)
-        {
-            return Err(DeviceError::Refused("cannot_raise_own_authority"));
-        }
-        store.set_attribution(Actor::Owner, &format!("app:{admin}"))?;
-        store.set_attribution_detail("device", json!({"device": admin, "name": caller.name}))?;
-        record.authority_revision = record
-            .authority_revision
-            .checked_add(1)
-            .ok_or(DeviceError::Limit("authority_revision_limit"))?;
-        record.authority = Some(request.authority);
-        store.records_transaction(|| {
-            AREA.save(&store, &request.device, &record)?;
-            store.log_event(
-                None,
-                "device_authority_changed",
-                json!({
-                    "device": request.device, "authority": record.authority,
-                    "revision": record.authority_revision,
-                    "by_device": admin, "name": caller.name,
-                }),
-            )
-        })?;
-        for session in lock(&self.sessions).values() {
-            if session.device == request.device {
-                session
-                    .authority_revision
-                    .store(record.authority_revision, Ordering::Release);
-            }
-        }
-        Ok(record.info(request.device))
-    }
-
-    pub(crate) fn pair_confirm(&self, pair_id: &str, via: &str) -> Result<DeviceInfo, DeviceError> {
+    pub(crate) fn pair_confirm(&self, pair_id: &str) -> Result<DeviceInfo, DeviceError> {
         let (public, name, app_version) = self.pairings.begin_confirm(pair_id, Instant::now())?;
-        let result = self.enrol(&name, &app_version, Some(&public), via);
+        let result = self.enrol(&name, &app_version, Some(&public));
         self.pairings
             .finish(pair_id, result.as_ref().cloned().map_err(|_| ()));
         result
@@ -528,8 +415,8 @@ impl Devices {
 }
 
 #[cfg(test)]
-#[path = "devices_authority_tests.rs"]
-mod authority_tests;
+#[path = "devices_tests.rs"]
+mod tests;
 
 #[derive(Debug)]
 pub(crate) enum DeviceError {
@@ -543,6 +430,14 @@ pub(crate) enum DeviceError {
     Unavailable(String),
     Internal(anyhow::Error),
 }
+
+impl std::fmt::Display for DeviceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.wire().1)
+    }
+}
+
+impl std::error::Error for DeviceError {}
 
 impl From<anyhow::Error> for DeviceError {
     fn from(error: anyhow::Error) -> Self {
@@ -588,18 +483,8 @@ impl DeviceError {
     }
 }
 
-pub(crate) struct UnixSession {
-    pub(crate) via: &'static str,
-    pub(crate) attached: Option<SessionGuard>,
-}
-
 fn params<T: DeserializeOwned>(value: Value) -> Result<T, DeviceError> {
     serde_json::from_value(value).map_err(|_| DeviceError::Invalid("invalid_params"))
-}
-fn value(result: impl Serialize) -> Result<Value, DeviceError> {
-    serde_json::to_value(result)
-        .context("encoding device reply")
-        .map_err(Into::into)
 }
 
 pub(crate) fn serve_unix(
@@ -608,104 +493,29 @@ pub(crate) fn serve_unix(
     id: Value,
     method: &str,
     input: Value,
-    session: &mut UnixSession,
-) -> Result<bool> {
-    if ![
-        DEVICE_ENROL,
-        DEVICE_ATTACH,
-        DEVICE_LIST,
-        DEVICE_REVOKE,
-        PAIR_BEGIN,
-        PAIR_STATUS,
-        PAIR_CONFIRM,
-        PAIR_CANCEL,
-    ]
-    .contains(&method)
-    {
-        return Ok(false);
-    }
-    let Some(devices) = shared.devices() else {
-        conn::error(conn, id, ErrorCode::Unavailable, "unavailable")?;
-        return Ok(true);
-    };
-    let result = (|| -> Result<Value, DeviceError> {
-        if session.via == "app"
-            && [DEVICE_REVOKE, PAIR_BEGIN, PAIR_CONFIRM, PAIR_CANCEL].contains(&method)
-        {
-            let device = session
-                .attached
-                .as_ref()
-                .ok_or(DeviceError::Refused("admin_only"))?;
-            let (_, authority) = devices.authenticated(&device.device)?;
-            if !authority.admin {
-                return Err(DeviceError::Refused("admin_only"));
-            }
-        }
-        let app_via = (session.via == "app")
-            .then(|| {
-                session
-                    .attached
-                    .as_ref()
-                    .map(|guard| format!("app:{}", guard.device))
-            })
-            .flatten();
-        let via = app_via.as_deref().unwrap_or(session.via);
-        match method {
-            DEVICE_ENROL => {
-                let p: DeviceEnrol = params(input)?;
-                let info = devices.enrol_native(&p.name, &p.app_version, via)?;
-                let (info, guard) = devices.attach(&info.id)?;
-                session.attached = Some(guard);
-                value(info)
-            }
-            DEVICE_ATTACH => {
-                let p: DeviceAttach = params(input)?;
-                let (info, guard) = devices.attach(&p.device)?;
-                session.attached = Some(guard);
-                value(info)
-            }
-            DEVICE_LIST => {
-                let _: DeviceList = params(input)?;
-                value(devices.list()?)
-            }
-            DEVICE_REVOKE => {
-                let p: DeviceRevoke = params(input)?;
-                value(devices.revoke(&p.device, via)?)
-            }
-            PAIR_BEGIN => {
-                let _: PairBegin = params(input)?;
-                value(devices.pair_begin(Instant::now())?)
-            }
-            PAIR_STATUS => {
-                let p: PairStatusQuery = params(input)?;
-                let state = devices.pairings.status(
-                    &p.pair_id,
-                    Instant::now(),
-                    Duration::from_millis(u64::from(p.wait_ms.min(25_000))),
-                )?;
-                value(PairStatus {
-                    pair_id: p.pair_id,
-                    state,
-                })
-            }
-            PAIR_CONFIRM => {
-                let p: PairConfirm = params(input)?;
-                value(devices.pair_confirm(&p.pair_id, via)?)
-            }
-            PAIR_CANCEL => {
-                let p: PairCancel = params(input)?;
-                devices.pairings.cancel(&p.pair_id, Instant::now())?;
-                value(())
-            }
-            _ => Err(DeviceError::Invalid("invalid_device_method")),
-        }
+    attached: &mut Option<SessionGuard>,
+) -> Result<()> {
+    let devices = shared.devices();
+    let result = (|| -> Result<DeviceInfo, DeviceError> {
+        let device = if method == DEVICE_ENROL {
+            let p: DeviceEnrol = params(input)?;
+            devices.enrol_native(&p.name, &p.app_version)?.id
+        } else {
+            params::<DeviceAttach>(input)?.device
+        };
+        let (info, guard) = devices.attach(&device)?;
+        *attached = Some(guard);
+        Ok(info)
     })();
     match result {
-        Ok(result) => conn::reply(conn, id, result)?,
+        Ok(result) => {
+            shared.publish();
+            conn::reply(conn, id, result)?;
+        }
         Err(problem) => {
             let (code, message) = problem.wire();
             conn::error(conn, id, code, &message)?;
         }
     }
-    Ok(true)
+    Ok(())
 }

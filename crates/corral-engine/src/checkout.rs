@@ -98,6 +98,17 @@ impl Checkout {
     }
 }
 
+impl crate::Engine {
+    /// Observe the current worker checkout HEAD. A retired checkout has only the
+    /// commit recorded on its run.
+    pub fn observed_head(&self, run: &Run) -> Result<Option<String>> {
+        if run.worktree.is_dir() {
+            return corral_git::rev_sha(&run.worktree, "HEAD").map(Some);
+        }
+        Ok(run.head_sha.clone())
+    }
+}
+
 fn git(dir: &Path, args: &[&str]) -> Result<()> {
     let out = output(dir, args)?;
     if !out.status.success() {

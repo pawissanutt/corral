@@ -1,308 +1,190 @@
-//! The same enrolled-device API on Unix and Noise carriers. Caller/provenance fields
-//! are never deserialized here; the command service derives them from the registry.
-use std::sync::mpsc;
-use std::time::Duration;
+//! The UID-checked Unix socket and authenticated Noise sessions serve the same owner API.
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
+use corral_engine::refuse;
 use corral_protocol::{
-    self as wire, app, assistant, attachment, device,
-    frame::{Frame, FrameKind},
-    rpc,
+    self as wire, app, config as settings, device, op, pane,
+    rpc::{self, ErrorCode},
 };
+use corral_types::{Refusal, SessionRef};
 use serde::{Serialize, de::DeserializeOwned};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use crate::{conn::Conn, state::Shared};
+use crate::{
+    config,
+    conn::{self, Conn},
+    devices::{DeviceError, SessionGuard},
+    health, ops,
+    state::Shared,
+    topics::Subscriptions,
+    views,
+};
 
-type Failure = (rpc::ErrorCode, String);
-const READ_WAIT: Duration = Duration::from_millis(wire::cmd::APP_READ_WAIT_MS);
-
-pub(crate) fn is_method(method: &str) -> bool {
-    matches!(
-        method,
-        app::APP_SESSION
-            | app::ACT_PREVIEW
-            | app::ACT_SUBMIT
-            | app::ACT_RESULT
-            | app::DETAIL_GET
-            | app::CHANGES_PAGE
-            | app::SEEN_ADVANCE
-            | app::DEVICE_SET_AUTHORITY
-            | device::DEVICE_AUTHORITY_PREVIEW
-            | device::DEVICE_REVOKE
-            | device::PAIR_BEGIN
-            | device::PAIR_STATUS
-            | device::PAIR_CONFIRM
-            | device::PAIR_CANCEL
-            | assistant::ASSISTANT_SEND
-            | assistant::ASSISTANT_WARM
-            | assistant::ASSISTANT_STOP
-            | assistant::ASSISTANT_SESSION
-            | assistant::ASSISTANT_CANCEL
-            | attachment::ATTACHMENT_BEGIN
-            | attachment::ATTACHMENT_PUT
-            | attachment::ATTACHMENT_DISCARD
-            | assistant::PROMPT_PREVIEW
-            | assistant::PROMPT_ANSWER
-            | device::DEVICE_LIST
-            | device::DEVICE_PAGE
-            | device::PUSH_STATUS
-            | device::PUSH_SUBSCRIBE
-            | device::PUSH_UNSUBSCRIBE
-    )
-}
-
-pub(crate) fn capability(shared: &Shared, cap: &str) -> bool {
-    match cap {
-        wire::BOARD_V1
-        | device::DEVICE_V1
-        | app::INBOX_V1
-        | app::CHANGES_V1
-        | app::PLANS_V1
-        | app::BUILDS_V1
-        | app::PROJECTS_V1
-        | app::AGENTS_V1
-        | app::AGENTS_ACTIVITY_V1
-        | app::SESSION_V1
-        | app::SESSION_FLEET_V1
-        | wire::detail::STREAM_TERMINAL_V1
-        | app::FILINGS_V1
-        | app::CLOSED_V1
-        | app::REVIEW_V1
-        | app::TIMELINE_V1
-        | app::USAGE_V1
-        | app::SETTINGS_V1
-        | app::ACT_V1 => true,
-        device::PUSH_V1 => true,
-        app::ASSISTANT_V1 | attachment::ASSISTANT_ATTACH_V1 => crate::assistant::available(shared),
-        _ => false,
+pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
+    wire::Welcome {
+        proto: wire::Proto {
+            major: wire::PROTO_MAJOR,
+            minor: wire::PROTO_MINOR,
+        },
+        caps: hello
+            .caps
+            .into_iter()
+            .filter(|cap| {
+                matches!(
+                    cap.as_str(),
+                    wire::TASKS_V1
+                        | wire::CHANGES_V1
+                        | wire::PLANS_V1
+                        | wire::PROJECTS_V1
+                        | wire::AGENTS_V1
+                        | wire::REVIEW_V1
+                        | wire::TIMELINE_V1
+                        | wire::USAGE_V1
+                        | wire::SETTINGS_V1
+                        | wire::CLOSED_V1
+                        | device::DEVICE_V1
+                        | device::PUSH_V1
+                )
+            })
+            .collect(),
+        daemon: wire::DaemonInfo {
+            version: env!("CARGO_PKG_VERSION").into(),
+            store: shared.devices().store_name(),
+            epoch: shared.epoch(),
+        },
+        health: shared.health(),
     }
-}
-
-pub(crate) fn allowed_topic(topic: wire::subscription::Topic) -> bool {
-    use wire::subscription::Topic;
-    matches!(
-        topic,
-        Topic::Board
-            | Topic::Health
-            | Topic::Inbox
-            | Topic::Plans
-            | Topic::Builds
-            | Topic::Projects
-            | Topic::Agents
-            | Topic::Assistant
-            | Topic::Usage
-            | Topic::Settings
-            | Topic::Thread
-            | Topic::Terminal
-            | Topic::Session
-    )
 }
 
 pub(crate) fn serve(
     conn: &mut dyn Conn,
-    shared: &Shared,
-    id: Value,
-    method: &str,
-    params: Value,
-    session: Option<&crate::devices::SessionGuard>,
+    shared: &Arc<Shared>,
+    request: rpc::Request,
+    session: Option<&SessionGuard>,
+    topics: &mut Subscriptions<'_>,
 ) -> Result<()> {
-    // Keep the complete response envelope bounded even for hostile JSON-RPC ids.
-    if serde_json::to_vec(&id)?.len() > 256 {
-        return error(
-            conn,
-            Value::Null,
-            (rpc::ErrorCode::InvalidParams, "invalid_rpc_id".into()),
-        );
+    let rpc::Request {
+        id, method, params, ..
+    } = request;
+    let devices = shared.devices();
+    let device = if let Some(session) = session {
+        match devices.authenticated(&session.device) {
+            Ok(device) => Some(device),
+            Err(error) => return respond::<()>(conn, id, Err(error.into())),
+        }
+    } else {
+        None
+    };
+    let device_id = || {
+        session
+            .map(|guard| guard.device.as_str())
+            .ok_or_else(|| Failure::new(ErrorCode::Unauthenticated, "device_attach_required"))
+    };
+    macro_rules! answer {
+        ($operation:expr) => {
+            respond(conn, id, (|| -> Result<_, Failure> { $operation })())
+        };
     }
-    match dispatch(
-        shared,
-        method,
-        params,
-        session.map(|session| session.device.as_str()),
-    ) {
-        Ok(mut result) => {
-            if method == app::APP_SESSION
-                && let Some(session) = session
-            {
-                result["device"]["reach"] = serde_json::to_value(session.reach())?;
+    match method.as_str() {
+        wire::PING => conn::reply(conn, id, wire::Pong {}),
+        wire::HEALTH_GET => conn::reply(conn, id, shared.health()),
+        wire::NUDGE => answer!({
+            let nudge: wire::Nudge = decode(params)?;
+            let wait = nudge.wait_ms.map(|ms| Duration::from_millis(u64::from(ms)));
+            Ok(shared.nudge(wait))
+        }),
+        wire::DAEMON_STOP => answer!({
+            let stop: wire::Stop = decode(params)?;
+            shared.stop();
+            if stop.drain && !shared.wait_closed(Duration::from_secs(600)) {
+                return Err(Failure::new(ErrorCode::Busy, "daemon drain timed out"));
             }
-            reply(conn, id, result)
-        }
-        Err(problem) => error(conn, id, problem),
-    }
-}
-
-fn dispatch(
-    shared: &Shared,
-    method: &str,
-    params: Value,
-    id: Option<&str>,
-) -> Result<Value, Failure> {
-    let id = id.ok_or((
-        rpc::ErrorCode::Unauthenticated,
-        "device_attach_required".into(),
-    ))?;
-    let devices = shared
-        .devices()
-        .ok_or((rpc::ErrorCode::Unavailable, "devices_unavailable".into()))?;
-    let (device, authority) = devices
-        .authenticated(id)
-        .map_err(|problem| problem.wire())?;
-    match method {
-        app::APP_SESSION => {
-            let _: app::AppSessionRequest = decode(params)?;
-            value(app::AppSession {
-                device,
-                authority,
-                seen: devices.seen(id).map_err(|problem| problem.wire())?,
-                server_time: corral_core::clock::now().to_string(),
-            })
-        }
-        device::PUSH_STATUS => {
-            let _: app::AppSessionRequest = decode(params)?;
-            value(devices.push_status(id).map_err(|problem| problem.wire())?)
-        }
-        device::PUSH_SUBSCRIBE => value(
-            devices
-                .push_subscribe(id, decode(params)?)
-                .map_err(|problem| problem.wire())?,
-        ),
-        device::PUSH_UNSUBSCRIBE => {
-            let _: app::AppSessionRequest = decode(params)?;
-            value(
-                devices
-                    .push_unsubscribe(id)
-                    .map_err(|problem| problem.wire())?,
-            )
-        }
-        app::ACT_PREVIEW => value(crate::commands::app::preview(shared, id, decode(params)?)?),
-        app::ACT_SUBMIT => value(crate::commands::app::submit(shared, id, decode(params)?)?),
-        app::ACT_RESULT => value(crate::commands::app::result(shared, id, decode(params)?)?),
-        app::DETAIL_GET => {
-            let receive = crate::views::detail(shared, decode(params)?).map_err(read_failure)?;
-            value(receive_read(receive)?)
-        }
-        app::CHANGES_PAGE => {
-            let receive = crate::views::changes(
-                shared,
-                decode(params)?,
-                devices.seen(id).map_err(|problem| problem.wire())?,
-            )
-            .map_err(read_failure)?;
-            let page = receive_read(receive)?;
-            value(page)
-        }
-        app::SEEN_ADVANCE => {
-            let request: app::SeenAdvance = decode(params)?;
-            let receive = crate::views::changes(
-                shared,
-                app::ChangesQuery {
-                    before: None,
-                    after: None,
-                    limit: 1,
-                },
-                app::SeenCursor::default(),
-            )
-            .map_err(read_failure)?;
-            if request.through > receive_read(receive)?.head {
-                return Err((rpc::ErrorCode::InvalidParams, "seen_ahead_of_head".into()));
-            }
-            value(
-                devices
-                    .advance_seen(id, request.through)
-                    .map_err(|problem| problem.wire())?,
-            )
-        }
-        device::DEVICE_AUTHORITY_PREVIEW => value(crate::commands::app::authority_preview(
-            shared,
-            id,
-            decode(params)?,
-        )?),
-        app::DEVICE_SET_AUTHORITY => {
-            let result = crate::commands::app::set_authority(shared, id, decode(params)?)?;
-            shared.wake_projection();
-            value(result)
-        }
-        device::DEVICE_REVOKE
-        | device::PAIR_BEGIN
-        | device::PAIR_STATUS
-        | device::PAIR_CONFIRM
-        | device::PAIR_CANCEL => {
-            if !authority.admin {
-                return Err((rpc::ErrorCode::Refused, "admin_only".into()));
-            }
-            let via = format!("app:{id}");
-            let result = match method {
-                device::DEVICE_REVOKE => {
-                    let request: device::DeviceRevoke = decode(params)?;
-                    value(
-                        devices
-                            .revoke(&request.device, &via)
-                            .map_err(|error| error.wire())?,
-                    )
-                }
-                device::PAIR_BEGIN => {
-                    let _: device::PairBegin = decode(params)?;
-                    value(
-                        devices
-                            .pair_begin(std::time::Instant::now())
-                            .map_err(|error| error.wire())?,
-                    )
-                }
-                device::PAIR_STATUS => {
-                    let request: device::PairStatusQuery = decode(params)?;
-                    let state = devices
-                        .pairings
-                        .status(
-                            &request.pair_id,
-                            std::time::Instant::now(),
-                            Duration::from_millis(
-                                u64::from(request.wait_ms).min(wire::cmd::APP_READ_WAIT_MS),
-                            ),
-                        )
-                        .map_err(|error| crate::devices::DeviceError::from(error).wire())?;
-                    value(device::PairStatus {
-                        pair_id: request.pair_id,
-                        state,
-                    })
-                }
-                device::PAIR_CONFIRM => {
-                    let request: device::PairConfirm = decode(params)?;
-                    value(
-                        devices
-                            .pair_confirm(&request.pair_id, &via)
-                            .map_err(|error| error.wire())?,
-                    )
-                }
-                _ => {
-                    let request: device::PairCancel = decode(params)?;
-                    devices
-                        .pairings
-                        .cancel(&request.pair_id, std::time::Instant::now())
-                        .map_err(|error| crate::devices::DeviceError::from(error).wire())?;
-                    value(())
-                }
+            Ok(wire::Stopped {})
+        }),
+        wire::SUB_OPEN => answer!(topics.open(decode(params)?).map_err(invalid)),
+        wire::SUB_ACK => answer!(topics.ack(decode(params)?).map_err(invalid)),
+        wire::SUB_CLOSE => answer!({
+            topics.close(decode(params)?);
+            Ok(())
+        }),
+        op::OP_SUBMIT => answer!(Ok(ops::submit(shared, decode(params)?)?)),
+        settings::CONFIG_GET => answer!({
+            let _: settings::ConfigGet = decode(params)?;
+            Ok(config::get(shared)?)
+        }),
+        settings::CONFIG_PUT => answer!(Ok(config::put(shared, decode(params)?)?)),
+        pane::PANE_FOCUS => answer!({
+            let engine = shared.engine()?;
+            let session = pane_session(&engine, decode(params)?)?;
+            Ok(engine.runner.focus(&session)?)
+        }),
+        pane::PANE_KEYS => answer!({
+            let request: pane::PaneKeys = decode(params)?;
+            let engine = shared.engine()?;
+            let SessionRef::Herdr { pane, .. } = pane_session(&engine, request.target)? else {
+                return Err(refuse(
+                    "headless process sessions have no pane to send keys to",
+                    vec![],
+                )
+                .into());
             };
-            if result.is_ok() && matches!(method, device::DEVICE_REVOKE | device::PAIR_CONFIRM) {
-                shared.wake_projection();
+            let keys: Vec<_> = request.keys.iter().map(String::as_str).collect();
+            health::herdr(&engine.config.runner)
+                .pane_send_keys(&pane, &keys)
+                .with_context(|| format!("send keys to herdr pane {pane}"))?;
+            Ok(())
+        }),
+        app::DETAIL_GET => answer!(Ok(views::detail(shared, decode(params)?)?)),
+        app::CHANGES_PAGE => answer!({
+            let seen = match session {
+                Some(session) => devices.seen(&session.device)?,
+                None => app::SeenCursor::default(),
+            };
+            Ok(views::changes(
+                shared,
+                views::ChangesRequest {
+                    query: decode(params)?,
+                    seen,
+                },
+            )?)
+        }),
+        app::SEEN_ADVANCE => answer!({
+            let request: app::SeenAdvance = decode(params)?;
+            if request.through > shared.engine()?.store.latest_seq()? {
+                return Err(Failure::new(ErrorCode::InvalidParams, "seen_ahead_of_head"));
             }
-            result
-        }
-        device::DEVICE_LIST => {
+            Ok(devices.advance_seen(device_id()?, request.through)?)
+        }),
+        app::APP_SESSION => answer!({
+            let _: app::AppSessionRequest = decode(params)?;
+            let seen = devices.seen(device_id()?)?;
+            let device = device.ok_or_else(|| {
+                Failure::new(ErrorCode::Unauthenticated, "device_attach_required")
+            })?;
+            Ok(app::AppSession {
+                device,
+                seen,
+                server_time: jiff::Timestamp::now().to_string(),
+            })
+        }),
+        device::DEVICE_LIST => answer!({
             let _: device::DeviceList = decode(params)?;
-            value(devices.list().map_err(|problem| problem.wire())?)
-        }
-        device::DEVICE_PAGE => {
+            Ok(devices.list()?)
+        }),
+        device::DEVICE_PAGE => answer!({
             let request: device::DevicePageQuery = decode(params)?;
             if request.limit == 0 || request.limit > device::DEVICE_PAGE_LIMIT_MAX {
-                return Err((
-                    rpc::ErrorCode::InvalidParams,
-                    "invalid_device_page_limit".into(),
+                return Err(Failure::new(
+                    ErrorCode::InvalidParams,
+                    "invalid_device_page_limit",
                 ));
             }
-            let mut rows = devices.list().map_err(|problem| problem.wire())?;
-            rows.sort_by(|left, right| left.id.cmp(&right.id));
+            let mut rows = devices.list()?;
+            rows.sort_unstable_by(|left, right| left.id.cmp(&right.id));
             rows.retain(|row| request.after.as_ref().is_none_or(|after| &row.id > after));
             let more = rows.len() > usize::from(request.limit);
             rows.truncate(usize::from(request.limit));
@@ -311,136 +193,135 @@ fn dispatch(
             } else {
                 None
             };
-            value(device::DevicePage {
+            Ok(device::DevicePage {
                 devices: rows,
                 next,
             })
+        }),
+        device::DEVICE_REVOKE => answer!({
+            let request: device::DeviceRevoke = decode(params)?;
+            let info = devices.revoke(&request.device)?;
+            shared.publish();
+            Ok(info)
+        }),
+        device::PAIR_BEGIN => answer!({
+            let _: device::PairBegin = decode(params)?;
+            Ok(devices.pair_begin(Instant::now())?)
+        }),
+        device::PAIR_STATUS => answer!({
+            let request: device::PairStatusQuery = decode(params)?;
+            let state = devices
+                .pairings
+                .status(
+                    &request.pair_id,
+                    Instant::now(),
+                    Duration::from_millis(u64::from(request.wait_ms.min(25_000))),
+                )
+                .map_err(DeviceError::from)?;
+            Ok(device::PairStatus {
+                pair_id: request.pair_id,
+                state,
+            })
+        }),
+        device::PAIR_CONFIRM => answer!({
+            let request: device::PairConfirm = decode(params)?;
+            let device = devices.pair_confirm(&request.pair_id)?;
+            shared.publish();
+            Ok(device)
+        }),
+        device::PAIR_CANCEL => answer!({
+            let request: device::PairCancel = decode(params)?;
+            devices
+                .pairings
+                .cancel(&request.pair_id, Instant::now())
+                .map_err(DeviceError::from)?;
+            Ok(())
+        }),
+        device::PUSH_STATUS => answer!({
+            let _: app::AppSessionRequest = decode(params)?;
+            Ok(devices.push_status(device_id()?)?)
+        }),
+        device::PUSH_SUBSCRIBE => {
+            answer!(Ok(devices.push_subscribe(device_id()?, decode(params)?)?))
         }
-        assistant::PROMPT_PREVIEW => value(crate::commands::app::prompt_preview(
-            shared,
-            id,
-            decode(params)?,
-        )?),
-        assistant::ASSISTANT_SEND => {
-            crate::assistant::request(shared, id, crate::assistant::Request::Send(decode(params)?))
-        }
-        assistant::ASSISTANT_CANCEL => crate::assistant::request(
-            shared,
-            id,
-            crate::assistant::Request::Cancel(decode(params)?),
-        ),
-        attachment::ATTACHMENT_BEGIN => crate::assistant::request(
-            shared,
-            id,
-            crate::assistant::Request::AttachBegin(decode(params)?),
-        ),
-        attachment::ATTACHMENT_PUT => crate::assistant::request(
-            shared,
-            id,
-            crate::assistant::Request::AttachPut(decode(params)?),
-        ),
-        attachment::ATTACHMENT_DISCARD => crate::assistant::request(
-            shared,
-            id,
-            crate::assistant::Request::AttachDiscard(decode(params)?),
-        ),
-        assistant::ASSISTANT_WARM => {
-            crate::assistant::request(shared, id, crate::assistant::Request::Warm(decode(params)?))
-        }
-        assistant::ASSISTANT_STOP => {
-            crate::assistant::request(shared, id, crate::assistant::Request::Stop(decode(params)?))
-        }
-        assistant::ASSISTANT_SESSION => crate::assistant::request(
-            shared,
-            id,
-            crate::assistant::Request::Session(decode(params)?),
-        ),
-        assistant::PROMPT_ANSWER => value(crate::commands::app::prompt_submit(
-            shared,
-            id,
-            decode(params)?,
-        )?),
-        _ => Err((rpc::ErrorCode::MethodNotFound, "method_not_found".into())),
+        device::PUSH_UNSUBSCRIBE => answer!({
+            let _: app::AppSessionRequest = decode(params)?;
+            Ok(devices.push_unsubscribe(device_id()?)?)
+        }),
+        _ => conn::error(conn, id, ErrorCode::MethodNotFound, "method_not_found"),
     }
+}
+
+fn pane_session(
+    engine: &corral_engine::Engine,
+    target: pane::PaneFocus,
+) -> Result<SessionRef, Failure> {
+    engine
+        .store
+        .get_run(&target.task, &target.run)?
+        .filter(|run| run.ended.is_none())
+        .and_then(|run| run.session)
+        .ok_or_else(|| Failure::new(ErrorCode::NotFound, "live_session_not_found"))
 }
 
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, Failure> {
     serde_json::from_value(value)
-        .map_err(|_| (rpc::ErrorCode::InvalidParams, "invalid_params".into()))
+        .map_err(|error| Failure::new(ErrorCode::InvalidParams, error.to_string()))
 }
 
-fn value(result: impl Serialize) -> Result<Value, Failure> {
-    serde_json::to_value(result).map_err(|_| (rpc::ErrorCode::Internal, "encode_failed".into()))
+fn invalid(error: anyhow::Error) -> Failure {
+    Failure::new(ErrorCode::InvalidParams, format!("{error:#}"))
 }
 
-fn receive_read<T>(receive: mpsc::Receiver<anyhow::Result<T>>) -> Result<T, Failure> {
-    receive
-        .recv_timeout(READ_WAIT)
-        .map_err(|_| (rpc::ErrorCode::Unavailable, "read_deadline".into()))?
-        .map_err(read_failure)
-}
+struct Failure(rpc::Error);
 
-fn read_failure(problem: anyhow::Error) -> Failure {
-    let message = problem.to_string();
-    let code = if message.contains("queue") || message.starts_with("busy") {
-        rpc::ErrorCode::Busy
-    } else if message.starts_with("not_found") || message.contains("not found") {
-        rpc::ErrorCode::NotFound
-    } else if message.starts_with("invalid") {
-        rpc::ErrorCode::InvalidParams
-    } else if message.starts_with("too_large") {
-        rpc::ErrorCode::TooLarge
-    } else if message.starts_with("conflict") {
-        rpc::ErrorCode::Conflict
-    } else {
-        rpc::ErrorCode::Unavailable
-    };
-    (code, message.chars().take(512).collect())
-}
-
-pub(crate) fn reply(conn: &mut dyn Conn, id: Value, result: impl Serialize) -> Result<()> {
-    let response = rpc::Response {
-        jsonrpc: rpc::JSONRPC.into(),
-        id: id.clone(),
-        outcome: rpc::ResponseOutcome::Result { result },
-    };
-    let payload = serde_json::to_vec(&response).context("encoding app reply")?;
-    if payload.len() > app::APP_CONTROL_MAX {
-        return error(
-            conn,
-            id,
-            (rpc::ErrorCode::TooLarge, "app_control_limit".into()),
-        );
+impl Failure {
+    fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self(rpc::Error {
+            code,
+            message: message.into(),
+            data: None,
+        })
     }
-    conn.send_frame(&Frame {
-        kind: FrameKind::Control,
-        stream: 0,
-        payload,
-    })
 }
 
-pub(crate) fn error(conn: &mut dyn Conn, id: Value, problem: Failure) -> Result<()> {
-    let (code, message) = problem;
-    let data = (code == rpc::ErrorCode::Refused).then(|| json!({"code": message}));
-    let response: rpc::Response<Value> = rpc::Response {
-        jsonrpc: rpc::JSONRPC.into(),
-        id,
-        outcome: rpc::ResponseOutcome::Error {
-            error: rpc::Error {
-                code,
-                message,
-                data,
-            },
-        },
-    };
-    let payload = serde_json::to_vec(&response)?;
-    anyhow::ensure!(
-        payload.len() <= app::APP_CONTROL_MAX,
-        "app error exceeds control limit"
-    );
-    conn.send_frame(&Frame {
-        kind: FrameKind::Control,
-        stream: 0,
-        payload,
-    })
+impl From<DeviceError> for Failure {
+    fn from(error: DeviceError) -> Self {
+        let (code, message) = error.wire();
+        Self::new(code, message)
+    }
+}
+
+impl From<anyhow::Error> for Failure {
+    fn from(error: anyhow::Error) -> Self {
+        let error = match error.downcast::<Refusal>() {
+            Ok(refusal) => {
+                return match rpc::Error::refused(refusal) {
+                    Ok(error) => Self(error),
+                    Err(error) => {
+                        Self::new(ErrorCode::Internal, format!("encode refusal: {error}"))
+                    }
+                };
+            }
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+        let code = if error.is::<ops::WorkerBusy>() {
+            ErrorCode::Busy
+        } else if message.starts_with("invalid:") {
+            ErrorCode::InvalidParams
+        } else if message.starts_with("too_large:") {
+            ErrorCode::TooLarge
+        } else {
+            ErrorCode::Internal
+        };
+        Self::new(code, message)
+    }
+}
+
+fn respond<T: Serialize>(conn: &mut dyn Conn, id: Value, result: Result<T, Failure>) -> Result<()> {
+    match result {
+        Ok(result) => conn::reply(conn, id, result),
+        Err(failure) => conn::rpc_error(conn, id, failure.0),
+    }
 }

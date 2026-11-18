@@ -1,32 +1,29 @@
 //! Bounded, per-connection RPC workers; the loop never writes to a client socket.
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use corral_protocol::{
     self as wire,
-    frame::{Frame, FrameKind, read_frame_until, write_frame_until},
-    read::{ReadKind, ReadReply, ReadRequest},
+    frame::{FrameKind, read_frame_until},
     rpc,
 };
-#[cfg(test)]
-use serde::Serialize;
-use serde_json::Value;
 use std::os::unix::net::{UnixListener, UnixStream};
 
-use crate::conn::{IO_TIMEOUT, WorkerPermit, error, notify, reply};
-use crate::state::Shared;
-use crate::topics::Topics;
+use crate::{
+    app::dispatch,
+    conn::{IO_TIMEOUT, WorkerPermit, error, notify, reply},
+    state::Shared,
+    topics::Subscriptions,
+};
 
 pub(crate) const MAX_CONNECTIONS: usize = 64;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) fn start(listener: UnixListener, shared: Arc<Shared>, store: &Path) -> Result<()> {
+pub(crate) fn start(listener: UnixListener, shared: Arc<Shared>) -> Result<()> {
     listener
         .set_nonblocking(true)
         .context("setting daemon listener nonblocking")?;
-    let store = store.display().to_string();
     std::thread::Builder::new()
         .name("corrald-server".into())
         .spawn(move || {
@@ -63,12 +60,11 @@ pub(crate) fn start(listener: UnixListener, shared: Arc<Shared>, store: &Path) -
                         }
                         let permit = WorkerPermit(Arc::clone(&shared));
                         let shared = Arc::clone(&shared);
-                        let store = store.clone();
                         if let Err(error) = std::thread::Builder::new()
                             .name("corrald-client".into())
                             .spawn(move || {
                                 let _permit = permit;
-                                if let Err(error) = serve(stream, shared, &store) {
+                                if let Err(error) = serve(stream, shared) {
                                     eprintln!("corrald client: {error:#}");
                                 }
                             })
@@ -93,14 +89,14 @@ pub(super) fn accept_error(shared: &Shared, error: std::io::Error) {
                 || code == rustix::io::Errno::NFILE.raw_os_error()) =>
         {
             eprintln!("corrald accepting client: {error}; retrying after descriptor exhaustion");
-            shared.wait(Duration::from_millis(500), false);
+            shared.wait(Duration::from_millis(500));
         }
         _ => shared.fail_server(format!("accepting daemon connection: {error}")),
     }
 }
 
-pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()> {
-    let peer_uid = check_peer(&stream)?;
+pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
+    check_peer(&stream)?;
     stream
         .set_read_timeout(Some(IO_TIMEOUT))
         .context("setting client read timeout")?;
@@ -109,14 +105,10 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
         .context("setting client write timeout")?;
     let mut welcomed = false;
     let hello_deadline = Instant::now() + HELLO_TIMEOUT;
-    let mut topics = Topics::new(&shared);
-    let mut session = crate::devices::UnixSession {
-        via: "daemon",
-        attached: None,
-    };
+    let mut topics = Subscriptions::new(&shared);
+    let mut attached: Option<crate::devices::SessionGuard> = None;
     loop {
-        if session
-            .attached
+        if attached
             .as_ref()
             .is_some_and(|guard| guard.revoked.load(std::sync::atomic::Ordering::Acquire))
         {
@@ -129,14 +121,14 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
             );
         }
         if shared.lock().closed {
-            return bye(&mut stream, &shared);
+            return bye(&mut stream);
         }
         if !welcomed && Instant::now() >= hello_deadline {
             return Ok(());
         }
         if welcomed {
-            if let Some(guard) = &session.attached {
-                guard.flush_authority(&mut stream)?;
+            if let Some(guard) = &attached {
+                guard.touch()?;
             }
             topics.flush(&mut stream)?;
         }
@@ -166,7 +158,7 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
             Ok(None) => return Ok(()),
             Err(error) => {
                 if shared.lock().closed {
-                    return bye(&mut stream, &shared);
+                    return bye(&mut stream);
                 }
                 return Err(error).context("reading client frame");
             }
@@ -175,9 +167,6 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
             frame.kind == FrameKind::Control && frame.stream == 0,
             "expected control RPC frame"
         );
-        if session.via == "app" && frame.payload.len() > wire::app::APP_CONTROL_MAX {
-            return Err(anyhow::anyhow!("app control limit exceeded"));
-        }
         let request: rpc::Request =
             serde_json::from_slice(&frame.payload).context("decoding client RPC")?;
         if request.jsonrpc != rpc::JSONRPC {
@@ -198,130 +187,29 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
             )?;
             continue;
         }
-        let id = request.id;
-        let params = request.params;
-        let app_request = session.via == "app"
-            || (request.method == wire::HELLO
-                && params.pointer("/client/kind").and_then(Value::as_str) == Some("app"));
-        if app_request
-            && (frame.payload.len() > wire::app::APP_CONTROL_MAX
-                || serde_json::to_vec(&id)?.len() > 256)
+        if serde_json::to_vec(&request.id)
+            .context("encode client request ID")?
+            .len()
+            > 256
         {
-            crate::app::dispatch::error(
+            error(
                 &mut stream,
-                Value::Null,
-                (rpc::ErrorCode::TooLarge, "app_control_limit".into()),
+                serde_json::Value::Null,
+                rpc::ErrorCode::TooLarge,
+                "rpc_id_limit",
             )?;
             continue;
-        }
-        if session.via == "app"
-            && matches!(
-                request.method.as_str(),
-                wire::READ
-                    | wire::cmd::CMD_SUBMIT
-                    | wire::cmd::CMD_RESULT
-                    | wire::NUDGE
-                    | wire::DAEMON_STOP
-            )
-        {
-            crate::app::dispatch::error(
-                &mut stream,
-                id,
-                (rpc::ErrorCode::Refused, "not_app_safe".into()),
-            )?;
-            continue;
-        }
-        if matches!(
-            request.method.as_str(),
-            wire::SUB_OPEN | wire::SUB_ACK | wire::SUB_CLOSE
-        ) {
-            use wire::subscription::Topic;
-            let topic = params
-                .get("topic")
-                .cloned()
-                .and_then(|topic| serde_json::from_value::<Topic>(topic).ok());
-            let typed = topic.is_some_and(|topic| {
-                matches!(
-                    topic,
-                    Topic::Inbox
-                        | Topic::Plans
-                        | Topic::Builds
-                        | Topic::Projects
-                        | Topic::Agents
-                        | Topic::Assistant
-                        | Topic::Usage
-                        | Topic::Settings
-                        | Topic::Thread
-                        | Topic::Session
-                        | Topic::Terminal
-                )
-            });
-            if (session.via == "app" || typed) && session.attached.is_none() {
-                error(
-                    &mut stream,
-                    id,
-                    rpc::ErrorCode::Unauthenticated,
-                    "device_attach_required",
-                )?;
-                continue;
-            }
-            if session.via == "app" && !topic.is_some_and(crate::app::dispatch::allowed_topic) {
-                error(&mut stream, id, rpc::ErrorCode::Refused, "topic_refused")?;
-                continue;
-            }
         }
         match request.method.as_str() {
-            wire::HELLO => match serde_json::from_value::<wire::Hello>(params) {
+            wire::HELLO => match serde_json::from_value::<wire::Hello>(request.params) {
                 Ok(hello) if hello.proto.major == wire::PROTO_MAJOR => {
-                    session.via = match hello.client.kind.as_str() {
-                        "cli" => "cli",
-                        "app" => "app",
-                        _ => "daemon",
-                    };
-                    topics.set_session_fleet(
-                        hello
-                            .caps
-                            .iter()
-                            .any(|cap| cap == wire::app::SESSION_FLEET_V1),
-                    );
-                    reply(
-                        &mut stream,
-                        id,
-                        wire::Welcome {
-                            proto: wire::Proto {
-                                major: wire::PROTO_MAJOR,
-                                minor: wire::PROTO_MINOR,
-                            },
-                            caps: hello
-                                .caps
-                                .into_iter()
-                                .filter(|cap| {
-                                    if session.via == "app" {
-                                        crate::app::dispatch::capability(&shared, cap)
-                                    } else {
-                                        cap == wire::BOARD_V1
-                                            || cap == wire::READ_V1
-                                            || cap == wire::cmd::CMD_V1
-                                            || cap == wire::CLASSIC_V1
-                                            || cap == wire::device::DEVICE_V1
-                                            || crate::app::dispatch::capability(&shared, cap)
-                                    }
-                                })
-                                .collect(),
-                            daemon: wire::DaemonInfo {
-                                version: env!("CARGO_PKG_VERSION").into(),
-                                store: store.into(),
-                                epoch: shared.epoch(),
-                            },
-                            health: shared.health(),
-                        },
-                    )?;
+                    reply(&mut stream, request.id, dispatch::welcome(&shared, hello))?;
                     welcomed = true;
                 }
                 Ok(_) => {
                     error(
                         &mut stream,
-                        id,
+                        request.id,
                         rpc::ErrorCode::UnsupportedVersion,
                         "unsupported_version",
                     )?;
@@ -329,276 +217,48 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
                 }
                 Err(_) => error(
                     &mut stream,
-                    id,
+                    request.id,
                     rpc::ErrorCode::InvalidParams,
                     "invalid hello",
                 )?,
             },
-            wire::PING => reply(&mut stream, id, wire::Pong {})?,
             wire::BYE => {
                 reply(
                     &mut stream,
-                    id,
+                    request.id,
                     wire::Bye {
                         reason: "client disconnected".into(),
                     },
                 )?;
                 return Ok(());
             }
-            wire::NUDGE => match serde_json::from_value::<wire::Nudge>(params) {
-                Ok(nudge) => {
-                    let wait = nudge.wait_ms.map(|ms| Duration::from_millis(u64::from(ms)));
-                    reply(&mut stream, id, shared.nudge_from(&nudge.source, wait))?;
-                }
-                Err(_) => error(
-                    &mut stream,
-                    id,
-                    rpc::ErrorCode::InvalidParams,
-                    "invalid nudge",
-                )?,
-            },
-            wire::HEALTH_GET => reply(&mut stream, id, shared.health())?,
-            wire::READ => match serde_json::from_value::<ReadRequest>(params) {
-                Ok(request) => serve_read(&mut stream, &shared, id, request)?,
-                Err(_) => error(
-                    &mut stream,
-                    id,
-                    rpc::ErrorCode::InvalidParams,
-                    "invalid read",
-                )?,
-            },
-            wire::cmd::CMD_SUBMIT => match serde_json::from_value::<wire::cmd::CmdSubmit>(params) {
-                Ok(submit) => {
-                    crate::commands::serve_submit(&mut stream, &shared, id, peer_uid, submit)?
-                }
-                Err(_) => error(
-                    &mut stream,
-                    id,
-                    rpc::ErrorCode::InvalidParams,
-                    "invalid cmd.submit",
-                )?,
-            },
-            wire::cmd::CMD_RESULT => {
-                match serde_json::from_value::<wire::cmd::CmdResultQuery>(params) {
-                    Ok(query) => {
-                        crate::commands::serve_result(&mut stream, &shared, id, peer_uid, query)?
-                    }
-                    Err(_) => error(
-                        &mut stream,
-                        id,
-                        rpc::ErrorCode::InvalidParams,
-                        "invalid cmd.result",
-                    )?,
-                }
-            }
-            wire::SUB_OPEN => match serde_json::from_value::<wire::subscription::SubOpen>(params) {
-                Ok(open) => match topics.open(open) {
-                    Ok(()) => reply(&mut stream, id, ())?,
-                    Err(problem) => error(
-                        &mut stream,
-                        id,
-                        rpc::ErrorCode::InvalidParams,
-                        &problem.to_string(),
-                    )?,
-                },
-                Err(_) => error(
-                    &mut stream,
-                    id,
-                    rpc::ErrorCode::InvalidParams,
-                    "invalid sub.open",
-                )?,
-            },
-            wire::SUB_ACK => match serde_json::from_value::<wire::subscription::SubAck>(params) {
-                Ok(ack) => match topics.ack(ack) {
-                    Ok(()) => reply(&mut stream, id, ())?,
-                    Err(problem) => error(
-                        &mut stream,
-                        id,
-                        rpc::ErrorCode::InvalidParams,
-                        &problem.to_string(),
-                    )?,
-                },
-                Err(_) => error(
-                    &mut stream,
-                    id,
-                    rpc::ErrorCode::InvalidParams,
-                    "invalid sub.ack",
-                )?,
-            },
-            wire::SUB_CLOSE => match serde_json::from_value::<wire::subscription::SubClose>(params)
-            {
-                Ok(close) => {
-                    topics.close(close);
-                    reply(&mut stream, id, ())?;
-                }
-                Err(_) => error(
-                    &mut stream,
-                    id,
-                    rpc::ErrorCode::InvalidParams,
-                    "invalid sub.close",
-                )?,
-            },
-            wire::DAEMON_STOP => match serde_json::from_value::<wire::Stop>(params) {
-                Ok(stop) => {
-                    // Both stop modes finish any already-running pass, never interrupt effects.
-                    shared.stop(false);
-                    if stop.drain {
-                        ensure!(
-                            shared.wait_closed(Duration::from_secs(600)),
-                            "daemon drain timed out"
-                        );
-                    }
-                    reply(&mut stream, id, wire::Stopped {})?;
-                }
-                Err(_) => error(
-                    &mut stream,
-                    id,
-                    rpc::ErrorCode::InvalidParams,
-                    "invalid stop",
-                )?,
-            },
-            other => {
-                if crate::app::dispatch::is_method(other)
-                    && (session.via == "app"
-                        || !matches!(
-                            other,
-                            wire::device::DEVICE_LIST
-                                | wire::device::DEVICE_REVOKE
-                                | wire::device::PAIR_BEGIN
-                                | wire::device::PAIR_STATUS
-                                | wire::device::PAIR_CONFIRM
-                                | wire::device::PAIR_CANCEL
-                        ))
-                {
-                    crate::app::dispatch::serve(
-                        &mut stream,
-                        &shared,
-                        id,
-                        other,
-                        params,
-                        session.attached.as_ref(),
-                    )?;
-                    continue;
-                }
-                if !crate::devices::serve_unix(
+            wire::device::DEVICE_ENROL | wire::device::DEVICE_ATTACH => {
+                crate::devices::serve_unix(
                     &mut stream,
                     &shared,
-                    id.clone(),
-                    other,
-                    params,
-                    &mut session,
-                )? {
-                    error(
-                        &mut stream,
-                        id,
-                        rpc::ErrorCode::MethodNotFound,
-                        "method_not_found",
-                    )?;
-                }
+                    request.id,
+                    &request.method,
+                    request.params,
+                    &mut attached,
+                )?;
             }
+            _ => dispatch::serve(
+                &mut stream,
+                &shared,
+                request,
+                attached.as_ref(),
+                &mut topics,
+            )?,
         }
     }
 }
 
-fn serve_read(
-    stream: &mut UnixStream,
-    shared: &Shared,
-    id: Value,
-    request: ReadRequest,
-) -> Result<()> {
-    if request.kind == ReadKind::Other {
-        return error(
-            stream,
-            id,
-            rpc::ErrorCode::InvalidParams,
-            "unknown read kind",
-        );
-    }
-    let identity = corral_ops::pm_read::client_identity();
-    match identity {
-        Ok((exe, build)) if request.exe == exe && request.build == build => {}
-        Ok(_) => return error(stream, id, rpc::ErrorCode::Refused, "client_mismatch"),
-        Err(problem) => {
-            return error(
-                stream,
-                id,
-                rpc::ErrorCode::Internal,
-                &format!("{problem:#}").replace(['\r', '\n'], " "),
-            );
-        }
-    }
-    let Some(receiver) = crate::reader::request(shared, request.kind) else {
-        return error(
-            stream,
-            id,
-            rpc::ErrorCode::Unavailable,
-            "reader unavailable",
-        );
-    };
-    let served = match receiver.recv_timeout(Duration::from_secs(30)) {
-        Ok(Ok(served)) => served,
-        Ok(Err(problem)) => {
-            return error(
-                stream,
-                id,
-                rpc::ErrorCode::Internal,
-                &format!("{problem:#}").replace(['\r', '\n'], " "),
-            );
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            return error(stream, id, rpc::ErrorCode::Busy, "reader timed out");
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            return error(
-                stream,
-                id,
-                rpc::ErrorCode::Unavailable,
-                "reader unavailable",
-            );
-        }
-    };
-    let document = &served.document;
-    let frames = u32::try_from(document.bytes.len().div_ceil(wire::frame::DATA_MAX).max(1))
-        .context("counting read data frames")?;
-    let stream_id = 1;
-    reply(
-        stream,
-        id,
-        ReadReply {
-            as_of: document.as_of.clone(),
-            seq: document.seq,
-            cached: served.cached,
-            stream: stream_id,
-            bytes: document.bytes.len() as u64,
-            frames,
-        },
-    )?;
-    // This entire transfer completes before returning to the topic flush / RPC
-    // loop. One deadline bounds all DATA frames, not a fresh timeout per frame.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut frame = Frame {
-        kind: FrameKind::Data,
-        stream: stream_id,
-        payload: Vec::with_capacity(document.bytes.len().min(wire::frame::DATA_MAX)),
-    };
-    if document.bytes.is_empty() {
-        write_frame_until(stream, &frame, deadline).context("writing empty read document")?;
-    } else {
-        for chunk in document.bytes.chunks(wire::frame::DATA_MAX) {
-            frame.payload.clear();
-            frame.payload.extend_from_slice(chunk);
-            write_frame_until(stream, &frame, deadline).context("writing read document")?;
-        }
-    }
-    Ok(())
-}
-
-fn bye(stream: &mut UnixStream, shared: &Shared) -> Result<()> {
+fn bye(stream: &mut UnixStream) -> Result<()> {
     notify(
         stream,
         wire::BYE,
         wire::Bye {
-            reason: shared.bye_reason().into(),
+            reason: "daemon stopped".into(),
         },
     )
 }
@@ -637,7 +297,3 @@ fn check_peer(stream: &UnixStream) -> Result<u32> {
 fn check_peer(_stream: &UnixStream) -> Result<u32> {
     anyhow::bail!("client peer credentials are unavailable on this platform")
 }
-
-#[cfg(test)]
-#[path = "server_tests.rs"]
-mod tests;

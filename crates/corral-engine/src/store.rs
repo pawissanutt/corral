@@ -59,6 +59,28 @@ impl Store {
         Ok(Self { connection })
     }
 
+    /// Compare successive results from the same connection to observe commits
+    /// made elsewhere, including writes which do not append an event.
+    pub fn data_version(&self) -> Result<u64> {
+        self.connection
+            .pragma_query_value(None, "data_version", |row| row.get::<_, i64>(0))
+            .context("read SQLite data version")?
+            .try_into()
+            .context("SQLite data version must not be negative")
+    }
+
+    /// Pin related reads without taking the writer lock.
+    pub fn read_snapshot<T>(&self, read: impl FnOnce() -> Result<T>) -> Result<T> {
+        let transaction = rusqlite::Transaction::new_unchecked(
+            &self.connection,
+            rusqlite::TransactionBehavior::Deferred,
+        )
+        .context("begin engine read snapshot")?;
+        let result = read()?;
+        transaction.commit().context("end engine read snapshot")?;
+        Ok(result)
+    }
+
     /// The closure's writes (including events) commit together; an error rolls back.
     /// Nested transactions are rejected by SQLite rather than partially committed.
     pub fn transaction<T>(&self, operation: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
@@ -150,6 +172,61 @@ impl Store {
         )
     }
 
+    /// Count open tasks by assigned project without reading task bodies.
+    pub fn open_project_counts(&self) -> Result<std::collections::BTreeMap<String, u64>> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT project,count(*) FROM tasks
+             WHERE project IS NOT NULL AND status NOT IN ('done','dropped')
+             GROUP BY project",
+            )
+            .context("prepare open project counts")?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)?)))
+            .context("query open project counts")?;
+        rows.map(|row| {
+            let (project, count) = row.context("read open project count")?;
+            Ok((
+                project,
+                count
+                    .try_into()
+                    .context("project count must not be negative")?,
+            ))
+        })
+        .collect()
+    }
+
+    pub fn closed_task_count(&self) -> Result<u64> {
+        self.connection
+            .query_row(
+                "SELECT count(*) FROM tasks WHERE status IN ('done','dropped')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .context("count closed tasks")?
+            .try_into()
+            .context("closed task count must not be negative")
+    }
+
+    /// Newest updated first, newest task number first on ties. Canonical UTC
+    /// timestamps compare chronologically once the trailing Z is removed.
+    pub fn closed_tasks_before(
+        &self,
+        before: Option<(jiff::Timestamp, u32)>,
+        limit: u16,
+    ) -> Result<Vec<Task>> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT document FROM tasks WHERE status IN ('done','dropped')
+             AND (?1 IS NULL OR (rtrim(json_extract(document,'$.updated'),'Z'),CAST(substr(id,3) AS INTEGER)) < (?1,?2))
+             ORDER BY rtrim(json_extract(document,'$.updated'),'Z') DESC,CAST(substr(id,3) AS INTEGER) DESC
+             LIMIT ?3",
+        ).context("prepare closed task page")?;
+        let at = before.map(|(at, _)| at.to_string());
+        let at = at.as_deref().map(|at| at.trim_end_matches('Z'));
+        documents(&mut statement, params![at, before.map(|(_, id)| id), limit])
+    }
+
     pub fn insert_run(&self, run: &Run) -> Result<()> {
         self.connection
             .execute(
@@ -201,6 +278,14 @@ impl Store {
         documents(&mut statement, [task])
     }
 
+    pub fn all_runs(&self) -> Result<Vec<Run>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT document FROM runs ORDER BY task,CAST(substr(id,2) AS INTEGER)")
+            .context("prepare all runs listing")?;
+        documents(&mut statement, [])
+    }
+
     pub fn latest_run(&self, task: &str, role: Role) -> Result<Option<Run>> {
         self.optional_document("SELECT document FROM runs WHERE task=?1 AND role=?2 ORDER BY CAST(substr(id,2) AS INTEGER) DESC LIMIT 1", params![task, role.as_str()])
     }
@@ -246,6 +331,16 @@ impl Store {
     /// Insertion order, not agent-provided timestamps, decides the newest check.
     pub fn latest_check(&self, task: &str, kind: CheckKind, key: &str) -> Result<Option<Check>> {
         self.optional_document("SELECT document FROM checks WHERE task=?1 AND kind=?2 AND key=?3 ORDER BY seq DESC LIMIT 1", params![task, kind.as_str(), key])
+    }
+
+    pub fn has_gate_checks(&self, task: &str) -> Result<bool> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM checks WHERE task=?1 AND kind='gate')",
+                [task],
+                |row| row.get(0),
+            )
+            .context("check for recorded gate results")
     }
 
     pub fn list_checks(&self, task: &str) -> Result<Vec<Check>> {

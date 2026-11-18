@@ -1,38 +1,47 @@
-//! Typed snapshots remain typed through notification assembly.
-use anyhow::{Result, bail};
-use corral_ops::{Ctx, app_read};
-use corral_protocol::{
-    assistant::ThreadEntry,
-    board::BoardCursor,
-    rows::*,
-    subscription::{LiveText, RowsDelta, SubDelta, Topic},
+//! Read models backed by engine facts, not a second task or session store.
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    ops::Range,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
+
+use anyhow::{Context, Result, anyhow, bail};
+use corral_engine::{
+    Check, CheckKind, Engine, Role, Run, SessionStatus, Status, Task, store::TaskFilter,
+    usage::UsageSummary,
+};
+use corral_protocol::{
+    Health,
+    rows::*,
+    subscription::{BoardCursor, Topic},
+};
+use serde::Serialize;
+
+use crate::state::Shared;
 
 #[derive(PartialEq)]
 pub(crate) enum Rows {
-    Inbox(Vec<InboxRow>),
+    Health(Vec<Health>),
+    Tasks(Vec<TaskRow>),
     Plans(Vec<PlanRow>),
-    Builds(Vec<BuildRow>),
     Projects(Vec<ProjectRow>),
     Agents(Vec<AgentRow>),
-    Assistant(Vec<AssistantRow>),
-    Usage(Vec<UsageRow>),
+    Usage(Vec<UsageSummary>),
     Settings(Vec<SettingsSnapshot>),
-    Thread(Vec<ThreadEntry>),
 }
 
 macro_rules! each {
     ($self:expr, $rows:ident, $body:expr) => {
         match $self {
-            Rows::Inbox($rows) => $body,
+            Rows::Health($rows) => $body,
+            Rows::Tasks($rows) => $body,
             Rows::Plans($rows) => $body,
-            Rows::Builds($rows) => $body,
             Rows::Projects($rows) => $body,
             Rows::Agents($rows) => $body,
-            Rows::Assistant($rows) => $body,
             Rows::Usage($rows) => $body,
             Rows::Settings($rows) => $body,
-            Rows::Thread($rows) => $body,
         }
     };
 }
@@ -41,63 +50,287 @@ impl Rows {
     pub fn len(&self) -> usize {
         each!(self, rows, rows.len())
     }
-    pub fn id(&self, index: usize) -> &str {
-        each!(self, rows, rows[index].id.as_str())
+
+    pub fn id(&self, index: usize) -> Cow<'_, str> {
+        match self {
+            Self::Health(_) => "health".into(),
+            Self::Tasks(rows) => rows[index].task.id.as_str().into(),
+            Self::Plans(rows) => rows[index].parent.id.as_str().into(),
+            Self::Projects(rows) => rows[index].id.as_str().into(),
+            Self::Agents(rows) => {
+                let run = &rows[index].run;
+                format!("{}_{}", run.task, run.id).into()
+            }
+            Self::Usage(_) => "usage".into(),
+            Self::Settings(_) => "settings".into(),
+        }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn delta(
+    pub fn frame(
         &self,
+        topic: Topic,
         epoch: u64,
         cursor: BoardCursor,
-        range: std::ops::Range<usize>,
-        left: Vec<String>,
+        range: Range<usize>,
+        left: &[String],
         more: bool,
-        scope: Option<&str>,
-        live: Option<LiveText>,
-    ) -> SubDelta {
-        macro_rules! page {
-            ($rows:expr) => {
-                RowsDelta {
+    ) -> Result<corral_protocol::frame::Frame> {
+        #[derive(Serialize)]
+        struct Page<'a, T> {
+            topic: Topic,
+            epoch: u64,
+            rows: &'a [T],
+            left: &'a [String],
+            cursor: BoardCursor,
+            more: bool,
+        }
+        each!(
+            self,
+            rows,
+            crate::topics::notification(
+                corral_protocol::SUB_DELTA,
+                Page {
+                    topic,
                     epoch,
-                    rows: $rows[range].to_vec(),
+                    rows: &rows[range],
                     left,
                     cursor,
                     more,
                 }
-            };
+            )
+        )
+    }
+}
+
+const EXTERNAL_POLL: Duration = Duration::from_secs(2);
+
+/// One snapshot per topic shared by all clients. Each topic has its own lock,
+/// so probing agents never holds the cache lock for health or SQLite-only reads.
+#[derive(Default)]
+pub(crate) struct RowCache {
+    entries: [Mutex<Option<Observation>>; 7],
+}
+
+struct Observation {
+    revision: u64,
+    at: Instant,
+    result: std::result::Result<Arc<Rows>, String>,
+}
+
+impl RowCache {
+    pub(crate) fn get(&self, shared: &Shared, topic: Topic) -> Result<Arc<Rows>> {
+        let index = match topic {
+            Topic::Health => 0,
+            Topic::Tasks => 1,
+            Topic::Plans => 2,
+            Topic::Projects => 3,
+            Topic::Agents => 4,
+            Topic::Usage => 5,
+            Topic::Settings => 6,
+            _ => bail!("unsupported row topic"),
+        };
+        let mut slot = self.entries[index]
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let revision = shared.revision();
+        let refresh = slot.as_ref().is_none_or(|old| {
+            let poll = matches!(topic, Topic::Agents | Topic::Projects | Topic::Settings)
+                || old.result.is_err();
+            old.revision != revision || (poll && old.at.elapsed() >= EXTERNAL_POLL)
+        });
+        if refresh {
+            // Stamp the generation from before reading. A publish during the
+            // read stays visible on the next access; never mark its data as read.
+            let result = read(shared, topic)
+                .map(|new| {
+                    if let Some(Ok(old)) = slot.as_ref().map(|old| &old.result)
+                        && **old == new
+                    {
+                        Arc::clone(old)
+                    } else {
+                        Arc::new(new)
+                    }
+                })
+                .map_err(|error| format!("{error:#}"));
+            *slot = Some(Observation {
+                revision,
+                at: Instant::now(),
+                result,
+            });
         }
-        match self {
-            Self::Inbox(rows) => SubDelta::Inbox { delta: page!(rows) },
-            Self::Plans(rows) => SubDelta::Plans { delta: page!(rows) },
-            Self::Builds(rows) => SubDelta::Builds { delta: page!(rows) },
-            Self::Projects(rows) => SubDelta::Projects { delta: page!(rows) },
-            Self::Agents(rows) => SubDelta::Agents { delta: page!(rows) },
-            Self::Assistant(rows) => SubDelta::Assistant { delta: page!(rows) },
-            Self::Usage(rows) => SubDelta::Usage { delta: page!(rows) },
-            Self::Settings(rows) => SubDelta::Settings { delta: page!(rows) },
-            Self::Thread(rows) => SubDelta::Thread {
-                scope: scope.unwrap_or_default().to_owned(),
-                delta: page!(rows),
-                live,
-            },
+        match &slot.as_ref().context("row observation unavailable")?.result {
+            Ok(rows) => Ok(Arc::clone(rows)),
+            Err(error) => Err(anyhow!("{error}")),
         }
     }
 }
 
-pub(super) fn read(ctx: &Ctx, topic: Topic) -> Result<Rows> {
-    Ok(match topic {
-        Topic::Inbox => Rows::Inbox(app_read::inbox_rows(ctx)?),
-        Topic::Plans => Rows::Plans(app_read::plans_rows(ctx)?),
-        Topic::Builds => Rows::Builds(app_read::builds_rows(ctx)?),
-        Topic::Projects => Rows::Projects(app_read::projects_rows(ctx)?),
-        Topic::Agents => Rows::Agents(app_read::agents_rows(ctx)?),
-        Topic::Assistant => Rows::Assistant(app_read::assistant_rows(ctx)?),
-        Topic::Usage => Rows::Usage(app_read::usage_rows(ctx)?),
-        Topic::Settings => Rows::Settings(app_read::settings_rows(ctx)?),
-        // A watched thread publishes freshness only. Its history is fetched one bounded
-        // canonical page at a time, never materialized as an all-history snapshot.
-        Topic::Thread => Rows::Thread(Vec::new()),
-        _ => bail!("unsupported app topic"),
-    })
+fn read(shared: &Shared, topic: Topic) -> Result<Rows> {
+    if topic == Topic::Health {
+        return Ok(Rows::Health(vec![shared.health()]));
+    }
+    let engine = shared.engine()?;
+    match topic {
+        Topic::Tasks => engine
+            .store
+            .read_snapshot(|| Ok(Rows::Tasks(tasks(&engine)?))),
+        Topic::Plans => engine
+            .store
+            .read_snapshot(|| Ok(Rows::Plans(plans(&engine)?))),
+        Topic::Projects => Ok(Rows::Projects(projects(&engine)?)),
+        Topic::Agents => Ok(Rows::Agents(agents(&engine)?)),
+        Topic::Usage => Ok(Rows::Usage(vec![engine.usage_summary(None)?])),
+        Topic::Settings => Ok(Rows::Settings(vec![SettingsSnapshot {
+            config: object(&engine.config)?,
+            listener: shared.devices().listener(),
+            devices: shared.devices().list()?,
+        }])),
+        _ => bail!("unsupported topic"),
+    }
+}
+
+fn object(value: &impl Serialize) -> Result<serde_json::Map<String, serde_json::Value>> {
+    match serde_json::to_value(value)? {
+        serde_json::Value::Object(map) => Ok(map),
+        _ => bail!("engine config is not an object"),
+    }
+}
+
+fn tasks(engine: &Engine) -> Result<Vec<TaskRow>> {
+    let mut active = BTreeMap::<String, Run>::new();
+    for run in engine.store.live_runs(None)? {
+        // Prefer the worker when the reviewer is also live.
+        if run.session.is_some() && (run.role == Role::Worker || !active.contains_key(&run.task)) {
+            active.insert(run.task.clone(), run);
+        }
+    }
+    engine
+        .store
+        .list_tasks(&TaskFilter {
+            statuses: vec![
+                Status::Idea,
+                Status::Backlog,
+                Status::Ready,
+                Status::Running,
+                Status::Blocked,
+                Status::Review,
+            ],
+            ..Default::default()
+        })?
+        .into_iter()
+        .map(|task| {
+            let run = active.remove(&task.id);
+            let (gate, review) = current_checks(engine, &task, run.as_ref())?;
+            let ready =
+                task.status == Status::Review && engine.store.has_ready_since_done(&task.id)?;
+            Ok(TaskRow {
+                task,
+                run,
+                gate,
+                review,
+                ready,
+            })
+        })
+        .collect()
+}
+
+pub(super) fn current_checks(
+    engine: &Engine,
+    task: &Task,
+    live: Option<&Run>,
+) -> Result<(Option<Check>, Option<Check>)> {
+    let gate = if engine.store.has_gate_checks(&task.id)? {
+        let last_worker;
+        let worker = if let Some(run) = live.filter(|run| run.role == Role::Worker) {
+            Some(run)
+        } else {
+            last_worker = engine.store.latest_run(&task.id, Role::Worker)?;
+            last_worker.as_ref()
+        };
+        worker
+            .map(|run| engine.observed_head(run))
+            .transpose()?
+            .flatten()
+            .map(|head| engine.store.latest_check(&task.id, CheckKind::Gate, &head))
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+    let review = if engine.store.has_verdict_since_done(&task.id, task.round)? {
+        engine
+            .store
+            .latest_check(&task.id, CheckKind::Review, &task.round.to_string())?
+    } else {
+        None
+    };
+    Ok((gate, review))
+}
+
+const STATUSES: [Status; 8] = [
+    Status::Idea,
+    Status::Backlog,
+    Status::Ready,
+    Status::Running,
+    Status::Blocked,
+    Status::Review,
+    Status::Done,
+    Status::Dropped,
+];
+
+fn plans(engine: &Engine) -> Result<Vec<PlanRow>> {
+    let tasks = engine.store.list_tasks(&TaskFilter::default())?;
+    let mut counts = BTreeMap::<&str, [u64; 8]>::new();
+    for child in &tasks {
+        if let Some(parent) = &child.parent {
+            counts.entry(parent).or_default()[child.status as usize] += 1;
+        }
+    }
+    let mut plans = Vec::with_capacity(counts.len());
+    for parent in &tasks {
+        if let Some(counts) = counts.get(parent.id.as_str()) {
+            plans.push(PlanRow {
+                parent: parent.clone(),
+                child_counts: STATUSES
+                    .into_iter()
+                    .zip(*counts)
+                    .filter(|(_, count)| *count != 0)
+                    .map(|(status, count)| StatusCount { status, count })
+                    .collect(),
+            });
+        }
+    }
+    Ok(plans)
+}
+
+fn projects(engine: &Engine) -> Result<Vec<ProjectRow>> {
+    let mut counts = engine.store.open_project_counts()?;
+    engine
+        .config
+        .projects
+        .iter()
+        .map(|(id, project)| {
+            Ok(ProjectRow {
+                id: id.clone(),
+                config: object(project)?,
+                open: counts.remove(id).unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+fn agents(engine: &Engine) -> Result<Vec<AgentRow>> {
+    let mut agents = Vec::new();
+    for run in engine.store.live_runs(None)? {
+        if let Some(session) = &run.session {
+            let status = engine
+                .runner
+                .status(session)
+                .with_context(|| format!("observe session {} {}", run.task, run.id))?;
+            if status != SessionStatus::Gone {
+                agents.push(AgentRow { run, status });
+            }
+        }
+    }
+    Ok(agents)
 }
