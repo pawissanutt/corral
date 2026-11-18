@@ -117,7 +117,13 @@ impl Shared {
     }
 
     pub(crate) fn health(&self) -> Health {
-        self.lock().health.clone()
+        let mut health = self.lock().health.clone();
+        // The engine read is best effort and must not run under the state lock.
+        health.slots = self
+            .engine()
+            .and_then(|engine| crate::health::slots(&engine))
+            .ok();
+        health
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, State> {

@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use corral_herdr::Herdr;
+use corral_protocol::pane::PaneKeys;
 
-pub(super) fn send(herdr: &Herdr, pane: &str, text: Option<&str>, keys: &[String]) -> Result<()> {
-    if let Some(text) = text {
+pub(super) fn send(herdr: &Herdr, pane: &str, request: &PaneKeys) -> Result<()> {
+    if let Some(text) = request.text.as_deref() {
         herdr
             .pane_send_text(pane, text, false)
             .and_then(|delivery| match delivery.error {
@@ -10,11 +11,11 @@ pub(super) fn send(herdr: &Herdr, pane: &str, text: Option<&str>, keys: &[String
                 None => Ok(()),
             })
             .with_context(|| format!("send text to herdr pane {pane}"))?;
-        if keys.is_empty() {
+        if request.keys.is_empty() {
             return Ok(());
         }
     }
-    let keys: Vec<_> = keys.iter().map(String::as_str).collect();
+    let keys: Vec<_> = request.keys.iter().map(String::as_str).collect();
     herdr
         .pane_send_keys(pane, &keys)
         .with_context(|| format!("send keys to herdr pane {pane}"))
@@ -55,19 +56,25 @@ esac
         let herdr = Herdr::with_bin(bin, None).with_poll_wait(|_| {});
         let calls = root.path().join("calls");
         let pane = "w1:p1";
-        let keys = ["tab".to_owned(), "enter".to_owned()];
-
-        assert!(send(&herdr, pane, Some(""), &keys).is_err());
+        let request = |text, keys: Option<&[&str]>| -> PaneKeys {
+            let mut params = serde_json::json!({"task":"T-001","run":"R1","text":text});
+            if let Some(keys) = keys {
+                params["keys"] = serde_json::json!(keys);
+            }
+            serde_json::from_value(params).unwrap()
+        };
+        let keys = Some(["tab", "enter"].as_slice());
+        assert!(send(&herdr, pane, &request("", keys)).is_err());
         assert!(!calls.exists());
 
-        send(&herdr, pane, Some("hello $USER; &"), &[]).unwrap();
+        send(&herdr, pane, &request("hello $USER; &", None)).unwrap();
         assert_eq!(
             fs::read(&calls).unwrap().as_slice(),
             b"pane\0send-text\0w1:p1\0hello $USER; &\0"
         );
         fs::remove_file(&calls).unwrap();
 
-        send(&herdr, pane, Some("next"), &keys).unwrap();
+        send(&herdr, pane, &request("next", keys)).unwrap();
         assert_eq!(
             fs::read(&calls).unwrap().as_slice(),
             b"pane\0send-text\0w1:p1\0next\0pane\0send-keys\0w1:p1\0tab\0enter\0"

@@ -34,7 +34,6 @@ shared! {
     SessionStatus: ["string", "object"],
     Status: "string",
     Task: "object",
-    Usage: "object",
     UsageBy: "string",
     UsageSummary: "object",
 }

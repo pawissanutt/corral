@@ -270,6 +270,7 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                         run,
                         at: Timestamp::now(),
                         profile,
+                        harness: None,
                         model,
                         input,
                         output,

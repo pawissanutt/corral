@@ -4,9 +4,8 @@ mod review;
 pub(crate) mod rows;
 mod terminal_screen;
 
-// These consumers are exercised independently while the app still builds old wire literals.
 #[cfg(test)]
-mod pending;
+mod board_wire_tests;
 
 use std::{
     hash::{DefaultHasher, Hasher},

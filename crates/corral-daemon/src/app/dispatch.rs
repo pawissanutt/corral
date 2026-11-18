@@ -122,25 +122,20 @@ pub(crate) fn serve(
         settings::CONFIG_PUT => answer!(Ok(config::put(shared, decode(params)?)?)),
         pane::PANE_FOCUS => answer!({
             let engine = shared.engine()?;
-            let session = pane_session(&engine, decode(params)?)?;
+            let session = pane_session(&engine, &decode(params)?)?;
             Ok(engine.runner.focus(&session)?)
         }),
         pane::PANE_KEYS => answer!({
             let request: pane::PaneKeys = decode(params)?;
             let engine = shared.engine()?;
-            let SessionRef::Herdr { pane, .. } = pane_session(&engine, request.target)? else {
+            let SessionRef::Herdr { pane, .. } = pane_session(&engine, &request.target)? else {
                 return Err(refuse(
                     "headless process sessions have no pane to send keys to",
                     vec![],
                 )
                 .into());
             };
-            pane_keys::send(
-                &health::herdr(&engine.config.runner),
-                &pane,
-                None,
-                &request.keys,
-            )?;
+            pane_keys::send(&health::herdr(&engine.config.runner), &pane, &request)?;
             Ok(())
         }),
         app::DETAIL_GET => answer!(Ok(views::detail(shared, decode(params)?)?)),
@@ -259,7 +254,7 @@ pub(crate) fn serve(
 
 fn pane_session(
     engine: &corral_engine::Engine,
-    target: pane::PaneFocus,
+    target: &pane::PaneFocus,
 ) -> Result<SessionRef, Failure> {
     engine
         .store

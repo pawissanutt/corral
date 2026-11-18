@@ -3,7 +3,7 @@ use crate::{
     tests::{run, task, tempdir},
 };
 
-use super::{UsageBy, UsageSummary, UsageTotal};
+use super::{UsageBy, UsageSummary, UsageTotal, UsageWindow};
 
 fn request(at: &str) -> Usage {
     Usage {
@@ -11,6 +11,7 @@ fn request(at: &str) -> Usage {
         run: None,
         at: at.parse().unwrap(),
         profile: None,
+        harness: None,
         model: "model-a".into(),
         input: 10,
         output: 2,
@@ -30,6 +31,7 @@ fn usage_round_trips_without_creating_an_event() {
         task: Some("T-001".into()),
         run: Some("R1".into()),
         profile: Some("worker".into()),
+        harness: Some("reported".into()),
         usd: Some(0.125),
         billing: Some("api".into()),
         ..request("2026-11-18T00:00:00.012345678Z")
@@ -59,9 +61,16 @@ fn usage_round_trips_without_creating_an_event() {
 fn usage_rollups_keep_unassociated_requests_but_count_only_exact_run_matches() {
     let root = tempdir();
     let engine = Engine::init(root.path(), None).unwrap();
-    for id in ["T-001", "T-002", "T-003"] {
+    for (id, profile, model, started) in [
+        ("T-001", "fast", "model-a", "2026-11-17T21:00:00Z"),
+        ("T-002", "slow", "model-b", "2026-11-18T00:00:00Z"),
+        ("T-003", "fast", "model-a", "2026-11-18T00:00:00Z"),
+    ] {
         engine.store.insert_task(&task(id)).unwrap();
         let mut fixture = run(id, "R1");
+        fixture.profile = profile.into();
+        fixture.model = Some(model.into());
+        fixture.started = started.parse().unwrap();
         if id == "T-002" {
             fixture.role = Role::Reviewer;
             fixture.ended = Some(fixture.started);
@@ -215,6 +224,7 @@ fn group_coverage_counts_only_distinct_runs_in_the_request_group() {
         Usage {
             at: day_two.parse().unwrap(),
             profile: Some("slow".into()),
+            harness: Some("reported".into()),
             model: "model-b".into(),
             ..matching.clone()
         },
@@ -246,21 +256,23 @@ fn group_coverage_counts_only_distinct_runs_in_the_request_group() {
     for row in &requests {
         engine.record_usage(row).unwrap();
     }
-    let ungrouped = engine.usage_report(None).unwrap();
-    assert_eq!(ungrouped.summary.total.requests, requests.len() as u64);
-    assert_eq!(
-        (ungrouped.summary.covered_runs, ungrouped.summary.total_runs),
-        (2, 4)
-    );
-    assert!(ungrouped.group_coverage.is_empty());
+    let ungrouped = engine.usage_summary(None).unwrap();
+    assert_eq!(ungrouped.total.requests, requests.len() as u64);
+    assert_eq!((ungrouped.covered_runs, ungrouped.total_runs), (2, 4));
+    assert!(ungrouped.groups.is_empty());
     let counts = |by| {
-        let report = engine.usage_report(Some(by)).unwrap();
-        assert_eq!(report.summary, engine.usage_summary(Some(by)).unwrap());
-        assert_eq!(report.summary.total, ungrouped.summary.total);
-        report
-            .group_coverage
+        let grouped = engine.usage_summary(Some(by)).unwrap();
+        assert_eq!(grouped.total, ungrouped.total);
+        grouped
+            .groups
             .into_iter()
-            .map(|group| (group.key, group.covered_runs, group.total_runs))
+            .map(|group| {
+                (
+                    group.key,
+                    group.covered_runs.unwrap(),
+                    group.total_runs.unwrap(),
+                )
+            })
             .collect::<Vec<_>>()
     };
     assert_eq!(
@@ -300,14 +312,14 @@ fn group_coverage_counts_only_distinct_runs_in_the_request_group() {
         ]
     );
 
-    let enriched = engine.store.list_usage_rows().unwrap();
+    let enriched = engine.store.list_usage().unwrap();
     assert_eq!(
         enriched
             .iter()
             .map(|row| row.harness.as_deref())
             .collect::<Vec<_>>(),
         [
-            Some("pi"),
+            Some("reported"),
             Some("pi"),
             Some("pi"),
             Some("generic"),
@@ -319,8 +331,122 @@ fn group_coverage_counts_only_distinct_runs_in_the_request_group() {
     assert_eq!(
         enriched
             .into_iter()
-            .map(|row| row.usage)
+            .zip(&requests)
+            .map(|(mut row, request)| {
+                row.harness.clone_from(&request.harness);
+                row
+            })
             .collect::<Vec<_>>(),
         requests
     );
+}
+
+#[test]
+fn usage_series_buckets_by_local_midnight_and_covers_only_same_day_cohorts() {
+    let root = tempdir();
+    let engine = Engine::init(root.path(), None).unwrap();
+    engine.store.insert_task(&task("T-001")).unwrap();
+    let from = "2026-11-16T22:00:00Z";
+    let next_day = "2026-11-17T22:00:00Z";
+    let before = "2026-11-16T21:59:59.999999999Z";
+    let to = "2026-11-20T22:00:00Z";
+    for (id, started, model) in [
+        ("prior", before, "model-a"),
+        ("matching", from, "model-a"),
+        ("switched", next_day, "configured"),
+        ("silent", "2026-11-18T22:00:00Z", "model-a"),
+        ("later", to, "model-a"),
+    ] {
+        let mut run = run("T-001", id);
+        run.started = started.parse().unwrap();
+        run.model = Some(model.into());
+        engine.store.insert_run(&run).unwrap();
+    }
+    for (id, at) in [
+        ("prior", before),
+        ("prior", from),
+        ("matching", from),
+        ("matching", "2026-11-17T21:59:59.999999999Z"),
+        ("matching", next_day),
+        ("switched", next_day),
+        ("later", to),
+    ] {
+        engine
+            .record_usage(&Usage {
+                task: Some("T-001".into()),
+                run: Some(id.into()),
+                ..request(at)
+            })
+            .unwrap();
+    }
+    let window = || UsageWindow::parse("2026-11-17", "2026-11-21", 120).unwrap();
+    let series = engine.usage_series(window(), Some(UsageBy::Model)).unwrap();
+    let counts = |day: usize| {
+        let summary = &series[day].summary;
+        (
+            summary.total.requests,
+            summary.covered_runs,
+            summary.total_runs,
+        )
+    };
+    let groups = |day: usize| {
+        series[day]
+            .summary
+            .groups
+            .iter()
+            .map(|group| {
+                (
+                    group.key.as_deref(),
+                    group.total.requests,
+                    group.covered_runs,
+                    group.total_runs,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        series
+            .iter()
+            .map(|day| day.day.as_str())
+            .collect::<Vec<_>>(),
+        ["2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20"]
+    );
+    assert_eq!(counts(0), (3, 1, 1));
+    assert_eq!(groups(0), [(Some("model-a"), 3, Some(1), Some(1))]);
+    assert_eq!(counts(1), (2, 1, 1));
+    assert_eq!(
+        groups(1),
+        [
+            (Some("configured"), 0, Some(0), Some(1)),
+            (Some("model-a"), 2, Some(0), Some(0)),
+        ]
+    );
+    assert_eq!(counts(2), (0, 0, 1));
+    assert_eq!(groups(2), [(Some("model-a"), 0, Some(0), Some(1))]);
+    assert_eq!(series[3].summary, UsageSummary::default());
+
+    let by_day = engine.usage_series(window(), Some(UsageBy::Day)).unwrap();
+    for day in &by_day[..3] {
+        assert_eq!(day.summary.groups[0].key.as_deref(), Some(day.day.as_str()));
+        assert_eq!(
+            day.summary.groups[0].covered_runs,
+            Some(day.summary.covered_runs)
+        );
+    }
+}
+
+#[test]
+fn usage_window_requires_canonical_dates_and_a_bounded_forward_span() {
+    assert!(UsageWindow::parse("2024-01-01", "2025-01-01", -240).is_ok());
+    for (from, to, offset) in [
+        ("2024-01-01", "2025-01-02", 0),
+        ("2024-01-01", "2024-01-01", 0),
+        ("2024-01-02", "2024-01-01", 0),
+        ("2024-02-30", "2024-03-01", 0),
+        ("2024-01-01T00:00:00Z", "2024-01-02", 0),
+        ("2024-01-01", "2024-01-02", 1440),
+        ("2024-01-01", "2024-01-02", -1440),
+    ] {
+        assert!(UsageWindow::parse(from, to, offset).is_err());
+    }
 }

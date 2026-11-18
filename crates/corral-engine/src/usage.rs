@@ -1,53 +1,132 @@
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context, Result, ensure};
-pub use corral_types::{UsageBy, UsageGroup, UsageSummary, UsageTotal};
-use jiff::{Timestamp, civil::Date, tz::TimeZone};
-use rusqlite::{Row, Transaction, TransactionBehavior, params};
+pub use corral_types::{UsageBy, UsageDay, UsageGroup, UsageSummary, UsageTotal};
+use jiff::{Timestamp, civil::Date, tz::Offset};
+use rusqlite::{Row, params, params_from_iter};
 
 use crate::{Engine, Store, Usage, store::encode};
 
-// Keep identity columns for coverage queries, but do not require a matching run:
-// taskless sessions and reports carrying only one identifier still contribute.
-pub(crate) const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS usage(seq INTEGER PRIMARY KEY, task TEXT, run TEXT, document TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS usage_task_run ON usage(task,run);
-";
-
-const USAGE_ROWS: &str = "SELECT document FROM usage ORDER BY seq";
-const USAGE_RUNS: &str = "FROM usage
-    LEFT JOIN runs ON runs.task = usage.task AND runs.id = usage.run
-    ORDER BY usage.seq";
-
-/// A stored request with the harness of its exact associated run, if known.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UsageRow {
-    pub usage: Usage,
-    pub harness: Option<String>,
+// Jiff stores UTC timestamps with optional fractional seconds. Sort by a
+// biased unsigned year (including BCE), then by the remaining ISO text.
+// The midnight bounds have no fraction; dropping `Z` places a bound before
+// every stored timestamp in its second, including the exact instant.
+macro_rules! instant_key {
+    ($value:literal) => {
+        concat!(
+            "printf('%05d%s', 10000 + CAST(substr(",
+            $value,
+            ", 1, 7) AS INTEGER), ",
+            "substr(",
+            $value,
+            ", instr(",
+            $value,
+            ", 'T') - 5))"
+        )
+    };
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UsageGroupCoverage {
-    pub key: Option<String>,
-    /// Members of this run cohort with at least one request in the same group.
-    pub covered_runs: u64,
-    /// Persisted runs grouped by profile, configured model, task or UTC start day.
-    pub total_runs: u64,
+// Do not require a matching run: usage with partial or absent IDs still counts.
+pub(crate) const SCHEMA: &str = concat!(
+    "CREATE TABLE IF NOT EXISTS usage(seq INTEGER PRIMARY KEY, task TEXT, run TEXT, document TEXT NOT NULL);
+     CREATE INDEX IF NOT EXISTS usage_task_run ON usage(task,run);
+     CREATE INDEX IF NOT EXISTS usage_at ON usage(", instant_key!("json_extract(document, '$.at')"), ");
+     CREATE INDEX IF NOT EXISTS runs_started ON runs(", instant_key!("json_extract(document, '$.started')"), ");"
+);
+
+const USAGE_AT: &str = instant_key!("json_extract(usage.document, '$.at')");
+const RUN_START: &str = "json_extract(runs.document, '$.started')";
+const RUN_START_KEY: &str = instant_key!("json_extract(runs.document, '$.started')");
+const USAGE_JOIN: &str =
+    "FROM usage LEFT JOIN runs ON runs.task = usage.task AND runs.id = usage.run";
+
+/// A validated range of 1–366 local days at a single fixed offset east of UTC.
+pub struct UsageWindow {
+    from: Date,
+    offset: Offset,
+    days: usize,
+    bounds: [String; 2],
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct UsageReport {
-    pub summary: UsageSummary,
-    /// The union of request and run keys, in the same order as summary groups.
-    /// Empty when ungrouped.
-    pub group_coverage: Vec<UsageGroupCoverage>,
+impl UsageWindow {
+    pub fn parse(from: &str, to: &str, utc_offset_minutes: i16) -> Result<Self> {
+        let from = parse_date(from).context("invalid usage start date")?;
+        let to = parse_date(to).context("invalid usage end date")?;
+        let days = from.duration_until(to).as_secs() / 86_400;
+        ensure!(
+            (1..=366).contains(&days),
+            "usage range must span 1 to 366 days"
+        );
+        ensure!(
+            (-1439..=1439).contains(&utc_offset_minutes),
+            "usage UTC offset must be less than 24 hours"
+        );
+        let offset = Offset::from_seconds(i32::from(utc_offset_minutes) * 60)?;
+        let bound = |day: Date| -> Result<String> {
+            let mut text = offset.to_timestamp(day.at(0, 0, 0, 0))?.to_string();
+            let _ = text.pop();
+            Ok(text)
+        };
+        Ok(Self {
+            from,
+            offset,
+            days: days as usize,
+            bounds: [bound(from)?, bound(to)?],
+        })
+    }
+
+    fn bucket(&self, day: Date) -> usize {
+        (self.from.duration_until(day).as_secs() / 86_400) as usize
+    }
+}
+
+fn parse_date(value: &str) -> Result<Date> {
+    let bytes = value.as_bytes();
+    ensure!(
+        bytes.len() == 10
+            && bytes.iter().enumerate().all(|(index, &byte)| match index {
+                4 | 7 => byte == b'-',
+                _ => byte.is_ascii_digit(),
+            }),
+        "expected a date in YYYY-MM-DD format"
+    );
+    Ok(value.parse()?)
+}
+
+#[derive(Default)]
+struct Bucket {
+    total: UsageTotal,
+    groups: BTreeMap<Option<GroupKey>, GroupTally>,
+    total_runs: u64,
+    // Matched run rowids. The flag tracks coverage in that run's own group.
+    covered: HashMap<i64, bool>,
 }
 
 #[derive(Default)]
 struct GroupTally {
-    usage: Option<UsageTotal>,
+    total: UsageTotal,
     covered_runs: u64,
     total_runs: u64,
+}
+
+impl Bucket {
+    fn into_summary(self) -> UsageSummary {
+        UsageSummary {
+            total: self.total,
+            covered_runs: self.covered.len() as u64,
+            total_runs: self.total_runs,
+            groups: self
+                .groups
+                .into_iter()
+                .map(|(key, tally)| UsageGroup {
+                    key: key.map(GroupKey::into_label),
+                    total: tally.total,
+                    covered_runs: Some(tally.covered_runs),
+                    total_runs: Some(tally.total_runs),
+                })
+                .collect(),
+        }
+    }
 }
 
 fn add(total: &mut UsageTotal, usage: &Usage) -> Result<()> {
@@ -92,8 +171,43 @@ impl GroupKey {
     }
 }
 
-fn utc_day(at: Timestamp) -> Date {
-    at.to_zoned(TimeZone::UTC).date()
+fn text<'a>(row: &'a Row<'_>, column: usize) -> Result<Option<&'a str>> {
+    Ok(row.get_ref(column)?.as_str_or_null()?)
+}
+
+fn local_start(row: &Row<'_>, column: usize, offset: Offset) -> Result<Option<Date>> {
+    text(row, column)?
+        .map(|value| {
+            let start: Timestamp = value.parse().context("parse usage run start")?;
+            Ok(offset.to_datetime(start).date())
+        })
+        .transpose()
+}
+
+fn select_bucket<'a>(
+    buckets: &'a mut [Bucket],
+    window: Option<&UsageWindow>,
+    day: Option<Date>,
+) -> Result<&'a mut Bucket> {
+    let index = match window {
+        Some(window) => window.bucket(day.context("usage is missing its local day")?),
+        None => 0,
+    };
+    buckets
+        .get_mut(index)
+        .context("usage is outside its selected window")
+}
+
+fn add_bounds(query: &mut String, key: &str) {
+    query.push_str(" WHERE ");
+    query.push_str(key);
+    query.push_str(concat!(" >= ", instant_key!("?1"), " AND "));
+    query.push_str(key);
+    query.push_str(concat!(" < ", instant_key!("?2")));
+}
+
+fn bounds(window: Option<&UsageWindow>) -> impl rusqlite::Params {
+    params_from_iter(window.into_iter().flat_map(|window| &window.bounds))
 }
 
 fn run_group_column(by: UsageBy) -> &'static str {
@@ -101,53 +215,24 @@ fn run_group_column(by: UsageBy) -> &'static str {
         UsageBy::Profile => "json_extract(runs.document, '$.profile')",
         UsageBy::Model => "json_extract(runs.document, '$.model')",
         UsageBy::Task => "runs.task",
-        UsageBy::Day => "json_extract(runs.document, '$.started')",
+        UsageBy::Day => "NULL",
     }
 }
 
-fn started_day(started: Option<&str>) -> Result<Date> {
-    Ok(utc_day(
-        started
-            .context("run is missing its start timestamp")?
-            .parse()
-            .context("parse run start timestamp")?,
-    ))
-}
-
-fn covers_group(
-    row: &Row<'_>,
-    key: Option<&GroupKey>,
-    covered: &mut HashMap<i64, bool>,
-) -> Result<bool> {
-    let Some(run) = row
-        .get::<_, Option<i64>>(1)
-        .context("read matched run ID")?
-    else {
-        return Ok(false);
-    };
-    let covered_in_group = covered.entry(run).or_default();
-    if *covered_in_group {
-        return Ok(false);
+fn matches_group(key: Option<&GroupKey>, run_group: Option<&str>, run_day: Option<Date>) -> bool {
+    match key {
+        Some(GroupKey::Text(key)) => run_group == Some(key.as_str()),
+        Some(GroupKey::Day(day)) => run_day == Some(*day),
+        None => run_group.is_none(),
     }
-    let run_key = row.get_ref(2).context("read usage run group")?;
-    let run_key = run_key.as_str_or_null().context("read run group as text")?;
-    // A request can report a different model or arrive on a later day. It
-    // contributes to that request group but does not cover another run cohort.
-    let matched = match key {
-        Some(GroupKey::Text(key)) => run_key == Some(key.as_str()),
-        Some(GroupKey::Day(day)) => started_day(run_key)? == *day,
-        None => run_key.is_none(),
-    };
-    *covered_in_group = matched;
-    Ok(matched)
 }
 
-fn take_key(by: UsageBy, usage: &mut Usage) -> Option<GroupKey> {
+fn take_key(by: UsageBy, usage: &mut Usage, day: Option<Date>) -> Option<GroupKey> {
     let label = match by {
         UsageBy::Profile => usage.profile.take(),
         UsageBy::Model => Some(std::mem::take(&mut usage.model)),
         UsageBy::Task => usage.task.take(),
-        UsageBy::Day => return Some(GroupKey::Day(utc_day(usage.at))),
+        UsageBy::Day => return day.map(GroupKey::Day),
     };
     label.map(GroupKey::Text)
 }
@@ -174,115 +259,122 @@ impl Engine {
 
     /// Roll up all recorded requests. Grouping does not change overall run coverage.
     pub fn usage_summary(&self, by: Option<UsageBy>) -> Result<UsageSummary> {
-        Ok(self.roll_up_usage(by, false)?.summary)
-    }
-
-    /// Add per-group coverage without changing the totals or overall coverage.
-    pub fn usage_report(&self, by: Option<UsageBy>) -> Result<UsageReport> {
-        self.roll_up_usage(by, true)
-    }
-
-    fn roll_up_usage(&self, by: Option<UsageBy>, include_coverage: bool) -> Result<UsageReport> {
-        // Count coverage and read requests from the same snapshot, without taking
-        // the write lock used by Store::transaction.
-        let transaction = self
-            .store
-            .connection
-            .is_autocommit()
-            .then(|| {
-                Transaction::new_unchecked(&self.store.connection, TransactionBehavior::Deferred)
-            })
-            .transpose()
-            .context("begin usage summary snapshot")?;
-        let mut total = UsageTotal::default();
-        let mut groups: BTreeMap<_, GroupTally> = BTreeMap::new();
-        let coverage_by = by.filter(|_| include_coverage);
-        // Keys are matched run rowids in this snapshot; the flag records whether
-        // a request has also covered that run in its own cohort.
-        let mut covered = HashMap::new();
-        let grouped_coverage = if let Some(by) = coverage_by {
-            let total_runs = self.store.tally_run_groups(by, &mut groups)?;
-            let column = run_group_column(by);
-            let query = format!("SELECT usage.document, runs.rowid, {column} {USAGE_RUNS}");
-            Some((query, total_runs))
-        } else {
-            None
-        };
-        let query = grouped_coverage
-            .as_ref()
-            .map_or(USAGE_ROWS, |(query, _)| query.as_str());
-        self.store.read_usage(query, |mut usage, row| {
-            add(&mut total, &usage)?;
-            if let Some(by) = by {
-                let key = take_key(by, &mut usage);
-                let matched =
-                    coverage_by.is_some() && covers_group(row, key.as_ref(), &mut covered)?;
-                let group = groups.entry(key).or_default();
-                group.covered_runs += u64::from(matched);
-                add(group.usage.get_or_insert_with(UsageTotal::default), &usage)?;
-            }
-            Ok(())
-        })?;
-        let (total_runs, covered_runs) = match grouped_coverage {
-            Some((_, total_runs)) => (total_runs, covered.len() as u64),
-            None => self.store.usage_run_counts()?,
-        };
-        if let Some(transaction) = transaction {
-            transaction.commit().context("end usage summary snapshot")?;
-        }
-        let mut summary = UsageSummary {
-            total,
-            covered_runs,
-            total_runs,
-            ..UsageSummary::default()
-        };
-        let mut group_coverage = Vec::new();
-        for (key, tally) in groups {
-            let mut key = key.map(GroupKey::into_label);
-            if let Some(total) = tally.usage {
-                let key = if include_coverage {
-                    key.clone()
-                } else {
-                    key.take()
-                };
-                summary.groups.push(UsageGroup { key, total });
-            }
-            if include_coverage {
-                group_coverage.push(UsageGroupCoverage {
-                    key,
-                    covered_runs: tally.covered_runs,
-                    total_runs: tally.total_runs,
+        self.usage_snapshot(|| {
+            if by.is_none() {
+                let mut total = UsageTotal::default();
+                self.store.read_usage(
+                    "SELECT document FROM usage ORDER BY seq",
+                    None,
+                    |usage, _| add(&mut total, &usage),
+                )?;
+                let (total_runs, covered_runs) = self.store.usage_run_counts()?;
+                return Ok(UsageSummary {
+                    total,
+                    total_runs,
+                    covered_runs,
+                    ..UsageSummary::default()
                 });
             }
+            let mut bucket = Bucket::default();
+            self.roll_up_usage(by, None, std::slice::from_mut(&mut bucket))?;
+            Ok(bucket.into_summary())
+        })
+    }
+
+    /// Roll up requests by local report day against runs started on that day.
+    pub fn usage_series(&self, window: UsageWindow, by: Option<UsageBy>) -> Result<Vec<UsageDay>> {
+        self.usage_snapshot(|| {
+            let mut buckets: Vec<_> = (0..window.days).map(|_| Bucket::default()).collect();
+            self.roll_up_usage(by, Some(&window), &mut buckets)?;
+            let mut day = window.from;
+            let mut days = Vec::with_capacity(window.days);
+            for bucket in buckets {
+                days.push(UsageDay {
+                    day: day.to_string(),
+                    summary: bucket.into_summary(),
+                });
+                day = day.tomorrow()?;
+            }
+            Ok(days)
+        })
+    }
+
+    fn usage_snapshot<T>(&self, read: impl FnOnce() -> Result<T>) -> Result<T> {
+        if self.store.connection.is_autocommit() {
+            self.store.read_snapshot(read)
+        } else {
+            read()
         }
-        Ok(UsageReport {
-            summary,
-            group_coverage,
+    }
+
+    fn roll_up_usage(
+        &self,
+        by: Option<UsageBy>,
+        window: Option<&UsageWindow>,
+        buckets: &mut [Bucket],
+    ) -> Result<()> {
+        let local_offset = window
+            .map(|window| window.offset)
+            .or_else(|| (by == Some(UsageBy::Day)).then_some(Offset::ZERO));
+        let group = by.map_or("NULL", run_group_column);
+        let started = if local_offset.is_some() {
+            RUN_START
+        } else {
+            "NULL"
+        };
+        self.store.tally_runs(by, window, buckets, local_offset)?;
+        let mut query =
+            format!("SELECT usage.document, runs.rowid, {group}, {started} {USAGE_JOIN}");
+        if window.is_some() {
+            add_bounds(&mut query, USAGE_AT);
+            query.push_str(" ORDER BY ");
+            query.push_str(USAGE_AT);
+        } else {
+            query.push_str(" ORDER BY usage.seq");
+        }
+        self.store.read_usage(&query, window, |mut usage, row| {
+            let day = local_offset.map(|offset| offset.to_datetime(usage.at).date());
+            let bucket = select_bucket(buckets, window, day)?;
+            add(&mut bucket.total, &usage)?;
+            let run_day = if let Some(offset) = local_offset {
+                local_start(row, 3, offset)?
+            } else {
+                None
+            };
+            let covered = row
+                .get::<_, Option<i64>>(1)?
+                .filter(|_| window.is_none() || run_day == day)
+                .map(|run| bucket.covered.entry(run).or_default());
+            if let Some(by) = by {
+                let key = take_key(by, &mut usage, day);
+                let matched = if let Some(covered) = covered.filter(|covered| !**covered) {
+                    *covered = matches_group(key.as_ref(), text(row, 2)?, run_day);
+                    *covered
+                } else {
+                    false
+                };
+                let group = bucket.groups.entry(key).or_default();
+                group.covered_runs += u64::from(matched);
+                add(&mut group.total, &usage)?;
+            }
+            Ok(())
         })
     }
 }
 
 impl Store {
-    /// List recorded requests in insertion order, without resolving their IDs.
+    /// List recorded requests in insertion order, resolving missing harnesses
+    /// only from a run matching both stored IDs.
     pub fn list_usage(&self) -> Result<Vec<Usage>> {
+        let query = format!(
+            "SELECT usage.document, json_extract(runs.document, '$.harness') {USAGE_JOIN} ORDER BY usage.seq"
+        );
         let mut usage = Vec::new();
-        self.read_usage(USAGE_ROWS, |row, _| {
-            usage.push(row);
-            Ok(())
-        })?;
-        Ok(usage)
-    }
-
-    /// List requests in insertion order, resolving harness only by both stored IDs.
-    pub fn list_usage_rows(&self) -> Result<Vec<UsageRow>> {
-        let query =
-            format!("SELECT usage.document, json_extract(runs.document, '$.harness') {USAGE_RUNS}");
-        let mut usage = Vec::new();
-        self.read_usage(&query, |request, row| {
-            usage.push(UsageRow {
-                usage: request,
-                harness: row.get(1).context("read usage run harness")?,
-            });
+        self.read_usage(&query, None, |mut request, row| {
+            if request.harness.is_none() {
+                request.harness = row.get(1).context("read usage run harness")?;
+            }
+            usage.push(request);
             Ok(())
         })?;
         Ok(usage)
@@ -300,41 +392,62 @@ impl Store {
             .context("count usage run coverage")
     }
 
-    fn tally_run_groups(
+    fn tally_runs(
         &self,
-        by: UsageBy,
-        groups: &mut BTreeMap<Option<GroupKey>, GroupTally>,
-    ) -> Result<u64> {
-        let column = run_group_column(by);
+        by: Option<UsageBy>,
+        window: Option<&UsageWindow>,
+        buckets: &mut [Bucket],
+        local_offset: Option<Offset>,
+    ) -> Result<()> {
+        let group = by.map_or("NULL", run_group_column);
+        let started = if local_offset.is_some() {
+            RUN_START
+        } else {
+            "NULL"
+        };
+        let mut query = format!("SELECT {group}, {started} FROM runs");
+        if window.is_some() {
+            add_bounds(&mut query, RUN_START_KEY);
+        }
         let mut statement = self
             .connection
-            .prepare(&format!("SELECT {column} FROM runs"))
-            .context("prepare usage run groups")?;
-        let mut rows = statement.query([]).context("query usage run groups")?;
-        let mut total_runs = 0;
-        while let Some(row) = rows.next().context("read usage run group")? {
-            let value = row.get_ref(0).context("read usage run group")?;
-            let value = value.as_str_or_null().context("read run group as text")?;
-            let key = match by {
-                UsageBy::Day => Some(GroupKey::Day(started_day(value)?)),
-                _ => value.map(|label| GroupKey::Text(label.to_owned())),
+            .prepare(&query)
+            .context("prepare usage run cohorts")?;
+        let mut rows = statement
+            .query(bounds(window))
+            .context("query usage run cohorts")?;
+        while let Some(row) = rows.next().context("read usage run cohort")? {
+            let day = if let Some(offset) = local_offset {
+                local_start(row, 1, offset)?
+            } else {
+                None
             };
-            groups.entry(key).or_default().total_runs += 1;
-            total_runs += 1;
+            let bucket = select_bucket(buckets, window, day)?;
+            bucket.total_runs += 1;
+            if let Some(by) = by {
+                let key = match by {
+                    UsageBy::Day => Some(GroupKey::Day(day.context("missing run start day")?)),
+                    _ => text(row, 0)?.map(|label| GroupKey::Text(label.to_owned())),
+                };
+                bucket.groups.entry(key).or_default().total_runs += 1;
+            }
         }
-        Ok(total_runs)
+        Ok(())
     }
 
     fn read_usage(
         &self,
         query: &str,
+        window: Option<&UsageWindow>,
         mut consume: impl FnMut(Usage, &Row<'_>) -> Result<()>,
     ) -> Result<()> {
         let mut statement = self
             .connection
             .prepare(query)
             .context("prepare usage listing")?;
-        let mut rows = statement.query([]).context("query usage rows")?;
+        let mut rows = statement
+            .query(bounds(window))
+            .context("query usage rows")?;
         while let Some(row) = rows.next().context("read usage row")? {
             let document = row.get_ref(0).context("read usage document")?;
             let document = document.as_str().context("read usage document as text")?;

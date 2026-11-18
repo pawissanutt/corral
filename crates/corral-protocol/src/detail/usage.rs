@@ -1,15 +1,20 @@
-//! Accounted usage, its run coverage, and the runs used for durations.
-use corral_types::{Run, Usage, UsageSummary};
+//! Reported usage and run coverage in local calendar-day buckets.
+pub use corral_types::UsageDay;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct UsageSeries {
-    /// Coverage and totals for the whole query, independent of the detail page.
+    /// Ascending days, including days without any reports or runs.
+    #[schemars(with = "Vec<UsageDaySchema>")]
+    pub days: Vec<UsageDay>,
+}
+
+#[derive(JsonSchema)]
+#[schemars(rename = "UsageDay")]
+#[allow(dead_code, reason = "schema projection for the shared serde type")]
+struct UsageDaySchema {
+    day: String,
     #[schemars(with = "crate::schema_types::UsageSummary")]
-    pub summary: UsageSummary,
-    #[schemars(with = "Vec<crate::schema_types::Usage>")]
-    pub rows: Vec<Usage>,
-    #[schemars(with = "Vec<crate::schema_types::Run>")]
-    pub runs: Vec<Run>,
+    summary: corral_types::UsageSummary,
 }

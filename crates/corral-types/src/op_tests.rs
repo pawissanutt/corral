@@ -85,6 +85,7 @@ fn commands_render_documented_flags_and_escape_shell_arguments() {
                     run: Some("R1".into()),
                     at: jiff::Timestamp::UNIX_EPOCH,
                     profile: None,
+                    harness: None,
                     model: "model".into(),
                     input: 12,
                     output: 0,

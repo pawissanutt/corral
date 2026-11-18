@@ -229,3 +229,97 @@ fn review_uses_immutable_submitted_patch_and_includes_all_checks() {
     assert!(file.patch.contains("+submitted"));
     assert!(!file.patch.contains("not submitted"));
 }
+
+#[test]
+fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
+    use corral_types::{Usage, UsageBy};
+
+    let fixture = Fixture::new();
+    fixture.project();
+    let task = fixture.named_task("document local usage", Some("demo"));
+    let engine = fixture.shared.engine().unwrap();
+    let mut run = fixture.dispatch(&task);
+    run.started = "2026-02-01T20:00:00Z".parse().unwrap();
+    run.profile = "shared-profile".into();
+    engine.store.update_run(&run).unwrap();
+    let mut no_usage = run.clone();
+    no_usage.id = "R2".into();
+    engine.store.insert_run(&no_usage).unwrap();
+
+    for (at, input) in [
+        ("2026-02-01T21:59:00Z", 19), // Previous local day; omitted.
+        ("2026-02-01T22:00:00Z", 11), // Inclusive start.
+        ("2026-02-02T22:00:00Z", 23), // Exclusive end.
+    ] {
+        engine
+            .record_usage(&Usage {
+                task: Some(task.clone()),
+                run: Some(run.id.clone()),
+                at: at.parse().unwrap(),
+                model: "test-model".into(),
+                profile: Some(run.profile.clone()),
+                input,
+                ..Usage::default()
+            })
+            .unwrap();
+    }
+    let get = |from: &str, to: &str| DetailGet {
+        target: DetailRef::UsageSeries {
+            from: from.into(),
+            to: to.into(),
+            by: Some(UsageBy::Profile),
+            utc_offset_minutes: 120,
+        },
+        etag: None,
+        page: None,
+    };
+    // Both runs started on the prior local day, so their cohort is outside Feb 2.
+    let reply = detail(&fixture.shared, get("2026-02-02", "2026-02-03")).unwrap();
+    let Some(DetailBody::UsageSeries(series)) = reply.body else {
+        panic!("expected grouped usage")
+    };
+    let [day] = series.days.as_slice() else {
+        panic!("expected one local day")
+    };
+    assert_eq!(day.day, "2026-02-02");
+    assert_eq!(
+        (day.summary.total.input, day.summary.total.requests),
+        (11, 1)
+    );
+    assert_eq!((day.summary.covered_runs, day.summary.total_runs), (0, 0));
+    let [group] = day.summary.groups.as_slice() else {
+        panic!("expected one profile")
+    };
+    assert_eq!(group.key.as_deref(), Some("shared-profile"));
+    assert_eq!((group.covered_runs, group.total_runs), (Some(0), Some(0)));
+
+    let previous = detail(&fixture.shared, get("2026-02-01", "2026-02-02")).unwrap();
+    let Some(DetailBody::UsageSeries(series)) = previous.body else {
+        panic!("expected grouped usage")
+    };
+    let day = &series.days[0];
+    assert_eq!(day.summary.total.input, 19);
+    assert_eq!((day.summary.covered_runs, day.summary.total_runs), (1, 2));
+    let group = &day.summary.groups[0];
+    assert_eq!((group.covered_runs, group.total_runs), (Some(1), Some(2)));
+
+    let mut request = get("2026-02-01", "2026-05-13");
+    let first = detail(&fixture.shared, request.clone()).unwrap();
+    request.page = first.next;
+    assert!(request.page.is_some());
+    let Some(DetailBody::UsageSeries(first)) = first.body else {
+        panic!("expected first page")
+    };
+    assert_eq!(first.days.len(), 100);
+    assert_eq!(first.days[0].day, "2026-02-01");
+    assert_eq!(first.days[99].day, "2026-05-11");
+    let last = detail(&fixture.shared, request).unwrap();
+    assert!(last.next.is_none());
+    let Some(DetailBody::UsageSeries(last)) = last.body else {
+        panic!("expected final page")
+    };
+    assert_eq!(last.days.len(), 1);
+    assert_eq!(last.days[0].day, "2026-05-12");
+    assert_eq!(last.days[0].summary, corral_types::UsageSummary::default());
+    assert!(detail(&fixture.shared, get("2026-01-01", "2027-01-03")).is_err());
+}

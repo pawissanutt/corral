@@ -1,4 +1,6 @@
 //! Health snapshots are observations, not proof that any requested action completed.
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -20,6 +22,25 @@ pub struct Health {
     pub last_sync_error: Option<String>,
     pub pid: u32,
     pub version: String,
+    /// Dispatch occupancy and limits, absent when the engine cannot be observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slots: Option<Slots>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Slots {
+    pub global: SlotCount,
+    /// Only projects with an explicit running limit.
+    pub projects: BTreeMap<String, SlotCount>,
+}
+
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+pub struct SlotCount {
+    /// Running and Blocked tasks currently occupying slots.
+    pub used: u64,
+    pub limit: u64,
 }
 
 impl Health {
@@ -31,6 +52,7 @@ impl Health {
             last_sync_error: None,
             pid: 0,
             version: String::new(),
+            slots: None,
         }
     }
 
