@@ -1,9 +1,11 @@
-//! Settings: the workspace configuration as corrald read it, devices and pairing, push, and
-//! this device's connection.
+//! Settings: the workspace configuration and its editor, this daemon, devices and pairing,
+//! push, and this device's connection.
 
-pub mod config;
 pub mod connect;
+pub mod document;
+pub mod editor;
 mod edits;
+pub mod form;
 pub mod live;
 pub mod push;
 pub mod qr;
@@ -16,4 +18,6 @@ pub use live::daemon_connection_details;
 pub struct State {
     pub ids: crate::model::id::IdSupply,
     pub edits: Edits,
+    /// `corral.toml` and its unsaved draft.
+    pub config: editor::Editor,
 }

@@ -9,6 +9,7 @@ use nsh_core::prelude::*;
 use super::parts::{button_row, cell, ring, space};
 use crate::model::Form;
 use crate::model::devices::{self, DeviceOp, PairBrowser, ThisDevice};
+use crate::model::settings::Pending;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::term;
@@ -95,23 +96,39 @@ fn enrol_form(app: AppState, name: Signal<String>) -> AnyElement {
     )
 }
 
-/// Forget this browser's pairing: its stored credential goes, and the app returns to the
-/// disconnected Connection page to pair again.
+/// Forget this browser's pairing, after one question in its place: its stored credential goes,
+/// and the app returns to the disconnected Connection page to pair again.
 pub fn forget(app: AppState) -> AnyElement {
-    button_row(
-        app,
-        vec![button_with(
-            app,
-            "Forget this browser",
-            ButtonKind::Ghost,
-            ButtonOptions {
-                danger: true,
-                ..ButtonOptions::default()
-            },
-            "btn-forget-browser",
-            move || run(app, DeviceOp::Forget),
-        )],
-    )
+    let asking = computed(move || {
+        app.settings
+            .with(|state| state.edits.confirming == Some(Pending::Forget))
+    });
+    dynamic(move || {
+        if asking.get() {
+            return untracked(|| super::live_devices::confirmation(app, &Pending::Forget));
+        }
+        untracked(|| {
+            button_row(
+                app,
+                vec![button_with(
+                    app,
+                    "Forget this browser",
+                    ButtonKind::Ghost,
+                    ButtonOptions {
+                        danger: true,
+                        ..ButtonOptions::default()
+                    },
+                    "btn-forget-browser",
+                    move || {
+                        app.act(app.settings, |state, _| {
+                            state.confirm_device(Pending::Forget)
+                        });
+                    },
+                )],
+            )
+        })
+    })
+    .into_element()
 }
 
 /// The browser's pairing form while a code may be entered (before pairing, or after it

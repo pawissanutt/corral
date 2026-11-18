@@ -97,6 +97,12 @@ impl AppState {
         });
         on_key_with("escape", anywhere, move |_| self.close_newest());
         on_key_with("mod+b", typing, move |_| self.toggle_sidebar());
+        // Save the configuration draft from any of its fields, as the save bar's Save does.
+        on_key_with("mod+s", anywhere, move |_| {
+            if self.nav.with_untracked(super::config::on_config) {
+                self.act(self.settings, |state, _| state.save_config());
+            }
+        });
         on_key_with("mod+shift+m", anywhere, move |_| {
             if self.data.get_untracked() == DataState::Disconnected {
                 return;

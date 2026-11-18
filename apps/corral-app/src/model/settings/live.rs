@@ -139,75 +139,52 @@ pub fn seen_line(device: &DeviceRow, feed: &Feed) -> Option<String> {
 /// One row of a facts table.
 pub type Fact = (&'static str, String);
 
-/// Settings › General: the workspace as corrald reports it.
-pub fn general_facts(feed: &Feed, settings: &SettingsSnapshot) -> Vec<Fact> {
-    let mut rows = vec![
-        (
-            "Workspace",
-            feed.workspace
-                .clone()
-                .unwrap_or_else(|| "not reported".into()),
-        ),
-        (
-            "Store",
-            feed.store.clone().unwrap_or_else(|| "not reported".into()),
-        ),
-    ];
+/// Settings › This daemon: the host corrald runs on, where it listens for browsers, and the
+/// workspace it serves, as corrald reports them. Read-only: the listener is read at startup.
+pub fn daemon_facts(feed: &Feed, settings: &SettingsSnapshot) -> Vec<Fact> {
+    let reported = |value: Option<&String>| value.cloned().unwrap_or_else(|| "not reported".into());
+    let mut rows = vec![("Host", reported(settings.hostname.as_ref()))];
     match &settings.listener {
         Some(listener) => {
             rows.push((
-                "Browser listener",
-                format!("port {} (configured)", listener.port),
+                "Listener",
+                listener
+                    .address
+                    .clone()
+                    .unwrap_or_else(|| format!("port {}", listener.port)),
             ));
             rows.push((
                 "Allowed origins",
                 if listener.origins.is_empty() {
                     "none".into()
                 } else {
-                    listener.origins.join(", ")
+                    listener.origins.join("\n")
                 },
             ));
         }
-        None => rows.push(("Browser listener", "not configured".into())),
+        None => rows.push((
+            "Listener",
+            "none · browsers cannot reach this daemon".into(),
+        )),
     }
+    rows.push(("Workspace", reported(feed.workspace.as_ref())));
+    rows.push(("Store", reported(feed.store.as_ref())));
     if let Some(health) = &feed.health {
-        rows.push(("Daemon version", health.version.clone()));
-    }
-    rows
-}
-
-/// Settings › Machines: this daemon host is the only machine corral runs agents on. Its name,
-/// role, runner, live agent count and how this device reaches it.
-pub fn machine(feed: &Feed) -> [String; 5] {
-    let runner = feed.health.as_ref().map_or_else(
-        || "not reported".into(),
-        |health| {
+        rows.push(("Version", health.version.clone()));
+        rows.push((
+            "Runner",
             if health.runner_reachable {
                 "reachable".into()
             } else {
                 "unreachable".into()
-            }
-        },
-    );
-    let agents = if feed.capable(corral_protocol::app::AGENTS_V1) {
-        feed.agents.len().to_string()
-    } else {
-        "not served".into()
-    };
-    [
-        // corrald reports no host name; the endpoint below says where it is.
-        "this daemon host".into(),
-        "daemon host".into(),
-        runner,
-        agents,
-        feed.endpoint
-            .clone()
-            .unwrap_or_else(|| "not configured".into()),
-    ]
+            },
+        ));
+    }
+    rows
 }
 
-/// Machines' explanation: one host is what corral supports today.
-pub const MACHINES_NOTE: &str = "corral runs every agent on this daemon host. Remote machines are not supported yet, so there is nothing to add or change here.";
+/// Why the listener is not edited here.
+pub const LISTENER_NOTE: &str = "The listener comes from [daemon] in corral.toml and is read when corrald starts: change it in Configuration › File, then restart the daemon.";
 
 /// The phone root list's subtitle for a section, from live facts.
 pub fn phone_subtitle(feed: &Feed, section: SettingsSection) -> String {
@@ -226,7 +203,9 @@ pub fn phone_subtitle(feed: &Feed, section: SettingsSection) -> String {
             (Registry::Failed, _) => "couldn't load the list".into(),
             _ => "loading".into(),
         },
-        SettingsSection::Machines => "this daemon host only".into(),
+        SettingsSection::Daemon => snapshot(feed)
+            .and_then(|settings| settings.hostname.clone())
+            .unwrap_or_else(|| "host and listener".into()),
         SettingsSection::Connection => match feed.link {
             Link::Up => "connected".into(),
             Link::Connecting => "connecting".into(),
@@ -234,12 +213,9 @@ pub fn phone_subtitle(feed: &Feed, section: SettingsSection) -> String {
         },
         SettingsSection::Notifications => super::push::subtitle(feed).into(),
         SettingsSection::Config => snapshot(feed).map_or_else(String::new, |settings| {
-            super::config::subtitle(&settings.config)
+            super::form::subtitle(&settings.config)
         }),
-        SettingsSection::General => feed.workspace.as_ref().map_or_else(
-            || "theme and data on this device".into(),
-            |workspace| format!("this device · {workspace}"),
-        ),
+        SettingsSection::General => "theme and data on this device".into(),
     }
 }
 

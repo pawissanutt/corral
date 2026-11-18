@@ -131,13 +131,13 @@ impl Destination {
 pub enum SettingsSection {
     /// Device settings.
     Devices,
-    /// Machine settings.
-    Machines,
+    /// This daemon: its host, listener and workspace.
+    Daemon,
     /// Connection settings.
     Connection,
     /// Notification settings.
     Notifications,
-    /// `corral.toml`, read-only until the config editor lands.
+    /// The `corral.toml` editor.
     Config,
     /// General settings.
     General,
@@ -146,7 +146,7 @@ impl SettingsSection {
     /// Settings sections in navigation order.
     pub const ALL: [SettingsSection; 6] = [
         Self::Devices,
-        Self::Machines,
+        Self::Daemon,
         Self::Connection,
         Self::Notifications,
         Self::Config,
@@ -156,7 +156,7 @@ impl SettingsSection {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Devices => "Devices",
-            Self::Machines => "Machines",
+            Self::Daemon => "This daemon",
             Self::Connection => "Connection",
             Self::Notifications => "Notifications",
             Self::Config => "Configuration",
@@ -167,7 +167,7 @@ impl SettingsSection {
     pub const fn slug(self) -> &'static str {
         match self {
             Self::Devices => "devices",
-            Self::Machines => "machines",
+            Self::Daemon => "daemon",
             Self::Connection => "connection",
             Self::Notifications => "notifications",
             Self::Config => "config",

@@ -133,4 +133,10 @@ pub enum Effect {
         what: crate::model::agents::PaneAsk,
         request: PaneRequest,
     },
+    /// Read `corral.toml` (`config.get`), or replace it with `put` (`config.put`); the reply is
+    /// read under `key`.
+    Config {
+        key: Id,
+        put: Option<String>,
+    },
 }

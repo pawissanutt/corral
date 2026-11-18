@@ -4,6 +4,7 @@
 //! change, as the daemon projects its own store. Its pi sessions (two workers and the chats) are
 //! hosts in `Feed.hosts` that stream on the clock's ticks. The caller supplies the clock; nothing
 //! here contacts a daemon or persists anything.
+mod config;
 mod controls;
 mod details;
 mod effects;
@@ -31,6 +32,7 @@ use corral_types::{Actor, Event, EventKind};
 use jiff::Timestamp;
 use serde_json::Value;
 
+pub use config::config;
 pub use controls::{answer, control};
 pub use details::detail;
 pub use effects::{effect, operation};

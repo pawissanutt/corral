@@ -17,8 +17,9 @@ use crate::model::devices::DeviceRow;
 /// Settings, task records and the event log; `projects` false is an assistant-only workspace.
 pub(super) fn populate(feed: &mut Feed, projects: bool) {
     let devices = devices(feed.now);
+    let file = super::config::sample(projects);
     feed.settings = Some(SettingsSnapshot {
-        config: config(projects),
+        config: super::config::parsed(&file),
         listener: Some(ListenerInfo {
             port: 7778,
             origins: vec!["http://127.0.0.1:8080".into()],
@@ -27,6 +28,7 @@ pub(super) fn populate(feed: &mut Feed, projects: bool) {
         devices,
         hostname: Some("preview-workstation".into()),
     });
+    feed.sample_config = Some(file);
     if !projects {
         return;
     }
@@ -147,52 +149,6 @@ pub(super) fn slots(feed: &Feed, records: &[TaskDetail]) -> Slots {
                 ))
             })
             .collect(),
-    }
-}
-
-fn config(projects: bool) -> Map<String, Value> {
-    let project =
-        |path: &str, base: &str, gate: &str, profile: Option<&str>, running: Option<u64>| {
-            json!({
-                "path": path, "base": base, "gate": [gate], "reviewer": "omp-sol-review",
-                "profile": profile, "running": running, "env": {}, "auto_dispatch": null,
-                "auto_land": null, "max_rounds": null, "branch_prefix": null
-            })
-        };
-    let projects = if projects {
-        json!({
-            "corral": project(".", "main", "just check", None, None),
-            "site": project("site", "release", "bun test", Some("codex-terra"), Some(2)),
-        })
-    } else {
-        json!({})
-    };
-    let config = json!({
-        "limits": { "running": 5 },
-        "defaults": {
-            "base": null, "branch_prefix": "corral/", "max_rounds": 2, "profile": "omp-sol",
-            "auto_dispatch": false, "auto_land": false
-        },
-        "runner": { "mode": "herdr", "herdr_session": "corral" },
-        "sync": { "quiet_after_secs": 120, "watch_secs": 5 },
-        "artifacts": { "globs": ["docs/**/records/*", "**/*report*.html"], "max_bytes": 20_000_000 },
-        "harnesses": {
-            "omp": { "command": "omp {prompt_ref}", "model_flag": "--model", "effort_flag": "--thinking" },
-            "codex": { "command": "codex exec {prompt_ref}", "model_flag": "-m", "effort_flag": null }
-        },
-        "profiles": {
-            "omp-sol": { "harness": "omp", "model": "sol", "effort": "high", "args": [] },
-            "omp-sol-review": { "harness": "omp", "model": "sol", "effort": "xhigh", "args": [] },
-            "codex-terra": { "harness": "codex", "model": "terra", "effort": "medium", "args": [] },
-            "pi-luna": { "harness": "pi", "model": "luna", "effort": "medium", "args": [] }
-        },
-        "projects": projects,
-        "routing": [],
-        "daemon": { "listen": "127.0.0.1:7778", "web_origin": ["http://127.0.0.1:8080"] }
-    });
-    match config {
-        Value::Object(map) => map,
-        _ => Map::new(),
     }
 }
 
