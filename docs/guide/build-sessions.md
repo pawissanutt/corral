@@ -62,6 +62,8 @@ has an exact preferred API candidate, a saved platform key, and explicit finite
 fallback policy is required. See [API-first profiles](api-first-profiles.md).
 
 The Rust-owned ledger reserves a conservative priced bound before every physical request.
+Paid startup authenticates that ledger's current capability, session and exact binding;
+it does not use the separate bound-role continuation-notice protocol.
 By default, paid children use the parent's exact route. A workspace owner can opt new
 Builds into mixed API child routes by mapping existing child presets to approved workspace
 API profiles and setting one shared USD cap. For example, with the named presets and
@@ -85,6 +87,7 @@ in the Build share the cap, including the parent's requests if it uses the API. 
 must be chosen before a child starts. Failed or uncertain requests retain their reservation;
 resume requires the same approval and mappings and never replenishes the allowance.
 A new approval requires a new Build, not a retry.
+An established paid build cannot switch profiles, even back to subscription.
 
 Bare and non-workspace sessions cannot use metered API profiles. Missing credentials,
 unsupported model/effort, changed approval or insufficient allowance refuse rather than

@@ -2017,8 +2017,30 @@ export class HostSession {
       throw new Error(`hello_refused: ${result?.code ?? receipt.state}: ${result?.reason ?? ""}`);
     }
     const result = receipt.result;
-    this.paidContinuation.accept(typeof result === "object" && result !== null && "continuation" in result
-      ? result.continuation : undefined);
+    const binding = this.options.binding;
+    const paidBuild = this.options.identity.role === "build" && this.options.build !== undefined
+      && binding !== undefined && isApiConnection(binding.connection);
+    if (paidBuild) {
+      if (!this.options.build?.paidRecord) {
+        throw new Error("paid_admission_required: API Build hello requires its Rust financial authority");
+      }
+      // Build has no bound-role continuation receipt. Authenticate its own Rust ledger
+      // before publishing a bound session; every physical POST still needs a reservation.
+      await this.budget.refresh();
+      const state: Record<string, unknown> = this.budget.state();
+      const paid = state.paid;
+      if (state.admitted !== true || state.connection !== binding.connection || state.binding_digest !== binding.digest
+          || typeof paid !== "object" || paid === null
+          || !("episode" in paid) || paid.episode !== this.options.build.session.id
+          || !("epoch" in paid) || typeof paid.epoch !== "number" || !Number.isSafeInteger(paid.epoch) || paid.epoch <= 0
+          || !("allowance_nanos" in paid) || typeof paid.allowance_nanos !== "number"
+          || !Number.isSafeInteger(paid.allowance_nanos) || paid.allowance_nanos <= 0) {
+        throw new Error("paid_admission_required: API Build hello requires its exact approved Rust ledger");
+      }
+    } else {
+      this.paidContinuation.accept(typeof result === "object" && result !== null && "continuation" in result
+        ? result.continuation : undefined);
+    }
     // Session order, unlike cross-process wall clocks, is a stable recovery boundary.
     // The one-shot nonce distinguishes children that reuse this session and restart at g1.
     // No turn is admitted until this generation's committed hello has been recorded.
@@ -2038,7 +2060,7 @@ export class HostSession {
     this.options.herdr?.bind({ sessionId, sessionFile, epochMs: bound.herdr_seq_epoch_ms, questions: bound.questions });
     await this.planning?.refresh();
     if (this.planning && !this.planning.restricted) await this.planningMcp();
-    if ((this.options.capabilities?.catalog ?? 0) >= 7) await this.budget.refresh();
+    if (!paidBuild && (this.options.capabilities?.catalog ?? 0) >= 7) await this.budget.refresh();
     await this.writePermissionNotice?.();
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
     this.commands?.bound(commandFacts, monitorFacts);
