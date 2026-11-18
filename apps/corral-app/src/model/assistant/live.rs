@@ -629,18 +629,24 @@ pub fn live_agents(state: &State, feed: &Feed) -> Agents {
         .collect();
     let topic = feed.topics.get("assistant");
     let creating = state.live.new_session.is_some();
+    let unserved = match crate::model::health::capability_availability(
+        feed,
+        corral_protocol::app::ASSISTANT_V1,
+    ) {
+        crate::model::health::Availability::Missing(capability) => Some(capability),
+        _ => None,
+    };
+    // The note beside the disabled button is the reason it is disabled.
     let sessions_note = if creating {
         Some("Starting a new session in corrald…".into())
+    } else if let Some(capability) = unserved {
+        Some(format!(
+            "This corrald serves no assistant sessions ({capability} is not advertised)."
+        ))
     } else if let Some(why) = &state.live.new_session_failed {
         Some(format!("New session not started: {why}"))
     } else if let Some(error) = topic.and_then(|topic| topic.error.as_ref()) {
         Some(format!("Sessions unavailable: {}", error.message))
-    } else if let crate::model::health::Availability::Missing(capability) =
-        crate::model::health::capability_availability(feed, corral_protocol::app::ASSISTANT_V1)
-    {
-        Some(format!(
-            "This corrald serves no assistant sessions ({capability} is not advertised)."
-        ))
     } else if topic.is_none_or(|topic| topic.loading) && feed.assistants.is_empty() {
         Some("Loading sessions…".into())
     } else if topic.is_some_and(|topic| topic.stale) {
@@ -651,7 +657,7 @@ pub fn live_agents(state: &State, feed: &Feed) -> Agents {
         None
     };
     let mut new_session = button("+ New session", Action::NewSession);
-    new_session.enabled = !creating;
+    new_session.enabled = !creating && unserved.is_none();
     Agents {
         sessions_title: "Assistant sessions",
         sessions_count: format!("{} · daemon and pane", rows.len()),

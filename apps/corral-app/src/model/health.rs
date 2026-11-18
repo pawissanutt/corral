@@ -128,8 +128,8 @@ pub struct Workspace {
     pub path: Cow<'static, str>,
     /// The autopilot summary.
     pub autopilot: &'static str,
-    /// The device name.
-    pub device: Cow<'static, str>,
+    /// The device name; none while this device has no name yet, so the shell says "This device" once.
+    pub device: Option<Cow<'static, str>>,
     /// The action signing identity.
     pub via: Cow<'static, str>,
 }
@@ -512,9 +512,7 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
                 .unwrap_or_default()
                 .into(),
             autopilot: mode.unwrap_or(""),
-            device: device
-                .map(|name| Cow::Owned(name.to_owned()))
-                .unwrap_or(Cow::Borrowed("this device")),
+            device: device.map(|name| Cow::Owned(name.to_owned())),
             via: device
                 .map(|name| Cow::Owned(format!("you on {name}")))
                 .unwrap_or(Cow::Borrowed("you on this device")),
@@ -747,7 +745,7 @@ mod tests {
         let snapshot = daemon_snapshot(&feed, Form::Terminal);
         let workspace = snapshot.workspace.as_ref().expect("workspace");
         assert_eq!(workspace.name, "workspace");
-        assert_eq!(workspace.device, "owner-laptop");
+        assert_eq!(workspace.device.as_deref(), Some("owner-laptop"));
         assert_eq!(workspace.via, "you on owner-laptop");
         assert_eq!(
             snapshot.health.source.as_deref(),
@@ -763,7 +761,10 @@ mod tests {
         );
         let workspace = unknown.workspace.as_ref().expect("workspace");
         assert_eq!(workspace.name, "corrald");
-        assert_eq!(workspace.device, "this device");
+        assert_eq!(
+            workspace.device, None,
+            "an unnamed device is not named twice"
+        );
         assert_eq!(workspace.via, "you on this device");
         assert_eq!(unknown.health.source.as_deref(), Some("corrald"));
     }

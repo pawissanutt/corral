@@ -709,11 +709,11 @@ fn device_footer(app: AppState, ws: Workspace) -> AnyElement {
             text(format!("{THIS_DEVICE} "))
                 .text_size(px(small))
                 .text_color(color(Token::ShellInk2))
-                .child(
-                    text(ws.device.into_owned())
+                .children(ws.device.map(|name| {
+                    text(name.into_owned())
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(color(Token::ShellInk)),
-                ),
+                        .text_color(color(Token::ShellInk))
+                })),
         )
         .child(
             text(format!("{SIGNS_AS} "))

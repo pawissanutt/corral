@@ -2,7 +2,7 @@
 
 The [app connection contract](CONNECTION-CONTRACT.md) describes the implemented independent client and authenticated native/browser transport boundaries. The [earlier transport proof](TRANSPORT-PROOF.md) is historical feasibility evidence. The [app guide](../../apps/corral-app/README.md) describes current setup and limits.
 
-The app now wires typed reads and authorized actions across its current destinations, including worker/PM questions and the shared assistant/PM composer. This is implementation status, not a claim that every private journey or the full gate has passed.
+The app now wires typed reads and engine operations across its current destinations, including the one chat composer. This is implementation status, not a claim that every private journey or the full gate has passed.
 
 Imported from `/home/pawis/corral-app-design/` into branch `app-daemon-integration`, based on Corral commit `6f91ec1175e1ac1edc5ff5a568dd6620e4de824b`. This is a design handoff and next-step recommendation, not an implementation task contract or authorization to run agents, change automation, or install services.
 
@@ -23,23 +23,39 @@ Corral's current [daemon guide](../guide/daemon.md), [daemon-first implementatio
 ## Implementation status
 
 The app remains a separate Cargo workspace and uses an app-local client on `corral-protocol`,
-not a standalone `corral-client` crate. Enrolled native Unix and paired Noise WebSocket
-clients share typed services and the same per-device authority model. Any admin device can
-pair/revoke; self-raise is refused, admin grants need device-bound proof, and authority
-changes notify active sessions. Confirm/Admin commands require a matching daemon preview
-and tap/proof, not biometric confirmation. Unsupported/disconnected data never becomes
-fixture facts. Preview uses the same screens with sample data, is explicit and is not
-restored on restart. Disconnected screens offer Connect/Preview; local preferences remain
-in Settings › General › This device.
+not a standalone `corral-client` crate. It serves the simple engine through the daemon
+`corrald-next` (see [simple-daemon-app.md](../plans/simple-daemon-app.md)). Enrolled native Unix
+and paired Noise WebSocket clients share typed services and one authority: a paired device is the
+owner, and browser and native clients are equal. There are no authority classes, previews, proofs
+or command journal. Every engine operation goes out as `op.submit { op, force }` and the engine
+decides. A refusal opens a sheet with its reason and one button per typed next step; the forced
+step reads "… anyway", says what it skips and is its own confirmation. Drop, Stop, Approve and
+land, Retry with a fresh start, a move to Done or Dropped, anything forced, a device revoke and
+Forget ask once on the device; nothing else asks. This replaces the per-device authority, the
+previews and proofs, and the Inbox and Builds destinations described in REQUIREMENTS.md and
+ARCHITECTURE.md (owner decisions of 2026-11-18).
 
-The daemon hosts assistant sessions; Ask is one assistant/PM chat composer. Settings
-supports model selection and optional `assistant.summary_profile` for quick-thread
-compaction, effective at the next assistant-host start. Paid-API summary profiles are
-refused without separate spending authority. Acknowledged transactional outboxes preserve
-drafts/messages across restarts and concurrent tabs. Saved credentials permit offline boot
-from complete last-known Board/Inbox/Plans/Builds/Health snapshots marked stale, not live.
-Builds (`builds.v1`) is its own read-only destination for published build-session records;
-see the screen map in [mockup/DESIGN.md](mockup/DESIGN.md).
+Destinations are Now, Changes, Plans, Agents, Review, Timeline, Usage, Artifacts and Settings.
+Now's first group, Needs you, is the old Inbox; Agents holds what Builds held. A plan is a parent
+task with children and a Markdown document, with no separate plan review. Every task row, plan
+member, review candidate and closed row has one Actions menu with all fifteen engine operations;
+every run has a Session menu (Cancel turn, Pause, Resume, Rewind, Terminate, Relaunch, Reply, Focus
+pane, then its task's Actions). The artifact finder is one filter over every task's artifacts.
+Settings holds Devices, This daemon, Connection, Notifications, Configuration and General.
+Configuration edits `corral.toml` through `config.get` and `config.put`: the daemon writes the
+file only after the engine's config check passes, and a refusal's reasons land on the field they
+name. Unsupported or disconnected data never becomes fixture facts. The sample preview is explicit
+and launch-only, runs the same screens against a small local engine and is never restored on
+restart. Disconnected screens offer Connect and Preview; local preferences remain in Settings ›
+General › This device.
+
+Ask is one composer for the one chat agent; there is no PM/assistant switch. A quick thread can be
+ended and using it afterward starts a new session; named sessions have the same transcript.
+Conversation, launch and relaunch depend on no automation setting. Acknowledged transactional
+outboxes preserve drafts and messages across restarts and concurrent tabs. Saved credentials permit
+offline boot from the last complete Tasks, Plans, Projects and Health snapshots marked stale, not
+live. Operations and replies are refused offline.
+
 Projects (`projects.v1`, `Topic::Projects`) make a workspace's configured projects visible:
 a sidebar project list with Project pages, independent per-screen project filters, and the
 project in scope as Ask context, so filed Ideas default to it. A complete empty project
@@ -47,45 +63,31 @@ list means no project management: the app offers only Ask, Agents, Usage and Set
 One app connection still serves one daemon; filters are keyed by daemon store so a later
 multi-daemon switcher can keep separate scopes.
 
-Timeline reads use indexed half-open timestamp windows (including owner/PM points),
-overlapping recorded sessions, and predecessor phase state. Completed historical
-attempts do not consume the window's lifecycle budget. Crossing phases keep their
-recorded start and session attribution; events at the exclusive upper bound are not
-applied, so an unclosed phase is open as of that bound, not ended at the reader's clock.
-Needs-me context includes decision receipts since the last unconditional close:
-one answered decision does not imply that every pending decision was answered.
-Usage, daily costs, Timeline and burn-up return bounded partial results with completeness,
-coverage and unpriced-data notes rather than discarding an entire oversized read. Provider
-failures remain explicit; unavailable quota limits, usage, windows and headroom stay unknown.
-Usage accounting keeps rebuildable full-history UTC-day summaries in the validated cache
-root (`usage-v1`). Task revisions and transcript file identities invalidate saved totals;
-pricing overrides and catalog versions invalidate estimates. Closed transcript files are
-folded incrementally without a row cap. Only live files are scanned with independent
-per-session/PM bounds, so transcript volume cannot suppress task costs. Copied/resumed
-responses retain collector deduplication, and undated usage stays undated. Missing,
-unreadable or incompatible cache files rebuild from source; incomplete live scans still
-report partial coverage. Removing this cache never removes accounting evidence.
-Burn-up scopes cover workspace, project and plan and remain cumulative over real task
-creation/landing events; the Timeline date range does not narrow their totals.
+Usage totals the engine's usage rows (one per model request, written by `corral usage add` from
+agent hosts) per profile, model, task and day, beside run counts from `runs`. Its header says how
+many runs the totals cover and that the rest ran on a harness that reports no usage; quota stays
+unknown. Days are the device's local calendar days. Timeline reads `runs` and `events`; the burn-up
+counts created, landed, dropped and reopened events and does not narrow with the Timeline range.
 
-Private smoke has launched the native terminal and paired packaged Chromium against a private daemon, with matching trusted-side pairing codes and a live seven-task board and connected Settings. It does not establish the full browser journeys or root gate. GTK desktop and a physical phone have not been built or tested on this host; phone web layout remains in scope.
-
-Shared record action tables serve inspector, menus, palette and phone surfaces, with
-authority/revision checks and same-ID result recovery. Review defaults to Unified below
-about 1100 pt content width. Pane sessions expose acknowledged bounded live terminal
-windows (`stream.terminal.v1`); raw keys need Admin and fresh proof, and daemon-hosted
-assistants have no raw terminal.
+Pane sessions show pane text and process sessions the tail of `session.log`; there is no raw
+terminal for chat sessions. Review defaults to Unified below about 1100 pt of content width.
 
 Opt-in direct LAN/Tailscale binding and browser Web Push are implemented. Remote browsers
-need an HTTPS app and operator TLS/WSS (`daemon.web_endpoint`); there is no embedded TLS.
+need an HTTPS app and operator TLS/WSS (`--web-endpoint`); there is no embedded TLS.
 Relay/native push remain blocked on independently hosted infrastructure and publisher
 provisioning. Inbound OS share targets are blocked by NSH 0.5.0; the app guide links the
 host/packaging evidence. Native desktop global Ask shortcut and tray are implemented,
 but unverified on this host.
 
+Verified so far: `cargo test` in the app, builds for the headless, `tui` and `web` targets, and
+terminal walks against the sample preview and against a real daemon on a scratch workspace. Parity
+with the classic terminal board is tabulated in section 5 of
+[simple-daemon-app.md](../plans/simple-daemon-app.md). The GTK desktop and a physical phone have
+not been built or tested on this host; phone web layout remains in scope.
+
 The architecture's “Current state” and phases are historical proposals, not a current
 inventory. Do not plan the implemented daemon, readers, chat and command router again.
-Runtime migration and classic-UI retirement remain separate work. Phone layouts are
+Classic-UI retirement remains separate work. Phone layouts are
 already part of the UI contract; later packaging is not permission for desktop-only UI.
 Keep the sidebar available/collapsible and automatically folded at narrow widths.
 Retire classic only after actionable parity and supported-device verification.
