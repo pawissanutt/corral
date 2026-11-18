@@ -232,11 +232,11 @@ fn staged_chip(item: &Staged, feed: &Feed) -> StagedChip {
 
 /// The tray, the three buttons with why any is dimmed, and what holds Send. Screenshot and File
 /// upload, so they need corrald now; a link is inline, so it attaches offline too.
-pub fn tray(feed: &Feed, staged: &[Staged], to_assistant: bool, text_blank: bool) -> Tray {
+pub fn tray(feed: &Feed, staged: &[Staged], text_blank: bool) -> Tray {
     let capable = feed.capable(ASSISTANT_ATTACH_V1);
     let full = staged.len() >= ATTACHMENTS_PER_MESSAGE;
     let up = feed.link == Link::Up;
-    let open = capable && to_assistant && !full;
+    let open = capable && !full;
     let mut screenshot = button("Screenshot", Action::Attach(PickKind::Image));
     let mut link = button("Link", Action::AttachLink);
     let mut file = button("File", Action::Attach(PickKind::File));
@@ -249,8 +249,6 @@ pub fn tray(feed: &Feed, staged: &[Staged], to_assistant: bool, text_blank: bool
         } else {
             "this corrald does not accept attachments; upgrade corral".to_owned()
         })
-    } else if !to_assistant {
-        Some("PM messages carry no attachments".into())
     } else if full {
         Some(format!("{ATTACHMENTS_PER_MESSAGE} attachments per message"))
     } else if !up {
@@ -269,12 +267,7 @@ pub fn tray(feed: &Feed, staged: &[Staged], to_assistant: bool, text_blank: bool
     let waiting = states
         .iter()
         .any(|(_, state)| matches!(state, Readiness::Waiting));
-    let status = if !to_assistant && !staged.is_empty() {
-        Some(vec![
-            span("no attachments to the PM").hue(Hue::Fail),
-            span(" PM messages carry none; remove them or switch to Assistant."),
-        ])
-    } else if let Some((name, why)) = failed {
+    let status = if let Some((name, why)) = failed {
         Some(vec![
             span("attachment not uploaded").hue(Hue::Fail),
             span(format!(" {name}: {why}. Remove it to send.")),
@@ -301,8 +294,7 @@ pub fn tray(feed: &Feed, staged: &[Staged], to_assistant: bool, text_blank: bool
         chips: staged.iter().map(|item| staged_chip(item, feed)).collect(),
         note,
         status,
-        holds_send: !staged.is_empty()
-            && (!to_assistant || states.iter().any(|(_, s)| !matches!(s, Readiness::Ready))),
+        holds_send: states.iter().any(|(_, s)| !matches!(s, Readiness::Ready)),
     }
 }
 

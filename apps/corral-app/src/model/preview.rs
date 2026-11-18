@@ -11,6 +11,7 @@ mod engine;
 mod fleet;
 mod pane;
 mod pi;
+mod pi_control;
 mod pi_rows;
 mod pi_script;
 mod rollup;

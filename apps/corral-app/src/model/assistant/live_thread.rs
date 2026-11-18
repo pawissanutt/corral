@@ -1,22 +1,20 @@
 //! A served thread as transcript items: durable entries in order, the streamed answer from the
-//! running turn's text, the PM's replies folded under the items they answer, and this device's
-//! own sends still in its outbox. Loading, empty, stale and error states are said plainly.
+//! running turn's text, and this device's own sends still in its outbox. Loading, empty, stale
+//! and error states are said plainly.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use corral_protocol::assistant::{
-    AssistantSend, ContextRef, EntryCard, EntryKind, MessageState as WireState, ThreadEntry,
-    ToolLine, TurnCompletion,
+    AssistantSend, ContextRef, EntryKind, MessageState as WireState, ThreadEntry, ToolLine,
+    TurnCompletion,
 };
 
 use super::cards::{WAIT_LIFETIME, WAIT_NOTE};
-use super::live_cards::{IdeaEntry, act_chip, action_card, idea_card, question_card};
 use super::views::button;
 use super::{
-    Action, AssistantMessage, Body, Chip, OwnerMessage, PmMessage, PmReply, QUICK, QueueNote,
-    RollDivider, SourceLink, State, ThreadItem, ToolRow, WaitingBlock, clock, entry_session,
-    fact_chips, quick_id, record_link, row, saved_as_written, send_chips, subject,
-    wait_explanation, wait_label,
+    Action, AssistantMessage, Body, Chip, OwnerMessage, QUICK, QueueNote, RollDivider, SourceLink,
+    State, ThreadItem, ToolRow, WaitingBlock, clock, entry_session, fact_chips, question_card,
+    quick_id, record_link, row, send_chips, wait_explanation, wait_label,
 };
 use crate::model::daemon::{CommandStatus, Feed, Link};
 use crate::model::hue::Hue;
@@ -33,8 +31,9 @@ fn tag(state: Option<&WireState>) -> Chip {
         ),
         Some(WireState::Delivered | WireState::PmDelivered) => ("delivered".into(), Hue::Neutral),
         Some(WireState::Late) => ("late · cannot instruct".into(), Hue::Held),
-        Some(WireState::QueuedForPm) => ("queued for PM".into(), Hue::Held),
-        Some(WireState::PmReplied) => ("PM replied".into(), Hue::Ok),
+        Some(WireState::QueuedForPm | WireState::PmReplied) => {
+            ("state unknown".into(), Hue::Neutral)
+        }
         Some(WireState::Saved { task }) => (format!("saved · {task}"), Hue::Neutral),
         Some(WireState::Withdrawn) => ("withdrawn".into(), Hue::Neutral),
         Some(WireState::Other) => ("state unknown".into(), Hue::Neutral),
@@ -74,8 +73,6 @@ fn owner(state: &State, feed: &Feed, entry: &ThreadEntry) -> OwnerMessage {
         attachment: attachment(&entry.links),
         files,
         opened,
-        file: None,
-        filed: None,
     }
 }
 
@@ -122,12 +119,9 @@ fn markdown(text: &str) -> Vec<Body> {
 
 /// What every assistant message of this thread shares.
 struct Thread<'a> {
-    state: &'a State,
     feed: &'a Feed,
     author: String,
     session: Option<String>,
-    /// Tasks the owner's own message was filed as, as written, with no model.
-    as_written: BTreeSet<String>,
     scope: &'a str,
 }
 
@@ -169,49 +163,6 @@ impl Thread<'_> {
         }
     }
 
-    fn card(&self, entry: &ThreadEntry, card: &EntryCard) -> Option<Body> {
-        Some(match card {
-            EntryCard::Idea {
-                task,
-                title,
-                labels,
-                criteria,
-                duplicates,
-                words,
-            } => Body::Filed(idea_card(
-                self.state,
-                self.feed,
-                IdeaEntry {
-                    entry,
-                    task,
-                    title,
-                    labels,
-                    criteria,
-                    duplicates,
-                    words,
-                    author: entry_session(&entry.id).unwrap_or(&self.author),
-                    as_written: self.as_written.contains(task.as_str()),
-                },
-            )),
-            EntryCard::Action {
-                command,
-                class,
-                outcome,
-                input,
-            } => Body::Action(action_card(
-                entry,
-                command,
-                class,
-                outcome.as_ref(),
-                input.as_ref(),
-            )),
-            EntryCard::Question { .. }
-            | EntryCard::Prompt { .. }
-            | EntryCard::PmItem { .. }
-            | EntryCard::Other => return None,
-        })
-    }
-
     /// An assistant reply or card entry, as recorded.
     fn reply(&self, entry: &ThreadEntry) -> AssistantMessage {
         let text = if entry.kind == EntryKind::Answer || entry.card.is_none() {
@@ -219,10 +170,7 @@ impl Thread<'_> {
         } else {
             ""
         };
-        let mut body = markdown(text);
-        let card = entry.card.as_ref().and_then(|card| self.card(entry, card));
-        let filed = matches!(card, Some(Body::Filed(_)));
-        body.extend(card);
+        let body = markdown(text);
         let mut message = self.message(entry, body);
         match entry.completion {
             Some(TurnCompletion::Aborted) => {
@@ -236,11 +184,7 @@ impl Thread<'_> {
             Some(TurnCompletion::Other) => {
                 message.state = Some(Chip::new("turn ended · outcome unknown", Hue::Neutral));
             }
-            Some(TurnCompletion::Completed) | None => {
-                if filed && entry.kind == EntryKind::Answer {
-                    message.state = Some(Chip::new("answered and filed", Hue::Neutral));
-                }
-            }
+            Some(TurnCompletion::Completed) | None => {}
         }
         message
     }
@@ -283,24 +227,6 @@ impl Thread<'_> {
         }
         Some(message)
     }
-    /// File as idea on an owner message: files its words as an Idea task, with no model. Once
-    /// sent, the chip says how the filing went instead.
-    fn file(&self, entry: &ThreadEntry) -> (Option<super::Button>, Option<Chip>) {
-        let status = act_chip(
-            self.state,
-            self.feed,
-            &subject("file", &entry.id),
-            "File as idea",
-        );
-        if status.as_ref().is_some_and(|chip| chip.hue != Hue::Fail) {
-            return (None, status);
-        }
-        (
-            Some(button("File as idea", Action::FileEntry(entry.id.clone()))),
-            status,
-        )
-    }
-
     /// An entry standing for content the thread has not recorded: the running turn's answer,
     /// a question waiting for the owner.
     fn placeholder(&self, id: String) -> ThreadEntry {
@@ -326,22 +252,8 @@ impl Thread<'_> {
         }
     }
 
-    /// The waiting block under a stored message, with File as idea now.
-    fn waiting(
-        &self,
-        entry: &ThreadEntry,
-        reason: &corral_protocol::rows::WaitReason,
-        full: bool,
-    ) -> WaitingBlock {
-        let status = act_chip(
-            self.state,
-            self.feed,
-            &subject("file", &entry.id),
-            "File as idea",
-        );
-        let mut file = button("File as idea now", Action::FileEntry(entry.id.clone()));
-        file.enabled = status.as_ref().is_none_or(|chip| chip.hue == Hue::Fail);
-        let buttons = vec![file];
+    /// The waiting block under a stored message.
+    fn waiting(&self, reason: &corral_protocol::rows::WaitReason, full: bool) -> WaitingBlock {
         WaitingBlock {
             state: Chip::new(
                 format!("waiting for assistant · {}", wait_label(reason)),
@@ -349,8 +261,6 @@ impl Thread<'_> {
             ),
             explanation: full.then(|| wait_explanation(reason, self.feed)),
             note: if full { WAIT_NOTE } else { "" },
-            buttons,
-            status,
             lifetime: WAIT_LIFETIME,
         }
     }
@@ -377,53 +287,13 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
     } else {
         Some(scope.to_owned())
     };
-    let mut thread = Thread {
-        state,
+    let thread = Thread {
         feed,
         author: current.clone().unwrap_or_else(|| scope.to_owned()),
         session: current.clone(),
-        as_written: BTreeSet::new(),
         scope,
     };
     let entries = super::live_parts::assemble(&snapshot.entries);
-    let pm_items: BTreeSet<&str> = entries
-        .iter()
-        .filter(|entry| entry.kind == EntryKind::PmMessage)
-        .filter_map(|entry| match &entry.card {
-            Some(EntryCard::PmItem { id, .. }) => Some(id.as_str()),
-            _ => None,
-        })
-        .collect();
-    let replies: BTreeMap<&str, PmReply> = entries
-        .iter()
-        .filter(|entry| entry.kind == EntryKind::PmReply)
-        .filter_map(|entry| match &entry.card {
-            Some(EntryCard::PmItem { id, .. }) => Some((
-                id.as_str(),
-                PmReply {
-                    at: clock(&entry.at, feed),
-                    text: entry.text.clone().unwrap_or_default(),
-                },
-            )),
-            _ => None,
-        })
-        .collect();
-    // An Idea card and the owner's "saved as written" state name the same filing once; the
-    // Idea card (with its commands) stands for it.
-    let ideas: BTreeSet<&str> = entries
-        .iter()
-        .filter_map(|entry| match &entry.card {
-            Some(EntryCard::Idea { task, .. }) => Some(task.as_str()),
-            _ => None,
-        })
-        .collect();
-    thread.as_written = entries
-        .iter()
-        .filter_map(|entry| match &entry.state {
-            Some(WireState::Saved { task }) => Some(task.clone()),
-            _ => None,
-        })
-        .collect();
     // The waiting block under a message already shows the failure that left it waiting; the
     // notice recording that same failure right after it is the same event, shown once. Any
     // other notice, including a later repeat of the same failure, is its own event.
@@ -440,20 +310,13 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
         }
         match entry.kind {
             EntryKind::Message => {
-                let mut message = owner(state, feed, entry);
-                (message.file, message.filed) = thread.file(entry);
-                items.push(ThreadItem::Owner(message));
+                items.push(ThreadItem::Owner(owner(state, feed, entry)));
                 match &entry.state {
                     Some(WireState::Waiting { reason }) => {
                         // Only the full block (the latest waiting message) shows the reason.
                         let full = last_waiting.as_ref() == Some(&entry.id);
                         explained = full.then(|| reason.text.trim().to_owned());
-                        items.push(ThreadItem::Waiting(thread.waiting(entry, reason, full)));
-                    }
-                    Some(WireState::Saved { task }) if !ideas.contains(task.as_str()) => {
-                        let mut card = saved_as_written(task, entry.text.as_deref().unwrap_or(""));
-                        card.attribution = "Idea · filed from your words, as written · no AI used to file";
-                        items.push(ThreadItem::Saved(card));
+                        items.push(ThreadItem::Waiting(thread.waiting(reason, full)));
                     }
                     Some(WireState::Withdrawn) => items.push(ThreadItem::Note(
                         "withdrawn by you · nothing was filed or run · the text stays here for reference".into(),
@@ -461,20 +324,6 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
                     _ => {}
                 }
             }
-            EntryKind::PmMessage => {
-                items.push(ThreadItem::Pm(pm_item(state, feed, entry, &replies)))
-            }
-            EntryKind::PmReply => match &entry.card {
-                Some(EntryCard::PmItem { id, .. }) if pm_items.contains(id.as_str()) => {}
-                Some(EntryCard::PmItem { id, .. }) => items.push(ThreadItem::PmReply {
-                    id: id.clone(),
-                    reply: PmReply {
-                        at: clock(&entry.at, feed),
-                        text: entry.text.clone().unwrap_or_default(),
-                    },
-                }),
-                _ => items.push(ThreadItem::Note(entry.text.clone().unwrap_or_default())),
-            },
             EntryKind::Roll => items.push(ThreadItem::Roll(RollDivider {
                 text: entry
                     .text
@@ -499,12 +348,14 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
                     items.push(ThreadItem::Note(text));
                 }
             }
-            EntryKind::Answer
-            | EntryKind::Idea
+            EntryKind::Answer | EntryKind::Question | EntryKind::Prompt => {
+                items.push(ThreadItem::Assistant(thread.reply(entry)))
+            }
+            EntryKind::Idea
             | EntryKind::Action
-            | EntryKind::Question
-            | EntryKind::Prompt => items.push(ThreadItem::Assistant(thread.reply(entry))),
-            EntryKind::Other => items.push(ThreadItem::Note(
+            | EntryKind::PmMessage
+            | EntryKind::PmReply
+            | EntryKind::Other => items.push(ThreadItem::Note(
                 "An entry this version of the app cannot show.".into(),
             )),
         }
@@ -557,32 +408,6 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
         ));
     }
     items
-}
-
-/// A PM item and its folded reply, as the thread recorded them.
-fn pm_item(
-    state: &State,
-    feed: &Feed,
-    entry: &ThreadEntry,
-    replies: &BTreeMap<&str, PmReply>,
-) -> PmMessage {
-    let id = match &entry.card {
-        Some(EntryCard::PmItem { id, .. }) => Some(id.clone()),
-        _ => None,
-    };
-    let mut message = owner(state, feed, entry);
-    message.tag.hue = match entry.state {
-        Some(WireState::PmReplied) => Hue::Ok,
-        Some(WireState::Delivered | WireState::PmDelivered) => Hue::Neutral,
-        _ => Hue::Held,
-    };
-    PmMessage {
-        reply: id.as_deref().and_then(|id| replies.get(id).cloned()),
-        id: id.unwrap_or_else(|| "PMI on arrival".into()),
-        note: matches!(entry.state, Some(WireState::QueuedForPm))
-            .then_some("Delivered when the PM next takes input; supervision is not interrupted."),
-        owner: message,
-    }
 }
 
 /// This device's own sends to `scope` that the thread does not show yet: queued offline,
@@ -677,7 +502,7 @@ fn outbox(
                     }
                 }
         };
-        let message = OwnerMessage {
+        items.push(ThreadItem::Owner(OwnerMessage {
             author: "you",
             provenance: "this device".into(),
             at: clock(&send.typed_at, feed),
@@ -687,19 +512,7 @@ fn outbox(
             attachment: attachment(&send.context),
             files: send_chips(feed, &send.attachments),
             opened: None,
-            file: None,
-            filed: None,
-        };
-        if send.target == corral_protocol::assistant::AskTarget::Pm {
-            items.push(ThreadItem::Pm(PmMessage {
-                owner: message,
-                id: "PMI on arrival".into(),
-                reply: None,
-                note: None,
-            }));
-        } else {
-            items.push(ThreadItem::Owner(message));
-        }
+        }));
         if note.is_some() || !buttons.is_empty() {
             items.push(ThreadItem::Queued(QueueNote {
                 text: note.unwrap_or_default(),

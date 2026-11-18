@@ -120,7 +120,6 @@ impl State {
             LiveAction::Ask { record } => vec![Effect::AskAbout {
                 context: Some(record.context(None)),
                 text: None,
-                target: None,
             }],
             LiveAction::Next { task, index } => {
                 let next = feed

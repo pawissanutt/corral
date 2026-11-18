@@ -386,7 +386,6 @@ impl State {
             Press::Ask { about, rev } => vec![Effect::AskAbout {
                 context: Some(about.context(rev)),
                 text: None,
-                target: None,
             }],
             Press::Verb { record, verb } => self.start_verb(record, verb, feed),
             Press::SubmitVerb(values) => self.submit_verb(values),

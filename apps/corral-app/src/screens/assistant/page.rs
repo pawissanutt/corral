@@ -21,9 +21,9 @@ use crate::ui::kit::overlay::{self, Confirm, Modal};
 use crate::ui::kit::page::{Width, columns, context, pushed_head};
 use crate::ui::kit::text::{h3, label_value, rich_small};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-use super::parts::{act, model_button, note_size, ring, spacer, words};
+use super::parts::{act, model_button, note_size, spacer, words};
 use super::{open_scope, side_facts, transcript, watch_ops};
 
 /// The facts column beside the transcript (`grid-template-columns: minmax(0,1fr) 300px`).
@@ -34,8 +34,8 @@ const PHONE_INSET: f32 = 14.0;
 
 /// The served thread `id` ("quick" or A-n) on desktop and in a terminal, subscribed while it is
 /// shown: the head (back to Agents, title, the thread's state, where it runs), the transcript
-/// with its composer docked under it, and the session's facts (with the Ideas filed from it)
-/// beside them. A terminal narrower than its wide grid keeps the transcript alone.
+/// with its composer docked under it, and the session's facts beside them. A terminal narrower
+/// than its wide grid keeps the transcript alone.
 pub fn live_thread(app: AppState, id: Id) -> AnyElement {
     open_scope(app, id.clone(), false);
     watch_ops(app);
@@ -278,9 +278,8 @@ fn end_modal(app: AppState, session: &str) -> Modal {
     }
 }
 
-/// The session's facts (`Session`: id, state, where, profile, cost and what is known besides),
-/// how long its host runs, the served session's canonical actions, and the Ideas filed from
-/// this thread.
+/// The session's facts (`Session`: id, state, where, profile, cost and what is known besides)
+/// and how long its host runs.
 fn facts(app: AppState, source: &ThreadRef) -> Vec<AnyElement> {
     let header = header(app, source);
     let form = app.form;
@@ -297,23 +296,6 @@ fn facts(app: AppState, source: &ThreadRef) -> Vec<AnyElement> {
     } else {
         view().mt(px(8.0)).child(note).into_element()
     });
-    if !header.filed.is_empty() {
-        if form == Form::Terminal {
-            out.push(term::blank());
-        }
-        out.push(h3(app, LABELS.filed_from_thread, None));
-        out.push(
-            view()
-                .gap(px(2.0))
-                .children(
-                    header
-                        .filed
-                        .into_iter()
-                        .map(|row| filed_row(app, row.id, row.title, row.action)),
-                )
-                .into_element(),
-        );
-    }
     out
 }
 
@@ -324,59 +306,6 @@ fn fact_row(app: AppState, fact: &Fact) -> AnyElement {
         return side_facts::stacked(app, fact.label, side_facts::identified(app, &fact.value));
     }
     label_value(app, fact.label, rich_small(app, &fact.value))
-}
-
-/// A filed row of the facts column (`.irow`): the mono id and the title cut to fit.
-fn filed_row(
-    app: AppState,
-    id: String,
-    title: String,
-    action: crate::model::assistant::Action,
-) -> AnyElement {
-    let form = app.form;
-    let id_text = text(id.clone())
-        .number_of_lines(1u32)
-        .text_color(color(Token::Ink3));
-    let id_text = if form == Form::Terminal {
-        id_text
-    } else {
-        id_text.font_family(FONT_MONO).text_size(px(11.5))
-    };
-    let row = view()
-        .flex_row()
-        .items_center()
-        .role(AccessibilityRole::Button)
-        .label(format!("{id} {title}"))
-        .test_id(&format!("task-{id}"))
-        .cursor_pointer()
-        .on_press(move || act(app, action.clone()))
-        .child(
-            view()
-                .w(if form == Form::Terminal {
-                    term::cells(6.0)
-                } else {
-                    px(46.0)
-                })
-                .flex_shrink_0()
-                .child(id_text),
-        )
-        .child(
-            words(app, title, 12.5, Token::Ink)
-                .number_of_lines(1u32)
-                .truncate()
-                .flex_1()
-                .min_w(px(0.0)),
-        );
-    if form == Form::Terminal {
-        return row.into_element();
-    }
-    row.gap(px(8.0))
-        .px(px(4.0))
-        .py(px(6.0))
-        .rounded(px(6.0))
-        .hover(|s| s.bg(color(Token::Hover)))
-        .focus_visible(ring)
-        .into_element()
 }
 
 /// The served thread `id` as a pushed phone page, subscribed while it is shown.

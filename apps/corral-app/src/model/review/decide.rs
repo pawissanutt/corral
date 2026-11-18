@@ -313,7 +313,6 @@ impl State {
                     Some(hunk) => format!("{path} {hunk}: "),
                     None => format!("{path}: "),
                 }),
-                target: None,
             }],
             Action::Refresh => self.refresh(feed, &shown),
             Action::OpenArtifact(reference) => {

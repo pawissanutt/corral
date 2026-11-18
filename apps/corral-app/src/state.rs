@@ -24,9 +24,9 @@ use nsh_core::storage::Storage;
 use crate::model::act::RefusalSheet;
 use crate::model::commands::Action;
 use crate::model::{
-    Act, AskTarget, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay,
-    SettingsSection, SidebarPref, Snapshot, ThemeChoice, agents, assistant, daemon, plans, review,
-    settings, timeline, usage, work,
+    Act, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay, SettingsSection,
+    SidebarPref, Snapshot, ThemeChoice, agents, assistant, daemon, plans, review, settings,
+    timeline, usage, work,
 };
 
 const DESTINATION_KEY: &str = "corral.destination";
@@ -46,7 +46,6 @@ pub struct AppState {
     daemon_feed: Signal<daemon::Feed>,
     /// Invalidates a system picker opened before a data-source change.
     source_revision: Signal<u64>,
-    pub ask_target: Signal<AskTarget>,
     pub ask_draft: Signal<String>,
     /// Grows by one each time Ask opens, so the composer focuses its field.
     pub ask_focus: Signal<u32>,
@@ -144,7 +143,6 @@ impl AppState {
                 preference(THEME_KEY, ThemeChoice::from_slug).unwrap_or(ThemeChoice::System),
             ),
             sidebar: signal(preference(SIDEBAR_KEY, SidebarPref::from_slug).unwrap_or_default()),
-            ask_target: signal(AskTarget::Assistant),
             ask_draft: signal(String::new()),
             ask_focus: signal(0),
             work: source::StateSource::new(

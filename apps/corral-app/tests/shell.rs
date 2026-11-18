@@ -528,3 +528,20 @@ fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     app.press("id:lane-T-15/R1").unwrap();
     app.wait_for("id:session-terminal").unwrap();
 }
+
+/// A rewind leaves a gap in the live stream, so the session page reads the transcript again:
+/// after rewinding T-14's worker to turn 3, the words of turn 3 are no longer on the page.
+#[test]
+fn rewinding_a_session_reloads_its_transcript() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.press("id:agent-T-14_R1").unwrap();
+    app.press("id:btn-open-session").unwrap();
+    app.wait_for("text:/A run that crossed midnight/").unwrap();
+    app.press("id:btn-session-menu").unwrap();
+    app.press("id:btn-rewind").unwrap();
+    app.press("id:btn-rewind-turn-3").unwrap();
+    app.wait_for("id:confirm").unwrap();
+    app.press("id:confirm-confirm").unwrap();
+    app.wait_for_gone("text:/A run that crossed midnight/", Duration::from_secs(5))
+        .unwrap();
+}

@@ -29,7 +29,8 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::console::{self, BIG};
 use super::panel_summary::summary;
-use super::session::{self, Rows, Termbar};
+use super::session;
+use super::surface;
 use super::{controls, reply, run_roster, segs};
 
 /// The panel's width beside the roster (desktop points; the mock's 448 less its rule and
@@ -493,12 +494,12 @@ fn pane_outcome(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
 
 /// The Terminal tab: the pane's toolbar over its screen, as the session page draws them.
 fn terminal(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
-    let rows = computed(move || current.with(|p| p.terminal.as_ref().map(Rows::of)));
-    let bar = computed(move || current.with(|p| p.terminal.as_ref().map(Termbar::of)));
+    let rows = computed(move || current.with(|p| p.terminal.as_ref().map(surface::Rows::of)));
+    let bar = computed(move || current.with(|p| p.terminal.as_ref().map(surface::Termbar::of)));
     let top = dynamic(move || {
         bar.with(|bar| {
             bar.as_ref()
-                .map(|bar| untracked(|| session::toolbar(app, bar, run_roster)))
+                .map(|bar| untracked(|| surface::toolbar(app, bar, run_roster)))
         })
     });
     if app.form == Form::Terminal {
@@ -507,8 +508,8 @@ fn terminal(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
             .min_h(px(0.0))
             .child(top)
             .child(term::hrule())
-            .child(session::surface_scroll(rows).child(dynamic(move || {
-                rows.with(|rows| session::rows_view(app, rows.as_ref(), BIG, (0.0, 0.0)))
+            .child(surface::surface_scroll(rows).child(dynamic(move || {
+                rows.with(|rows| surface::rows_view(app, rows.as_ref(), BIG, (0.0, 0.0)))
             })))
             .into_element();
     }
@@ -518,10 +519,10 @@ fn terminal(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
         .flex_col()
         .child(top)
         .child(
-            session::surface_scroll(rows)
+            surface::surface_scroll(rows)
                 .bg(console::ground())
                 .child(dynamic(move || {
-                    rows.with(|rows| session::rows_view(app, rows.as_ref(), BIG, (14.0, 12.0)))
+                    rows.with(|rows| surface::rows_view(app, rows.as_ref(), BIG, (14.0, 12.0)))
                 })),
         )
         .into_element()

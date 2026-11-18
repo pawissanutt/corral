@@ -14,7 +14,7 @@ use crate::model::agents::{Control, PaneAsk};
 use crate::model::daemon::{DetailCache, Feed, Operation};
 use crate::model::effect::PaneRequest;
 use crate::model::health::{self, Availability};
-use crate::model::{AskTarget, Destination, Effect, Env, Id, Live, Overlay, Selection};
+use crate::model::{Destination, Effect, Env, Id, Live, Overlay, Selection};
 
 const NO_LINK: &str = "Refused: needs a live connection to corrald. Nothing was queued.";
 
@@ -45,19 +45,11 @@ impl AppState {
         self.nav.update(|nav| nav.selection.set(&live));
     }
 
-    /// Opens the one Ask composer with a real context, a draft and the recipient when given.
-    pub fn ask_about(
-        &self,
-        context: Option<ContextRef>,
-        text: Option<String>,
-        target: Option<AskTarget>,
-    ) {
+    /// Opens the one Ask composer with a real context and a draft when given.
+    pub fn ask_about(&self, context: Option<ContextRef>, text: Option<String>) {
         self.ask_context.set(context);
         if let Some(text) = text {
             self.ask_draft.set(text);
-        }
-        if let Some(target) = target {
-            self.ask_target.set(target);
         }
         self.open_ask();
     }
@@ -253,11 +245,7 @@ impl AppState {
         match effect {
             Effect::OpenLive(live) => self.open_live(live),
             Effect::Select(live) => self.select(live),
-            Effect::AskAbout {
-                context,
-                text,
-                target,
-            } => self.ask_about(context, text, target),
+            Effect::AskAbout { context, text } => self.ask_about(context, text),
             Effect::Act(act) => self.dispatch(act),
             Effect::VerbMenu(record) => self.work.update(|state| state.menu = Some(record)),
             Effect::Device(op) => self.device(op),

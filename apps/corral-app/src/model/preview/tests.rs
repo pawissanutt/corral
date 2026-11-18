@@ -1,6 +1,11 @@
 use super::*;
 use crate::model::act::{self as acts, Act, ActStatus};
+use crate::model::agents::{self, Control};
+use crate::model::assistant::quick_id;
+use crate::model::effect::Effect;
 use crate::model::id::Id;
+use corral_protocol::assistant::{AskTarget, AssistantSend, AssistantSessionOp, QUICK_THREAD};
+use corral_protocol::rows::{AssistantKind, AssistantState};
 use corral_types::{Op, Status};
 
 #[test]
@@ -44,5 +49,69 @@ fn unfinished_dependency_refuses_dispatch_until_forced() {
     assert_eq!(
         forced.map(|event| event.detail["skipped"].clone()),
         Some(serde_json::json!(["dependencies"]))
+    );
+}
+
+/// The pause controls a session's Session menu offers; the turn a reply starts adds Cancel.
+fn pausing(feed: &Feed, session: &str) -> Vec<Control> {
+    agents::controls(feed, session)
+        .into_iter()
+        .filter(|control| matches!(control, Control::Pause | Control::Resume))
+        .collect()
+}
+
+/// The owner's reply is input a paused worker takes: its row stops saying paused and offers
+/// Pause again instead of Resume.
+#[test]
+fn owner_message_resumes_a_paused_session() {
+    let mut feed = feed(1_800_000_000, "2027-01-15".into(), "08:00".into(), None);
+    let session = "T-14_R1";
+    control(&mut feed, &Id::new("pause"), session, Control::Pause);
+    assert_eq!(feed.agents[session].paused, Some(true));
+    assert_eq!(pausing(&feed, session), [Control::Resume]);
+
+    let reply = Op::Reply {
+        id: "T-14".into(),
+        text: "Carry on".into(),
+    };
+    act(&mut feed, &Act::with_key(Id::new("reply"), reply, false)).unwrap();
+    assert_eq!(acts::status(&feed, "reply"), Some(ActStatus::Done));
+    assert_eq!(feed.agents[session].paused, Some(false));
+    assert_eq!(pausing(&feed, session), [Control::Pause]);
+}
+
+/// Once the quick thread ended, its next message opens a new quick session that holds it.
+#[test]
+fn ended_quick_thread_starts_a_new_session_on_the_next_send() {
+    let mut feed = feed(1_800_000_000, "2027-01-15".into(), "08:00".into(), None);
+    let old = quick_id(&feed).expect("the sample has a quick session");
+    let end = Effect::Session {
+        key: Id::new("end"),
+        op: AssistantSessionOp::End {
+            session: old.clone(),
+        },
+    };
+    effect(&mut feed, &end).unwrap();
+    assert_eq!(feed.assistants[old.as_str()].state, AssistantState::Ended);
+
+    let send = AssistantSend {
+        cmd_id: "again".into(),
+        thread: QUICK_THREAD.into(),
+        target: AskTarget::Assistant,
+        text: "Back again".into(),
+        typed_at: "2027-01-15T08:00:00Z".into(),
+        context: vec![],
+        attachments: vec![],
+    };
+    effect(&mut feed, &Effect::Send(send)).unwrap();
+    let new = quick_id(&feed).expect("a new quick session");
+    assert_ne!(new, old);
+    assert_eq!(feed.assistants[new.as_str()].kind, AssistantKind::Quick);
+    assert_ne!(feed.assistants[new.as_str()].state, AssistantState::Ended);
+    assert!(
+        feed.threads[new.as_str()]
+            .entries
+            .values()
+            .any(|entry| entry.text.as_deref() == Some("Back again"))
     );
 }

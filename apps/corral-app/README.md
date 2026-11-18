@@ -15,7 +15,7 @@ Destinations:
 - **Timeline**: the activity timeline and range selection.
 - **Usage**: reported costs, completeness and sourced quota facts; absent facts stay unknown.
 - **Settings**: device pairing, authority, notifications, profiles and local preferences.
-- **Ask**: one composer for questions, ideas and instructions, addressed to the assistant or PM.
+- **Ask**: one composer for questions, ideas and instructions, addressed to the assistant.
 
 Counts are an icon and number, with the sentence in a hint on hover or keyboard focus on desktop and in the status line in a terminal; phone rows keep one explanatory line. The top-bar health display is one `healthy` chip when every component is healthy and names the component otherwise.
 
@@ -210,8 +210,7 @@ an initialization failure stops startup with an error. Tasks, conversations and 
 records are unchanged by this indexing.
 
 Delivered owner messages retain their original typed time; a different receipt time is
-shown separately. Receipt order still orders the conversation. If an assistant cannot run,
-File as idea saves the owner's words as written rather than inventing an AI summary.
+shown separately. Receipt order still orders the conversation.
 
 `corral device list [--json]` lists identities; `corral device revoke <id>` closes their
 live sessions and stops automatic reconnect. Native devices can explicitly enrol again.
@@ -221,9 +220,9 @@ records from any administrator device or the owner CLI. Failed Forget remains re
 
 ### Ask and attachments
 
-Ask uses one composer for questions and ideas, addressed to the assistant or PM. Assistant
-threads use a supervised daemon-hosted assistant and stream actual replies; PM messages enter
-the PM inbox rather than steering supervision. Settings › Assistant manages configured profiles
+Ask uses one composer for questions and ideas, addressed to the assistant, the one chat
+agent. Assistant threads use a supervised daemon-hosted assistant and stream actual replies.
+Settings › Assistant manages configured profiles
 and the assistant profile. The model selector offers `corral-pi` profiles that name a model;
 changing it applies to the next message. Choices distinguish **Anthropic · API (metered)**
 from **Anthropic · subscription**, including when they name the same model. Session facts

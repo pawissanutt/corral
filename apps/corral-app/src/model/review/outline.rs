@@ -293,7 +293,6 @@ pub(super) fn navigation(action: &Action, shown: &Shown) -> Option<Vec<Effect>> 
         Action::AskCandidate => Some(vec![Effect::AskAbout {
             context: Some(Live::Review(shown.id().clone()).context(None)),
             text: None,
-            target: None,
         }]),
         Action::OpenSession => Some(
             shown

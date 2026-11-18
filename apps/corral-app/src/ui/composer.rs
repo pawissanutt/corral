@@ -1,31 +1,28 @@
-//! The Ask composer and the surface it opens in. One field and one Send: the Assistant | PM switch
-//! with the PM's state, the model pill and its list, the "answered by" line after a switch, the
-//! removable context chip and the staged attachments, the offline or waiting line, the
-//! Screenshot, Link and File controls. Enter sends and Shift+Enter breaks the line; Send hands
-//! the draft, target and attachment refs to the assistant model, which stores the message with
-//! its state at once; the draft and the attachments clear once the device outbox accepted it.
-//! A phone folds all of it into one row and one chip above it (`phone`).
+//! The Ask composer and the surface it opens in. One field and one Send: the model pill and
+//! its list, the "answered by" line after a switch, the removable context chip and the staged
+//! attachments, the offline or waiting line, the Screenshot, Link and File controls. Enter
+//! sends and Shift+Enter breaks the line; Send hands the draft and attachment refs to the
+//! assistant model, which stores the message with its state at once; the draft and the
+//! attachments clear once the device outbox accepted it. A phone folds all of it into one row
+//! and one chip above it (`phone`).
 
-use std::rc::Rc;
-
-use nsh_base::{SheetEvent, sheet, toggle, toggle_group};
+use nsh_base::{SheetEvent, sheet};
 use nsh_core::element::{Input, color as for_appearance, input};
-use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
 use crate::model::assistant::{self, Composer, KeyHint, ModelList, ThreadRef};
 use crate::model::hue::Hue;
 use crate::model::text::Rich;
-use crate::model::{AskTarget, Form, Overlay};
+use crate::model::{Form, Overlay};
 use crate::state::AppState;
 use crate::ui::ask::{act, chip_row, drawer, foot_controls, models, tray};
-use crate::ui::atoms::{control_height, key_hint};
+use crate::ui::atoms::key_hint;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::text::rich_small;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
+use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 mod draft;
 mod pending;
@@ -34,9 +31,6 @@ mod send;
 
 use draft::keep_draft;
 use send::send;
-
-/// Runs after a press in the target switch: the phone's chooser opens the model list or closes.
-type AfterTarget = Rc<dyn Fn()>;
 
 /// Where a composer's model list opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +55,7 @@ pub(crate) struct Host {
 }
 
 /// Ask's composer: the drawer's on desktop, the sheet's on a phone, the pane's in a terminal.
-/// Reads and writes `app.ask_draft` and `app.ask_target`; focuses its field whenever
+/// Reads and writes `app.ask_draft`; focuses its field whenever
 /// `app.ask_focus` changes.
 pub fn composer(app: AppState) -> AnyElement {
     let list = if app.form == Form::Phone {
@@ -133,7 +127,6 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
     let source = thread.clone();
     let built = computed(move || {
         let env = app.env();
-        let target = app.ask_target.get();
         let ThreadRef::Live(scope) = &source;
         // The project brief shows as its own chip, so it is not repeated as the record chip.
         let context = app.composer_record_context();
@@ -147,7 +140,6 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
                             feed,
                             assistant::Draft {
                                 scope: scope.as_str(),
-                                target,
                                 text,
                                 context: context.as_ref(),
                                 staged,
@@ -166,9 +158,6 @@ pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
         focus_on_open(app, entry);
     }
     keep_draft(app, scope.clone(), draft);
-    if form != Form::Phone && !named {
-        bind_target_key(app);
-    }
     let menu = computed(move || built.with(|c| c.model_menu.clone()));
     let status = computed(move || built.with(|c| c.status.clone()));
     let next = computed(move || built.with(|c| c.next_message.clone()));
@@ -233,22 +222,6 @@ pub(crate) fn focus_on_open(app: AppState, entry: ElementRef) {
     });
 }
 
-/// `Ctrl ⇧ P` flips the target without leaving the field, while this composer lives.
-fn bind_target_key(app: AppState) {
-    let anywhere = KeyOptions {
-        when: When::Always,
-        ..KeyOptions::default()
-    };
-    on_key_with("mod+shift+p", anywhere, move |_| {
-        app.ask_target.update(|target| {
-            *target = match *target {
-                AskTarget::Pm => AskTarget::Assistant,
-                AskTarget::Assistant => AskTarget::Pm,
-            };
-        });
-    });
-}
-
 /// Where Send delivers: the composer's thread, whether it is docked under a thread page, and the
 /// draft it sends from.
 #[derive(Debug, Clone)]
@@ -278,7 +251,7 @@ fn saved_line(app: AppState, line: &Rich) -> AnyElement {
         .into_element()
 }
 
-/// The control row (`.crow`): the target switch, the model pill or the PM's profile note, and on
+/// The control row (`.crow`): the model pill or the session's profile note, and on
 /// desktop the keys, right-aligned, wrapping under the rest when the row is narrow. Absent for a
 /// pane session's composer, which has none of them. Ask's own pane in a terminal shows no keys:
 /// the shell's key line names them while its field has the focus.
@@ -291,7 +264,6 @@ fn controls(
     docked: bool,
 ) -> AnyElement {
     let form = app.form;
-    let has_targets = computed(move || built.with(|c| !c.targets.is_empty()));
     let pill = computed(move || {
         built.with(|c| {
             c.model_pill
@@ -303,11 +275,10 @@ fn controls(
     let note = computed(move || built.with(|c| c.profile_note.clone()));
     let own_keys = form != Form::Terminal || docked;
     let keys = computed(move || built.with(|c| c.key_hints.filter(|_| own_keys)));
-    // Ask always has its switch, a daemon session its pill, a pane session nothing. A thread
-    // page can mount before its row or the configured profiles arrive, so the row follows them
-    // instead of being fixed at mount; only what is inside it follows the target.
-    let shown =
-        move || has_targets.get() || pill.with(Option::is_some) || note.with(Option::is_some);
+    // Ask always has its pill or profile note, a pane session neither. A thread page can mount
+    // before its row or the configured profiles arrive, so the row follows them instead of
+    // being fixed at mount.
+    let shown = move || pill.with(Option::is_some) || note.with(Option::is_some);
     when(shown, move || {
         untracked(|| {
             view()
@@ -316,10 +287,6 @@ fn controls(
                 .flex_wrap()
                 .items_center()
                 .gap(px(8.0))
-                .child(when(
-                    move || has_targets.get(),
-                    move || untracked(|| target_switch(app, built, None)),
-                ))
                 .child(dynamic(move || {
                     pill.get().map(|(label, name)| {
                         untracked(|| models::pill(app, label, name, list, row, menu))
@@ -341,121 +308,8 @@ fn controls(
     .into_element()
 }
 
-/// Assistant | PM: one toggle pressed at a time, one stop of the keyboard focus with the arrow keys
-/// moving between them; PM carries its state dot and words. Choosing one closes the model list,
-/// then runs `after`. A phone's spans the chooser, each half a full touch target.
-fn target_switch(app: AppState, built: Memo<Composer>, after: Option<AfterTarget>) -> AnyElement {
-    let form = app.form;
-    let options = built.with(|c| c.targets.clone());
-    let group = toggle_group().flex_row().items_center();
-    let group = if form == Form::Terminal {
-        group.gap(px(8.0))
-    } else {
-        group
-            .gap(px(2.0))
-            .p(px(2.0))
-            .rounded(px(if form == Form::Phone { 12.0 } else { 7.0 }))
-            .bg(color(Token::BgSunk))
-            .border_1()
-            .border_color(color(Token::Rule))
-    };
-    group
-        .children(options.iter().enumerate().map(|(index, option)| {
-            target_item(
-                app,
-                built,
-                (index, option.target, option.label),
-                after.clone(),
-            )
-        }))
-        .into_element()
-}
-
-fn target_item(
-    app: AppState,
-    built: Memo<Composer>,
-    (index, target, label): (usize, crate::model::AskTarget, &'static str),
-    after: Option<AfterTarget>,
-) -> AnyElement {
-    let form = app.form;
-    let on = computed(move || built.with(|c| c.targets.get(index).is_some_and(|t| t.selected)));
-    let state =
-        computed(move || built.with(|c| c.targets.get(index).and_then(|t| t.state.clone())));
-    let (height, size, radius) = match form {
-        Form::Desktop => (control_height(24.0), 12.0, 5.0),
-        Form::Phone => (44.0, 15.0, 10.0),
-        Form::Terminal => (16.0, text_size(form), 0.0),
-    };
-    let words = text(label)
-        .number_of_lines(1u32)
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(move || {
-            if on.get() || form == Form::Terminal {
-                color(Token::Ink)
-            } else {
-                color(Token::Ink3)
-            }
-        });
-    let words = if form == Form::Terminal {
-        words
-    } else {
-        words.font_family(FONT_TEXT).text_size(px(size))
-    };
-    let face = view()
-        .test_id(&format!("seg-ask-{}", label.to_lowercase()))
-        .flex_row()
-        .items_center()
-        .gap(px(4.0))
-        .child(words)
-        .child(dynamic(move || {
-            state
-                .get()
-                .map(|chip| untracked(|| state_mark(app, &chip.label, chip.hue)))
-        }));
-    toggle()
-        .pressed(move || on.get())
-        // Choosing the pressed one again keeps it: the switch always names one target.
-        .on_change(move |_: &bool| {
-            app.ask_target.set(target);
-            app.assistant.update(|state| {
-                state.close_menu();
-            });
-            if let Some(after) = &after {
-                after();
-            }
-        })
-        .h(px(height))
-        .px(px(if form == Form::Phone { 12.0 } else { 10.0 }))
-        .when(form == Form::Phone, |t| t.flex_1())
-        .rounded(px(radius))
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        // In a terminal NSH bands a pressed toggle itself; a fill of the app's would be a second.
-        .when(form != Form::Terminal, |t| {
-            t.border_1()
-                .bg(move || {
-                    if on.get() {
-                        color(Token::Surface)
-                    } else {
-                        AdaptiveColor::TRANSPARENT
-                    }
-                })
-                .border_color(move || {
-                    if on.get() {
-                        color(Token::Rule2)
-                    } else {
-                        AdaptiveColor::TRANSPARENT
-                    }
-                })
-                .focus_visible(|s| s.border_color(color(Token::Focus)))
-        })
-        .child(face)
-        .into_element()
-}
-
-/// The PM's state beside its name (`.pmdot` and its words): a dot in the state's colour, the words
-/// quiet. A terminal draws the dot as a glyph.
+/// A state beside its name: a dot in the state's colour, the words quiet. A terminal draws the
+/// dot as a glyph.
 pub(crate) fn state_mark(app: AppState, label: &str, hue: Hue) -> AnyElement {
     let form = app.form;
     let words = text(label.to_owned())
