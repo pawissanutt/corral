@@ -16,6 +16,7 @@ export function createSession(launch: BuildLaunch, worktree: Pick<BuildSessionRe
   return { version: 1, id: launch.paid?.session ?? `B-${suffix}`, name, created: now.toISOString(), updated: now.toISOString(),
     repoRoot: launch.repoRoot, ...worktree, here: launch.here, ...(launch.bare ? { bare: true } : {}),
     ...(launch.route ? { route: launch.route } : {}),
+    ...(launch.paid?.mixed ? { mixedPaid: true } : {}),
     ...(launch.project ? { project: launch.project } : {}), ...(launch.workspaceRoot ? { workspaceRoot: launch.workspaceRoot } : {}) };
 }
 
@@ -28,6 +29,7 @@ export function loadSession(dataRoot: string, id: string): BuildSessionRecord {
     || !(record.branch === null || typeof record.branch === "string") || !(record.base === null || typeof record.base === "string")
     || [record.workspaceRoot, record.sessionFile].some(value => value !== undefined && (typeof value !== "string" || !isAbsolute(value)))
     || (record.bare !== undefined && typeof record.bare !== "boolean")
+    || (record.mixedPaid !== undefined && record.mixedPaid !== true)
     || (record.repository !== undefined && typeof record.repository !== "boolean")
     || (record.baseBranch !== undefined && record.baseBranch !== null && typeof record.baseBranch !== "string")
     || (record.bare === true && (record.workspaceRoot !== undefined || record.project !== undefined))

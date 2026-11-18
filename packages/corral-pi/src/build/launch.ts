@@ -82,7 +82,7 @@ export function readBuildLaunch(fd: number): BuildLaunch {
     const slash = qualified.indexOf("/");
     const provider = qualified.slice(0, slash);
     if (profile.binding != null && !isProviderId(provider)) throw new LaunchMessageInvalid("paid child provider is unknown");
-    const binding = isProviderId(provider) ? parseBinding(profile.binding, provider, qualified.slice(slash + 1), effort) : undefined;
+    const binding = profile.binding != null && isProviderId(provider) ? parseBinding(profile.binding, provider, qualified.slice(slash + 1), effort) : undefined;
     if (binding && (!isApiConnection(binding.connection) || name === "default")) throw new LaunchMessageInvalid("invalid paid child binding");
     return { name, model: qualified, ...(effort !== undefined ? { effort } : {}), ...(binding ? { binding } : {}),
       ...(profile.description != null ? { description: text(profile, "description") } : {}) };
