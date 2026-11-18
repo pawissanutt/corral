@@ -8,8 +8,10 @@ use corral_protocol::assistant::{
     self as wire, AssistantSend, AssistantSessionOp, AssistantWarm, ContextRef, MESSAGE_TEXT_MAX,
 };
 use corral_protocol::rows::AssistantRow;
+use corral_types::{NewTask, Op, Status};
 
 use super::{Action, State, live};
+use crate::model::act::{self, Act, ActStatus};
 use crate::model::daemon::Feed;
 use crate::model::effect::{Effect, Env};
 use crate::model::id::Id;
@@ -73,6 +75,8 @@ pub struct LiveState {
     pub handed: BTreeMap<String, String>,
     /// The attachment whose readback is open under its message: (entry, attachment id).
     pub attachment: Option<(String, String)>,
+    /// Owner messages filed as an Idea from here: entry → the engine operation's key.
+    pub filed: BTreeMap<String, Id>,
 }
 
 impl LiveState {
@@ -331,6 +335,7 @@ impl State {
             } => crate::model::agents::answer_prompt(&session, question, option, text)
                 .into_iter()
                 .collect(),
+            Action::FileEntry(entry) => self.file(entry, feed),
             Action::RetryThread(scope) => vec![Effect::Thread { scope, open: true }],
             Action::Unattach(key) => vec![Effect::Unattach(Id::from(key))],
             Action::CancelSend(key) => vec![Effect::CancelSend(Id::from(key))],
@@ -390,4 +395,51 @@ impl State {
             op: AssistantSessionOp::End { session },
         }]
     }
+
+    /// Files an owner message as an Idea in its words, with no model. Sent once while the
+    /// filing is in flight or done; a refused or failed one may be sent again.
+    fn file(&mut self, entry: String, feed: &Feed) -> Vec<Effect> {
+        let sent = self
+            .live
+            .filed
+            .get(&entry)
+            .and_then(|key| act::status(feed, key.as_str()));
+        if sent
+            .is_some_and(|status| !matches!(status, ActStatus::Failed(_) | ActStatus::Refused(_)))
+        {
+            return Vec::new();
+        }
+        let Some(task) = idea_from(feed, &entry) else {
+            return vec![Effect::Toast(
+                "This message is not loaded here; nothing was filed".into(),
+            )];
+        };
+        let act = Act::new(&mut self.ids, Op::New { task }, false);
+        self.live.filed.insert(entry, act.key.clone());
+        vec![Effect::Act(act)]
+    }
+}
+
+/// A message filed as an Idea in its owner's words: the first non-blank line, cut at 120
+/// characters, as the title, and the whole message as the body.
+fn idea_from(feed: &Feed, entry: &str) -> Option<NewTask> {
+    let words = feed
+        .threads
+        .values()
+        .find_map(|thread| thread.entries.get(entry))?
+        .text
+        .clone()?;
+    let title = words
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?
+        .chars()
+        .take(120)
+        .collect();
+    Some(NewTask {
+        title,
+        body: words,
+        status: Status::Idea,
+        ..NewTask::default()
+    })
 }

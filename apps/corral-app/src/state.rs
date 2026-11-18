@@ -49,6 +49,9 @@ pub struct AppState {
     pub ask_draft: Signal<String>,
     /// Grows by one each time Ask opens, so the composer focuses its field.
     pub ask_focus: Signal<u32>,
+    /// The test id of a control a direct key asked to take the keyboard focus (`Effect::Focus`),
+    /// until it has taken it or the next commit has passed.
+    pub focus_to: Signal<Option<&'static str>>,
     pub work: source::StateSource<work::State>,
     pub plans: source::StateSource<plans::State>,
     pub timeline: Signal<timeline::State>,
@@ -101,6 +104,10 @@ pub struct AppState {
     /// On the destination's keyboard list (Now's, Inbox's): its keys act while the focus is in
     /// it, or nowhere.
     pub list_keys: ElementRef,
+    /// The Now task row that has the keyboard focus: the list's Enter opens the selected task
+    /// only while the focus is on its row (or nowhere), so Enter on a focused Waiting toggle or
+    /// another row presses that control.
+    pub focused_row: Signal<Option<String>>,
     key_focus: Signal<keys::KeyFocus>,
 }
 
@@ -145,6 +152,7 @@ impl AppState {
             sidebar: signal(preference(SIDEBAR_KEY, SidebarPref::from_slug).unwrap_or_default()),
             ask_draft: signal(String::new()),
             ask_focus: signal(0),
+            focus_to: signal(None),
             work: source::StateSource::new(
                 data,
                 work::State {
@@ -233,6 +241,7 @@ impl AppState {
             sidebar_peek: signal(false),
             focus_root: element_ref(),
             list_keys: element_ref(),
+            focused_row: signal(None),
             key_focus: signal(keys::KeyFocus::default()),
         };
         app.follow_browser_pairing();
@@ -528,6 +537,11 @@ impl AppState {
                 Effect::GoSettings(section) => self.go_settings(section),
                 Effect::Back => self.back(),
                 Effect::CloseAsk => self.close(Overlay::Ask),
+                Effect::Focus(id) => {
+                    let focus_to = self.focus_to;
+                    focus_to.set(Some(id));
+                    after_answer(move || focus_to.set(None));
+                }
                 other => self.run_live(other),
             }
         }

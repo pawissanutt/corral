@@ -228,8 +228,11 @@ fn reply_box(app: AppState, reply: ReplyBox) -> AnyElement {
     let draft = signal(String::new());
     let empty = computed(move || draft.with(|words| words.trim().is_empty()));
     let on_enter = reply.clone();
+    let handle = element_ref();
+    app.focus_when_asked(work::REPLY_FIELD, handle);
     let entry = input()
-        .test_id("field-reply")
+        .test_id(work::REPLY_FIELD)
+        .element_ref(&handle)
         .label(reply.label.clone())
         .placeholder(reply.placeholder)
         .value(move || draft.get())

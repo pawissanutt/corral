@@ -305,3 +305,49 @@ fn row(
         }))
         .into_element()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use nsh_core::platform::{Idiom, Os};
+    use nsh_core::prelude::{Bounds, Points, Size};
+    use nsh_engine::{EngineConfig, Root};
+    use nsh_testing::Headless;
+
+    fn bounds_of(app: &Headless, id: &str) -> Bounds<Points> {
+        let nodes = app.screen().layout_nodes();
+        let node = nodes
+            .iter()
+            .find(|node| node.test_id.as_deref() == Some(id) && !node.hidden);
+        node.map(|node| node.bounds).unwrap()
+    }
+
+    /// PW-05: a phone held sideways had about 125 pt for content, and the Ask sheet filled it
+    /// before the keyboard. Sideways, who answers folds into the field's row instead of taking a
+    /// line above it.
+    #[test]
+    fn sideways_ask_keeps_who_answers_in_the_field_row() {
+        let mut config = EngineConfig::new(Root::of::<crate::App>());
+        config.environment.os = Os::Web;
+        config.environment.idiom = Idiom::Phone;
+        config.viewport = Size::new(Points(844.0), Points(390.0));
+        let mut app = Headless::start(config).unwrap();
+        app.wait_for("id:ask-open").unwrap();
+        app.press("id:btn-search").unwrap();
+        app.wait_for("id:palette-input").unwrap();
+        app.type_text("id:palette-input", "Data: fixture").unwrap();
+        app.press("text:Data: fixture").unwrap();
+        app.wait_for_gone("id:palette-input", Duration::from_secs(5))
+            .unwrap();
+        app.press("id:ask-open").unwrap();
+        app.wait_for("id:btn-who").unwrap();
+        let who = bounds_of(&app, "btn-who");
+        let field = bounds_of(&app, "ask-input");
+        let middle = who.origin.y.0 + who.size.height.0 / 2.0;
+        assert!(
+            middle >= field.origin.y.0 && middle <= field.origin.y.0 + field.size.height.0,
+            "who {who:?} sits beside the field {field:?}"
+        );
+    }
+}

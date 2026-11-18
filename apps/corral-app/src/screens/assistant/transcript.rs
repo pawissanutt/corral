@@ -234,11 +234,34 @@ fn owner_tail(app: AppState, owner: &OwnerMessage) -> Vec<AnyElement> {
     tail
 }
 
-/// The owner's message, with its attachment readback when one is open.
+/// The owner's message, with its attachment readback when one is open, and File as idea under
+/// it (or how the filing went).
 fn owner_view(app: AppState, owner: &OwnerMessage, inset: f32) -> AnyElement {
     let mut body = vec![plain(app, owner.text.clone()).into_element()];
     if let Some(opened) = &owner.opened {
         body.push(attachments::readback(app, opened));
+    }
+    if owner.file.is_some() || owner.filed.is_some() {
+        let terminal = app.form == Form::Terminal;
+        let mut foot = Vec::new();
+        if let Some(filed) = &owner.filed {
+            foot.push(chip(app, filed.label.clone(), filed.hue));
+        }
+        if let Some(file) = &owner.file {
+            if terminal && !foot.is_empty() {
+                foot.push(term::space(2.0));
+            }
+            foot.push(model_button(app, file, ButtonKind::Quiet));
+        }
+        body.push(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(px(if terminal { 0.0 } else { 8.0 }))
+                .children(foot)
+                .into_element(),
+        );
     }
     message(
         app,

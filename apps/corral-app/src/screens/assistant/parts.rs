@@ -229,10 +229,10 @@ pub fn button_row(app: AppState, buttons: &[Button], kind: ButtonKind, gap: f32)
 }
 
 /// `btn-<label>`, with the record it acts on when the action names one, so the Withdraw of two
-/// queued sends stay apart.
+/// queued sends, or the File as idea of two messages, stay apart.
 pub fn test_id(button: &Button) -> String {
     let subject = match &button.action {
-        Action::CancelSend(id) => Some(id.as_str()),
+        Action::CancelSend(id) | Action::FileEntry(id) => Some(id.as_str()),
         _ => None,
     };
     let mut slug = String::with_capacity(button.label.len() + 8);

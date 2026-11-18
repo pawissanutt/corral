@@ -22,6 +22,16 @@ pub fn list_keys_live(destination: Destination, top: Option<&Live>) -> &'static 
     }
 }
 
+/// `keys` without Enter, for while the focus is on a control of the list other than the
+/// selected row: that control takes Enter as its press.
+pub fn without_open(keys: &'static [&'static str]) -> &'static [&'static str] {
+    if keys == LIVE_MOVE_OPEN {
+        MOVE_MENU
+    } else {
+        keys
+    }
+}
+
 /// The daemon-mode terminal key hints of the destination or the live page on top. `off_board`:
 /// Now's selection is a task the board does not list (a closed one), whose detail already shows
 /// beside the list, so Enter has no session to offer.
@@ -38,12 +48,17 @@ pub fn key_legend_live(
             if !off_board {
                 legend.push(("Enter", "session"));
             }
-            legend.extend([("]", "next tab"), (".", "actions")]);
+            legend.extend([("]", "next tab"), ("R", "reply"), (".", "actions")]);
             legend
         }
         (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member"), (".", "actions")],
         (Destination::Agents, _) => vec![("j k", "session"), (".", "session menu")],
-        (Destination::Review, _) => vec![("j k", "candidate"), ("s", "split"), (".", "actions")],
+        (Destination::Review, _) => vec![
+            ("j k", "candidate"),
+            ("A", "approve"),
+            ("s", "split"),
+            (".", "actions"),
+        ],
         _ => Vec::new(),
     }
 }

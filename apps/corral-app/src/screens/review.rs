@@ -670,6 +670,12 @@ fn command_hinted(cx: &Ctx, button: &review::Button, hint: Option<String>) -> An
         ButtonStyle::Ghost => ButtonKind::Ghost,
         ButtonStyle::Quiet => ButtonKind::Quiet,
     };
+    let approve = button.action == Action::Approve && app.form != Form::Phone;
+    let focus = approve.then(|| {
+        let handle = element_ref();
+        app.focus_when_asked(review::APPROVE, handle);
+        handle
+    });
     let options = ButtonOptions {
         icon: match button.action {
             Action::AskAbout { .. } | Action::AskCandidate => Some(Icon::Ask),
@@ -678,6 +684,8 @@ fn command_hinted(cx: &Ctx, button: &review::Button, hint: Option<String>) -> An
         },
         wide: app.form == Form::Phone && button.style == ButtonStyle::Primary,
         danger: button.action == Action::LandAnyway,
+        key_hint: approve.then_some("A"),
+        focus,
         ..ButtonOptions::default()
     };
     let control = button_with(
@@ -699,7 +707,7 @@ fn command_hinted(cx: &Ctx, button: &review::Button, hint: Option<String>) -> An
 /// The test id of a control by its action.
 fn button_id(action: &Action) -> String {
     match action {
-        Action::Approve => "btn-approve".to_owned(),
+        Action::Approve => review::APPROVE.to_owned(),
         Action::LandAnyway => "btn-land-anyway".to_owned(),
         Action::Gate => "btn-gate".to_owned(),
         Action::StartReview => "btn-review".to_owned(),

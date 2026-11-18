@@ -57,6 +57,8 @@ pub enum Action {
     ConfirmEnd(String),
     /// Daemon: start a named daemon session, separate from the quick thread.
     NewSession,
+    /// Daemon: file an owner message as an Idea in its words, with no model.
+    FileEntry(String),
     /// Daemon: answer the agent's question in place, with an option, words, or both.
     AnswerQuestion {
         session: String,

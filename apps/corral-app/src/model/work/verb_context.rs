@@ -127,7 +127,14 @@ impl FormContext {
             landing: row
                 .and_then(|row| row.row.run.as_ref())
                 .map(|run| run.base.clone()),
-            branches: crate::model::projects::branches(feed, project),
+            // Never the task's own branch: the engine refuses landing it onto itself.
+            branches: crate::model::projects::branches(feed, project)
+                .into_iter()
+                .filter(|branch| {
+                    row.and_then(|row| row.row.run.as_ref())
+                        .is_none_or(|run| run.branch != *branch)
+                })
+                .collect(),
         }
     }
 }

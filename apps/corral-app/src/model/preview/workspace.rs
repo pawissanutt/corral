@@ -183,7 +183,8 @@ fn config(projects: bool) -> Map<String, Value> {
         "profiles": {
             "omp-sol": { "harness": "omp", "model": "sol", "effort": "high", "args": [] },
             "omp-sol-review": { "harness": "omp", "model": "sol", "effort": "xhigh", "args": [] },
-            "codex-terra": { "harness": "codex", "model": "terra", "effort": "medium", "args": [] }
+            "codex-terra": { "harness": "codex", "model": "terra", "effort": "medium", "args": [] },
+            "pi-luna": { "harness": "pi", "model": "luna", "effort": "medium", "args": [] }
         },
         "projects": projects,
         "routing": [],

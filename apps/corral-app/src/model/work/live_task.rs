@@ -388,6 +388,14 @@ pub fn task_buttons(feed: &Feed, task: &daemon::Task, phone: bool) -> Vec<Button
     buttons
 }
 
+/// The reply box's field (`field-reply`), which Now's `R` puts the keyboard focus in.
+pub const REPLY_FIELD: &str = "field-reply";
+
+/// The selected task's reply box, when its Blocked card recommends a reply.
+pub fn reply_box(task: &daemon::Task) -> Option<ReplyBox> {
+    blocked_card(task)?.reply
+}
+
 /// The Blocked card of a task: its reason, detail and one button per next step, labelled as
 /// the operation it runs ("Dispatch anyway" for a forced one). A recommended reply is the reply
 /// box instead of a button.
