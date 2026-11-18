@@ -88,13 +88,7 @@ impl AppState {
                 }
             }
         });
-        on_key_with("mod+k", anywhere, move |_| {
-            if self.is_open(Overlay::Palette) {
-                self.close(Overlay::Palette);
-            } else {
-                self.open_palette();
-            }
-        });
+        on_key_with("mod+k", anywhere, move |_| self.toggle_palette());
         on_key_with("escape", anywhere, move |_| self.close_newest());
         on_key_with("mod+b", typing, move |_| self.toggle_sidebar());
         // Save the configuration draft from any of its fields, as the save bar's Save does.
@@ -115,6 +109,24 @@ impl AppState {
         });
     }
 
+    /// The phone form with a hardware keyboard: Ctrl+K (⌘K) opens and closes the palette, as the
+    /// magnifier does. Its letter and list keys stay unbound; a phone has no key line naming them.
+    pub(super) fn bind_phone_keys(self) {
+        let anywhere = KeyOptions {
+            when: When::Always,
+            ..KeyOptions::default()
+        };
+        on_key_with("mod+k", anywhere, move |_| self.toggle_palette());
+    }
+
+    fn toggle_palette(self) {
+        if self.is_open(Overlay::Palette) {
+            self.close(Overlay::Palette);
+        } else {
+            self.open_palette();
+        }
+    }
+
     /// Follows the keyboard focus coming into and leaving the app and the destination's list.
     fn watch_key_focus(self) {
         let focus = self.key_focus;
@@ -128,14 +140,15 @@ impl AppState {
             .on_focus_out(move || focus.update(|at| at.list = false));
     }
 
-    /// Tracked: the list keys to bind now. None while a sheet or an overlay is up (its own
-    /// controls take Enter), while a control outside the list has the focus, or without a
-    /// connection.
+    /// Tracked: the list keys to bind now. None while a sheet, an overlay or a menu is up (its
+    /// own items take the arrows and Enter: a menu the pointer opened takes Down into its first
+    /// item), while a control outside the list has the focus, or without a connection.
     fn list_keys_now(&self) -> &'static [&'static str] {
         if !self.key_focus.get().takes_list_keys()
             || self.sheet_open()
             || self.nav.with(|nav| nav.newest().is_some())
             || self.work.with(|state| state.menu.is_some())
+            || self.menus.get() > 0
         {
             return &[];
         }
@@ -174,6 +187,7 @@ impl AppState {
         if untracked(|| self.sheet_open())
             || self.nav.with_untracked(|nav| nav.newest().is_some())
             || self.work.with_untracked(|state| state.menu.is_some())
+            || self.menus.get_untracked() > 0
         {
             return;
         }

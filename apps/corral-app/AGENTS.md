@@ -54,6 +54,7 @@ Destinations are Now, Changes, Plans, Agents, Review, Timeline, Usage, Artifacts
 - `src/model/usage/period.rs`: the period the Usage page totals and the series request it makes. Days are the device's local calendar days: the request carries the device's offset from UTC (`utc_offset_minutes`) and its IANA zone (`time_zone`, when the platform names one), and corrald buckets the whole range in that zone, so a clock change mid-range keeps its days whole.
 - `src/ui/kit/`: shared pieces every screen is built from, including marks, rows, page scaffolds, notices, tables and overlays.
 - `src/ui/kit/glance.rs`: count, loop, rail and activity renderers; `src/ui/kit/hint.rs`: hint wrapper.
+- `src/ui/kit/walk.rs`: Up/Down/Home/End through a menu the app draws as a dialog (the keyboard's Actions and Session menus, `model::commands::menu_step`); NSH's own menus and the palette walk theirs. `src/ui/kit/overlay.rs`'s `Modal.foot` keeps a form's buttons under its scrolling body.
 - `src/ui/health_line.rs`: responsive health display; `src/model/health/line.rs`: condensed health and status facts.
 - `src/ui/kit/page_phone.rs`: phone page scaffolds and helpers.
 - `src/ui/`: tokens, atoms, icons, Ask and composer surfaces, palette and terminal-specific pieces in `term.rs`.

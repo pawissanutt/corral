@@ -173,6 +173,9 @@ pub struct VerbField {
     pub placeholder: &'static str,
     pub required: bool,
     pub value: String,
+    /// Markdown or prose of several lines (a body, a comment, notes): drawn as a multi-line
+    /// field where Return breaks the line, and sent with its line breaks as typed.
+    pub multiline: bool,
     /// A closed set of values drawn as one button each; empty for free text.
     pub choices: Vec<Choice>,
     /// Values a free-text field offers beside what is typed (a project's local branches),

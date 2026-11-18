@@ -112,6 +112,25 @@ impl Surface {
     }
 }
 
+/// The keys that walk a menu the app draws itself (the keyboard's Actions and Session menus),
+/// as NSH's popup menus walk theirs.
+pub const MENU_WALK: [&str; 4] = ["up", "down", "home", "end"];
+
+/// Where `key` moves the keyboard focus from item `at` of a menu of `len`: Up and Down to the
+/// previous and next item, around the ends, Home and End to the first and last.
+pub fn menu_step(key: &str, at: usize, len: usize) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    Some(match key {
+        "up" if at == 0 || at > last => last,
+        "up" => at - 1,
+        "down" if at >= last => 0,
+        "down" => at + 1,
+        "home" => 0,
+        "end" => last,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

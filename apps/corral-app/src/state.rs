@@ -117,7 +117,8 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Restores preferences, starts root-owned persistence and toast timing, and binds non-phone keys.
+    /// Restores preferences, starts root-owned persistence and toast timing, and binds the keys
+    /// (on the phone, only the palette's).
     pub fn install(form: Form) -> AppState {
         let pairing_link = crate::client::pairing_link();
         let mut nav = NavState::new(form);
@@ -269,7 +270,9 @@ impl AppState {
         app.settle_config();
         app.follow_cached_feed();
         app.watch_device_receipts();
-        if form != Form::Phone {
+        if form == Form::Phone {
+            app.bind_phone_keys();
+        } else {
             app.bind_keys();
         }
         app
@@ -740,14 +743,37 @@ mod tests {
         assert!(!cached_namespace(&feed));
     }
 
+    /// A browser without a saved pairing showed Now's skeletons and "corrald is not reachable"
+    /// while it dialed nothing: with no paired marker it opens Connection's pairing form at once
+    /// and says it is not paired; with the marker it still connects (and may be unreachable).
     #[test]
-    fn unpaired_browser_opens_connection_instead_of_restoring_mockup() {
-        let mut nav = NavState::new(Form::Desktop);
-        nav.destination = Destination::Now;
-        let (data, _) = startup(&mut nav, true, false, Ok(None));
-        assert_eq!(nav.destination, Destination::Settings);
-        assert_eq!(nav.settings, SettingsSection::Connection);
-        assert_eq!(data, DataState::Disconnected);
+    fn unpaired_browser_opens_the_pairing_form_and_does_not_call_corrald_unreachable() {
+        for form in [Form::Desktop, Form::Phone] {
+            let mut nav = NavState::new(form);
+            nav.destination = Destination::Now;
+            let configured = crate::client::saved_pairing(None);
+            let (data, feed) = startup(&mut nav, true, configured, Ok(None));
+            assert_eq!(nav.destination, Destination::Settings);
+            assert_eq!(nav.settings, SettingsSection::Connection);
+            assert_eq!(data, DataState::Disconnected);
+            assert!(matches!(
+                crate::model::devices::pair_browser(&feed),
+                PairBrowser::Form { prefilled: false }
+            ));
+            let guide = crate::model::settings::connect::web_guide(&feed, None);
+            let empty = crate::model::settings::connect::unavailable(&feed, true);
+            for line in [guide.status, empty.reason] {
+                assert!(!line.contains("reachable"), "{line}");
+            }
+            let mut nav = NavState::new(form);
+            let (data, _) = startup(
+                &mut nav,
+                true,
+                crate::client::saved_pairing(Some("1")),
+                Ok(None),
+            );
+            assert_eq!(data, DataState::Daemon);
+        }
     }
 
     #[test]

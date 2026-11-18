@@ -46,6 +46,7 @@ fn modal(app: AppState) -> Modal {
         title,
         sub: Some(note.to_owned()),
         body: body.into_element(),
+        foot: None,
         done: Some("Close".to_owned()),
         confirm: None,
     }

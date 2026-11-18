@@ -272,6 +272,7 @@ fn end_modal(app: AppState, session: &str) -> Modal {
             Token::Ink2,
         )
         .into_element(),
+        foot: None,
         done: None,
         confirm: Some(Confirm {
             label: if form == Form::Phone {

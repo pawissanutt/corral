@@ -380,6 +380,26 @@ fn a_refused_dispatch_offers_dispatch_anyway_and_forcing_it_runs_the_task() {
     app.wait_for("text:/forced dispatch/").unwrap();
 }
 
+/// The keyboard's Actions menu (`.`) took no arrows, so Down three times and Enter ran its first
+/// item, Edit. Down moves through the items and Enter runs the one it reached, the fourth
+/// (Dispatch); End and Home reach the last and the first.
+#[test]
+fn arrow_keys_walk_the_actions_menu_and_enter_runs_the_item_reached() {
+    let mut app = preview(desktop(), &[("corral.destination", "now")]);
+    app.press("id:task-T-8").unwrap();
+    app.press_key(".").unwrap();
+    app.wait_for("id:verbs").unwrap();
+    app.press_key("end").unwrap();
+    app.press_key("home").unwrap();
+    for _ in 0..3 {
+        app.press_key("down").unwrap();
+    }
+    app.press_key("enter").unwrap();
+    app.wait_for("id:btn-verb-send").unwrap();
+    app.wait_for("text:Dispatch T-8").unwrap();
+    assert_eq!(app.screen().count("text:Edit T-8").unwrap(), 0);
+}
+
 /// A destructive operation asks once, locally, with the focus on Cancel: Enter cancels, the
 /// receipt says nothing was sent, and the task is still there.
 #[test]
@@ -463,6 +483,23 @@ fn terminate_from_a_session_row_asks_once_and_ends_the_run() {
     app.wait_for_gone("id:agent-T-14_R1", Duration::from_secs(5))
         .unwrap();
     assert_eq!(app.screen().count("id:confirm").unwrap(), 0);
+}
+
+/// A menu the pointer opened lost the arrows to the roster under it, which moved its selection:
+/// they go into the menu (End to its last item, Task ›, then Up past Focus pane and Reply…), and
+/// Enter runs the item reached, Terminate.
+#[test]
+fn arrow_keys_walk_a_menu_the_pointer_opened() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.wait_for("id:agent-T-14_R1").unwrap();
+    app.right_click("id:agent-T-14_R1").unwrap();
+    app.wait_for("id:btn-terminate").unwrap();
+    for key in ["end", "up", "up", "up"] {
+        app.press_key(key).unwrap();
+    }
+    app.press_key("enter").unwrap();
+    app.wait_for("id:confirm").unwrap();
+    app.wait_for("text:/Terminate/").unwrap();
 }
 
 /// Pause on a session without a pi host is refused, and the refusal sheet says corrald's reason.

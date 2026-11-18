@@ -283,7 +283,7 @@ python3 scripts/tui-walk.py --size 140x44 fixture key:n sleep:1 screen
 | `A` (Shift+A) on Review | Focus Approve and land |
 | `j k`, `J K` | Move the list selection; Plans members |
 | `/` | Open Ask |
-| `Ctrl K` or `?` | Open palette |
+| `Ctrl K` or `?` | Open palette (`Ctrl K` also on the phone layout with a hardware keyboard) |
 | `Ctrl B` | Toggle sidebar; narrow windows fold it to a rail, not remove it |
 | `Ctrl S` in Settings › Configuration | Save the `corral.toml` draft (one `config.put`), from any field |
 | `]` | Next Now inspector tab |
@@ -297,7 +297,14 @@ while editing a field. List keys (`j`/`k`, arrows, Enter) bind only
 while the destination list has focus or no control has focus, with no overlay/confirmation.
 Now moves and opens the selected task's session with Enter; Review and Agents move; Plans move with `j k` and members with `J K`.
 Tab moves focus; Enter/Space and arrows remain with focused
-controls. Review has `s` (split when wide enough). While a menu, form, sheet or the palette is open, the key line shows that surface's keys.
+controls. In a menu (the Actions or Session menu `.` opens, one opened from its button or a row,
+the palette's results) `↑ ↓` move, `Home`/`End` reach the ends and Enter runs the item reached;
+Tab still moves, and the list under an open menu leaves it the arrows. On the web a popup menu
+opened with the pointer does not yet take the arrows until an item has the focus. In an operation's
+form a Markdown or prose field (a body, a comment, a reply, notes) takes several lines: Enter
+breaks the line there and Tab reaches Send. A form taller than the window scrolls inside its
+sheet, with Cancel and Send kept below it. Review has `s` (split when wide enough). While a
+menu, form, sheet or the palette is open, the key line shows that surface's keys.
 
 ## Structure
 

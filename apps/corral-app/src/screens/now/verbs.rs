@@ -20,6 +20,7 @@ use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::overlay::{Modal, counted, modal};
 use crate::ui::kit::suggest::suggestions;
+use crate::ui::kit::walk::walk;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -378,8 +379,8 @@ pub fn verb_composer(app: AppState) -> AnyElement {
 }
 
 /// The keyboard's command menu for the record the work state names: every operation in the
-/// table's order, the first one focused, so Tab moves, Return runs, Escape closes.
-/// test_id "verbs".
+/// table's order, the first one focused, so the arrows (or Tab) move, Return runs, Escape
+/// closes. test_id "verbs".
 fn command_menu(app: AppState) -> Modal {
     let form = app.form;
     let record = app.work.with_untracked(|state| state.menu.clone());
@@ -388,14 +389,14 @@ fn command_menu(app: AppState) -> Modal {
             .as_ref()
             .map_or_else(Vec::new, |record| work::record_verbs(record, feed))
     });
-    let first = element_ref();
-    let mut focused = false;
+    let mut walked = Vec::new();
     let rows: Vec<AnyElement> = verbs
         .into_iter()
         .map(|verb| {
-            let focus = (verb.enabled && !focused).then(|| {
-                focused = true;
-                first
+            let focus = verb.enabled.then(|| {
+                let handle = element_ref();
+                walked.push(handle);
+                handle
             });
             let label = match &verb.press {
                 Press::Menu(_) => format!("{} ›", verb.label),
@@ -404,9 +405,10 @@ fn command_menu(app: AppState) -> Modal {
             command_row(app, VerbAction { label, ..verb }, focus)
         })
         .collect();
-    if focused {
+    if let Some(&first) = walked.first() {
         after_answer(move || first.focus());
     }
+    walk(walked);
     Modal {
         test_id: "verbs".into(),
         title: record
@@ -418,6 +420,7 @@ fn command_menu(app: AppState) -> Modal {
             .role(AccessibilityRole::List)
             .children(rows)
             .into_element(),
+        foot: None,
         done: None,
         confirm: None,
     }
@@ -546,11 +549,20 @@ fn composer(app: AppState) -> Modal {
             if !field.choices.is_empty() {
                 return choice_row(app, field, index, values, caption);
             }
+            // A prose field keeps its line breaks: Return breaks the line there, and Tab reaches
+            // Send; a one-line field sends on Return.
+            let multiline = field.multiline;
             let entry = input()
                 .test_id(&format!("field-verb-{index}"))
                 .label(field.label)
                 .placeholder(field.placeholder)
                 .auto_focus(index == 0)
+                .multiline(multiline)
+                .submit_behavior(if multiline {
+                    SubmitBehavior::Newline
+                } else {
+                    SubmitBehavior::BlurAndSubmit
+                })
                 .value(move || values.with(|values| values.get(index).cloned().unwrap_or_default()))
                 .on_change(move |typed: &str| {
                     values.update(|values| {
@@ -569,19 +581,41 @@ fn composer(app: AppState) -> Modal {
                 .border_1()
                 .border_color(color(Token::Rule2))
                 .focus(|s| s.border_color(color(Token::Focus)));
-            let entry = match form {
-                Form::Terminal => entry.h(term::rows(1.0)).px(term::cells(1.0)),
-                Form::Desktop => entry
+            let entry = match (form, multiline) {
+                (Form::Terminal, false) => entry.h(term::rows(1.0)).px(term::cells(1.0)),
+                (Form::Terminal, true) => entry
+                    .min_h(term::rows(3.0))
+                    .max_h(term::rows(8.0))
+                    .px(term::cells(1.0)),
+                (Form::Desktop, false) => entry
                     .font_family(FONT_TEXT)
                     .text_size(px(13.0))
                     .h(px(32.0))
                     .px(px(10.0))
                     .rounded(px(6.0)),
-                Form::Phone => entry
+                (Form::Desktop, true) => entry
+                    .font_family(FONT_TEXT)
+                    .text_size(px(13.0))
+                    .line_height(px(19.0))
+                    .min_h(px(96.0))
+                    .max_h(px(288.0))
+                    .px(px(10.0))
+                    .py(px(7.0))
+                    .rounded(px(6.0)),
+                (Form::Phone, false) => entry
                     .font_family(FONT_TEXT)
                     .text_size(px(16.0))
                     .min_h(px(TARGET))
                     .px(px(12.0))
+                    .rounded(px(10.0)),
+                (Form::Phone, true) => entry
+                    .font_family(FONT_TEXT)
+                    .text_size(px(16.0))
+                    .line_height(px(22.0))
+                    .min_h(px(TARGET * 2.5))
+                    .max_h(px(240.0))
+                    .px(px(12.0))
+                    .py(px(10.0))
                     .rounded(px(10.0)),
             };
             let offered = (!field.suggestions.is_empty()).then(|| {
@@ -650,13 +684,20 @@ fn composer(app: AppState) -> Modal {
             send,
         )
     });
-    let actions = view()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .when(!phone, |row| row.justify_end())
-        .child(cancel)
-        .child(submit);
+    // Why Send did not go and the buttons stay under the fields, in view however long the form.
+    let foot = view()
+        .gap(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
+        .child(error)
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .when(!phone, |row| row.justify_end())
+                .child(cancel)
+                .child(submit),
+        )
+        .into_element();
     let body = view()
         .gap(px(match form {
             Form::Terminal => 0.0,
@@ -665,15 +706,13 @@ fn composer(app: AppState) -> Modal {
         }))
         .when(form != Form::Terminal, |body| body.pt(px(4.0)))
         .children(rows)
-        .child(error)
-        .when(form == Form::Terminal, |body| body.child(term::blank()))
-        .child(actions)
         .into_element();
     Modal {
         test_id: "verb".into(),
         title,
         sub: None,
         body,
+        foot: Some(foot),
         done: None,
         confirm: None,
     }
