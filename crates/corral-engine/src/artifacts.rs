@@ -21,6 +21,30 @@ use crate::{
     store::{Store, documents, encode},
 };
 
+/// Narrow the artifact finder before applying its page bounds.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ArtifactFilter<'a> {
+    pub words: Option<&'a str>,
+    pub kind: Option<&'a str>,
+    pub task: Option<&'a str>,
+    pub project: Option<&'a str>,
+}
+
+// Jiff serializes timestamps in UTC with an optional decimal fraction. With
+// the trailing Z removed, SQLite's text order matches chronological order.
+const CATALOG_SCHEMA: &str = "
+    CREATE INDEX IF NOT EXISTS artifacts_by_time
+        ON artifacts(rtrim(json_extract(document, '$.at'), 'Z'), task || ':' || ordinal);
+    CREATE INDEX IF NOT EXISTS artifact_events_by_reference
+        ON events(json_extract(detail, '$.reference')) WHERE kind='artifact';";
+
+pub(crate) fn prepare_catalog(store: &Store) -> Result<()> {
+    store
+        .connection
+        .execute_batch(CATALOG_SCHEMA)
+        .context("prepare artifact catalog indexes")
+}
+
 impl Store {
     pub fn insert_artifact(&self, artifact: &Artifact) -> Result<()> {
         self.connection
@@ -50,6 +74,106 @@ impl Store {
     pub fn list_artifacts(&self, task: Option<&str>) -> Result<Vec<Artifact>> {
         let mut statement = self.connection.prepare("SELECT document FROM artifacts WHERE (?1 IS NULL OR task=?1) ORDER BY task,ordinal").context("prepare artifact listing")?;
         documents(&mut statement, [task])
+    }
+
+    /// Newest first, with descending reference as a tie-breaker. The exclusive
+    /// anchor remains usable even when newer or non-matching rows are added.
+    pub fn artifacts_before(
+        &self,
+        filter: ArtifactFilter<'_>,
+        before: Option<(Timestamp, &str)>,
+        limit: usize,
+    ) -> Result<Vec<Artifact>> {
+        let time = before.map(|(at, _)| at.to_string());
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT a.document, t.project, a.task || ':' || a.ordinal AS reference,
+                        rtrim(json_extract(a.document, '$.at'), 'Z') AS sort_time
+                   FROM artifacts a JOIN tasks t ON t.id=a.task
+                  WHERE (sort_time, reference) < (coalesce(?1, '~'), coalesce(?2, ''))
+                    AND (?3 IS NULL OR a.task=?3)
+                  ORDER BY sort_time DESC, reference DESC",
+            )
+            .context("prepare artifact catalog page")?;
+        let mut rows = statement
+            .query(params![
+                time.as_deref().map(|at| at.trim_end_matches('Z')),
+                before.map(|(_, reference)| reference),
+                filter.task,
+            ])
+            .context("query artifact catalog page")?;
+        let kind_prefix = filter.kind.map(str::to_lowercase);
+        let project_prefix = filter.project.map(str::to_lowercase);
+        let words = filter
+            .words
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect::<Vec<_>>();
+        let mut selected = Vec::new();
+        let mut run = self
+            .connection
+            .prepare(
+                "SELECT run FROM events
+                 WHERE kind='artifact' AND json_extract(detail, '$.reference')=?1
+                 ORDER BY seq LIMIT 1",
+            )
+            .context("prepare artifact run attribution")?;
+        while selected.len() < limit {
+            let Some(row) = rows.next().context("read artifact catalog row")? else {
+                break;
+            };
+            let project: Option<String> = row.get(1).context("read artifact project")?;
+            if let Some(prefix) = &project_prefix
+                && !project
+                    .as_ref()
+                    .is_some_and(|name| name.to_lowercase().starts_with(prefix))
+            {
+                continue;
+            }
+            let mut artifact: Artifact = serde_json::from_str(
+                row.get_ref(0)
+                    .context("read artifact metadata")?
+                    .as_str()
+                    .context("artifact metadata is not text")?,
+            )
+            .context("decode artifact metadata")?;
+            let kind = if kind_prefix.is_some() || !words.is_empty() {
+                artifact.kind.as_deref().map(str::to_lowercase)
+            } else {
+                None
+            };
+            if let Some(prefix) = &kind_prefix
+                && !kind.as_ref().is_some_and(|name| name.starts_with(prefix))
+            {
+                continue;
+            }
+            let reference = row
+                .get_ref(2)
+                .context("read artifact reference")?
+                .as_str()
+                .context("artifact reference is not text")?;
+            if !words.is_empty() {
+                let title = artifact.title.to_lowercase();
+                let reference = reference.to_ascii_lowercase();
+                if !words.iter().all(|word| {
+                    title.contains(word)
+                        || kind.as_ref().is_some_and(|kind| kind.contains(word))
+                        || reference.contains(word)
+                }) {
+                    continue;
+                }
+            }
+            artifact.project = project;
+            artifact.run = run
+                .query_row([reference], |row| row.get(0))
+                .optional()
+                .context("read artifact run attribution")?
+                .flatten();
+            selected.push(artifact);
+        }
+        Ok(selected)
     }
 
     pub fn get_artifact(&self, reference: &str) -> Result<Option<Artifact>> {
@@ -85,9 +209,10 @@ impl Engine {
     ) -> Result<Artifact> {
         self.store.transaction(|store| {
             store.require_task(task)?;
+            let run = self.artifact_run(store, task)?;
             self.add_artifact_file_in(
                 store,
-                self.artifact_target(task),
+                self.artifact_target(task, run.as_deref()),
                 path,
                 kind,
                 title,
@@ -109,14 +234,44 @@ impl Engine {
         }
         self.store.transaction(|store| {
             store.require_task(task)?;
-            self.add_artifact_in(store, self.artifact_target(task), bytes, kind, title)
+            let run = self.artifact_run(store, task)?;
+            self.add_artifact_in(
+                store,
+                self.artifact_target(task, run.as_deref()),
+                bytes,
+                kind,
+                title,
+            )
         })
     }
 
-    fn artifact_target<'a>(&self, task: &'a str) -> ArtifactTarget<'a> {
+    fn artifact_run(&self, store: &Store, task: &str) -> Result<Option<String>> {
+        // Run-launched CLI commands inherit this context. Owner submissions
+        // (including daemon RPCs) are task-level attachments.
+        if !matches!(self.actor, Actor::Agent | Actor::Reviewer)
+            || std::env::var_os("CORRAL_NEXT_ROOT").as_deref() != Some(self.root.as_os_str())
+            || std::env::var("CORRAL_TASK").as_deref() != Ok(task)
+        {
+            return Ok(None);
+        }
+        let Ok(run) = std::env::var("CORRAL_RUN") else {
+            return Ok(None);
+        };
+        let exists: bool = store
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM runs WHERE task=?1 AND id=?2)",
+                params![task, run],
+                |row| row.get(0),
+            )
+            .context("look up artifact's submitting run")?;
+        Ok(exists.then_some(run))
+    }
+
+    fn artifact_target<'a>(&self, task: &'a str, run: Option<&'a str>) -> ArtifactTarget<'a> {
         ArtifactTarget {
             task,
-            run: None,
+            run,
             actor: self.actor,
         }
     }
@@ -175,6 +330,8 @@ impl Engine {
             title: title.to_owned(),
             at: Timestamp::now(),
             by: target.actor,
+            project: None,
+            run: None,
         };
         store.insert_artifact(&artifact)?;
         store.append_event(&NewEvent {

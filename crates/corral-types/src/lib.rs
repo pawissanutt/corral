@@ -8,7 +8,7 @@ use serde_json::Value;
 
 mod op;
 
-pub use op::{Next, Op, Refusal};
+pub use op::{ConfigProblem, Next, Op, Refusal};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -223,6 +223,12 @@ pub struct Artifact {
     pub title: String,
     pub at: Timestamp,
     pub by: Actor,
+    /// Project of the owning task, when supplied by the catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Run that recorded the artifact, if it was attached to a run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
 }
 
 impl Artifact {

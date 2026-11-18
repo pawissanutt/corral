@@ -239,10 +239,10 @@ title_regex = "["
         "defaults.base",
         "runner.mode",
         "artifacts.globs",
-        "harnesses.bad",
-        "missing-harness",
-        "model_flag",
-        "effort_flag",
+        "harnesses.bad.command",
+        "profiles.bad.harness",
+        "profiles.no-flags.model",
+        "profiles.no-flags.effort",
         "projects.app.path",
         "projects.app.running",
         "projects.app.profile",
@@ -253,7 +253,9 @@ title_regex = "["
         "routing[0].title_regex",
     ] {
         assert!(
-            problems.iter().any(|problem| problem.contains(needle)),
+            problems
+                .iter()
+                .any(|problem| problem.key.as_deref() == Some(needle)),
             "missing {needle}: {problems:?}"
         );
     }
