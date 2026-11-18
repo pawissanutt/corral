@@ -21,6 +21,8 @@ export interface BuildControlsOptions extends Omit<FleetOptions, "models" | "app
   readonly localTools: () => readonly ToolDefinition[];
   readonly run?: Run;
   readonly git?: Run;
+  /** Gives the parent a failed landing gate to fix and settles when the turn that answers it ends. */
+  readonly repairLand?: (prompt: string) => Promise<{ readonly aborted: boolean }>;
   /** Ends the parent's agent_wait when input is queued for its next turn boundary. */
   readonly wake?: InputWake;
 }
@@ -69,7 +71,7 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     catch { /* A reporting failure does not block the interactive session. */ }
   });
   const exit = createExit({ context, run, git, fleet: () => fleet.snapshot(), journal: buildJournal,
-    changed: options.changed, now: options.now,
+    changed: options.changed, now: options.now, ...(options.repairLand ? { repair: options.repairLand } : {}),
     save(record) {
       // The entry records the transcript after binding, later than this composition is created.
       const saved = loadSession(dataRoot, session.id);
