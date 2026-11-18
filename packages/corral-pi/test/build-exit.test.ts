@@ -156,6 +156,7 @@ describe("build exits", () => {
         const state = await f.control.choose("land", override ? { overrideReason: "Owner accepts the risk" } : undefined);
         expect(state.phase).toBe(landed ? "landed" : "failed");
         expect(f.prompts[0]!.includes("build_review")).toBe(!override);
+        expect(f.journal.record().decisions.some(decision => decision.kind === "override" && decision.text.startsWith("Repair 1 commits"))).toBe(override);
         if (!landed) { expect(state.detail).toContain("no approving review covers the repaired head"); expect(f.events).not.toContain("land"); }
       } finally { f.close(); }
     }
