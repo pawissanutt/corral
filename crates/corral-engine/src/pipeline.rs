@@ -107,7 +107,13 @@ impl Engine {
         if let Some(project) = project.as_ref().filter(|p| !p.gate.is_empty()) {
             let check = match self.store.latest_check(id, CheckKind::Gate, &head)? {
                 Some(check) => check,
-                None => self.run_gate(&worker, Some(project), Actor::Auto, effects_started)?,
+                None => self.run_gate(
+                    &worker,
+                    task.round,
+                    Some(project),
+                    Actor::Auto,
+                    effects_started,
+                )?,
             };
             if check.result == CheckResult::Fail {
                 return self.send_back(id, &gate_notes(&check));

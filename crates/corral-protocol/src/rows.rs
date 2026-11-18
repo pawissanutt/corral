@@ -29,6 +29,9 @@ pub struct TaskRow {
     /// In `task.depends_on` order, including dependencies that are no longer open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dependencies: Option<Vec<DependencyStatus>>,
+    /// Worker profile dispatch would select without an explicit override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_profile: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -66,6 +69,9 @@ pub struct ProjectRow {
     pub open_by_status: Option<Vec<StatusCount>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective: Option<EffectiveProjectSettings>,
+    /// Local branch names, most recently committed first; absent if unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_branches: Option<Vec<String>>,
 }
 
 /// Project settings after applying workspace defaults, before task-specific overrides.
@@ -95,6 +101,9 @@ pub struct AgentRow {
     pub run: Run,
     #[schemars(with = "crate::schema_types::SessionStatus")]
     pub status: SessionStatus,
+    /// The live Pi host's pause flag, absent when there is no host state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -124,6 +133,9 @@ pub struct AssistantRow {
     pub cost_usd: Option<f64>,
     pub cost_basis: Option<CostBasis>,
     pub wait: Option<WaitReason>,
+    /// Host question id for the owner prompt shown while Waiting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_id: Option<String>,
     pub rev: u64,
 }
 

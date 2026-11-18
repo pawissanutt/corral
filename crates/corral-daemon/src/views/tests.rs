@@ -192,6 +192,8 @@ fn review_uses_immutable_submitted_patch_and_includes_all_checks() {
         let check = corral_engine::Check {
             kind: corral_engine::CheckKind::Review,
             key: round.to_string(),
+            round: Some(round),
+            run: None,
             notes: Some(format!("review round {round}")),
             log: None,
             ..checks[0].clone()
@@ -269,6 +271,7 @@ fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
             to: to.into(),
             by: Some(UsageBy::Profile),
             utc_offset_minutes: 120,
+            time_zone: None,
         },
         etag: None,
         page: None,
@@ -322,4 +325,73 @@ fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
     assert_eq!(last.days[0].day, "2026-05-12");
     assert_eq!(last.days[0].summary, corral_types::UsageSummary::default());
     assert!(detail(&fixture.shared, get("2026-01-01", "2027-01-03")).is_err());
+}
+
+#[test]
+fn named_usage_zone_buckets_and_bounds_follow_the_clock_change() {
+    let fixture = Fixture::new();
+    let engine = fixture.shared.engine().unwrap();
+    for (at, input) in [
+        ("2026-03-08T05:00:00Z", 1), // First midnight, still EST.
+        ("2026-03-09T03:59:59Z", 2),
+        ("2026-03-09T04:00:00Z", 4), // Next midnight, now EDT.
+        ("2026-03-10T04:00:00Z", 8), // Exclusive upper bound.
+    ] {
+        engine
+            .record_usage(&corral_types::Usage {
+                at: at.parse().unwrap(),
+                model: "test-model".into(),
+                input,
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let query = serde_json::from_value(serde_json::json!({
+        "kind": "usage_series", "from": "2026-03-08", "to": "2026-03-10",
+        "utc_offset_minutes": -300, "time_zone": "America/New_York"
+    }))
+    .unwrap();
+    let reply = detail(&fixture.shared, query).unwrap();
+    let Some(DetailBody::UsageSeries(series)) = reply.body else {
+        panic!("expected usage series");
+    };
+    let totals: Vec<_> = series
+        .days
+        .iter()
+        .map(|day| (day.day.as_str(), day.summary.total.input))
+        .collect();
+    assert_eq!(totals, [("2026-03-08", 3), ("2026-03-09", 4)]);
+}
+
+#[test]
+fn burnup_includes_drops_and_reopens_in_event_order() {
+    use corral_engine::EventKind;
+
+    let fixture = Fixture::new();
+    let id = fixture.named_task("Scope changes", None);
+    fixture.apply(Op::Drop { id: id.clone() });
+    fixture.apply(Op::Reopen { id: id.clone() });
+    fixture.apply(Op::Comment {
+        id,
+        text: "Unrelated to scope".into(),
+    });
+    let reply = detail(
+        &fixture.shared,
+        DetailGet {
+            target: DetailRef::Burnup {
+                scope: "workspace".into(),
+            },
+            page: None,
+            etag: None,
+        },
+    )
+    .unwrap();
+    let Some(DetailBody::Burnup(series)) = reply.body else {
+        panic!("expected burnup");
+    };
+    let kinds: Vec<_> = series.events.iter().map(|event| event.kind).collect();
+    assert_eq!(
+        kinds,
+        [EventKind::Created, EventKind::Dropped, EventKind::Reopened]
+    );
 }

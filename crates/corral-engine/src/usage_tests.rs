@@ -394,7 +394,7 @@ fn usage_series_buckets_by_local_midnight_and_covers_only_same_day_cohorts() {
             })
             .unwrap();
     }
-    let window = || UsageWindow::parse("2026-11-17", "2026-11-21", 120).unwrap();
+    let window = || UsageWindow::parse("2026-11-17", "2026-11-21", 120, None).unwrap();
     let series = engine.usage_series(window(), Some(UsageBy::Model)).unwrap();
     let counts = |day: usize| {
         let summary = &series[day].summary;
@@ -452,7 +452,7 @@ fn usage_series_buckets_by_local_midnight_and_covers_only_same_day_cohorts() {
 
 #[test]
 fn usage_window_requires_canonical_dates_and_a_bounded_forward_span() {
-    assert!(UsageWindow::parse("2024-01-01", "2025-01-01", -240).is_ok());
+    assert!(UsageWindow::parse("2024-01-01", "2025-01-01", -240, None).is_ok());
     for (from, to, offset) in [
         ("2024-01-01", "2025-01-02", 0),
         ("2024-01-01", "2024-01-01", 0),
@@ -462,6 +462,6 @@ fn usage_window_requires_canonical_dates_and_a_bounded_forward_span() {
         ("2024-01-01", "2024-01-02", 1440),
         ("2024-01-01", "2024-01-02", -1440),
     ] {
-        assert!(UsageWindow::parse(from, to, offset).is_err());
+        assert!(UsageWindow::parse(from, to, offset, None).is_err());
     }
 }

@@ -112,7 +112,13 @@ impl Engine {
             let run = self.last_worker(&self.store, &task)?;
             let project = self.project_for(&task)?;
             let mut effects_started = false;
-            match self.run_gate(&run, project.as_ref(), self.actor, &mut effects_started) {
+            match self.run_gate(
+                &run,
+                task.round,
+                project.as_ref(),
+                self.actor,
+                &mut effects_started,
+            ) {
                 Ok(check) => {
                     if task.blocked.as_ref().is_some_and(|blocked| {
                         matches!(blocked.reason.as_str(), GATE_FAILED | PIPELINE_FAILED)
@@ -175,6 +181,7 @@ impl Engine {
     pub(crate) fn run_gate(
         &self,
         run: &Run,
+        round: u32,
         project: Option<&EffectiveProject>,
         actor: Actor,
         effects_started: &mut bool,
@@ -240,6 +247,8 @@ impl Engine {
                 log: Some(artifact.reference()),
                 by: actor,
                 at: Timestamp::now(),
+                round: Some(round),
+                run: Some(run.id.clone()),
             };
             store.insert_check(&check)?;
             self.event(
@@ -414,13 +423,14 @@ impl Engine {
                 log: None,
                 by: self.actor,
                 at: Timestamp::now(),
+                round: Some(task.round),
+                run: reviewer.as_ref().map(|run| run.id.clone()),
             };
             store.insert_check(&check)?;
-            let review_run = reviewer.as_ref().map(|run| run.id.as_str());
             self.event(
                 store,
                 Some(id),
-                review_run,
+                check.run.as_deref(),
                 EventKind::Verdict,
                 self.actor,
                 json!({"approve":approve,"notes":notes,"round":task.round}),
