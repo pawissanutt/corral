@@ -16,7 +16,7 @@ test("the sparkline keeps the last buckets right-aligned, scaled to the busiest 
 
 const NOW = 1_000_000;
 function helper(request: string, phase: HelperInspection["phase"], extra: Partial<HelperInspection> = {}): HelperInspection {
-  return { request, kind: "explore", model: "provider/model-a", generation: 1, phase, createdAt: NOW - 9000,
+  return { request, kind: "explore", model: "provider/model-a", phase, createdAt: NOW - 9000,
     ...(phase === "preparing" || phase === "queued" ? {} : { startedAt: NOW - 8000 }),
     ...(phase === "preparing" || phase === "queued" || phase === "running" ? {} : { endedAt: NOW - 1000 }),
     prompt: `Find ${request}`, messages: [], truncated: false, ...extra };

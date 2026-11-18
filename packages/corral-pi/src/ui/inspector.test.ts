@@ -12,68 +12,66 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { runChild, childKey } from "../extensions/codemode/child.ts";
 
-const identity = { store: "st-test", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 3 };
+const identity = { store: "st-test", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
+type Observed = { toolName: string; input: Record<string, unknown>; details: unknown; content: AgentToolResult<unknown>["content"]; isError: boolean; parentToolCallId?: string };
 function adapter() {
-  let listener: (event: { toolName: string; details: unknown; content: AgentToolResult<unknown>["content"]; isError: boolean; parentToolCallId?: string }) => void = () => {};
+  let listener: (event: Observed) => void = () => {};
   const pi = { on: (_name: string, fn: typeof listener) => { listener = fn; } } as unknown as ExtensionAPI;
-  const events = new EventLog(3, 2);
+  const events = new EventLog(3);
   const activity = new InspectorActivity(events, () => {});
-  activity.extend(pi, new Set(["corral_todo", "corral_gate"]));
-  return { events, activity, send: (details: unknown, extra = {}) => listener({
-    toolName: "corral_gate", details, content: [], isError: false, ...extra,
+  activity.extend(pi, new Set(["corral_todo", "corral_done"]));
+  return { events, activity, send: (details: unknown, extra: Partial<Observed> = {}) => listener({
+    toolName: "corral_done", input: { summary: "Implemented." }, details, content: [{ type: "text", text: JSON.stringify(details) }],
+    isError: false, ...extra,
   }) };
 }
 const base = (activity: InspectorActivity): InspectorSnapshot => ({
   session: "session-real-adapter", boundSession: null, turn: 2, turnOpen: true,
   capabilities: null, guidance: { projectText: null, skillPaths: [], promptPaths: [], prompts: [], skills: [] },
-  settings: [], budget: ["Budget unavailable · legacy generation"], ...activity.snapshot(),
+  settings: [], budget: ["Budget unavailable · legacy launch"], ...activity.snapshot(),
 });
 const progress = (revision: number) => ({ revision, spec_revision: "spec", phases: [{ id: "p", label: "Implement", steps: [
   { id: "s", label: "Work", status: { state: "in_progress" as const }, criteria: ["C1"] },
 ] }] });
+/** A corral_todo success as the host-local ledger returns it. */
+const todoResult = (revision: number) => ({ revision, progress: progress(revision), plan: "P1", disposition: { state: "actionable", next: "s" }, closed_plans: 0 });
 
-test("receipt observations keep outcome and nesting, bounded; unknown never reads as success; gaps and omissions in both modes", () => {
+test("observed operations keep ok or failed and nesting, bounded; gaps and omissions in both modes", () => {
   const { events, activity, send } = adapter();
-  events.emit("bound"); events.emit("turn_started", { turn: 2 }); events.emit("tool_denied");
-  for (const state of ["committed", "rejected", "uncertain", "queued"]) send({ state, result: { code: "example" } });
-  send({ state: "committed", replayed: true, result: { status: "started" } });
-  send(undefined, { isError: true, content: [{ type: "text", text: "transport unavailable" }] });
-  send({ result: { status: "started" } });
-  // Unauthenticated nested calls and non-Corral tools cannot inject receipt outcomes.
-  send({ state: "committed" }, { parentToolCallId: "nested" });
-  send({ state: "committed" }, { toolName: "read" });
+  events.emit("bound"); events.emit("turn_started", { turn: 2 }); events.emit("tool_denied"); events.emit("turn_ended");
+  send({ id: "T-001", status: "review" });
+  send({ reason: "T-001 is not running", next: ["corral start T-001"] }, { isError: true });
+  // Unauthenticated nested calls and non-Corral tools cannot inject outcomes.
+  send({ id: "T-001" }, { parentToolCallId: "nested" });
+  send({ id: "T-001" }, { toolName: "read" });
   const rows = activity.snapshot().receipts;
-  expect(rows.map(row => [row.tool, row.state, row.nested])).toEqual([
-    ["corral_gate", "committed", false], ["corral_gate", "rejected", false], ["corral_gate", "uncertain", false],
-    ["corral_gate", "queued", false], ["corral_gate", "committed", false], ["corral_gate", "no receipt", false],
-    ["corral_gate", "no receipt", false],
-  ]);
+  expect(rows.map(row => [row.tool, row.state, row.nested])).toEqual([["corral_done", "ok", false], ["corral_done", "failed", false]]);
   const now = Date.now(), text = (set: readonly { text: string }[]) => set.map(line => line.text).join("\n");
   const first = receiptLines(base(activity), now);
   const operations = first.lines.slice(first.lines.findIndex((line, index) => index > 0 && line.heading) + 1).slice(0, rows.length);
-  rows.forEach((row, index) => {
-    if (row.state !== "committed") expect(operations[index]!.text.split("  ")[1]?.[0]).not.toBe("✓");
-  });
+  expect(operations.map(line => line.text.split("  ")[1])).toEqual([
+    "✓ Finished the run · sent to review · done · ok", "✗ Finish · refused: T-001 is not running · done · failed",
+  ]);
   // The exact records keep the observed summary and every retained event's time and kind; the readable lines read local time.
-  for (const observed of ["replayed", "transport unavailable"]) expect(text(first.raw)).toContain(observed);
+  expect(text(first.raw)).toContain("✗ Finish · refused: T-001 is not running");
   for (const event of base(activity).events.events) {
     expect(text(first.raw)).toContain(event.at); expect(text(first.raw)).toContain(event.kind);
     expect(text(first.lines)).not.toContain(event.at);
   }
-  for (let n = 0; n < 30; n++) send({ state: "committed", result: { revision: n } });
+  for (let n = 0; n < 30; n++) send({ id: "T-001", status: "review" });
   expect(activity.snapshot().receipts).toHaveLength(24);
-  expect(activity.snapshot().receiptsOmitted).toBe(13);
+  expect(activity.snapshot().receiptsOmitted).toBe(8);
   const info = base(activity), shown = receiptLines(info, now);
   expect(info.events.gap?.missing).toBe(1);
-  const page = info.events, gapless = { generation: page.generation, events: page.events, last: page.last, next: page.next, more: page.more };
+  const page = info.events, gapless = { events: page.events, last: page.last, next: page.next, more: page.more };
   for (const variant of [{ ...info, events: gapless }, { ...info, receiptsOmitted: 0 }]) {
     const other = receiptLines(variant, now);
     expect(text(other.lines)).not.toBe(text(shown.lines)); expect(text(other.raw)).not.toBe(text(shown.raw));
   }
 });
 
-test("only authenticated, non-denied Code Mode children can feed receipt and ledger adapters", async () => {
-  type Result = { toolName: string; toolCallId: string; parentToolCallId?: string; details: unknown; content: []; isError: boolean };
+test("only authenticated, non-denied Code Mode children can feed the operation and ledger adapters", async () => {
+  type Result = { toolName: string; toolCallId: string; parentToolCallId?: string; input: Record<string, unknown>; details: unknown; content: []; isError: boolean };
   const listeners: ((event: Result) => unknown)[] = [];
   const pi = { on: (_name: string, fn: (event: Result) => unknown) => { listeners.push(fn); } } as unknown as ExtensionAPI;
   const activity = new InspectorActivity(new EventLog(3), () => {});
@@ -82,10 +80,10 @@ test("only authenticated, non-denied Code Mode children can feed receipt and led
   activity.extend(pi, new Set(["corral_todo"])); ledger.extend(pi);
   const parent = { tool_call_id: "code", cell: "cell-1", call: "cell-1.1" };
   const child = { key: childKey(parent), parent, tool: "corral_todo" };
-  const event: Result = { toolName: "corral_todo", toolCallId: "code/1", parentToolCallId: "code", content: [], isError: false,
-    details: { state: "committed", result: { progress: progress(2) } } };
+  const event: Result = { toolName: "corral_todo", toolCallId: "code/1", parentToolCallId: "code", input: { op: "start", step: "s" },
+    content: [], isError: false, details: todoResult(2) };
   const send = async (result = event) => { await Promise.all(listeners.map(fn => fn(result))); };
-  await send(); // A receipt-shaped object and parent ID are insufficient.
+  await send(); // A result-shaped object and parent ID are insufficient.
   await runChild({ ...child, denied: "not allowed" }, () => send());
   await runChild(child, () => send({ ...event, parentToolCallId: "foreign" }));
   await runChild({ ...child, tool: "read" }, () => send());
@@ -94,26 +92,25 @@ test("only authenticated, non-denied Code Mode children can feed receipt and led
   expect(ledger.current?.revision).toBe(2); expect(activity.snapshot().receipts.map(row => row.nested)).toEqual([true]);
 });
 
-test("canonical ledger adapters reject local assertions, rejected outcomes, late replay and stale reads", async () => {
+test("the ledger adapter applies returned progress, ignores failures and older revisions, and rereads when a result has none", async () => {
   let read: unknown = { runs: [{ id: "R1", progress: progress(1) }] };
   const ledger = new TodoLedger(identity, async () => read);
   expect(ledger.unavailable).toBeTrue();
   await ledger.restore();
-  await ledger.receipt({ state: "committed", result: { progress: progress(3) } });
-  await ledger.receipt({ state: "committed", replayed: true, result: { progress: progress(2) } });
-  for (const state of ["rejected", "uncertain", "queued", "agent says done"]) await ledger.receipt({ state, result: { progress: progress(9) } });
+  await ledger.result(todoResult(3), false);
+  await ledger.result(todoResult(2), false);
+  await ledger.result(todoResult(9), true);
   expect(ledger.current?.revision).toBe(3);
   await expect(ledger.restore()).rejects.toThrow("older ledger");
   expect(ledger.unavailable).toBeTrue();
   expect(ledger.current?.revision).toBe(3);
   read = { runs: [{ id: "R1", progress: progress(4) }] };
-  await ledger.restore();
+  await ledger.result({ note: "no progress" }, false);
   expect(ledger.unavailable).toBeFalse();
-  for (const role of ["pm", "assistant"] as const) {
-    const data = { todo: progress(1), todo_requests: null };
-    const own = new TodoLedger({ ...identity, role }, async () => ({ container: role === "pm" ? data : { state: data } }));
-    await own.restore(); expect(own.current?.phases[0]?.steps[0]?.criteria).toEqual(["C1"]);
-  }
+  expect(ledger.current?.revision).toBe(4);
+  const data = { todo: progress(1), todo_requests: null };
+  const own = new TodoLedger({ ...identity, role: "assistant" }, async () => ({ container: { state: data } }));
+  await own.restore(); expect(own.current?.phases[0]?.steps[0]?.criteria).toEqual(["C1"]);
 });
 
 test("disconnected/legacy inspectors and activity never present unknown as successful acceptance", async () => {

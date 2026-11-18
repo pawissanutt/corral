@@ -19,7 +19,7 @@ const work = mkdtempSync(join(tmpdir(), "corral-panels-keys-"));
 afterAll(() => rmSync(work, { recursive: true, force: true }));
 
 const KEY = { f6: "\x1b[17~", f8: "\x1b[19~", esc: "\x1b", ctrlB: "\x02", altB: "\x1bb" };
-const worker = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 3 };
+const worker = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
 const plan: TodoProgress = { revision: 3, spec_revision: "spec-1", phases: [{ id: "p1", label: "Build", steps: [
   { id: "s1", label: "Write the parser", status: { state: "done" }, criteria: ["C1"] },
   { id: "s2", label: "Wire the panel", status: { state: "in_progress" }, criteria: ["C2", "C3"] },
@@ -125,7 +125,7 @@ test("only the chosen sidebar key toggles: Alt+B leaves Ctrl+B to the editor; an
 });
 
 test("/todo shows the one Plan with the keys at any width and in any role, and Enter on it opens the whole ledger", () => {
-  const pm = { store: worker.store, project: "demo", role: "pm" as const, generation: 3 };
+  const pm = { store: worker.store, project: "demo", role: "assistant" as const, assistant: "A-3" };
   for (const [columns, rows, hideRail] of [[80, 24, false], [140, 46, false], [140, 46, true]] as const) {
     const h = shell(columns, rows, () => snapshot({ ledger: plan }), { identity: pm });
     try {

@@ -25,7 +25,7 @@ function child(n: number, tool: string, ok: boolean | undefined, extra: Partial<
 function report(children: readonly ChildOutcome[], extra: Partial<CellReport> = {}): CellReport {
   const settledOk = children.filter(c => c.ok === true).length, failed = children.filter(c => c.ok === false).length;
   return { cell: "cell-1", status: "ok", stateLost: false, truncated: false, outputs: [], children, startedAt: NOW,
-    calls: { total: children.length, ok: settledOk, failed, running: children.length - settledOk - failed, committed: 0 },
+    calls: { total: children.length, ok: settledOk, failed, running: children.length - settledOk - failed },
     failures: children.filter(c => c.ok === false), durationMs: 374, ...extra };
 }
 function context(args: Record<string, unknown>, extra: Partial<RenderContext> = {}): RenderContext {
@@ -124,8 +124,8 @@ test("a stored detached report the runtime does not know is history: no spinner,
 });
 
 test("a report stored before child records existed renders its counts and failures", () => {
-  const old = { cell: "cell-6", status: "error", generation: 1, stateLost: false, truncated: false, outputs: [],
-    calls: { total: 4, ok: 0, failed: 1, running: 3, committed: 0 }, error: { name: "CodeCallError", code: "tool_error", message: "ENOENT" },
+  const old = { cell: "cell-6", status: "error", stateLost: false, truncated: false, outputs: [],
+    calls: { total: 4, ok: 0, failed: 1, running: 3 }, error: { name: "CodeCallError", code: "tool_error", message: "ENOENT" },
     failures: [{ tool: "read", call: "cell-6.2", key: "x/cell-6.2", ok: false, code: "tool_error", message: "ENOENT", effect: "unknown" }] };
   let lines: string[] = [];
   expect(() => { lines = draw(cellRenderers(deps()), context(code), [old as unknown as CellReport]); }).not.toThrow();

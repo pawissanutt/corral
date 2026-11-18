@@ -1,81 +1,51 @@
-// Proof (F10) building blocks: the I T R A ladder, its chips and the selectable row model.
-// Pure presentation of the canonical inspection; nothing here reads or infers freshness. Two staleness facts stay
-// apart: a gate or review that corral marks not fresh is `stale` (its own validity); data kept from an earlier read
-// is `retained` (the source's state, stated once by the shared chip header).
-import type { Inspection, InspectionStore } from "./inspection.ts";
-import { plainLabel, PANEL_TEXT } from "./panels-view.ts";
-import { chip, toneColor, type Tone } from "./panel-parts.ts";
+// Proof (F10) building blocks: the chips and the selectable section model over the task's newest checks.
+// Pure presentation of `corral show --json`; nothing here reads or infers freshness. A gate result belongs to the
+// commit it ran on and a review to its round; data kept from an earlier read is `retained`, stated once by the
+// shared chip header.
+import type { TaskCheck, TaskView } from "./task-store.ts";
+import { chip } from "./panel-parts.ts";
 
-export type Criterion = Inspection["criteria"][number];
-export interface Step { readonly letter: "I" | "T" | "R" | "A"; readonly glyph: string; readonly word: string; readonly tone: Tone }
-export type SectionId = "notes" | "findings" | "artifacts" | "summary";
-/** One selectable row of the Proof list: criteria first, then the MORE sections. */
-export type ProofItem = { readonly kind: "criterion"; readonly index: number } | { readonly kind: "section"; readonly id: SectionId };
+export type SectionId = "gate" | "notes" | "findings" | "artifacts" | "summary";
 
 export const short = (sha: string) => sha.slice(0, 8);
-/** The four steps for one criterion. Glyph and word always travel together; a retained read marks T and R `retained`. */
-export function ladder(store: InspectionStore, data: Inspection, c: Criterion): readonly Step[] {
-  const invalid = c.failures.length > 0 || data.manifest_failures.length > 0;
-  const status = c.observation?.status;
-  const tested: Step = store.stale ? { letter: "T", glyph: "~", word: "retained", tone: "warn" }
-    : invalid ? { letter: "T", glyph: "!", word: "invalid", tone: "bad" }
-    : status === "pass" ? { letter: "T", glyph: "✓", word: "pass · worker", tone: "ok" }
-    : status === "fail" ? { letter: "T", glyph: "✗", word: "fail · worker", tone: "bad" }
-    : status === "not_run" ? { letter: "T", glyph: "○", word: "not run", tone: "none" }
-    : { letter: "T", glyph: "·", word: "missing", tone: "none" };
-  const review = data.review, verdict = plainLabel(review?.verdict ?? "pending");
-  const reviewed: Step = !review ? { letter: "R", glyph: "·", word: "missing", tone: "none" }
-    : store.stale ? { letter: "R", glyph: "~", word: `${verdict} retained*`, tone: "warn" }
-    : !review.fresh ? { letter: "R", glyph: "~", word: `${verdict} stale*`, tone: "warn" }
-    : review.verdict === "approve" ? { letter: "R", glyph: "✓", word: "approve*", tone: "ok" }
-    : review.verdict ? { letter: "R", glyph: "✗", word: `${verdict}*`, tone: "bad" }
-    : { letter: "R", glyph: "…", word: "pending*", tone: "warn" };
-  return [
-    c.implemented ? { letter: "I", glyph: "✓", word: "implemented", tone: "ok" } : { letter: "I", glyph: "○", word: "not claimed", tone: "none" },
-    tested, reviewed,
-    { letter: "A", glyph: "—", word: "not recorded", tone: "none" },
-  ];
-}
-/** Glyph-only ladder for a list row; the `I T R A` column header above it carries the letters. */
-export const glyphs = (steps: readonly Step[]) => steps.map(s => `${toneColor(s.tone)}${s.glyph}`).join(" ") + PANEL_TEXT;
-export const stepChips = (steps: readonly Step[]) => steps.map(s => chip(`${s.letter} ${s.glyph} ${s.word}`, s.tone));
+const newest = (checks: readonly TaskCheck[]) => checks.reduce<TaskCheck | undefined>((last, check) => !last || check.at >= last.at ? check : last, undefined);
+export const gateCheck = (data: TaskView) => newest(data.checks.filter(check => check.kind === "gate"));
+export const reviewChecks = (data: TaskView) => data.checks.filter(check => check.kind === "review").sort((a, b) => b.at.localeCompare(a.at));
+/** The run Proof speaks for: this session's, else the newest worker run. */
+export const proofRun = (data: TaskView, run: string | undefined) =>
+  data.runs.find(item => item.id === run) ?? data.runs.filter(item => item.role === "worker").at(-1);
 
-/**
- * Top chip row: gate, review, manifest, candidate range and worktree. Missing records and a gate or review corral
- * marks not fresh stay inline as chips; whether the whole read is retained is the header's state chip, not these.
- */
-export function topChips(data: Inspection): string[] {
-  const gate = data.gate, review = data.review;
+/** Top chip row: the newest gate, the newest review and the run's commit range. Missing records stay inline as chips. */
+export function topChips(data: TaskView, run: string | undefined): string[] {
+  const gate = gateCheck(data), review = reviewChecks(data)[0], current = proofRun(data, run);
   const gateChip = !gate ? chip("gate · missing")
-    : chip(`gate ${!gate.fresh && gate.result !== "running" ? "~" : gate.result === "pass" ? "✓" : gate.result === "fail" ? "✗" : gate.result === "running" ? "…" : "~"} ${gate.result} · ${gate.fresh ? "fresh" : "stale"}${gate.tier ? ` · ${gate.tier} tier` : ""}`,
-      gate.result === "fail" ? "bad" : !gate.fresh ? "warn" : gate.result === "pass" ? "ok" : "none");
+    : chip(`gate ${gate.result === "pass" ? "✓ pass" : "✗ fail"} · ${short(gate.key)}`, gate.result === "pass" ? "ok" : "bad");
   const reviewChip = !review ? chip("review · missing")
-    : !review.fresh ? chip(`review ~ ${review.verdict ?? "pending"} · stale`, "warn")
-    : review.verdict === "approve" ? chip("review ✓ approve", "ok")
-    : review.verdict ? chip(`review ✗ ${review.verdict}`, "bad") : chip("review … pending", "warn");
+    : review.result === "pass" ? chip(`review ✓ approve · round ${review.key}`, "ok") : chip(`review ✗ changes · round ${review.key}`, "bad");
   return [
     gateChip, reviewChip,
-    data.manifest_digest ? chip(`manifest ${short(data.manifest_digest)} · ${data.audited ? "audited" : "not audited"}`, data.audited ? "none" : "warn") : chip("manifest ! legacy", "warn"),
-    chip(`${short(data.base)} → ${short(data.head)}`),
-    data.dirty ? chip("! dirty", "warn") : chip("clean", "ok"),
+    ...(current ? [chip(`${short(current.base_sha)} → ${current.head_sha ? short(current.head_sha) : "worktree"}`)] : []),
   ];
 }
 
-export function proofItems(data: Inspection | undefined): ProofItem[] {
+export function proofItems(data: TaskView | undefined, run: string | undefined): SectionId[] {
   if (!data) return [];
-  const items: ProofItem[] = data.criteria.map((_, index) => ({ kind: "criterion", index }));
-  const sections: SectionId[] = [...(data.review?.notes ? ["notes" as const] : []), "findings", "artifacts", ...(data.worker_summary ? ["summary" as const] : [])];
-  return [...items, ...sections.map(id => ({ kind: "section" as const, id }))];
+  return [
+    ...(gateCheck(data) ? ["gate" as const] : []),
+    ...(reviewChecks(data)[0]?.notes ? ["notes" as const] : []),
+    "findings", "artifacts",
+    ...(proofRun(data, run)?.summary ? ["summary" as const] : []),
+  ];
 }
-export const SECTION_LABEL: Record<SectionId, string> = { notes: "Review notes", findings: "Review findings", artifacts: "Run artifacts", summary: "Worker summary" };
-export function sectionCount(data: Inspection, id: SectionId): string {
+export const SECTION_LABEL: Record<SectionId, string> = {
+  gate: "Gate result", notes: "Review notes", findings: "Review findings", artifacts: "Task artifacts", summary: "Worker summary",
+};
+export function sectionCount(data: TaskView, id: SectionId): string {
   switch (id) {
-    case "notes": return "candidate-wide";
-    case "findings": {
-      const superseded = data.findings.filter(f => f.superseded).length;
-      return `${data.findings.length}${data.findings_omitted ? ` +${data.findings_omitted} omitted` : ""}${superseded ? ` · ${superseded} superseded` : ""}`;
-    }
-    case "artifacts": return `${data.artifacts.length}${data.artifacts_omitted ? ` +${data.artifacts_omitted} omitted` : ""}`;
+    case "gate": return gateCheck(data)?.result ?? "missing";
+    case "notes": return "newest round";
+    case "findings": return String(reviewChecks(data).length);
+    case "artifacts": return String(data.artifacts.length);
     case "summary": return "assertion";
   }
 }

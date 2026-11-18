@@ -52,29 +52,17 @@ export function rawLines(value: unknown): PagerLine[] {
   return bounded(json).map(line => ({ text: line }));
 }
 
-export type HistoryKind = "tasks" | "assistants";
 export interface HistoryEntry {
-  readonly kind: HistoryKind;
   readonly id: string;
   readonly title: string;
   readonly status: string | undefined;
   readonly raw: Record<string, unknown>;
 }
-/**
- * The rows of a list read, at most `HISTORY_ROWS`, and how many the reader returned. Tasks are searched by the
- * reader; assistant sessions are filtered here by the words of `query` over the whole record.
- */
-export function historyEntries(kind: HistoryKind, value: unknown, query: string): { readonly rows: readonly HistoryEntry[]; readonly returned: number } {
-  const words = kind === "assistants" ? query.toLowerCase().split(/\s+/).filter(Boolean) : [];
-  const source = records(value).filter(row => {
-    if (!words.length) return true;
-    const haystack = JSON.stringify(row).toLowerCase();
-    return words.every(word => haystack.includes(word));
-  });
-  const rows = source.slice(0, HISTORY_ROWS).map((row): HistoryEntry => kind === "tasks"
-    ? { kind, id: text(row.id) ?? "", title: oneLine(text(row.title) ?? ""), status: text(row.status), raw: row }
-    : { kind, id: text(row.session ?? row.id) ?? "", title: oneLine(text(row.focus ?? row.title) ?? ""),
-      status: text(row.status) ?? (text(row.ended) === undefined ? undefined : "ended"), raw: row });
+/** The task rows of a list read, at most `HISTORY_ROWS`, and how many the reader returned. The reader searched them. */
+export function historyEntries(value: unknown): { readonly rows: readonly HistoryEntry[]; readonly returned: number } {
+  const source = records(value);
+  const rows = source.slice(0, HISTORY_ROWS).map((row): HistoryEntry =>
+    ({ id: text(row.id) ?? "", title: oneLine(text(row.title) ?? ""), status: text(row.status), raw: row }));
   return { rows, returned: source.length };
 }
 
@@ -85,9 +73,9 @@ export interface RunEntry {
   readonly ended: string | undefined;
   readonly raw: Record<string, unknown>;
 }
-/** A task record's runs, latest first. */
-export function runEntries(task: Record<string, unknown>): readonly RunEntry[] {
-  return records(task.runs).reverse().map(run => ({
+/** A task's runs from its `corral show` read, latest first. */
+export function runEntries(view: Record<string, unknown>): readonly RunEntry[] {
+  return records(view.runs).reverse().map(run => ({
     id: text(run.id) ?? "", outcome: text(run.outcome), ended: recordedTime(run.ended), raw: run,
   }));
 }
@@ -95,61 +83,13 @@ export function runEntries(task: Record<string, unknown>): readonly RunEntry[] {
 /** One recap fact: words first, where it was read from kept apart. undefined value = not recorded. */
 export interface RecapFact { readonly label: string; readonly value: string | undefined; readonly provenance: string }
 
-function ledgerStep(value: unknown): string | undefined {
-  const steps = records(record(value).phases).flatMap(phase => records(phase.steps));
-  const step = steps.find(step => record(step.status).state === "in_progress") ?? steps.find(step => record(step.status).state === "pending");
-  if (!step) return undefined;
-  const id = text(step.id), label = text(step.label);
-  return [id, label].filter(Boolean).join(" · ") || undefined;
-}
-function questionText(value: RecordValue): string {
-  const key = text(value.key), words = text(value.text ?? value.question ?? value.prompt);
-  return oneLine(key && words ? `${key}: ${words}` : words ?? key ?? JSON.stringify(value));
-}
-function counted(value: unknown, noun: string): string | undefined {
-  return Array.isArray(value) ? `${value.length} ${noun}${value.length === 1 ? "" : "s"} recorded` : undefined;
-}
-
-/**
- * A task run's recap. `questions` is the question list read for the task (an Error when that read failed); only
- * questions of this run and its children count.
- */
-export function taskRecap(task: Record<string, unknown>, run: Record<string, unknown>, questions: unknown): readonly RecapFact[] {
-  const checkpoint = record(record(records(run.checkpoints).at(-1)).checkpoint);
-  const host = record(run.agent_host);
-  const prefix = `${String(task.id)}/${String(run.id)}/`;
-  const waiting = questions instanceof Error ? `could not be read: ${oneLine(questions.message)}`
-    : Array.isArray(questions) ? (() => {
-      const pending = records(questions).map(view => record(view.question)).filter(question => String(question.key ?? "").startsWith(prefix));
-      return pending.length ? pending.map(questionText).join("; ") : "nothing pending";
-    })() : undefined;
-  const next = text(record(checkpoint.input).next_action);
+/** A task run's recap from its run record. */
+export function taskRecap(run: Record<string, unknown>): readonly RecapFact[] {
   return [
-    { label: "outcome", value: text(run.outcome ?? task.result), provenance: run.outcome !== undefined ? "run.outcome" : "task.result (the run records no outcome)" },
+    { label: "outcome", value: text(run.outcome), provenance: "run.outcome · absent while the run is live" },
     { label: "summary", value: text(run.summary), provenance: "run.summary" },
-    { label: "waiting on", value: waiting, provenance: "question list for the task · effective pending questions of this run and its children" },
-    { label: "next step", value: next ?? ledgerStep(run.progress),
-      provenance: next !== undefined ? "run.checkpoints[-1].checkpoint.input.next_action" : "run.progress · first in-progress or pending step" },
-    { label: "checkpoint", value: recordedTime(checkpoint.captured), provenance: "run.checkpoints[-1].checkpoint.captured · compatibility not inferred" },
-    { label: "generations", value: counted(host.generations, "generation"), provenance: "run.agent_host.generations · recorded, not live health" },
-    { label: "rewinds", value: counted(host.rewinds, "rewind"), provenance: "run.agent_host.rewinds · recorded, not live health" },
-  ];
-}
-
-/** An assistant session's recap from its session and container records. */
-export function assistantRecap(session: Record<string, unknown>, container: Record<string, unknown>): readonly RecapFact[] {
-  const state = record(container.state);
-  const ended = text(session.ended) !== undefined;
-  const open = records(state.questions).filter(question => question.state === "open" || question.state === "escalated");
-  return [
-    { label: "outcome", value: undefined, provenance: "assistant sessions record no structured outcome" },
-    { label: "summary", value: text(session.summary), provenance: "assistant.session.summary" },
-    { label: "ended", value: recordedTime(session.ended), provenance: "assistant.session.ended · a missing end is not success" },
-    { label: "waiting on", value: ended ? "nothing · the session ended" : Array.isArray(state.questions) ? open.length ? open.map(questionText).join("; ") : "nothing pending" : undefined,
-      provenance: ended ? "assistant.session.ended closes its questions" : "assistant.container.state.questions · open or escalated" },
-    { label: "next step", value: ledgerStep(state.todo), provenance: "assistant.container.state.todo · first in-progress or pending step" },
-    { label: "generations", value: counted(state.generations, "generation"), provenance: "assistant.container.state.generations · recorded, not live health" },
-    { label: "rewinds", value: counted(state.rewinds, "rewind"), provenance: "assistant.container.state.rewinds · recorded, not live health" },
+    { label: "profile", value: [text(run.profile), text(run.model)].filter(Boolean).join(" · ") || undefined, provenance: "run.profile and run.model" },
+    { label: "ended", value: recordedTime(run.ended), provenance: "run.ended · a missing end is not success" },
   ];
 }
 
@@ -251,27 +191,3 @@ export function transcriptPage(page: string): TranscriptPage {
   return { lines, raw: shown.map(line => ({ text: line })), cut, empty: !page.trim() };
 }
 
-/** Recorded checkpoints, rewinds and any unfinished rewind as readable rows, from `agent rewind --list`. */
-export function recoveryLines(value: unknown): PagerLine[] {
-  const recovery = record(value);
-  const checkpoints = records(recovery.checkpoints), rewinds = records(recovery.rewinds);
-  const pending = recovery.pending === null || recovery.pending === undefined ? undefined : record(recovery.pending);
-  const when = (row: RecordValue) => recordedTime(row.at) ?? "time not recorded";
-  const lines: PagerLine[] = [{ text: "Checkpoints", heading: true }];
-  if (!Array.isArray(recovery.checkpoints)) lines.push({ text: "not recorded" });
-  else if (!checkpoints.length) lines.push({ text: "none recorded" });
-  for (const checkpoint of checkpoints) {
-    const turn = [text(checkpoint.turn) && `turn ${text(checkpoint.turn)}`, text(checkpoint.generation) && `generation ${text(checkpoint.generation)}`].filter(Boolean).join(" · ");
-    lines.push({ text: `${text(checkpoint.id) ?? "checkpoint"}  ${[turn, when(checkpoint), checkpoint.ended === true ? "turn ended" : "turn not ended in record"].filter(Boolean).join(" · ")}` });
-  }
-  lines.push({ text: "" }, { text: "Rewinds", heading: true });
-  if (!Array.isArray(recovery.rewinds)) lines.push({ text: "not recorded" });
-  else if (!rewinds.length) lines.push({ text: "none recorded" });
-  for (const rewind of rewinds) {
-    const target = text(rewind.checkpoint);
-    lines.push({ text: `${text(rewind.id) ?? "rewind"}  ${[target && `to ${target}`, text(rewind.stage ?? rewind.state) ?? "stage not recorded", when(rewind), text(rewind.detail)].filter(Boolean).map(part => oneLine(String(part))).join(" · ")}` });
-  }
-  lines.push({ text: "" }, { text: pending ? `Unfinished rewind ${text(pending.id) ?? ""} · ${text(pending.stage ?? pending.state) ?? "stage not recorded"}`.replace(/\s+·/, " ·") : "No unfinished rewind recorded" });
-  lines.push({ text: "Recorded history · read-only · nothing here restores or rewinds" });
-  return lines;
-}

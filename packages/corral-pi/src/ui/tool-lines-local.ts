@@ -313,13 +313,13 @@ function helperPresenter(kind: "explore" | "oracle", deps: ToolRenderDeps): Pres
     const report = recordOf(details?.["report"]), findings = findingsOf(details, output);
     const status = text(report, "status") ?? (text(details, "outcome") === "completed" ? "completed" : "partial");
     const stop = text(report, "stopReason") ?? text(details, "outcome") ?? "";
-    const request = text(details, "request"), transcript = text(details, "sessionFile"), generation = count(details, "generation");
+    const request = text(details, "request"), transcript = text(details, "sessionFile");
     // The headline is Markdown; its emphasis, heading and code marks read as noise on one row.
     const lines = call.totals ? call.totals.lines : lineCount(findings);
     const headline = firstLine(findings).replace(/^#+\s*/, "").replace(/\*\*|__|`/g, "");
     const open = deps.openView, view = open && request ? { view: { label: "Agents", open: () => open("agents", `helper:${request}`) } } : {};
     const expanded = (): readonly BodyLine[] => [
-      ...(request ? [{ text: `Request ${request}${generation === undefined ? "" : ` · generation ${generation}`}` }] : []),
+      ...(request ? [{ text: `Request ${request}` }] : []),
       ...(transcript ? [{ text: `Transcript ${transcript}` }] : []),
       ...(details?.["truncated"] === true ? [{ text: "Findings truncated; the transcript has the full answer.", tone: "warning" as const }] : []),
       { text: "" }, ...textLines(findings, "text"),
