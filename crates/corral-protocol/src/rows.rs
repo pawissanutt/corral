@@ -184,12 +184,25 @@ pub struct WaitReason {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SettingsSnapshot {
-    /// Parsed `corral.toml` as serialized by the engine.
+    /// Parsed `corral.toml` as serialized by the engine; empty on a parse error.
     pub config: Map<String, Value>,
     pub listener: Option<ListenerInfo>,
     pub devices: Vec<DeviceInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
+    /// Content fingerprint of `corral.toml`, including comments and formatting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// Built-in engine configuration with no workspace overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_in_defaults: Option<Map<String, Value>>,
+    /// Unconfigured project resolved against the built-in workspace defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_defaults: Option<Map<String, Value>>,
+    /// Parse problem in an externally edited file; `config.get` still returns the raw TOML.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::schema_types::ConfigProblem>")]
+    pub problem: Option<corral_types::ConfigProblem>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

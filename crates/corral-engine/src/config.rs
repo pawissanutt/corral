@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use corral_types::ConfigProblem;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -182,7 +183,7 @@ pub struct RoutingRule {
     pub profile: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct EffectiveProject {
     pub path: PathBuf,
     pub base: Option<String>,
@@ -201,20 +202,54 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading configuration {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("parsing configuration {}", path.display()))
+        Self::parse(&text).with_context(|| format!("parsing configuration {}", path.display()))
+    }
+
+    pub fn parse(text: &str) -> std::result::Result<Self, ConfigProblem> {
+        let deserializer = toml::de::Deserializer::parse(text)
+            .map_err(|error| parse_problem(text, &error, None))?;
+        serde_path_to_error::deserialize(deserializer).map_err(|error| {
+            let mut key = error.path().to_string();
+            if key == "." {
+                key.clear();
+            }
+            let inner = error.inner();
+            // The TOML deserializer can reject table keys before visiting
+            // them. For that error its span points at the first unknown key.
+            if inner.message().starts_with("unexpected keys in table:")
+                && let Some(field) = inner.span().and_then(|span| text.get(span))
+            {
+                if !key.is_empty() {
+                    key.push('.');
+                }
+                key.push_str(field.trim_matches(['\'', '"']));
+            }
+            parse_problem(text, inner, (!key.is_empty()).then_some(key))
+        })
+    }
+
+    /// Parse and validate the same candidate for the CLI and the daemon.
+    pub fn check(root: &Path, text: &str) -> std::result::Result<Self, Vec<ConfigProblem>> {
+        let candidate = Self::parse(text).map_err(|problem| vec![problem])?;
+        let problems = candidate.validate(root);
+        if problems.is_empty() {
+            Ok(candidate)
+        } else {
+            Err(problems)
+        }
     }
 
     /// Collect independent problems rather than stopping at the first bad reference.
-    pub fn validate(&self, root: &Path) -> Vec<String> {
+    pub fn validate(&self, root: &Path) -> Vec<ConfigProblem> {
         let mut problems = Vec::new();
         if self.limits.running == 0 {
-            problems.push("limits.running must be greater than zero".into());
+            problems.push(problem("limits.running", "must be greater than zero"));
         }
         if self.sync.watch_secs == 0 {
-            problems.push("sync.watch_secs must be greater than zero".into());
+            problems.push(problem("sync.watch_secs", "must be greater than zero"));
         }
         if !matches!(self.runner.mode.as_str(), "process" | "herdr") {
-            problems.push("runner.mode must be process or herdr".into());
+            problems.push(problem("runner.mode", "must be process or herdr"));
         }
         if self
             .defaults
@@ -222,26 +257,30 @@ impl Config {
             .as_ref()
             .is_some_and(|base| base.trim().is_empty())
         {
-            problems.push("defaults.base must not be empty".into());
+            problems.push(problem("defaults.base", "must not be empty"));
         }
         if let Some(profile) = &self.defaults.profile {
             self.check_profile(profile, "defaults.profile", &mut problems);
         }
         for pattern in &self.artifacts.globs {
             if let Err(error) = glob::Pattern::new(pattern) {
-                problems.push(format!(
-                    "artifacts.globs: invalid glob {pattern:?}: {error}"
+                problems.push(problem(
+                    "artifacts.globs",
+                    format!("invalid glob {pattern:?}: {error}"),
                 ));
             }
         }
         for (name, harness) in &self.harnesses {
-            if name.trim().is_empty() || harness.command.trim().is_empty() {
-                problems.push(format!(
-                    "harnesses.{name}: name and command must not be empty"
-                ));
+            if name.trim().is_empty() {
+                problems.push(problem("harnesses", "names must not be empty"));
             }
-            if harness.command.contains('\0') {
-                problems.push(format!("harnesses.{name}.command contains NUL"));
+            if harness.command.trim().is_empty() {
+                problems.push(problem(
+                    format!("harnesses.{name}.command"),
+                    "must not be empty",
+                ));
+            } else if harness.command.contains('\0') {
+                problems.push(problem(format!("harnesses.{name}.command"), "contains NUL"));
             }
             for (key, flag) in [
                 ("model_flag", &harness.model_flag),
@@ -251,67 +290,95 @@ impl Config {
                     .as_ref()
                     .is_some_and(|f| f.trim().is_empty() || f.contains('\0'))
                 {
-                    problems.push(format!(
-                        "harnesses.{name}.{key} must be a nonempty argument"
+                    problems.push(problem(
+                        format!("harnesses.{name}.{key}"),
+                        "must be a nonempty argument",
                     ));
                 }
             }
         }
         for (name, profile) in &self.profiles {
             if name.trim().is_empty() {
-                problems.push("profile names must not be empty".into());
+                problems.push(problem("profiles", "names must not be empty"));
             }
             if let Some(harness) = self.harnesses.get(&profile.harness) {
                 if profile.model.is_some() && harness.model_flag.is_none() {
-                    problems.push(format!("profiles.{name}: harness has no model_flag"));
+                    problems.push(problem(
+                        format!("profiles.{name}.model"),
+                        "harness has no model_flag",
+                    ));
                 }
                 if profile.effort.is_some() && harness.effort_flag.is_none() {
-                    problems.push(format!("profiles.{name}: harness has no effort_flag"));
+                    problems.push(problem(
+                        format!("profiles.{name}.effort"),
+                        "harness has no effort_flag",
+                    ));
                 }
             } else {
-                problems.push(format!(
-                    "profiles.{name}: unknown harness {:?}",
-                    profile.harness
+                problems.push(problem(
+                    format!("profiles.{name}.harness"),
+                    format!("unknown harness {:?}", profile.harness),
                 ));
             }
-            if profile
-                .args
-                .iter()
-                .chain(profile.model.iter())
-                .chain(profile.effort.iter())
-                .any(|arg| arg.contains('\0'))
-            {
-                problems.push(format!("profiles.{name}: arguments contain NUL"));
+            for (key, invalid) in [
+                ("args", profile.args.iter().any(|arg| arg.contains('\0'))),
+                (
+                    "model",
+                    profile.model.as_ref().is_some_and(|arg| arg.contains('\0')),
+                ),
+                (
+                    "effort",
+                    profile
+                        .effort
+                        .as_ref()
+                        .is_some_and(|arg| arg.contains('\0')),
+                ),
+            ] {
+                if invalid {
+                    problems.push(problem(format!("profiles.{name}.{key}"), "contains NUL"));
+                }
             }
         }
         for (name, project) in &self.projects {
             if name.trim().is_empty() {
-                problems.push("project names must not be empty".into());
+                problems.push(problem("projects", "names must not be empty"));
             }
             if project.path.as_os_str().is_empty() {
-                problems.push(format!("projects.{name}.path must not be empty"));
-            } else if !root.join(&project.path).is_dir() {
-                problems.push(format!(
-                    "projects.{name}.path is not a directory: {}",
-                    root.join(&project.path).display()
+                problems.push(problem(
+                    format!("projects.{name}.path"),
+                    "must not be empty",
                 ));
+            } else {
+                let path = root.join(&project.path);
+                if !path.is_dir() {
+                    problems.push(problem(
+                        format!("projects.{name}.path"),
+                        format!("is not a directory: {}", path.display()),
+                    ));
+                }
             }
             if project
                 .base
                 .as_ref()
                 .is_some_and(|base| base.trim().is_empty())
             {
-                problems.push(format!("projects.{name}.base must not be empty"));
+                problems.push(problem(
+                    format!("projects.{name}.base"),
+                    "must not be empty",
+                ));
             }
             if project.running == Some(0) {
-                problems.push(format!("projects.{name}.running must be greater than zero"));
+                problems.push(problem(
+                    format!("projects.{name}.running"),
+                    "must be greater than zero",
+                ));
             }
             for (key, profile) in [
                 ("profile", &project.profile),
                 ("reviewer", &project.reviewer),
             ] {
                 if let Some(profile) = profile {
-                    self.check_profile(profile, &format!("projects.{name}.{key}"), &mut problems);
+                    self.check_profile(profile, format!("projects.{name}.{key}"), &mut problems);
                 }
             }
             if project
@@ -319,14 +386,16 @@ impl Config {
                 .iter()
                 .any(|line| line.trim().is_empty() || line.contains('\0'))
             {
-                problems.push(format!(
-                    "projects.{name}.gate contains an empty line or NUL"
+                problems.push(problem(
+                    format!("projects.{name}.gate"),
+                    "contains an empty line or NUL",
                 ));
             }
             for (key, value) in &project.env {
                 if !valid_env_key(key) || value.contains('\0') {
-                    problems.push(format!(
-                        "projects.{name}.env: invalid value or name {key:?}"
+                    problems.push(problem(
+                        format!("projects.{name}.env"),
+                        format!("invalid value or name {key:?}"),
                     ));
                 }
             }
@@ -334,28 +403,37 @@ impl Config {
         for (index, rule) in self.routing.iter().enumerate() {
             self.check_profile(
                 &rule.profile,
-                &format!("routing[{index}].profile"),
+                format!("routing[{index}].profile"),
                 &mut problems,
             );
             if let Some(project) = &rule.project
                 && !self.projects.contains_key(project)
             {
-                problems.push(format!(
-                    "routing[{index}].project: unknown project {project:?}"
+                problems.push(problem(
+                    format!("routing[{index}].project"),
+                    format!("unknown project {project:?}"),
                 ));
             }
             if let Some(pattern) = &rule.title_regex
                 && let Err(error) = Regex::new(pattern)
             {
-                problems.push(format!("routing[{index}].title_regex: {error}"));
+                problems.push(problem(
+                    format!("routing[{index}].title_regex"),
+                    error.to_string(),
+                ));
             }
         }
         problems
     }
 
-    fn check_profile(&self, name: &str, field: &str, problems: &mut Vec<String>) {
+    fn check_profile(
+        &self,
+        name: &str,
+        field: impl Into<String>,
+        problems: &mut Vec<ConfigProblem>,
+    ) {
         if !self.profiles.contains_key(name) {
-            problems.push(format!("{field}: unknown profile {name:?}"));
+            problems.push(problem(field, format!("unknown profile {name:?}")));
         }
     }
 
@@ -366,7 +444,16 @@ impl Config {
                 vec![],
             )
         })?;
-        Ok(EffectiveProject {
+        Ok(self.resolve_project(project))
+    }
+
+    /// Settings inherited by a project that has no overrides.
+    pub fn project_defaults(&self) -> EffectiveProject {
+        self.resolve_project(&Project::default())
+    }
+
+    fn resolve_project(&self, project: &Project) -> EffectiveProject {
+        EffectiveProject {
             path: project.path.clone(),
             base: project.base.clone().or_else(|| self.defaults.base.clone()),
             gate: project.gate.clone(),
@@ -384,7 +471,7 @@ impl Config {
                 .branch_prefix
                 .clone()
                 .unwrap_or_else(|| self.defaults.branch_prefix.clone()),
-        })
+        }
     }
 
     /// The pipeline's review-round limit for a task, including unassigned tasks.
@@ -462,6 +549,33 @@ impl Config {
             ));
         }
         Ok(name.to_owned())
+    }
+}
+
+fn problem(key: impl Into<String>, message: impl Into<String>) -> ConfigProblem {
+    ConfigProblem {
+        key: Some(key.into()),
+        message: message.into(),
+        line: None,
+        column: None,
+    }
+}
+
+fn parse_problem(text: &str, error: &toml::de::Error, key: Option<String>) -> ConfigProblem {
+    let (line, column) = error.span().map_or((None, None), |span| {
+        let before = &text[..text.floor_char_boundary(span.start)];
+        let line = before.bytes().filter(|&b| b == b'\n').count() + 1;
+        let column = before
+            .rsplit('\n')
+            .next()
+            .map_or(1, |s| s.chars().count() + 1);
+        (Some(line), Some(column))
+    });
+    ConfigProblem {
+        key,
+        message: error.message().to_owned(),
+        line,
+        column,
     }
 }
 

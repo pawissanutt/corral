@@ -302,6 +302,8 @@ fn shell_word(f: &mut fmt::Formatter<'_>, value: &str) -> fmt::Result {
 pub struct Refusal {
     pub reason: String,
     pub next: Vec<Next>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problems: Option<Vec<ConfigProblem>>,
 }
 
 impl fmt::Display for Refusal {
@@ -315,6 +317,32 @@ impl fmt::Display for Refusal {
 }
 
 impl std::error::Error for Refusal {}
+
+/// One config-check diagnostic. Source locations, when available, are 1-based.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigProblem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
+}
+
+impl fmt::Display for ConfigProblem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(key) = &self.key {
+            write!(f, "{key}: ")?;
+        }
+        if let (Some(line), Some(column)) = (self.line, self.column) {
+            write!(f, "line {line}, column {column}: ")?;
+        }
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ConfigProblem {}
 
 #[cfg(test)]
 #[path = "op_tests.rs"]

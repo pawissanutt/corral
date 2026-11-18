@@ -26,6 +26,7 @@ macro_rules! shared {
 shared! {
     Artifact: "object",
     Check: "object",
+    ConfigProblem: "object",
     Event: "object",
     Op: ["string", "object"],
     #[cfg(test)]

@@ -56,7 +56,9 @@ impl Store {
         connection
             .execute_batch(crate::usage::SCHEMA)
             .context("initialize usage table")?;
-        Ok(Self { connection })
+        let store = Self { connection };
+        crate::artifacts::prepare_catalog(&store)?;
+        Ok(store)
     }
 
     /// Compare successive results from the same connection to observe commits

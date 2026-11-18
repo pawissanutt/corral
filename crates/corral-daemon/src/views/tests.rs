@@ -170,7 +170,159 @@ fn artifact_chunks_preserve_utf8_boundaries_and_are_selector_bound() {
     assert!(!b.truncated);
     assert_eq!(a.content + &b.content, text);
     assert!(get(target, None, Some(first.etag)).unwrap().body.is_none());
-    assert!(get(DetailRef::Artifacts { filter: None }, first.next, None).is_err());
+    let finder = DetailRef::Artifacts {
+        filter: None,
+        narrowing: None,
+    };
+    assert!(get(finder, first.next, None).is_err());
+}
+
+#[test]
+fn artifact_finder_orders_and_filters_before_stable_paging() {
+    use corral_engine::{Actor, Artifact, EventKind, events::NewEvent};
+    use corral_protocol::detail::ArtifactNarrowing;
+
+    let fixture = Fixture::new();
+    let site = fixture.named_task("site", Some("site-web"));
+    let other = fixture.named_task("docs", Some("site-workers"));
+    let engine = fixture.shared.engine().unwrap();
+    let insert = |task: &str, id, at: &str, kind: &str, title: String, run: Option<&str>| {
+        let artifact = Artifact {
+            task: task.to_owned(),
+            id,
+            at: at.parse().unwrap(),
+            kind: Some(kind.to_owned()),
+            title,
+            sha256: "unused".into(),
+            bytes: 0,
+            by: Actor::Agent,
+            // Older catalog rows also lack these fields.
+            project: None,
+            run: None,
+        };
+        let reference = artifact.reference();
+        engine
+            .store
+            .transaction(|store| {
+                store.insert_artifact(&artifact)?;
+                store.append_event(&NewEvent {
+                    task: Some(task.to_owned()),
+                    run: run.map(str::to_owned),
+                    kind: EventKind::Artifact,
+                    actor: Actor::Agent,
+                    detail: serde_json::json!({"reference": reference}),
+                })
+            })
+            .unwrap();
+        reference
+    };
+    let large = format!("Deploy {}", "x".repeat(31 * 1024));
+    let old = insert(
+        &site,
+        1,
+        "2026-04-01T00:00:00Z",
+        "nightly",
+        large.clone(),
+        Some("R1"),
+    );
+    let new = insert(
+        &site,
+        2,
+        "2026-04-01T00:00:00.1Z",
+        "Nightly",
+        large,
+        Some("R2"),
+    );
+    let tied = insert(
+        &other,
+        1,
+        "2026-04-01T00:00:00.1Z",
+        "nightly",
+        "Deploy".into(),
+        None,
+    );
+    let wrong_kind = insert(
+        &site,
+        3,
+        "2026-04-01T00:00:00.2Z",
+        "manual",
+        "Deploy nightly".into(),
+        None,
+    );
+    let wrong_word = insert(
+        &site,
+        4,
+        "2026-04-01T00:00:00.3Z",
+        "nightly",
+        "Review".into(),
+        None,
+    );
+
+    let get =
+        |target, page, etag| detail(&fixture.shared, DetailGet { target, page, etag }).unwrap();
+    let artifacts = |reply: &DetailReply| match &reply.body {
+        Some(DetailBody::Artifacts(page)) => page.rows.clone(),
+        _ => panic!("expected artifacts"),
+    };
+    let refs = |reply: &DetailReply| {
+        artifacts(reply)
+            .iter()
+            .map(Artifact::reference)
+            .collect::<Vec<_>>()
+    };
+
+    let all = DetailRef::Artifacts {
+        filter: None,
+        narrowing: None,
+    };
+    let first = get(all.clone(), None, None);
+    assert_eq!(refs(&first), [wrong_word, wrong_kind, tied, new.clone()]);
+    assert_eq!(
+        refs(&get(all, first.next, None)).as_slice(),
+        std::slice::from_ref(&old)
+    );
+
+    let narrowing = ArtifactNarrowing {
+        kind: Some("nig".into()),
+        task: Some(site.clone()),
+        project: Some("SITE-W".into()),
+    };
+    let search = DetailRef::Artifacts {
+        filter: Some("DEPLOY nightly".into()),
+        narrowing: Some(narrowing.clone()),
+    };
+    let first = get(search.clone(), None, None);
+    assert_eq!(refs(&first), [new]);
+    let page = first.next.unwrap();
+    let second = get(search.clone(), Some(page.clone()), None);
+    let rows = artifacts(&second);
+    assert_eq!(refs(&second), [old]);
+    assert_eq!(rows[0].project.as_deref(), Some("site-web"));
+    assert_eq!(rows[0].run.as_deref(), Some("R1"));
+    assert!(second.next.is_none());
+
+    let mismatched_project = DetailRef::Artifacts {
+        filter: Some("DEPLOY nightly".into()),
+        narrowing: Some(ArtifactNarrowing {
+            project: Some("docs".into()),
+            ..narrowing
+        }),
+    };
+    assert!(refs(&get(mismatched_project, None, None)).is_empty());
+
+    // A matching row added before the first page's anchor does not invalidate
+    // a client holding the second page or its cached etag.
+    insert(
+        &site,
+        5,
+        "2026-04-01T00:00:01Z",
+        "nightly",
+        "Deploy".into(),
+        None,
+    );
+    let unchanged = get(search, Some(page), Some(second.etag.clone()));
+    assert_eq!(unchanged.etag, second.etag);
+    assert!(unchanged.body.is_none());
 }
 
 #[test]

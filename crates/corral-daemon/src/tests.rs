@@ -7,13 +7,14 @@ use std::{
     time::Duration,
 };
 
-use corral_engine::{Engine, store::TaskFilter, testing::FakeRunner};
+use corral_engine::{Engine, testing::FakeRunner};
 use corral_protocol::{
     self as wire,
     config::ConfigDocument,
     frame::{Frame, FrameKind, read_frame, write_frame},
     op::{OpReply, OpSubmit},
     rpc,
+    subscription::{SubAck, SubDelta, SubOpen, Topic},
 };
 use corral_types::{Actor, EventKind, NewTask, Op, Refusal, Status};
 use serde::{Serialize, de::DeserializeOwned};
@@ -314,34 +315,177 @@ fn socket_refusal_offers_the_force_that_records_what_it_skipped() {
 }
 
 #[test]
-fn bad_profile_in_config_put_is_refused_without_replacement() {
+fn config_put_refuses_with_keys_or_syntax_location_without_replacing_file() {
     let fixture = Fixture::new();
     let mut client = Client::connect(&fixture.unix_server());
     let before: ConfigDocument = client.ok(wire::config::CONFIG_GET, wire::config::ConfigGet {});
-    let error = client
-        .call(
-            wire::config::CONFIG_PUT,
-            ConfigDocument {
-                toml: "[defaults]\nprofile = 'absent'\n".into(),
-            },
-        )
-        .unwrap_err();
-    assert_eq!(error.code, rpc::ErrorCode::Refused);
-    let refusal: Refusal = serde_json::from_value(error.data.unwrap()).unwrap();
-    assert!(refusal.reason.contains("absent"));
+    let rejected = |client: &mut Client, toml| {
+        let error = client
+            .call(wire::config::CONFIG_PUT, json!({"toml": toml}))
+            .unwrap_err();
+        assert_eq!(error.code, rpc::ErrorCode::Refused);
+        let refusal: Refusal = serde_json::from_value(error.data.unwrap()).unwrap();
+        refusal.problems.unwrap()
+    };
+    let problems = rejected(
+        &mut client,
+        "
+[limits]
+running = 0
+[projects.site]
+path = '.'
+profile = 'absent'
+[[routing]]
+profile = 'also-absent'
+",
+    );
+    assert_eq!(
+        problems
+            .iter()
+            .map(|problem| problem.key.as_deref())
+            .collect::<Vec<_>>(),
+        [
+            Some("limits.running"),
+            Some("projects.site.profile"),
+            Some("routing[0].profile")
+        ]
+    );
+    let bad_type = rejected(&mut client, "[[routing]]\nprofile = 1\n");
+    assert_eq!(bad_type[0].key.as_deref(), Some("routing[0].profile"));
+    let unknown = rejected(&mut client, "[projects.site]\nwrong = 1\n");
+    assert_eq!(unknown[0].key.as_deref(), Some("projects.site.wrong"));
+    let syntax = rejected(&mut client, "[limits]\nrunning = @\n");
+    assert_eq!(
+        (syntax[0].key.as_deref(), syntax[0].line, syntax[0].column),
+        (None, Some(2), Some(11))
+    );
     assert_eq!(
         client.ok::<ConfigDocument>(wire::config::CONFIG_GET, wire::config::ConfigGet {}),
         before
     );
-    assert!(
-        fixture
-            .shared
-            .engine()
+}
+
+fn read_delta(client: &mut Client) -> SubDelta {
+    let frame = read_frame(&mut client.0).unwrap().unwrap();
+    let notification: rpc::Notification<SubDelta> = serde_json::from_slice(&frame.payload).unwrap();
+    assert_eq!(notification.method, wire::SUB_DELTA);
+    notification.params
+}
+
+fn subscribe(client: &mut Client, topic: Topic) -> SubDelta {
+    client.ok::<()>(
+        wire::SUB_OPEN,
+        SubOpen {
+            topic,
+            since: None,
+            scope: None,
+        },
+    );
+    read_delta(client)
+}
+
+#[test]
+fn external_config_edit_reloads_engine_and_notifies_settings_and_projects() {
+    let fixture = Fixture::new();
+    let path = fixture.unix_server();
+    let mut settings = Client::connect(&path);
+    let mut projects = Client::connect(&path);
+    let SubDelta::Settings { delta: old } = subscribe(&mut settings, Topic::Settings) else {
+        panic!("expected settings delta");
+    };
+    let SubDelta::Projects {
+        delta: old_projects,
+    } = subscribe(&mut projects, Topic::Projects)
+    else {
+        panic!("expected projects delta");
+    };
+    settings.ok::<()>(
+        wire::SUB_ACK,
+        SubAck {
+            topic: Topic::Settings,
+            scope: None,
+            cursor: old.cursor,
+        },
+    );
+    projects.ok::<()>(
+        wire::SUB_ACK,
+        SubAck {
+            topic: Topic::Projects,
+            scope: None,
+            cursor: old_projects.cursor,
+        },
+    );
+
+    let shared = Arc::clone(fixture.shared());
+    let observer = std::thread::spawn(move || {
+        let engine = shared.engine().unwrap();
+        let seq = engine.store.latest_seq().unwrap();
+        let version = engine.store.data_version().unwrap();
+        crate::poll_loop(&shared, &engine.store, seq, version);
+    });
+    let edit = "[defaults]\nmax_rounds = 7\n[projects.site]\npath = '.'\n";
+    fs::write(fixture.root().join(".corral-next/corral.toml"), edit).unwrap();
+
+    let SubDelta::Settings { delta } = read_delta(&mut settings) else {
+        panic!("expected settings delta");
+    };
+    let SubDelta::Projects {
+        delta: projects_delta,
+    } = read_delta(&mut projects)
+    else {
+        panic!("expected projects delta");
+    };
+    let document: ConfigDocument =
+        settings.ok(wire::config::CONFIG_GET, wire::config::ConfigGet {});
+    assert_ne!(delta.rows[0].revision, old.rows[0].revision);
+    assert_eq!(delta.rows[0].revision, document.revision);
+    assert_eq!(document.toml, edit);
+    assert_eq!(delta.rows[0].config["defaults"]["max_rounds"], 7);
+    assert_eq!(projects_delta.rows[0].id, "site");
+    assert_eq!(
+        projects_delta.rows[0]
+            .effective
+            .as_ref()
             .unwrap()
-            .store
-            .list_tasks(&TaskFilter::default())
-            .unwrap()
-            .is_empty()
+            .max_rounds,
+        7
+    );
+    assert_eq!(
+        fixture.shared.engine().unwrap().config.defaults.max_rounds,
+        7
+    );
+
+    fixture.shared.stop();
+    observer.join().unwrap();
+}
+
+#[test]
+fn settings_snapshot_distinguishes_builtin_defaults_from_workspace_values() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.root().join(".corral-next/corral.toml"),
+        "[limits]\nrunning = 9\n[defaults]\nprofile = 'generic'\n",
+    )
+    .unwrap();
+    let mut client = Client::connect(&fixture.unix_server());
+    let SubDelta::Settings { delta } = subscribe(&mut client, Topic::Settings) else {
+        panic!("expected settings delta");
+    };
+    let row = &delta.rows[0];
+    assert_eq!(row.config["limits"]["running"], 9);
+    assert_eq!(row.config["defaults"]["profile"], "generic");
+    let built_in = row.built_in_defaults.as_ref().unwrap();
+    assert_eq!(built_in["limits"], json!({"running": 4}));
+    assert_eq!(
+        built_in["defaults"],
+        json!({"base": null, "profile": "omp-sol", "branch_prefix": "corral/",
+               "max_rounds": 2, "auto_dispatch": false, "auto_land": false})
+    );
+    assert_eq!(
+        serde_json::to_value(row.project_defaults.as_ref().unwrap()).unwrap(),
+        json!({"path": "", "base": null, "gate": [], "reviewer": null, "profile": "omp-sol",
+               "running": null, "env": {}, "max_rounds": 2, "branch_prefix": "corral/",
+               "auto_dispatch": false, "auto_land": false})
     );
 }
 
@@ -361,8 +505,6 @@ fn a_nudge_during_sync_requires_a_later_pass() {
 
 #[test]
 fn external_engine_commits_reach_socket_subscribers() {
-    use wire::subscription::{SubAck, SubDelta, SubOpen, Topic};
-
     let fixture = Fixture::new();
     let mut client = Client::connect(&fixture.unix_server());
     let shared = Arc::clone(fixture.shared());
@@ -375,11 +517,7 @@ fn external_engine_commits_reach_socket_subscribers() {
     });
     wait.recv_timeout(Duration::from_secs(3)).unwrap();
     let recv_delta = |client: &mut Client| {
-        let frame = read_frame(&mut client.0).unwrap().unwrap();
-        let notification: rpc::Notification<SubDelta> =
-            serde_json::from_slice(&frame.payload).unwrap();
-        assert_eq!(notification.method, wire::SUB_DELTA);
-        let SubDelta::Tasks { delta } = notification.params else {
+        let SubDelta::Tasks { delta } = read_delta(client) else {
             panic!("expected tasks delta")
         };
         delta
