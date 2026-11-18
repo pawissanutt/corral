@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::{Context, Result, ensure};
 pub use corral_types::{UsageBy, UsageDay, UsageGroup, UsageSummary, UsageTotal};
 use jiff::{Timestamp, civil::Date, tz::Offset};
-use rusqlite::{Row, params, params_from_iter};
+use rusqlite::{OptionalExtension, Row, params, params_from_iter};
 
 use crate::{Engine, Store, Usage, store::encode};
 
@@ -239,21 +239,27 @@ fn take_key(by: UsageBy, usage: &mut Usage, day: Option<Date>) -> Option<GroupKe
 
 impl Engine {
     pub fn record_usage(&self, usage: &Usage) -> Result<()> {
-        // JSON would otherwise silently encode a non-finite price as null.
-        ensure!(
-            usage.usd.is_none_or(f64::is_finite),
-            "usage USD price must be finite"
-        );
-        let document = encode(usage)?;
+        self.store.transaction(|store| store.insert_usage(usage))
+    }
+
+    pub(crate) fn report_usage(&self, mut usage: Usage) -> Result<()> {
         self.store.transaction(|store| {
-            store
-                .connection
-                .execute(
-                    "INSERT INTO usage(task,run,document) VALUES(?1,?2,?3)",
-                    params![usage.task, usage.run, document],
-                )
-                .context("record usage")?;
-            Ok(())
+            // The first request can report while dispatch is still publishing its
+            // run. Resolve attribution only after acquiring SQLite's write slot.
+            if usage.profile.is_none()
+                && let (Some(task), Some(run)) = (&usage.task, &usage.run)
+            {
+                usage.profile = store
+                    .connection
+                    .query_row(
+                        "SELECT json_extract(document, '$.profile') FROM runs WHERE task=?1 AND id=?2",
+                        params![task, run],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .context("read usage run profile")?;
+            }
+            store.insert_usage(&usage)
         })
     }
 
@@ -363,6 +369,22 @@ impl Engine {
 }
 
 impl Store {
+    fn insert_usage(&self, usage: &Usage) -> Result<()> {
+        // JSON would otherwise silently encode a non-finite price as null.
+        ensure!(
+            usage.usd.is_none_or(f64::is_finite),
+            "usage USD price must be finite"
+        );
+        let document = encode(usage)?;
+        self.connection
+            .execute(
+                "INSERT INTO usage(task,run,document) VALUES(?1,?2,?3)",
+                params![usage.task, usage.run, document],
+            )
+            .context("record usage")?;
+        Ok(())
+    }
+
     /// List recorded requests in insertion order, resolving missing harnesses
     /// only from a run matching both stored IDs.
     pub fn list_usage(&self) -> Result<Vec<Usage>> {

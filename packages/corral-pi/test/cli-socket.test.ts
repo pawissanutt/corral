@@ -1,13 +1,12 @@
 import { expect, test } from "bun:test";
-import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
+import { buildFixtureInstall, scriptedFixtureInstall } from "./support/fixture-install.ts";
 import { connect, type TestClient } from "./support/bridge-client.ts";
 import { launch, type Launch } from "./support/pi-process.ts";
 import { within } from "./support/wait.ts";
 import { writeFakeEngine } from "./support/fake-engine.ts";
-import type { FakeStep } from "./fixtures/auth/fake-transport.ts";
 
 async function transcriptThrough(path: string, text: string): Promise<string[]> {
   const { promise, resolve } = Promise.withResolvers<string[]>();
@@ -26,14 +25,6 @@ async function transcriptThrough(path: string, text: string): Promise<string[]> 
   const watcher = watch(path, check);
   try { check(); return await within(promise, 10_000, `the transcript to contain ${text}`); }
   finally { watcher.close(); }
-}
-
-/** Run the shipped role at the real CLI boundary, with only provider responses scripted. */
-function scriptedInstall(dir: string, steps: readonly FakeStep[]): string {
-  const assets = buildFixtureInstall({ parent: dir, omit: ["role"] });
-  cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });
-  appendFileSync(join(assets.dir, "src/auth/index.ts"), `\nfixtureTransport().script(${JSON.stringify(steps)});\n`);
-  return assets.dir;
 }
 
 test("one flag launch runs the fixture to idle; v2 answers, pauses, restarts and delivers held input before owner text", async () => {
@@ -135,7 +126,7 @@ test("chat runs the engine as the assistant and edits plain workspace memory", a
     mkdirSync(join(dir, ".corral-next", "memory"), { recursive: true });
     writeFileSync(memory, "# Notes\nOriginal text\n");
     const engine = writeFakeEngine(dir, { list: { result: [{ id: "T-1" }] } });
-    const assets = scriptedInstall(dir, [
+    const assets = scriptedFixtureInstall(dir, [
       { toolCalls: [{ callId: "list", name: "bash", arguments: { command: 'test "$CORRAL_ACTOR" = assistant && "$CORRAL" list --json' } }] },
       { toolCalls: [{ callId: "memory", name: "edit", arguments: { path: memory, edits: [{ oldText: "Original text", newText: "Updated note" }] } }] },
       { text: "Recorded the note." },
@@ -169,7 +160,7 @@ test("a warmed chat relaunches after shutdown before the first turn", async () =
   const processes: Launch[] = [];
   const clients: TestClient[] = [];
   try {
-    const assets = scriptedInstall(dir, [{ text: "The relaunched chat is ready." }]);
+    const assets = scriptedFixtureInstall(dir, [{ text: "The relaunched chat is ready." }]);
     const socket = join(dir, "s.sock");
     const start = () => {
       const chat = launch(assets, ["chat", "--dir", "A-1", "--socket", socket, "--headless"], dir,
@@ -215,7 +206,7 @@ test("reviewer answers an automated re-review and reopens the same transcript af
     writeFileSync(promptFile, "# T-1 Review the candidate\n\n## Review round 0\n");
     const engine = writeFakeEngine(dir);
     const rereview = "Review round 1 for T-1.\n\nVerify the required fix.";
-    const assets = scriptedInstall(dir, [
+    const assets = scriptedFixtureInstall(dir, [
       { toolCalls: [{ callId: "first-verdict", name: "corral_verdict",
         arguments: { verdict: "changes", notes: "Add regression coverage." } }] },
       { match: rereview, toolCalls: [{ callId: "second-verdict", name: "corral_verdict",
