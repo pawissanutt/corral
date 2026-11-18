@@ -964,6 +964,7 @@ export class HostSession {
     for (const spec of specs) {
       const tool = defineCorralTool(spec, {
         client: this.options.client, identity: this.options.identity,
+        drained: () => this.drained(),
         todo: async payload => {
           const result = this.local.todo(payload);
           await this.ledger?.restore();

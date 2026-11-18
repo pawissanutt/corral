@@ -221,6 +221,8 @@ pub struct Check {
     pub log: Option<String>,        // artifact ref
     pub by: Actor,
     pub at: Timestamp,
+    pub round: Option<u32>,        // task round at recording; absent in older rows
+    pub run: Option<String>,       // gate worker or associated reviewer run id, if available
 }
 ```
 

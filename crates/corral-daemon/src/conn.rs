@@ -1,5 +1,6 @@
 //! Transport-neutral control replies and per-connection worker accounting.
 use std::{
+    net::SocketAddr,
     os::unix::net::UnixStream,
     sync::Arc,
     time::{Duration, Instant},
@@ -16,6 +17,20 @@ use serde_json::Value;
 use crate::state::Shared;
 
 pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(2);
+
+pub(crate) enum Peer {
+    Unix,
+    Tcp(SocketAddr),
+}
+
+impl Peer {
+    pub(crate) fn is_local(&self) -> bool {
+        match self {
+            Self::Unix => true,
+            Self::Tcp(peer) => peer.ip().to_canonical().is_loopback(),
+        }
+    }
+}
 
 pub(crate) trait Conn {
     fn send_frame(&mut self, frame: &Frame) -> Result<()>;
@@ -114,5 +129,28 @@ impl Drop for WorkerPermit {
     fn drop(&mut self) {
         self.0.lock().workers -= 1;
         self.0.changed.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Peer;
+
+    #[test]
+    fn tcp_locality_normalizes_mapped_ipv4_peers() {
+        for (addr, expected) in [
+            ("127.0.0.2:4040", true),
+            ("[::1]:4040", true),
+            ("[::ffff:127.0.0.2]:4040", true),
+            ("192.0.2.1:4040", false),
+            ("[2001:db8::1]:4040", false),
+            ("[::ffff:192.0.2.1]:4040", false),
+        ] {
+            assert_eq!(
+                Peer::Tcp(addr.parse().unwrap()).is_local(),
+                expected,
+                "{addr}"
+            );
+        }
     }
 }

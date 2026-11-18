@@ -62,8 +62,11 @@ pub enum DetailRef {
         to: String,
         #[schemars(with = "Option<crate::schema_types::UsageBy>")]
         by: Option<UsageBy>,
-        /// Fixed minutes east of UTC (`-1439..=1439`), applied to the entire range.
+        /// Fixed minutes east of UTC (`-1439..=1439`), used when no zone is given.
         utc_offset_minutes: i16,
+        /// IANA time zone name for local day boundaries, including clock changes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time_zone: Option<String>,
     },
     Artifact {
         reference: String,

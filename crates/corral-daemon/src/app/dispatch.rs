@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::{
     assistant, config,
-    conn::{self, Conn},
+    conn::{self, Conn, Peer},
     devices::{DeviceError, SessionGuard},
     health, ops, sessions,
     state::Shared,
@@ -79,6 +79,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
 
 pub(crate) fn serve(
     conn: &mut dyn Conn,
+    peer: &Peer,
     shared: &Arc<Shared>,
     request: rpc::Request,
     session: Option<&SessionGuard>,
@@ -227,6 +228,7 @@ pub(crate) fn serve(
                 device,
                 seen,
                 server_time: jiff::Timestamp::now().to_string(),
+                local: Some(peer.is_local()),
             })
         }),
         device::DEVICE_LIST => answer!({

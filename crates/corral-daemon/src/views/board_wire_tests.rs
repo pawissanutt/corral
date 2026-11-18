@@ -57,6 +57,7 @@ fn health_get(shared: &Arc<Shared>) -> Health {
     let mut receiver = Receiver::default();
     dispatch::serve(
         &mut receiver,
+        &crate::conn::Peer::Unix,
         shared,
         rpc::Request {
             jsonrpc: rpc::JSONRPC.into(),
@@ -349,4 +350,97 @@ path = "missing-repo"
         panic!("health topic must survive an unavailable engine")
     };
     assert!(rows[0].slots.is_none());
+}
+
+#[test]
+fn served_worker_profile_uses_dispatch_routing_without_a_flag() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.shared.root().join(".corral-next/corral.toml"),
+        r#"
+[defaults]
+profile = "generic"
+[projects.demo]
+path = "."
+profile = "claude"
+[[routing]]
+title_regex = "(?i)frontend"
+project = "demo"
+profile = "omo"
+"#,
+    )
+    .unwrap();
+    let routed = fixture.named_task("Build the Frontend", Some("demo"));
+    let project = fixture.named_task("Backend", Some("demo"));
+    let default = fixture.named_task("Not assigned", None);
+    let pinned = fixture.task(NewTask {
+        title: "Frontend with a pin".into(),
+        project: Some("demo".into()),
+        profile: Some("omp".into()),
+        ..Default::default()
+    });
+    let SubDelta::Tasks { delta } = subscribe(&fixture.shared, Topic::Tasks) else {
+        panic!("expected tasks");
+    };
+    for (id, profile) in [
+        (routed, "omo"),
+        (project, "claude"),
+        (default, "generic"),
+        (pinned, "omp"),
+    ] {
+        let row = delta.rows.iter().find(|row| row.task.id == id).unwrap();
+        assert_eq!(row.resolved_profile.as_deref(), Some(profile));
+    }
+}
+
+#[test]
+fn served_project_branches_are_local_recency_ordered_and_bounded() {
+    use std::{
+        io::Write,
+        process::{Command, Stdio},
+    };
+
+    let fixture = Fixture::new();
+    fixture.project();
+    let repo = fixture.shared.root().join("repo");
+    let old = Command::new("git")
+        .current_dir(&repo)
+        .args(["commit-tree", "HEAD^{tree}", "-m", "old"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+        .output()
+        .unwrap();
+    assert!(old.status.success());
+    let old = std::str::from_utf8(&old.stdout).unwrap().trim();
+    git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/unlisted", "HEAD"],
+    );
+
+    let mut refs = Command::new("git")
+        .current_dir(&repo)
+        .args(["update-ref", "--stdin"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let mut input = refs.stdin.take().unwrap();
+        for n in 0..100 {
+            writeln!(input, "create refs/heads/archive/{n:03} {old}").unwrap();
+        }
+    }
+    assert!(refs.wait().unwrap().success());
+
+    let SubDelta::Projects { delta } = subscribe(&fixture.shared, Topic::Projects) else {
+        panic!("expected projects");
+    };
+    let branches = delta.rows[0].local_branches.as_ref().unwrap();
+    assert_eq!(branches.len(), 100);
+    assert_eq!(branches[0], "main");
+    assert_eq!(branches[1], "archive/000");
+    assert_eq!(branches[99], "archive/098");
 }

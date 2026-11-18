@@ -1,6 +1,6 @@
 //! Authenticated browser sessions share the bounded enrolled-device app gateway.
 use std::{
-    net::TcpStream,
+    net::{SocketAddr, TcpStream},
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
@@ -20,7 +20,7 @@ use super::{
     ws::{self, Mode, WsConn},
 };
 use crate::{
-    conn::{error, notify, reply},
+    conn::{Peer, error, notify, reply},
     devices::{self, DeviceError, Devices},
     state::Shared,
     topics::Subscriptions,
@@ -43,8 +43,14 @@ impl Drop for PairGuard {
     }
 }
 
-pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) -> Result<()> {
+pub(super) fn serve(
+    stream: TcpStream,
+    peer: SocketAddr,
+    shared: Arc<Shared>,
+    origins: &[String],
+) -> Result<()> {
     let devices = shared.devices();
+    let peer = Peer::Tcp(peer);
     let (socket, mode) = ws::upgrade(stream, origins)?;
     let established = ws::handshake(socket, mode, devices)?;
     let mut conn = established.conn;
@@ -231,7 +237,14 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
             conn.close(CloseCode::Normal, "client disconnected");
             return Ok(());
         }
-        dispatch::serve(&mut conn, &shared, request, session.as_ref(), &mut topics)?;
+        dispatch::serve(
+            &mut conn,
+            &peer,
+            &shared,
+            request,
+            session.as_ref(),
+            &mut topics,
+        )?;
     }
 }
 

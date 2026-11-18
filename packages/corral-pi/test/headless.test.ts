@@ -104,12 +104,12 @@ test("a headless worker asks, reopens its transcript and reports done after the 
       { toolCalls: [{ callId: "done-1", name: "corral_done", arguments: {
         summary,
       } }] },
-      { text: "Done." },
     ]);
     const answered = nextEvent(second.events, event => event.kind === "turn_ended");
     await second.host.answerQuestion({ question: question.id, option: "socket" }, async () => undefined);
     const ended = await answered;
     await second.host.drained();
+    expect(fixtureTransport().requests - requests).toBe(1); // corral_done terminates the provider turn
 
     // The local answer starts a bridge-origin turn and completion reaches the engine once.
     const started = second.events.since(0, 64 * 1024).events.filter(event => event.kind === "turn_started");

@@ -23,6 +23,7 @@ struct HostState {
     paused: bool,
     open: bool,
     stopped: bool,
+    questions: Vec<Value>,
 }
 
 impl HostState {
@@ -81,7 +82,7 @@ impl Host {
                         json!({"protocol": 2, "role": role, "session_id": id, "session_file": transcript, "pid": 1234})
                     }
                     "get_state" => {
-                        json!({"paused": state.paused, "turn": {"current": 1, "open": state.open}, "owner_questions": [], "last_error": null})
+                        json!({"paused": state.paused, "turn": {"current": 1, "open": state.open}, "owner_questions": state.questions, "last_error": null})
                     }
                     "events_since" => {
                         json!({"last": 0, "next": 0, "events": [], "more": false, "gap": null})
@@ -119,7 +120,12 @@ impl Host {
                         state.text.extend(held);
                         json!({"paused": false})
                     }
-                    "answer" => json!({"status":"delivered"}),
+                    "answer" => {
+                        state
+                            .questions
+                            .retain(|question| question["id"] != args["question"]);
+                        json!({"status":"delivered"})
+                    }
                     "rewind" if args["list"] == true => {
                         json!({"checkpoints": [{"id": "turn-1", "phase": "start", "turn": 1}], "rewinds": []})
                     }
@@ -246,6 +252,16 @@ fn worker_live_replay_cancel_and_paused_engine_send_back_share_the_session() {
     let mut owner = Client::connect(&path);
     let task = owner.new_task("exercise Pi controls", Vec::new());
     owner.op(dispatch(&task), false);
+    let paused = || {
+        let rows = crate::views::RowCache::default()
+            .get(fixture.shared(), wire::subscription::Topic::Agents)
+            .unwrap();
+        let crate::views::Rows::Agents(rows) = rows.as_ref() else {
+            panic!("expected agent rows");
+        };
+        rows[0].paused
+    };
+    assert_eq!(paused(), None);
     let no_pi: rpc::Error = owner
         .call(SESSION_CANCEL, json!({"id":format!("{task}_R1")}))
         .unwrap_err();
@@ -274,6 +290,7 @@ fn worker_live_replay_cancel_and_paused_engine_send_back_share_the_session() {
         dir: run_dir,
     });
     engine.store.update_run(&run).unwrap();
+    assert_eq!(paused(), Some(false));
     {
         let mut state = host.state.lock().unwrap();
         state.open = true;
@@ -294,6 +311,7 @@ fn worker_live_replay_cancel_and_paused_engine_send_back_share_the_session() {
     assert!(cancelled.cancelled);
     assert!(!host.state.lock().unwrap().open);
     owner.ok::<Value>(SESSION_PAUSE, json!({"id":id}));
+    assert_eq!(paused(), Some(true));
     fs::write(run.worktree.join("note"), "").unwrap();
     engine.done(&task, "red gate").unwrap();
     engine.advance(&task).unwrap();
@@ -359,9 +377,17 @@ fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
     let first: SendAck = owner.ok(ASSISTANT_SEND, send("first", "first chat"));
     assert!(first.entry.starts_with("A-1/"));
     text(&mut watch(&path, "A-1"), "assistant live text");
+    let state = Arc::clone(&placement.hosts.lock().unwrap()["A-1"].state);
+    state.lock().unwrap().questions = vec![
+        json!({"id": "question-1", "question": "Which change?"}),
+        json!({"id": "question-2", "question": "Next question"}),
+    ];
+    let rows = crate::assistant::rows(fixture.shared()).unwrap();
+    assert_eq!(rows[0].state, wire::rows::AssistantState::Waiting);
+    assert_eq!(rows[0].question_id.as_deref(), Some("question-1"));
+    assert_eq!(rows[0].wait.as_ref().unwrap().text, "Which change?");
     let reply: SessionPromptAnswered = owner.ok(PROMPT_ANSWER, json!({"session":"A-1", "question":"question-1", "option":"Fix", "text":"in this worktree"}));
     assert_eq!(reply.status, "delivered");
-    let state = Arc::clone(&placement.hosts.lock().unwrap()["A-1"].state);
     assert_eq!(
         state.lock().unwrap().requests.last().unwrap(),
         &(
@@ -369,6 +395,8 @@ fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
             json!({"question":"question-1", "option":"Fix", "text":"in this worktree"})
         )
     );
+    let rows = crate::assistant::rows(fixture.shared()).unwrap();
+    assert_eq!(rows[0].question_id.as_deref(), Some("question-2"));
     let cancelled: CancelAck = owner.ok(
         ASSISTANT_CANCEL,
         AssistantCancel {

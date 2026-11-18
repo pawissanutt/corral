@@ -81,7 +81,7 @@ pub enum RewindReply {
     Turn(Rewound),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RewindCheckpoint {
     pub id: String,
     pub phase: String,
@@ -92,16 +92,19 @@ pub struct RewindCheckpoint {
     pub reference: Option<String>,
     pub leaf: Option<String>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Rewound {
     pub turn: u64,
     pub checkpoint: String,
     pub rescue_ref: String,
     pub from_head: String,
     pub head: String,
-    pub at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
 }
 
 /// `prompt.answer` accepts a Pi question ID and a choice, free text, or both.
@@ -125,4 +128,47 @@ pub struct SessionPromptAnswered {
 pub enum PromptAnswerRequest {
     Session(SessionPromptAnswer),
     Legacy(crate::assistant::PromptAnswer),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn rewind_list_preserves_times_and_accepts_rows_without_them() {
+        let checkpoint_time = "2026-11-18T12:01:00.000Z";
+        let rewind_time = "2026-11-18T12:03:00.000Z";
+        let reply: RewindReply = serde_json::from_value(json!({
+            "kind": "list",
+            "checkpoints": [
+                {"id": "R1-t1-start", "phase": "start", "turn": 1},
+                {"id": "R1-t2-start", "phase": "start", "turn": 2, "at": checkpoint_time}
+            ],
+            "rewinds": [
+                {"turn": 1, "checkpoint": "R1-t1-start", "rescue_ref": "rescue1",
+                 "from_head": "latest", "head": "initial"},
+                {"turn": 2, "checkpoint": "R1-t2-start", "rescue_ref": "rescue2",
+                 "from_head": "latest", "head": "second", "at": rewind_time}
+            ]
+        }))
+        .unwrap();
+        let RewindReply::List {
+            checkpoints,
+            rewinds,
+        } = &reply
+        else {
+            panic!("expected a rewind list");
+        };
+        assert_eq!(checkpoints[0].at, None);
+        assert_eq!(checkpoints[1].at.as_deref(), Some(checkpoint_time));
+        assert_eq!(rewinds[0].at, None);
+        assert_eq!(rewinds[1].at.as_deref(), Some(rewind_time));
+
+        let wire = serde_json::to_value(reply).unwrap();
+        assert!(wire["checkpoints"][0].get("at").is_none());
+        assert_eq!(wire["checkpoints"][1]["at"], checkpoint_time);
+        assert!(wire["rewinds"][0].get("at").is_none());
+        assert_eq!(wire["rewinds"][1]["at"], rewind_time);
+    }
 }

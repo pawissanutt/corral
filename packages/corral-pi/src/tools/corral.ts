@@ -58,10 +58,10 @@ export class CorralClient {
   get workspaceRoot(): string { return this.options.root; }
   get configured(): boolean { return this.options.corral !== ""; }
 
-  private async execute(argv: readonly string[], json: boolean): Promise<string> {
+  private async execute(argv: readonly string[], json: boolean, cwd = this.options.cwd): Promise<string> {
     if (!this.configured) throw new CorralCommandError("No engine configured; pass --corral <path>");
     const result = await this.run(["--root", this.options.root, ...(json ? ["--json"] : []), ...argv],
-      { cwd: this.options.cwd });
+      { cwd });
     if (result.code === 0) return result.stdout;
     const diagnostic = result.stderr || result.stdout || `${argv[0]} exited ${result.code}`;
     for (const text of [result.stdout, result.stderr]) {
@@ -84,8 +84,8 @@ export class CorralClient {
     throw new CorralCommandError(diagnostic);
   }
 
-  async command(argv: readonly string[]): Promise<unknown> {
-    const stdout = await this.execute(argv, true);
+  async command(argv: readonly string[], cwd?: string): Promise<unknown> {
+    const stdout = await this.execute(argv, true, cwd);
     try { return JSON.parse(stdout); }
     catch (cause) { throw new Error(`${argv[0]} returned invalid JSON`, { cause }); }
   }
@@ -98,12 +98,13 @@ export class CorralClient {
 
   usage(usage: ModelUsage): Promise<unknown> {
     const { task, run } = this.options.identity;
+    // Usage is workspace data, even if a concurrent landing removes this run's worktree.
     return this.command(["usage", "add", "--model", usage.model,
       ...(task ? ["--task", task] : []), ...(run ? ["--run", run] : []),
       "--input", String(usage.input), "--output", String(usage.output),
       "--cache-read", String(usage.cache_read), "--cache-write", String(usage.cache_write),
       ...(usage.usd === undefined ? [] : ["--usd", String(usage.usd)]),
-      ...(usage.billing ? ["--billing", usage.billing] : [])]);
+      ...(usage.billing ? ["--billing", usage.billing] : [])], this.options.root);
   }
 
   taskSnapshot(): Promise<unknown> {

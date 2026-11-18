@@ -76,8 +76,8 @@ New on the wire because the engine has them: `done`, `gate`, `review`, `stop`, `
 | Topic `inbox` | drop | Now's Needs-you group reads `tasks` |
 | Topic `plans`, detail `plan` | reshape | Parent tasks with child counts by status; detail is the parent, its `body`, the children and their `depends_on` edges |
 | Detail `plan_diff`, `question`, `build`, `filings`; topic `builds` | drop | No plan revisions, questions or build records; filed ideas are `created` lines in Changes |
-| Topic `projects` | keep | `[projects.*]` plus open-task counts |
-| Topic `agents` | reshape | Live `runs` with `SessionStatus` and `quiet_since` |
+| Topic `projects` | keep | `[projects.*]`, open-task counts and up to 100 local branches in tip committer-date order |
+| Topic `agents` | reshape | Live `runs` with `SessionStatus`, `quiet_since` and the Pi host's pause flag where available |
 | Topics `assistant`, `thread`, `session`; details `session`, `session_item`, `attachment`; `assistant.*`, `attachment.*`, `prompt.answer` | keep, unchanged | Served by phase 3 over the per-session socket |
 | Topic `terminal`, detail `terminal` | keep | Pane text for herdr sessions (`crates/corral-herdr/src/lib.rs:288`); tail of `session.log` for process sessions |
 | Topic `usage`, detail `usage_series` | reshape | Section 4, Usage |
@@ -127,10 +127,17 @@ One loop thread owns an engine handle and calls `sync`:
 | Plans | keep | Parent tasks. Document is the parent's Markdown `body`; members are the children laid out by `depends_on`; Path to done is the children not yet Done. Proposal, revision and plan-reviewer panes go |
 | Agents | keep | Live runs: role, profile, model, status, quiet time, terminal. Chat, the quick thread and assistant sessions arrive with phase 3 |
 | Review | keep | Review tasks: diff and summary from `done`, gate check for HEAD, review check for the round, round n of `max_rounds`. A reviewer session persists across the rounds of a task: the engine re-requests review from the live reviewer session. Phase 3 adds Rewind to the pi session menu |
-| Timeline | keep | `runs` (start, end, role, outcome) and `events`; burn-up from `created` and `landed` |
+| Timeline | keep | `runs` (start, end, role, outcome) and `events`; burn-up from `created`, `landed`, `dropped` and `reopened` |
 | Usage | keep, reshape | The engine's `usage` rows (one per model request, written by `corral usage add` from agent hosts), totalled per profile, model, task and day, beside run counts and durations from `runs`. The header reads "covers N of M runs" and says the rest ran on a harness that reports no usage. Quota stays unknown |
 | Builds | merge into Agents | A build session is a worker without a task (phase 3); landed work shows in Changes |
 | Settings | keep | Config editor (limits, defaults, the two automation switches, profiles, projects with gate lines and reviewer, routing, artifact globs, harnesses), devices and pairing, push, connection, this device. Authority editor, modes and grants go |
+
+The `tasks` topic and plan child rows expose `resolved_profile`, the worker profile
+dispatch selects with no override. An assistant row in `Waiting` exposes the `question_id`
+of the pending prompt it shows. `usage_series` accepts an optional IANA `time_zone` for
+day boundaries, falling back to the supplied `utc_offset_minutes` when no zone is given.
+`app.session` reports `local` for Unix and loopback peers so the app can offer pane focus
+without treating remote owners differently for authorization.
 
 Where the actions sit:
 
