@@ -411,6 +411,19 @@ impl State {
                 self.cycle_tab();
                 Some(Vec::new())
             }
+            "R" => {
+                let task = selection(self, chosen, tasks, feed, form, grouping)
+                    .and_then(|id| tasks.iter().find(|task| task.id == *id))?;
+                Some(if super::reply_box(task).is_some() {
+                    self.now_tab = super::NowTab::Story;
+                    vec![Effect::Focus(super::REPLY_FIELD)]
+                } else {
+                    vec![Effect::Toast(format!(
+                        "{} has no question waiting for your reply",
+                        task.id
+                    ))]
+                })
+            }
             _ => None,
         }
     }

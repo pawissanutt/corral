@@ -24,6 +24,10 @@ pub struct OwnerMessage {
     pub files: Vec<FileChip>,
     /// The attachment whose canonical readback is open under the message.
     pub opened: Option<AttachmentView>,
+    /// File as idea: files the message's words as an Idea task, with no model.
+    pub file: Option<Button>,
+    /// How the filing sent from here went: the new task's id, or the refusal.
+    pub filed: Option<Chip>,
 }
 
 /// Content inside an assistant reply, in its original order.

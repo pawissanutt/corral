@@ -8,6 +8,7 @@ use corral_protocol::assistant::{
     AssistantSend, ContextRef, EntryKind, MessageState as WireState, ThreadEntry, ToolLine,
     TurnCompletion,
 };
+use corral_protocol::op::OpReply;
 
 use super::cards::{WAIT_LIFETIME, WAIT_NOTE};
 use super::views::button;
@@ -16,6 +17,7 @@ use super::{
     State, ThreadItem, ToolRow, WaitingBlock, clock, entry_session, fact_chips, question_card,
     quick_id, record_link, row, send_chips, wait_explanation, wait_label,
 };
+use crate::model::act::{self, ActStatus};
 use crate::model::daemon::{CommandStatus, Feed, Link};
 use crate::model::hue::Hue;
 use crate::model::id::Id;
@@ -52,6 +54,7 @@ fn attachment(links: &[ContextRef]) -> Option<String> {
 
 fn owner(state: &State, feed: &Feed, entry: &ThreadEntry) -> OwnerMessage {
     let (files, opened) = fact_chips(state, feed, &entry.id, &entry.attachments);
+    let (file, filed) = filing(state, feed, entry);
     OwnerMessage {
         author: "you",
         provenance: entry
@@ -73,7 +76,54 @@ fn owner(state: &State, feed: &Feed, entry: &ThreadEntry) -> OwnerMessage {
         attachment: attachment(&entry.links),
         files,
         opened,
+        file,
+        filed,
     }
+}
+
+/// File as idea under an owner message, and how a filing sent from here went: the new task's
+/// id, or what stopped it. The button stays while nothing is filed, so a refused filing can be
+/// sent again; a message corrald already saved or withdrew has none.
+fn filing(
+    state: &State,
+    feed: &Feed,
+    entry: &ThreadEntry,
+) -> (Option<super::Button>, Option<Chip>) {
+    let key = state.live.filed.get(entry.id.as_str());
+    let status = key.and_then(|key| act::status(feed, key.as_str()));
+    let chip = status.as_ref().map(|status| match status {
+        ActStatus::Pending | ActStatus::Running => Chip::new("filing as idea…", Hue::Corral),
+        ActStatus::Done => {
+            let created = key
+                .and_then(|key| feed.operations.get(key.as_str()))
+                .and_then(|operation| operation.decode::<OpReply>());
+            match created {
+                Some(OpReply::Done {
+                    task: Some(task), ..
+                }) => Chip::new(format!("filed as idea · {task}"), Hue::Ok),
+                _ => Chip::new("filed as idea", Hue::Ok),
+            }
+        }
+        ActStatus::Refused(refusal) => {
+            Chip::new(format!("not filed · {}", refusal.reason), Hue::Fail)
+        }
+        ActStatus::Failed(why) => Chip::new(format!("not filed · {why}"), Hue::Fail),
+    });
+    let settled = matches!(
+        entry.state,
+        Some(WireState::Saved { .. } | WireState::Withdrawn)
+    );
+    let open = status
+        .as_ref()
+        .is_none_or(|status| matches!(status, ActStatus::Failed(_) | ActStatus::Refused(_)));
+    let file = (open
+        && !settled
+        && entry
+            .text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty()))
+    .then(|| button("File as idea", Action::FileEntry(entry.id.clone())));
+    (file, chip)
 }
 
 fn tools(lines: &[ToolLine]) -> (Option<String>, Vec<ToolRow>) {
@@ -512,6 +562,8 @@ fn outbox(
             attachment: attachment(&send.context),
             files: send_chips(feed, &send.attachments),
             opened: None,
+            file: None,
+            filed: None,
         }));
         if note.is_some() || !buttons.is_empty() {
             items.push(ThreadItem::Queued(QueueNote {

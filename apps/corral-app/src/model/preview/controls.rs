@@ -74,6 +74,9 @@ enum Fail {
 }
 
 fn run(feed: &mut Feed, key: &Id, session: &str, control: Control) -> Result<Value, Fail> {
+    if control == Control::Relaunch {
+        return relaunch(feed, key, session);
+    }
     let row = feed
         .agents
         .get(session)
@@ -85,26 +88,6 @@ fn run(feed: &mut Feed, key: &Id, session: &str, control: Control) -> Result<Val
             engine(feed, key, Op::Stop { id: task })?;
             Ok(Value::Null)
         }
-        Control::Relaunch => {
-            engine(
-                feed,
-                key,
-                Op::Retry {
-                    id: task.clone(),
-                    profile: Some(row.run.profile.clone()),
-                    fresh: false,
-                    note: None,
-                },
-            )?;
-            let next = feed
-                .agents
-                .values()
-                .filter(|other| other.run.task == task && other.run.ended.is_none())
-                .map(|other| format!("{}_{}", other.run.task, other.run.id))
-                .last()
-                .unwrap_or_else(|| session.to_owned());
-            Ok(json!({"id": next}))
-        }
         _ if !matches!(row.run.session, Some(SessionRef::Pi { .. })) => Err(Fail::Refused(
             "session has no Pi socket; use Terminate to stop its host".into(),
         )),
@@ -113,6 +96,37 @@ fn run(feed: &mut Feed, key: &Id, session: &str, control: Control) -> Result<Val
         )),
         _ => pi_control::control(feed, session, control).map_err(Fail::Refused),
     }
+}
+
+/// Relaunch, as corrald does it: a retry of the run's task with the run's profile. A run that
+/// ended (terminated, stopped) is no longer listed, so it is read from its task's record.
+fn relaunch(feed: &mut Feed, key: &Id, session: &str) -> Result<Value, Fail> {
+    let missing = || Fail::Missing("task session not found".into());
+    let (task, run) = session.split_once('_').ok_or_else(missing)?;
+    let profile = super::records(feed)
+        .into_iter()
+        .find(|record| record.task.id == task)
+        .and_then(|record| record.runs.into_iter().find(|other| other.id == run))
+        .map(|run| run.profile)
+        .ok_or_else(missing)?;
+    engine(
+        feed,
+        key,
+        Op::Retry {
+            id: task.to_owned(),
+            profile: Some(profile),
+            fresh: false,
+            note: None,
+        },
+    )?;
+    let next = feed
+        .agents
+        .values()
+        .filter(|other| other.run.task == task && other.run.ended.is_none())
+        .map(|other| format!("{}_{}", other.run.task, other.run.id))
+        .last()
+        .unwrap_or_else(|| session.to_owned());
+    Ok(json!({"id": next}))
 }
 
 /// Submits an engine operation as corrald does for Terminate and Relaunch.

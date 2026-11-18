@@ -344,10 +344,12 @@ impl Button {
 /// Worker-hue feed glyph for a worker-start event.
 pub const START_MARK: &str = "▶";
 
-/// Now's letter command, bound wherever the focus is outside a text field: `]` brings the
-/// inspector's next tab forward (Tab stays the platform's focus key). The list keys (moves,
-/// Enter) are `commands::list_keys`, bound only while the list has the focus.
-pub const KEYS: &[&str] = &["]"];
+/// Now's letter commands, bound wherever the focus is outside a text field: `]` brings the
+/// inspector's next tab forward (Tab stays the platform's focus key); `R` (Shift+R) puts the
+/// focus in the selected Blocked card's reply box, which Tab reaches only after the whole list.
+/// The list keys (moves, Enter) are `commands::list_keys`, bound only while the list has the
+/// focus.
+pub const KEYS: &[&str] = &["]", "R"];
 
 impl State {
     /// Apply form-independent local controls.

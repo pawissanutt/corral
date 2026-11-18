@@ -5,7 +5,7 @@
 use corral_protocol::detail::{DetailBody, DetailRef, ReviewDetail, TaskDetail};
 use corral_types::{Actor, Check, CheckKind, CheckResult, Run, Status};
 
-use crate::model::daemon::{DetailCache, Feed, Task};
+use crate::model::daemon::{DetailCache, Feed, Group, Task};
 use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::Selection;
@@ -41,14 +41,19 @@ pub(super) fn artifact_ref(reference: &str) -> DetailRef {
     }
 }
 
-/// Every task in Review on the board, in the project scope, in board order.
+/// Every task in Review on the board, in the project scope, as the list shows them: those
+/// waiting for the owner's verdict first, each group in board order. j/k walk and the first
+/// candidate shown follow this order.
 pub fn candidates_filtered<'a>(feed: &'a Feed, filter: &ProjectFilter) -> Vec<&'a Task> {
     let filter = filter.resolved(feed);
-    feed.board
+    let mut candidates: Vec<&Task> = feed
+        .board
         .tasks()
         .iter()
         .filter(|task| task.status() == Status::Review && filter.matches(task.project()))
-        .collect()
+        .collect();
+    candidates.sort_by_key(|task| task.group != Group::NeedsYou);
+    candidates
 }
 
 /// The candidate Review shows: the root's selection while the board still lists that task,
@@ -117,6 +122,13 @@ impl<'a> Shown<'a> {
         self.run()
             .or(self.task.row.run.as_ref())
             .map(|run| run.base.as_str())
+    }
+
+    /// The candidate's own branch, which it cannot land onto.
+    pub fn branch(&self) -> Option<&'a str> {
+        self.run()
+            .or(self.task.row.run.as_ref())
+            .map(|run| run.branch.as_str())
     }
 
     /// The check of `kind` that decides now: the board row's (the newest gate for HEAD, the

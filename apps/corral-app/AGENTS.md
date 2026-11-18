@@ -98,6 +98,12 @@ If another process holds `~/.cargo/.package-cache`, builds can use `CARGO_HOME` 
 
 Use the [NSH documentation index](https://nsh.dev/llms.txt); documentation pages are available as `.md`. The NSH 0.5.1 crate sources are under `~/.cargo/registry/src/*/nsh-*-0.5.1/`. Read the relevant documentation and source or a real call before using an API.
 
+## Walking the terminal UI
+
+`scripts/tui-walk.py` starts `nsh run --target tui --port <port>` (default 8797) in a pseudo-terminal of `--size COLSxROWS` (default 140x44), runs steps given as arguments or in a `--steps` file, and prints the screen as text. It uses `pyte` from `/tmp/corral-tui-walk-venv`, created on first use; it writes nothing else outside `/tmp`. It counts as the one NSH build at a time.
+
+Steps: `fixture` (Ctrl+K, `Data: fixture`, Enter: the explicit sample preview), `key:NAME[*N]` (`enter tab stab esc up down left right home end pgup pgdn bs del space`, `ctrl+x`, `alt+x` or one character, such as `R` for Shift+R), `type:TEXT`, `wait:TEXT`, `gone:TEXT`, `sleep:SECS`, `screen`, `rows:A-B`, `attrs[:all]` (reverse, bold, underline and background runs; `all` adds foreground colour) and `diff` (the styled runs that changed since the last `attrs`/`diff`). On this target the keyboard focus is reverse video with underline and a selected row is reverse video alone, so `key:tab diff` shows where each Tab lands. Example: `scripts/tui-walk.py fixture key:n key:R diff "type:Keep it paused" key:enter screen`.
+
 ## Tests
 
 Keep tests few and name each for the defect it catches. Test at the lowest layer that can fail. Do not pin wording, styles or incidental layout.

@@ -142,7 +142,8 @@ pub fn kind(feed: &Feed, session: &str) -> Option<Kind> {
 /// a reviewer is cancelled by its task's hold already. Rewind is a worker's. Relaunch is for a
 /// host that is lost, Cancel for one working or waiting. A worker shows Pause or Resume as its
 /// row's `paused` says; a daemon that does not report it gets both. A chat's row says, so it
-/// offers one.
+/// offers one. A run (`<task>_<run>`) corrald no longer lists has ended, terminated or stopped:
+/// Relaunch is what applies to it, a new run of the same role and profile.
 pub fn controls(feed: &Feed, session: &str) -> Vec<Control> {
     match kind(feed, session) {
         Some(Kind::Chat) => chat_controls(feed, session),
@@ -151,6 +152,7 @@ pub fn controls(feed: &Feed, session: &str) -> Vec<Control> {
             .get(session)
             .map(|row| run_controls(row, kind))
             .unwrap_or_default(),
+        None if session.contains('_') => vec![Control::Relaunch],
         None => Vec::new(),
     }
 }

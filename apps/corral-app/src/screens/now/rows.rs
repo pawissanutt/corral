@@ -265,6 +265,17 @@ pub(crate) fn task_row(
         true,
     )
     .when_some(handle, |line, handle| line.element_ref(&handle));
+    let (focused, blurred) = (row.line.id.to_string(), row.line.id.to_string());
+    let focused_row = app.focused_row;
+    let line = line
+        .on_focus(move || focused_row.set(Some(focused.clone())))
+        .on_blur(move || {
+            focused_row.update(|row| {
+                if row.as_deref() == Some(blurred.as_str()) {
+                    *row = None;
+                }
+            })
+        });
     let line = match form {
         Form::Desktop => line
             .px(px(DESK_PAD))

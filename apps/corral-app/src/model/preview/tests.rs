@@ -80,6 +80,21 @@ fn owner_message_resumes_a_paused_session() {
     assert_eq!(pausing(&feed, session), [Control::Pause]);
 }
 
+/// A terminated run leaves the roster; its Session menu still offers Relaunch, which starts a
+/// new run of the task. Before, the menu had no control at all once the row was gone.
+#[test]
+fn terminated_run_offers_relaunch() {
+    let mut feed = feed(1_800_000_000, "2027-01-15".into(), "08:00".into(), None);
+    let session = "T-14_R1";
+    control(&mut feed, &Id::new("stop"), session, Control::Terminate);
+    assert!(!feed.agents.contains_key(session));
+    assert_eq!(agents::controls(&feed, session), [Control::Relaunch]);
+
+    control(&mut feed, &Id::new("again"), session, Control::Relaunch);
+    assert!(feed.operations["again"].refusal.is_none());
+    assert!(feed.agents.contains_key("T-14_R2"));
+}
+
 /// Once the quick thread ended, its next message opens a new quick session that holds it.
 #[test]
 fn ended_quick_thread_starts_a_new_session_on_the_next_send() {

@@ -51,8 +51,13 @@ use crate::model::id::Id;
 use crate::model::live::{Live, Selection};
 use crate::model::work::{Record, Verb};
 
-/// Review's keyboard shortcut toggles the stored split/unified preference.
-pub const KEYS: &[&str] = &["s"];
+/// Review's keyboard shortcuts: `s` toggles the stored split/unified preference; `A`
+/// (Shift+A) puts the focus on the shown candidate's Approve, which Tab reaches only after the
+/// list and the brief.
+pub const KEYS: &[&str] = &["s", "A"];
+
+/// The decide bar's Approve (`btn-approve`), which `A` focuses.
+pub const APPROVE: &str = "btn-approve";
 
 /// The desktop preference; phone, terminal and narrow desktop output remain unified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -200,6 +205,15 @@ impl State {
                 index.saturating_sub(1)
             };
             return Some(vec![Effect::Select(Live::Review(rows[next].id.clone()))]);
+        }
+        if key == "A" {
+            let shown = matches!(top, Some(Live::Review(_)))
+                || selected_filtered(selection, feed, filter).is_some();
+            return Some(if shown {
+                vec![Effect::Focus(APPROVE)]
+            } else {
+                Vec::new()
+            });
         }
         if key == "." {
             let id = match top {

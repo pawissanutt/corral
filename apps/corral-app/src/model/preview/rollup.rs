@@ -13,6 +13,7 @@ use corral_types::{
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::sample::BRANCHES;
 use super::{details, put, records, save, stamp, workspace};
 use crate::model::Id;
 use crate::model::daemon::{self, ClientError, DetailCache, Feed, detail_key};
@@ -220,18 +221,20 @@ fn projects(feed: &Feed, records: &[TaskDetail]) -> BTreeMap<Id, ProjectRow> {
         .collect()
 }
 
-/// The project's local branches as corrald lists them, newest tip first: each run's branch,
-/// newest run first, then the base and a release branch to land onto.
-fn branches(records: &[TaskDetail], project: &str, base: Option<&str>) -> Vec<String> {
+/// The project's local branches as corrald lists them, newest tip first: the branch of each run
+/// whose task is not yet landed or dropped (both remove it), newest run first, then the base
+/// and the repository's own branches. The sample engine lands only onto these.
+pub(super) fn branches(records: &[TaskDetail], project: &str, base: Option<&str>) -> Vec<String> {
     let mut runs: Vec<&Run> = records
         .iter()
         .filter(|record| record.task.project.as_deref() == Some(project))
+        .filter(|record| !matches!(record.task.status, Status::Done | Status::Dropped))
         .flat_map(|record| &record.runs)
         .collect();
     runs.sort_by_key(|run| std::cmp::Reverse(run.started));
     let mut names: Vec<String> = Vec::new();
     let tips = runs.iter().map(|run| run.branch.as_str());
-    for name in tips.chain([base.unwrap_or("main"), "release/2026.11"]) {
+    for name in tips.chain(base).chain(BRANCHES.iter().copied()) {
         if !name.is_empty() && !names.iter().any(|known| known == name) {
             names.push(name.to_owned());
         }

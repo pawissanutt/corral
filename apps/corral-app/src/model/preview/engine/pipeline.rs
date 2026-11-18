@@ -6,8 +6,8 @@ use corral_types::{
 };
 use serde_json::{Value, json};
 
-use super::super::rollup::{closed, last_worker};
-use super::super::sample::{BRANCHES, artifact, finish, gate, review, sha};
+use super::super::rollup::{branches, closed, last_worker};
+use super::super::sample::{BRANCHES, artifact, finish, gate, records, review, sha};
 use super::super::{ago, event};
 use super::{
     Fail, commit, config, dispatch_next, forced, next_done, next_force_approve, next_retry,
@@ -260,11 +260,15 @@ pub(super) fn approve(
     // does not have, is refused by name with one step per existing branch, forced as asked.
     if let Some(worker) = last_worker(&rec) {
         let target = onto.unwrap_or(&worker.base);
+        let project = rec.task.project.as_deref().unwrap_or_default();
+        let exists = branches(&records(feed), project, None)
+            .iter()
+            .any(|branch| branch == target);
         let reason = if target == worker.branch {
             Some(format!(
                 "cannot land a task branch onto itself ({target:?})"
             ))
-        } else if !BRANCHES.contains(&target) {
+        } else if !exists {
             Some(format!("landing target branch {target:?} does not exist"))
         } else {
             None

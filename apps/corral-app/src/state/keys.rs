@@ -30,17 +30,31 @@ impl KeyFocus {
 }
 
 /// NSH names a shifted character by its unshifted key: `?` is Shift+/ and the reducers'
-/// capital `J`/`K` are Shift+J/K (a bare "J" would bind plain `j`).
+/// capitals (`J`/`K`, Now's `R`, Review's `A`) are Shift+letter (a bare "J" would bind `j`).
 fn stroke(key: &'static str) -> &'static str {
     match key {
         "?" => "shift+/",
         "J" => "shift+j",
         "K" => "shift+k",
+        "R" => "shift+r",
+        "A" => "shift+a",
         key => key,
     }
 }
 
 impl AppState {
+    /// The control `handle` takes the keyboard focus whenever a direct key names its test id
+    /// (`Effect::Focus`), once it has laid out.
+    pub fn focus_when_asked(self, id: &'static str, handle: ElementRef) {
+        let focus_to = self.focus_to;
+        effect(move || {
+            if focus_to.get() == Some(id) {
+                untracked(|| focus_to.set(None));
+                after_answer(move || handle.focus());
+            }
+        });
+    }
+
     pub(super) fn bind_keys(self) {
         let typing = KeyOptions {
             when: When::NotEditing,
@@ -129,9 +143,23 @@ impl AppState {
             return &[];
         }
         match self.data.get() {
-            DataState::Daemon | DataState::Fixture => self
-                .nav
-                .with(|nav| commands::list_keys_live(destination, nav.live())),
+            DataState::Daemon | DataState::Fixture => {
+                let keys = self
+                    .nav
+                    .with(|nav| commands::list_keys_live(destination, nav.live()));
+                // Enter opens the selected task; with the focus on another control of the list
+                // (a toggle, another row) that control takes it.
+                let on_selected = !self.key_focus.get().anywhere
+                    || self.focused_row.with(|row| {
+                        self.nav
+                            .with(|nav| row.as_deref() == nav.selection.task.as_deref())
+                    });
+                if on_selected {
+                    keys
+                } else {
+                    commands::without_open(keys)
+                }
+            }
             DataState::Disconnected => &[],
         }
     }

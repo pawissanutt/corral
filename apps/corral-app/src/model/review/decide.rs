@@ -59,9 +59,12 @@ fn target(state: &State, feed: &Feed, shown: &Shown) -> Target {
         .or_else(|| base.map(str::to_owned))
         .unwrap_or_default();
     let project = shown.task.task().project.as_deref();
+    // The candidate's own branch is never a target: the engine refuses landing it onto itself.
+    let mut branches = projects::branches(feed, project);
+    branches.retain(|branch| Some(branch.as_str()) != shown.branch());
     Target {
         label: "Onto",
-        branches: projects::suggest(&projects::branches(feed, project), &value),
+        branches: projects::suggest(&branches, &value),
         value,
         placeholder: "Branch to land onto",
         hint: match base {

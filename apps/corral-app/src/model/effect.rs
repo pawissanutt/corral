@@ -53,6 +53,9 @@ pub enum Effect {
     /// Leave the current page for the one below it.
     Back,
     CloseAsk,
+    /// Move the keyboard focus to the control with this test id, which is on screen: a direct
+    /// key's way to a control many Tab presses away.
+    Focus(&'static str),
     /// Select a live record and push its page where the form stacks it.
     OpenLive(Live),
     /// Select a live record in place without navigating.
