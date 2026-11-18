@@ -15,11 +15,17 @@ test("build writes stay inside the session worktree and outside protected direct
     for (const path of [join(base, "outside.ts"), join(`${worktree}-other`, "file.ts"), "../outside.ts"]) {
       expect(classifyBuildWrite(path, worktree).allowed).toBe(false);
     }
-    for (const directory of [".git", ".corral", ".worktrees"]) {
+    for (const directory of [".git", ".corral", ".corral-next", ".worktrees"]) {
       expect(classifyBuildWrite(join(worktree, directory), worktree).allowed).toBe(false);
       expect(classifyBuildWrite(join(worktree, directory, "new"), worktree).allowed).toBe(false);
       expect(classifyBuildWrite(join(worktree, "nested", directory, "new"), worktree).allowed).toBe(false);
     }
+    const memory = join(base, ".corral-next", "memory");
+    mkdirSync(memory, { recursive: true });
+    symlinkSync(worktree, join(memory, "escape"));
+    expect(classifyBuildWrite(join(memory, "notes.md"), worktree, base)).toEqual({ allowed: true });
+    expect(classifyBuildWrite(join(memory, "notes.md"), worktree).allowed).toBeFalse();
+    expect(classifyBuildWrite(join(memory, "escape", "notes.md"), worktree, base).allowed).toBeFalse();
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { Text, stripTerminalSequences, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "../node_modules/@earendil-works/pi-tui/dist/layout.js";
 
@@ -87,7 +87,8 @@ function captureInspector(bound: boolean): void {
   expect(host.session.model?.id).toBe("gpt-6.1-sol");
   // Header row 1 names the bound task and run; the tab row offers the task-bound views.
   expect(chrome[0]).toContain("T-001 · R1");
-  for (const tab of ["Task", "Chat", "Agents", "Changes", "Proof", "Inbox"]) expect(chrome[2]).toContain(tab);
+  for (const tab of ["Task", "Chat", "Agents", "Changes", "Proof"]) expect(chrome[2]).toContain(tab);
+  expect(chrome[2]).not.toContain("Inbox");
   // The host's binding reaches the panels: a disconnected host's status bar reads `○ unbound`, a bound one `● bound`.
   expect(panels.workbench.sideSource().bound).toBe(bound);
   // No agents, jobs, plan or failed read: the collapsed row carries no summary, so it is one row set into its own rule.
@@ -97,13 +98,9 @@ function captureInspector(bound: boolean): void {
   expect(visibleWidth(inline[0] ?? "")).toBe(80);
   // The model label belongs to the real composer, not the header or the sidebar.
   expect([...chrome, ...rail].join("\n")).not.toContain("gpt-6.1-sol");
-  const evidence = resolve(import.meta.dirname, "../../../.evidence");
-  mkdirSync(evidence, { recursive: true });
-  writeFileSync(join(evidence, `T-689-host-${bound ? "bound" : "disconnected"}-render.txt`),
-    [...chrome, "", ...rail, "", ...plain(inline)].join("\n"));
 }
 
-test("host inspector renders real disconnected state in wide and inline layouts without model calls", () => captureInspector(false));
+test("the host's disconnected state reaches its header and responsive sidebar without model calls", () => captureInspector(false));
 
 test("input is rejected before local startup, which binds and persists the active transcript", async () => {
   expect(await submit("Reply only EARLY.", "prompt")).toEqual({ disposition: "rejected", reason: "host_not_ready" });

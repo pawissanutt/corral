@@ -1,6 +1,6 @@
 // Production review loadout and its verdict command with the offline provider.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,7 +21,6 @@ import reviewer, { CONTRACT_ASSET, kickoff, reviewerRole } from "./index.ts";
 
 const identity = {
   store: "st-0123456789abcdef", project: "demo", role: "reviewer" as const, task: "T-007", run: "R2",
-  review: "R2-review1",
 };
 const UPSTREAM = ["read", "grep", "find", "ls", "bash"];
 const CORRAL_TOOLS = ["corral_artifact", "corral_verdict"];
@@ -86,7 +85,7 @@ test("the reviewer has read-only file tools plus task artifact and verdict", () 
 
 test("the contract is the installed reviewer-contract.md with the bound identity filled in", () => {
   const contract = reviewer.contract({ identity, cwd: "/tmp", model: "m" });
-  expect(contract).toContain("corral task T-007, run R2, review R2-review1, in\nproject demo");
+  expect(contract).toContain("corral task T-007 in project demo");
   expect(contract).not.toContain("{{");
   const empty = mkdtempSync(join(tmpdir(), "corral-pi-noassets-"));
   try {
@@ -149,7 +148,7 @@ test("review kickoff is keyed by round and prompt content and retries only unobs
     sendUserMessage: (text: string) => sent.push(text),
   } as unknown as ExtensionAPI;
   const promptFile = join(work, "T-007-R2-review.md");
-  writeFileSync(promptFile, "First candidate");
+  writeFileSync(promptFile, "First candidate\n\n## Review round 0\n");
   const context = { identity, cwd: "/tmp", model: "m", promptFile };
   const install = (bound: RoleContext) => {
     reviewer.extend?.(pi, bound);
@@ -181,7 +180,7 @@ test("review kickoff is keyed by round and prompt content and retries only unobs
   install(context)({ type: "session_start", reason: "startup" }, session([[{ type: "text", text: observed }]]));
   expect(sent).toEqual([]);
   const copiedPrompt = join(work, "copied-review.md");
-  writeFileSync(copiedPrompt, "First candidate");
+  writeFileSync(copiedPrompt, readFileSync(promptFile, "utf8"));
   install({ ...context, promptFile: copiedPrompt })({ type: "session_start", reason: "startup" }, session([observed]));
   expect(sent).toEqual([]);
   // Recovery after a crash before observation still needs to deliver the current attempt.
@@ -189,12 +188,12 @@ test("review kickoff is keyed by round and prompt content and retries only unobs
   expect(sent.length).toBe(1);
 
   sent.length = 0;
-  const next = { ...context, identity: { ...identity, review: "R2-review2" } };
-  install(next)({ type: "session_start", reason: "startup" }, session([observed]));
+  writeFileSync(promptFile, "First candidate\n\n## Review round 1\n");
+  install(context)({ type: "session_start", reason: "startup" }, session([observed]));
   expect(sent.length).toBe(1);
 
   sent.length = 0;
-  writeFileSync(promptFile, "Rewritten candidate");
+  writeFileSync(promptFile, "Rewritten candidate\n\n## Review round 0\n");
   install(context)({ type: "session_start", reason: "startup" }, session([observed]));
   expect(sent.length).toBe(1);
   sent.length = 0;

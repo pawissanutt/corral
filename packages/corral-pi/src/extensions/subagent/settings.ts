@@ -27,6 +27,6 @@ export function auxiliarySettings(role: Role, enabled: readonly string[], settin
   return {
     ...(enabled.includes("subagents") ? { explore: ExploreSettingsSchema.parse(settings?.subagents) } : {}),
     ...(enabled.includes("oracle") ? { oracle: OracleSettingsSchema.parse(settings?.oracle) } : {}),
-    ...(role === "pm" && enabled.includes("expert") ? { expert: ExpertSettingsSchema.parse(settings?.expert) } : {}),
+    ...(role === "assistant" && enabled.includes("expert") ? { expert: ExpertSettingsSchema.parse(settings?.expert) } : {}),
   };
 }

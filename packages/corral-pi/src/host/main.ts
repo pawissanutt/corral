@@ -28,6 +28,8 @@ import { guardTerminalStop } from "./terminal-stop.ts";
 import { admitConnection } from "./connections.ts";
 import { connectionRules, isApiConnection } from "../auth/connections.ts";
 import { errorPresenter } from "../ui/error-copy.ts";
+import { repaintTranscript } from "../ui/transcript-repaint.ts";
+import { presentHostNotice } from "../ui/host-notices.ts";
 import { RemoteOwner } from "./remote-owner.ts";
 import { SessionRecord } from "./session-record.ts";
 import { summaryOptions } from "./summary.ts";
@@ -118,6 +120,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   mkdirSync(config.sessionDir, { recursive: true, mode: 0o700 });
   let remote: RemoteOwner | undefined;
   let host: HostSession | undefined;
+  let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;
   const client = new CorralClient({ corral: config.corral, root: config.root, cwd: config.cwd, identity: config.identity });
   const pane = config.pane || process.env.HERDR_PANE_ID;
   let transcript = record.transcript;
@@ -129,12 +132,12 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider, ...(aws ? { aws } : {}),
     ...(config.binding ? { binding: config.binding } : {}),
     paneInput: async (text, images) => await remote?.paneInput(text, images) ?? false,
+    transcriptRewound: () => { if (terminal) repaintTranscript(terminal); },
     automatedInput: input => remote?.submit(input),
     ...(config.effort ? { effort: config.effort } : {}),
     quickSummary: config.quickSummary,
     ...(summary ? { summary } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
-    ...(config.memoryFile ? { memoryFile: config.memoryFile } : {}),
     ...(config.ui ? { ui: config.ui } : {}),
     todo: config.todo === true,
     ...(config.capabilities ? { capabilities: config.capabilities } : {}),
@@ -146,7 +149,6 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     sessionManager: openSession(sdk, config.cwd, config.sessionDir, transcript),
   });
   const session = host;
-  let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => {
     try { await session.close(); await session.drained(); }
@@ -178,6 +180,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
       resume: () => owner.resume(),
       setModel: args => owner.setModel(args),
       cancel: turn => session.cancel(turn),
+      rewind: input => owner.rewind(input),
       queueState: limit => session.queue.snapshot(limit),
       queueWithdraw: key => session.queue.withdrawInput(key),
       shutdown() {
@@ -205,7 +208,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     // corral resumes sessions with its own commands; Pi's `pi --session …` line would name a command that does not work here.
     verbose: false, resumeHint: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
     ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation),
-      errorPresentation: errorPresenter(() => session.latestStopCause()), ...panels.presentation() } : {}),
+      errorPresentation: errorPresenter(() => session.latestStopCause()), userPresentation: presentHostNotice, ...panels.presentation() } : {}),
   });
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();

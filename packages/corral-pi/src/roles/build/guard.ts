@@ -1,4 +1,4 @@
-import { relative, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { assistantShellRefusal } from "../assistant/guard.ts";
@@ -214,15 +214,22 @@ export function buildShellRefusal(command: string, bare = false): string | undef
 }
 
 export type BuildWriteClassification = { allowed: true } | { allowed: false; reason: string };
-const PROTECTED: readonly string[] = [".git", ".corral", ".worktrees"];
+const PROTECTED: readonly string[] = [".git", ".corral", ".corral-next", ".worktrees"];
 
 /** Check both the tool's lexical destination and where its existing symlinks lead. */
-export function classifyBuildWrite(path: string, worktree: string): BuildWriteClassification {
+export function classifyBuildWrite(path: string, worktree: string, workspace?: string): BuildWriteClassification {
   const root = resolveToolPath(worktree, ".");
   const target = resolveToolPath(path, root);
+  if (workspace && target.endsWith(".md") && within(target, join(workspace, ".corral-next", "memory"))) {
+    const canonicalWorkspace = real(workspace);
+    const canonicalTarget = real(target);
+    if (canonicalWorkspace && canonicalTarget && within(canonicalTarget, join(canonicalWorkspace, ".corral-next", "memory"))) {
+      return { allowed: true };
+    }
+  }
   if (!within(target, root)) return { allowed: false, reason: "build rule: writes must stay inside the session worktree; nothing was written." };
   if (relative(root, target).split(sep).some((part) => PROTECTED.includes(part))) {
-    return { allowed: false, reason: "build rule: writes into .git, .corral or .worktrees are refused; nothing was written." };
+    return { allowed: false, reason: "build rule: writes into Git or corral state directories are refused; nothing was written." };
   }
   const canonicalRoot = real(root);
   const canonicalTarget = real(target);
@@ -233,7 +240,7 @@ export function classifyBuildWrite(path: string, worktree: string): BuildWriteCl
     return { allowed: false, reason: "build rule: the write destination resolves outside the session worktree; nothing was written." };
   }
   if (relative(canonicalRoot, canonicalTarget).split(sep).some((part) => PROTECTED.includes(part))) {
-    return { allowed: false, reason: "build rule: the write destination resolves into .git, .corral or .worktrees; nothing was written." };
+    return { allowed: false, reason: "build rule: the write destination resolves into Git or corral state directories; nothing was written." };
   }
   return { allowed: true };
 }
@@ -252,7 +259,8 @@ export function installBuildGuard(pi: ExtensionAPI, context: RoleContext): void 
     const path = input.path;
     if (typeof path !== "string") return { block: true, reason: "build rule: edit and write require a target path; nothing was written." };
     try {
-      const result = classifyBuildWrite(resolveToolPath(path, context.cwd), context.build.session.worktree);
+      const { session } = context.build;
+      const result = classifyBuildWrite(resolveToolPath(path, context.cwd), session.worktree, session.bare ? undefined : session.workspaceRoot);
       return result.allowed ? undefined : { block: true, reason: result.reason };
     } catch {
       return { block: true, reason: "build rule: the write destination could not be resolved safely; nothing was written." };

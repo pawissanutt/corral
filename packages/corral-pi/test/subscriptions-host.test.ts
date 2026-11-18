@@ -14,7 +14,8 @@ import fixtureAuth from "./fixtures/auth/index.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
 import { writeFakeEngine } from "./support/fake-engine.ts";
 
-for (const role of ["assistant", "pm"] as const) test(`${role}: GPT -> Claude -> GPT preserves history and binding; removed credentials cannot commit`, async () => {
+test("assistant switches GPT -> Claude -> GPT with history; removed credentials cannot commit", async () => {
+  const role = "assistant";
   const assets = buildFixtureInstall();
   const work = mkdtempSync(join(tmpdir(), "corral-subscriptions-"));
   const oldFetch = globalThis.fetch;
@@ -51,7 +52,7 @@ for (const role of ["assistant", "pm"] as const) test(`${role}: GPT -> Claude ->
       createSdkMcpServer: (options) => ({ type: "sdk", name: options.name, instance: options }) as never,
     });
     const sdk = await import("@earendil-works/pi-coding-agent");
-    const identity = { store: "st-0123456789abcdef", project: "demo", role };
+    const identity = { store: "st-0123456789abcdef", project: "demo", role } as const;
     const corral = writeFakeEngine(work);
     const events = new EventLog();
     const cwd = join(work, "work"); mkdirSync(cwd);

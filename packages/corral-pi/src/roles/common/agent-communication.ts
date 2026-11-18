@@ -1,6 +1,6 @@
 /**
  * The messaging rules shared by the roles whose only children are read-only `explore` helpers
- * (PM, reviewer, planner and plan reviewer). `roleRule` adds the one rule a role needs about
+ * (the independent reviewer). `roleRule` adds the one rule a role needs about
  * whose messages it weighs; the worker, build and assistant contracts describe their own fleets.
  */
 export function agentCommunicationContract(roleRule?: string): string {

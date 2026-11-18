@@ -97,13 +97,16 @@ test("the contract is the installed worker-contract.md with the bound identity f
   }
 });
 
-test("a host session activates exactly the loadout and loads only the installed corral-worker skill", () => {
+test("a host session activates exactly the loadout and loads the installed worker and plan skills", () => {
   const state = host.state();
   const expected = [...UPSTREAM, ...CORRAL_TOOLS, "corral_todo", ...LSP_TOOLS, "ask_user", "agent_message", "agent_roster"];
   expect([...host.loadout]).toEqual(expected);
   expect([...(state.active_tools as string[])].sort()).toEqual(expected.sort());
   const skills = host.runtime.services.resourceLoader.getSkills().skills;
-  expect(skills.map((skill) => [skill.name, skill.filePath])).toEqual([["corral-worker", join(assets.dir, SKILL_ASSET)]]);
+  expect(skills.map((skill) => [skill.name, skill.filePath])).toEqual([
+    ["corral-worker", join(assets.dir, SKILL_ASSET)],
+    ["corral-plan", join(assets.dir, "assets/skills/corral-plan/SKILL.md")],
+  ]);
   expect(readFileSync(skills[0]?.filePath ?? "", "utf8")).toBe(readFileSync(join(PACKAGE_ROOT, SKILL_ASSET), "utf8"));
   expect(host.session.systemPrompt).toContain("# corral worker contract (corral-pi)");
 });
@@ -274,7 +277,7 @@ function completionHarness(fleet: FleetSnapshot, recordDir: string, artifact: "c
 
 test("worker done attaches fleet evidence before completing and attachment refusals or errors never fail done", async () => {
   const directory = mkdtempSync(join(tmpdir(), "corral-worker-record-"));
-  const mail = [{ seq: 1, at: 0, from: "pm", to: "parent", text: "Information", delivery: "delivered" as const }];
+  const mail = [{ seq: 1, at: 0, from: "child", to: "parent", text: "Information", delivery: "delivered" as const }];
   try {
     for (const artifact of ["committed", "rejected", "throw"] as const) {
       const { calls, tool } = completionHarness({ children: artifact === "throw" ? [] : [completedChild], mail, maxParallel: 1 },
@@ -286,7 +289,7 @@ test("worker done attaches fleet evidence before completing and attachment refus
       const record = JSON.parse(readFileSync(String(calls[0]?.payload.path), "utf8"));
       expect(record.version).toBe(1);
       expect(record.slices.map((slice: { id: string }) => slice.id)).toEqual(artifact === "throw" ? [] : ["slice"]);
-      expect(record.messages[0].from).toBe("pm");
+      expect(record.messages[0].from).toBe("child");
       expect(result.isError).toBeFalse();
       expect(result.terminate).toBeTrue();
       const text = result.content.filter(part => part.type === "text").map(part => part.text).join("\n");

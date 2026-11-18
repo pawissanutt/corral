@@ -9,7 +9,7 @@ export const AGENT = "corral-pi";
 // Herdr accepts its source state updates in increasing order. Start near the wall clock.
 export const SEQ_SHIFT = 20n;
 export const TOKENS = [
-  "corral_role", "corral_project", "corral_task", "corral_run", "corral_review", "corral_assistant",
+  "corral_role", "corral_project", "corral_task", "corral_run", "corral_assistant",
   "corral_session",
 ] as const;
 const CALL_TIMEOUT_MS = 10_000;
@@ -64,8 +64,7 @@ export const runHerdr: HerdrRunner = (bin, args) => new Promise((resolve, reject
 
 function display(identity: HostIdentity): string {
   const run = identity.task && identity.run ? `${identity.task}/${identity.run}` : identity.task;
-  const scope = identity.role === "pm" ? identity.project : undefined;
-  return [AGENT, identity.role, scope, run, identity.review, identity.assistant]
+  return [AGENT, identity.role, run, identity.assistant]
     .filter((part) => part !== undefined && part !== "").join(" ");
 }
 
@@ -213,7 +212,7 @@ export class HerdrLifecycle {
     const id = this.identity;
     const values: Record<(typeof TOKENS)[number], string | undefined> = {
       corral_role: id.role, corral_project: id.project, corral_task: id.task, corral_run: id.run,
-      corral_review: id.review, corral_assistant: id.assistant,
+      corral_assistant: id.assistant,
       corral_session: sessionId,
     };
     return { op: "identity", args: ["pane", "report-metadata", this.target.pane, "--source", SOURCE, "--agent", AGENT,

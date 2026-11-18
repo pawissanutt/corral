@@ -20,7 +20,6 @@ export class LocalControlPlane {
     const todo = { todo: progress, todo_requests: { plans, history, turn: null, continued: null } };
     // The pane's existing widget selectors are role-specific; the underlying state is not.
     if (this.identity.role === "worker") return { runs: [{ id: this.identity.run, progress }] };
-    if (this.identity.role === "pm") return { container: todo };
     return { container: { state: todo } };
   }
 

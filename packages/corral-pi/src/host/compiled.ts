@@ -6,9 +6,7 @@ import assistantContract from "../../assets/assistant-contract.md" with { type: 
 import gptAssistant from "../../assets/families/gpt/assistant.md" with { type: "text" };
 import buildContract from "../../assets/build-contract.md" with { type: "text" };
 import gptBuild from "../../assets/families/gpt/build.md" with { type: "text" };
-import gptPm from "../../assets/families/gpt/pm.md" with { type: "text" };
-import pmContext from "../../assets/pm-context.md" with { type: "text" };
-import pmSkill from "../roles/pm/skills/corral-pm/SKILL.md" with { type: "text" };
+import planSkill from "../../assets/skills/corral-plan/SKILL.md" with { type: "text" };
 import requestExecution from "../../assets/request-execution.md" with { type: "text" };
 import requestExecutionOff from "../../assets/request-execution-off.md" with { type: "text" };
 import reviewerContract from "../../assets/reviewer-contract.md" with { type: "text" };
@@ -22,9 +20,7 @@ export const INSTALL_FILES: Readonly<Record<string, string>> = {
   "assets/families/gpt/assistant.md": gptAssistant,
   "assets/build-contract.md": buildContract,
   "assets/families/gpt/build.md": gptBuild,
-  "assets/families/gpt/pm.md": gptPm,
-  "assets/pm-context.md": pmContext,
-  "src/roles/pm/skills/corral-pm/SKILL.md": pmSkill,
+  "assets/skills/corral-plan/SKILL.md": planSkill,
   "assets/request-execution.md": requestExecution,
   "assets/request-execution-off.md": requestExecutionOff,
   "assets/reviewer-contract.md": reviewerContract,
@@ -47,14 +43,12 @@ export function writeInstall(dir: string): void {
 
 async function installBundle(): Promise<void> {
   // Load role and SDK dependencies only after the executable's environment guard runs.
-  const [{ setBundle }, worker, reviewer, pm, planner, planReviewer, assistant, build, auth] = await Promise.all([
+  const [{ setBundle }, worker, reviewer, assistant, build, auth] = await Promise.all([
     import("./bundle.ts"), import("../roles/worker/index.ts"), import("../roles/reviewer/index.ts"),
-    import("../roles/pm/index.ts"), import("../roles/planner/index.ts"), import("../roles/plan-reviewer/index.ts"),
     import("../roles/assistant/index.ts"), import("../roles/build/index.ts"), import("../auth/index.ts"),
   ]);
   setBundle({
     roles: { worker: (root) => worker.workerRole(root), reviewer: (root) => reviewer.reviewerRole(root),
-      pm: (root) => pm.pmRole(root), planner: () => planner.default, plan_reviewer: () => planReviewer.default,
       assistant: (root) => assistant.assistantRole(root), build: (root) => build.buildRole(root) },
     auth: auth.default,
     writeAssets: writeInstall,

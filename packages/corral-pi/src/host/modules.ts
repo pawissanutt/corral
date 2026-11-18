@@ -14,17 +14,9 @@ export type ModuleKind = "role" | "auth";
 const ROLE_OWNERS: Record<Role, string> = {
   worker: "worker-role",
   reviewer: "reviewer-role",
-  pm: "pm-role",
-  planner: "plan-roles",
-  plan_reviewer: "plan-roles",
   assistant: "assistant-role",
   build: "build-role",
 };
-
-/** The role module's directory under src/roles; Rust's `AgentRole::module_dir` matches it. */
-export function roleDir(role: Role): string {
-  return role === "plan_reviewer" ? "plan-reviewer" : role;
-}
 
 export class ModuleUnavailable extends Error {
   readonly code: string;
@@ -50,7 +42,7 @@ export interface ModulePaths {
 export function modulePaths(role: Role): ModulePaths {
   if (!ROLES.includes(role)) throw new ModuleInvalid("src/roles", `unknown role ${String(role)}`);
   return {
-    role: `src/roles/${roleDir(role)}/index.ts`,
+    role: `src/roles/${role}/index.ts`,
     auth: "src/auth/index.ts",
   };
 }

@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildFixtureInstall } from "./support/fixture-install.ts";
+import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { connect, type TestClient } from "./support/bridge-client.ts";
 import { launch, type Launch } from "./support/pi-process.ts";
 import { within } from "./support/wait.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
+import type { FakeStep } from "./fixtures/auth/fake-transport.ts";
 
 async function transcriptThrough(path: string, text: string): Promise<string[]> {
   const { promise, resolve } = Promise.withResolvers<string[]>();
@@ -26,10 +28,18 @@ async function transcriptThrough(path: string, text: string): Promise<string[]> 
   finally { watcher.close(); }
 }
 
+/** Run the shipped role at the real CLI boundary, with only provider responses scripted. */
+function scriptedInstall(dir: string, steps: readonly FakeStep[]): string {
+  const assets = buildFixtureInstall({ parent: dir, omit: ["role"] });
+  cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });
+  appendFileSync(join(assets.dir, "src/auth/index.ts"), `\nfixtureTransport().script(${JSON.stringify(steps)});\n`);
+  return assets.dir;
+}
+
 test("one flag launch runs the fixture to idle; v2 answers, pauses, restarts and delivers held input before owner text", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-cli-"));
   const assets = buildFixtureInstall({ parent: dir });
-  const cwd = join(dir, "worktree");
+  const cwd = join(realpathSync(dir), "worktree");
   const run = join(dir, "run");
   const socket = join(dir, "s.sock");
   mkdirSync(cwd);
@@ -116,31 +126,107 @@ test("one flag launch runs the fixture to idle; v2 answers, pauses, restarts and
   }
 }, 35_000);
 
-test("chat opens a socket and takes owner input without the legacy planning store", async () => {
+test("chat runs the engine as the assistant and edits plain workspace memory", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-chat-"));
-  const assets = buildFixtureInstall({ parent: dir });
-  const socket = join(dir, "s.sock");
-  const chat = launch(assets.dir, ["chat", "--dir", "A-1", "--socket", socket], dir,
-    { HOME: dir, PATH: process.env.PATH, XDG_DATA_HOME: join(dir, "data"), TMPDIR: dir,
-      GIT_CEILING_DIRECTORIES: dir, CORRAL_NEXT_ROOT: dir, CORRAL_ACTOR: "assistant" });
+  let chat: Launch | undefined;
   let client: TestClient | undefined;
   try {
+    const memory = join(dir, ".corral-next", "memory", "notes.md");
+    mkdirSync(join(dir, ".corral-next", "memory"), { recursive: true });
+    writeFileSync(memory, "# Notes\nOriginal text\n");
+    const engine = writeFakeEngine(dir, { list: { result: [{ id: "T-1" }] } });
+    const assets = scriptedInstall(dir, [
+      { toolCalls: [{ callId: "list", name: "bash", arguments: { command: 'test "$CORRAL_ACTOR" = assistant && "$CORRAL" list --json' } }] },
+      { toolCalls: [{ callId: "memory", name: "edit", arguments: { path: memory, edits: [{ oldText: "Original text", newText: "Updated note" }] } }] },
+      { text: "Recorded the note." },
+    ]);
+    const socket = join(dir, "s.sock");
+    chat = launch(assets, ["chat", "--dir", "A-1", "--socket", socket, "--corral", engine.path], dir,
+      { HOME: dir, PATH: process.env.PATH, XDG_DATA_HOME: join(dir, "data"), TMPDIR: dir,
+        GIT_CEILING_DIRECTORIES: dir, CORRAL_NEXT_ROOT: dir });
     await chat.output(/session socket ready/);
     client = await connect(socket);
     const hello = await client.request({ version: 2, id: "hello", command: "hello" });
     expect(hello.result).toMatchObject({ protocol: 2, role: "assistant", session_id: "A-1", pid: chat.child.pid });
-    const sent = await client.request({ version: 2, id: "message", command: "submit_input", args: { origin: "owner", text: "Hello chat" } });
+    const sent = await client.request({ version: 2, id: "message", command: "submit_input",
+      args: { origin: "owner", text: "List tasks and update the notes." } });
     expect(sent.result?.disposition).toBe("started");
     await chat.output(/turn 1 ended/);
-    expect(readFileSync(String(hello.result?.session_file), "utf8")).toContain("Hello chat");
+    expect(engine.calls().filter(argv => argv[0] === "list")).toEqual([["list", "--json"]]);
+    expect(readFileSync(memory, "utf8")).toBe("# Notes\nUpdated note\n");
+    expect(readFileSync(String(hello.result?.session_file), "utf8")).toContain("Recorded the note.");
     await client.request({ version: 2, id: "shutdown", command: "shutdown" });
     expect(await within(chat.exit, 10_000, "chat shutdown")).toBe(0);
   } finally {
     client?.close();
-    await chat.stop();
+    await chat?.stop();
     rmSync(dir, { recursive: true, force: true });
   }
 }, 20_000);
+
+test("reviewer answers an automated re-review and reopens the same transcript after a kill", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-review-"));
+  const processes: Launch[] = [];
+  const clients: TestClient[] = [];
+  try {
+    const promptFile = join(dir, "prompt.md");
+    writeFileSync(promptFile, "# T-1 Review the candidate\n\n## Review round 0\n");
+    const engine = writeFakeEngine(dir);
+    const rereview = "Review round 1 for T-1.\n\nVerify the required fix.";
+    const assets = scriptedInstall(dir, [
+      { toolCalls: [{ callId: "first-verdict", name: "corral_verdict",
+        arguments: { verdict: "changes", notes: "Add regression coverage." } }] },
+      { match: rereview, toolCalls: [{ callId: "second-verdict", name: "corral_verdict",
+        arguments: { verdict: "approve", notes: "Regression coverage verified." } }] },
+    ]);
+    const socket = join(dir, "r.sock");
+    const run = join(dir, ".corral-next", "runs", "T-1", "reviewer");
+    const env = { HOME: dir, PATH: process.env.PATH, TMPDIR: dir, XDG_DATA_HOME: join(dir, "data"),
+      GIT_CEILING_DIRECTORIES: dir, CORRAL_NEXT_ROOT: dir, CORRAL_TASK: "T-1", CORRAL_RUN: "R2", CORRAL_ACTOR: "reviewer" };
+    let seq = 0;
+    const call = async (client: TestClient, command: string, args?: Record<string, unknown>) => {
+      const reply = await client.request({ version: 2, id: `review-${++seq}`, command, args });
+      if (!reply.ok || !reply.result) throw new Error(`${command}: ${JSON.stringify(reply.error)}`);
+      return reply.result;
+    };
+    const start = async () => {
+      const host = launch(assets, ["run", "--dir", run, "--socket", socket, "--corral", engine.path, "--prompt-file", promptFile], dir, env);
+      processes.push(host);
+      await host.output(/session socket ready/);
+      const client = await connect(socket);
+      clients.push(client);
+      const hello = await call(client, "hello");
+      expect(hello).toMatchObject({ role: "reviewer", session_id: "T-1/reviewer" });
+      return { host, client, transcript: String(hello.session_file) };
+    };
+    const initial = await start();
+    await initial.host.output(/turn 1 ended/);
+    expect((await call(initial.client, "submit_input", { text: rereview, origin: "auto", busy_policy: "steer" })).disposition).toBe("started");
+    await initial.host.output(/turn 2 ended/);
+    const before = readFileSync(initial.transcript, "utf8");
+    expect(before).toContain("Add regression coverage.");
+    expect(before).toContain("Review round 1 for T-1.");
+    expect(before).toContain("Regression coverage verified.");
+    const verdicts = () => engine.calls().filter(argv => argv[3] === "verdict");
+    expect(verdicts()).toEqual([
+      ["--root", dir, "--json", "verdict", "T-1", "changes", "--notes", "Add regression coverage."],
+      ["--root", dir, "--json", "verdict", "T-1", "approve", "--notes", "Regression coverage verified."],
+    ]);
+    initial.host.child.kill("SIGKILL");
+    await within(initial.host.exit, 10_000, "the reviewer to stop");
+    const reopened = await start();
+    expect(reopened.transcript).toBe(initial.transcript);
+    expect((await call(reopened.client, "get_state")).turn).toEqual({ current: 2, open: false });
+    expect(readFileSync(reopened.transcript, "utf8")).toBe(before);
+    expect(verdicts()).toHaveLength(2);
+    await call(reopened.client, "shutdown");
+    expect(await within(reopened.host.exit, 10_000, "reviewer shutdown")).toBe(0);
+  } finally {
+    for (const client of clients) client.close();
+    await Promise.all(processes.map(host => host.stop()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 30_000);
 
 
 test("worker relaunch repairs an interrupted transcript, then a retry inherits it unless fresh", async () => {

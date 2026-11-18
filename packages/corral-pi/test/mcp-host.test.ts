@@ -27,7 +27,7 @@ test("workspace MCP policy holds directly, deferred and nested across reconnect 
   const sdk = await import("@earendil-works/pi-coding-agent");
   try {
     restrictEnvironment(process.env);
-    for (const role of ["worker", "reviewer", "pm"] as const) {
+    for (const role of ["worker", "reviewer"] as const) {
       for (const search of [false, true]) {
         const peer = await mcpServer();
         const cwd = join(work, `${role}-${search}`);

@@ -1,6 +1,6 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { EventLog } from "../bridge/events.ts";
-import { BridgeRefusal, type AnswerInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
+import { BridgeRefusal, type AnswerInput, type RewindInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
 import { loadOwnerAttachments } from "./owner-attachments.ts";
 import type { SessionRecord } from "./session-record.ts";
 import type { HostSession } from "./session.ts";
@@ -57,6 +57,10 @@ export class RemoteOwner {
       }
       return { ...(await this.host.cancel(undefined)), paused: true };
     });
+  }
+
+  rewind(input: RewindInput): Promise<Record<string, unknown>> {
+    return this.order(() => this.host.rewind(input));
   }
 
   resume(): Promise<Record<string, unknown>> {

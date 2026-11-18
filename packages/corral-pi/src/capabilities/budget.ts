@@ -9,7 +9,6 @@ import type { ApiAdmission } from "../host/api-connections.ts";
 export interface BudgetReply extends Record<string, unknown> {
   admitted?: boolean;
   exhausted?: boolean;
-  guard_paused?: boolean;
   reason?: string;
 }
 export interface BudgetOptions {
@@ -134,11 +133,6 @@ export class RunBudget {
       try {
         this.last = await this.options.record({ kind: "budget", action: "reserve", request, ...bound, unbounded });
         if (this.last.admitted !== true) {
-          // A cache-health hold is resumable in this same session, not exhaustion. Do not
-          // latch stop(), cancel unrelated requests, or emit the budget-limit lifecycle.
-          if (this.last.reason === "cache_guard_paused") {
-            throw new Error("cache_guard_paused: PM cache health hold; inspect `corral pm brief`, then owner `corral pm guard-resume` to continue");
-          }
           if (this.limited()) {
             this.stop();
             throw new Error("budget_exhausted: reservation refused (remaining balance, uncertainty, unbounded transport or pricing gap); inspect budget state");

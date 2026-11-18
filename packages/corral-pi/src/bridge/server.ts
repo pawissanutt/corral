@@ -6,8 +6,8 @@ import type { EventLog } from "./events.ts";
 import { FrameInvalid, FrameTooLarge, LineReader } from "./framing.ts";
 import {
   BRIDGE_VERSION, BridgeRefusal, EVENT_PAGE_BYTES, FRAME_MAX_BYTES, INPUT_REPLY_MS, MAX_IN_FLIGHT,
-  type AnswerInput, type RequestFrame, type SessionInput, type SubmitResult,
-  frameId, parseAnswer, parseFrame, parseQueueLimit, parseQueueWithdraw, parseSeq, parseSubmitInput, parseTurn,
+  type AnswerInput, type RequestFrame, type RewindInput, type SessionInput, type SubmitResult,
+  frameId, parseAnswer, parseFrame, parseQueueLimit, parseQueueWithdraw, parseRewind, parseSeq, parseSubmitInput, parseTurn,
 } from "./protocol.ts";
 
 export interface BridgeHandlers {
@@ -18,6 +18,7 @@ export interface BridgeHandlers {
   pause(): Promise<Record<string, unknown>>;
   resume(): Promise<Record<string, unknown>>;
   cancel(turn: number | undefined): Promise<Record<string, unknown>>;
+  rewind(input: RewindInput): Promise<Record<string, unknown>>;
   shutdown(): void;
   queueState(limit: number): Record<string, unknown>;
   queueWithdraw(key: string): Record<string, unknown>;
@@ -150,6 +151,7 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
       case "pause": return host.pause();
       case "resume": return host.resume();
       case "cancel": return { request_id: frame.id, ...(await host.cancel(parseTurn(frame.args))) };
+      case "rewind": return host.rewind(parseRewind(frame.args));
       case "queue_state": return host.queueState(parseQueueLimit(frame.args));
       case "queue_withdraw": return host.queueWithdraw(parseQueueWithdraw(frame.args));
       case "set_model": return host.setModel(frame.args);

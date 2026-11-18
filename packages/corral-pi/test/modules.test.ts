@@ -7,9 +7,6 @@ import { setBundle } from "../src/host/bundle.ts";
 import { ModuleInvalid, ModuleUnavailable, loadModules, missingModules, modulePaths } from "../src/host/modules.ts";
 import { assistantRole } from "../src/roles/assistant/index.ts";
 import { buildRole } from "../src/roles/build/index.ts";
-import { planReviewerRole } from "../src/roles/plan-reviewer/index.ts";
-import { plannerRole } from "../src/roles/planner/index.ts";
-import { pmRole } from "../src/roles/pm/index.ts";
 import { reviewerRole } from "../src/roles/reviewer/index.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
 import { ROLES, type Role } from "../src/roles/types.ts";
@@ -24,6 +21,7 @@ const install = (options?: Parameters<typeof buildFixtureInstall>[0]) => {
 afterAll(() => installs.forEach((built) => built.cleanup()));
 
 test("the package ships every role and the auth module", () => {
+  expect(ROLES).toEqual(["worker", "reviewer", "assistant", "build"]);
   for (const role of ROLES) expect(missingModules(PACKAGE_ROOT, role)).toEqual([]);
   for (const file of ["src/roles/types.ts", "src/auth/types.ts"]) {
     expect(existsSync(join(PACKAGE_ROOT, file))).toBeTrue();
@@ -53,8 +51,7 @@ test("a compiled host loads its bundled modules, building each role on the insta
   };
   setBundle({
     roles: {
-      worker: built(workerRole), reviewer: built(reviewerRole), pm: built(pmRole),
-      planner: built(() => plannerRole()), plan_reviewer: built(() => planReviewerRole()),
+      worker: built(workerRole), reviewer: built(reviewerRole),
       assistant: built(assistantRole), build: built(buildRole),
     },
     auth,
@@ -79,29 +76,29 @@ test("a compiled host loads its bundled modules, building each role on the insta
     .toEqual(["role_unavailable", "credentials_unavailable"]);
 });
 
-test("a bare installation missing PM answers ModuleUnavailable naming its owner", async () => {
+test("an installation missing the assistant answers ModuleUnavailable naming its owner", async () => {
   const dir = install({ overlays: false });
-  unlinkSync(join(dir, "src/roles/pm/index.ts"));
+  unlinkSync(join(dir, "src/roles/assistant/index.ts"));
   expect(existsSync(join(dir, "fixture.json"))).toBeFalse();
-  const missing = missingModules(dir, "pm");
+  const missing = missingModules(dir, "assistant");
   expect(missing.map((m) => [m.code, m.module, m.owner_child])).toEqual([
-    ["role_unavailable", "src/roles/pm/index.ts", "pm-role"],
+    ["role_unavailable", "src/roles/assistant/index.ts", "assistant-role"],
   ]);
   let error: unknown;
   try {
-    await loadModules(dir, "pm");
+    await loadModules(dir, "assistant");
   } catch (caught) {
     error = caught;
   }
   expect(error instanceof ModuleUnavailable).toBeTrue();
-  expect((error as ModuleUnavailable).owner_child).toBe("pm-role");
+  expect((error as ModuleUnavailable).owner_child).toBe("assistant-role");
 });
 
 test("a missing auth module alone is credentials_unavailable, owner host-install", async () => {
   const dir = install({ omit: ["auth"] });
   let error: unknown;
   try {
-    await loadModules(dir, "pm");
+    await loadModules(dir, "assistant");
   } catch (caught) {
     error = caught;
   }

@@ -13,7 +13,7 @@ test("a model's ID decides its prompt family before its provider", () => {
 });
 
 test("only a family with a shipped overlay gets a calibration section", () => {
-  for (const role of ["assistant", "pm"] as const) {
+  for (const role of ["assistant", "build"] as const) {
     const read = calibrationReader(PACKAGE_ROOT, role);
     expect(read("openai-codex", "gpt-6-astra")).toMatch(/^## Working style/);
     expect(read("anthropic", "claude-opus-5-5")).toBeUndefined();

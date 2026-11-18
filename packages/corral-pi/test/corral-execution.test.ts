@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { executionRefusal } from "../src/roles/common/execution.ts";
-import pm from "../src/roles/pm/index.ts";
+import assistant from "../src/roles/assistant/index.ts";
 import reviewer from "../src/roles/reviewer/index.ts";
 import worker from "../src/roles/worker/index.ts";
 import { defineCorralTool } from "../src/tools/define.ts";
 import { CorralClient } from "../src/tools/corral.ts";
 
-const roles = [worker, reviewer, pm];
+const roles = [worker, reviewer, assistant];
 
 test("one loadout check decides direct and Code Mode calls; every Corral tool is callable from code", () => {
   for (const role of roles) {

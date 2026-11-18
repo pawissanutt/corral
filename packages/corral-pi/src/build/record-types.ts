@@ -87,7 +87,7 @@ export interface RecordReview {
 
 export interface RecordMessage {
   readonly at: string;
-  /** A child id, `parent`, `owner`, or a cross-session recipient key such as `T-144_R2` or `pm`. */
+  /** A child id, `parent` or `owner` in this session. */
   readonly from: string;
   /** A child id, `parent`, `all`, or a cross-session recipient key. */
   readonly to: string;

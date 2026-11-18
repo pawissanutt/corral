@@ -17,9 +17,9 @@ test("configured host loadouts expose ask_user and its guidance across roles", a
   cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });
   const sdk = await import("@earendil-works/pi-coding-agent");
   try {
-    for (const role of ["assistant", "pm", "worker", "reviewer"] as Role[]) {
+    for (const role of ["assistant", "build", "worker", "reviewer"] satisfies Role[]) {
       const identity = { store: "st-0123456789abcdef", project: "demo", role,
-        task: "T-007", run: "R1", review: "R1-review1", assistant: "A-1" };
+        task: "T-007", run: "R1", assistant: "A-1" };
       const modules = await loadModules(assets.dir, role);
       const transport = modules.auth.transport?.(authContext());
       if (!transport) throw new Error("fixture transport missing");

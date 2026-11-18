@@ -28,7 +28,8 @@ import type { EventLog } from "../bridge/events.ts";
 import { LiveEvents } from "./live-events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
 import { closeResidentSession, residentLifecycle } from "../claude/resident.ts";
-import { BridgeRefusal, type AnswerInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
+import { BridgeRefusal, type AnswerInput, type RewindInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
+import { listRewinds, parseRewindCommand, recordRewind, restoreRewind, rewindPoint } from "./rewind.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import type { BuildContext } from "../build/types.ts";
 import { createBuildControls, type BuildControls } from "../build/host-controls.ts";
@@ -84,7 +85,6 @@ import { fleetTools } from "../extensions/fleet/tools.ts";
 import { boundFleetSettings } from "../extensions/fleet/settings.ts";
 import { executionRefusal, exploreLoadout } from "../roles/common/execution.ts";
 import { workerDoneTool } from "../roles/worker/tools.ts";
-import { memoryContext } from "./memory.ts";
 import { transcriptPreview } from "./transcript-preview.ts";
 import { ManagedEffects } from "./managed-effects.ts";
 import { LocalControlPlane } from "./local.ts";
@@ -92,8 +92,6 @@ import { type ConnectionBinding, admitConnection, parseBinding } from "./connect
 import { CONNECTIONS, type ConnectionId, isApiConnection, resolveConnection } from "../auth/connections.ts";
 import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
 import { HostQueue } from "./queue.ts";
-import { pmCacheKeyMode } from "../roles/pm/context.ts";
-import { pmCacheKeyStream } from "./pm-cache-key.ts";
 import { recordTranscriptMark, type MarkSink, type ModelMark, type TranscriptMark, type TurnStopCause, type TurnWait } from "./transcript-marks.ts";
 import { TurnFacts, turnWaits } from "./turn-facts.ts";
 import { RemotePrompts } from "./remote-prompts.ts";
@@ -104,6 +102,7 @@ export interface HostSessionOptions {
   readonly identity: HostIdentity;
   readonly build?: BuildContext;
   readonly paneInput?: (text: string, images?: ImageContent[]) => Promise<boolean>;
+  readonly transcriptRewound?: () => void;
   readonly automatedInput?: (input: SessionInput) => Promise<SubmitResult> | undefined;
   readonly cwd: string;
   readonly agentDir: string;
@@ -117,7 +116,6 @@ export interface HostSessionOptions {
   readonly quickSummary?: boolean;
   readonly summary?: SummaryOptions;
   readonly promptFile?: string;
-  readonly memoryFile?: string;
   readonly todo?: boolean;
   /** The session's recorded snapshot; when present it decides todo. */
   readonly capabilities?: HostCapabilities;
@@ -343,6 +341,7 @@ export class HostSession {
   private readonly additionalLspFactory: (() => LspToolkit) | undefined;
   private readonly bashQuestions = new Map<string, string>();
   private readonly checkpoints: Checkpoints | undefined;
+  private rewinding = false;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
   private readonly fleet: FleetRuntime | undefined;
   private readonly buildControls: BuildControls | undefined;
@@ -416,8 +415,6 @@ export class HostSession {
         () => options.sessionManager.getEntries().flatMap(entry => entry.type === "custom" && entry.customType === REVIEW_BASE_ENTRY ? [entry.data] : []),
         data => options.sessionManager.appendCustomEntry(REVIEW_BASE_ENTRY, data)),
       canRenderTool: name => exploreLoadout(this.loadout).includes(name),
-      inspection: () => options.client.taskSnapshot(),
-      lifecycle: () => options.client.taskSnapshot(),
       artifacts: () => options.client.artifacts(),
       artifactViewer: reference => options.client.artifactViewer(reference),
       exportSession: async () => (await this.reportedExport()).text,
@@ -658,8 +655,7 @@ export class HostSession {
     const { options } = this;
     if (options.capabilities?.enabled.includes("background_shell") !== true) return undefined;
     const settings = JobSettingsSchema.safeParse(options.guidance?.settings.background_shell);
-    const worker = options.identity.role === "worker";
-    if ((!worker && options.identity.role !== "pm" && options.identity.role !== "assistant" && options.identity.role !== "build") || !settings.success || !options.runtimeDir) {
+    if (options.identity.role === "reviewer" || !settings.success || !options.runtimeDir) {
       throw new Error("module_invalid: background_shell needs an eligible role, settings and a runtime directory");
     }
     return new JobRuntime({
@@ -743,11 +739,6 @@ export class HostSession {
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
     const model = localModels?.model ?? models.getModel(route.id, modelId);
     if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
-    const cacheMode = options.identity.role === "pm" ? pmCacheKeyMode(options.promptFile) : "session";
-    if (cacheMode === "stable" && model.api !== "openai-codex-responses") {
-      console.warn(`pm_cache_key_unsupported: ${model.provider}/${model.id}; keeping provider cache defaults`);
-    }
-    const cacheKey = { mode: cacheMode, identity: options.identity, sessionId: () => host.sessionId() };
     for (const id of subscriptions.providers) {
       if (!localModels && !apiBinding) {
         const fetch = PROVIDERS[id].auth === "oauth"
@@ -761,12 +752,10 @@ export class HostSession {
       const restricted = models.getProvider(id);
       if (!restricted) throw new Error("budget: approved provider is unavailable");
       const billing = id === "llama.cpp" ? undefined : apiBinding || PROVIDERS[id].auth === "aws-profile" ? "api" : "subscription";
-      const stream = pmCacheKeyStream(restricted.stream.bind(restricted), cacheKey);
-      const streamSimple = pmCacheKeyStream(restricted.streamSimple.bind(restricted), cacheKey);
       const report = (usage: ModelUsage) => host.reportUsage(usage);
       models.registerNativeProvider({ ...restricted,
-        stream: observeUsage(stream, billing, report),
-        streamSimple: observeUsage(streamSimple, billing, report),
+        stream: observeUsage(restricted.stream.bind(restricted), billing, report),
+        streamSimple: observeUsage(restricted.streamSimple.bind(restricted), billing, report),
       });
     }
     host.auxiliaryModels = models;
@@ -790,8 +779,7 @@ export class HostSession {
     }
     const thinkingLevel = options.effort && THINKING.has(options.effort)
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
-    const contract = [options.modules.role.contract(host.roleContext),
-      memoryContext(options.identity.role, options.memoryFile, options.runtimeDir)].filter(Boolean).join("\n\n");
+    const contract = options.modules.role.contract(host.roleContext);
     const factory: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
       const settingsManager = sdk.SettingsManager.inMemory(host.settings);
       const guidance = selectGuidance({
@@ -1019,6 +1007,19 @@ export class HostSession {
       return refuse(event.reason === "new" ? "a new session" : "switching or importing a session", ctx.ui);
     });
     pi.on("session_before_fork", (_event, ctx) => refuse("forking the session", ctx.ui));
+    if (this.checkpoints) pi.registerCommand("rewind", {
+      description: "Restore the worktree and conversation to the start of a turn; /rewind --list",
+      handler: async (args, ctx) => {
+        try {
+          const input = parseRewindCommand(args);
+          const result = await this.rewind(input);
+          if ("list" in input) this.notice(JSON.stringify(result, null, 2), "text", ctx.ui);
+          else this.notice(`Rewound to the start of turn ${input.turn}. Saved work: ${result.rescue_ref}`, "text", ctx.ui);
+        } catch (error) {
+          this.notice(error instanceof Error ? error.message : String(error), "error", ctx.ui);
+        }
+      },
+    });
     if (this.buildControls) {
       const { exit, board } = this.buildControls;
       pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { if (!this.panels?.finish()) exit.open(); } });
@@ -1038,7 +1039,7 @@ export class HostSession {
       });
     }
     pi.on("input", async (event) => {
-      if (this.closing) return { action: "handled" as const };
+      if (this.closing || this.rewinding) return { action: "handled" as const };
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
       // A build session's record keeps what the owner asked for, verbatim.
@@ -1342,6 +1343,7 @@ export class HostSession {
 
   submitLocal(input: SessionInput, images?: ImageContent[]): Promise<SubmitResult> {
     if (!this.bound || this.closing) return Promise.resolve({ disposition: "rejected", reason: "host_not_ready" });
+    if (this.rewinding) return Promise.resolve({ disposition: "rejected", reason: "rewind_in_progress" });
     return this.promptInput(input, this.queue.bridgeInput(input), images);
   }
 
@@ -1446,6 +1448,43 @@ export class HostSession {
     this.options.events.emit("cancel", { turn: cancelled });
     await this.session.abort();
     return { cancelled: true, turn: cancelled };
+  }
+
+  async rewind(input: RewindInput): Promise<Record<string, unknown>> {
+    const snapshots = this.checkpoints;
+    if (!snapshots || !this.bound || this.closing) {
+      throw new BridgeRefusal("rewind_unavailable", "rewind is available in a running worker with turn checkpoints");
+    }
+    if (this.rewinding) throw new BridgeRefusal("busy", "a rewind is already in progress");
+    const session = this.session;
+    const manager = session.sessionManager;
+    if ("list" in input) return listRewinds(manager);
+    const point = rewindPoint(manager, input.turn);
+    this.rewinding = true;
+    try {
+      session.clearQueue();
+      if (this.open) await this.cancel(undefined);
+      else await session.abort();
+      const result = restoreRewind(session, snapshots, point);
+      this.turn = 0;
+      this.restoreTurn(manager);
+      this.turnError = null;
+      this.stopCause = undefined;
+      this.bashQuestions.clear();
+      for (const question of this.ownerQuestions?.list() ?? []) {
+        if (question.status === "pending") this.options.herdr?.questionChanged(question.id, false);
+      }
+      this.ownerQuestions?.restore();
+      this.options.events.emit("rewound", { ...result });
+      this.liveEvents.rewound(result.turn);
+      this.options.transcriptRewound?.();
+      const file = manager.getSessionFile()!;
+      try { recordRewind(file, result); }
+      catch (error) { throw new Error(`rewound but could not record history; saved work is at ${result.rescue_ref}: ${String(error)}`); }
+      return { ...result };
+    } finally {
+      this.rewinding = false;
+    }
   }
 
   private panelSnapshot(): PanelSnapshot | null {

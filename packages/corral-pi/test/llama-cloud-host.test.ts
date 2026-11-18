@@ -30,7 +30,7 @@ const routes = [
   { provider: "amazon-bedrock", model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0" },
 ] as const;
 
-for (const role of ["worker", "reviewer", "pm"] as const) {
+for (const role of ["worker", "reviewer", "assistant"] as const) {
   for (const { provider, model } of routes) {
     test(`${role}/${provider} creates its cloud session when the role also permits local inference`, async () => {
       // Given a real host runtime, cloud credentials and a local-capable role snapshot.
@@ -86,7 +86,7 @@ for (const role of ["worker", "reviewer", "pm"] as const) {
         // Then cloud model/auth/transport selection survives without local catalog traffic.
         expect(host.state().model).toBe(`${provider}/${model}`);
         expect(host.state().capabilities).toEqual(capabilities);
-        expect(credentialContexts).toEqual(role === "pm" && provider !== "amazon-bedrock"
+        expect(credentialContexts).toEqual(role === "assistant" && provider !== "amazon-bedrock"
           ? [provider, provider === "openai-codex" ? "anthropic" : "openai-codex"] : [provider]);
         expect(transport.requests).toBe(0);
         await expect(network.fetch("http://127.0.0.1:8080/v1/models")).rejects.toThrow(/network_refused/);

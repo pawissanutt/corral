@@ -77,8 +77,7 @@ afterAll(() => {
 
 function identity(role: Role): HostIdentity {
   const base = { store: "st-demo", project: "app", role };
-  if (role === "pm") return base;
-  if (role === "reviewer") return { ...base, task: "T-564", run: "R1", review: "R1-review1" };
+  if (role === "assistant") return { ...base, assistant: "A-1" };
   return { ...base, task: "T-564", run: "R1" };
 }
 
@@ -154,12 +153,12 @@ function userTexts(host: HostSession): string[] {
 
 test("every role loads home skills, trusted project text and templates, never ambient .pi resources", async () => {
   // Given standard guidance with project-text trust for the worker and reviewer in the project
-  // worktree, and the PM at the workspace root with its selected project's checkout:
+  // worktree, and the assistant at the workspace root with its selected project's checkout:
   const trusted: CapabilityGuidance = { settings: HOME_DIRS, projectText: true };
-  for (const role of ["worker", "reviewer", "pm"] as const) {
-    const pm = role === "pm";
+  for (const role of ["worker", "reviewer", "assistant"] as const) {
+    const chat = role === "assistant";
     const started = await start(role, role === "reviewer" ? STANDARD : [...STANDARD, "todo"],
-      pm ? { ...trusted, projectDir: cwd } : trusted, pm ? { cwd: root } : {});
+      chat ? { ...trusted, projectDir: cwd } : trusted, chat ? { cwd: root } : {});
     try {
       // When the host binds its extensions and builds its resources:
       await started.host.session.bindExtensions({});
@@ -167,13 +166,13 @@ test("every role loads home skills, trusted project text and templates, never am
       // Then home and repository Agent Skills, both template sets and the workspace and project
       // context files load in ancestor order; the worker keeps its packaged role skill; and no
       // ~/.pi, project .pi or out-of-workspace resource is loaded.
-      const roleSkills = role === "worker" ? ["corral-worker"] : role === "pm" ? ["corral-pm"] : [];
+      const roleSkills = role === "worker" ? ["corral-plan", "corral-worker"] : role === "reviewer" ? ["corral-plan"] : [];
       expect(found.skills).toEqual([...roleSkills, "home-skill", "repo-skill"].sort());
       expect(found.prompts).toEqual(["home-review", "repo-prompt"]);
       expect(found.context).toEqual([join(root, "AGENTS.md"), join(cwd, "AGENTS.md")]);
       expect(found.extensions.some((path) => path.includes(".pi"))).toBeFalse();
       const state = started.host.state().guidance as { project_text: boolean; export: boolean };
-      expect([state.project_text, state.export]).toEqual([true, role !== "pm"]);
+      expect([state.project_text, state.export]).toEqual([true, role !== "assistant"]);
     } finally {
       started.host.session.dispose();
     }
@@ -186,10 +185,10 @@ test("every role loads home skills, trusted project text and templates, never am
   try {
     for (const { host } of [untrusted, strict, older]) await host.session.bindExtensions({});
     const text = loaded(untrusted.host);
-    expect([text.skills, text.prompts, text.context]).toEqual([["corral-worker", "home-skill"], ["home-review"], []]);
+    expect([text.skills, text.prompts, text.context]).toEqual([["corral-plan", "corral-worker", "home-skill"], ["home-review"], []]);
     for (const host of [strict.host, older.host]) {
       const found = loaded(host);
-      expect([found.skills, found.prompts, found.context]).toEqual([["corral-worker"], [], []]);
+      expect([found.skills, found.prompts, found.context]).toEqual([["corral-plan", "corral-worker"], [], []]);
       expect((host.state().guidance as { export: boolean }).export).toBeFalse();
     }
   } finally {
@@ -210,7 +209,7 @@ test("Pi pack lists and loads all six skills in a standard worker without OmO ro
     await bind(started);
     const resources = started.host.runtime.services.resourceLoader.getSkills();
     expect(resources.diagnostics).toEqual([]);
-    expect(loaded(started.host).skills).toEqual(["corral-worker", ...names].sort());
+    expect(loaded(started.host).skills).toEqual(["corral-plan", "corral-worker", ...names].sort());
     const tools = new Set(started.host.session.getActiveToolNames());
     for (const name of names) {
       const found = resources.skills.find((item) => item.name === name);

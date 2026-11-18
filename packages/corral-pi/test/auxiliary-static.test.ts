@@ -18,7 +18,7 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
   const originalFetch = globalThis.fetch;
   try {
     for (const tree of ["src/roles", "assets"]) cpSync(join(PACKAGE_ROOT, tree), join(assets.dir, tree), { recursive: true });
-    for (const role of ["worker", "reviewer", "pm", "planner", "plan_reviewer"] as Role[]) {
+    for (const role of ["worker", "reviewer", "assistant", "build"] satisfies Role[]) {
       const modules = await loadModules(assets.dir, role);
       const transport = modules.auth.transport?.(authContext());
       if (!transport) throw new Error("fixture transport missing");
@@ -49,9 +49,9 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
       const schema = JSON.stringify(task!.parameters);
       expect(schema).toContain('"explore"');
       expect(schema.includes('"slice"')).toBe(role === "worker");
-      expect(schema.includes('"review"')).toBe(role === "worker");
+      expect(schema.includes('"review"')).toBe(role === "worker" || role === "assistant");
       expect(fleet.tools.filter(tool => ["agent_wait", "agent_cancel"].includes(tool.name))).toHaveLength(2);
-      if (role === "pm") {
+      if (role === "assistant") {
         const beforeExpert = await profile([], false);
         expect(base).toEqual(beforeExpert);
         expect(base.tools.some(tool => tool.name === "corral_expert")).toBe(false);
@@ -60,7 +60,7 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
         expect(expert.tools.filter(tool => tool.name !== "corral_expert")).toEqual(base.tools);
       }
       for (const preset of ["strict", "standard", "full"]) {
-        const explore = role !== "pm" && (preset === "full" || (preset === "standard" && role !== "reviewer"));
+        const explore = preset === "full" || (preset === "standard" && role !== "reviewer");
         const enabled = [...(explore ? ["subagents"] : []), ...(preset === "full" ? ["oracle"] : [])];
         const candidate = enabled.length ? await profile(enabled) : base;
         const promptDelta = candidate.promptBytes - base.promptBytes;

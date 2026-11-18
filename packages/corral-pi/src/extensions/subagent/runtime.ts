@@ -7,20 +7,6 @@ import { researchBudget, type ResearchOptions, type ResearchReport } from "./res
 
 export type AuxiliaryKind = "explore" | "oracle" | "web_search" | "expert";
 export type Outcome = "completed" | "uncertain" | "not_started";
-export interface PlanReviewAssociation {
-  readonly workflow: string; readonly review: string; readonly digest: string;
-}
-export interface ReviewSnapshot {
-  readonly path: string; readonly digest: string; readonly bytes: number;
-}
-export interface ReviewMission {
-  readonly association: PlanReviewAssociation;
-  readonly plan: ReviewSnapshot; readonly context: ReviewSnapshot;
-}
-export interface AuxiliaryHandle {
-  readonly request: string; readonly done: Promise<AuxiliaryResponse>;
-  cancel(): void;
-}
 export interface Invocation {
   readonly request: string;
   readonly kind: AuxiliaryKind;
@@ -31,8 +17,6 @@ export interface Invocation {
   readonly sessionId: string;
   readonly maxTurns: number;
   readonly research?: ResearchOptions;
-  readonly review?: ReviewMission;
-  readonly checkReview?: () => Promise<void>;
   readonly deadlineAt?: number;
   readonly serviceTier?: "priority";
   readonly observe?: (event: HelperEvent) => void;
@@ -91,7 +75,6 @@ class Slots {
 export interface AuxiliaryObservation {
   readonly request: string; readonly parent: string; readonly kind: AuxiliaryKind;
   readonly model: string; state: string; sessionFile?: string;
-  readonly purpose?: "assistant_plan_review"; readonly planReview?: PlanReviewAssociation;
 }
 export class AuxiliaryRuntime {
   private readonly observations = new Map<string, AuxiliaryObservation>();
@@ -104,7 +87,6 @@ export class AuxiliaryRuntime {
   private readonly expert: Slots;
   private readonly controllers = new Set<AbortController>();
   private readonly requests = new Map<string, { id: string; done: Promise<AuxiliaryResponse> }>();
-  private readonly reviews = new Map<string, AuxiliaryHandle>();
   private stopped = false;
   constructor(private readonly options: AuxiliaryOptions) {
     this.explore = new Slots(options.settings.explore?.max_parallel ?? 1);
@@ -133,22 +115,6 @@ export class AuxiliaryRuntime {
     void this.perform(kind, request, prompt, signal).then(resolve, reject);
     return promise;
   }
-  /** Host-owned advisory review. Same pool/accounting/provider, independent of turn signals. */
-  startReview(request: string, mission: ReviewMission): AuxiliaryHandle {
-    const previous = this.reviews.get(request);
-    if (previous) return previous;
-    const controller = new AbortController();
-    const prompt = `Independently review local plan ${mission.association.workflow}/${mission.association.review} digest ${mission.association.digest}. `
-      + "Read both complete immutable snapshots with read_review_snapshot before drawing conclusions. "
-      + "Assess original request coverage, retained behavior/exclusions, grounded code claims, unresolved choices, failure cases, dependencies, implementability and observable verification. "
-      + "Inspect relevant code with read-only tools. Return advisory findings with severity, plan sections, actual source citations and concrete recommendations; no findings is valid. "
-      + "State missing coverage honestly. Never edit, approve a board plan, authorize execution, delegate or file tasks.";
-    const done = this.perform("explore", request, prompt, controller.signal, mission);
-    this.requests.set(request, { id: request, done });
-    const handle = { request, done, cancel: () => controller.abort(new Error("local plan review cancelled")) };
-    this.reviews.set(request, handle);
-    return handle;
-  }
   private slots(kind: AuxiliaryKind): Slots {
     switch (kind) {
       case "explore": return this.explore;
@@ -157,7 +123,7 @@ export class AuxiliaryRuntime {
       case "expert": return this.expert;
     }
   }
-  private async perform(kind: AuxiliaryKind, request: string, prompt: string, outer?: AbortSignal, review?: ReviewMission): Promise<AuxiliaryResponse> {
+  private async perform(kind: AuxiliaryKind, request: string, prompt: string, outer?: AbortSignal): Promise<AuxiliaryResponse> {
     const { options } = this;
     const settings = options.settings[kind];
     if (!settings) throw new Error(`${kind} is disabled`);
@@ -180,11 +146,9 @@ export class AuxiliaryRuntime {
     const deadlineAt = Date.now() + settings.timeout_secs * 1000;
     const timeout = AbortSignal.timeout(settings.timeout_secs * 1000);
     const signal = AbortSignal.any([controller.signal, timeout, ...(outer ? [outer] : [])]);
-    const observation: AuxiliaryObservation = { request, parent: options.sessionId(), kind, model: `${provider}/${model}`, state: "preparing",
-      ...(review ? { purpose: "assistant_plan_review", planReview: review.association } as const : {}) };
+    const observation: AuxiliaryObservation = { request, parent: options.sessionId(), kind, model: `${provider}/${model}`, state: "preparing" };
     this.observations.set(request, observation);
-    const common = { kind: "auxiliary", request, usage_kind: kind,
-      ...(review ? { plan_review: review.association } : {}) };
+    const common = { kind: "auxiliary", request, usage_kind: kind };
     let release: (() => void) | undefined;
     let prepared = false;
     let started = false;
@@ -212,7 +176,6 @@ export class AuxiliaryRuntime {
         maxTurns: kind === "explore" ? researchBudget({}, options.settings.explore?.max_turns ?? 1).maxTurns
           : kind === "expert" ? options.settings.expert?.max_turns ?? 24 : 1,
         ...(kind === "explore" ? { research: {}, deadlineAt } : kind === "expert" ? { deadlineAt } : {}),
-        ...(review ? { review, checkReview: async () => { await options.record({ ...common, action: "check" }); } } : {}),
         ...(serviceTier ? { serviceTier } : {}),
         observe: event => { if (!signal.aborted) this.history.observe(request, event); } }, signal);
       outcome = result.outcome;
@@ -241,8 +204,8 @@ export class AuxiliaryRuntime {
       }
     }
     if (!result) throw new Error("auxiliary request did not finish");
-    return { ...result, text: kind === "web_search" || review ? result.text : result.text.slice(0, 32768),
-      truncated: !review && kind !== "web_search" && result.text.length > 32768,
+    return { ...result, text: kind === "web_search" ? result.text : result.text.slice(0, 32768),
+      truncated: kind !== "web_search" && result.text.length > 32768,
       request,
       ...(kind === "expert" ? { model: `${provider}/${model}` } : {}),
       ...(observation.sessionFile ? { sessionFile: observation.sessionFile } : {}),
