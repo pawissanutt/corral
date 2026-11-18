@@ -1,6 +1,7 @@
 mod args;
 mod editor;
 mod hook;
+mod import;
 mod output;
 
 use std::{
@@ -74,6 +75,11 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
     let root = Engine::discover_root(&cwd, out.root)?;
     if let Command::Config(ConfigCommand::Check) = command {
         check_config(&root, out)?;
+        return Ok(0);
+    }
+    if let Command::Import { dir, all, dry_run } = command {
+        let report = import::run(&root, &dir, all, dry_run)?;
+        out.value(&report, |out, report| report.write(out))?;
         return Ok(0);
     }
     if matches!(command, Command::Hook) && hook::nudge(&root)? {
@@ -280,7 +286,7 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
             )?;
         }
         Command::Pipeline { task } => engine.advance(&task)?,
-        Command::Init { .. } | Command::Config(_) => {
+        Command::Init { .. } | Command::Config(_) | Command::Import { .. } => {
             unreachable!("handled before opening the engine")
         }
     }

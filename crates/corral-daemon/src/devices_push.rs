@@ -429,6 +429,7 @@ mod tests {
             seq,
             ts: jiff::Timestamp::UNIX_EPOCH,
             task: Some("T-001".into()),
+            project: None,
             run: None,
             kind,
             actor: corral_types::Actor::Auto,

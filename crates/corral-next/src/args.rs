@@ -24,6 +24,17 @@ pub(crate) enum Command {
         #[arg(long)]
         first_id: Option<u32>,
     },
+    /// Import tasks from a legacy `corral export tasks` directory into an initialized workspace.
+    Import {
+        #[arg(value_name = "DIR")]
+        dir: PathBuf,
+        /// Include Done and Dropped tasks and retain dependencies on Done tasks.
+        #[arg(long)]
+        all: bool,
+        /// Report what would be imported without changing tasks, events, or IDs.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Create a task (Backlog unless --idea or --ready is set).
     New {
         title: String,
