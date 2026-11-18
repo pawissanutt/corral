@@ -2,21 +2,27 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::{
-    Actor, Blocked, CheckKind, CheckResult, Engine, Op, Outcome, Run, Status, Store, Task,
+    Actor, Blocked, CheckKind, CheckResult, Engine, Next, Op, Outcome, Run, Status, Store, Task,
     checkout::Checkout,
     events::EventKind,
     refuse,
-    review::{gate_notes, next_done},
-    tasks::{next_changes, next_force_approve, next_retry, set_lifecycle},
+    review::{SendBack, gate_notes, next_done},
+    tasks::{next_changes, next_retry, set_lifecycle},
 };
 
 impl Engine {
-    pub fn approve(&self, id: &str, force: bool) -> Result<Run> {
-        self.with_pipeline_lock(id, || self.approve_as(id, force, self.actor))
+    pub fn approve(&self, id: &str, onto: Option<&str>, force: bool) -> Result<Run> {
+        self.with_pipeline_lock(id, || self.approve_as(id, onto, force, self.actor))
     }
 
-    pub(crate) fn approve_as(&self, id: &str, force: bool, actor: Actor) -> Result<Run> {
-        self.check_force(force, || Op::Approve { id: id.into() })?;
+    pub(crate) fn approve_as(
+        &self,
+        id: &str,
+        onto: Option<&str>,
+        force: bool,
+        actor: Actor,
+    ) -> Result<Run> {
+        self.check_force(force, || approve_op(id, onto))?;
         let task = self.store.require_task(id)?;
         let worker = self.last_worker(&self.store, &task)?;
         let checkout = Checkout::from_run(&worker)?;
@@ -25,6 +31,30 @@ impl Engine {
         let task = self.store.require_task(id)?;
         let mut worker = self.last_worker(&self.store, &task)?;
         let checkout = Checkout::from_run(&worker)?;
+        let target = onto.unwrap_or(&checkout.base);
+        let reason = if target == checkout.branch {
+            Some(format!(
+                "cannot land a task branch onto itself ({target:?})"
+            ))
+        } else if !corral_git::local_branch_exists(&checkout.repo, target)
+            .context("check landing target branch")?
+        {
+            Some(format!("landing target branch {target:?} does not exist"))
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            let next = corral_git::local_branches(&checkout.repo)?
+                .into_iter()
+                .filter(|branch| branch != &checkout.branch)
+                .map(|branch| Next {
+                    op: approve_op(id, Some(&branch)),
+                    force,
+                })
+                .collect();
+            return Err(refuse(reason, next));
+        }
+        let next_force = || Next::force(approve_op(id, onto));
         let mut skipped = Vec::new();
         if task.status != Status::Review {
             if !force {
@@ -35,7 +65,7 @@ impl Engine {
                 };
                 return Err(refuse(
                     "approve requires a task in Review",
-                    vec![next, next_force_approve(id)],
+                    vec![next, next_force()],
                 ));
             }
             skipped.push("status rule");
@@ -46,32 +76,46 @@ impl Engine {
                 vec![next_retry(id)],
             ));
         }
+        let target_ref = format!("refs/heads/{target}");
         if !checkout.path.is_dir() {
             let result = corral_git::worktree_add(
                 &checkout.repo,
                 &checkout.path,
                 &checkout.branch,
-                &checkout.base_ref(),
+                &target_ref,
             );
             if let Err(error) = result {
-                self.block_landing(id, &worker.id, &error, force, &skipped, actor)?;
+                self.block_landing(&worker, onto, &error, force, &skipped, actor)?;
                 return Ok(worker);
             }
         }
         if let Err(error) = checkout.verify_branch() {
-            self.block_landing(id, &worker.id, &error, force, &skipped, actor)?;
+            self.block_landing(&worker, onto, &error, force, &skipped, actor)?;
             return Ok(worker);
         }
-        match corral_git::rebase(&checkout.path, &checkout.base_ref()) {
-            Ok(corral_git::RebaseOutcome::Rebased) => {}
+        let target_sha =
+            corral_git::rev_sha(&checkout.repo, &target_ref).context("read landing target SHA")?;
+        let source_sha = checkout.merge_base()?;
+        match corral_git::rebase_onto(&checkout.path, &source_sha, &target_sha) {
+            Ok(corral_git::RebaseOutcome::Rebased) => {
+                if worker.base_sha != target_sha {
+                    // Remember the actual fork after a retarget, even if the
+                    // landing gate or the fast-forward later refuses.
+                    self.store.transaction(|store| {
+                        let mut current = store
+                            .get_run(id, &worker.id)?
+                            .context("landing worker run disappeared")?;
+                        current.base_sha.clone_from(&target_sha);
+                        store.update_run(&current)
+                    })?;
+                    worker.base_sha.clone_from(&target_sha);
+                }
+            }
             Ok(corral_git::RebaseOutcome::Conflict { message, .. }) => {
                 self.landing_send_back(
-                    id,
-                    &worker.id,
-                    &format!(
-                        "rebase onto {} and resolve conflicts\n\n{message}",
-                        checkout.base
-                    ),
+                    &worker,
+                    onto,
+                    &format!("rebase onto {target} and resolve conflicts\n\n{message}"),
                     force,
                     &skipped,
                     actor,
@@ -79,7 +123,7 @@ impl Engine {
                 return Ok(worker);
             }
             Err(error) => {
-                self.block_landing(id, &worker.id, &error, force, &skipped, actor)?;
+                self.block_landing(&worker, onto, &error, force, &skipped, actor)?;
                 return Ok(worker);
             }
         }
@@ -99,13 +143,13 @@ impl Engine {
                     if check.key != head {
                         let error =
                             anyhow::anyhow!("checkout HEAD changed before the landing gate");
-                        self.block_landing(id, &worker.id, &error, false, &[], actor)?;
+                        self.block_landing(&worker, onto, &error, false, &[], actor)?;
                         return Ok(worker);
                     }
                     if check.result == CheckResult::Fail {
                         self.landing_send_back(
-                            id,
-                            &worker.id,
+                            &worker,
+                            onto,
                             &gate_notes(&check),
                             false,
                             &[],
@@ -116,17 +160,18 @@ impl Engine {
                 }
             }
         }
-        let current_base = corral_git::rev_sha(&checkout.repo, &checkout.base_ref())
-            .context("read base before fast-forward")?;
+        let current_base = corral_git::rev_sha(&checkout.repo, &target_ref)
+            .context("read landing target before fast-forward")?;
         let current_branch = corral_git::rev_sha(&checkout.repo, &checkout.branch_ref())
             .context("read branch before fast-forward")?;
         if head != current_branch
+            || current_base != target_sha
             || !corral_git::is_ancestor(&checkout.repo, &current_base, &head)
                 .context("check that rebased HEAD still contains the base")?
         {
             let error =
                 anyhow::anyhow!("base or task branch changed during landing; run approve again");
-            self.block_landing(id, &worker.id, &error, force, &skipped, actor)?;
+            self.block_landing(&worker, onto, &error, force, &skipped, actor)?;
             return Ok(worker);
         }
         self.store.transaction(|store| {
@@ -134,17 +179,17 @@ impl Engine {
             if !force && task.status != Status::Review {
                 return Err(refuse(
                     "task left Review before landing",
-                    vec![next_done(id), next_force_approve(id)],
+                    vec![next_done(id), next_force()],
                 ));
             }
             if self.last_worker(store, &task)?.id != worker.id {
                 return Err(refuse(
                     "the task acquired a different worker run before landing",
-                    vec![next_done(id), next_force_approve(id)],
+                    vec![next_done(id), next_force()],
                 ));
             }
             let landing =
-                corral_git::fast_forward(&checkout.repo, &checkout.branch, &checkout.base)
+                corral_git::fast_forward_in_worktree(&checkout.repo, &checkout.branch, target)
                     .and_then(|()| {
                         self.stop_landing_sessions(store, id, &worker.id, actor)?;
                         corral_git::worktree_remove(&checkout.repo, &checkout.path, true)
@@ -154,7 +199,14 @@ impl Engine {
                             .context("delete landed task branch")
                     });
             if let Err(error) = landing {
-                self.block_landing_in(store, &mut task, &worker.id, &format!("{error:#}"), actor)?;
+                self.block_landing_in(
+                    store,
+                    &mut task,
+                    &worker.id,
+                    onto,
+                    &format!("{error:#}"),
+                    actor,
+                )?;
                 self.record_forced_approve(store, &task, &worker.id, force, &skipped, actor)?;
                 return Ok(());
             }
@@ -171,7 +223,7 @@ impl Engine {
                 Some(&worker.id),
                 EventKind::Landed,
                 actor,
-                json!({"sha":worker.head_sha,"base":worker.base}),
+                json!({"sha":worker.head_sha,"base":target}),
             )?;
             self.record_forced_approve(store, &task, &worker.id, force, &skipped, actor)?;
             Ok(())
@@ -213,18 +265,24 @@ impl Engine {
 
     fn landing_send_back(
         &self,
-        id: &str,
-        run: &str,
+        worker: &Run,
+        onto: Option<&str>,
         notes: &str,
         force: bool,
         skipped: &[&str],
         actor: Actor,
     ) -> Result<()> {
         self.launch_transaction(|store, pending| {
-            let mut task = store.require_task(id)?;
+            let mut task = store.require_task(&worker.task)?;
             if force || task.status == Status::Review {
-                self.send_back_in(store, pending, &mut task, notes, Actor::Auto, false)?;
-                self.record_forced_approve(store, &task, run, force, skipped, actor)?;
+                self.send_back_in(
+                    store,
+                    pending,
+                    &mut task,
+                    notes,
+                    SendBack::Automatic { onto },
+                )?;
+                self.record_forced_approve(store, &task, &worker.id, force, skipped, actor)?;
             }
             Ok(())
         })
@@ -232,17 +290,24 @@ impl Engine {
 
     fn block_landing(
         &self,
-        id: &str,
-        run: &str,
+        worker: &Run,
+        onto: Option<&str>,
         error: &anyhow::Error,
         force: bool,
         skipped: &[&str],
         actor: Actor,
     ) -> Result<()> {
         self.store.transaction(|store| {
-            let mut task = store.require_task(id)?;
-            self.block_landing_in(store, &mut task, run, &format!("{error:#}"), actor)?;
-            self.record_forced_approve(store, &task, run, force, skipped, actor)
+            let mut task = store.require_task(&worker.task)?;
+            self.block_landing_in(
+                store,
+                &mut task,
+                &worker.id,
+                onto,
+                &format!("{error:#}"),
+                actor,
+            )?;
+            self.record_forced_approve(store, &task, &worker.id, force, skipped, actor)
         })
     }
 
@@ -251,6 +316,7 @@ impl Engine {
         store: &Store,
         task: &mut Task,
         run: &str,
+        onto: Option<&str>,
         error: &str,
         actor: Actor,
     ) -> Result<()> {
@@ -262,7 +328,7 @@ impl Engine {
                 reason: "git refused landing".into(),
                 detail: Some(error.into()),
                 next: vec![
-                    next_force_approve(&task.id),
+                    Next::force(approve_op(&task.id, onto)),
                     next_changes(&task.id),
                     next_retry(&task.id),
                 ],
@@ -291,5 +357,12 @@ impl Engine {
             )?;
         }
         Ok(())
+    }
+}
+
+fn approve_op(id: &str, onto: Option<&str>) -> Op {
+    Op::Approve {
+        id: id.to_owned(),
+        onto: onto.map(str::to_owned),
     }
 }

@@ -95,6 +95,7 @@ impl Output<'_> {
                 ("Size", &task.size),
                 ("Profile", &task.profile),
                 ("Parent", &task.parent),
+                ("Base", &task.base),
             ] {
                 if let Some(value) = value {
                     writeln!(out, "{label}: {value}")?;

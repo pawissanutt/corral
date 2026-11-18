@@ -45,10 +45,24 @@ impl Checkout {
             &["merge-base", &self.base_ref(), &self.branch_ref()],
         )?;
         if !out.status.success() {
+            if !self.base_sha.is_empty()
+                && !corral_git::local_branch_exists(&self.repo, &self.base)?
+            {
+                return Ok(self.base_sha.clone());
+            }
             return Err(git_failure(&self.repo, "merge-base", &out));
         }
         let mut sha = String::from_utf8(out.stdout).context("read task branch's merge base")?;
         sha.truncate(sha.trim_end().len());
+        // A previous retargeted landing may have rebased onto a different
+        // branch. Keep that fork point while it is still part of this change.
+        if !self.base_sha.is_empty()
+            && sha != self.base_sha
+            && !corral_git::is_ancestor(&self.repo, &self.base_sha, &sha)?
+            && corral_git::is_ancestor(&self.repo, &self.base_sha, &self.branch_ref())?
+        {
+            return Ok(self.base_sha.clone());
+        }
         Ok(sha)
     }
 

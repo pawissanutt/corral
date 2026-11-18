@@ -20,12 +20,30 @@ fn commands_render_documented_flags_and_escape_shell_arguments() {
                     priority: Priority::P1,
                     kind: Some("ui".into()),
                     size: Some("xl".into()),
+                    base: Some("release/1".into()),
                     parent: Some("T-004".into()),
                     depends_on: vec!["T-001".into(), "T-002".into()],
                     ..NewTask::default()
                 },
             }),
-            "corral new -p 'a project' --ready --priority P1 --kind ui --size xl --parent T-004 --depends-on T-001,T-002 -- '--literal title'",
+            "corral new -p 'a project' --ready --priority P1 --kind ui --size xl --base release/1 --parent T-004 --depends-on T-001,T-002 -- '--literal title'",
+        ),
+        (
+            Next::force(Op::Approve {
+                id: "T-042".into(),
+                onto: Some("release/2".into()),
+            }),
+            "corral approve T-042 --onto release/2 --force",
+        ),
+        (
+            Next::run(Op::Edit {
+                id: "T-042".into(),
+                edit: TaskEdit {
+                    base: Some(None),
+                    ..TaskEdit::default()
+                },
+            }),
+            "corral edit T-042 --base ''",
         ),
         (
             Next::run(Op::Verdict {
@@ -106,13 +124,14 @@ fn edit_round_trip_distinguishes_unchanged_cleared_and_replaced_fields() {
                 kind: selection.clone(),
                 size: selection.clone(),
                 profile: selection.clone(),
+                base: selection.clone(),
                 parent: selection.clone(),
                 ..TaskEdit::default()
             },
         };
         let wire = serde_json::to_value(&op).unwrap();
         let edit = &wire["edit"]["edit"];
-        for key in ["project", "kind", "size", "profile", "parent"] {
+        for key in ["project", "kind", "size", "profile", "base", "parent"] {
             match &selection {
                 None => assert!(edit.get(key).is_none()),
                 Some(value) => assert_eq!(edit.get(key), Some(&serde_json::json!(value))),

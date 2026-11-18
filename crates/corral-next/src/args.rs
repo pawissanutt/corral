@@ -39,6 +39,9 @@ pub(crate) enum Command {
         kind: Option<String>,
         #[arg(long)]
         size: Option<String>,
+        /// Target branch for dispatch, overriding the project default.
+        #[arg(long)]
+        base: Option<String>,
         #[arg(long)]
         parent: Option<String>,
         #[arg(long)]
@@ -121,6 +124,9 @@ pub(crate) enum Command {
     /// Land a task and clean up its worktree.
     Approve {
         id: String,
+        /// Land onto this branch instead of the run's recorded base.
+        #[arg(long)]
+        onto: Option<String>,
         #[arg(long)]
         force: bool,
     },
@@ -198,6 +204,9 @@ pub(crate) struct Edit {
     pub size: Option<String>,
     #[arg(long)]
     pub profile: Option<String>,
+    /// Set the target branch for dispatch; an empty value clears it.
+    #[arg(long)]
+    pub base: Option<String>,
     #[arg(long)]
     pub parent: Option<String>,
     /// Comma-separated replacement dependency list; an empty value clears it.

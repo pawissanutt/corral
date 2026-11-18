@@ -85,6 +85,7 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
             priority,
             kind,
             size,
+            base,
             parent,
             depends_on,
         } => {
@@ -94,6 +95,7 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                 priority,
                 kind,
                 size,
+                base,
                 parent,
                 status: if idea {
                     Status::Idea
@@ -204,7 +206,9 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
         Command::Changes(Text { id, text }) => {
             apply(&engine, out, Op::Changes { id, text }, false)?
         }
-        Command::Approve { id, force } => apply(&engine, out, Op::Approve { id }, force)?,
+        Command::Approve { id, onto, force } => {
+            apply(&engine, out, Op::Approve { id, onto }, force)?
+        }
         Command::Drop(Id { id }) => apply(&engine, out, Op::Drop { id }, false)?,
         Command::Reopen(Id { id }) => apply(&engine, out, Op::Reopen { id }, false)?,
         Command::Sync { watch: false } | Command::Hook => apply(&engine, out, Op::Sync, false)?,

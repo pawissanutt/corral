@@ -78,7 +78,7 @@ running = 4                  # tasks in Running or Blocked at once; Review, revi
 
 [defaults]
 profile = "omp-sol"          # worker profile when nothing else names one
-base = "main"
+# base = "release"           # optional; unset means the repository's default branch
 max_rounds = 2
 auto_dispatch = false        # start Ready tasks when a slot is free
 auto_land = false            # land after gate and review without the owner
@@ -109,7 +109,7 @@ args = []
 
 [projects.mitimind-lite]
 path = "mitimind-lite"       # relative to the workspace root
-base = "main"
+# base = "develop"           # optional target branch for this project's tasks
 gate = ["just check"]        # optional; each line runs with `sh -c` in the worktree; exit 0 passes
 reviewer = "omp-sol"         # optional profile; one pass per `done`
 profile = "omp-sol"          # optional worker default
@@ -129,6 +129,10 @@ profile = "omp-opus"
 
 Worker profile resolution: dispatch flag, task `profile`, first matching `[[routing]]`
 rule, project `profile`, `defaults.profile`. Project keys fall back to `[defaults]`.
+
+Base branch resolution: dispatch flag, task `base`, project `base`, `defaults.base`, then
+the repository's default branch (what `refs/remotes/origin/HEAD` points at, else the branch
+checked out in the project's main checkout). Nothing assumes `main`.
 
 Harness placeholders: `{prompt_file}` (absolute path), `{prompt_ref}` (one quoted argument
 asking the agent to read that file), `{name}` (`T-042 title`), `{task}`, `{worktree}`,
@@ -161,6 +165,7 @@ pub struct Task {
     pub kind: Option<String>,
     pub size: Option<String>,
     pub profile: Option<String>,    // pinned worker profile
+    pub base: Option<String>,       // branch to start from and land onto
     pub parent: Option<String>,     // a plan is a parent task with children
     pub depends_on: Vec<String>,
     pub blocked: Option<Blocked>,   // Some exactly when status is Blocked
@@ -276,7 +281,7 @@ pub enum Op {
     Dispatch { id, profile, base }, Reply { id, text }, Stop { id },
     Retry { id, profile, fresh, note }, Done { id, summary }, Gate { id },
     Review { id, profile }, Verdict { id, approve, notes }, Changes { id, text },
-    Approve { id }, Drop { id }, Reopen { id },
+    Approve { id, onto }, Drop { id }, Reopen { id },
     ArtifactAdd { .. }, UsageAdd { .. }, Sync,
 }
 ```
@@ -295,7 +300,7 @@ The CLI parses its arguments into an `Op`; the wire submits `{ op, force }` unch
 | `review` | Review, a reviewer profile resolves | Reviewer session in the worktree | n/a |
 | `verdict` | Review | `Check` recorded; approve ends the reviewer session and continues the pipeline; changes sends work back and keeps the reviewer session for the next round | n/a |
 | `changes` | Review or Blocked with a run | Owner note sent back; Running; `round` reset to 0 | n/a |
-| `approve` | Review, gate green on the landed commit; the task's sessions are stopped as part of landing | Land (below); Done | The gate, and the status rule: any task with a branch lands |
+| `approve` | Review, gate green on the landed commit; the task's sessions are stopped as part of landing | Land (below) onto the run's base, or onto any existing branch with `onto`; Done | The gate, and the status rule: any task with a branch lands |
 | `retry` | the task has had a run | New worker run on the same branch, or from base with `fresh` | n/a |
 | `stop` | a live session | Session killed; Blocked `stopped by owner` | n/a |
 | `drop`, `reopen` | always | Dropped, or back to Backlog | n/a |
@@ -327,13 +332,17 @@ while status is Review:
 
 One function, under the per-repository lock (`corral_git::landing_lock`):
 
-1. Rebase the worktree onto the base. On conflict: abort the rebase and send back
-   `rebase onto <base> and resolve conflicts`.
+The target is the branch the run started from, unless `approve` names another with `onto`.
+Any existing branch can be a target.
+
+1. Rebase the worktree onto the target. On conflict: abort the rebase and send back
+   `rebase onto <target> and resolve conflicts`.
 2. If a gate is configured, not skipped, and no green check exists for the rebased HEAD,
    run it. Red: send back.
-3. Fast-forward the base: `git merge --ff-only <branch>` in the main checkout when it is on
-   the base, else `git fetch . <branch>:<base>`. Git decides whether local changes collide;
-   a refusal becomes Blocked with git's message.
+3. Fast-forward the target. If it is checked out in any worktree of the repository, run
+   `git merge --ff-only <branch>` there; if it is checked out nowhere, update the ref with
+   `git fetch . <branch>:<target>`. Git decides whether local changes collide; a refusal
+   becomes Blocked with git's message. A target that does not exist is refused by name.
 4. Close the task's sessions, remove the worktree, delete the branch, mark the run Landed,
    set Done, append `landed` with the sha.
 
@@ -421,16 +430,16 @@ functions for every table; the daemon never writes SQL.
 
 ```
 init [--first-id N]
-new "<title>" [-p project] [--idea|--ready] [--priority P1] [--kind k] [--size s] [--parent T] [--depends-on T,...]
+new "<title>" [-p project] [--idea|--ready] [--priority P1] [--kind k] [--size s] [--base b] [--parent T] [--depends-on T,...]
 list [--status s] [--project p] [--all]      show <id>      log <id>
-edit <id> [--title t] [--body-file f] [--project p] [--priority P1] [--kind k] [--size s] [--profile p] [--parent T] [--depends-on T,...]
+edit <id> [--title t] [--body-file f] [--project p] [--priority P1] [--kind k] [--size s] [--profile p] [--base b] [--parent T] [--depends-on T,...]
                                               # with no flags: title and body through $EDITOR
 comment <id> "<text>"      move <id> <status> [--force]
 dispatch <id> [--profile p] [--base b] [--force]
 reply <id> "<text>"      stop <id>      retry <id> [--profile p] [--fresh] [--note "<text>"]
 done <id> --summary "<text>"
 gate <id>      review <id> [--profile p]      verdict <id> approve|changes [--notes "<text>" | --notes-file f]
-changes <id> "<text>"      approve <id> [--force]
+changes <id> "<text>"      approve <id> [--onto branch] [--force]
 drop <id>      reopen <id>
 sync [--watch]      wait [--for kinds] [--task id] [--project p] [--after seq] [--timeout 30m]
 hook                                          # herdr plugin event entry: one sync pass, always exits 0

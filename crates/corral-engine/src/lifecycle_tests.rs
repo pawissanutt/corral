@@ -201,7 +201,14 @@ fn dispatch(id: &str) -> Op {
     }
 }
 fn approve(id: &str) -> Op {
-    Op::Approve { id: id.into() }
+    approve_onto(id, None)
+}
+
+fn approve_onto(id: &str, onto: Option<&str>) -> Op {
+    Op::Approve {
+        id: id.into(),
+        onto: onto.map(str::to_owned),
+    }
 }
 
 #[test]
@@ -325,11 +332,24 @@ fn reviewer_requests_changes_then_approves_and_auto_lands_off_base() {
     cx.project().reviewer = Some("generic".into());
     cx.project().auto_land = Some(true);
     git(&cx.repo, &["switch", "-c", "local"]);
+    git(
+        &cx.repo,
+        &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
+    );
+    git(
+        &cx.repo,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
     for accepts_send in [true, false] {
         let starts_before = cx.runner.starts().len();
         let sends_before = cx.runner.sends().len();
         let id = cx.backlog("reviewed change");
         let worker = cx.dispatch(&id);
+        assert_eq!(worker.base, "main");
         fs::write(worker.worktree.join("file.txt"), "first draft\n").unwrap();
         let previous_head = cx.done(&id).run.unwrap().head_sha.unwrap();
         let reviewer = || {
@@ -474,6 +494,57 @@ fn unchanged_head_reuses_green_gate_and_rebase_conflict_sends_back() {
     cx.apply(approve(&id), false);
     cx.assert_landed(&first, &head);
     assert_eq!(cx.events(&id, EventKind::Gate).len(), 1);
+
+    git(&cx.repo, &["branch", "release"]);
+    let release_before = git(&cx.repo, &["rev-parse", "refs/heads/release"]);
+    fs::write(cx.repo.join("main-only.txt"), "must not ship\n").unwrap();
+    git(&cx.repo, &["add", "main-only.txt"]);
+    git(&cx.repo, &["commit", "-m", "main-only commit"]);
+    let main_before = git(&cx.repo, &["rev-parse", "refs/heads/main"]);
+    let id = cx.backlog("retarget to an unchecked-out branch");
+    let run = cx.dispatch(&id);
+    fs::write(run.worktree.join("release-change.txt"), "ship this\n").unwrap();
+    let submitted = cx.done(&id).run.unwrap().head_sha.unwrap();
+    let result = cx
+        .engine
+        .apply(approve_onto(&id, Some("missing-release")), true)
+        .unwrap_err();
+    let refusal = as_refusal(&result).unwrap();
+    assert!(refusal.reason.contains("missing-release"));
+    assert!(
+        refusal
+            .next
+            .contains(&crate::Next::force(approve_onto(&id, Some("release"))))
+    );
+    let landed = cx.apply(approve_onto(&id, Some("release")), false);
+    assert_eq!(landed.task.unwrap().status, Status::Done);
+    let landed = landed.run.unwrap();
+    assert_eq!(landed.base, "main");
+    let landed_sha = landed.head_sha.unwrap();
+    assert_ne!(submitted, landed_sha);
+    assert_ne!(release_before, landed_sha);
+    assert_eq!(
+        git(&cx.repo, &["rev-parse", "refs/heads/release"]),
+        landed_sha
+    );
+    assert_eq!(
+        git(&cx.repo, &["rev-parse", "refs/heads/main"]),
+        main_before
+    );
+    assert_eq!(
+        git(&cx.repo, &["show", "release:release-change.txt"]),
+        "ship this"
+    );
+    assert!(
+        !git_output(&cx.repo, &["cat-file", "-e", "release:main-only.txt"])
+            .status
+            .success()
+    );
+    assert_eq!(cx.events(&id, EventKind::Gate).len(), 2);
+    assert_eq!(
+        cx.events(&id, EventKind::Landed)[0].detail["base"],
+        "release"
+    );
 
     let id = cx.backlog("conflicting task");
     let run = cx.dispatch(&id);
@@ -642,5 +713,14 @@ fn dispatch_recovers_checkout_and_run_files_after_launch_error() {
     assert!(!cx.branch_exists(&format!("corral/{id}")));
     assert!(!cx.engine.state_dir.join("runs").join(&id).exists());
     cx.runner.clear_start_hook();
-    assert_eq!(cx.dispatch(&id).id, "R1");
+    git(&cx.repo, &["switch", "--detach"]);
+    let error = cx.engine.apply(dispatch(&id), false).unwrap_err();
+    let refusal = as_refusal(&error).unwrap();
+    assert!(refusal.reason.contains("--base"));
+    let [next] = refusal.next.as_slice() else {
+        panic!("expected dispatch with the only local branch");
+    };
+    assert!(!next.force);
+    assert!(next.command().ends_with(" --base main"));
+    assert_eq!(cx.apply(next.op.clone(), false).run.unwrap().id, "R1");
 }

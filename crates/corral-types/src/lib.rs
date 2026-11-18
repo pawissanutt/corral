@@ -107,6 +107,7 @@ pub struct Task {
     pub kind: Option<String>,
     pub size: Option<String>,
     pub profile: Option<String>,
+    pub base: Option<String>,
     pub parent: Option<String>,
     pub depends_on: Vec<String>,
     pub blocked: Option<Blocked>,
@@ -256,6 +257,7 @@ pub struct NewTask {
     pub kind: Option<String>,
     pub size: Option<String>,
     pub profile: Option<String>,
+    pub base: Option<String>,
     pub parent: Option<String>,
     pub depends_on: Vec<String>,
 }
@@ -271,6 +273,7 @@ impl Default for NewTask {
             kind: None,
             size: None,
             profile: None,
+            base: None,
             parent: None,
             depends_on: Vec::new(),
         }
@@ -308,6 +311,12 @@ pub struct TaskEdit {
         deserialize_with = "present"
     )]
     pub profile: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub base: Option<Option<String>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

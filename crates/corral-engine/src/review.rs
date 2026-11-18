@@ -23,6 +23,11 @@ use crate::{
     tasks::{next_changes, next_force_approve, next_reply, next_retry, set_lifecycle},
 };
 
+pub(crate) enum SendBack<'a> {
+    Requested,
+    Automatic { onto: Option<&'a str> },
+}
+
 impl Engine {
     pub fn done(&self, id: &str, summary: &str) -> Result<Option<Run>> {
         let (run, submitted) =
@@ -367,8 +372,7 @@ impl Engine {
                     pending,
                     &mut task,
                     notes.unwrap_or("Reviewer requested changes."),
-                    Actor::Auto,
-                    false,
+                    SendBack::Automatic { onto: None },
                 )?;
             }
             Ok((reviewer, close))
@@ -397,7 +401,7 @@ impl Engine {
                     vec![next_done(id), next_retry(id)],
                 ));
             }
-            self.send_back_in(store, pending, &mut task, text, self.actor, true)
+            self.send_back_in(store, pending, &mut task, text, SendBack::Requested)
         })
     }
 
@@ -407,19 +411,27 @@ impl Engine {
         pending: &mut PendingLaunch,
         task: &mut Task,
         notes: &str,
-        actor: Actor,
-        reset: bool,
+        reason: SendBack<'_>,
     ) -> Result<Option<Run>> {
         let mut worker = self.last_worker(store, task)?;
         let project = self.project_for(task)?;
         let max_rounds = project
             .as_ref()
             .map_or(self.config.defaults.max_rounds, |p| p.max_rounds);
-        if !reset && task.round >= max_rounds {
+        let (actor, reset) = match reason {
+            SendBack::Requested => (self.actor, true),
+            SendBack::Automatic { .. } => (Actor::Auto, false),
+        };
+        if let SendBack::Automatic { onto } = reason
+            && task.round >= max_rounds
+        {
             let next = vec![
                 next_changes(&task.id),
                 next_retry(&task.id),
-                next_force_approve(&task.id),
+                Next::force(Op::Approve {
+                    id: task.id.clone(),
+                    onto: onto.map(str::to_owned),
+                }),
             ];
             self.block_in(
                 store,
@@ -499,7 +511,13 @@ impl Engine {
         self.launch_transaction(|store, pending| {
             let mut task = store.require_task(id)?;
             if task.status == Status::Review {
-                self.send_back_in(store, pending, &mut task, notes, Actor::Auto, false)?;
+                self.send_back_in(
+                    store,
+                    pending,
+                    &mut task,
+                    notes,
+                    SendBack::Automatic { onto: None },
+                )?;
             }
             Ok(())
         })

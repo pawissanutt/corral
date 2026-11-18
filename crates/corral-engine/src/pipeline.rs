@@ -79,7 +79,7 @@ impl Engine {
             .as_ref()
             .map_or(self.config.defaults.auto_land, |p| p.auto_land)
         {
-            self.approve_as(id, false, Actor::Auto)?;
+            self.approve_as(id, None, false, Actor::Auto)?;
             return Ok(());
         }
         self.store.transaction(|store| {
