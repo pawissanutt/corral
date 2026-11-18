@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_engine::{
-    Check, CheckKind, Engine, Role, Run, Runner, SessionStatus, Status, Task, store::TaskFilter,
+    Check, CheckKind, Engine, Role, Run, SessionStatus, Status, Task, store::TaskFilter,
     usage::UsageSummary,
 };
 use corral_protocol::{
@@ -286,6 +286,7 @@ pub(super) fn task_rows(engine: &Engine, tasks: Vec<Task>) -> Result<Vec<TaskRow
             let ready =
                 task.status == Status::Review && engine.store.has_ready_since_done(&task.id)?;
             let max_rounds = engine.config.task_max_rounds(&task);
+            let resolved_profile = engine.config.resolve_profile(&task, None).ok();
             let dependencies = task
                 .depends_on
                 .iter()
@@ -303,6 +304,7 @@ pub(super) fn task_rows(engine: &Engine, tasks: Vec<Task>) -> Result<Vec<TaskRow
                 max_rounds: Some(max_rounds),
                 reviewer,
                 dependencies: Some(dependencies),
+                resolved_profile,
             })
         })
         .collect()
@@ -391,6 +393,7 @@ fn projects(engine: &Engine) -> Result<Vec<ProjectRow>> {
             let effective = engine
                 .project_settings(id)
                 .or_else(|_| engine.config.effective_project(id))?;
+            let local_branches = engine.project_local_branches(&effective.path).ok();
             Ok(ProjectRow {
                 id: id.clone(),
                 config: object(project)?,
@@ -414,6 +417,7 @@ fn projects(engine: &Engine) -> Result<Vec<ProjectRow>> {
                     max_rounds: effective.max_rounds,
                     branch_prefix: effective.branch_prefix,
                 }),
+                local_branches,
             })
         })
         .collect()
@@ -423,12 +427,16 @@ fn agents(engine: &Engine) -> Result<Vec<AgentRow>> {
     let mut agents = Vec::new();
     for run in engine.store.live_runs(None)? {
         if let Some(session) = &run.session {
-            let status = engine
+            let (status, paused) = engine
                 .session_runner()
-                .status(session)
+                .observe(session)
                 .with_context(|| format!("observe session {} {}", run.task, run.id))?;
             if status != SessionStatus::Gone {
-                agents.push(AgentRow { run, status });
+                agents.push(AgentRow {
+                    run,
+                    status,
+                    paused,
+                });
             }
         }
     }

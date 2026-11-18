@@ -1,5 +1,5 @@
 use crate::{
-    Engine, Role, Store, Usage,
+    Engine, Op, Role, Store, Usage,
     tests::{run, task, tempdir},
 };
 
@@ -23,14 +23,13 @@ fn request(at: &str) -> Usage {
 }
 
 #[test]
-fn usage_round_trips_without_creating_an_event() {
+fn usage_add_attributes_the_run_without_creating_an_event() {
     let root = tempdir();
     let engine = Engine::init(root.path(), None).unwrap();
     assert_eq!(engine.usage_summary(None).unwrap(), UsageSummary::default());
     let associated = Usage {
         task: Some("T-001".into()),
         run: Some("R1".into()),
-        profile: Some("worker".into()),
         harness: Some("reported".into()),
         usd: Some(0.125),
         billing: Some("api".into()),
@@ -38,7 +37,14 @@ fn usage_round_trips_without_creating_an_event() {
     };
     engine.store.insert_task(&task("T-001")).unwrap();
     engine.store.insert_run(&run("T-001", "R1")).unwrap();
-    engine.record_usage(&associated).unwrap();
+    engine
+        .apply(
+            Op::UsageAdd {
+                usage: associated.clone(),
+            },
+            false,
+        )
+        .unwrap();
     let unassociated = Usage {
         input: u64::MAX,
         billing: Some("subscription".into()),
@@ -48,7 +54,16 @@ fn usage_round_trips_without_creating_an_event() {
     drop(engine);
 
     let store = Store::open(&root.path().join(".corral-next/corral.db")).unwrap();
-    assert_eq!(store.list_usage().unwrap(), [associated, unassociated]);
+    assert_eq!(
+        store.list_usage().unwrap(),
+        [
+            Usage {
+                profile: Some("generic".into()),
+                ..associated
+            },
+            unassociated
+        ]
+    );
     assert!(
         store
             .events_after(&Default::default(), 0)
@@ -379,7 +394,7 @@ fn usage_series_buckets_by_local_midnight_and_covers_only_same_day_cohorts() {
             })
             .unwrap();
     }
-    let window = || UsageWindow::parse("2026-11-17", "2026-11-21", 120).unwrap();
+    let window = || UsageWindow::parse("2026-11-17", "2026-11-21", 120, None).unwrap();
     let series = engine.usage_series(window(), Some(UsageBy::Model)).unwrap();
     let counts = |day: usize| {
         let summary = &series[day].summary;
@@ -437,7 +452,7 @@ fn usage_series_buckets_by_local_midnight_and_covers_only_same_day_cohorts() {
 
 #[test]
 fn usage_window_requires_canonical_dates_and_a_bounded_forward_span() {
-    assert!(UsageWindow::parse("2024-01-01", "2025-01-01", -240).is_ok());
+    assert!(UsageWindow::parse("2024-01-01", "2025-01-01", -240, None).is_ok());
     for (from, to, offset) in [
         ("2024-01-01", "2025-01-02", 0),
         ("2024-01-01", "2024-01-01", 0),
@@ -447,6 +462,6 @@ fn usage_window_requires_canonical_dates_and_a_bounded_forward_span() {
         ("2024-01-01", "2024-01-02", 1440),
         ("2024-01-01", "2024-01-02", -1440),
     ] {
-        assert!(UsageWindow::parse(from, to, offset).is_err());
+        assert!(UsageWindow::parse(from, to, offset, None).is_err());
     }
 }

@@ -7,6 +7,7 @@ import { CorralCommandError, type CorralClient } from "./corral.ts";
 export interface ToolHost {
   readonly client: CorralClient;
   readonly identity: HostIdentity;
+  drained(): Promise<unknown>;
   todo(payload: Record<string, unknown>): unknown;
   checkpoint(note: string): unknown;
 }
@@ -37,12 +38,14 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
           case "todo": result = await host.todo(payload); break;
           case "checkpoint": result = host.checkpoint(String(payload.note)); break;
           case "done":
-            if (!task) throw new Error("No task is attached to this session");
-            result = await host.client.command(["done", task, ...option("--summary", String(payload.summary))]);
-            break;
           case "verdict":
             if (!task) throw new Error("No task is attached to this session");
-            result = await host.client.command(["verdict", task, String(payload.verdict), ...option("--notes", String(payload.notes))]);
+            // The engine can close this host or remove its worktree as soon as
+            // it accepts the submission. Flush already-reported requests first.
+            await host.drained();
+            result = await host.client.command(spec.op === "done"
+              ? ["done", task, ...option("--summary", String(payload.summary))]
+              : ["verdict", task, String(payload.verdict), ...option("--notes", String(payload.notes))]);
             break;
           case "artifact":
             if (!task) throw new Error("No task is attached to this session");

@@ -113,9 +113,15 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
             to,
             by,
             utc_offset_minutes,
+            time_zone,
         } => {
-            let window = corral_engine::usage::UsageWindow::parse(from, to, *utc_offset_minutes)
-                .map_err(|error| anyhow::anyhow!("invalid: {error:#}"))?;
+            let window = corral_engine::usage::UsageWindow::parse(
+                from,
+                to,
+                *utc_offset_minutes,
+                time_zone.as_deref(),
+            )
+            .map_err(|error| anyhow::anyhow!("invalid: {error:#}"))?;
             DetailBody::UsageSeries(UsageSeries {
                 days: engine.usage_series(window, *by)?,
             })
@@ -142,7 +148,12 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
 fn burnup(engine: &Engine, scope: &str) -> Result<Burnup> {
     let store = &engine.store;
     let mut filter = EventFilter {
-        kinds: vec![EventKind::Created, EventKind::Landed],
+        kinds: vec![
+            EventKind::Created,
+            EventKind::Landed,
+            EventKind::Dropped,
+            EventKind::Reopened,
+        ],
         ..Default::default()
     };
     let mut members = None;

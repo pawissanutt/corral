@@ -43,8 +43,8 @@ function worktree(work: string): string {
   return cwd;
 }
 
-type Entry = { type: string; id: string; parentId: string | null; customType?: string; data?: CheckpointRecord;
-  message?: { role: string; content: unknown } };
+type Entry = { type: string; id: string; parentId: string | null; timestamp: string; customType?: string;
+  data?: CheckpointRecord; message?: { role: string; content: unknown } };
 
 test("rewind restores the start of a turn and continues the retained conversation", async () => {
   // Given the production worker with checkpoints, bound in a linked worktree with staged work.
@@ -104,8 +104,12 @@ test("rewind restores the start of a turn and continues the retained conversatio
     // Then each turn has a start and an end checkpoint, in order, with refs on their commits.
     const file = live.session.sessionFile ?? "";
     const entries = readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Entry);
-    const checkpoints = entries.filter((e) => e.type === "custom" && e.customType === CHECKPOINT_ENTRY)
-      .map((e) => e.data as CheckpointRecord);
+    const checkpointEntries = entries.filter((e) => e.type === "custom" && e.customType === CHECKPOINT_ENTRY);
+    const checkpoints = checkpointEntries.map((e) => e.data as CheckpointRecord);
+    const listedCheckpoints = checkpointEntries.map(({ data, timestamp }) => {
+      expect(new Date(timestamp).toISOString()).toBe(timestamp);
+      return { ...data, at: timestamp };
+    });
     expect(checkpoints.map(c => [c.id, c.phase])).toEqual([
       ["R1-t1-start", "start"], ["R1-t1-end", "end"], ["R1-t2-start", "start"], ["R1-t2-end", "end"],
     ]);
@@ -156,15 +160,20 @@ test("rewind restores the start of a turn and continues the retained conversatio
     });
     const socket = await connect(bridge.path);
     const request = (command: string, args: Record<string, unknown>) => socket.request({ version: 2, id: "request", command, args });
-    expect((await request("rewind", { list: true })).result?.checkpoints).toMatchObject([
-      ...checkpoints, { phase: "start", turn: 3 },
-    ]);
+    const listed = (await request("rewind", { list: true })).result?.checkpoints as
+      Array<Record<string, unknown>> | undefined;
+    expect(listed).toHaveLength(listedCheckpoints.length + 1);
+    expect(listed?.slice(0, -1)).toMatchObject(listedCheckpoints);
+    expect(listed?.at(-1)).toMatchObject({ phase: "start", turn: 3 });
+    const isoStamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+    expect(listed?.at(-1)?.at).toMatch(isoStamp);
     const reply = await request("rewind", { turn: 2 });
     expect(reply.error).toBeUndefined();
     expect(provider.aborted).toBe(abortedBefore + 1);
     const rescue = String(reply.result?.rescue_ref);
     expect(rescue).toMatch(/^refs\/worktree\/corral\/rescue\//);
     expect(reply.result).toMatchObject({ turn: 2, head: firstHead, from_head: secondHead });
+    expect(reply.result?.at).toMatch(isoStamp);
     expect(git(cwd, "symbolic-ref", "HEAD")).toBe("refs/heads/corral/T-575");
     expect(git(cwd, "rev-parse", "HEAD")).toBe(firstHead);
     expect(readFileSync(join(cwd, "tracked"), "utf8")).toBe("initial\n");
@@ -178,7 +187,7 @@ test("rewind restores the start of a turn and continues the retained conversatio
     expect(git(cwd, "show", `${rescue}:staged.txt`)).toBe("unstaged worktree version");
     expect(git(cwd, "show", `${rescue}^2:staged.txt`)).toBe("staged");
     expect((await request("rewind", { list: true })).result).toEqual({
-      checkpoints: checkpoints.slice(0, 3), rewinds: [reply.result],
+      checkpoints: listedCheckpoints.slice(0, 3), rewinds: [reply.result],
     });
     expect((await request("live_since", { seq: liveCursor })).result?.gap).toMatchObject({ reconcile: true });
     socket.close();

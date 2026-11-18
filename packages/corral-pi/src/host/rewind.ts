@@ -9,8 +9,10 @@ interface RewindRecord {
   readonly rescue_ref: string;
   readonly from_head: string;
   readonly head: string;
-  readonly at: string;
+  readonly at?: string;
 }
+
+type RewindCheckpoint = CheckpointRecord & { readonly at?: string };
 
 interface RewindTarget {
   readonly entry: string;
@@ -19,17 +21,22 @@ interface RewindTarget {
 
 function checkpoints(manager: SessionManager) {
   return manager.getBranch().flatMap(entry => entry.type === "custom" && entry.customType === CHECKPOINT_ENTRY
-    ? [{ entry: entry.id, point: entry.data as CheckpointRecord }] : []);
+    ? [{ entry: entry.id, point: entry.data as CheckpointRecord, at: entry.timestamp }] : []);
 }
 
 function historyFile(file: string): string { return `${file}.rewinds`; }
 
-export function listRewinds(manager: SessionManager) {
+export function listRewinds(manager: SessionManager): { checkpoints: RewindCheckpoint[]; rewinds: RewindRecord[] } {
   const file = manager.getSessionFile();
   const history = file && historyFile(file);
   const rewinds: RewindRecord[] = history && existsSync(history)
     ? readFileSync(history, "utf8").trimEnd().split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
-  return { checkpoints: checkpoints(manager).map(({ point }) => point), rewinds };
+  return {
+    checkpoints: checkpoints(manager).map(({ point, at }) => ({
+      ...point, ...(typeof at === "string" ? { at } : {}),
+    })),
+    rewinds,
+  };
 }
 
 export function rewindPoint(manager: SessionManager, turn: number): RewindTarget {
@@ -43,7 +50,7 @@ export function rewindPoint(manager: SessionManager, turn: number): RewindTarget
 
 /** Restore Git only after the retained transcript is ready to replace the old one. */
 export function restoreRewind(session: AgentSession, snapshots: Checkpoints,
-  { entry, point }: RewindTarget): RewindRecord {
+  { entry, point }: RewindTarget) {
   const manager = session.sessionManager;
   const file = manager.getSessionFile();
   const header = manager.getHeader();

@@ -445,6 +445,32 @@ impl<'a> PiRunner<'a> {
         }
     }
 
+    /// Read status and the pause flag from the same observation of the Pi host.
+    pub fn observe(&self, session: &SessionRef) -> Result<(SessionStatus, Option<bool>)> {
+        let SessionRef::Pi { socket, inner, .. } = session else {
+            return Ok((self.inner.status(session)?, None));
+        };
+        let state: State = match Client::new(socket).request("get_state", json!({})) {
+            Ok(state) => state,
+            Err(error) if unavailable(&error) => return Ok((self.inner.status(inner)?, None)),
+            Err(error) => return Err(error),
+        };
+        let status = if let Some(question) = state.owner_questions.into_iter().next() {
+            SessionStatus::Blocked {
+                excerpt: question.question,
+            }
+        } else if state.turn.open {
+            SessionStatus::Working
+        } else if !state.paused
+            && let Some(excerpt) = state.last_error
+        {
+            SessionStatus::Blocked { excerpt }
+        } else {
+            SessionStatus::Idle
+        };
+        Ok((status, Some(state.paused)))
+    }
+
     fn wait_for_hello(&self, client: &Client<'_>, inner: &SessionRef) -> Result<Hello> {
         let deadline = Instant::now() + START_TIMEOUT;
         let mut check_placement = Instant::now();
@@ -540,27 +566,7 @@ impl Runner for PiRunner<'_> {
     }
 
     fn status(&self, session: &SessionRef) -> Result<SessionStatus> {
-        let SessionRef::Pi { socket, inner, .. } = session else {
-            return self.inner.status(session);
-        };
-        let state: State = match Client::new(socket).request("get_state", json!({})) {
-            Ok(state) => state,
-            Err(error) if unavailable(&error) => return self.inner.status(inner),
-            Err(error) => return Err(error),
-        };
-        if let Some(question) = state.owner_questions.into_iter().next() {
-            Ok(SessionStatus::Blocked {
-                excerpt: question.question,
-            })
-        } else if state.turn.open {
-            Ok(SessionStatus::Working)
-        } else if !state.paused
-            && let Some(excerpt) = state.last_error
-        {
-            Ok(SessionStatus::Blocked { excerpt })
-        } else {
-            Ok(SessionStatus::Idle)
-        }
+        self.observe(session).map(|(status, _)| status)
     }
 
     fn send(&self, session: &SessionRef, text: &str, origin: Origin) -> Result<()> {

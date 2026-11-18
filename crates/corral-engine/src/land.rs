@@ -144,8 +144,13 @@ impl Engine {
                     if force {
                         skipped.push("gate");
                     } else {
-                        let check =
-                            self.run_gate(&worker, Some(project), actor, &mut effects_started)?;
+                        let check = self.run_gate(
+                            &worker,
+                            task.round,
+                            Some(project),
+                            actor,
+                            &mut effects_started,
+                        )?;
                         anyhow::ensure!(
                             check.key == head,
                             "checkout HEAD changed before the landing gate"

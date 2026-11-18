@@ -62,7 +62,7 @@ pub(crate) fn serve_listener(
                     break;
                 }
                 match listener.accept() {
-                    Ok((stream, _)) => {
+                    Ok((stream, peer)) => {
                         {
                             let mut state = shared.lock();
                             if state.stop
@@ -81,7 +81,7 @@ pub(crate) fn serve_listener(
                             .name("corrald-app-client".into())
                             .spawn(move || {
                                 let _permit = permit;
-                                if let Err(error) = session::serve(stream, shared, &origins) {
+                                if let Err(error) = session::serve(stream, peer, shared, &origins) {
                                     eprintln!("corrald app client: {error:#}");
                                 }
                             })
