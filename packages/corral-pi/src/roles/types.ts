@@ -7,9 +7,8 @@ import type { WebSettings } from "../extensions/web/settings.ts";
 import type { McpSettings } from "../host/mcp-settings.ts";
 import type { BuildContext } from "../build/types.ts";
 
-export type Role = "worker" | "reviewer" | "pm" | "planner" | "plan_reviewer" | "assistant" | "build";
-
-export const ROLES: readonly Role[] = ["worker", "reviewer", "pm", "planner", "plan_reviewer", "assistant", "build"];
+export const ROLES = ["worker", "reviewer", "assistant", "build"] as const;
+export type Role = typeof ROLES[number];
 
 /** Upstream Pi tools a role may activate (OD3). Nothing else upstream is ever active. */
 export type UpstreamTool = "read" | "edit" | "write" | "bash" | "grep" | "find" | "ls";
@@ -25,7 +24,6 @@ export interface HostIdentity {
   readonly role: Role;
   readonly task?: string;
   readonly run?: string;
-  readonly review?: string;
   /** Assistant only: the session `A-<n>`; `project` is its recorded project, or empty. */
   readonly assistant?: string;
 }

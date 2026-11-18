@@ -101,6 +101,7 @@ export function testHandlers(overrides: Partial<BridgeHandlers> = {}): BridgeHan
     submit: async () => ({ disposition: "handled" }), answer: async () => ({ status: "missing" }),
     pause: async () => ({ paused: true }), resume: async () => ({ paused: false }),
     cancel: async () => ({ cancelled: false }), shutdown() {},
+    rewind: async () => ({}),
     queueState: () => ({ items: [], more: false }), queueWithdraw: () => ({ outcome: "unknown_item" }),
     setModel: async () => ({}),
     ...overrides,

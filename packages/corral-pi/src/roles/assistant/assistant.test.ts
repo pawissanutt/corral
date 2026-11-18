@@ -58,7 +58,6 @@ test("a workspace-scoped assistant sees every configured MCP server; bound roles
   expect(serverVisible(server, "assistant", "")).toBeTrue();
   expect(serverVisible(server, "worker", "app")).toBeTrue();
   expect(serverVisible(server, "worker", "web")).toBeFalse();
-  expect(serverVisible(server, "pm", "")).toBeFalse();
 });
 
 test("owner text truncation preserves UTF-8 boundaries", () => {

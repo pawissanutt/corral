@@ -9,14 +9,14 @@ import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
 import { assistantRole } from "../src/roles/assistant/index.ts";
-import { pmRole } from "../src/roles/pm/index.ts";
 import type { HostIdentity } from "../src/roles/types.ts";
 import { CorralClient } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 
-for (const role of ["assistant", "pm"] as const) {
-  test(`${role} host records completed dialog answers as user messages and not cancellations`, async () => {
+{
+  const role = "assistant";
+  test("the assistant records completed dialog answers as user messages and not cancellations", async () => {
     const assets = buildFixtureInstall();
     const work = mkdtempSync(join(tmpdir(), `ask-user-${role}-`));
     const cwd = join(work, "ws");
@@ -32,13 +32,12 @@ for (const role of ["assistant", "pm"] as const) {
       if (!transport) throw new Error("fixture transport missing");
       const network = guardedFetch(transport);
       globalThis.fetch = network.fetch;
-      const identity: HostIdentity = { store: "st-demo", project: role === "pm" ? "demo" : "", role,
-        ...(role === "assistant" ? { assistant: "A-1" } : {}) };
+      const identity: HostIdentity = { store: "st-demo", project: "", role, assistant: "A-1" };
       const client = new CorralClient({ corral: "", root: work, cwd, identity });
       host = await HostSession.create({ sdk, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol",
         capabilities: { catalog: 8, digest: "b".repeat(64), preset: "standard", enabled: ["ask_user"] },
         ui: "plain", runtimeDir: work, client, events: new EventLog(), network,
-        modules: { ...modules, role: role === "assistant" ? assistantRole(PACKAGE_ROOT) : pmRole(PACKAGE_ROOT) },
+        modules: { ...modules, role: assistantRole(PACKAGE_ROOT) },
         sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")) });
       let cancel = false;
       const seen: unknown[] = [];

@@ -13,7 +13,7 @@ export const EVENT_PAGE_BYTES = FRAME_MAX_BYTES - 4 * 1024;
 
 export const COMMANDS = [
   "hello", "get_state", "submit_input", "cancel", "events_since", "live_since", "shutdown", "queue_state", "queue_withdraw",
-  "set_model", "answer", "pause", "resume",
+  "set_model", "answer", "pause", "resume", "rewind",
 ] as const;
 export type Command = typeof COMMANDS[number];
 
@@ -104,6 +104,15 @@ export function parseTurn(args: Record<string, unknown>): number | undefined {
     throw new BridgeRefusal("bad_input", "turn must be a positive integer");
   }
   return args.turn;
+}
+
+export type RewindInput = { readonly turn: number } | { readonly list: true };
+
+export function parseRewind(args: Record<string, unknown>): RewindInput {
+  if (args.list === true && args.turn === undefined) return { list: true };
+  const turn = parseTurn(args);
+  if (turn !== undefined && args.list === undefined) return { turn };
+  throw new BridgeRefusal("bad_input", "specify a turn or list: true");
 }
 
 export interface AnswerInput {

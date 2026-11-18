@@ -3,17 +3,14 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { HostIdentity } from "../types.ts";
 
-function promptDigest(path: string): string {
-  try {
-    return createHash("sha256").update(readFileSync(path)).digest("hex");
-  } catch {
-    return "unreadable";
-  }
-}
-
-export function requestMarker(kind: string, ids: readonly (string | undefined)[], promptFile: string): string {
-  return `[corral ${kind} request ${JSON.stringify([...ids, promptDigest(promptFile)])}]`;
+export function reviewRequestMarker({ task, run }: HostIdentity, promptFile: string): string {
+  const prompt = readFileSync(promptFile, "utf8");
+  // The engine writes this heading at the end of the review brief, after user-supplied sections.
+  const round = Array.from(prompt.matchAll(/^## Review round (\d+)$/gm)).at(-1)?.[1] ?? null;
+  const digest = createHash("sha256").update(prompt).digest("hex");
+  return `[corral review request ${JSON.stringify([task, round, run, digest])}]`;
 }
 
 /** Sends the startup prompt once; a marker can identify a request independently of its prompt path. */

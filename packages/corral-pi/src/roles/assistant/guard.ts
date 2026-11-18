@@ -1,12 +1,11 @@
-// The assistant's fixed shell refusals (T-544): no input into a herdr pane and no direct write
-// under `.corral/`. They stop an honest model's accidents, not an adversary. Presets, capability
-// settings and configured bash rules can neither disable nor override them. The board changes
-// only through corral commands, which audit and attribute each change.
+// Guard against accidental pane input and direct edits to board state, not against adversaries.
 //
 // A small quote-aware lexer splits the line into the simple commands it executes, including
 // `$(...)` and backtick bodies (also inside double quotes), `sh -c` strings and `eval`. Quoted
 // text is data: a comment that quotes a herdr command, or a printed example of a redirection, is
 // never refused. Only executed commands, unquoted redirections and write destinations count.
+
+import { normalize } from "node:path";
 
 interface Simple {
   readonly words: string[];
@@ -144,9 +143,10 @@ function invocation(words: readonly string[]): { name: string; args: string[] } 
   return { name: (words[index] ?? "").split("/").pop() ?? "", args: words.slice(index + 1) };
 }
 
-/** A path with a `.corral` component, the workspace store's directory. */
+/** Engine state is not a file-edit surface; Markdown memory is ordinary workspace data. */
 function inStore(path: string): boolean {
-  return /(?:^|\/)\.corral(?:\/|$)/.test(path);
+  path = normalize(path);
+  return /(?:^|\/)\.corral(?:\/|$)/.test(path) || /(?:^|\/)\.corral-next(?:\/(?!memory(?:\/|$))|$)/.test(path);
 }
 
 function paneInput(name: string, args: readonly string[]): boolean {
@@ -179,11 +179,11 @@ export function assistantShellRefusal(command: string): string | undefined {
     const shown = JSON.stringify(simple.words.join(" "));
     if (paneInput(name, args)) {
       return `assistant rule: no input into a herdr pane (${shown}); nothing ran. `
-        + "An assistant never types into another pane: tell the owner, or hand the request to the PM.";
+        + "Send task replies through the engine or tell the owner.";
     }
     if (writesStore(simple, name, args)) {
-      return `assistant rule: no direct write under .corral/ (${shown}); nothing ran. `
-        + "Change the board through corral commands, which record who changed what.";
+      return `assistant rule: no direct write under .corral/ or to engine state (${shown}); nothing ran. `
+        + "Change board state through engine commands.";
     }
   }
   return undefined;

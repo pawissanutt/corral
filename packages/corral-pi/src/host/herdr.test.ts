@@ -86,7 +86,7 @@ test("bind names the identity before the first state, then turns report working 
   expect(herdr.calls[0]).toEqual(["pane", "report-metadata", "w1:p4", "--source", SOURCE, "--agent", AGENT,
     "--applies-to-source", SOURCE, "--display-agent", "corral-pi worker T-7/R2",
     "--token", "corral_role=worker", "--token", "corral_project=app", "--token", "corral_task=T-7",
-    "--token", "corral_run=R2", "--clear-token", "corral_review", "--clear-token", "corral_assistant",
+    "--token", "corral_run=R2", "--clear-token", "corral_assistant",
     "--token", "corral_session=019a-sess", "--seq", `${BASE + 1n}`]);
   expect(herdr.calls[1]).toEqual(["pane", "report-agent", "w1:p4", "--source", SOURCE, "--agent", AGENT,
     "--state", "working", "--agent-session-id", "019a-sess", "--agent-session-path", "/s/019a-sess.jsonl",
@@ -220,10 +220,7 @@ test("a failed report is visible and the next event reports the latest state", a
 
 test("every role names its own corral identity through the one adapter", async () => {
   const roles: [HostIdentity, string, string[]][] = [
-    [{ ...WORKER, role: "reviewer", review: "review1" }, "corral-pi reviewer T-7/R2 review1", ["corral_review=review1"]],
-    [{ ...WORKER, role: "planner", run: "P1" }, "corral-pi planner T-7/P1", ["corral_run=P1"]],
-    [{ ...WORKER, role: "plan_reviewer", run: "P1", review: "PR1" }, "corral-pi plan_reviewer T-7/P1 PR1", ["corral_review=PR1"]],
-    [{ store: "st-1", project: "app", role: "pm" }, "corral-pi pm app", ["corral_project=app"]],
+    [{ ...WORKER, role: "reviewer" }, "corral-pi reviewer T-7/R2", ["corral_run=R2"]],
     [{ store: "st-1", project: "", role: "assistant", assistant: "A-4" }, "corral-pi assistant A-4",
       ["corral_assistant=A-4"]],
   ];

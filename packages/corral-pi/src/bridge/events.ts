@@ -32,6 +32,7 @@ export class EventLog {
   private readonly ring: BridgeEvent[] = [];
   private readonly listeners = new Set<(event: BridgeEvent) => void>();
   private seq = 0;
+  private invalidatedThrough = -1;
 
   constructor(private readonly capacity = 512) {}
 
@@ -48,6 +49,13 @@ export class EventLog {
     if (this.ring.length > this.capacity) this.ring.shift();
     for (const listener of this.listeners) listener(event);
     return event;
+  }
+
+  /** A transcript rewrite invalidates even a reader that was fully caught up. */
+  invalidate(kind: string, data: Record<string, unknown>): void {
+    this.invalidatedThrough = this.seq;
+    this.ring.length = 0;
+    this.emit(kind, data);
   }
 
   on(listener: (event: BridgeEvent) => void): () => void {
@@ -67,8 +75,8 @@ export class EventLog {
       used += size;
     }
     const oldest = this.ring[0]?.seq;
-    const gap = oldest !== undefined && seq + 1 < oldest
-      ? { after: seq, resumed: oldest, missing: oldest - seq - 1, reconcile: true as const }
+    const gap = oldest !== undefined && (seq <= this.invalidatedThrough || seq + 1 < oldest)
+      ? { after: seq, resumed: oldest, missing: Math.max(0, oldest - seq - 1), reconcile: true as const }
       : undefined;
     return {
       events, last: this.seq, next: events.at(-1)?.seq ?? seq,

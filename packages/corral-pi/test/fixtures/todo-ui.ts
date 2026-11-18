@@ -1,6 +1,6 @@
 // Offline manual smoke: the production rich pane and tools, disposable files, no herdr server.
-// Run: bun test/fixtures/todo-ui.ts [worker|pm|assistant]; click Todo, try /todo and /todo down,
-// then Ctrl+D to exit. The pm and assistant variants show a session request plan (T-679).
+// Run: bun test/fixtures/todo-ui.ts [worker|assistant]; click Todo, try /todo and /todo down,
+// then Ctrl+D to exit. The assistant variant shows a session request plan.
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -14,8 +14,8 @@ import { CorralClient } from "../../src/tools/corral.ts";
 import { fixtureTransport } from "./auth/index.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "../support/fixture-install.ts";
 
-const role = (process.argv[2] ?? "worker") as "worker" | "pm" | "assistant";
-if (!["worker", "pm", "assistant"].includes(role)) throw new Error(`unknown role ${role}`);
+const role = (process.argv[2] ?? "worker") as "worker" | "assistant";
+if (!["worker", "assistant"].includes(role)) throw new Error(`unknown role ${role}`);
 const session = role !== "worker";
 const assets = buildFixtureInstall({ omit: ["role"] });
 const work = mkdtempSync(join(tmpdir(), "corral-todo-ui-"));
@@ -29,8 +29,7 @@ try {
   restrictEnvironment(process.env);
   const identity: HostIdentity = role === "worker"
     ? { store: "st-demo", project: "demo", role, task: "T-DEMO", run: "R1" }
-    : role === "pm" ? { store: "st-demo", project: "demo", role }
-      : { store: "st-demo", project: "", role, assistant: "A-1" };
+    : { store: "st-demo", project: "", role, assistant: "A-1" };
   const modules = await loadModules(assets.dir, role);
   const transport = modules.auth.transport?.(authContext());
   if (!transport) throw new Error("fixture transport missing");

@@ -63,6 +63,10 @@ export class LiveEvents {
     this.events = new EventLog(capacity);
   }
 
+  rewound(turn: number): void {
+    this.events.invalidate("live_rewind", { turn });
+  }
+
   /** Initially empty fleets stay silent; an empty replacement after activity is a sequenced clear. */
   observeFleet(snapshot: FleetSnapshot | undefined): void {
     if (!snapshot || !this.fleet && !snapshot.children.length && !snapshot.mail.length) return;

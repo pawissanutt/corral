@@ -7,7 +7,7 @@ const explore = { model: null, max_parallel: 2, max_turns: 20, timeout_secs: 300
 test("fleet permissions never grant implementation or review to other roles", () => {
   expect(boundFleetSettings("worker", ["fleet", "subagents"], { subagents: explore }).allowedKinds).toEqual(["explore", "slice", "review"]);
   expect(boundFleetSettings("assistant", ["fleet"]).allowedKinds).toEqual(["review"]);
-  for (const role of ["reviewer", "pm", "planner", "plan_reviewer", "build"] satisfies Role[]) {
+  for (const role of ["reviewer", "build"] satisfies Role[]) {
     expect(boundFleetSettings(role, ["fleet", "subagents"]).allowedKinds).toEqual(["explore"]);
   }
   expect(boundFleetSettings("worker", []).allowedKinds).toEqual([]);
@@ -23,7 +23,7 @@ test("fleet limits default and validate independently of legacy exploration limi
 });
 
 test("legacy exploration limits apply only when fleet is absent", () => {
-  expect(boundFleetSettings("pm", ["subagents"], { subagents: explore }))
+  expect(boundFleetSettings("assistant", ["subagents"], { subagents: explore }))
     .toEqual({ allowedKinds: ["explore"], maxParallel: 2, maxTurns: 20, timeoutSecs: 300 });
-  expect(() => boundFleetSettings("pm", ["subagents"], { subagents: { ...explore, max_parallel: 17 } })).toThrow();
+  expect(() => boundFleetSettings("assistant", ["subagents"], { subagents: { ...explore, max_parallel: 17 } })).toThrow();
 });

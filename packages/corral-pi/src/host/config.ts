@@ -47,7 +47,6 @@ export interface HostConfig {
   readonly promptFile?: string;
   readonly quickSummary?: boolean;
   readonly summary?: SummaryProfile;
-  readonly memoryFile?: string;
   readonly ui?: UiMode;
 }
 
@@ -98,6 +97,7 @@ export function workspaceSettings(root: string, role: keyof typeof ABILITIES, ru
   if (raw.bash_rules !== undefined) enabled.push("bash_rules");
   if (raw.hooks !== undefined && role === "worker") enabled.push("hooks");
   if (raw.browser !== undefined && role !== "reviewer") enabled.push("browser");
+  if (role === "assistant" && raw.expert !== undefined) enabled.push("expert");
   const web = raw.web === undefined ? undefined : WebSettingsSchema.parse(raw.web);
   if (web) enabled.push("web.enabled");
   const mcp = raw.mcp === undefined ? undefined : McpSettingsSchema.parse(raw.mcp);
@@ -111,6 +111,7 @@ export function workspaceSettings(root: string, role: keyof typeof ABILITIES, ru
         raw[key] && typeof raw[key] === "object" ? [[key, raw[key] as Json]] : [])),
       ...(enabled.includes("subagents") ? { subagents: { model: null, max_parallel: 3, max_turns: 12, timeout_secs: 120 } } : {}),
       ...(enabled.includes("oracle") ? { oracle: { model: null, timeout_secs: 120 } } : {}),
+      ...(enabled.includes("expert") ? { expert: raw.expert as Json } : {}),
       ...(enabled.includes("background_shell") ? { background_shell: JobSettingsSchema.parse(raw.background_shell ?? {
         max_jobs: 4, max_output_bytes: 8 * 1024 * 1024, max_runtime_secs: 3600, wait_ms: 10_000,
       }) } : {}),
