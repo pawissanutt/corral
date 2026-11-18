@@ -19,7 +19,7 @@ use crate::model::Form;
 use crate::state::AppState;
 use crate::ui::atoms::control_height;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::term::{cells, key_cap};
+use crate::ui::term::{self, cells, key_cap};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
 /// The minimum touch target on a phone.
@@ -131,10 +131,11 @@ pub fn button_with(
         .children(glyph)
         .children(words)
         .children(cap_after);
+    let handle = options.focus.unwrap_or_else(element_ref);
     let target = press_target()
         .disabled(options.disabled)
         .on_press(move |_: &()| on_press())
-        .when_some(options.focus, |b, handle| b.element_ref(&handle))
+        .element_ref(&handle)
         .when(bare, |b| b.accessibility_label(label))
         .flex_row()
         .items_center()
@@ -148,7 +149,11 @@ pub fn button_with(
             b.border_1().border_color(outline)
         });
     let target = match form {
-        Form::Terminal => target.px(look.pad).h(px(16.0)),
+        // The band's first Cell is the focus mark's, in place of the leading padding.
+        Form::Terminal => target
+            .pr(look.pad)
+            .h(px(16.0))
+            .child(term::focus_cell(term::focus_of(handle))),
         Form::Desktop => target
             .h(px(control_height(30.0)))
             .when(bare, |b| b.w(px(control_height(30.0))))
@@ -380,7 +385,9 @@ fn seg_option(
         .when(form != Form::Terminal, |t| {
             t.font_family(FONT_TEXT).text_size(px(size))
         });
+    let handle = element_ref();
     toggle()
+        .element_ref(&handle)
         .pressed(on)
         // Choosing the pressed one again keeps it: the control always names one option.
         .on_change(move |_: &bool| pick())
@@ -420,6 +427,11 @@ fn seg_option(
                 .hover(|s| s.bg(color(Token::Hover)))
                 .focus_visible(ring)
         })
+        // In a terminal the option's first Cell is the focus mark's, in place of its padding.
+        .when(form == Form::Terminal, |t| {
+            t.pl(px(0.0))
+                .child(term::focus_cell(term::focus_of(handle)))
+        })
         .child(view().test_id(&test_id).child(words))
         .into_element()
 }
@@ -443,7 +455,8 @@ pub fn tab_strip<T: Copy + PartialEq + 'static>(
     let pick: Rc<dyn Fn(T)> = Rc::new(on_pick);
     let strip = tabs().flex_row().items_end();
     let strip = match form {
-        Form::Terminal => strip.gap(px(16.0)),
+        // A Cell apart: each tab leads with its focus mark's Cell.
+        Form::Terminal => strip.gap(px(8.0)),
         Form::Desktop | Form::Phone => strip
             .gap(px(2.0))
             .border_b_1()
@@ -494,14 +507,20 @@ fn strip_tab(
         })
         // Weight marks the selection for those who cannot tell the inks apart.
         .style_when(on, |s| s.font_weight(FontWeight::SEMIBOLD));
+    let handle = element_ref();
     let item = tab()
+        .element_ref(&handle)
         .selected(on)
         .on_press(move |_: &()| pick())
         .cursor_pointer()
         .items_center()
         .justify_center();
     let item = match form {
-        Form::Terminal => item,
+        // The focus mark before the label: a tab's selection is bold, its focus reversed and
+        // underlined, and without colours the two read alike.
+        Form::Terminal => item
+            .flex_row()
+            .child(term::focus_cell(term::focus_of(handle))),
         Form::Desktop => item
             .pt(px(7.0))
             .pb(px(8.0))

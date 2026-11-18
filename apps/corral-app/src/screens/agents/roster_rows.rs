@@ -443,7 +443,17 @@ fn line(app: AppState, row: ReadSignal<RosterRow>, columns: Memo<Columns>) -> An
             .child(quiet(form, fact(row, |r| r.since.as_str()), true))
             .into_element(),
     ];
-    shell(app, row, move || run_roster(app, action.clone()), cells)
+    // Where the panel takes the roster's place the pressed row goes out of sight: the focus
+    // moves on to the panel it opened rather than being lost with the row.
+    let press = move || {
+        run_roster(app, action.clone());
+        if untracked(|| super::roster::panel_covers(app)) {
+            app.run(vec![crate::model::Effect::Focus(
+                super::panel::OPEN_SESSION,
+            )]);
+        }
+    };
+    shell(app, row, press, cells)
 }
 
 /// A phone row (`.ar` at 640 pt and under): the chip, the pinned mark and the name in semibold,

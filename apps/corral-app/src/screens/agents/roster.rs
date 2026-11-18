@@ -124,10 +124,16 @@ fn phone(app: AppState, roster: Memo<Roster>) -> AnyElement {
         .into_element()
 }
 
+/// Whether the selected session's panel takes the roster's place (tracked): a terminal page
+/// too narrow for both side by side.
+pub(super) fn panel_covers(app: AppState) -> bool {
+    app.form == Form::Terminal && term::page_columns(app) < TERM_ROSTER + 1.0 + panel::TERM_PANEL
+}
+
 fn terminal(app: AppState, roster: Memo<Roster>) -> AnyElement {
     let panel = computed(move || panel_view(app));
     let open = computed(move || panel.with(Option::is_some));
-    let beside = computed(move || term::page_columns(app) >= TERM_ROSTER + 1.0 + panel::TERM_PANEL);
+    let beside = computed(move || !panel_covers(app));
     let place = computed(move || {
         if beside.get() {
             Place::Beside

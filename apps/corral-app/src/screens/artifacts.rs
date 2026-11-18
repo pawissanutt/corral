@@ -235,8 +235,14 @@ fn field(app: AppState) -> AnyElement {
         .placeholder(PLACEHOLDER)
         .value(move || app.artifacts.with(|state| state.query.clone()))
         .on_change(move |typed: &str| app.artifacts_act(Action::Query(typed.to_owned())))
-        .on_focus(move || focused.set(true))
-        .on_blur(move || focused.set(false))
+        .on_focus(move || {
+            focused.set(true);
+            app.artifacts.update(|state| state.typing = true);
+        })
+        .on_blur(move || {
+            focused.set(false);
+            app.artifacts.update(|state| state.typing = false);
+        })
         .flex_1()
         .min_w(px(0.0))
         .text_color(color(Token::Ink))

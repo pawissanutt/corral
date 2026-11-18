@@ -18,8 +18,8 @@ const HEIGHT: f32 = 56.0;
 const HAIRLINE: f32 = 1.0;
 /// Block heights from an eighth to full.
 const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-/// A terminal day is as many Cells as the row holds for each, up to this many.
-const MOST_CELLS_PER_DAY: usize = 4;
+/// From this many Cells a day, its last Cell is a gap, so neighbouring days read apart.
+const GAPPED_DAY: usize = 3;
 
 /// The strip in `room` terminal Cells (unused on desktop and the phone, which measure).
 pub(super) fn strip(app: AppState, strip: &DayStrip, room: usize) -> AnyElement {
@@ -93,11 +93,17 @@ fn bars(app: AppState, strip: &DayStrip) -> AnyElement {
         .into_element()
 }
 
-/// Each day as up to four Cells while the row holds them, several days to a Cell when it does
-/// not, then the first and last day under them.
+/// Each day as an equal share of the row, the strip across the whole of it (a short period's
+/// days wide, a gap closing each), several days to a Cell when the row is short of them; then
+/// the first and last day under them.
 fn cells(strip: &DayStrip, room: usize) -> AnyElement {
     let room = room.max(1);
-    let per_day = (room / strip.bars.len().max(1)).clamp(1, MOST_CELLS_PER_DAY);
+    let per_day = (room / strip.bars.len().max(1)).max(1);
+    let (drawn, gap) = if per_day >= GAPPED_DAY {
+        (per_day - 1, 1)
+    } else {
+        (per_day, 0)
+    };
     let columns = strip.columns(room);
     let blocks: String = columns
         .iter()
@@ -108,9 +114,10 @@ fn cells(strip: &DayStrip, room: usize) -> AnyElement {
             } else {
                 '·'
             };
-            std::iter::repeat_n(glyph, per_day)
+            std::iter::repeat_n(glyph, drawn).chain(std::iter::repeat_n(' ', gap))
         })
         .collect();
+    let blocks = blocks.trim_end().to_owned();
     let width = blocks.chars().count();
     let between = width.saturating_sub(strip.first.chars().count() + strip.last.chars().count());
     view()

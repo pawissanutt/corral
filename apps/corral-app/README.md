@@ -309,7 +309,10 @@ Run one cargo or NSH build at a time on this shared host.
 
 | Key | Action |
 |---|---|
-| `i n . p b a r t u ,` | Inbox, Now, Changes, Plans, Builds, Agents, Review, Timeline, Usage, Settings |
+| `n . p a r t u f ,` | Now, Changes, Plans, Agents, Review, Timeline, Usage, Artifacts, Settings (`i` opens Now) |
+| `R` (Shift+R) on Now | Reply to the selected Blocked task in place |
+| `A` (Shift+A) on Review | Focus Approve and land |
+| `j k`, `J K` | Move the list selection; Plans members |
 | `/` | Open Ask |
 | `Ctrl K` or `?` | Open palette |
 | `Ctrl B` | Toggle sidebar; narrow windows fold it to a rail, not remove it |

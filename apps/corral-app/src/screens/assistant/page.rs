@@ -54,7 +54,16 @@ fn page(app: AppState, source: ThreadRef) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(transcript::list(app, source.clone(), inset))
-        .child(ask::docked(app, source.clone()))
+        .child({
+            // An ended session takes no more messages: no composer under its transcript.
+            let ThreadRef::Live(scope) = source.clone();
+            let ended = computed(move || {
+                app.feed
+                    .with(|feed| crate::model::assistant::ended(feed, scope.as_str()))
+            });
+            let source = source.clone();
+            dynamic(move || (!ended.get()).then(|| untracked(|| ask::docked(app, source.clone()))))
+        })
         .into_element();
     let facts = {
         let source = source.clone();

@@ -325,6 +325,34 @@ fn title_slot(content: impl IntoElement) -> View {
         .child(content)
 }
 
+/// The focus mark (`›`), led by a kit control's Cell while it has the keyboard focus. Without
+/// colours NSH draws a focused control and a selected or filled one alike, reversed (the focus
+/// only adds an underline); the mark tells them apart at every colour depth.
+pub const FOCUS_MARK: &str = "›";
+
+/// Tracked: whether the control `handle` is attached to has the keyboard focus.
+pub fn focus_of(handle: ElementRef) -> Signal<bool> {
+    let focused = signal(false);
+    handle.on_focus_in(move || focused.set(true));
+    handle.on_focus_out(move || focused.set(false));
+    focused
+}
+
+/// One Cell holding [`FOCUS_MARK`] while `focused`, blank otherwise: the leading Cell of a
+/// control's band, so marking it moves nothing.
+pub fn focus_cell(focused: Signal<bool>) -> AnyElement {
+    view()
+        .w(cells(1.0))
+        .flex_shrink_0()
+        .accessibility_elements_hidden(true)
+        .child(
+            text(move || if focused.get() { FOCUS_MARK } else { " " })
+                .font_weight(FontWeight::BOLD)
+                .text_color(color(Token::Ink)),
+        )
+        .into_element()
+}
+
 /// A key as a cap: the key in bold on a small band (the standard grey on a 16-colour terminal,
 /// reversed without colours), so the legend reads as keys and names.
 pub fn key_cap(keys: impl Into<SharedString>) -> AnyElement {

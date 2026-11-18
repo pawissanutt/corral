@@ -91,9 +91,26 @@ class Walk:
 
             fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", self.rows, self.cols, 0, 0))
             os.chdir(APP)
-            os.environ.update(TERM="xterm-256color", COLUMNS=str(self.cols), LINES=str(self.rows))
+            # The app is drawn as on the owner's terminal: an inherited NO_COLOR (agent shells set
+            # it) would make NSH draw everything in reverse video and bold alone.
+            os.environ.pop("NO_COLOR", None)
+            os.environ.update(
+                TERM="xterm-256color", COLUMNS=str(self.cols), LINES=str(self.rows),
+                COLORTERM="truecolor", NSH_TUI_COLORS=args.colors,
+            )
             os.execvp("nsh", ["nsh", "run", "--target", "tui", "--port", str(args.port)])
         self.pid, self.fd = pid, fd
+        self.background = args.background
+
+    def answer_colors(self, data):
+        """Answers NSH's startup colour queries (OSC 10 and 11), which pyte ignores, as a
+        terminal with the given background does; without the answer NSH draws no surfaces."""
+        if b"\x1b]11;?" not in data or self.background == "none":
+            return
+        back = self.background.lstrip("#")
+        fore = "d4d4d4" if int(back[:2], 16) < 0x80 else "1e1e1e"
+        rgb = lambda hex6: "/".join(hex6[i : i + 2] * 2 for i in (0, 2, 4))
+        self.send(f"\x1b]10;rgb:{rgb(fore)}\x1b\\\x1b]11;rgb:{rgb(back)}\x1b\\")
 
     def send(self, data):
         os.write(self.fd, data.encode() if isinstance(data, str) else data)
@@ -109,6 +126,7 @@ class Walk:
                     data = os.read(self.fd, 65536)
                 except OSError:
                     raise SystemExit("the app exited:\n" + self.text())
+                self.answer_colors(data)
                 self.stream.feed(data)
                 last = time.time()
 
@@ -230,6 +248,14 @@ def main():
     parser.add_argument("--steps", help="a file of steps, one per line, run before the arguments")
     parser.add_argument("--start", type=float, default=900, help="seconds allowed for build and start")
     parser.add_argument("--wait", type=float, default=20, help="seconds a wait/gone step allows")
+    parser.add_argument(
+        "--colors", default="truecolor", choices=["truecolor", "256", "16", "mono"],
+        help="colour depth NSH draws at (NSH_TUI_COLORS)",
+    )
+    parser.add_argument(
+        "--background", default="1e1e1e",
+        help="terminal background RRGGBB the colour queries are answered with, or none",
+    )
     parser.add_argument("steps_args", nargs="*", metavar="STEP")
     args = parser.parse_args()
     steps = []

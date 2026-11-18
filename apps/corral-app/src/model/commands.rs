@@ -6,7 +6,7 @@ mod keys;
 #[cfg(test)]
 mod tests;
 
-pub use keys::{key_legend_live, list_keys_live, with_focus};
+pub use keys::{Surface, key_legend_live, list_keys_live, with_focus};
 
 use crate::model::daemon::Feed;
 use crate::model::{
