@@ -14,8 +14,6 @@ pub const DEVICE_LIST: &str = "device.list";
 pub const DEVICE_PAGE: &str = "device.page";
 pub const DEVICE_PAGE_LIMIT_MAX: u16 = 50;
 pub const DEVICE_REVOKE: &str = "device.revoke";
-pub const DEVICE_AUTHORITY_PREVIEW: &str = "device.authority_preview";
-pub const SESSION_AUTHORITY_CHANGED: &str = "device.session_authority_changed";
 pub const PAIR_BEGIN: &str = "pair.begin";
 pub const PAIR_STATUS: &str = "pair.status";
 pub const PAIR_CONFIRM: &str = "pair.confirm";
@@ -74,8 +72,6 @@ pub struct DeviceInfo {
     pub app_version: String,
     pub enrolled_at: String,
     pub revoked_at: Option<String>,
-    #[serde(default)]
-    pub authority: Option<crate::app::DeviceAuthority>,
     /// Coarse RFC3339 time of authenticated activity, not an online indicator.
     #[serde(default)]
     pub last_seen: Option<String>,
@@ -115,26 +111,6 @@ pub struct DevicePage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DeviceRevoke {
     pub device: String,
-}
-
-/// `device.authority_preview` takes `app::DeviceSetAuthority` and returns `app::ActPreview`.
-/// `device.set_authority` accepts this additive envelope. Setting admin requires a fresh,
-/// single-use device-bound proof, including edits that retain existing admin authority.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct DeviceAuthorityChange {
-    #[serde(flatten)]
-    pub change: crate::app::DeviceSetAuthority,
-    #[serde(default)]
-    pub confirm: Option<crate::app::ConfirmProof>,
-}
-
-/// Unsolicited CONTROL notification, sent only to sessions of the changed device.
-/// Revisions are durable and monotonic per device; notifications may coalesce.
-/// Refresh `app.session` and discard pending confirmations on receipt.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct SessionAuthorityChanged {
-    pub device: String,
-    pub revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

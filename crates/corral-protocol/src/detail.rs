@@ -1,10 +1,9 @@
 //! Etag-aware, bounded app details. Page tokens are opaque and selector-bound.
+use corral_types::UsageBy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 pub mod artifact;
-pub mod build;
 pub mod closed;
-pub mod filing;
 pub mod plan;
 pub mod question;
 pub mod review;
@@ -13,9 +12,7 @@ pub mod task;
 pub mod timeline;
 pub mod usage;
 pub use artifact::*;
-pub use build::*;
 pub use closed::*;
-pub use filing::*;
 pub use plan::*;
 pub use question::*;
 pub use review::*;
@@ -27,22 +24,11 @@ pub use usage::*;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DetailRef {
-    Question {
-        key: String,
-    },
     Task {
         id: String,
     },
     Plan {
         id: String,
-    },
-    Build {
-        id: String,
-    },
-    PlanDiff {
-        id: String,
-        from: String,
-        to: String,
     },
     Review {
         task: String,
@@ -70,18 +56,19 @@ pub enum DetailRef {
         scope: String,
     },
     UsageSeries {
-        period: String,
+        #[schemars(with = "Option<crate::schema_types::UsageBy>")]
+        by: Option<UsageBy>,
     },
     Artifact {
-        task: String,
-        key: String,
+        reference: String,
     },
+    Artifacts {
+        filter: Option<String>,
+    },
+    /// Attachment bytes are returned as `DetailBody::Artifact`, as in the chat wire.
     Attachment {
         entry: String,
         id: String,
-    },
-    Filings {
-        before: Option<u64>,
     },
     /// Closed tasks, newest first; `before` is a page's opaque `older` anchor.
     Closed {
@@ -113,11 +100,8 @@ pub struct DetailReply {
 #[serde(tag = "kind", content = "body", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum DetailBody {
-    Question(QuestionDetail),
     Task(TaskDetail),
     Plan(PlanDetail),
-    Build(BuildDetail),
-    PlanDiff(PatchPage),
     Review(ReviewDetail),
     ReviewFile(PatchPage),
     Session(SessionPage),
@@ -127,7 +111,7 @@ pub enum DetailBody {
     Burnup(Burnup),
     UsageSeries(UsageSeries),
     Artifact(ArtifactPage),
-    Filings(FilingsPage),
+    Artifacts(ArtifactsPage),
     Closed(ClosedPage),
     #[serde(other, deserialize_with = "skip_body")]
     Other,
@@ -143,16 +127,9 @@ pub struct PatchPage {
     /// At most 48 KiB; remaining text is fetched with DetailReply.next.
     pub patch: String,
     pub truncated: bool,
-    /// Present for candidate-bound review patches; absent on plan diffs and older daemons.
+    /// Immutable identity of the run whose stored diff is being paged.
     #[serde(default)]
     pub candidate: Option<ReviewCandidate>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ArtifactRef {
-    pub source_ref: String,
-    pub title: String,
-    pub media_type: Option<String>,
 }
 
 #[cfg(test)]
@@ -161,23 +138,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn question_kind_survives_detail_envelope_and_unknown_bodies_are_skipped() {
-        let wire = json!({
-            "kind": "question",
-            "body": {
-                "key": "T-1/R1/Q1", "rev": 1,
-                "state": {"state": "open"}, "kind": "worker_question",
-                "blocking": true, "task": "T-1", "plan": null,
-                "from": {"role": "worker", "session": null, "profile": null},
-                "asked_at": "2026-11-14T00:00:00Z", "needed_by": null,
-                "text": "Proceed?", "options": [], "recommendation": null,
-                "place": {"goal": null, "position": null, "waiting": []},
-                "evidence": [], "thread": [], "history": [],
-                "answer": null, "deadline": null
-            }
-        });
-        let detail: DetailBody = serde_json::from_value(wire.clone()).unwrap();
-        assert_eq!(serde_json::to_value(detail).unwrap(), wire);
+    fn unknown_detail_body_is_skipped() {
         assert_eq!(
             serde_json::from_value::<DetailBody>(json!({
                 "kind": "future_detail", "body": {"unknown": true}

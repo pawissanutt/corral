@@ -1,4 +1,5 @@
 //! JSON-RPC 2.0 envelopes. Method payloads live in the protocol's typed modules.
+use corral_types::Refusal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -43,6 +44,18 @@ pub struct Error {
     pub data: Option<Value>,
 }
 
+impl Error {
+    /// Encode the engine's refusal without reducing its suggested operations to text.
+    pub fn refused(refusal: Refusal) -> serde_json::Result<Self> {
+        let data = serde_json::to_value(&refusal)?;
+        Ok(Self {
+            code: ErrorCode::Refused,
+            message: refusal.reason,
+            data: Some(data),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
@@ -55,7 +68,6 @@ pub enum ErrorCode {
     NotFound,
     Conflict,
     Refused,
-    ConfirmRequired,
     Busy,
     Unavailable,
     Expired,
