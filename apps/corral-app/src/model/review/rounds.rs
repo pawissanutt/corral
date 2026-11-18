@@ -42,19 +42,15 @@ pub struct Rounds {
     pub reviewer: Option<ReviewerLine>,
 }
 
-/// The checks in insertion order, split where a new submission was judged: a review closes its
+/// The checks in insertion order, split where a new submission was judged. A check that names
+/// its round starts the next group when the round changes, or when it gates another worker run
+/// than the round's gate did. An older check without one is inferred: a review closes its
 /// round, and a gate on another commit than the round's gate starts the next one. A rerun gate
 /// on the same commit stays in its round.
 fn split(checks: &[Check]) -> Vec<Vec<&Check>> {
     let mut rounds: Vec<Vec<&Check>> = Vec::new();
     for check in checks {
-        let starts = rounds.last().is_none_or(|round| {
-            round.iter().any(|seen| seen.kind == CheckKind::Review)
-                || (check.kind == CheckKind::Gate
-                    && round
-                        .iter()
-                        .any(|seen| seen.kind == CheckKind::Gate && seen.key != check.key))
-        });
+        let starts = rounds.last().is_none_or(|round| starts(round, check));
         if starts {
             rounds.push(vec![check]);
         } else if let Some(round) = rounds.last_mut() {
@@ -64,17 +60,39 @@ fn split(checks: &[Check]) -> Vec<Vec<&Check>> {
     rounds
 }
 
-/// Each round's number: its review's key; else the task's round for the one in progress; else
-/// one past the round before it when that one ended failed (it was sent back), the same when it
-/// passed (a landing's rebase gated again).
+fn starts(round: &[&Check], check: &Check) -> bool {
+    let other_gate = |differs: fn(&Check, &Check) -> bool| {
+        check.kind == CheckKind::Gate
+            && round
+                .iter()
+                .any(|seen| seen.kind == CheckKind::Gate && differs(seen, check))
+    };
+    match (check.round, round.iter().find_map(|seen| seen.round)) {
+        (Some(number), Some(known)) => {
+            number != known
+                || other_gate(|seen, check| {
+                    seen.run.is_some() && check.run.is_some() && seen.run != check.run
+                })
+        }
+        _ => {
+            round.iter().any(|seen| seen.kind == CheckKind::Review)
+                || other_gate(|seen, check| seen.key != check.key)
+        }
+    }
+}
+
+/// Each round's number: the round its checks name; else its review's key; else the task's
+/// round for the one in progress; else one past the round before it when that one ended failed
+/// (it was sent back), the same when it passed (a landing's rebase gated again).
 fn numbers(rounds: &[Vec<&Check>], now: u32) -> Vec<u32> {
     let mut numbers: Vec<u32> = Vec::with_capacity(rounds.len());
     for (at, round) in rounds.iter().enumerate() {
+        let served = round.iter().find_map(|check| check.round);
         let reviewed = round
             .iter()
             .find(|check| check.kind == CheckKind::Review)
             .and_then(|check| check.key.parse().ok());
-        let number = reviewed.unwrap_or_else(|| {
+        let number = served.or(reviewed).unwrap_or_else(|| {
             if at + 1 == rounds.len() {
                 return now;
             }
@@ -94,6 +112,22 @@ fn numbers(rounds: &[Vec<&Check>], now: u32) -> Vec<u32> {
         numbers.push(number);
     }
     numbers
+}
+
+/// "Round 1", with the worker run its gate names when it says, and "· now" for the current one.
+fn title(number: u32, checks: &[&Check], current: bool) -> String {
+    let mut title = format!("Round {number}");
+    let gated = checks
+        .iter()
+        .find(|check| check.kind == CheckKind::Gate)
+        .and_then(|check| check.run.as_deref());
+    if let Some(run) = gated {
+        title.push_str(&format!(" · {run}"));
+    }
+    if current {
+        title.push_str(" · now");
+    }
+    title
 }
 
 pub(super) fn rounds(feed: &Feed, shown: &Shown) -> Option<Rounds> {
@@ -137,11 +171,7 @@ pub(super) fn rounds(feed: &Feed, shown: &Shown) -> Option<Rounds> {
             .map(|(at, (checks, number))| {
                 let current = open && at == last;
                 Round {
-                    title: if current {
-                        format!("Round {number} · now")
-                    } else {
-                        format!("Round {number}")
-                    },
+                    title: title(number, checks, current),
                     current,
                     links: checks
                         .iter()
@@ -183,12 +213,15 @@ mod tests {
             log: None,
             by: Actor::Auto,
             at: Timestamp::UNIX_EPOCH,
+            round: None,
+            run: None,
         }
     }
 
     /// A task sent back once by its reviewer, then gated green on the new commit and approved,
     /// then gated again after the landing's rebase: three rounds numbered 0, 1 and 1, and a gate
-    /// rerun on one commit stays in its round.
+    /// rerun on one commit stays in its round. Checks that name their round and run are grouped
+    /// by them: the rebase gate of the approved run stays in round 1.
     #[test]
     fn checks_split_into_the_submissions_they_judged() {
         let checks = [
@@ -208,5 +241,17 @@ mod tests {
             check(CheckKind::Gate, "bbb", true),
         ];
         assert_eq!(numbers(&split(&red), 1), [0, 1]);
+        let served: Vec<Check> = [(0, "R1"), (0, "R9"), (1, "R2"), (1, "R9"), (1, "R2")]
+            .into_iter()
+            .zip(&checks[1..])
+            .map(|((round, run), check)| Check {
+                round: Some(round),
+                run: Some(run.into()),
+                ..check.clone()
+            })
+            .collect();
+        let rounds = split(&served);
+        assert_eq!(rounds.iter().map(Vec::len).collect::<Vec<_>>(), [2, 3]);
+        assert_eq!(numbers(&rounds, 1), [0, 1]);
     }
 }

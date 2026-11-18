@@ -77,6 +77,7 @@ pub(super) fn assistant(
             cost_usd: Some(1.12),
             cost_basis: Some(CostBasis::Estimated),
             wait: None,
+            question_id: None,
             rev: 1,
         },
     );

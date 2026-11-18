@@ -179,7 +179,6 @@ impl AppState {
                 feed.plans.clear();
                 feed.projects.clear();
                 feed.agents.clear();
-                feed.paused.clear();
                 feed.assistants.clear();
                 feed.usage = None;
                 feed.settings = None;

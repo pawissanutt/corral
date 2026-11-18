@@ -99,6 +99,21 @@ pub(super) fn max_rounds(feed: &Feed, project: Option<&str>) -> u32 {
         .map_or(2, |settings| settings.max_rounds)
 }
 
+/// The worker profile a dispatch without one runs, as the sample's engine resolves it: the
+/// task's own, then its project's, then the workspace default.
+pub(super) fn resolved_profile(feed: &Feed, task: &corral_types::Task) -> Option<String> {
+    task.profile.clone().or_else(|| match &task.project {
+        Some(id) => feed
+            .projects
+            .get(id.as_str())
+            .and_then(|row| row.effective.as_ref())
+            .and_then(|settings| settings.profile.clone()),
+        None => default_of(feed, "profile")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    })
+}
+
 /// Slots in use: Running and Blocked tasks hold one; projects with their own limit count apart.
 pub(super) fn slots(feed: &Feed, records: &[TaskDetail]) -> Slots {
     let holding = |project: Option<&str>| {

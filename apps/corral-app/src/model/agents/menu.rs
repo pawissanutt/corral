@@ -97,8 +97,8 @@ mod tests {
         assert_eq!(slugs(&feed, "T-3_R1")[0], "relaunch");
     }
 
-    /// Focus pane is offered for a herdr pane reached from corrald's own machine, and says why
-    /// it cannot work for a headless session or from a remote device.
+    /// Focus pane is offered for a herdr pane on a connection corrald reports as local, and
+    /// says why it cannot work for a headless session or over a remote connection.
     #[test]
     fn focus_pane_works_only_for_a_local_pane_and_says_why_otherwise() {
         let device = DeviceInfo {
@@ -109,13 +109,14 @@ mod tests {
             enrolled_at: String::new(),
             revoked_at: None,
             last_seen: None,
-            reach: Some(DeviceReach::Unix),
+            reach: Some(DeviceReach::Tailscale),
         };
         let mut feed = Feed {
             session: Some(AppSession {
                 device,
                 seen: Default::default(),
                 server_time: String::new(),
+                local: Some(true),
             }),
             ..Feed::default()
         };
@@ -139,7 +140,7 @@ mod tests {
         assert_eq!(focus(&feed, "T-1_R1"), (true, false));
         assert_eq!(focus(&feed, "T-2_R1"), (false, true));
         if let Some(session) = &mut feed.session {
-            session.device.reach = Some(DeviceReach::Tailscale);
+            session.local = Some(false);
         }
         assert_eq!(focus(&feed, "T-1_R1"), (false, true));
     }

@@ -476,6 +476,34 @@ fn pause_on_a_session_without_a_pi_host_shows_the_refusal_reason() {
     app.wait_for("text:/no Pi socket/").unwrap();
 }
 
+/// In a terminal, a control chosen in the selected run's Session menu changes the run's state
+/// under the menu; the closing menu puts the keyboard back on its trigger, which must still be
+/// there: Return opens the menu again, and after it Ctrl+K opens the palette and Escape closes
+/// it with the sample preview still shown.
+#[test]
+fn the_keyboard_stays_with_the_app_after_a_session_menu_control_in_a_terminal() {
+    let mut app = preview(terminal_80(), &[("corral.destination", "agents")]);
+    app.press("id:agent-T-14_R1").unwrap();
+    app.press("id:btn-session-menu").unwrap();
+    app.wait_for("id:btn-cancel-turn").unwrap();
+    app.press_key("down").unwrap();
+    app.press_key("enter").unwrap();
+    app.wait_for_gone("id:btn-cancel-turn", Duration::from_secs(5))
+        .unwrap();
+    app.press_key("enter").unwrap();
+    app.wait_for("id:btn-terminate").unwrap();
+    app.press_key("escape").unwrap();
+    app.wait_for_gone("id:btn-terminate", Duration::from_secs(5))
+        .unwrap();
+    app.press_key("ctrl+k").unwrap();
+    app.wait_for("id:palette-input").unwrap();
+    app.press_key("escape").unwrap();
+    app.wait_for_gone("id:palette-input", Duration::from_secs(5))
+        .unwrap();
+    app.wait_for("id:btn-session-menu").unwrap();
+    assert_eq!(app.screen().count("text:/not reachable/").unwrap(), 0);
+}
+
 /// Review's live reviewer opens its session page: the reviewer run's terminal.
 #[test]
 fn the_reviewer_session_opens_from_review() {

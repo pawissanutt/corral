@@ -104,7 +104,7 @@ fn follow(app: AppState, scope: Id, scroller: ElementRef) {
                     .map(|message| message.text.len())
                     .sum::<usize>()
             });
-            let asks = crate::model::agents::prompts(feed, scope.as_str()).len();
+            let asks = usize::from(crate::model::agents::prompt(feed, scope.as_str()).is_some());
             (entries + feed.commands.len() + asks, streamed)
         });
         let before = seen.replace(Some(now));

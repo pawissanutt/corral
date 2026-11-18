@@ -1,9 +1,11 @@
 //! Workspace projects and independent, device-local screen scopes. No client or UI runtime.
+mod branches;
 mod filters;
 mod page;
 #[cfg(test)]
 mod tests;
 
+pub use branches::{BRANCHES_CAPTION, branches, suggest};
 pub use filters::{FilterScreen, Filters, NowGroup, NowScope};
 pub use page::{
     FACTS_LABEL, PLANS_HEADING, PLANS_HINT, ProjectEmpty, ProjectFact, ProjectPage, ProjectPlan,

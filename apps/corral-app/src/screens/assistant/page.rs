@@ -70,7 +70,7 @@ fn page(app: AppState, source: ThreadRef) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .bg(color(Token::Bg))
-        .child(dynamic(move || Some(head(app, &source))))
+        .child(head(app, &source))
         .child(columns(
             app,
             vec![
@@ -93,36 +93,87 @@ fn header(app: AppState, source: &ThreadRef) -> ThreadHeader {
 }
 
 /// The page head (`.pagehead`): a quiet back button, the title, the thread's state chip, where
-/// it runs and, at the trailing edge, End session while the served session can be ended. A
-/// terminal uses the kit's pushed head with the chip and End at its end.
+/// it runs and, at the trailing edge, the Session menu and End session while the served session
+/// can be ended. A terminal uses the kit's pushed head with the chip, the menu and End at its
+/// end. The head follows the thread's facts part by part: the Session menu is drawn anew only
+/// for another session, so the state a control changes under the open menu leaves its trigger
+/// mounted for the keyboard focus the closing menu puts back on it.
 fn head(app: AppState, source: &ThreadRef) -> AnyElement {
-    let header = header(app, source);
-    let state = header
-        .state
-        .as_ref()
-        .map(|state| chip(app, state.label.clone(), state.hue));
-    let end = header
-        .end
-        .clone()
-        .map(|end| end_button(app, end, ButtonKind::Ghost));
-    let menu = header
-        .menu
-        .clone()
-        .map(|session| crate::screens::agents::session_menu(app, session));
-    let title = header.title;
-    let back = header.back_label;
-    if app.form == Form::Terminal {
-        let trailing = (state.is_some() || menu.is_some() || end.is_some()).then(|| {
-            view()
-                .flex_row()
-                .items_center()
-                .children(state)
-                .when_some(menu, |row, menu| row.child(term::space(2.0)).child(menu))
-                .when_some(end, |row, end| row.child(term::space(2.0)).child(end))
-                .into_element()
-        });
-        return pushed_head(app, title, back, move || app.back(), trailing);
+    let shown = {
+        let source = source.clone();
+        computed(move || header(app, &source))
+    };
+    let terminal = app.form == Form::Terminal;
+    let gap = move |row: View| {
+        if terminal {
+            row.child(term::space(2.0))
+        } else {
+            row
+        }
+    };
+    let session = computed(move || shown.with(|header| header.menu.clone()));
+    let menu = dynamic(move || {
+        session.get().map(|session| {
+            gap(view().flex_row().items_center())
+                .child(crate::screens::agents::session_menu(app, session))
+        })
+    });
+    let end = dynamic(move || {
+        shown.with(|header| header.end.clone()).map(|end| {
+            gap(view().flex_row().items_center()).child(end_button(app, end, ButtonKind::Ghost))
+        })
+    });
+    let state = move || {
+        dynamic(move || {
+            shown.with(|header| {
+                header
+                    .state
+                    .as_ref()
+                    .map(|state| chip(app, state.label.clone(), state.hue))
+            })
+        })
+    };
+    if terminal {
+        let trailing = view()
+            .flex_row()
+            .items_center()
+            .child(state())
+            .child(menu)
+            .child(end)
+            .into_element();
+        return pushed_head(
+            app,
+            move || SharedString::from(shown.with(|header| header.title.clone())),
+            move || SharedString::from(shown.with(|header| header.back_label)),
+            move || app.back(),
+            Some(trailing),
+        );
     }
+    let back = untracked(|| shown.with(|header| header.back_label));
+    let title = dynamic(move || {
+        text(shown.with(|header| header.title.clone()))
+            .test_id("page-title")
+            .role(AccessibilityRole::Header)
+            .flex_shrink(1.0)
+            .min_w(px(0.0))
+            .truncate()
+            .font_family(FONT_TEXT)
+            .text_size(px(15.0))
+            .font_weight(FontWeight::BOLD)
+            .letter_spacing(px(-0.08))
+            .text_color(color(Token::Ink))
+    });
+    let subtitle = dynamic(move || {
+        words(
+            app,
+            shown.with(|header| header.subtitle.clone()),
+            12.0,
+            Token::Ink3,
+        )
+        .number_of_lines(1u32)
+        .flex_shrink(1.0)
+        .min_w(px(0.0))
+    });
     view()
         .flex_row()
         .flex_none()
@@ -143,29 +194,12 @@ fn head(app: AppState, source: &ThreadRef) -> AnyElement {
             "page-back",
             move || app.back(),
         ))
-        .child(
-            text(title)
-                .test_id("page-title")
-                .role(AccessibilityRole::Header)
-                .flex_shrink(1.0)
-                .min_w(px(0.0))
-                .truncate()
-                .font_family(FONT_TEXT)
-                .text_size(px(15.0))
-                .font_weight(FontWeight::BOLD)
-                .letter_spacing(px(-0.08))
-                .text_color(color(Token::Ink)),
-        )
-        .children(state)
-        .child(
-            words(app, header.subtitle, 12.0, Token::Ink3)
-                .number_of_lines(1u32)
-                .flex_shrink(1.0)
-                .min_w(px(0.0)),
-        )
+        .child(title)
+        .child(state())
+        .child(subtitle)
         .child(spacer())
-        .children(menu)
-        .children(end)
+        .child(menu)
+        .child(end)
         .into_element()
 }
 

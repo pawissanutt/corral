@@ -80,6 +80,11 @@ fn body(app: AppState, sheet: RewindSheet) -> AnyElement {
                     px(10.0)
                 })
                 .child(press)
+                .children(
+                    point
+                        .when
+                        .map(|when| mono(app, when).text_color(color(Token::Ink2))),
+                )
                 .child(mono(app, point.detail).text_color(color(Token::Ink3)))
                 .into_element()
         })

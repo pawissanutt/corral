@@ -117,22 +117,24 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
             to,
             by,
             utc_offset_minutes,
+            time_zone,
         } => {
             let day = |text: &str| {
                 text.parse::<jiff::civil::Date>()
                     .map_err(|_| "invalid: usage series date".to_owned())
             };
             let (mut at, end) = (day(from)?, day(to)?);
+            let zone = usage_zone(feed, time_zone.as_deref(), *utc_offset_minutes)?;
             let runs = all_runs(&records(feed));
             let rows = usage_rows(feed, &runs);
             let mut days = Vec::new();
             while at < end && days.len() < 366 {
                 let key = at.to_string();
-                let on = |instant| local_day(instant, *utc_offset_minutes) == key;
+                let on = |instant| local_day(instant, &zone) == key;
                 let day_rows: Vec<_> = rows.iter().filter(|row| on(row.at)).cloned().collect();
                 let day_runs: Vec<_> = runs.iter().filter(|run| on(run.started)).cloned().collect();
                 days.push(UsageDay {
-                    summary: summarize(&day_rows, &day_runs, *by, *utc_offset_minutes),
+                    summary: summarize(&day_rows, &day_runs, *by, &zone),
                     day: key,
                 });
                 at = at.tomorrow().map_err(|error| error.to_string())?;
@@ -187,6 +189,21 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
         }
         _ => return Err(format!("Preview has no sample of {target:?}")),
     })
+}
+
+/// The zone a usage series' days are cut in, as corrald resolves it: the named IANA zone, else
+/// the fixed offset. The device's own zone is already loaded, so it needs no database lookup.
+fn usage_zone(feed: &Feed, name: Option<&str>, offset: i16) -> Result<jiff::tz::TimeZone, String> {
+    match name {
+        Some(name) => match &feed.time_zone {
+            Some(zone) if zone.iana_name() == Some(name) => Ok(zone.clone()),
+            _ => jiff::tz::TimeZone::get(name)
+                .map_err(|_| format!("invalid: unknown usage time zone {name}")),
+        },
+        None => jiff::tz::Offset::from_seconds(i32::from(offset) * 60)
+            .map(jiff::tz::Offset::to_time_zone)
+            .map_err(|_| "invalid: usage UTC offset".to_owned()),
+    }
 }
 
 /// The review of the latest submitted worker run; the daemon answers `not_found` without one.
@@ -315,7 +332,15 @@ fn burnup(feed: &Feed, scope: &str) -> Result<Burnup, String> {
         events: feed
             .changes
             .values()
-            .filter(|event| matches!(event.kind, EventKind::Created | EventKind::Landed))
+            .filter(|event| {
+                matches!(
+                    event.kind,
+                    EventKind::Created
+                        | EventKind::Landed
+                        | EventKind::Dropped
+                        | EventKind::Reopened
+                )
+            })
             .filter(|event| event.task.as_deref().is_some_and(member))
             .cloned()
             .collect(),

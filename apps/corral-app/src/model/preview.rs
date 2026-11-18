@@ -96,6 +96,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         device: device.clone(),
         seen: SeenCursor::default(),
         server_time: stamp(now),
+        local: Some(true),
     });
     feed.device = DeviceLink::Enrolled {
         id: "preview-device".into(),

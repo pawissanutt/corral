@@ -1,9 +1,9 @@
-//! Questions an agent asked the owner in its session (`ask_user`), read from the recorded
-//! transcript's `corral_owner_question` snapshots, and answered in place through
-//! `prompt.answer`: a listed option, the owner's own words, or both where the question takes
-//! a note. The transcript records each change of a question; the newest snapshot is its state.
-//! An answer is read back under a key made from its session and question, so any surface that
-//! shows the question shows how its answer went.
+//! The question a chat's host is waiting on the owner for (`ask_user`), named by its row's
+//! `question_id` and drawn from the transcript's newest `corral_owner_question` snapshot of it,
+//! and answered in place through `prompt.answer`: a listed option, the owner's own words, or both
+//! where the question takes a note. Before the transcript holding the snapshot is read again,
+//! the row's wait text is asked in words. An answer is read back under a key made from its
+//! session and question, so any surface that shows the question shows how its answer went.
 
 use corral_protocol::detail::{DetailBody, DetailRef, SessionItem};
 use corral_protocol::session::{SessionPromptAnswer, SessionPromptAnswered};
@@ -20,7 +20,6 @@ pub const QUESTION_CARD: &str = "corral_owner_question";
 #[derive(Deserialize)]
 struct Record {
     id: String,
-    status: String,
     questions: Vec<Choice>,
 }
 
@@ -48,58 +47,57 @@ pub struct Prompt {
     pub sending: bool,
 }
 
-/// The questions still pending in the loaded transcript of `session`, oldest first.
-pub fn prompts(feed: &Feed, session: &str) -> Vec<Prompt> {
+/// The question the host of `session` waits on the owner for, as its row names it.
+pub fn prompt(feed: &Feed, session: &str) -> Option<Prompt> {
+    let row = crate::model::assistant::row(feed, session)?;
+    let question = row.question_id.clone()?;
+    let (text, options, free_text) = match snapshot(feed, session, &question) {
+        // The host answers a question of one choice here; one with several is answered in
+        // its pane.
+        Some(record) => {
+            let [choice] = <[Choice; 1]>::try_from(record.questions).ok()?;
+            (
+                choice.question,
+                choice.options,
+                choice.free_text != Some(false),
+            )
+        }
+        None => (row.wait.as_ref()?.text.clone(), Vec::new(), true),
+    };
+    let (status, sending) = answer_status(feed, &answer_key(session, &question));
+    Some(Prompt {
+        session: Id::from(session),
+        question,
+        text,
+        options,
+        free_text,
+        status,
+        sending,
+    })
+}
+
+/// The newest snapshot of `question` in the loaded transcript of `session`.
+fn snapshot(feed: &Feed, session: &str, question: &str) -> Option<Record> {
     let target = DetailRef::Session {
         id: session.to_owned(),
     };
     let Some(DetailBody::Session(page)) = feed.detail(&target).and_then(|cache| cache.body())
     else {
-        return Vec::new();
+        return None;
     };
-    let mut latest: Vec<Record> = Vec::new();
-    for item in page.messages.iter().flat_map(|message| &message.items) {
-        let SessionItem::Card {
-            title,
-            data: Some(data),
-            ..
-        } = item
-        else {
-            continue;
-        };
-        if title != QUESTION_CARD {
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<Record>(data) else {
-            continue;
-        };
-        latest.retain(|known| known.id != record.id);
-        latest.push(record);
-    }
-    latest
-        .into_iter()
-        .filter(|record| record.status == "pending")
-        .filter_map(|record| {
-            // The host answers a question of one choice here; one with several is answered in
-            // its pane.
-            let [choice] = <[Choice; 1]>::try_from(record.questions).ok()?;
-            let (status, sending) = answer_status(feed, &answer_key(session, &record.id));
-            Some(Prompt {
-                session: Id::from(session),
-                question: record.id,
-                text: choice.question,
-                options: choice.options,
-                free_text: choice.free_text != Some(false),
-                status,
-                sending,
-            })
+    page.messages
+        .iter()
+        .flat_map(|message| &message.items)
+        .filter_map(|item| match item {
+            SessionItem::Card {
+                title,
+                data: Some(data),
+                ..
+            } if title == QUESTION_CARD => serde_json::from_str::<Record>(data).ok(),
+            _ => None,
         })
-        .collect()
-}
-
-/// Whether the loaded transcript of `session` holds a question waiting for the owner.
-pub fn asks(feed: &Feed, session: &str) -> bool {
-    !prompts(feed, session).is_empty()
+        .filter(|record| record.id == question)
+        .last()
 }
 
 fn answer_key(session: &str, question: &str) -> Id {
@@ -161,23 +159,50 @@ mod tests {
     use corral_protocol::detail::{
         DetailBody, DetailRef, SessionItem, SessionMessage, SessionPage,
     };
+    use corral_protocol::rows::{
+        AssistantKind, AssistantLocation, AssistantRow, AssistantState, WaitReason,
+    };
 
-    use super::{QUESTION_CARD, prompts};
+    use super::{QUESTION_CARD, prompt};
     use crate::model::daemon::{DetailCache, Feed, detail_key};
 
-    fn card(status: &str) -> SessionItem {
+    fn card(options: &str) -> SessionItem {
         SessionItem::Card {
             title: QUESTION_CARD.into(),
             text: String::new(),
             data: Some(format!(
-                r#"{{"version":1,"id":"q-1","session":"A-1","questions":[{{"question":"Which branch?","options":["main","dev"]}}],"expires":0,"status":"{status}"}}"#
+                r#"{{"version":1,"id":"q-1","session":"A-1","questions":[{{"question":"Which branch?","options":[{options}]}}],"expires":0,"status":"pending"}}"#
             )),
         }
     }
 
-    fn feed(items: Vec<SessionItem>) -> Feed {
+    fn feed(question: Option<&str>, items: Vec<SessionItem>) -> Feed {
         let target = DetailRef::Session { id: "A-1".into() };
         let mut feed = Feed::default();
+        feed.assistants.insert(
+            "A-1".into(),
+            AssistantRow {
+                id: "A-1".into(),
+                kind: AssistantKind::Session,
+                title: "A-1".into(),
+                state: AssistantState::Waiting,
+                live_in: AssistantLocation::Daemon,
+                profile: None,
+                connection: None,
+                focus: None,
+                pending: 0,
+                turn: Some(1),
+                cost_usd: None,
+                cost_basis: None,
+                wait: Some(WaitReason {
+                    code: "owner_question".into(),
+                    text: "Which branch?".into(),
+                    retry_at: None,
+                }),
+                question_id: question.map(str::to_owned),
+                rev: 1,
+            },
+        );
         feed.details.insert(
             detail_key(&target),
             DetailCache {
@@ -209,15 +234,22 @@ mod tests {
         feed
     }
 
-    /// The newest snapshot of a question is its state: once the transcript records it
-    /// answered, the card no longer asks.
+    /// The row's question id says what is pending; the newest snapshot of it gives its options,
+    /// the wait's words stand in until the transcript holds one, and no id asks nothing.
     #[test]
-    fn an_answered_snapshot_retires_the_pending_question() {
-        let pending = prompts(&feed(vec![card("pending")]), "A-1");
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].question, "q-1");
-        assert_eq!(pending[0].options, ["main", "dev"]);
-        let answered = feed(vec![card("pending"), card("answered")]);
-        assert!(prompts(&answered, "A-1").is_empty());
+    fn the_rows_question_id_names_the_pending_question() {
+        let newest = feed(
+            Some("q-1"),
+            vec![card(r#""main""#), card(r#""main","dev""#)],
+        );
+        let asked = prompt(&newest, "A-1");
+        assert_eq!(
+            asked.as_ref().map(|asked| asked.question.as_str()),
+            Some("q-1")
+        );
+        assert_eq!(asked.map(|asked| asked.options.len()), Some(2));
+        let unread = prompt(&feed(Some("q-1"), Vec::new()), "A-1");
+        assert_eq!(unread.map(|asked| asked.options.len()), Some(0));
+        assert!(prompt(&feed(None, vec![card(r#""main""#)]), "A-1").is_none());
     }
 }

@@ -75,6 +75,7 @@ fn project_sessions_are_the_live_runs_on_its_own_tasks() {
             quiet_since: None,
         },
         status: SessionStatus::Working,
+        paused: None,
     };
     let mut feed = Feed::default();
     feed.board.apply_batch(

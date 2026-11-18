@@ -45,6 +45,7 @@ fn text(label: &'static str, placeholder: &'static str, value: impl Into<String>
         required: false,
         value: value.into(),
         choices: Vec::new(),
+        suggestions: Vec::new(),
     }
 }
 
@@ -204,12 +205,16 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
             text("Notes", "Reviewer notes", ""),
         ],
         Verb::Changes => vec![required("Notes", "What to change", "")],
-        // The run's base, which the engine lands onto unless another existing branch is named.
-        Verb::Approve => vec![text(
-            "Onto",
-            "Branch to land onto; empty lands onto the run's base",
-            ctx.landing.clone().unwrap_or_default(),
-        )],
+        // The run's base, which the engine lands onto unless another existing branch is named;
+        // the project's local branches are offered beside it.
+        Verb::Approve => vec![VerbField {
+            suggestions: ctx.branches.clone(),
+            ..text(
+                "Onto",
+                "Branch to land onto; empty lands onto the run's base",
+                ctx.landing.clone().unwrap_or_default(),
+            )
+        }],
         Verb::Retry => vec![
             text("Profile", "Worker profile; empty keeps the default", ""),
             pick("From base", &YES_NO, "no"),

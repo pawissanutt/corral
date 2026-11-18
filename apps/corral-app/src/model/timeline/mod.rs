@@ -401,12 +401,10 @@ pub fn gaps_title(range: Range) -> &'static str {
         Range::SevenDays => "Gaps worth a look · 7 days",
     }
 }
-/// What the burn-up counts, said under it. corrald's burn-up serves only `created` and `landed`
-/// events, so a drop or a reopen moves neither line.
-pub const BURNUP_COUNTS: &str = "Scope counts the tasks created in this scope; landed counts \
-                                 the tasks landed, each from its recorded event. Only creations \
-                                 and landings are served here, so a dropped task stays in scope \
-                                 and a reopened one stays landed.";
+/// What the burn-up counts, said under it.
+pub const BURNUP_COUNTS: &str = "Scope counts the tasks created in this scope, less those \
+                                 dropped; landed counts the tasks landed, less those reopened. \
+                                 Each step is a recorded event.";
 /// Burn-up input: points at fractions of the period with their scope and landed counts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BurnupSeries {

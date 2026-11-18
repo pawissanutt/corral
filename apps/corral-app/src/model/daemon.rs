@@ -154,9 +154,6 @@ pub struct Feed {
     pub projects: BTreeMap<Id, ProjectRow>,
     /// Live runs by `<task>_<run>`, the same id as their terminal scope.
     pub agents: BTreeMap<Id, AgentRow>,
-    /// Whether a run's pi session is paused, by Agents row id, where it was reported. corrald's
-    /// rows do not carry it yet, so only the sample preview fills it; absent means unknown.
-    pub paused: BTreeMap<Id, bool>,
     pub assistants: BTreeMap<Id, AssistantRow>,
     /// The engine's usage totals and their run coverage.
     pub usage: Option<UsageSummary>,
@@ -351,7 +348,6 @@ impl Feed {
         self.session = None;
         self.plans.clear();
         self.agents.clear();
-        self.paused.clear();
         self.assistants.clear();
         self.usage = None;
         self.settings = None;

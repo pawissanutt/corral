@@ -279,18 +279,9 @@ pub fn amount(usd: f64, basis: Option<CostBasis>) -> String {
     }
 }
 
-/// Whether the thread's session asks the owner a question: one still pending in its loaded
-/// transcript, or the wait its row reports.
+/// Whether the thread's session waits on the owner's answer to a question its row names.
 pub fn needs_you(feed: &Feed, scope: &str) -> bool {
-    crate::model::agents::asks(feed, scope)
-        || row(feed, scope)
-            .and_then(|row| row.wait.as_ref())
-            .is_some_and(asks_owner)
-}
-
-/// Whether a row's wait is for the owner's answer rather than for the assistant.
-pub fn asks_owner(wait: &WaitReason) -> bool {
-    wait.code == "owner_question"
+    row(feed, scope).is_some_and(|row| row.question_id.is_some())
 }
 
 /// The thread's state chip. With corrald unreachable the row is only what was last received:
@@ -420,12 +411,14 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
                     row.id
                 )),
             ]),
-            // An ended generation's recorded failure is history, not a current wait.
+            // An ended generation's recorded failure is history, not a current wait; a wait on
+            // the owner's answer is the question card's, not the assistant's.
             Some(AssistantRow {
                 wait: Some(wait),
                 state,
+                question_id: None,
                 ..
-            }) if *state != AssistantState::Ended && !asks_owner(wait) => Some(vec![
+            }) if *state != AssistantState::Ended => Some(vec![
                 span(format!("waiting for assistant · {}", wait_label(wait))).hue(Hue::Held),
                 span(" Send still stores your message; it waits in the thread."),
             ]),

@@ -200,7 +200,8 @@ fn typed(from: &str, to: &str) -> Result<Days, String> {
 }
 
 /// The usage series for the page's period and grouping: from the first local day (included) to
-/// the day after the last (excluded), bucketed at the device's offset from UTC.
+/// the day after the last (excluded), cut at the device's IANA zone when the platform names one
+/// (so a clock change mid-range keeps its days whole), else at its offset from UTC now.
 pub fn series_request(state: &State, local: &Local) -> DetailRef {
     let days = state.days(local.today);
     DetailRef::UsageSeries {
@@ -208,6 +209,7 @@ pub fn series_request(state: &State, local: &Local) -> DetailRef {
         to: days.last.tomorrow().unwrap_or(days.last).to_string(),
         by: Some(state.by),
         utc_offset_minutes: local.offset_minutes,
+        time_zone: local.zone.clone(),
     }
 }
 
@@ -215,12 +217,12 @@ pub fn series_request(state: &State, local: &Local) -> DetailRef {
 mod tests {
     use super::*;
 
-    /// The request names the chosen local days and the device's own offset: New York in winter
-    /// is five hours behind UTC, so at 02:00 UTC it is still the day before there. A custom
-    /// range is sent as typed, To included; one past 366 days is refused and the shown range
-    /// stays.
+    /// The request names the chosen local days, the device's zone and its offset: New York in
+    /// winter is five hours behind UTC, so at 02:00 UTC it is still the day before there. A
+    /// custom range is sent as typed, To included; one past 366 days is refused and the shown
+    /// range stays.
     #[test]
-    fn the_series_request_carries_the_chosen_local_days_and_the_device_offset() {
+    fn the_series_request_carries_the_chosen_local_days_and_the_device_zone() {
         let feed = Feed {
             now: 1_763_431_200,
             time_zone: Some(TimeZone::get("America/New_York").unwrap()),
@@ -236,13 +238,15 @@ mod tests {
                 from,
                 to,
                 utc_offset_minutes,
+                time_zone,
                 ..
-            } => (from, to, utc_offset_minutes),
+            } => (from, to, utc_offset_minutes, time_zone),
             other => panic!("not a usage series: {other:?}"),
         };
+        let zone = Some("America/New_York".to_owned());
         assert_eq!(
             range(&state),
-            ("2025-11-11".into(), "2025-11-18".into(), -300)
+            ("2025-11-11".into(), "2025-11-18".into(), -300, zone.clone())
         );
         state.select_period(Period::ThisMonth, local.today);
         assert_eq!(range(&state).0, "2025-11-01");
@@ -252,7 +256,7 @@ mod tests {
         state.apply_custom();
         assert_eq!(
             range(&state),
-            ("2025-01-01".into(), "2025-03-01".into(), -300)
+            ("2025-01-01".into(), "2025-03-01".into(), -300, zone)
         );
         state.type_from("2024-01-01");
         state.apply_custom();

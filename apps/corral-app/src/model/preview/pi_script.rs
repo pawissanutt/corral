@@ -286,7 +286,7 @@ pub(super) fn populate(feed: &mut Feed) {
         rescue_ref: format!("refs/worktree/corral/rescue/{STREAMING}/0"),
         from_head: super::sample::sha("rescue-0", 40),
         head: super::sample::sha("cp-0-2/head", 40),
-        at: at(HOUR + 45 * MINUTE),
+        at: Some(at(HOUR + 45 * MINUTE)),
     });
     feed.hosts.insert(Id::from(STREAMING), streaming);
     pi_worker(feed, STREAMING);

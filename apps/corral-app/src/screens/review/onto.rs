@@ -1,16 +1,19 @@
 //! The Onto line (`field-onto`): the branch approving lands onto, the run's base until another
-//! is typed, and what approving does to the candidate. Desktop and terminal pin it over the
-//! decide bar; the phone keeps it in the page beside Run gate and Start review. Return in the
-//! field approves. The words live in the model (`Action::Onto`), and the field is built once per
+//! is typed, the project's local branches offered under it one press each (`seg-onto-<branch>`),
+//! and what approving does to the candidate. Desktop and terminal pin it over the decide bar;
+//! the phone keeps it in the page beside Run gate and Start review. Return in the field
+//! approves. The words live in the model (`Action::Onto`), and the field is built once per
 //! shown candidate, so typing re-reads the model without rebuilding the field.
 
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
 use crate::model::Form;
+use crate::model::projects::BRANCHES_CAPTION;
 use crate::model::review::{Action, Target};
 use crate::model::text::Rich;
 use crate::ui::kit::hint::hinted;
+use crate::ui::kit::suggest::suggestions;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -138,6 +141,19 @@ fn line(cx: &Ctx, target: &Target) -> AnyElement {
                 .min_w(px(0.0))
         })
     });
+    let branches = computed(move || {
+        page.with(|page| {
+            page.detail
+                .as_ref()
+                .map(|detail| detail.decide.target.branches.clone())
+                .unwrap_or_default()
+        })
+    });
+    let pick = {
+        let cx = cx.clone();
+        move |branch: String| act(&cx, Action::Onto(branch))()
+    };
+    let offered = suggestions(app, BRANCHES_CAPTION, "onto", branches, pick);
     let row = view().flex_row().items_center().min_w(px(0.0));
     match form {
         Form::Terminal => view()
@@ -151,25 +167,30 @@ fn line(cx: &Ctx, target: &Target) -> AnyElement {
                     .child(term::space(2.0))
                     .child(view().flex_1().min_w(px(0.0)).child(said)),
             )
+            .child(view().px(term::cells(1.0)).child(offered))
             .into_element(),
-        Form::Desktop => row
+        Form::Desktop => view()
             .flex_none()
-            .gap(px(10.0))
+            .gap(px(6.0))
             .px(px(24.0))
             .pt(px(10.0))
             .bg(color(Token::Bg))
             .border_t(px(1.0))
             .border_color(color(Token::Rule))
-            .child(caption)
-            .child(field)
-            .child(view().flex_1().min_w(px(0.0)).child(said))
+            .child(
+                row.gap(px(10.0))
+                    .child(caption)
+                    .child(field)
+                    .child(view().flex_1().min_w(px(0.0)).child(said)),
+            )
+            .child(offered)
             .into_element(),
-        Form::Phone => row
-            .gap(px(10.0))
+        Form::Phone => view()
+            .gap(px(8.0))
             .px(px(18.0))
             .pt(px(14.0))
-            .child(caption)
-            .child(field)
+            .child(row.gap(px(10.0)).child(caption).child(field))
+            .child(offered)
             .into_element(),
     }
 }

@@ -35,6 +35,7 @@ pub(super) fn agent(task: &str, run: &str, role: Role) -> AgentRow {
             quiet_since: None,
         },
         status: SessionStatus::Working,
+        paused: None,
     }
 }
 
@@ -63,6 +64,7 @@ fn assistant(id: &str, kind: AssistantKind) -> AssistantRow {
         cost_usd: None,
         cost_basis: None,
         wait: None,
+        question_id: None,
         rev: 1,
     }
 }

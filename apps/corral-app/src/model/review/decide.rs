@@ -13,7 +13,7 @@ use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::{Live, Selection};
 use crate::model::nav::Form;
-use crate::model::projects::ProjectFilter;
+use crate::model::projects::{self, ProjectFilter};
 use crate::model::text::span;
 
 use super::live::{Shown, artifact_ref, file_ref, review_ref, selected_filtered, sha7, task_ref};
@@ -48,17 +48,21 @@ fn status_line(feed: &Feed, sent: &Sent) -> Option<StatusLine> {
     })
 }
 
-/// The Onto field of the shown candidate: what was typed for it, else the run's base.
-fn target(state: &State, shown: &Shown) -> Target {
+/// The Onto field of the shown candidate: what was typed for it, else the run's base, with the
+/// project's local branches it offers for that.
+fn target(state: &State, feed: &Feed, shown: &Shown) -> Target {
     let base = shown.base();
+    let value = state
+        .onto
+        .get(shown.id())
+        .cloned()
+        .or_else(|| base.map(str::to_owned))
+        .unwrap_or_default();
+    let project = shown.task.task().project.as_deref();
     Target {
         label: "Onto",
-        value: state
-            .onto
-            .get(shown.id())
-            .cloned()
-            .or_else(|| base.map(str::to_owned))
-            .unwrap_or_default(),
+        branches: projects::suggest(&projects::branches(feed, project), &value),
+        value,
         placeholder: "Branch to land onto",
         hint: match base {
             Some(base) => format!(
@@ -135,7 +139,7 @@ pub(super) fn decide_bar(state: &State, feed: &Feed, shown: &Shown, env: Env) ->
             )
         });
     }
-    let target = target(state, shown);
+    let target = target(state, feed, shown);
     let device = feed
         .session
         .as_ref()

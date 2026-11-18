@@ -11,6 +11,7 @@ use nsh_core::element::{StyleRefinement, color as for_appearance, input};
 use nsh_core::prelude::*;
 
 use crate::model::commands::CONFIRM_CANCEL;
+use crate::model::projects;
 use crate::model::work::{self, Button, Press, Record, VerbAction};
 use crate::model::{Form, Hue, Live};
 use crate::state::AppState;
@@ -18,6 +19,7 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::overlay::{Modal, modal};
+use crate::ui::kit::suggest::suggestions;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -580,10 +582,28 @@ fn composer(app: AppState) -> Modal {
                     .px(px(12.0))
                     .rounded(px(10.0)),
             };
+            let offered = (!field.suggestions.is_empty()).then(|| {
+                let all = field.suggestions.clone();
+                let typed = computed(move || {
+                    values.with(|values| {
+                        projects::suggest(&all, values.get(index).map_or("", String::as_str))
+                    })
+                });
+                let pick = move |value: String| {
+                    values.update(|values| {
+                        if let Some(slot) = values.get_mut(index) {
+                            *slot = value;
+                        }
+                    });
+                };
+                let group = field.label.to_lowercase().replace(' ', "-");
+                suggestions(app, projects::BRANCHES_CAPTION, group, typed, pick)
+            });
             view()
                 .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
                 .child(caption)
                 .child(entry)
+                .children(offered)
                 .into_element()
         })
         .collect();
