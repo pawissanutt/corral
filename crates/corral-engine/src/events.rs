@@ -42,14 +42,16 @@ impl Store {
             .context("event sequence must not be negative")
     }
 
-    pub(crate) fn has_ready_since_done(&self, task: &str) -> Result<bool> {
+    /// Whether the pipeline announced readiness for the current submission.
+    pub fn has_ready_since_done(&self, task: &str) -> Result<bool> {
         self.connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM events WHERE task=?1 AND kind='ready' AND seq > COALESCE((SELECT MAX(seq) FROM events WHERE task=?1 AND kind='done'),0))",
             [task], |row| row.get(0),
         ).context("check whether readiness was announced")
     }
 
-    pub(crate) fn has_verdict_since_done(&self, task: &str, round: u32) -> Result<bool> {
+    /// Review rounds can be reused; ignore a verdict from a previous submission.
+    pub fn has_verdict_since_done(&self, task: &str, round: u32) -> Result<bool> {
         self.connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM events WHERE task=?1 AND kind='verdict' AND json_extract(detail,'$.round')=?2 AND seq > COALESCE((SELECT MAX(seq) FROM events WHERE task=?1 AND kind='done'),0))",
             params![task, round], |row| row.get(0),
@@ -109,6 +111,93 @@ impl Store {
         )
     }
 
+    /// Exclusive sequence bounds. `after` without `before` can walk forward;
+    /// history pages walk backwards from a `before` cursor or the head.
+    pub fn event_page(
+        &self,
+        task: Option<&str>,
+        after: Option<u64>,
+        before: Option<u64>,
+        newest_first: bool,
+        limit: u16,
+    ) -> Result<Vec<Event>> {
+        let lower = after.unwrap_or(0).saturating_add(1);
+        let upper = before.map_or(i64::MAX as u64, |seq| seq.saturating_sub(1));
+        let Ok(lower) = i64::try_from(lower) else {
+            return Ok(Vec::new());
+        };
+        let upper = i64::try_from(upper).unwrap_or(i64::MAX);
+        let order = if newest_first { "DESC" } else { "ASC" };
+        let sql = if task.is_some() {
+            format!(
+                "SELECT seq,ts,task,run,kind,actor,detail FROM events WHERE seq BETWEEN ?1 AND ?2 AND task=?4 ORDER BY seq {order} LIMIT ?3"
+            )
+        } else {
+            format!(
+                "SELECT seq,ts,task,run,kind,actor,detail FROM events WHERE seq BETWEEN ?1 AND ?2 ORDER BY seq {order} LIMIT ?3"
+            )
+        };
+        let mut statement = self
+            .connection
+            .prepare_cached(&sql)
+            .context("prepare event page")?;
+        let rows = if let Some(task) = task {
+            statement.query(params![lower, upper, limit, task])
+        } else {
+            statement.query(params![lower, upper, limit])
+        }
+        .context("query event page")?;
+        read_events(rows)
+    }
+
+    pub fn event_count_after(&self, after: u64) -> Result<u64> {
+        let Ok(after) = i64::try_from(after) else {
+            return Ok(0);
+        };
+        self.connection
+            .query_row("SELECT count(*) FROM events WHERE seq>?1", [after], |row| {
+                row.get::<_, i64>(0)
+            })
+            .context("count engine events")?
+            .try_into()
+            .context("event count must not be negative")
+    }
+
+    /// The diff registered by `done` for the specified worker's last submission.
+    pub fn submitted_diff_ref(&self, task: &str, run: &str) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        self.connection
+            .query_row(
+                "SELECT json_extract(detail,'$.reference') FROM events
+             WHERE task=?1 AND run=?2 AND kind='artifact' AND json_extract(detail,'$.kind')='diff'
+             ORDER BY seq DESC LIMIT 1",
+                params![task, run],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("read submitted diff reference")
+    }
+
+    pub fn events_in_window(&self, from: Timestamp, to: Timestamp) -> Result<Vec<Event>> {
+        let from = from.to_string();
+        let to = to.to_string();
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT seq,ts,task,run,kind,actor,detail FROM events
+             WHERE rtrim(ts,'Z')>=?1 AND rtrim(ts,'Z')<?2 ORDER BY seq",
+            )
+            .context("prepare timeline events")?;
+        read_events(
+            statement
+                .query(params![
+                    from.trim_end_matches('Z'),
+                    to.trim_end_matches('Z')
+                ])
+                .context("query timeline events")?,
+        )
+    }
+
     pub fn events_after(&self, filter: &EventFilter, after_seq: u64) -> Result<Vec<Event>> {
         self.query_events(filter, after_seq, -1)
     }
@@ -119,7 +208,7 @@ impl Store {
         };
         let kinds = encode(&filter.kinds)?;
         let mut statement = self.connection.prepare("SELECT events.seq,events.ts,events.task,events.run,events.kind,events.actor,events.detail FROM events LEFT JOIN tasks ON tasks.id=events.task WHERE events.seq>?1 AND (?2 IS NULL OR events.task=?2) AND (?3 IS NULL OR tasks.project=?3) AND (?4='[]' OR events.kind IN (SELECT value FROM json_each(?4))) ORDER BY events.seq LIMIT ?5").context("prepare event listing")?;
-        let mut rows = statement
+        let rows = statement
             .query(params![
                 after_seq,
                 filter.task,
@@ -128,29 +217,7 @@ impl Store {
                 limit
             ])
             .context("query engine events")?;
-        let mut events = Vec::new();
-        while let Some(row) = rows.next().context("read engine event row")? {
-            let kind: String = row.get(4).context("read event kind")?;
-            let kind: EventKind =
-                serde_json::from_value(Value::String(kind)).context("decode event kind")?;
-            let ts: String = row.get(1).context("read event timestamp")?;
-            let actor: String = row.get(5).context("read event actor")?;
-            let detail: String = row.get(6).context("read event detail")?;
-            events.push(Event {
-                seq: row
-                    .get::<_, i64>(0)
-                    .context("read event sequence")?
-                    .try_into()
-                    .context("event sequence must not be negative")?,
-                ts: ts.parse().context("parse event timestamp")?,
-                task: row.get(2).context("read event task")?,
-                run: row.get(3).context("read event run")?,
-                kind,
-                actor: serde_json::from_str(&actor).context("decode event actor")?,
-                detail: serde_json::from_str(&detail).context("decode event detail")?,
-            });
-        }
-        Ok(events)
+        read_events(rows)
     }
 
     /// Returns the first matching event, or None when the timeout expires.
@@ -172,6 +239,32 @@ impl Store {
             thread::sleep(remaining.min(Duration::from_millis(25)));
         }
     }
+}
+
+fn read_events(mut rows: rusqlite::Rows<'_>) -> Result<Vec<Event>> {
+    let mut events = Vec::new();
+    while let Some(row) = rows.next().context("read engine event row")? {
+        let kind: String = row.get(4).context("read event kind")?;
+        let kind: EventKind =
+            serde_json::from_value(Value::String(kind)).context("decode event kind")?;
+        let ts: String = row.get(1).context("read event timestamp")?;
+        let actor: String = row.get(5).context("read event actor")?;
+        let detail: String = row.get(6).context("read event detail")?;
+        events.push(Event {
+            seq: row
+                .get::<_, i64>(0)
+                .context("read event sequence")?
+                .try_into()
+                .context("event sequence must not be negative")?,
+            ts: ts.parse().context("parse event timestamp")?,
+            task: row.get(2).context("read event task")?,
+            run: row.get(3).context("read event run")?,
+            kind,
+            actor: serde_json::from_str(&actor).context("decode event actor")?,
+            detail: serde_json::from_str(&detail).context("decode event detail")?,
+        });
+    }
+    Ok(events)
 }
 
 #[cfg(test)]

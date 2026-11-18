@@ -90,10 +90,18 @@ impl Engine {
     pub fn usage_summary(&self, by: Option<UsageBy>) -> Result<UsageSummary> {
         // Count coverage and read requests from the same snapshot, without taking
         // the write lock used by Store::transaction.
-        let transaction =
-            Transaction::new_unchecked(&self.store.connection, TransactionBehavior::Deferred)
-                .context("begin usage summary snapshot")?;
-        let (total_runs, covered_runs) = transaction
+        let transaction = self
+            .store
+            .connection
+            .is_autocommit()
+            .then(|| {
+                Transaction::new_unchecked(&self.store.connection, TransactionBehavior::Deferred)
+            })
+            .transpose()
+            .context("begin usage summary snapshot")?;
+        let (total_runs, covered_runs) = self
+            .store
+            .connection
             .query_row(
                 "SELECT count(*), count(*) FILTER (WHERE EXISTS (
                      SELECT 1 FROM usage WHERE usage.task = runs.task AND usage.run = runs.id
@@ -112,7 +120,9 @@ impl Engine {
             }
             Ok(())
         })?;
-        transaction.commit().context("end usage summary snapshot")?;
+        if let Some(transaction) = transaction {
+            transaction.commit().context("end usage summary snapshot")?;
+        }
         Ok(UsageSummary {
             total,
             groups: groups

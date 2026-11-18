@@ -1,264 +1,141 @@
-//! One shared replacement window per watched session, never a per-client output queue.
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+//! A bounded replace-only terminal window. A slow reader skips intervening windows.
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, Weak},
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, ensure};
-use corral_core::Store;
-use corral_ops::Ctx;
 use corral_protocol::{
     self as wire,
     app::APP_CONTROL_MAX,
-    board::BoardCursor,
-    detail::{DetailBody, DetailGet, DetailRef, TERMINAL_POLL_MS, TerminalSnapshot},
+    detail::{TERMINAL_POLL_MS, TerminalSnapshot},
     frame::Frame,
-    subscription::{SubAck, SubDelta, SubOpen},
+    subscription::{BoardCursor, SubAck, SubOpen, Topic},
 };
 
-use super::super::notification;
-use crate::state::Shared;
+use crate::{conn::Conn, state::Shared, views};
 
-const SCOPES: usize = 128;
-const SCOPE_BYTES: usize = 512;
-const ERROR_BYTES: usize = 1024;
+const SCOPES_PER_CONNECTION: usize = 32;
+const WATCHED_SCOPES: usize = 128;
 const POLL: Duration = Duration::from_millis(TERMINAL_POLL_MS);
 
-fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
-    value.lock().unwrap_or_else(|error| error.into_inner())
-}
-
 #[derive(Default)]
-pub(crate) struct Service {
-    entries: Mutex<BTreeMap<String, Arc<Mutex<Entry>>>>,
-    thread: Mutex<Option<JoinHandle<()>>>,
-}
-
-#[derive(Default)]
-struct Entry {
-    users: usize,
-    last_read: Option<Instant>,
-    rev: u64,
-    published: Option<Arc<Frame>>,
-}
-
-impl Service {
-    pub(super) fn start(self: &Arc<Self>, ctx: &Ctx, shared: &Arc<Shared>) -> Result<()> {
-        let ctx = Ctx {
-            store: Store::open_unobserved(ctx.store.root())
-                .context("opening terminal stream store")?,
-            herdr: ctx.herdr.clone(),
-            resource_probe: Arc::clone(&ctx.resource_probe),
-        };
-        let worker = Arc::clone(self);
-        let shared = Arc::clone(shared);
-        let thread = std::thread::Builder::new()
-            .name("corrald-terminal-live".into())
-            .spawn(move || {
-                while !shared.lock().closed {
-                    worker.poll(Instant::now(), shared.epoch(), |scope| {
-                        let reply = corral_ops::app_read::read(
-                            &ctx,
-                            &DetailGet {
-                                target: DetailRef::Terminal { id: scope.into() },
-                                etag: None,
-                                page: None,
-                            },
-                        )?;
-                        match reply.body {
-                            Some(DetailBody::Terminal(snapshot)) => Ok(snapshot),
-                            _ => anyhow::bail!("terminal window unavailable"),
-                        }
-                    });
-                    std::thread::sleep(POLL);
-                }
-            })
-            .context("starting terminal stream worker")?;
-        *lock(&self.thread) = Some(thread);
-        Ok(())
-    }
-
-    pub(super) fn join(&self) {
-        if let Some(thread) = lock(&self.thread).take()
-            && thread.join().is_err()
-        {
-            eprintln!("corrald terminal stream worker failed");
-        }
-    }
-
-    fn poll(
-        &self,
-        now: Instant,
-        epoch: u64,
-        mut read: impl FnMut(&str) -> Result<TerminalSnapshot>,
-    ) {
-        // Release the registry before I/O: opening/closing a page never waits on herdr.
-        let entries: Vec<_> = lock(&self.entries)
-            .iter()
-            .map(|(scope, entry)| (scope.clone(), Arc::clone(entry)))
-            .collect();
-        for (scope, entry) in entries {
-            {
-                let mut entry = lock(&entry);
-                if entry.users == 0
-                    || entry
-                        .last_read
-                        .is_some_and(|at| now.saturating_duration_since(at) < POLL)
-                {
-                    continue;
-                }
-                entry.last_read = Some(now);
-            }
-            let result = read(&scope);
-            let mut entry = lock(&entry);
-            if entry.users == 0 {
-                continue;
-            }
-            // Keep exactly one latest frame. A slow consumer skips intervening windows;
-            // each window includes recent scrollback, so repeated screens never append.
-            let rev = entry.rev.saturating_add(1);
-            let cursor = BoardCursor { rev, after: None };
-            let (snapshot, error) = match result {
-                Ok(snapshot) => (Some(snapshot), None),
-                Err(error) => {
-                    let mut message = format!("{error:#}");
-                    while message.len() > ERROR_BYTES {
-                        message.pop();
-                    }
-                    (None, Some(message))
-                }
-            };
-            let frame = notification(
-                wire::SUB_DELTA,
-                SubDelta::Terminal {
-                    scope: scope.clone(),
-                    epoch,
-                    snapshot,
-                    cursor,
-                    more: false,
-                    error,
-                },
-            )
-            .and_then(|frame| {
-                ensure!(
-                    frame.payload.len() <= APP_CONTROL_MAX,
-                    "terminal window exceeds CONTROL budget"
-                );
-                Ok(frame)
-            });
-            match frame {
-                Ok(frame) => {
-                    entry.rev = rev;
-                    entry.published = Some(Arc::new(frame));
-                }
-                Err(_) => {
-                    // A producer violating the wire bound must not leave a stale frame
-                    // looking live. Send a bounded unavailable replacement instead.
-                    if let Ok(frame) = notification(
-                        wire::SUB_DELTA,
-                        SubDelta::Terminal {
-                            scope,
-                            epoch,
-                            snapshot: None,
-                            cursor: BoardCursor { rev, after: None },
-                            more: false,
-                            error: Some("terminal window exceeds CONTROL budget".into()),
-                        },
-                    ) {
-                        entry.rev = rev;
-                        entry.published = Some(Arc::new(frame));
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct Watch {
-    service: Arc<Service>,
-    scope: String,
-    entry: Arc<Mutex<Entry>>,
-}
-
-impl Drop for Watch {
-    fn drop(&mut self) {
-        let mut entries = lock(&self.service.entries);
-        let mut entry = lock(&self.entry);
-        entry.users -= 1;
-        if entry.users == 0 {
-            entries.remove(&self.scope);
-        }
-    }
-}
-
-struct Subscriber {
-    watch: Watch,
-    delivered: u64,
-    in_flight: Option<BoardCursor>,
-}
-
-impl Subscriber {
-    fn next(&mut self) -> Option<Arc<Frame>> {
-        if self.in_flight.is_some() {
-            return None;
-        }
-        let entry = lock(&self.watch.entry);
-        if entry.rev == self.delivered {
-            return None;
-        }
-        let frame = Arc::clone(entry.published.as_ref()?);
-        self.delivered = entry.rev;
-        self.in_flight = Some(BoardCursor {
-            rev: entry.rev,
-            after: None,
-        });
-        Some(frame)
-    }
-}
-
-#[derive(Default)]
-pub(super) struct TerminalTopics {
+pub(in crate::topics) struct TerminalTopics {
     subscribers: BTreeMap<String, Subscriber>,
 }
 
-impl TerminalTopics {
-    pub fn len(&self) -> usize {
-        self.subscribers.len()
-    }
+struct Subscriber {
+    watch: Arc<Mutex<Capture>>,
+    sent: Option<Arc<Window>>,
+    pending: Option<BoardCursor>,
+    rev: u64,
+}
 
-    pub fn contains(&self, scope: Option<&str>) -> bool {
-        scope.is_some_and(|scope| self.subscribers.contains_key(scope))
-    }
+/// One latest capture per watched scope across connections. Once the last
+/// subscriber drops, the registry's weak reference retains no terminal text.
+#[derive(Default)]
+pub(crate) struct TerminalCache {
+    entries: Mutex<BTreeMap<String, Weak<Mutex<Capture>>>>,
+}
 
-    pub fn open(&mut self, shared: &Shared, open: SubOpen) -> Result<()> {
-        let scope = scope(open.scope)?;
-        let service = lock(&shared.session_live)
-            .as_ref()
-            .map(|service| Arc::clone(&service.terminal))
-            .context("terminal stream service unavailable")?;
-        // Drop the old watch before counting; reopening never leaks scope slots.
-        self.subscribers.remove(&scope);
-        let entry = {
-            let mut entries = lock(&service.entries);
-            ensure!(
-                entries.contains_key(&scope) || entries.len() < SCOPES,
-                "too many watched terminals"
-            );
-            let entry = entries.entry(scope.clone()).or_default();
-            lock(entry).users += 1;
-            Arc::clone(entry)
+#[derive(Default)]
+struct Capture {
+    checked: Option<Instant>,
+    current: Option<Arc<Window>>,
+}
+
+impl TerminalCache {
+    fn watch(&self, scope: &str) -> Result<Arc<Mutex<Capture>>> {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(entry) = entries.get(scope).and_then(Weak::upgrade) {
+            return Ok(entry);
+        }
+        entries.retain(|_, entry| entry.strong_count() != 0);
+        ensure!(entries.len() < WATCHED_SCOPES, "too many watched terminals");
+        let entry = Arc::new(Mutex::new(Capture::default()));
+        entries.insert(scope.to_owned(), Arc::downgrade(&entry));
+        Ok(entry)
+    }
+}
+
+impl Capture {
+    fn latest(&mut self, shared: &Shared, scope: &str, now: Instant) -> Result<Arc<Window>> {
+        if let Some(current) = &self.current
+            && self
+                .checked
+                .is_some_and(|at| now.saturating_duration_since(at) < POLL)
+        {
+            return Ok(Arc::clone(current));
+        }
+        self.checked = Some(now);
+        let window = match shared
+            .engine()
+            .and_then(|engine| views::terminal(&engine, scope))
+        {
+            Ok(snapshot) => Window::Snapshot(snapshot),
+            Err(error) => {
+                let mut message = format!("{error:#}");
+                message.truncate(message.floor_char_boundary(1024));
+                Window::Error(message)
+            }
         };
-        // Reconnect always receives a complete current window, regardless of `since`.
+        if self
+            .current
+            .as_ref()
+            .is_none_or(|old| !window.unchanged(old))
+        {
+            self.current = Some(Arc::new(window));
+        }
+        self.current
+            .as_ref()
+            .map(Arc::clone)
+            .context("terminal observation unavailable")
+    }
+}
+
+enum Window {
+    Snapshot(TerminalSnapshot),
+    Error(String),
+}
+
+impl Window {
+    fn unchanged(&self, old: &Self) -> bool {
+        match (self, old) {
+            (Self::Snapshot(now), Self::Snapshot(old)) => {
+                now.live == old.live && now.lines == old.lines && now.rows == old.rows
+            }
+            (Self::Error(now), Self::Error(old)) => now == old,
+            _ => false,
+        }
+    }
+}
+
+impl TerminalTopics {
+    pub fn open(&mut self, shared: &Shared, open: SubOpen) -> Result<()> {
+        let scope = open.scope.context("terminal scope is required")?;
+        views::run_scope(&scope)?;
+        ensure!(
+            self.subscribers.contains_key(&scope) || self.subscribers.len() < SCOPES_PER_CONNECTION,
+            "too many terminal subscriptions"
+        );
+        // A replacement window is independent of any same-epoch cursor.
+        let rev = open
+            .since
+            .filter(|since| since.epoch == shared.epoch())
+            .map_or(0, |since| since.cursor.rev);
+        ensure!(rev < (1_u64 << 53) - 1, "invalid terminal cursor revision");
+        let watch = shared.terminal_cache.watch(&scope)?;
         self.subscribers.insert(
-            scope.clone(),
+            scope,
             Subscriber {
-                watch: Watch {
-                    service,
-                    scope,
-                    entry,
-                },
-                delivered: 0,
-                in_flight: None,
+                watch,
+                sent: None,
+                pending: None,
+                rev,
             },
         );
         Ok(())
@@ -271,37 +148,92 @@ impl TerminalTopics {
     }
 
     pub fn ack(&mut self, ack: SubAck) -> Result<()> {
-        let scope = scope(ack.scope)?;
-        let subscriber = self
+        let scope = ack.scope.context("terminal scope is required")?;
+        let sub = self
             .subscribers
             .get_mut(&scope)
             .context("terminal topic is not open")?;
         ensure!(
-            subscriber.in_flight.as_ref() == Some(&ack.cursor),
+            sub.pending.as_ref() == Some(&ack.cursor),
             "ack does not match the in-flight cursor"
         );
-        subscriber.in_flight = None;
+        sub.pending = None;
         Ok(())
     }
 
-    pub fn flush(&mut self, conn: &mut dyn crate::conn::Conn) -> Result<()> {
-        for subscriber in self.subscribers.values_mut() {
-            if let Some(frame) = subscriber.next() {
-                conn.send_frame(&frame)
-                    .context("pushing terminal stream window")?;
+    pub fn flush(&mut self, shared: &Shared, conn: &mut dyn Conn) -> Result<()> {
+        let now = Instant::now();
+        for (scope, sub) in &mut self.subscribers {
+            if let Some(frame) = sub.next_at(shared, scope, now)? {
+                conn.send_frame(&frame).context("pushing terminal window")?;
             }
         }
         Ok(())
     }
 }
 
-fn scope(scope: Option<String>) -> Result<String> {
-    let scope = scope.context("terminal scope is required")?;
-    ensure!(
-        !scope.is_empty() && scope.len() <= SCOPE_BYTES && !scope.chars().any(char::is_control),
-        "invalid terminal scope"
-    );
-    Ok(scope)
+impl Subscriber {
+    fn next_at(&mut self, shared: &Shared, scope: &str, now: Instant) -> Result<Option<Frame>> {
+        if self.pending.is_some() {
+            return Ok(None);
+        }
+        let window = self
+            .watch
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .latest(shared, scope, now)?;
+        if self
+            .sent
+            .as_ref()
+            .is_some_and(|old| Arc::ptr_eq(old, &window))
+        {
+            return Ok(None);
+        }
+        let rev = self
+            .rev
+            .checked_add(1)
+            .context("terminal revision exhausted")?;
+        let cursor = BoardCursor { rev, after: None };
+        let encode = |window: &Window| {
+            #[derive(serde::Serialize)]
+            struct Page<'a> {
+                topic: Topic,
+                scope: &'a str,
+                epoch: u64,
+                snapshot: Option<&'a TerminalSnapshot>,
+                cursor: &'a BoardCursor,
+                more: bool,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                error: Option<&'a str>,
+            }
+            let (snapshot, error) = match window {
+                Window::Snapshot(snapshot) => (Some(snapshot), None),
+                Window::Error(error) => (None, Some(error.as_str())),
+            };
+            super::super::notification(
+                wire::SUB_DELTA,
+                Page {
+                    topic: Topic::Terminal,
+                    scope,
+                    epoch: shared.epoch(),
+                    snapshot,
+                    cursor: &cursor,
+                    more: false,
+                    error,
+                },
+            )
+        };
+        let mut frame = encode(&window)?;
+        if frame.payload.len() > APP_CONTROL_MAX {
+            frame = encode(&Window::Error(
+                "terminal window exceeds CONTROL budget".into(),
+            ))?;
+        }
+        self.sent = Some(window);
+        self.pending = Some(cursor);
+        self.rev = rev;
+        Ok(Some(frame))
+    }
 }
 
 #[cfg(test)]

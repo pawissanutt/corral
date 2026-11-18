@@ -25,6 +25,8 @@ pub struct Config {
     pub profiles: BTreeMap<String, Profile>,
     pub projects: BTreeMap<String, Project>,
     pub routing: Vec<RoutingRule>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon: Option<DaemonConfig>,
 }
 
 impl Default for Config {
@@ -39,8 +41,17 @@ impl Default for Config {
             profiles: builtin_profiles(),
             projects: BTreeMap::new(),
             routing: Vec::new(),
+            daemon: None,
         }
     }
+}
+
+/// Listener settings are consumed by corrald-next, not by the engine.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DaemonConfig {
+    pub listen: Option<std::net::SocketAddr>,
+    pub web_origin: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

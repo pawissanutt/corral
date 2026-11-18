@@ -7,41 +7,10 @@ use std::net::TcpListener;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use corral_ops::Ctx;
 
 use crate::{server, state::Shared};
 
 const MAX_APP_CONNECTIONS: usize = 8;
-
-pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>) {
-    let Some(listen) = &ctx.store.config.daemon.listen else {
-        return;
-    };
-    let origins: Vec<_> = ctx
-        .store
-        .config
-        .daemon
-        .web_origins
-        .iter()
-        .map(|origin| origin.as_str().to_owned())
-        .collect();
-    if origins.is_empty() {
-        eprintln!(
-            "corrald app listener: listening, but [daemon] web_origins is empty, so no browser can connect"
-        );
-    }
-    let result = (|| -> Result<()> {
-        let devices = shared.devices().context("device registry is unavailable")?;
-        devices
-            .identity()
-            .map_err(|error| anyhow::anyhow!("{}", error.wire().1))?;
-        let listener = TcpListener::bind(listen.addr()).context("binding app listener")?;
-        serve_listener(listener, Arc::clone(shared), origins)
-    })();
-    if let Err(error) = result {
-        eprintln!("corrald app listener: {error:#}");
-    }
-}
 
 struct AppPermit(Arc<Shared>);
 impl Drop for AppPermit {
@@ -57,6 +26,7 @@ pub(crate) fn serve_listener(
     listener: TcpListener,
     shared: Arc<Shared>,
     origins: Vec<String>,
+    endpoint: Option<&str>,
 ) -> Result<()> {
     listener
         .set_nonblocking(true)
@@ -64,8 +34,8 @@ pub(crate) fn serve_listener(
     let address = listener
         .local_addr()
         .context("reading app listener address")?;
-    let devices = shared.devices().context("device registry is unavailable")?;
-    devices.set_listener(address, &origins);
+    shared.devices().set_listener(address, &origins, endpoint);
+    shared.publish();
     std::thread::Builder::new()
         .name("corrald-app-server".into())
         .spawn(move || {

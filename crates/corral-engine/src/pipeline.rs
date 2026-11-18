@@ -9,9 +9,20 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::{
-    Actor, CheckKind, CheckResult, Engine, PipelineMode, Status, Task, checkout::Checkout,
-    events::EventKind, review::gate_notes,
+    Actor, Blocked, CheckKind, CheckResult, Engine, Next, Op, PipelineMode, Status, Store, Task,
+    as_refusal, checkout::Checkout, events::EventKind, review::gate_notes,
+    tasks::next_force_approve,
 };
+
+pub(crate) const GATE_FAILED: &str = "gate failed";
+pub(crate) const PIPELINE_FAILED: &str = "pipeline failed";
+
+pub(crate) struct OperationFailure<'a> {
+    pub(crate) operation: &'static str,
+    pub(crate) reason: &'static str,
+    pub(crate) error: &'a anyhow::Error,
+    pub(crate) next: Vec<Next>,
+}
 
 impl Engine {
     pub fn advance(&self, id: &str) -> Result<()> {
@@ -22,23 +33,68 @@ impl Engine {
         let Some(_lock) = self.pipeline_lock(id, false, true)? else {
             return Ok(());
         };
-        let result = self.advance_locked(id);
-        if let Err(error) = &result {
+        let mut effects_started = false;
+        let result = self.advance_locked(id, &mut effects_started);
+        if let Err(error) = &result
+            && (effects_started || as_refusal(error).is_none())
+        {
             self.store.transaction(|store| {
-                self.event(
-                    store,
-                    Some(id),
-                    None,
-                    EventKind::Error,
-                    Actor::Auto,
-                    json!({"operation":"pipeline","reason":format!("{error:#}")}),
-                )
+                let mut task = store.require_task(id)?;
+                if task.status == Status::Review {
+                    self.record_operation_failure(
+                        store,
+                        &mut task,
+                        None,
+                        OperationFailure {
+                            operation: "pipeline",
+                            reason: PIPELINE_FAILED,
+                            error,
+                            next: vec![
+                                Next::run(Op::Gate { id: id.into() }),
+                                next_force_approve(id),
+                            ],
+                        },
+                        Actor::Auto,
+                    )?;
+                }
+                Ok(())
             })?;
         }
         result.and(self.unlink_terminal_pipeline_lock(id))
     }
 
-    fn advance_locked(&self, id: &str) -> Result<()> {
+    /// Persist an observable outcome even when the submitting caller no longer waits.
+    pub(crate) fn record_operation_failure(
+        &self,
+        store: &Store,
+        task: &mut Task,
+        run: Option<&str>,
+        failure: OperationFailure<'_>,
+        actor: Actor,
+    ) -> Result<()> {
+        let detail = format!("{:#}", failure.error);
+        self.event(
+            store,
+            Some(&task.id),
+            run,
+            EventKind::Error,
+            actor,
+            json!({"operation": failure.operation, "reason": detail}),
+        )?;
+        self.block_in(
+            store,
+            task,
+            run,
+            Blocked {
+                reason: failure.reason.into(),
+                detail: Some(detail),
+                next: failure.next,
+            },
+            actor,
+        )
+    }
+
+    fn advance_locked(&self, id: &str, effects_started: &mut bool) -> Result<()> {
         let task = self.store.require_task(id)?;
         if task.status != Status::Review {
             return Ok(());
@@ -51,7 +107,7 @@ impl Engine {
         if let Some(project) = project.as_ref().filter(|p| !p.gate.is_empty()) {
             let check = match self.store.latest_check(id, CheckKind::Gate, &head)? {
                 Some(check) => check,
-                None => self.run_gate(&worker, Some(project), Actor::Auto)?,
+                None => self.run_gate(&worker, Some(project), Actor::Auto, effects_started)?,
             };
             if check.result == CheckResult::Fail {
                 return self.send_back(id, &gate_notes(&check));

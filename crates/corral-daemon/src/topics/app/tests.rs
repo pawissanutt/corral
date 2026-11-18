@@ -1,121 +1,258 @@
-use super::*;
+use std::fs;
+
+use corral_engine::{NewTask, Op, SessionStatus, Status, Usage};
 use corral_protocol::{
-    assistant::{EntryKind, ThreadEntry},
     rpc,
-    subscription::SubDelta,
+    subscription::{SubAck, SubDelta},
 };
 
-fn entry(id: &str) -> ThreadEntry {
-    ThreadEntry {
-        id: id.into(),
-        rev: 1,
-        at: "2026-11-14T00:00:00Z".into(),
-        typed_at: None,
-        kind: EntryKind::Answer,
-        device: None,
-        via: None,
-        text: Some("\0".repeat(8 * 1024)),
-        state: None,
-        model: None,
-        cost_usd: None,
-        cost_basis: None,
-        completion: None,
-        part: None,
-        tools: Vec::new(),
-        links: Vec::new(),
-        card: None,
-        attachments: Vec::new(),
+use super::*;
+use crate::{conn::Conn, topics::Subscriptions, views::tests::Fixture};
+
+#[derive(Default)]
+struct Receiver(Vec<Frame>);
+
+impl Conn for Receiver {
+    fn send_frame(&mut self, frame: &Frame) -> Result<()> {
+        self.0.push(frame.clone());
+        Ok(())
     }
 }
 
-#[test]
-fn replacement_pages_all_removals_and_requires_exact_single_ack() {
-    let shared = Shared::new();
-    let _fixture = views::tests::install(&shared);
-    let key = Key::new(Topic::Thread, Some("quick".into())).unwrap();
-    let watch = views::watch(&shared, key.clone()).unwrap();
-    views::tests::publish(&shared, &key, Rows::Thread(Vec::new()), 1);
-    let known: BTreeSet<_> = (0..205).map(|n| format!("removed-{n}")).collect();
-    let mut sub = Subscriber {
-        watch,
-        epoch: shared.epoch(),
-        reset: false,
-        cursor: BoardCursor::default(),
-        live_next: true,
-        in_flight: false,
-        delivered: 0,
-        known: known.clone(),
-        live: None,
-        pending_live: None,
-        serial: 0,
-        transfer: Some(Transfer {
-            rev: 1,
-            page: Some(Arc::new(Snapshot {
-                rev: 1,
-                rows: Rows::Thread(vec![entry("one"), entry("two"), entry("three")]),
-            })),
-            index: 0,
-            pending: None,
-            next: None,
-            head: Some(1),
-            last: true,
-            remaining: known.clone(),
-            seen: BTreeSet::new(),
-            left: None,
-            left_index: 0,
-        }),
-    };
-    let mut topics = AppTopics::default();
-    let mut removed = BTreeSet::new();
-    let mut received = BTreeSet::new();
-    loop {
-        let (frame, close) = sub.next_transfer(&shared).unwrap().unwrap();
-        assert!(!close);
+fn receive(subs: &mut Subscriptions<'_>) -> Option<SubDelta> {
+    let mut receiver = Receiver::default();
+    subs.flush(&mut receiver).unwrap();
+    assert!(receiver.0.len() < 2);
+    receiver.0.pop().map(|frame| {
         assert!(frame.payload.len() <= APP_CONTROL_MAX);
-        assert!(
-            sub.next(&shared).unwrap().is_none(),
-            "second page leaked before ack"
-        );
         let message: rpc::Notification<SubDelta> = serde_json::from_slice(&frame.payload).unwrap();
-        let SubDelta::Thread { delta, .. } = message.params else {
-            panic!("wrong topic")
-        };
-        for row in delta.rows {
-            assert!(received.insert(row.id));
-        }
-        for id in delta.left {
-            assert!(removed.insert(id));
-        }
-        let more = delta.more;
-        topics.subscribers.insert(key.clone(), sub);
-        let wrong = SubAck {
-            topic: Topic::Thread,
-            scope: key.scope.clone(),
-            cursor: BoardCursor {
-                rev: 999,
-                after: None,
-            },
-        };
-        assert!(topics.ack(wrong).is_err());
-        let ack = SubAck {
-            topic: Topic::Thread,
-            scope: key.scope.clone(),
-            cursor: delta.cursor,
-        };
-        topics.ack(ack.clone()).unwrap();
-        assert!(topics.ack(ack).is_err(), "duplicate ack accepted");
-        sub = topics.subscribers.remove(&key).unwrap();
-        if !more {
-            break;
-        }
-    }
-    assert_eq!(
-        received,
-        ["one", "two", "three"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
+        assert_eq!(message.method, corral_protocol::SUB_DELTA);
+        message.params
+    })
+}
+
+fn start(fixture: &Fixture, topic: Topic) -> (Subscriptions<'_>, SubDelta) {
+    let mut subs = Subscriptions::new(&fixture.shared);
+    subs.open(SubOpen {
+        topic,
+        scope: None,
+        since: None,
+    })
+    .unwrap();
+    let first = receive(&mut subs).unwrap();
+    (subs, first)
+}
+
+fn ack(subs: &mut Subscriptions<'_>, topic: Topic, cursor: BoardCursor) {
+    subs.ack(SubAck {
+        topic,
+        cursor,
+        scope: None,
+    })
+    .unwrap();
+}
+
+#[test]
+fn health_delta_tracks_sync_result() {
+    let fixture = Fixture::new();
+    let (mut subs, SubDelta::Health { cursor, rows, .. }) = start(&fixture, Topic::Health) else {
+        panic!("expected health snapshot");
+    };
+    assert!(rows[0].last_sync_at.is_none());
+    ack(&mut subs, Topic::Health, cursor);
+    fixture.apply(Op::Sync);
+    fixture.shared.finish_sync(true, None);
+    let Some(SubDelta::Health { rows, .. }) = receive(&mut subs) else {
+        panic!("expected sync health delta");
+    };
+    assert!(rows[0].runner_reachable);
+    assert!(rows[0].last_sync_at.is_some());
+}
+
+#[test]
+fn tasks_delta_carries_engine_blocked_and_requires_exact_ack() {
+    let fixture = Fixture::new();
+    fixture.project();
+    let id = fixture.named_task("Needs input", Some("demo"));
+    let run = fixture.dispatch(&id);
+    let (mut subs, SubDelta::Tasks { delta }) = start(&fixture, Topic::Tasks) else {
+        panic!("expected tasks");
+    };
+    assert_eq!(delta.rows[0].task.status, Status::Running);
+    assert_eq!(delta.rows[0].run.as_ref().unwrap().id, run.id);
+    let excerpt = "Which branch should I target?";
+    fixture.runner.set_status(
+        run.session.as_ref().unwrap(),
+        SessionStatus::Blocked {
+            excerpt: excerpt.into(),
+        },
     );
-    assert_eq!(removed, known);
-    assert_eq!(sub.known, received);
+    fixture.apply(Op::Sync);
+    assert!(receive(&mut subs).is_none());
+    assert!(
+        subs.ack(SubAck {
+            topic: Topic::Tasks,
+            cursor: BoardCursor::default(),
+            scope: None
+        })
+        .is_err()
+    );
+    ack(&mut subs, Topic::Tasks, delta.cursor.clone());
+    assert!(
+        subs.ack(SubAck {
+            topic: Topic::Tasks,
+            cursor: delta.cursor,
+            scope: None
+        })
+        .is_err()
+    );
+    let Some(SubDelta::Tasks { delta }) = receive(&mut subs) else {
+        panic!("expected blocked tasks delta");
+    };
+    let task = &delta.rows[0].task;
+    assert_eq!(task.status, Status::Blocked);
+    let blocked = task.blocked.as_ref().unwrap();
+    assert!(!blocked.reason.is_empty());
+    assert_eq!(blocked.detail.as_deref(), Some(excerpt));
+    assert!(matches!(&blocked.next[0].op, Op::Reply { id: target, .. } if target == &id));
+    assert!(!blocked.next[0].force);
+    ack(&mut subs, Topic::Tasks, delta.cursor);
+    fixture.apply(Op::Drop { id: id.clone() });
+    let Some(SubDelta::Tasks { delta }) = receive(&mut subs) else {
+        panic!("expected task removal");
+    };
+    assert!(delta.rows.is_empty());
+    assert_eq!(delta.left, [id]);
+}
+
+#[test]
+fn plans_delta_groups_children_by_status() {
+    let fixture = Fixture::new();
+    let id = fixture.task(NewTask {
+        title: "Plan".into(),
+        body: "# Markdown".into(),
+        ..Default::default()
+    });
+    let (mut subs, SubDelta::Plans { delta }) = start(&fixture, Topic::Plans) else {
+        panic!("expected plans");
+    };
+    assert!(delta.rows.is_empty());
+    ack(&mut subs, Topic::Plans, delta.cursor);
+    fixture.task(NewTask {
+        title: "Child".into(),
+        parent: Some(id.clone()),
+        status: Status::Ready,
+        ..Default::default()
+    });
+    let Some(SubDelta::Plans { delta }) = receive(&mut subs) else {
+        panic!("expected parent after its first child");
+    };
+    let plan = &delta.rows[0];
+    assert_eq!(plan.parent.id, id);
+    assert_eq!(plan.parent.body, "# Markdown");
+    assert_eq!(plan.child_counts[0].status, Status::Ready);
+    assert_eq!(plan.child_counts[0].count, 1);
+}
+
+#[test]
+fn projects_delta_counts_only_open_tasks() {
+    let fixture = Fixture::new();
+    fixture.project();
+    let id = fixture.named_task("Open", Some("demo"));
+    let (mut subs, SubDelta::Projects { delta }) = start(&fixture, Topic::Projects) else {
+        panic!("expected projects");
+    };
+    assert_eq!(delta.rows[0].open, 1);
+    ack(&mut subs, Topic::Projects, delta.cursor);
+    fixture.apply(Op::Drop { id });
+    let Some(SubDelta::Projects { delta }) = receive(&mut subs) else {
+        panic!("expected project count delta");
+    };
+    assert_eq!(delta.rows[0].id, "demo");
+    assert_eq!(delta.rows[0].open, 0);
+}
+
+#[test]
+fn agents_delta_includes_runner_status_and_persisted_quiet_since() {
+    let fixture = Fixture::new();
+    fixture.project();
+    let id = fixture.named_task("Active", Some("demo"));
+    let run = fixture.dispatch(&id);
+    let (mut subs, SubDelta::Agents { delta }) = start(&fixture, Topic::Agents) else {
+        panic!("expected agents");
+    };
+    assert_eq!(delta.rows[0].status, SessionStatus::Working);
+    ack(&mut subs, Topic::Agents, delta.cursor);
+    fixture
+        .runner
+        .set_status(run.session.as_ref().unwrap(), SessionStatus::Idle);
+    fixture.apply(Op::Sync);
+    let Some(SubDelta::Agents { delta }) = receive(&mut subs) else {
+        panic!("expected idle run update");
+    };
+    assert_eq!(delta.rows[0].status, SessionStatus::Idle);
+    assert!(delta.rows[0].run.quiet_since.is_some());
+}
+
+#[test]
+fn usage_delta_observes_usage_without_a_new_event() {
+    let fixture = Fixture::new();
+    let (mut subs, SubDelta::Usage { delta }) = start(&fixture, Topic::Usage) else {
+        panic!("expected usage");
+    };
+    assert_eq!(delta.rows[0].total.requests, 0);
+    ack(&mut subs, Topic::Usage, delta.cursor);
+    let seq = fixture
+        .apply(Op::UsageAdd {
+            usage: Usage {
+                task: None,
+                run: None,
+                at: jiff::Timestamp::now(),
+                profile: None,
+                model: "model".into(),
+                input: 100,
+                output: 20,
+                cache_read: 0,
+                cache_write: 0,
+                usd: Some(0.02),
+                billing: Some("api".into()),
+            },
+        })
+        .seq;
+    assert_eq!(seq, 0);
+    let Some(SubDelta::Usage { delta }) = receive(&mut subs) else {
+        panic!("expected usage delta");
+    };
+    assert_eq!(delta.rows[0].total.input, 100);
+    assert_eq!(delta.rows[0].total.requests, 1);
+}
+
+#[test]
+fn settings_delta_contains_parsed_config_listener_and_devices() {
+    let fixture = Fixture::new();
+    let (mut subs, SubDelta::Settings { delta }) = start(&fixture, Topic::Settings) else {
+        panic!("expected settings");
+    };
+    assert!(delta.rows[0].listener.is_none());
+    ack(&mut subs, Topic::Settings, delta.cursor);
+    let devices = fixture.shared.devices();
+    let device = devices.enrol_native("Native test", "test").unwrap();
+    devices.set_listener(
+        "127.0.0.1:0".parse().unwrap(),
+        &["http://localhost".into()],
+        None,
+    );
+    fs::write(
+        fixture.shared.root().join(".corral-next/corral.toml"),
+        "[limits]\nrunning = 7\n",
+    )
+    .unwrap();
+    fixture.apply(Op::Sync);
+    let Some(SubDelta::Settings { delta }) = receive(&mut subs) else {
+        panic!("expected new settings");
+    };
+    let row = &delta.rows[0];
+    assert_eq!(row.config["limits"]["running"].as_u64(), Some(7));
+    assert_eq!(row.devices[0].id, device.id);
+    assert_eq!(row.listener.as_ref().unwrap().origins, ["http://localhost"]);
 }

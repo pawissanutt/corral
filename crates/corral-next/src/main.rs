@@ -1,5 +1,6 @@
 mod args;
 mod editor;
+mod hook;
 mod output;
 
 use std::{
@@ -73,6 +74,9 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
     let root = Engine::discover_root(&cwd, out.root)?;
     if let Command::Config(ConfigCommand::Check) = command {
         check_config(&root, out)?;
+        return Ok(0);
+    }
+    if matches!(command, Command::Hook) && hook::nudge(&root)? {
         return Ok(0);
     }
     let engine = Engine::open(root)?;

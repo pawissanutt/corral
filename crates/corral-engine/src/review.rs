@@ -18,6 +18,7 @@ use crate::{
     config::EffectiveProject,
     dispatch::{LaunchRequest, PendingLaunch},
     events::EventKind,
+    pipeline::{GATE_FAILED, OperationFailure, PIPELINE_FAILED},
     prompt::rereview_request,
     refuse,
     tasks::{next_changes, next_force_approve, next_reply, next_retry, set_lifecycle},
@@ -110,7 +111,62 @@ impl Engine {
             let task = self.store.require_task(id)?;
             let run = self.last_worker(&self.store, &task)?;
             let project = self.project_for(&task)?;
-            self.run_gate(&run, project.as_ref(), self.actor)
+            let mut effects_started = false;
+            match self.run_gate(&run, project.as_ref(), self.actor, &mut effects_started) {
+                Ok(check) => {
+                    if task.blocked.as_ref().is_some_and(|blocked| {
+                        matches!(blocked.reason.as_str(), GATE_FAILED | PIPELINE_FAILED)
+                    }) {
+                        self.store.transaction(|store| {
+                            let mut current = store.require_task(id)?;
+                            if current.blocked == task.blocked {
+                                let status = if run.head_sha.is_some() {
+                                    Status::Review
+                                } else {
+                                    Status::Running
+                                };
+                                set_lifecycle(&mut current, status);
+                                store.update_task(&current)?;
+                                self.event(
+                                    store,
+                                    Some(id),
+                                    Some(&run.id),
+                                    EventKind::Resumed,
+                                    self.actor,
+                                    json!({"operation": "gate"}),
+                                )?;
+                            }
+                            Ok(())
+                        })?;
+                    }
+                    Ok(check)
+                }
+                Err(error) => {
+                    if effects_started {
+                        self.store.transaction(|store| {
+                            let mut current = store.require_task(id)?;
+                            if current.status == task.status
+                                && !matches!(current.status, Status::Done | Status::Dropped)
+                            {
+                                self.record_operation_failure(
+                                    store,
+                                    &mut current,
+                                    Some(&run.id),
+                                    OperationFailure {
+                                        operation: "gate",
+                                        reason: GATE_FAILED,
+                                        error: &error,
+                                        next: vec![Next::run(Op::Gate { id: id.into() })],
+                                    },
+                                    self.actor,
+                                )?;
+                            }
+                            Ok(())
+                        })?;
+                    }
+                    Err(error)
+                }
+            }
         })?;
         self.kick_pipeline(id)?;
         Ok(check)
@@ -121,12 +177,14 @@ impl Engine {
         run: &Run,
         project: Option<&EffectiveProject>,
         actor: Actor,
+        effects_started: &mut bool,
     ) -> Result<Check> {
         self.require_worktree(run)?;
         let head = corral_git::rev_sha(&run.worktree, "HEAD").context("read gate HEAD")?;
+        let prefix = head.get(..8).context("gate HEAD is not a commit SHA")?;
+        *effects_started = true;
         let directory = self.state_dir.join("runs").join(&run.task);
         fs::create_dir_all(&directory).context("create gate log directory")?;
-        let prefix = head.get(..8).context("gate HEAD is not a commit SHA")?;
         let log_path = directory.join(format!("gate-{prefix}.log"));
         let mut log = File::create(&log_path)
             .with_context(|| format!("create gate log {}", log_path.display()))?;

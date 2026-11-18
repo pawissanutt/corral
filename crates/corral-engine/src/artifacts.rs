@@ -202,6 +202,16 @@ impl Engine {
         fs::read(self.blob_path(&artifact.sha256)).context("read artifact blob")
     }
 
+    /// Open a blob identified by catalog metadata. Useful for bounded paging;
+    /// the caller never needs to construct or accept a filesystem path.
+    pub fn open_artifact_blob(&self, artifact: &Artifact) -> Result<File> {
+        anyhow::ensure!(
+            artifact.sha256.len() == 64 && artifact.sha256.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid artifact hash"
+        );
+        File::open(self.blob_path(&artifact.sha256)).context("open artifact blob")
+    }
+
     pub fn scan_artifacts(&self, worktree: &Path) -> Result<Vec<PathBuf>> {
         scan_globs(worktree, &self.config.artifacts.globs)
     }

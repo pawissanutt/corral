@@ -20,6 +20,10 @@
 # quiet_after_secs = 120
 # watch_secs = 5            # Seconds between sync --watch passes.
 
+# [daemon]
+# listen = "127.0.0.1:7778"                       # Optional authenticated app listener.
+# web_origin = ["http://127.0.0.1:8080"]          # Exact browser origins allowed to connect.
+
 # [artifacts]
 # globs = ["docs/**/records/*", "**/*report*.html"]
 # max_bytes = 20000000

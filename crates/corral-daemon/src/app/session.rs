@@ -11,21 +11,19 @@ use corral_protocol::{
     device::{self, PairState},
     frame::FrameKind,
     rpc::{self, ErrorCode},
-    subscription::{SubAck, SubClose, SubOpen, Topic},
 };
 use serde_json::Value;
 use tungstenite::protocol::frame::coding::CloseCode;
 
-use super::dispatch::reply;
 use super::{
     dispatch,
     ws::{self, Mode, WsConn},
 };
 use crate::{
-    conn::{error, notify},
+    conn::{error, notify, reply},
     devices::{self, DeviceError, Devices},
     state::Shared,
-    topics::Topics,
+    topics::Subscriptions,
 };
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -46,13 +44,14 @@ impl Drop for PairGuard {
 }
 
 pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) -> Result<()> {
-    let Some(devices) = shared.devices() else {
-        anyhow::bail!("app device registry unavailable");
-    };
+    let devices = shared.devices();
     let (socket, mode) = ws::upgrade(stream, origins)?;
-    let established = ws::handshake(socket, mode, &devices)?;
+    let established = ws::handshake(socket, mode, devices)?;
     let mut conn = established.conn;
     let session = established.session;
+    if session.is_some() {
+        shared.publish();
+    }
     let pair = match established.mode {
         Mode::Session => {
             if session.is_none() {
@@ -62,14 +61,14 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
             None
         }
         Mode::Pair(pair_id) => Some(PairGuard {
-            devices: Arc::clone(&devices),
+            devices: Arc::clone(devices),
             pair_id,
         }),
     };
     let mut welcomed = false;
     let mut claimed = false;
     let hello_deadline = Instant::now() + HELLO_TIMEOUT;
-    let mut topics = Topics::new(&shared);
+    let mut topics = Subscriptions::new(&shared);
     loop {
         if shared.lock().closed {
             conn.close(CloseCode::Away, device::CLOSE_DAEMON_STOPPING);
@@ -96,7 +95,7 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
             }
         } else if welcomed {
             if let Some(guard) = &session {
-                guard.flush_authority(&mut conn)?;
+                guard.touch()?;
             }
             topics.flush(&mut conn)?;
         }
@@ -129,10 +128,11 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
             }
         };
         if serde_json::to_vec(&request.id)?.len() > 256 {
-            dispatch::error(
+            error(
                 &mut conn,
                 Value::Null,
-                (ErrorCode::InvalidParams, "invalid_rpc_id".into()),
+                ErrorCode::InvalidParams,
+                "invalid_rpc_id",
             )?;
             continue;
         }
@@ -154,39 +154,14 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
             )?;
             continue;
         }
-        let id = request.id;
-        let params = request.params;
         if request.method == wire::HELLO && !claimed {
-            match serde_json::from_value::<wire::Hello>(params) {
-                Ok(hello) if hello.proto.major == wire::PROTO_MAJOR => {
-                    topics.set_session_fleet(
-                        pair.is_none()
-                            && hello
-                                .caps
-                                .iter()
-                                .any(|cap| cap == wire::app::SESSION_FLEET_V1),
-                    );
-                    reply(
-                        &mut conn,
-                        id,
-                        wire::Welcome {
-                            proto: wire::Proto {
-                                major: wire::PROTO_MAJOR,
-                                minor: wire::PROTO_MINOR,
-                            },
-                            caps: hello
-                                .caps
-                                .into_iter()
-                                .filter(|cap| pair.is_none() && dispatch::capability(&shared, cap))
-                                .collect(),
-                            daemon: wire::DaemonInfo {
-                                version: env!("CARGO_PKG_VERSION").into(),
-                                store: devices.store_name(),
-                                epoch: shared.epoch(),
-                            },
-                            health: shared.health(),
-                        },
-                    )?;
+            let id = request.id;
+            match serde_json::from_value::<wire::Hello>(request.params) {
+                Ok(mut hello) if hello.proto.major == wire::PROTO_MAJOR => {
+                    if pair.is_some() {
+                        hello.caps.clear();
+                    }
+                    reply(&mut conn, id, dispatch::welcome(&shared, hello))?;
                     welcomed = true;
                 }
                 Ok(_) => {
@@ -204,8 +179,9 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
             continue;
         }
         if let Some(pair) = &pair {
+            let id = request.id;
             if request.method == device::PAIR_CLAIM && !claimed {
-                match serde_json::from_value::<device::PairClaim>(params) {
+                match serde_json::from_value::<device::PairClaim>(request.params) {
                     Ok(claim) => {
                         let result = devices::validate(&claim.name, &claim.app_version).and_then(
                             |(name, version)| {
@@ -238,55 +214,18 @@ pub(crate) fn serve(stream: TcpStream, shared: Arc<Shared>, origins: &[String]) 
             }
             continue;
         }
-        if dispatch::is_method(&request.method) {
-            dispatch::serve(
+        if request.method == wire::BYE {
+            reply(
                 &mut conn,
-                &shared,
-                id,
-                &request.method,
-                params,
-                session.as_ref(),
+                request.id,
+                wire::Bye {
+                    reason: "client disconnected".into(),
+                },
             )?;
-            continue;
+            conn.close(CloseCode::Normal, "client disconnected");
+            return Ok(());
         }
-        match request.method.as_str() {
-            wire::PING => reply(&mut conn, id, wire::Pong {})?,
-            wire::BYE => {
-                reply(
-                    &mut conn,
-                    id,
-                    wire::Bye {
-                        reason: "client disconnected".into(),
-                    },
-                )?;
-                conn.close(CloseCode::Normal, "client disconnected");
-                return Ok(());
-            }
-            wire::HEALTH_GET => reply(&mut conn, id, shared.health())?,
-            wire::SUB_OPEN => match serde_json::from_value::<SubOpen>(params) {
-                Ok(open) if allowed_topic(open.topic) => {
-                    topic_reply(&mut conn, id, topics.open(open))?;
-                }
-                Ok(_) => error(&mut conn, id, ErrorCode::Refused, "topic_refused")?,
-                Err(_) => error(&mut conn, id, ErrorCode::InvalidParams, "invalid sub.open")?,
-            },
-            wire::SUB_ACK => match serde_json::from_value::<SubAck>(params) {
-                Ok(ack) if allowed_topic(ack.topic) => {
-                    topic_reply(&mut conn, id, topics.ack(ack))?;
-                }
-                Ok(_) => error(&mut conn, id, ErrorCode::Refused, "topic_refused")?,
-                Err(_) => error(&mut conn, id, ErrorCode::InvalidParams, "invalid sub.ack")?,
-            },
-            wire::SUB_CLOSE => match serde_json::from_value::<SubClose>(params) {
-                Ok(close) if allowed_topic(close.topic) => {
-                    topics.close(close);
-                    reply(&mut conn, id, ())?;
-                }
-                Ok(_) => error(&mut conn, id, ErrorCode::Refused, "topic_refused")?,
-                Err(_) => error(&mut conn, id, ErrorCode::InvalidParams, "invalid sub.close")?,
-            },
-            _ => refused(&mut conn, id)?,
-        }
+        dispatch::serve(&mut conn, &shared, request, session.as_ref(), &mut topics)?;
     }
 }
 
@@ -323,17 +262,6 @@ fn pairing_finished(conn: &mut WsConn, pair: &PairGuard) -> Result<bool> {
             conn.close(CloseCode::Policy, device::CLOSE_PAIRING_UNAVAILABLE);
             Ok(true)
         }
-    }
-}
-
-fn allowed_topic(topic: Topic) -> bool {
-    dispatch::allowed_topic(topic)
-}
-
-fn topic_reply(conn: &mut WsConn, id: Value, result: Result<()>) -> Result<()> {
-    match result {
-        Ok(()) => reply(conn, id, ()),
-        Err(problem) => error(conn, id, ErrorCode::InvalidParams, &problem.to_string()),
     }
 }
 
