@@ -68,7 +68,14 @@ export function fixtureRole(role: Role): RoleModule {
     contract() {
       return `Fixture ${role} contract for host-bridge tests. Use only the tools you are given.`;
     },
-    extend(pi) {
+    extend(pi, context) {
+      if (context.identity.store === "local" && context.promptFile) {
+        pi.on("session_start", (_event, ctx) => {
+          if (!ctx.sessionManager.getEntries().some(entry => entry.type === "message")) {
+            pi.sendUserMessage(`Read ${context.promptFile}.`);
+          }
+        });
+      }
       pi.registerTool({
         name: "fixture_forbidden",
         label: "Registered outside the loadout",
@@ -99,6 +106,14 @@ export function fixtureRole(role: Role): RoleModule {
         async handler(args) {
           const name = args.trim();
           transport().script([{ toolCalls: [{ callId: `call-${name}`, name, arguments: {} }] }, { text: "CALLED" }]);
+        },
+      });
+      pi.registerCommand("fixture-ask", {
+        description: "Make the next turn ask one question",
+        async handler() {
+          transport().script([{ toolCalls: [{ callId: "local-ask", name: "ask_user",
+            arguments: { questions: [{ question: "Which direction?", options: ["Left", "Right"] }] } }] },
+          { text: "Waiting for the owner." }]);
         },
       });
       pi.registerCommand("fixture-reload", { description: "Reload resources", async handler(_args, context) { await context.reload(); } });

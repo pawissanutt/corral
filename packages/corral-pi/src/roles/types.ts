@@ -63,14 +63,11 @@ export interface HostIdentity {
   readonly generation: number;
 }
 
-/**
- * The generation's capability snapshot as corral resolved and recorded it (T-563). The Rust
- * catalog owns keys, defaults and role ceilings; a host only reads which keys are enabled.
- */
+/** Host abilities and settings; old Rust launches also carry snapshot metadata. */
 export interface CapabilitySet {
   readonly catalog: number;
-  readonly digest: string;
-  readonly preset: string;
+  readonly digest?: string;
+  readonly preset?: string;
   readonly enabled: readonly string[];
   /** Resolved only when web.enabled is effective for this generation. */
   readonly web?: WebSettings;

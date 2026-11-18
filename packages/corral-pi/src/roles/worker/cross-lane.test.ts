@@ -12,7 +12,6 @@ import { dirname, join } from "node:path";
 import { EventLog } from "../../bridge/events.ts";
 import { type BridgeServer, startBridge } from "../../bridge/server.ts";
 import { loadModules } from "../../host/modules.ts";
-import { loadPeerLookup } from "../../host/peer.ts";
 import { guardedFetch, restrictEnvironment } from "../../host/restrict.ts";
 import { HostSession } from "../../host/session.ts";
 import { CorralClient, sha256Hex } from "../../tools/corral.ts";
@@ -20,6 +19,7 @@ import { type FakeTransport, fakeCodexTransport } from "../../../test/fixtures/a
 import { type FixtureInstall, buildFixtureInstall, PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
 import { within, nextEvent } from "../../../test/support/wait.ts";
 import { corralBinary, generationDir, ok, privateHerdr, privateRoot, probeBinary, run } from "../../../test/support/workspace.ts";
+import { testHandlers } from "../../../test/support/bridge-client.ts";
 import { StoreEventFollower as EventFollower, gateResult, inboxMessages } from "../../../test/support/canonical-store.ts";
 
 const isolated = privateHerdr();
@@ -126,17 +126,14 @@ beforeAll(async () => {
   writeFileSync(join(dir, "ctl.cap"), CTL, { mode: 0o600 });
   const session = host;
   bridge = await startBridge({
-    path: join(dir, "host.sock"), ctlCap: CTL, generation: lane.generation, uid: process.getuid?.() ?? -1,
-    peer: await loadPeerLookup(), events,
-    handlers: {
-      hello: () => ({ protocol: 1, generation: lane.generation, role: "worker", bound: session.bound,
-        session_id: session.sessionId(), last_seq: events.last,
-        commands: ["hello", "get_state", "submit_input", "cancel", "events_since", "shutdown"] }),
+    path: join(dir, "host.sock"), sessionId: `${lane.task}/${lane.run}`, events,
+    handlers: testHandlers({
+      hello: () => ({ protocol: 2, role: "worker", session_id: session.sessionId(),
+        session_file: session.session.sessionFile, pid: process.pid }),
       state: () => session.state(),
-      submit: (input, requestId) => session.submit(input, requestId),
-      cancel: (turn) => session.cancel(turn),
-      shutdown: () => undefined,
-    },
+      submit: input => session.submitLocal(input),
+      cancel: turn => session.cancel(turn),
+    }),
   });
   follower = await EventFollower.open(workspace);
 }, 900_000);

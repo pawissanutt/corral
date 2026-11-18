@@ -1,5 +1,5 @@
-// Builds a bounded temp asset directory from the package: src/, package.json, bun.lock and
-// compat.json, the package's installed node_modules linked in, and (with overlays) fixture.json
+// Builds a bounded temp asset directory from the package: src/, package.json and bun.lock,
+// the package's installed node_modules linked in, and (with overlays) fixture.json
 // plus the fixture role, auth and delivery modules copied to their fixed module paths. Fixture
 // modules exist only inside that temp directory, never in the package's own src/.
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -65,7 +65,7 @@ function copy(from: string, to: string): void {
 
 export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstall {
   const dir = mkdtempSync(join(options.parent ?? tmpdir(), "corral-pi-assets-"));
-  for (const file of ["package.json", "bun.lock", "compat.json"]) copy(join(PACKAGE_ROOT, file), join(dir, file));
+  for (const file of ["package.json", "bun.lock"]) copy(join(PACKAGE_ROOT, file), join(dir, file));
   copy(join(PACKAGE_ROOT, "src"), join(dir, "src"));
   if (options.isolatePiState) {
     const main = join(dir, "src/host/main.ts");

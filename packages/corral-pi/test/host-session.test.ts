@@ -7,8 +7,7 @@ import { renderLayoutFrame } from "../node_modules/@earendil-works/pi-tui/dist/l
 
 import { EventLog } from "../src/bridge/events.ts";
 import { startBridge } from "../src/bridge/server.ts";
-import { loadPeerLookup } from "../src/host/peer.ts";
-import { connect } from "./support/bridge-client.ts";
+import { connect, testHandlers } from "./support/bridge-client.ts";
 import type { SubmitInput } from "../src/bridge/protocol.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { BUILTIN_EXTENSIONS, NetworkRefused, guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
@@ -200,34 +199,28 @@ test("input held before upstream preflight is never reported rejected, and its t
 
 test("through the bridge, input still before preflight at the reply deadline is pending, then settles started with its origin", async () => {
   const server = await startBridge({
-    path: join(work, "e2e.sock"), ctlCap: CTL, generation: 1, uid: process.getuid?.() ?? -1, peer: await loadPeerLookup(),
-    events, inputReplyMs: 50,
-    handlers: {
-      hello: () => ({}), state: () => ({}), cancel: async () => ({}), shutdown: () => undefined,
-      submit: (submission, requestId) => host.submit(submission, requestId),
-    },
+    path: join(work, "e2e.sock"), sessionId: "fixture", events, inputReplyMs: 50,
+    handlers: testHandlers({ submit: submission => host.submitLocal(submission) }),
   });
   const client = await connect(join(work, "e2e.sock"));
   const held = holdNextInput();
-  const args = { text: "HOLD_INPUT Reply only DEFERRED.", busy_policy: "prompt", idempotency_key: "k-deferred", origin: "test" };
-  const frame = { version: 1, id: "rq-deferred", ctl_cap: CTL, generation: 1, command: "submit_input", args };
+  const args = { text: "HOLD_INPUT Reply only DEFERRED.", busy_policy: "prompt", origin: "owner" };
+  const frame = { version: 2, id: "rq-deferred", command: "submit_input", args };
   const first = client.request(frame);
   await within(held.entered, 30_000, "upstream to hold the input");
   const reply = (await first).result;
   expect([reply?.disposition, reply?.reason]).toEqual(["pending", "preflight_pending"]);
-  const settled = nextEvent(events, (event) => event.kind === "input_settled" && event.idempotency_key === "k-deferred");
+  const settled = nextEvent(events, (event) => event.kind === "input_settled" && event.request_id === frame.id);
   const started = nextEvent(events, (event) => event.kind === "turn_started");
   const ended = nextEvent(events, (event) => event.kind === "turn_ended");
   held.release();
   const outcome = await settled;
   expect(outcome.disposition).toBe("started");
-  expect((await started).origin).toEqual({ kind: "bridge", idempotency_key: "k-deferred" });
+  expect((await started).origin).toEqual({ kind: "bridge" });
   expect((await started).turn).toBe(outcome.turn);
   await ended;
-  const replay = (await client.request({ ...frame, id: "rq-deferred-2" })).result;
-  expect([replay?.disposition, replay?.turn, replay?.replayed]).toEqual(["started", outcome.turn, true]);
   expect(events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
-    .filter((event) => event.idempotency_key === "k-deferred" && event.disposition === "rejected")).toHaveLength(0);
+    .filter((event) => event.request_id === frame.id && event.disposition === "rejected")).toHaveLength(0);
   client.close();
   await server.close();
 });

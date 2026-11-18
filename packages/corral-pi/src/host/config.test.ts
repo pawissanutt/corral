@@ -1,10 +1,6 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
-import { HOST_CAPABILITIES, LaunchMessageInvalid, parseLaunchMessage } from "./config.ts";
+import { LaunchMessageInvalid, parseLaunchMessage, parseRunFlags } from "./config.ts";
 import { bindingDigest } from "./connections.ts";
-import { parseOwnerTurn } from "./remote-owner.ts";
 
 const message = {
   version: 1, store: "st-demo", project: "demo", role: "reviewer",
@@ -36,9 +32,6 @@ test("daemon assistant launch is pane-less without weakening terminal pane admis
   expect(() => parseLaunchMessage(JSON.stringify({ ...assistant, pane: null }))).toThrow(LaunchMessageInvalid);
   expect(() => parseLaunchMessage(JSON.stringify({ ...assistant, daemon_hosted: true }))).toThrow(LaunchMessageInvalid);
   expect(() => parseLaunchMessage(JSON.stringify({ ...message, daemon_hosted: true, pane: null }))).toThrow(LaunchMessageInvalid);
-  const turn = { entry: "E-1", input: "A-1/g0/i1", turn: 1, text: "owner words", device: "dev-1", via: "app:dev-1", typed_at: "2026-11-14T00:00:00Z" };
-  expect(parseOwnerTurn(turn).input).toBe("A-1/g0/i1");
-  expect(() => parseOwnerTurn({ ...turn, input: "arbitrary text" })).toThrow("already journaled");
 });
 
 test("workspace PM launch has no project while legacy PM launches remain readable", () => {
@@ -105,9 +98,18 @@ test("write permissions require assistant role and validated snapshot settings",
   expect(() => parseLaunchMessage(JSON.stringify({ ...assistant, capabilities: { ...capabilities, settings: {} } }))).toThrow("write_permissions");
 });
 
-test("compat.json advertises exactly the capabilities this host implements", () => {
-  const compat = JSON.parse(readFileSync(fileURLToPath(new URL("../../compat.json", import.meta.url)), "utf8"));
-  expect(compat.capabilities).toEqual([...HOST_CAPABILITIES]);
+test("flags name the engine run or task reviewer without a legacy launch message", () => {
+  const flags = ["--dir", "runs/T-1/R1", "--socket", "socket", "--prompt-file", "prompt.md",
+    "--corral", "/test/corral-next", "--model", "anthropic/claude-opus-4-8", "--effort", "high"];
+  const env = { CORRAL_NEXT_ROOT: "/fixture", CORRAL_TASK: "T-1", CORRAL_RUN: "R1" };
+  const run = parseRunFlags("run", flags, "/assets", { ...env, CORRAL_ACTOR: "agent" }, "/fixture/work");
+  expect(run.identity).toMatchObject({ role: "worker", task: "T-1", run: "R1" });
+  expect(run.local).toMatchObject({ id: "T-1/R1", dir: "/fixture/work/runs/T-1/R1", socket: "/fixture/work/socket" });
+  expect(run).toMatchObject({ root: "/fixture", corral: "/test/corral-next", provider: "anthropic", effort: "high",
+    promptFile: "/fixture/work/prompt.md" });
+  expect(run.secrets).toBeUndefined();
+  expect(parseRunFlags("run", flags, "/assets", { ...env, CORRAL_ACTOR: "reviewer" }, "/fixture/work").local?.id)
+    .toBe("T-1/reviewer");
 });
 
 test("web settings come from the generation snapshot and require an eligible enabled capability", () => {

@@ -32,7 +32,7 @@ import type { EventLog } from "../bridge/events.ts";
 import { LiveEvents } from "./live-events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
 import { closeResidentSession, residentLifecycle } from "../claude/resident.ts";
-import type { QuestionUpdate, SubmitInput, SubmitResult } from "../bridge/protocol.ts";
+import { BridgeRefusal, type AnswerInput, type QuestionUpdate, type SessionInput, type SubmitInput, type SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
 import { scratchRoots, writeSettings } from "../roles/assistant/paths.ts";
 import { investigationTool } from "../roles/assistant/investigate.ts";
@@ -55,8 +55,8 @@ import { TodoLedger, installPlanCommand } from "../ui/todo.ts";
 import { type DueContinuation, RequestContext, continuationText } from "./request.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
-import { askUserEnabled, askUserTool } from "./ask-user.ts";
-import { PendingQuestions, QUESTION_ENTRY } from "./pending-questions.ts";
+import { askUserEnabled, askUserTool, localQuestionAsk } from "./ask-user.ts";
+import { PendingQuestions, QUESTION_ENTRY, validAnswer } from "./pending-questions.ts";
 import { OwnerAskMirror } from "./owner-ask-mirror.ts";
 import { recordQuestionOwnerInput } from "./question-owner-input.ts";
 import { OwnerQuestionUi } from "../ui/owner-questions.ts";
@@ -130,6 +130,7 @@ export interface HostSessionOptions {
   readonly identity: HostIdentity;
   readonly build?: BuildContext;
   readonly daemonHosted?: boolean;
+  readonly local?: { paneInput(text: string, images?: ImageContent[]): Promise<boolean> };
   readonly cwd: string;
   readonly agentDir: string;
   readonly model: string;
@@ -179,7 +180,7 @@ export interface HostSessionOptions {
   readonly switchProfile?: () => void;
 }
 
-type TurnOrigin = { kind: "bridge" | "continuation"; idempotency_key: string } | { kind: "owner_terminal" }
+type TurnOrigin = { kind: "bridge"; idempotency_key?: string } | { kind: "continuation"; idempotency_key: string } | { kind: "owner_terminal" }
   | { kind: "unknown" };
 
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
@@ -359,6 +360,7 @@ export class HostSession {
   private open = false;
   private cancelRequested: number | undefined;
   private stopCause: TurnStopCause | undefined;
+  private turnError: string | null = null;
   private deliveredTextHashes: Set<string> | undefined;
   private nextTurnOrigin: TurnOrigin | undefined;
   private lastInputSource: string | undefined;
@@ -449,7 +451,7 @@ export class HostSession {
       emit: (kind, data) => options.events.emit(kind, data),
       fence: () => { this.stopCause ??= "host"; this.closing = true; this.writeAbort.abort(); void this.fleet?.close(); this.session.agent.abort(); },
     });
-    this.planning = options.identity.role === "assistant" ? new PlanningPolicy({
+    this.planning = !options.local && options.identity.role === "assistant" ? new PlanningPolicy({
       read: async () => {
         // Bootstrap has no authenticated session yet. Once bound, use the dedicated,
         // receipt-free workflow projection, independently of Todo continuation reads.
@@ -757,7 +759,7 @@ export class HostSession {
         diagnostic: error => { options.events.emit("shadow_failed", { error: String(error).slice(0, 500) }); },
       });
     }
-    this.planReviews = options.identity.role === "assistant" ? new PlanReviews({
+    this.planReviews = !options.local && options.identity.role === "assistant" ? new PlanReviews({
       auxiliary: auxiliary.explore ? this.auxiliary : undefined,
       call: async (id, payload) => {
         if (!this.bound) throw new Error("host_not_bound");
@@ -783,7 +785,7 @@ export class HostSession {
       },
       error: error => { options.events.emit("local_plan_review_error", { message: error instanceof Error ? error.message : String(error) }); },
     }) : undefined;
-    const dialogEnabled = options.daemonHosted || askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
+    const dialogEnabled = !!options.local || options.daemonHosted || askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
     // Only the PM's questions are board records: an assistant's pane answers are cited owner input.
     const askMirror = dialogEnabled && !options.daemonHosted && options.identity.role === "pm"
       ? new OwnerAskMirror(options.client, () => this.sessionId(), () => this.currentTurn()) : undefined;
@@ -793,20 +795,21 @@ export class HostSession {
       } } : {}),
       session: () => options.sessionManager.getSessionId(), generation: options.identity.generation,
       entries: () => options.sessionManager.getEntries(),
-      append: value => { options.sessionManager.appendCustomEntry(QUESTION_ENTRY, value); },
+      append: value => { options.sessionManager.appendCustomEntry(QUESTION_ENTRY, value, { immediate: !!options.local }); },
       changed: question => {
         if (question) options.events.emit("owner_question", { id: question.id, status: question.status });
         this.questionUi?.changed(question);
       },
       record: async (text, question) => {
         if (!this.bound || this.closing) throw new Error("question_host_unbound_or_closing");
-        return options.identity.role === "assistant" ? recordQuestionOwnerInput({
+        return options.identity.role === "assistant" && !options.local ? recordQuestionOwnerInput({
           manager: options.sessionManager, client: options.client, events: options.events,
           generation: options.identity.generation, turn: this.currentTurn(), question, text,
         }) : text;
       },
       deliver: async (text, key) => {
-        const result = await this.submit({ text, idempotencyKey: key, origin: "ask-user", busyPolicy: "steer" }, key);
+        const result = options.local ? await this.submitLocal({ text, origin: "owner", busyPolicy: "steer" })
+          : await this.submit({ text, idempotencyKey: key, origin: "ask-user", busyPolicy: "steer" }, key);
         return result.disposition === "started" || result.disposition === "queued";
       },
     }) : undefined;
@@ -818,7 +821,8 @@ export class HostSession {
         const message = id ? ownerInputText(answer, id) : answer;
         this.dialogPi.sendUserMessage(message, { deliverAs: "steer" });
         return message;
-      }, this.ownerQuestions, () => this.questionUi?.busy === true, () => this.dialogPresentation(), this.remotePrompts?.ask, askMirror)] : []),
+      }, this.ownerQuestions, () => this.questionUi?.busy === true, () => this.dialogPresentation(),
+      options.local && this.ownerQuestions ? localQuestionAsk(this.ownerQuestions) : this.remotePrompts?.ask, askMirror)] : []),
       ...(this.additionalLsp?.tools ?? []).map(tool => ({ ...tool, execute: (...args: Parameters<ToolDefinition["execute"]>) => {
         const current = this.additionalLsp?.tools.find(candidate => candidate.name === tool.name);
         if (!current) throw new Error("LSP runtime unavailable; no effect started");
@@ -1502,7 +1506,11 @@ export class HostSession {
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
       // A build session's record keeps what the owner asked for, verbatim.
-      if (event.source === "interactive" && !event.text.startsWith("/")) this.buildControls?.noteOwnerInput(event.text);
+      if (event.source === "interactive" && !event.text.startsWith("/")) {
+        this.buildControls?.noteOwnerInput(event.text);
+        if (await this.options.local?.paneInput(event.text, event.images)) return { action: "handled" as const };
+        if (this.options.local) return { action: "continue" as const };
+      }
       // Only text the owner typed into this pane is journaled, before the model sees it.
       if (event.source !== "interactive" || this.options.identity.role !== "assistant" || event.text.startsWith("/")) {
         return { action: "continue" as const };
@@ -1662,6 +1670,9 @@ export class HostSession {
     this.unsubscribe = session.subscribe((event) => {
       if (event.type === "message_end") {
         this.panelStats = undefined;
+        if (event.message.role === "assistant" && event.message.stopReason !== "aborted") {
+          this.turnError = event.message.stopReason === "error" ? (event.message.errorMessage || "provider_error").slice(0, 512) : null;
+        }
         if (event.message.role === "assistant" && event.message.stopReason === "aborted") {
           this.stopCause ??= this.closing ? "host" : "owner";
         }
@@ -1713,6 +1724,7 @@ export class HostSession {
     this.turn++;
     this.paidContinuation.started();
     this.open = true;
+    this.turnError = null;
     this.stopCause = this.budget.state().stopped ? "budget" : undefined;
     if (this.marks && this.attached !== "headless") this.turnFacts.start(this.turn, Date.now(), this.session.getSessionStats().cost);
     const origin: TurnOrigin = this.nextTurnOrigin
@@ -1723,7 +1735,7 @@ export class HostSession {
     // Before the prompt is recorded: its parent is the cursor a rewind to this turn restores.
     if (this.bound) this.checkpoint("start");
     this.costTurn({ phase: "start",
-      key: origin.kind === "bridge" || origin.kind === "continuation" ? origin.idempotency_key : null });
+      key: origin.kind === "bridge" || origin.kind === "continuation" ? origin.idempotency_key ?? null : null });
     this.report("turn_started", { origin, provider: this.session.model?.provider, model: this.session.model?.id });
     if (this.budget.state().stopped) this.report("budget_exhausted", { budget: this.budget.state() });
     this.options.herdr?.turnStarted();
@@ -2012,14 +2024,31 @@ export class HostSession {
       bind_nonce_sha256: sha256Hex(bindNonce),
       ...(this.options.binding ? { binding: this.options.binding } : {}),
     }, { immediate: true });
+    await this.activate(sessionId, sha256Hex(bindNonce), sessionFile,
+      (receipt.result ?? {}) as { herdr_seq_epoch_ms?: unknown; questions?: unknown });
+    return receipt;
+  }
+
+  /** A flag launch owns its session locally; no call to corral admits startup. */
+  async startLocal(): Promise<void> {
+    const { sessionId, sessionFile, sessionManager } = this.session;
+    if (!sessionFile) throw new Error("the Pi session has no transcript path");
+    // Pi defers a new transcript until the first message unless an entry is flushed explicitly.
+    // The temporary legacy queue uses this process identity to distinguish its in-memory items.
+    const queueIdentity = sha256Hex(`${process.pid}:${processStartTime()}`);
+    if (!existsSync(sessionFile)) sessionManager.appendCustomEntry("corral_host_started", { pid: process.pid }, { immediate: true });
+    await this.activate(sessionId, queueIdentity, sessionFile, {});
+  }
+
+  private async activate(sessionId: string, queueIdentity: string, sessionFile: string,
+    bound: { herdr_seq_epoch_ms?: unknown; questions?: unknown }): Promise<void> {
     this.boundSessionId = sessionId;
-    this.queue.bind(sessionId, sha256Hex(bindNonce));
+    this.queue.bind(sessionId, queueIdentity);
     const commandFacts: CommandFact[] = [], monitorFacts: MonitorFact[] = [];
     for (const entry of this.session.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === COMMAND_ENTRY) commandFacts.push(entry.data as CommandFact);
       if (entry.type === "custom" && entry.customType === MONITOR_ENTRY) monitorFacts.push(entry.data as MonitorFact);
     }
-    const bound = (receipt.result ?? {}) as { herdr_seq_epoch_ms?: unknown; questions?: unknown };
     this.options.herdr?.bind({ sessionId, sessionFile, epochMs: bound.herdr_seq_epoch_ms, questions: bound.questions });
     await this.planning?.refresh();
     if (this.planning && !this.planning.restricted) await this.planningMcp();
@@ -2029,7 +2058,6 @@ export class HostSession {
     this.commands?.bound(commandFacts, monitorFacts);
     await this.questionUi?.recover();
     await this.recoverPlanReviews();
-    return receipt;
   }
 
   /** Only a journaled command-origin input can acknowledge a completion, never quoted log text. */
@@ -2121,42 +2149,79 @@ export class HostSession {
       this.queue.observer.lifecycle({ tag: queueTag, event: "rejected", reason: "host_closing" });
       return { disposition: "rejected", reason: "host_closing" };
     }
-    return new Promise<SubmitResult>((resolve) => {
-      let settled = false;
-      const settle = (result: SubmitResult) => {
-        if (settled) return;
-        settled = true;
-        resolve(result);
-      };
-      this.session.prompt(input.text, {
-        source: "rpc", queueTag, ...(images ? { images } : {}),
-        ...(input.busyPolicy === "steer" ? { streamingBehavior: "steer" as const } : {}),
-        ...(input.busyPolicy === "follow_up" ? { streamingBehavior: "followUp" as const } : {}),
-        preflightResult: (disposition) => {
-          if (disposition !== "started") {
-            settle({ disposition });
-            return;
-          }
-          this.nextTurnOrigin = { kind: "bridge", idempotency_key: input.idempotencyKey };
-          this.nextTurnInbox = input.origin === "corral-inbox";
-          settle({ disposition, turn: this.turn + 1 });
-        },
-      }).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        settle({ disposition: "rejected", reason: /already processing/i.test(message) ? "busy" : message.slice(0, 256) });
-      });
-    });
+    return this.promptInput(input, queueTag, images);
   }
-  /** Remote input IDs originate only in the daemon's journal; never create an owner-input event. */
-  remoteOwnerInput(input: string): void { this.remotePrompts?.setInput(input); }
 
-  /** Select only a model already in this generation's admitted provider catalog. */
+  submitLocal(input: SessionInput, images?: ImageContent[]): Promise<SubmitResult> {
+    if (!this.bound || this.closing) return Promise.resolve({ disposition: "rejected", reason: "host_not_ready" });
+    if (this.resume && /^\/resume(\s|$)/.test(input.text.trim())) {
+      return Promise.resolve({ disposition: "rejected", reason: "owner_only_command" });
+    }
+    return this.promptInput(input, this.queue.bridgeInput(input, images), images);
+  }
+
+  private promptInput(input: Pick<SubmitInput, "text" | "busyPolicy" | "origin"> & { idempotencyKey?: string },
+    queueTag: unknown, images?: ImageContent[]): Promise<SubmitResult> {
+    const { promise, resolve } = Promise.withResolvers<SubmitResult>();
+    this.session.prompt(input.text, {
+      source: "rpc", queueTag, ...(images ? { images } : {}),
+      ...(input.busyPolicy === "steer" ? { streamingBehavior: "steer" as const } : {}),
+      ...(input.busyPolicy === "follow_up" ? { streamingBehavior: "followUp" as const } : {}),
+      preflightResult: (disposition) => {
+        if (disposition !== "started") {
+          resolve({ disposition });
+          return;
+        }
+        this.nextTurnOrigin = { kind: "bridge", ...(input.idempotencyKey ? { idempotency_key: input.idempotencyKey } : {}) };
+        this.nextTurnInbox = input.origin === "corral-inbox";
+        resolve({ disposition, turn: this.turn + 1 });
+      },
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      resolve({ disposition: "rejected", reason: /already processing/i.test(message) ? "busy" : message.slice(0, 256) });
+    });
+    return promise;
+  }
+  pendingOwnerQuestions() {
+    return this.ownerQuestions?.pending().flatMap(record => {
+      const question = record.questions[0];
+      return question && record.questions.length === 1 ? [{ id: record.id, question: question.question,
+        options: question.options, free_text: question.freeText !== false, status: "pending" }] : [];
+    }) ?? [];
+  }
+
+  async answerQuestion({ question, option, text }: AnswerInput, before: () => Promise<unknown>): Promise<string> {
+    const pending = this.ownerQuestions;
+    const record = pending?.get(question);
+    if (!pending || !record) return "missing";
+    if (record.status !== "pending") return pending.status(question);
+    const choice = record.questions[0];
+    if (!choice || record.questions.length !== 1 || !validAnswer(choice, { option, text })) {
+      throw new BridgeRefusal("invalid_question_answer", "choose a listed option or use free text if allowed");
+    }
+    await before();
+    return pending.answer(question, [{ option, text }]);
+  }
+
+  async replyToQuestion(text: string): Promise<boolean> {
+    const pending = this.ownerQuestions;
+    const records = pending?.pending() ?? [];
+    const record = records[0], question = record?.questions[0];
+    if (!pending || !record || records.length !== 1 || !question || record.questions.length !== 1 || text.startsWith("/")) return false;
+    const option = text.trim();
+    const answer = question.options.includes(option) ? { option } : { text };
+    if (!validAnswer(question, answer)) return false;
+    await pending.answer(record.id, [answer]);
+    return true;
+  }
+
+  /** Select a model in the provider catalog already configured for this process. */
   async selectRemoteModel(name: string, effort?: string): Promise<void> {
-    if (!this.options.daemonHosted || this.open || this.closing) throw new Error("remote_model_selection_unavailable");
+    if ((!this.options.local && !this.options.daemonHosted) || this.open || this.closing) throw new Error("remote_model_selection_unavailable");
     const slash = name.indexOf("/");
     const provider = slash < 0 ? this.provider : name.slice(0, slash);
     const id = slash < 0 ? name : name.slice(slash + 1);
-    if (provider !== this.provider) throw new Error("provider_change_requires_new_generation");
+    if (provider !== this.provider) throw new Error("provider change requires relaunching corral-pi with --provider and --model");
     const model = this.auxiliaryModels?.getModel(provider, id);
     if (!model) throw new Error(`model_unavailable: ${name}`);
     if (effort !== undefined && !THINKING.has(effort)) throw new Error("thinking_level_invalid");
@@ -2262,6 +2327,7 @@ export class HostSession {
         created: this.sessionsCreated },
       streaming: session.isStreaming,
       turn: { current: this.turn, open: this.open },
+      ...(this.options.local ? { last_error: this.turnError } : {}),
       last_seq: this.options.events.last,
       model: session.model ? `${session.model.provider}/${session.model.id}` : null,
       loadout: [...this.loadout],

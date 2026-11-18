@@ -1,25 +1,21 @@
-// Bridge v1 wire format (corral to host): one JSON request per LF-terminated line, at most
-// 64 KiB, each carrying ctl_cap and the generation; one reply line per request.
+// Session socket v2: one JSON request and reply per line, with the Unix socket as the boundary.
+import { parseOwnerAttachments, type OwnerAttachment } from "../host/owner-attachments.ts";
 import type { BusyPolicy } from "../delivery/types.ts";
 
-export const BRIDGE_VERSION = 1;
+export const BRIDGE_VERSION = 2;
 export const FRAME_MAX_BYTES = 64 * 1024;
-export const INPUT_MAX_BYTES = 8 * 1024;
+export const INPUT_MAX_BYTES = FRAME_MAX_BYTES;
 export const MAX_IN_FLIGHT = 4;
-/** Distinct input keys one generation admits; it refuses new keys beyond, never forgets old ones. */
-export const SUBMISSIONS_MAX = 4096;
 /** How long a submit_input reply waits for upstream's preflight before answering `pending`. */
 export const INPUT_REPLY_MS = 30_000;
 /** Room left in a frame for the reply envelope around a page of events. */
 export const EVENT_PAGE_BYTES = FRAME_MAX_BYTES - 4 * 1024;
 
-export type Command = "hello" | "get_state" | "submit_input" | "cancel" | "events_since" | "live_since" | "shutdown" | "questions" | "queue_state" | "queue_withdraw" | "handoff_drain" | "owner_turn" | "set_model";
-export const COMMANDS: readonly Command[] = [
-  "hello", "get_state", "submit_input", "cancel", "events_since", "live_since", "shutdown", "questions", "queue_state", "queue_withdraw", "handoff_drain",
-  "owner_turn", "set_model",
-];
-/** At most this many questions in one `questions` request (corral sends its newest 128). */
-export const QUESTIONS_MAX = 256;
+export const COMMANDS = [
+  "hello", "get_state", "submit_input", "cancel", "events_since", "live_since", "shutdown", "queue_state", "queue_withdraw",
+  "set_model", "answer", "pause", "resume",
+] as const;
+export type Command = typeof COMMANDS[number];
 
 /** `pending`: admitted, upstream has not answered yet; the outcome follows as `input_settled`. */
 export type Disposition = "started" | "queued" | "handled" | "rejected" | "pending";
@@ -32,12 +28,19 @@ export class BridgeRefusal extends Error {
 
 export interface RequestFrame {
   readonly id: string;
-  readonly ctlCap: string;
-  readonly generation: number;
   readonly command: Command;
   readonly args: Record<string, unknown>;
 }
 
+/** Session socket input, also used for automated input saved while paused. */
+export interface SessionInput {
+  readonly text: string;
+  readonly busyPolicy: BusyPolicy;
+  readonly origin: "owner" | "auto";
+  readonly attachments?: OwnerAttachment[];
+}
+
+/** Internal legacy delivery adapter; no key comes from the session socket. */
 export interface SubmitInput {
   readonly text: string;
   readonly busyPolicy: BusyPolicy;
@@ -62,7 +65,6 @@ export interface SubmitResult {
 
 const ID = /^[A-Za-z0-9._:-]{1,80}$/;
 const KEY = /^[A-Za-z0-9._:-]{1,128}$/;
-const ORIGIN = /^[A-Za-z0-9._:-]{1,64}$/;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -78,33 +80,24 @@ export function parseFrame(value: unknown): RequestFrame {
   if (value.version !== BRIDGE_VERSION) throw new BridgeRefusal("bad_frame", `version must be ${BRIDGE_VERSION}`);
   const id = frameId(value);
   if (id === null) throw new BridgeRefusal("bad_frame", "id must be 1-80 characters of [A-Za-z0-9._:-]");
-  if (typeof value.ctl_cap !== "string") throw new BridgeRefusal("auth_failed", "ctl_cap is missing");
-  if (typeof value.generation !== "number" || !Number.isSafeInteger(value.generation)) {
-    throw new BridgeRefusal("bad_frame", "generation must be an integer");
-  }
   if (typeof value.command !== "string" || !COMMANDS.includes(value.command as Command)) {
-    throw new BridgeRefusal("unknown_command", "command is not a bridge v1 command");
+    throw new BridgeRefusal("unknown_command", "command is not a session socket command");
   }
   const args = value.args ?? {};
   if (!record(args)) throw new BridgeRefusal("bad_frame", "args must be an object");
-  return { id, ctlCap: value.ctl_cap, generation: value.generation, command: value.command as Command, args };
+  return { id, command: value.command as Command, args };
 }
 
-export function parseSubmitInput(args: Record<string, unknown>): SubmitInput {
-  const { text, busy_policy: busyPolicy, idempotency_key: key, origin } = args;
-  if (typeof text !== "string" || text.length === 0 || Buffer.byteLength(text) > INPUT_MAX_BYTES) {
-    throw new BridgeRefusal("bad_input", `text must be 1-${INPUT_MAX_BYTES} bytes`);
+export function parseSubmitInput(args: Record<string, unknown>): SessionInput {
+  const { text, busy_policy: busyPolicy = "steer", origin, attachments } = args;
+  if (typeof text !== "string" || !text.trim() || Buffer.byteLength(text) > INPUT_MAX_BYTES) {
+    throw new BridgeRefusal("bad_input", `text must be nonblank and fit in the ${FRAME_MAX_BYTES}-byte frame`);
   }
   if (busyPolicy !== "steer" && busyPolicy !== "follow_up" && busyPolicy !== "prompt") {
     throw new BridgeRefusal("bad_input", "busy_policy must be steer, follow_up or prompt");
   }
-  if (typeof key !== "string" || !KEY.test(key)) {
-    throw new BridgeRefusal("bad_input", "idempotency_key must be 1-128 characters of [A-Za-z0-9._:-]");
-  }
-  if (typeof origin !== "string" || !ORIGIN.test(origin)) {
-    throw new BridgeRefusal("bad_input", "origin must be 1-64 characters of [A-Za-z0-9._:-]");
-  }
-  return { text, busyPolicy, idempotencyKey: key, origin };
+  if (origin !== "owner" && origin !== "auto") throw new BridgeRefusal("bad_input", "origin must be owner or auto");
+  return { text, busyPolicy, origin, ...(attachments !== undefined ? { attachments: parseOwnerAttachments(attachments) } : {}) };
 }
 
 export function parseQueueLimit(args: Record<string, unknown>): number {
@@ -115,11 +108,11 @@ export function parseQueueLimit(args: Record<string, unknown>): number {
   return limit;
 }
 
-export function parseQueueWithdraw(args: Record<string, unknown>): { key: string; op_key: string } {
-  if (typeof args.key !== "string" || !KEY.test(args.key) || typeof args.op_key !== "string" || !KEY.test(args.op_key)) {
-    throw new BridgeRefusal("bad_input", "key and op_key must be 1-128 characters of [A-Za-z0-9._:-]");
+export function parseQueueWithdraw(args: Record<string, unknown>): string {
+  if (typeof args.key !== "string" || !KEY.test(args.key)) {
+    throw new BridgeRefusal("bad_input", "key must be 1-128 characters of [A-Za-z0-9._:-]");
   }
-  return { key: args.key, op_key: args.op_key };
+  return args.key;
 }
 
 export function parseTurn(args: Record<string, unknown>): number | undefined {
@@ -130,24 +123,21 @@ export function parseTurn(args: Record<string, unknown>): number | undefined {
   return args.turn;
 }
 
-const QUESTION_KEY = /^[A-Za-z0-9._:/-]{1,160}$/;
-const WORD = /^[a-z_]{1,32}$/;
+export interface AnswerInput {
+  readonly question: string;
+  readonly option?: string;
+  readonly text?: string;
+}
 
-export function parseQuestions(args: Record<string, unknown>): QuestionUpdate[] {
-  const list = args.questions;
-  if (!Array.isArray(list) || list.length > QUESTIONS_MAX) {
-    throw new BridgeRefusal("bad_input", `questions must be a list of at most ${QUESTIONS_MAX}`);
+export function parseAnswer(args: Record<string, unknown>): AnswerInput {
+  const { question, option, text } = args;
+  if (typeof question !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(question)
+      || (option !== undefined && (typeof option !== "string" || !option.trim()))
+      || (text !== undefined && (typeof text !== "string" || !text.trim()))
+      || (option === undefined && text === undefined)) {
+    throw new BridgeRefusal("bad_input", "answer needs a question and an option or text");
   }
-  return list.map((item: unknown) => {
-    if (!record(item)) throw new BridgeRefusal("bad_input", "each question is an object");
-    const { key, revision, kind, blocking, state } = item;
-    if (typeof key !== "string" || !QUESTION_KEY.test(key) || typeof revision !== "number" ||
-        !Number.isSafeInteger(revision) || revision < 1 || typeof kind !== "string" || !WORD.test(kind) ||
-        typeof blocking !== "boolean" || typeof state !== "string" || !WORD.test(state)) {
-      throw new BridgeRefusal("bad_input", "a question names key, revision, kind, blocking and state");
-    }
-    return { key, revision, kind, blocking, state };
-  });
+  return { question, option, text };
 }
 
 export function parseSeq(args: Record<string, unknown>): number {

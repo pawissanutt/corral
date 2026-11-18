@@ -13,7 +13,7 @@ export const QUEUE_OPERATIONS_MAX = 1024;
 const SNAPSHOT_BYTES = 48 * 1024;
 type Mode = "prompt" | "steer" | "follow_up";
 type State = "queued" | "started" | "withdrawn" | "handled" | "rejected";
-type Origin = "pane" | "corral-inbox" | "extension";
+type Origin = "pane" | "corral-inbox" | "extension" | "owner" | "auto";
 type Observer = NonNullable<Parameters<AgentSession["setQueueObserver"]>[0]>;
 interface Item {
   readonly item: string;
@@ -125,8 +125,9 @@ export class HostQueue {
   };
 
   /** Allocated before asynchronous bridge preflight, retaining the original envelope digest. */
-  bridgeInput(input: SubmitInput, images?: ImageContent[]): unknown {
-    return this.mint(input.text, input.busyPolicy, input.origin === "corral-inbox" ? "corral-inbox" : "extension", images, input.idempotencyKey);
+  bridgeInput(input: Pick<SubmitInput, "text" | "busyPolicy" | "origin"> & { idempotencyKey?: string }, images?: ImageContent[]): unknown {
+    const origin = input.origin === "owner" || input.origin === "auto" || input.origin === "corral-inbox" ? input.origin : "extension";
+    return this.mint(input.text, input.busyPolicy, origin, images, input.idempotencyKey);
   }
 
   private mint(text: string, mode: Mode, origin: Origin, images?: ImageContent[], key?: string, supersedes?: string): Item {
@@ -177,16 +178,17 @@ export class HostQueue {
     queueMicrotask(() => this.options.emit("queue_item", data));
   }
 
-  private check(): void {
+  private check(requireInteractive = true): void {
     this.healthy();
     if (!this.binding || !this.options.current()) throw new BridgeRefusal("stale_item", "queue binding is not current");
     if (!this.options.enabled()) throw new BridgeRefusal("capability_unavailable", "queue_control is unavailable");
-    if (!this.options.interactive()) throw new BridgeRefusal("not_interactive", "queue controls require an interactive host");
+    if (requireInteractive && !this.options.interactive()) throw new BridgeRefusal("not_interactive", "queue controls require an interactive host");
   }
 
   /** Metadata only over the bridge; text is returned solely to the interactive host API. */
-  snapshot(limit = 64, local = true): Record<string, unknown> {
-    this.check();
+  snapshot(limit = 64, view: boolean | "socket" = true): Record<string, unknown> {
+    const local = view === true, socket = view === "socket";
+    this.check(!socket);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 64) throw new BridgeRefusal("bad_input", "limit must be 1..64");
     const items: Record<string, unknown>[] = [];
     const positions = { steer: 0, follow_up: 0, prompt: 0 };
@@ -194,14 +196,14 @@ export class HostQueue {
     for (const item of this.pending) {
       const entry = { item: item.item, origin: item.origin, mode: item.mode, state: item.state,
         position: ++positions[item.mode], bytes: item.text_bytes, text_sha256: item.text_sha256,
-        actions: item.origin === (local ? "pane" : "corral-inbox") ? (local ? ["withdraw", "edit"] : ["withdraw"]) : [],
-        ...(item.idempotency_key ? { idempotency_key: item.idempotency_key } : {}),
+        actions: socket ? ["withdraw"] : item.origin === (local ? "pane" : "corral-inbox") ? (local ? ["withdraw", "edit"] : ["withdraw"]) : [],
+        ...(!socket && item.idempotency_key ? { idempotency_key: item.idempotency_key } : {}),
         ...(local && item.origin === "pane" ? { text: utf8Prefix(item.text, INPUT_MAX_BYTES), truncated: item.text_bytes > INPUT_MAX_BYTES } : {}) };
       bytes += Buffer.byteLength(JSON.stringify(entry));
       if (items.length === limit || bytes > SNAPSHOT_BYTES) { more = true; break; }
       items.push(entry);
     }
-    return { available: true, generation: this.options.generation, items, more };
+    return { available: true, ...(socket ? {} : { generation: this.options.generation }), items, more };
   }
 
   /** Delivery order comes from the SDK's exact objects, not journal insertion order. */
@@ -210,7 +212,8 @@ export class HostQueue {
     return this.options.session().agent.getQueuedMessages().flatMap(message => {
       const item = this.objects.get(message);
       return item?.state === "queued" && item.mode !== "prompt"
-        ? [{ key: item.item, text: item.text, policy: item.mode, editable: item.origin === "pane", origin: item.origin }]
+        ? [{ key: item.item, text: item.text, policy: item.mode, editable: item.origin === "pane",
+          origin: item.origin === "owner" || item.origin === "auto" ? "extension" : item.origin }]
         : [];
     });
   }
@@ -300,6 +303,17 @@ export class HostQueue {
   bridgeWithdraw(key: string, op_key: string): QueueOutcome {
     this.check();
     return this.mutate(key, op_key, "corral", "withdraw");
+  }
+
+  /** A socket withdrawal acts on the current queue, without an operation key or receipt. */
+  withdrawInput(key: string): { outcome: "withdrawn" | "already_started" | "unknown_item"; item?: string; turn?: number } {
+    this.check(false);
+    const item = this.entries.get(key);
+    if (item?.state === "started") return { outcome: "already_started", item: item.item, turn: item.turn };
+    if (item?.state === "queued" && item.message && this.options.session().removeQueuedMessage(item.message, "corral")) {
+      return { outcome: "withdrawn", item: item.item };
+    }
+    return { outcome: "unknown_item" };
   }
   operation(op_key: string): QueueOutcome | undefined {
     this.check();

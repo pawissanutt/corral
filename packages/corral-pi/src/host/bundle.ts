@@ -8,6 +8,7 @@ export interface Bundle {
   readonly roles?: Readonly<Record<Role, (root: string) => unknown>>;
   readonly delivery?: unknown;
   readonly auth: unknown;
+  readonly writeAssets?: (dir: string) => void;
 }
 
 let bundle: Bundle | undefined;
