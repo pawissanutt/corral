@@ -73,6 +73,7 @@ fn refusable(method: &str) -> bool {
     matches!(
         method,
         OP_SUBMIT
+            | CONFIG_PUT
             | PROMPT_ANSWER
             | control::SESSION_CANCEL
             | control::SESSION_PAUSE

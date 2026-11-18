@@ -204,6 +204,9 @@ pub struct Feed {
     /// The sample preview's pi hosts by session id (`model::preview`); corrald's hosts run
     /// behind corrald, so its feed never holds any.
     pub hosts: BTreeMap<Id, crate::model::preview::Host>,
+    /// The sample preview's `corral.toml` text, which its `config.get` and `config.put` read and
+    /// replace; corrald's file stays on the daemon host, so its feed never holds one.
+    pub sample_config: Option<String>,
 }
 
 impl Feed {

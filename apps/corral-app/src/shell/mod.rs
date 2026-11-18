@@ -70,7 +70,7 @@ pub fn sidebar_collapsed(app: AppState) -> bool {
 pub const fn section_short(section: SettingsSection) -> &'static str {
     match section {
         SettingsSection::Devices => "Dev",
-        SettingsSection::Machines => "Mach",
+        SettingsSection::Daemon => "Dmn",
         SettingsSection::Connection => "Conn",
         SettingsSection::Notifications => "Notif",
         SettingsSection::Config => "Conf",
@@ -104,33 +104,46 @@ const PREVIEW_SUB: &str = "Preview simulation · runs on this device only; nothi
 
 fn confirm_modal(app: AppState) -> Modal {
     let simulated = untracked(|| app.data.get()) == DataState::Fixture;
-    let (title, rows) = app
+    let (title, heading, rows, sends) = app
         .confirm
         .with_untracked(|asked| {
-            asked
-                .as_ref()
-                .map(|asked| (asked.title().to_owned(), asked.rows()))
+            asked.as_ref().map(|asked| {
+                (
+                    asked.title().to_owned(),
+                    asked.heading(),
+                    asked.rows(),
+                    asked.sends(),
+                )
+            })
         })
-        .unwrap_or_default();
+        .unwrap_or((String::new(), CONFIRM_EFFECT_HEADING, Vec::new(), true));
     let body = view()
-        .child(h3(app, CONFIRM_EFFECT_HEADING, None))
+        .child(h3(app, heading, None))
         .child(command_rows(app, rows))
         .into_element();
+    let sub = match (sends, simulated) {
+        (false, _) => LEAVE_SUB,
+        (true, true) => PREVIEW_SUB,
+        (true, false) => CONFIRM_SUB,
+    };
     Modal {
         test_id: String::from("confirm"),
-        sub: Some(if simulated { PREVIEW_SUB } else { CONFIRM_SUB }.to_owned()),
+        sub: Some(sub.to_owned()),
         body,
         done: None,
         confirm: Some(Confirm {
             label: act_confirm_label(&title, app.form),
             cancel: CONFIRM_CANCEL.to_owned(),
             word: act_confirm_word(&title),
-            check: (app.form == Form::Phone).then(|| CONFIRM_CHECK.to_owned()),
+            check: (sends && app.form == Form::Phone).then(|| CONFIRM_CHECK.to_owned()),
             on_confirm: Rc::new(move || app.confirm_yes()),
         }),
         title,
     }
 }
+
+/// What the sheet says when leaving with unsaved edits: nothing leaves this device.
+const LEAVE_SUB: &str = "Asked once, on this device. Nothing is sent to corrald.";
 
 /// The operation's rows as a label-value list, bounded so a long note scrolls inside the
 /// sheet instead of pushing its buttons away.

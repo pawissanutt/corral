@@ -8,19 +8,33 @@ use crate::model::daemon::Feed;
 use crate::model::id::{Id, IdSupply};
 use crate::model::live::Live;
 
-/// What the one local confirm sheet asks about: an engine operation, or a session control
-/// that cannot be taken back by pressing again (Terminate, a rewind).
+/// What the one local confirm sheet asks about: an engine operation, a session control that
+/// cannot be taken back by pressing again (Terminate, a rewind), or leaving Configuration with
+/// unsaved edits, which drops them; `Leave` holds where the owner was going.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Confirming {
     Op(Act),
     Control(crate::model::agents::ControlAsk),
+    Leave(Box<crate::model::nav::NavState>),
 }
+
+/// The leave question's title; its first word is what a terminal types to confirm.
+pub const LEAVE_TITLE: &str = "Discard unsaved changes to corral.toml";
 
 impl Confirming {
     pub fn title(&self) -> &str {
         match self {
             Self::Op(act) => &act.title,
             Self::Control(ask) => &ask.title,
+            Self::Leave(_) => LEAVE_TITLE,
+        }
+    }
+
+    /// The heading over the rows.
+    pub fn heading(&self) -> &'static str {
+        match self {
+            Self::Op(_) | Self::Control(_) => crate::model::commands::CONFIRM_EFFECT_HEADING,
+            Self::Leave(_) => "Draft",
         }
     }
 
@@ -29,7 +43,17 @@ impl Confirming {
         match self {
             Self::Op(act) => act.rows(),
             Self::Control(ask) => ask.rows.clone(),
+            Self::Leave(_) => vec![(
+                "corral.toml".into(),
+                "Your edits are dropped; the file stays as it was last saved. Cancel keeps editing."
+                    .into(),
+            )],
         }
+    }
+
+    /// Whether the sheet asks about something sent to corrald (or simulated by the preview).
+    pub fn sends(&self) -> bool {
+        !matches!(self, Self::Leave(_))
     }
 }
 

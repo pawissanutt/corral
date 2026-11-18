@@ -343,10 +343,19 @@ fn assistant_session(feed: &mut Feed, op: &AssistantSessionOp) -> Result<Value, 
 
 fn device(feed: &mut Feed, op: &DeviceOp) -> Result<Value, String> {
     match op {
-        DeviceOp::PairBegin
-        | DeviceOp::Pair { .. }
-        | DeviceOp::PairConfirm { .. }
-        | DeviceOp::Enrol { .. } => Err(
+        // The pairing page's sample offer; no device can claim it, as no daemon is listening.
+        DeviceOp::PairBegin => {
+            let code = "corral-pair-preview-sample";
+            feed.pairing = Pairing::Offered {
+                pair_id: "preview-pair".into(),
+                code: code.into(),
+                url: Some(format!("http://127.0.0.1:8080/#pair={code}")),
+                expires_at: feed.now + 600,
+                reach: vec![("LAN".into(), "127.0.0.1:7778".into())],
+            };
+            Ok(json!({"pair_id": "preview-pair"}))
+        }
+        DeviceOp::Pair { .. } | DeviceOp::PairConfirm { .. } | DeviceOp::Enrol { .. } => Err(
             "Preview cannot pair or enrol real devices; leave preview to use Settings › Connection"
                 .into(),
         ),

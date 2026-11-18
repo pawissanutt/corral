@@ -236,6 +236,7 @@ impl AppState {
                     | Effect::Pane { .. }
                     | Effect::Control { .. }
                     | Effect::Answer { .. }
+                    | Effect::Config { .. }
                     | Effect::Refused(_)
             )
         {
@@ -331,6 +332,7 @@ impl AppState {
                 what,
                 request,
             } => self.pane(session, key, what, request),
+            Effect::Config { key, put } => self.send_config(key, put),
             _ => {}
         }
     }
@@ -400,7 +402,7 @@ impl AppState {
     }
 
     /// Why a call that needs the connection cannot leave now.
-    fn link_refusal(&self) -> Option<&'static str> {
+    pub(super) fn link_refusal(&self) -> Option<&'static str> {
         self.feed
             .with_untracked(|feed| (!feed.ready()).then_some(NO_LINK))
     }

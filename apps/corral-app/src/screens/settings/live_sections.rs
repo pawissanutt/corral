@@ -1,6 +1,6 @@
 //! Settings sections of a served feed (corrald's, or the synthetic preview's) that read the
-//! settings snapshot or say what this device can do: Machines and Notifications; and the parts
-//! every live section shares (the snapshot's loading/stale/unreachable/failed state and a
+//! settings snapshot or say what this device can do: This daemon and Notifications; and the
+//! parts every live section shares (the snapshot's loading/stale/unreachable/failed state and a
 //! facts table).
 
 use corral_protocol::rows::SettingsSnapshot;
@@ -17,7 +17,7 @@ use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::notice::{error, notice};
 use crate::ui::kit::page::Width;
-use crate::ui::kit::table::{devtable, qtable};
+use crate::ui::kit::table::qtable;
 use crate::ui::tokens::Token;
 
 /// A facts table: quiet labels beside mono values.
@@ -118,48 +118,19 @@ pub fn snapshot_section(
     frame(app, title, 12.0, vec![snapshot_parts(app, build)])
 }
 
-/// Machines: this daemon host as the one machine, with what corrald reports of its runner and
-/// its live runs, and why there is nothing to add.
-pub fn machines(app: AppState) -> AnyElement {
-    let row = computed(move || app.feed.with(live::machine));
-    dynamic(move || {
-        let [name, role, runtime, agents, reach] = row.get();
-        untracked(move || {
-            let widths = [
-                Width::Fill,
-                Width::Fixed(120.0),
-                Width::Fill,
-                Width::Fixed(72.0),
-                Width::Fill,
-            ];
-            let bleed = if app.form == Form::Phone { -18.0 } else { 0.0 };
-            frame(
-                app,
-                "Machines",
-                12.0,
-                vec![
-                    view()
-                        .mx(px(bleed))
-                        .child(devtable(
-                            app,
-                            &widths,
-                            &["Machine", "Role", "Runner", "Agents", "Reach"],
-                            vec![vec![
-                                cell(app, name, Token::Ink, true).into_element(),
-                                cell(app, role, Token::Ink, false).into_element(),
-                                cell(app, runtime, Token::Ink, false).into_element(),
-                                cell(app, agents, Token::Ink, false).into_element(),
-                                mono_cell(app, reach, Token::Ink).into_element(),
-                            ]],
-                        ))
-                        .into_element(),
-                    space(app, 14.0),
-                    notice(app, Hue::Neutral, &vec![span(live::MACHINES_NOTE)], None),
-                ],
-            )
-        })
+/// This daemon: its host, listener and allowed origins, workspace and runner, read-only, and why
+/// the listener changes only with a restart.
+pub fn daemon(app: AppState) -> AnyElement {
+    snapshot_section(app, "This daemon", |app, settings| {
+        let rows = app
+            .feed
+            .with_untracked(|feed| live::daemon_facts(feed, settings));
+        vec![
+            facts(app, rows),
+            space(app, 12.0),
+            notice(app, Hue::Neutral, &vec![span(live::LISTENER_NOTE)], None),
+        ]
     })
-    .into_element()
 }
 
 /// Notifications: where this browser's Web Push stands, the switch that turns it on or off,

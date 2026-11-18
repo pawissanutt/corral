@@ -224,18 +224,10 @@ macro_rules! operation {
     };
 }
 operation!(detail, DetailGet, Detail);
-operation!(config_put, ConfigDocument, ConfigPut);
 operation!(assistant_warm, AssistantWarm, AssistantWarm);
 operation!(assistant_session, AssistantSessionOp, AssistantSession);
 operation!(changes_page, ChangesQuery, ChangesPage);
 operation!(seen_advance, SeenAdvance, SeenAdvance);
-pub fn config_get() -> String {
-    let request_id = new_id();
-    send(ClientRequest::ConfigGet {
-        request_id: request_id.clone(),
-    });
-    request_id
-}
 pub fn device_revoke(device: String) -> String {
     let request_id = new_id();
     send(ClientRequest::DeviceRevoke {

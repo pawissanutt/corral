@@ -313,6 +313,7 @@ Run one cargo or NSH build at a time on this shared host.
 | `/` | Open Ask |
 | `Ctrl K` or `?` | Open palette |
 | `Ctrl B` | Toggle sidebar; narrow windows fold it to a rail, not remove it |
+| `Ctrl S` in Settings › Configuration | Save the `corral.toml` draft (one `config.put`), from any field |
 | `]` | Next Now inspector tab |
 | `.` on a live Now/Review list | Selected row's action menu; otherwise Changes |
 | `` ` `` | Toggle session transcript/terminal |

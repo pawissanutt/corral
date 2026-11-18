@@ -64,15 +64,22 @@ impl AppState {
                 self.confirm.set(None);
                 self.send_control(ask.session, ask.key, ask.control);
             }
+            Some(Confirming::Leave(nav)) => {
+                self.confirm.set(None);
+                self.act(self.settings, |state, _| state.discard_config());
+                self.nav.set(*nav);
+            }
             None => {}
         }
     }
 
-    /// Closes the confirm sheet; nothing was sent.
+    /// Closes the confirm sheet; nothing was sent, and a leave stays with its draft.
     pub fn confirm_no(&self) {
         if let Some(asked) = self.confirm.get_untracked() {
             self.confirm.set(None);
-            self.toast(format!("{} · cancelled, nothing was sent", asked.title()));
+            if asked.sends() {
+                self.toast(format!("{} · cancelled, nothing was sent", asked.title()));
+            }
         }
     }
 

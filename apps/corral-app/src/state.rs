@@ -4,6 +4,7 @@
 //! engine operations; `keys` routes the keyboard.
 
 mod attach;
+mod config;
 mod devices;
 mod keys;
 mod live;
@@ -259,6 +260,7 @@ impl AppState {
         app.follow_sidebar();
         app.follow_projects();
         app.settle_controls();
+        app.settle_config();
         app.follow_cached_feed();
         app.watch_device_receipts();
         if form != Form::Phone {
@@ -591,9 +593,15 @@ impl AppState {
         }
     }
 
+    /// Applies a navigation, unless it leaves Configuration with unsaved edits: then the
+    /// confirm sheet asks first.
     fn change(&self, f: impl FnOnce(&mut NavState)) {
         let mut nav = self.nav.get_untracked();
+        let on_config = config::on_config(&nav);
         f(&mut nav);
+        if on_config && self.asks_to_leave(&nav) {
+            return;
+        }
         self.nav.set(nav);
     }
 

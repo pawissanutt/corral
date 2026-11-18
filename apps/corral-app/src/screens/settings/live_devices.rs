@@ -204,11 +204,13 @@ fn cancel(app: AppState, pair_id: String) -> AnyElement {
     )
 }
 
-/// The one local question a revoke asks: the exact question, then Revoke or Cancel.
-fn confirmation(app: AppState, pending: &Pending) -> AnyElement {
+/// The one local question a revoke or a Forget asks: the exact question, then the change or
+/// Cancel. It takes the keyboard focus on Cancel, the safe choice, as the confirm sheet does.
+/// Shared with Connection's Forget.
+pub(super) fn confirmation(app: AppState, pending: &Pending) -> AnyElement {
     let confirm = button_with(
         app,
-        "Revoke",
+        pending.verb(),
         ButtonKind::Primary,
         ButtonOptions {
             danger: true,
@@ -217,14 +219,19 @@ fn confirmation(app: AppState, pending: &Pending) -> AnyElement {
         "btn-device-confirm",
         move || app.act(app.settings, |state, _| state.apply_device()),
     );
+    let safe = element_ref();
     let dismiss = button_with(
         app,
         "Cancel",
         ButtonKind::Quiet,
-        ButtonOptions::default(),
+        ButtonOptions {
+            focus: Some(safe),
+            ..ButtonOptions::default()
+        },
         "btn-device-cancel",
         move || app.act(app.settings, |state, _| state.cancel_device()),
     );
+    after_answer(move || safe.focus());
     notice(
         app,
         Hue::Held,
@@ -254,29 +261,37 @@ fn receipt(app: AppState, device: &str) -> AnyElement {
     .into_element()
 }
 
-/// Revoke, on every other device still enrolled.
+/// Revoke on every other device still enrolled; Forget on this one.
 fn controls(app: AppState, device: &Shown) -> AnyElement {
     let mut buttons = Vec::new();
-    if device.revocable() {
-        let pending = Pending {
-            device: device.row.id.clone(),
-            name: device.row.name.clone(),
-        };
-        buttons.push(button_with(
-            app,
+    let (label, id, pending) = if device.own {
+        ("Forget", "btn-forget-device".to_owned(), Pending::Forget)
+    } else if device.revocable() {
+        (
             "Revoke",
-            ButtonKind::Ghost,
-            ButtonOptions {
-                danger: true,
-                ..ButtonOptions::default()
-            },
             format!("btn-revoke-device-{}", device.row.id),
-            move || {
-                let pending = pending.clone();
-                app.act(app.settings, move |state, _| state.confirm_device(pending));
+            Pending::Revoke {
+                device: device.row.id.clone(),
+                name: device.row.name.clone(),
             },
-        ));
-    }
+        )
+    } else {
+        return button_row(app, buttons);
+    };
+    buttons.push(button_with(
+        app,
+        label,
+        ButtonKind::Ghost,
+        ButtonOptions {
+            danger: true,
+            ..ButtonOptions::default()
+        },
+        id,
+        move || {
+            let pending = pending.clone();
+            app.act(app.settings, move |state, _| state.confirm_device(pending));
+        },
+    ));
     button_row(app, buttons)
 }
 
