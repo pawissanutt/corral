@@ -4,7 +4,8 @@
 
 use corral_protocol::detail::TaskDetail;
 use corral_protocol::device::{DeviceInfo, DevicePlatform, DeviceReach};
-use corral_protocol::rows::{ListenerInfo, SettingsSnapshot};
+use corral_protocol::health::{SlotCount, Slots};
+use corral_protocol::rows::{EffectiveProjectSettings, ListenerInfo, SettingsSnapshot};
 use corral_types::{Actor, CheckKind, CheckResult, EventKind, Outcome, Role, Status};
 use serde_json::{Map, Value, json};
 
@@ -21,8 +22,10 @@ pub(super) fn populate(feed: &mut Feed, projects: bool) {
         listener: Some(ListenerInfo {
             port: 7778,
             origins: vec!["http://127.0.0.1:8080".into()],
+            address: Some("127.0.0.1:7778".into()),
         }),
         devices,
+        hostname: Some("preview-workstation".into()),
     });
     if !projects {
         return;
@@ -40,18 +43,111 @@ pub(super) fn populate(feed: &mut Feed, projects: bool) {
     feed.changes_unseen = Some((through, feed.changes_head - through));
 }
 
-fn config(projects: bool) -> Map<String, Value> {
-    let project = |path: &str, gate: &str, running: Option<u64>| {
-        json!({
-            "path": path, "base": "main", "gate": [gate], "reviewer": "omp-sol-review",
-            "profile": null, "running": running, "env": {}, "auto_dispatch": null,
-            "auto_land": null, "max_rounds": null, "branch_prefix": null
-        })
+/// A key of the sample's `[defaults]` table.
+fn default_of<'a>(feed: &'a Feed, key: &str) -> Option<&'a Value> {
+    feed.settings
+        .as_ref()?
+        .config
+        .get("defaults")?
+        .get(key)
+        .filter(|value| !value.is_null())
+}
+
+/// A project's settings after the workspace defaults, as the engine resolves them.
+pub(super) fn effective(feed: &Feed, project: &Map<String, Value>) -> EffectiveProjectSettings {
+    let key = |key: &str| {
+        project
+            .get(key)
+            .filter(|value| !value.is_null())
+            .or_else(|| default_of(feed, key))
     };
+    let text = |name: &str| key(name).and_then(Value::as_str).map(str::to_owned);
+    let flag = |name: &str| key(name).and_then(Value::as_bool).unwrap_or(false);
+    EffectiveProjectSettings {
+        path: text("path").unwrap_or_default().into(),
+        base: text("base"),
+        reviewer: text("reviewer"),
+        profile: text("profile"),
+        gate: project
+            .get("gate")
+            .and_then(Value::as_array)
+            .map(|lines| {
+                lines
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        running: project.get("running").and_then(Value::as_u64),
+        env: Default::default(),
+        auto_dispatch: flag("auto_dispatch"),
+        auto_land: flag("auto_land"),
+        max_rounds: key("max_rounds")
+            .and_then(Value::as_u64)
+            .and_then(|rounds| u32::try_from(rounds).ok())
+            .unwrap_or(2),
+        branch_prefix: text("branch_prefix").unwrap_or_default(),
+    }
+}
+
+/// The round limit of a task in `project`.
+pub(super) fn max_rounds(feed: &Feed, project: Option<&str>) -> u32 {
+    project
+        .and_then(|id| feed.projects.get(id))
+        .and_then(|row| row.effective.as_ref())
+        .map_or(2, |settings| settings.max_rounds)
+}
+
+/// Slots in use: Running and Blocked tasks hold one; projects with their own limit count apart.
+pub(super) fn slots(feed: &Feed, records: &[TaskDetail]) -> Slots {
+    let holding = |project: Option<&str>| {
+        records
+            .iter()
+            .filter(|record| matches!(record.task.status, Status::Running | Status::Blocked))
+            .filter(|record| project.is_none_or(|id| record.task.project.as_deref() == Some(id)))
+            .count() as u64
+    };
+    let limit = feed
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.config.get("limits")?.get("running")?.as_u64())
+        .unwrap_or(4);
+    Slots {
+        global: SlotCount {
+            used: holding(None),
+            limit,
+        },
+        projects: feed
+            .projects
+            .values()
+            .filter_map(|row| {
+                let limit = row.effective.as_ref()?.running?;
+                Some((
+                    row.id.clone(),
+                    SlotCount {
+                        used: holding(Some(&row.id)),
+                        limit,
+                    },
+                ))
+            })
+            .collect(),
+    }
+}
+
+fn config(projects: bool) -> Map<String, Value> {
+    let project =
+        |path: &str, base: &str, gate: &str, profile: Option<&str>, running: Option<u64>| {
+            json!({
+                "path": path, "base": base, "gate": [gate], "reviewer": "omp-sol-review",
+                "profile": profile, "running": running, "env": {}, "auto_dispatch": null,
+                "auto_land": null, "max_rounds": null, "branch_prefix": null
+            })
+        };
     let projects = if projects {
         json!({
-            "corral": project(".", "just check", None),
-            "site": project("site", "bun test", Some(2)),
+            "corral": project(".", "main", "just check", None, None),
+            "site": project("site", "release", "bun test", Some("codex-terra"), Some(2)),
         })
     } else {
         json!({})

@@ -260,10 +260,7 @@ fn order(a: &str, b: &str) -> Ordering {
 pub fn task_row(task: corral_types::Task) -> TaskRow {
     TaskRow {
         task,
-        run: None,
-        gate: None,
-        review: None,
-        ready: false,
+        ..TaskRow::default()
     }
 }
 

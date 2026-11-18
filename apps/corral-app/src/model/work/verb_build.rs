@@ -29,11 +29,20 @@ pub(super) fn op(
             id,
             status: status(value(0))?,
         },
-        Verb::Dispatch => Op::Dispatch {
-            id,
-            profile: optional(0),
-            base: optional(1),
-        },
+        // An untouched default is left to the engine, which resolves the same profile and base
+        // and also applies what the app cannot see (a routing rule's title pattern).
+        Verb::Dispatch => {
+            let chosen = |index: usize| {
+                let now = value(index);
+                (initial.get(index).map_or("", |was| was.trim()) != now && !now.is_empty())
+                    .then(|| now.to_owned())
+            };
+            Op::Dispatch {
+                id,
+                profile: chosen(0),
+                base: chosen(1),
+            }
+        }
         Verb::Reply => Op::Reply { id, text: words(0) },
         Verb::Done => Op::Done {
             id,
@@ -64,12 +73,38 @@ pub(super) fn op(
             task: NewTask {
                 title: value(0).to_owned(),
                 body: words(1),
-                project: optional(2),
-                status: status(value(3))?,
-                ..NewTask::default()
+                status: status(value(2))?,
+                project: optional(3),
+                priority: priority(value(4))?,
+                kind: optional(5),
+                size: optional(6),
+                parent: optional(7),
+                depends_on: ids(value(8)),
+                base: optional(9),
+                profile: None,
             },
         },
     })
+}
+
+fn priority(value: &str) -> Result<Priority, String> {
+    match value {
+        "P0" => Ok(Priority::P0),
+        "P1" => Ok(Priority::P1),
+        "P2" => Ok(Priority::P2),
+        "P3" => Ok(Priority::P3),
+        other => Err(format!("Unknown priority {other}.")),
+    }
+}
+
+/// Task ids from `T-1, T-2`.
+fn ids(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Only the fields the owner changed; an emptied optional field clears it.
@@ -79,30 +114,17 @@ fn edit(values: &[String], initial: &[String]) -> Result<TaskEdit, String> {
         (initial.get(index).map_or("", |value| value.trim()) != now).then_some(now)
     };
     let cleared = |index| changed(index).map(|now: &str| (!now.is_empty()).then(|| now.to_owned()));
-    let priority = changed(3)
-        .map(|now| match now {
-            "P0" => Ok(Priority::P0),
-            "P1" => Ok(Priority::P1),
-            "P2" => Ok(Priority::P2),
-            "P3" => Ok(Priority::P3),
-            other => Err(format!("Unknown priority {other}.")),
-        })
-        .transpose()?;
     let edit = TaskEdit {
         title: changed(0).map(str::to_owned),
         body: changed(1).map(|_| values.get(1).cloned().unwrap_or_default()),
         project: cleared(2),
-        priority,
-        profile: cleared(4),
-        base: cleared(5),
-        parent: cleared(6),
-        depends_on: changed(7).map(|now| {
-            now.split(',')
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned)
-                .collect()
-        }),
+        priority: changed(3).map(priority).transpose()?,
+        kind: cleared(4),
+        size: cleared(5),
+        profile: cleared(6),
+        base: cleared(7),
+        parent: cleared(8),
+        depends_on: changed(9).map(ids),
         ..TaskEdit::default()
     };
     if edit == TaskEdit::default() {
@@ -118,7 +140,7 @@ mod tests {
 
     #[test]
     fn an_edit_sends_only_changed_fields_and_an_emptied_field_clears() {
-        let initial: Vec<String> = ["Title", "Body", "web", "P2", "", "", "", ""]
+        let initial: Vec<String> = ["Title", "Body", "web", "P2", "", "", "", "", "", ""]
             .map(String::from)
             .to_vec();
         let mut values = initial.clone();
@@ -140,6 +162,55 @@ mod tests {
                 &initial
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn a_capture_carries_every_field_and_a_dispatch_leaves_untouched_defaults_to_the_engine() {
+        let values: Vec<String> = [
+            "Zoom presets",
+            "",
+            "ready",
+            "corral",
+            "P1",
+            "ui",
+            "s",
+            "T-1",
+            "T-14, T-12",
+            "release",
+        ]
+        .map(String::from)
+        .to_vec();
+        let Ok(Op::New { task }) = op(&Record::Workspace, Verb::NewTask, &values, &[]) else {
+            panic!("a new task");
+        };
+        assert_eq!(
+            (
+                task.status,
+                task.priority,
+                task.size.as_deref(),
+                task.base.as_deref()
+            ),
+            (
+                corral_types::Status::Ready,
+                Priority::P1,
+                Some("s"),
+                Some("release")
+            )
+        );
+        assert_eq!(task.depends_on, ["T-14", "T-12"]);
+        assert_eq!(task.parent.as_deref(), Some("T-1"));
+        let initial: Vec<String> = ["omp-sol", "main"].map(String::from).to_vec();
+        let mut chosen = initial.clone();
+        chosen[0] = "codex-terra".into();
+        let task = Record::Task(Id::new("T-12"));
+        assert_eq!(
+            op(&task, Verb::Dispatch, &chosen, &initial),
+            Ok(Op::Dispatch {
+                id: "T-12".into(),
+                profile: Some("codex-terra".into()),
+                base: None,
+            })
         );
     }
 }

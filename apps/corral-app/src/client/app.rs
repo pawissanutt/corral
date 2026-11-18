@@ -471,6 +471,7 @@ mod tests {
             last_sync_error: None,
             pid: 1,
             version: "1".into(),
+            slots: None,
         };
         let mut feed = Feed::default();
         feed.welcome_received("/readiness/.corral".into(), health_reading.clone());

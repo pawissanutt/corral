@@ -14,13 +14,17 @@ mod served;
 mod served_facts;
 mod task_page;
 mod verb_build;
+mod verb_context;
 mod verb_forms;
 mod verbs;
 mod views;
 mod when;
 
+pub use verb_context::FormContext;
 pub use verb_forms::{STATUSES, VerbComposer};
-pub use verbs::{Record, Verb, VerbAction, VerbField, palette_record, record_verbs, session_task};
+pub use verbs::{
+    Choice, Record, Verb, VerbAction, VerbField, palette_record, record_verbs, session_task,
+};
 
 /// Shared loading caption for an inspector awaiting its task detail.
 pub const INSPECTOR_LOADING: &str = "Loading task…";
@@ -52,6 +56,7 @@ use crate::model::effect::{Effect, Env};
 use crate::model::nav::Destination;
 use crate::model::{Id, Live};
 use corral_protocol::app::{ChangesQuery, SeenAdvance};
+use corral_types::{Next, Op};
 
 /// The selected inspector tab, in the mockup's cycling order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -236,6 +241,12 @@ pub enum Press {
         task: Id,
         index: usize,
     },
+    /// Run a Blocked card's reply step `index` with the words typed into its reply box.
+    Answer {
+        task: Id,
+        index: usize,
+        text: String,
+    },
     /// Move this device's seen cursor through the change `seq`.
     Seen(u64),
     /// Fetch the page of changes before `seq`.
@@ -358,20 +369,24 @@ impl State {
                 self.menu = None;
                 Vec::new()
             }
-            Press::Next { task, index } => {
-                let next = feed
-                    .board
-                    .task(&task)
-                    .and_then(|task| task.blocked())
-                    .and_then(|blocked| blocked.next.get(index))
-                    .cloned();
-                match next {
-                    Some(next) => self.next(&next, false),
-                    None => vec![Effect::Toast(format!(
-                        "{task} is no longer blocked; nothing was sent."
-                    ))],
-                }
-            }
+            Press::Next { task, index } => match served_next(feed, &task, index) {
+                Some(next) => self.next(&next, false),
+                None => vec![no_longer_blocked(&task)],
+            },
+            Press::Answer { task, index, text } => match served_next(feed, &task, index) {
+                Some(Next {
+                    op: Op::Reply { id, .. },
+                    force,
+                }) => self.next(
+                    &Next {
+                        op: Op::Reply { id, text },
+                        force,
+                    },
+                    false,
+                ),
+                Some(next) => self.next(&next, false),
+                None => vec![no_longer_blocked(&task)],
+            },
             Press::RetryBoard => vec![Effect::RetryTopic("tasks".into())],
             Press::Seen(through) => vec![Effect::Seen(SeenAdvance { through })],
             Press::Older(before) => vec![Effect::Changes(ChangesQuery {
@@ -398,12 +413,25 @@ impl State {
     }
 }
 
+/// Entry `index` of the task's Blocked card `next` list, as served now.
+fn served_next(feed: &daemon::Feed, task: &Id, index: usize) -> Option<Next> {
+    feed.board
+        .task(task)
+        .and_then(|task| task.blocked())
+        .and_then(|blocked| blocked.next.get(index))
+        .cloned()
+}
+
+fn no_longer_blocked(task: &Id) -> Effect {
+    Effect::Toast(format!("{task} is no longer blocked; nothing was sent."))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::effect::Conn;
     use crate::model::nav::Form;
-    use corral_types::{Next, Op};
+    use corral_types::{Blocked, Status};
 
     const ENV: Env = Env {
         conn: Conn::Healthy,
@@ -443,6 +471,49 @@ mod tests {
         assert!(matches!(
             effects.as_slice(),
             [Effect::Act(act)] if act.op == Op::Reply { id: "T-9".into(), text: "go on".into() }
+        ));
+    }
+
+    #[test]
+    fn a_blocked_cards_reply_box_sends_its_words_as_the_served_reply_step() {
+        let mut task = daemon::bare_task(
+            "T-8",
+            "Paused sessions",
+            Status::Blocked,
+            Default::default(),
+        );
+        task.blocked = Some(Blocked {
+            reason: "worker needs a reply".into(),
+            detail: None,
+            next: vec![
+                Next::force(Op::Reply {
+                    id: "T-8".into(),
+                    text: String::new(),
+                }),
+                Next::run(Op::Stop { id: "T-8".into() }),
+            ],
+        });
+        let mut feed = daemon::Feed::default();
+        feed.board_received(
+            1,
+            vec![daemon::Task::new(daemon::task_row(task))],
+            &[],
+            true,
+        );
+        let mut state = State::default();
+        let effects = state.press(
+            Press::Answer {
+                task: Id::new("T-8"),
+                index: 0,
+                text: "Stay paused".into(),
+            },
+            &feed,
+            ENV,
+        );
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::Act(act)]
+                if act.op == Op::Reply { id: "T-8".into(), text: "Stay paused".into() } && act.force
         ));
     }
 

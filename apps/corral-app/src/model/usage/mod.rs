@@ -8,8 +8,11 @@ pub use live::page;
 
 use corral_protocol::detail::DetailRef;
 use corral_types::UsageBy;
+use jiff::tz::TimeZone;
+use jiff::{Span, Timestamp};
 
 use crate::model::Effect;
+use crate::model::daemon::Feed;
 
 /// Usage page title.
 pub const TITLE: &str = "Usage";
@@ -48,9 +51,27 @@ impl State {
     }
 }
 
-/// The usage series to request for a grouping: its totals, every report and every run.
-pub fn series_request(by: UsageBy) -> DetailRef {
-    DetailRef::UsageSeries { by: Some(by) }
+/// How many local days, through today, the grouped series covers.
+pub const DAYS: i64 = 30;
+
+/// The usage series to request for a grouping: the last [`DAYS`] local days, one bucket each.
+pub fn series_request(by: UsageBy, feed: &Feed) -> DetailRef {
+    let now = Timestamp::from_second(i64::try_from(feed.now).unwrap_or(0))
+        .unwrap_or(Timestamp::UNIX_EPOCH);
+    let local = now.to_zoned(feed.time_zone.clone().unwrap_or(TimeZone::UTC));
+    let today = local.date();
+    let day = |days: i64| {
+        today
+            .checked_add(Span::new().days(days))
+            .unwrap_or(today)
+            .to_string()
+    };
+    DetailRef::UsageSeries {
+        from: day(1 - DAYS),
+        to: day(1),
+        by: Some(by),
+        utc_offset_minutes: i16::try_from(local.offset().seconds() / 60).unwrap_or(0),
+    }
 }
 
 /// Where the recorded usage stands. A failed read is not a status here: the page's own

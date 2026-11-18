@@ -127,6 +127,7 @@ fn restart_restores_complete_wire_deltas_as_stale_without_fixture_or_readiness()
         last_sync_error: None,
         pid: 1,
         version: "test".into(),
+        slots: None,
     })))
     .unwrap();
     drop(cache);

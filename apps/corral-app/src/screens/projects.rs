@@ -359,9 +359,10 @@ fn moving_rows(
             section.count.to_string(),
             section.hue,
             &section.hint,
+            section.slots.as_deref(),
         ));
         for row in &section.rows {
-            out.push(task_row(app, row, unselected, fit));
+            out.push(task_row(app, row, unselected, fit, None));
         }
     }
     view().children(out).into_element()
@@ -381,6 +382,7 @@ fn record_sections(
             plans.len().to_string(),
             Hue::Neutral,
             PLANS_HINT,
+            None,
         ));
         out.extend(plans.iter().map(|plan| {
             record_row(
@@ -404,6 +406,7 @@ fn record_sections(
             sessions.len().to_string(),
             Hue::Neutral,
             SESSIONS_HINT,
+            None,
         ));
         out.extend(sessions.iter().map(|session| {
             record_row(

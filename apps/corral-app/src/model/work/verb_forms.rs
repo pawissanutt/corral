@@ -1,9 +1,10 @@
 //! The input an operation asks for before it runs, prefilled from the task as served, and the
 //! composer that collects it. A refusal's or Blocked card's next step that still needs words
 //! (a reply, a summary) opens the same composer with its own values in place.
-use corral_types::{Next, Op, Status};
+use corral_types::{Next, Op, Status, Task};
 
-use super::{Record, Sent, State, Verb, VerbField};
+use super::verb_context::FormContext;
+use super::{Choice, Record, Sent, State, Verb, VerbField};
 use crate::model::Id;
 use crate::model::act::Act;
 use crate::model::daemon::Feed;
@@ -24,15 +25,6 @@ pub struct VerbComposer {
     pub confirmed: bool,
 }
 
-const fn field(
-    label: &'static str,
-    placeholder: &'static str,
-    required: bool,
-    choices: &'static [&'static str],
-) -> (&'static str, &'static str, bool, &'static [&'static str]) {
-    (label, placeholder, required, choices)
-}
-
 /// Every status, as the Move picker lists them.
 pub const STATUSES: [&str; 8] = [
     "idea", "backlog", "ready", "running", "blocked", "review", "done", "dropped",
@@ -40,122 +32,196 @@ pub const STATUSES: [&str; 8] = [
 const PRIORITIES: [&str; 4] = ["P0", "P1", "P2", "P3"];
 const VERDICTS: [&str; 2] = ["approve", "changes"];
 const YES_NO: [&str; 2] = ["no", "yes"];
+/// Where a new task starts: an Idea to think about, the Backlog, or Ready to dispatch.
 const NEW_STATUSES: [&str; 3] = ["idea", "backlog", "ready"];
+/// The sizes routing rules name; empty leaves the task unsized.
+const SIZES: [&str; 6] = ["", "xs", "s", "m", "l", "xl"];
 
-type Spec = (&'static str, &'static str, bool, &'static [&'static str]);
-
-fn specs(verb: Verb) -> Vec<Spec> {
-    match verb {
-        Verb::Edit => vec![
-            field("Title", "Task title", true, &[]),
-            field("Body", "Markdown: Goal, Acceptance, Notes", false, &[]),
-            field("Project", "Project id; empty clears it", false, &[]),
-            field("Priority", "", true, &PRIORITIES),
-            field(
-                "Profile",
-                "Pinned worker profile; empty clears it",
-                false,
-                &[],
-            ),
-            field("Base", "Branch to start from and land onto", false, &[]),
-            field("Parent", "Parent task id", false, &[]),
-            field("Depends on", "Task ids, comma separated", false, &[]),
-        ],
-        Verb::Comment => vec![field("Comment", "Your comment", true, &[])],
-        Verb::Move => vec![field("Status", "", true, &STATUSES)],
-        Verb::Dispatch => vec![
-            field(
-                "Profile",
-                "Worker profile; empty uses the resolved default",
-                false,
-                &[],
-            ),
-            field(
-                "Base",
-                "Base branch; empty uses the resolved default",
-                false,
-                &[],
-            ),
-        ],
-        Verb::Reply => vec![field("Reply", "What the worker should hear", true, &[])],
-        Verb::Done => vec![field("Summary", "What changed", true, &[])],
-        Verb::Review => vec![field(
-            "Reviewer profile",
-            "Empty uses the project's reviewer",
-            false,
-            &[],
-        )],
-        Verb::Verdict => vec![
-            field("Verdict", "", true, &VERDICTS),
-            field("Notes", "Reviewer notes", false, &[]),
-        ],
-        Verb::Changes => vec![field("Notes", "What to change", true, &[])],
-        Verb::Retry => vec![
-            field(
-                "Profile",
-                "Worker profile; empty keeps the default",
-                false,
-                &[],
-            ),
-            field("From base", "", true, &YES_NO),
-            field("Note", "Sent to the new run", false, &[]),
-        ],
-        Verb::NewTask => vec![
-            field("Title", "Task title", true, &[]),
-            field("Body", "Task description", false, &[]),
-            field("Project", "Optional project", false, &[]),
-            field("Status", "", true, &NEW_STATUSES),
-        ],
-        Verb::Gate | Verb::Approve | Verb::Stop | Verb::Drop | Verb::Reopen => Vec::new(),
+/// A free-text field.
+fn text(label: &'static str, placeholder: &'static str, value: impl Into<String>) -> VerbField {
+    VerbField {
+        label,
+        placeholder,
+        required: false,
+        value: value.into(),
+        choices: Vec::new(),
     }
 }
 
-/// The verb's fields, prefilled from the task as the feed serves it.
-pub(super) fn fields(verb: Verb, task: Option<&corral_types::Task>) -> Vec<VerbField> {
-    let values = defaults(verb, task);
-    specs(verb)
-        .into_iter()
-        .zip(values)
-        .map(
-            |((label, placeholder, required, choices), value)| VerbField {
-                label,
-                placeholder,
-                required,
-                value,
-                choices,
-            },
-        )
-        .collect()
+/// A field that must not be left empty.
+fn required(label: &'static str, placeholder: &'static str, value: impl Into<String>) -> VerbField {
+    VerbField {
+        required: true,
+        ..text(label, placeholder, value)
+    }
 }
 
-fn defaults(verb: Verb, task: Option<&corral_types::Task>) -> Vec<String> {
-    let text = |value: Option<&String>| value.cloned().unwrap_or_default();
-    match (verb, task) {
-        (Verb::Edit, Some(task)) => vec![
-            task.title.clone(),
-            task.body.clone(),
-            text(task.project.as_ref()),
-            task.priority.as_str().into(),
-            text(task.profile.as_ref()),
-            text(task.base.as_ref()),
-            text(task.parent.as_ref()),
-            task.depends_on.join(", "),
-        ],
-        (Verb::Edit, None) => vec![String::new(); 3]
-            .into_iter()
-            .chain(["P2".to_owned()])
-            .chain(vec![String::new(); 4])
+/// A closed set of values, one button each, `value` chosen; an empty value is a real choice
+/// ("none", "Routing decides"), so a choice field is never missing.
+fn pick(label: &'static str, values: &[&str], value: impl Into<String>) -> VerbField {
+    VerbField {
+        choices: values
+            .iter()
+            .map(|value| Choice {
+                value: (*value).to_owned(),
+                label: if value.is_empty() { "none" } else { value }.to_owned(),
+            })
             .collect(),
-        (Verb::Move, task) => vec![task.map_or("backlog", |task| task.status.as_str()).into()],
-        (Verb::Verdict, _) => vec!["approve".into(), String::new()],
-        (Verb::Retry, _) => vec![String::new(), "no".into(), String::new()],
-        (Verb::NewTask, _) => vec![
-            String::new(),
-            String::new(),
-            String::new(),
-            "backlog".into(),
+        ..text(label, "", value)
+    }
+}
+
+/// The project: one button per configured project and None, else free text.
+fn project(ctx: &FormContext, value: Option<&String>) -> VerbField {
+    let value = value.cloned().unwrap_or_default();
+    if ctx.projects.is_empty() {
+        return text("Project", "Project id; empty for none", value);
+    }
+    let mut ids = vec![String::new()];
+    ids.extend(ctx.projects.iter().cloned());
+    if !ids.contains(&value) {
+        ids.push(value.clone());
+    }
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    pick("Project", &ids, value.clone())
+}
+
+/// The worker profile a dispatch runs: every configured profile, the one the engine would pick
+/// marked and chosen. When the app cannot tell which, the first choice leaves it to the engine.
+fn profile(ctx: &FormContext) -> VerbField {
+    if ctx.profiles.is_empty() {
+        return text(
+            "Profile",
+            "Worker profile; empty uses the resolved default",
+            ctx.profile.clone().unwrap_or_default(),
+        );
+    }
+    let mut names = ctx.profiles.clone();
+    if let Some(chosen) = &ctx.profile
+        && !names.contains(chosen)
+    {
+        names.push(chosen.clone());
+    }
+    let mut choices: Vec<Choice> = names
+        .into_iter()
+        .map(|name| Choice {
+            label: if ctx.profile.as_ref() == Some(&name) {
+                format!("{name} · default")
+            } else {
+                name.clone()
+            },
+            value: name,
+        })
+        .collect();
+    if ctx.profile.is_none() {
+        choices.insert(
+            0,
+            Choice {
+                value: String::new(),
+                label: "Routing decides".into(),
+            },
+        );
+    }
+    VerbField {
+        choices,
+        ..text("Profile", "", ctx.profile.clone().unwrap_or_default())
+    }
+}
+
+/// The verb's fields, prefilled from the task as the feed serves it and offering the choices
+/// the served configuration names.
+pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<VerbField> {
+    let of = |value: Option<&String>| value.cloned().unwrap_or_default();
+    match verb {
+        Verb::Edit => vec![
+            required(
+                "Title",
+                "Task title",
+                task.map(|task| task.title.clone()).unwrap_or_default(),
+            ),
+            text(
+                "Body",
+                "Markdown: Goal, Acceptance, Notes",
+                task.map(|task| task.body.clone()).unwrap_or_default(),
+            ),
+            project(ctx, task.and_then(|task| task.project.as_ref())),
+            pick(
+                "Priority",
+                &PRIORITIES,
+                task.map_or("P2", |task| task.priority.as_str()),
+            ),
+            text(
+                "Kind",
+                "ui, bug, docs…; empty clears it",
+                of(task.and_then(|task| task.kind.as_ref())),
+            ),
+            pick("Size", &SIZES, of(task.and_then(|task| task.size.as_ref()))),
+            text(
+                "Profile",
+                "Pinned worker profile; empty clears it",
+                of(task.and_then(|task| task.profile.as_ref())),
+            ),
+            text(
+                "Base",
+                "Branch to start from and land onto",
+                of(task.and_then(|task| task.base.as_ref())),
+            ),
+            text(
+                "Parent",
+                "Parent task id",
+                of(task.and_then(|task| task.parent.as_ref())),
+            ),
+            text(
+                "Depends on",
+                "Task ids, comma separated",
+                task.map(|task| task.depends_on.join(", "))
+                    .unwrap_or_default(),
+            ),
         ],
-        (verb, _) => vec![String::new(); specs(verb).len()],
+        Verb::Comment => vec![required("Comment", "Your comment", "")],
+        Verb::Move => vec![pick(
+            "Status",
+            &STATUSES,
+            task.map_or("backlog", |task| task.status.as_str()),
+        )],
+        Verb::Dispatch => vec![
+            profile(ctx),
+            text(
+                "Base",
+                "Repository default branch",
+                ctx.base.clone().unwrap_or_default(),
+            ),
+        ],
+        Verb::Reply => vec![required("Reply", "What the worker should hear", "")],
+        Verb::Done => vec![required("Summary", "What changed", "")],
+        Verb::Review => vec![text(
+            "Reviewer profile",
+            "Empty uses the project's reviewer",
+            "",
+        )],
+        Verb::Verdict => vec![
+            pick("Verdict", &VERDICTS, "approve"),
+            text("Notes", "Reviewer notes", ""),
+        ],
+        Verb::Changes => vec![required("Notes", "What to change", "")],
+        Verb::Retry => vec![
+            text("Profile", "Worker profile; empty keeps the default", ""),
+            pick("From base", &YES_NO, "no"),
+            text("Note", "Sent to the new run", ""),
+        ],
+        Verb::NewTask => vec![
+            required("Title", "Task title", ""),
+            text("Body", "Markdown: Goal, Acceptance, Notes", ""),
+            pick("Status", &NEW_STATUSES, "backlog"),
+            project(ctx, None),
+            pick("Priority", &PRIORITIES, "P2"),
+            text("Kind", "ui, bug, docs…", ""),
+            pick("Size", &SIZES, ""),
+            text("Parent", "Parent task id, for a plan's child", ""),
+            text("Depends on", "Task ids, comma separated", ""),
+            text("Base", "Empty uses the project's base", ""),
+        ],
+        Verb::Gate | Verb::Approve | Verb::Stop | Verb::Drop | Verb::Reopen => Vec::new(),
     }
 }
 
@@ -197,7 +263,7 @@ impl State {
             Record::Task(id) => feed.board.task(id).map(|task| task.task()),
             Record::Workspace => None,
         };
-        let fields = fields(verb, task);
+        let fields = fields(verb, task, &FormContext::new(feed, task));
         if fields.is_empty() {
             return match super::verb_build::op(&record, verb, &[], &[]) {
                 Ok(op) => self.send(&record, op, false, false),
@@ -226,7 +292,7 @@ impl State {
         let record = crate::model::act::target(&next.op)
             .map_or(Record::Workspace, |id| Record::Task(Id::new(id)));
         if let Some((verb, values)) = next_values(&next.op) {
-            let mut fields = fields(verb, None);
+            let mut fields = fields(verb, None, &FormContext::default());
             for (field, value) in fields.iter_mut().zip(&values) {
                 field.value = value.clone();
             }

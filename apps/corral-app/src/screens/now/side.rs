@@ -18,7 +18,7 @@ use crate::ui::kit::text::dim;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
-use super::inspector::content;
+use super::inspector::view_of;
 use super::parts::{act, go_scoped, press};
 use super::rows::{figures, words};
 
@@ -296,8 +296,6 @@ fn task_panel(
     view()
         .test_id("now-task")
         .child(bar)
-        .child(dynamic(move || {
-            inspector.with(|inspector| inspector.as_ref().map(|inspector| content(app, inspector)))
-        }))
+        .child(view_of(app, inspector))
         .into_element()
 }

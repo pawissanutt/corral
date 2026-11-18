@@ -46,6 +46,7 @@ fn detail_task(detail: &TaskDetail) -> daemon::Task {
         gate: latest(detail, CheckKind::Gate),
         review: latest(detail, CheckKind::Review),
         ready: false,
+        ..TaskRow::default()
     })
 }
 

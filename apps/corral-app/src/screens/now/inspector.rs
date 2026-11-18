@@ -1,25 +1,29 @@
 //! The selected task's story in Now's side column and on the phone's task page (`.insp`): its
-//! Story (header, a Blocked task's reason, detail and next steps, stepper, body and key/value
-//! facts, every engine operation and this device's last operation's outcome), the Evidence list
-//! of its artifacts, and the Session hand-off with the run's terminal capture, each with its
-//! detail's loading, stale or failed state.
+//! Story (header, a Blocked task's reason, detail, reply box and next steps, stepper, body and
+//! key/value facts, every engine operation and this device's last operation's outcome), the
+//! Evidence list of its artifacts, and the Session hand-off with the run's terminal capture,
+//! each with its detail's loading, stale or failed state.
 
+use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
 use crate::model::board::Mark;
 use crate::model::text::span;
 use crate::model::work::{
     self, BlockedCard, Dependency, DetailNote, Fact, Inspector, LiveEvidence, LiveSession,
-    LiveStory, Press, Stage,
+    LiveStory, Press, ReplyBox, Stage,
 };
 use crate::model::{Form, Hue};
 use crate::screens::markdown::{markdown, provide_styles};
 use crate::state::AppState;
+use crate::ui::icons::Icon;
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::{hue_ink, mark};
 use crate::ui::kit::notice::{loading, notice};
 use crate::ui::kit::table::{kv, steps};
 use crate::ui::kit::text::{dim, h3, mono, plain, rich, rich_small};
+use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::context::tail;
@@ -42,9 +46,50 @@ fn padded(app: AppState, child: AnyElement) -> AnyElement {
     .into_element()
 }
 
-/// The inspector's body for `inspector`, padded as `.insp` is; the phone's task page shows it
-/// too.
-pub(super) fn content(app: AppState, inspector: &Inspector) -> AnyElement {
+/// The inspector for whatever `inspector` holds now. A story is drawn in three parts so its
+/// reply box survives the story's every change (an age ticking, a run starting): the parts
+/// above and below it are drawn again, the box only when its step changes, keeping the words
+/// being typed and the focus.
+pub(super) fn view_of(app: AppState, inspector: Memo<Option<Inspector>>) -> AnyElement {
+    let story = computed(move || {
+        inspector.with(|inspector| match inspector {
+            Some(Inspector::LiveStory(story)) => Some((**story).clone()),
+            _ => None,
+        })
+    });
+    let is_story = computed(move || story.with(Option::is_some));
+    dynamic(move || {
+        if is_story.get() {
+            untracked(|| story_parts(app, story))
+        } else {
+            untracked(|| {
+                dynamic(move || {
+                    inspector.with(|inspector| inspector.as_ref().map(|it| content(app, it)))
+                })
+            })
+        }
+    })
+}
+
+fn story_parts(app: AppState, story: Memo<Option<LiveStory>>) -> AnyElement {
+    let reply =
+        computed(move || story.with(|story| story.as_ref()?.blocked.as_ref()?.reply.clone()));
+    let body = view()
+        .child(dynamic(move || {
+            story.with(|story| story.as_ref().map(|story| story_top(app, story)))
+        }))
+        .child(dynamic(move || {
+            reply.get().map(|reply| untracked(|| reply_box(app, reply)))
+        }))
+        .child(dynamic(move || {
+            story.with(|story| story.as_ref().map(|story| story_rest(app, story)))
+        }))
+        .into_element();
+    padded(app, body)
+}
+
+/// The inspector's body for `inspector`, padded as `.insp` is.
+fn content(app: AppState, inspector: &Inspector) -> AnyElement {
     let body = match inspector {
         Inspector::Loading => loading(
             app,
@@ -53,7 +98,10 @@ pub(super) fn content(app: AppState, inspector: &Inspector) -> AnyElement {
         ),
         Inspector::Quiet(words) => return quiet(app, *words),
         Inspector::Unavailable(reason) => note(app, reason),
-        Inspector::LiveStory(story) => live_story(app, story),
+        Inspector::LiveStory(story) => view()
+            .child(story_top(app, story))
+            .child(story_rest(app, story))
+            .into_element(),
         Inspector::LiveEvidence(evidence) => live_evidence(app, evidence),
         Inspector::LiveSession(session) => live_session(app, session),
     };
@@ -114,20 +162,20 @@ fn note(app: AppState, note: &DetailNote) -> AnyElement {
         .into_element()
 }
 
-/// A Blocked task's card: the engine's reason on the needs-you ground, its detail as served, and
-/// one button per next step, the first primary (`btn-next-<n>`). A forced step reads "… anyway";
-/// the app asks once before it runs.
+fn space(app: AppState, pixels: f32) -> Points {
+    px(if app.form == Form::Terminal {
+        0.0
+    } else {
+        pixels
+    })
+}
+
+/// A Blocked task's card: the engine's reason on the needs-you ground and its detail as served.
+/// The reply box and the other next steps follow it.
 fn blocked(app: AppState, card: &BlockedCard) -> AnyElement {
-    let space = |pixels: f32| {
-        px(if app.form == Form::Terminal {
-            0.0
-        } else {
-            pixels
-        })
-    };
     view()
-        .gap(space(8.0))
-        .pb(space(14.0))
+        .gap(space(app, 8.0))
+        .pb(space(app, 8.0))
         .test_id("blocked-card")
         .child(notice(
             app,
@@ -140,22 +188,112 @@ fn blocked(app: AppState, card: &BlockedCard) -> AnyElement {
                 .as_ref()
                 .map(|detail| plain(app, detail.clone()).into_element()),
         )
-        .when(!card.next.is_empty(), |panel| {
-            panel.child(
-                view().flex_row().flex_wrap().gap(px(8.0)).children(
-                    card.next
-                        .iter()
-                        .map(|button| pressable(app, button, false))
-                        .collect::<Vec<_>>(),
-                ),
-            )
-        })
         .into_element()
 }
 
-/// The selected task's story: the header, title, stepper and facts from the board row and the
-/// task detail.
-fn live_story(app: AppState, story: &LiveStory) -> AnyElement {
+/// The card's next steps other than a reply box's, one button each, the first primary
+/// (`btn-next-<n>`). A forced step reads "… anyway"; the app asks once before it runs.
+fn next_steps(app: AppState, card: &BlockedCard) -> Option<AnyElement> {
+    (!card.next.is_empty()).then(|| {
+        view()
+            .flex_row()
+            .flex_wrap()
+            .gap(px(8.0))
+            .pb(space(app, 14.0))
+            .children(
+                card.next
+                    .iter()
+                    .map(|button| pressable(app, button, false))
+                    .collect::<Vec<_>>(),
+            )
+            .into_element()
+    })
+}
+
+/// Sends the box's words as its step, then empties the box; nothing goes out empty.
+fn send_reply(app: AppState, draft: Signal<String>, reply: &ReplyBox) {
+    let words = draft.get_untracked();
+    if words.trim().is_empty() {
+        return;
+    }
+    draft.set(String::new());
+    press(app, reply.press(words));
+}
+
+/// The recommended reply in place on the card (`field-reply`, its send `btn-next-<n>`): one
+/// raised box with the field and the send, Return in the field sends. Its words live here, so
+/// the story changing around it keeps them.
+fn reply_box(app: AppState, reply: ReplyBox) -> AnyElement {
+    let form = app.form;
+    let draft = signal(String::new());
+    let empty = computed(move || draft.with(|words| words.trim().is_empty()));
+    let on_enter = reply.clone();
+    let entry = input()
+        .test_id("field-reply")
+        .label(reply.label.clone())
+        .placeholder(reply.placeholder)
+        .value(move || draft.get())
+        .on_change(move |typed: &str| draft.set(typed.to_owned()))
+        .on_submit(move |_: &str| send_reply(app, draft, &on_enter))
+        .flex_1()
+        .min_w(px(0.0))
+        .text_color(color(Token::Ink))
+        .placeholder_color(move || for_appearance(color(Token::Ink4)))
+        .caret_color(move || for_appearance(color(Token::Ink)))
+        .selection_color(move || for_appearance(color(Token::Sel)))
+        .bg(AdaptiveColor::TRANSPARENT);
+    let entry = match form {
+        Form::Terminal => entry.h(term::rows(1.0)),
+        Form::Desktop => entry.font_family(FONT_TEXT).text_size(px(13.0)).h(px(30.0)),
+        Form::Phone => entry
+            .font_family(FONT_TEXT)
+            .text_size(px(16.0))
+            .min_h(px(TARGET)),
+    };
+    let id = format!("btn-next-{}", reply.index);
+    let label = reply.send.clone();
+    let send = dynamic(move || {
+        let reply = reply.clone();
+        button_with(
+            app,
+            label.clone(),
+            ButtonKind::Primary,
+            ButtonOptions {
+                icon: Some(Icon::Send),
+                disabled: empty.get(),
+                ..ButtonOptions::default()
+            },
+            id.clone(),
+            move || send_reply(app, draft, &reply),
+        )
+    });
+    let boxed = view().flex_row().items_center().test_id("blocked-reply");
+    let boxed = match form {
+        Form::Terminal => boxed
+            .gap(term::cells(1.0))
+            .border_1()
+            .border_color(color(Token::Rule2))
+            .focus_within(|s| s.border_color(color(Token::Focus))),
+        Form::Desktop | Form::Phone => boxed
+            .gap(px(8.0))
+            .pl(px(12.0))
+            .pr(px(6.0))
+            .py(px(if form == Form::Phone { 6.0 } else { 5.0 }))
+            .rounded(px(if form == Form::Phone { 12.0 } else { 8.0 }))
+            .bg(color(Token::Surface))
+            .border_1()
+            .border_color(color(Token::Rule2))
+            .focus_within(|s| s.border_color(color(Token::Focus))),
+    };
+    view()
+        .pb(space(app, 10.0))
+        .child(boxed.child(entry).child(send))
+        .into_element()
+}
+
+/// The story above the reply box: the header, the title, the detail's state and the Blocked
+/// card's reason and detail.
+fn story_top(app: AppState, story: &LiveStory) -> AnyElement {
     let mut out: Vec<AnyElement> = vec![
         head(
             app,
@@ -171,6 +309,16 @@ fn live_story(app: AppState, story: &LiveStory) -> AnyElement {
     }
     if let Some(card) = &story.blocked {
         out.push(blocked(app, card));
+    }
+    view().children(out).into_element()
+}
+
+/// The story below the reply box: the card's other next steps, the stepper, the body, the
+/// facts, this device's last operation and every engine operation.
+fn story_rest(app: AppState, story: &LiveStory) -> AnyElement {
+    let mut out: Vec<AnyElement> = Vec::new();
+    if let Some(card) = &story.blocked {
+        out.extend(next_steps(app, card));
     }
     if !story.summary.is_empty() {
         out.push(paragraph(app, rich_small(app, &story.summary)));
@@ -198,22 +346,14 @@ fn live_story(app: AppState, story: &LiveStory) -> AnyElement {
         .collect();
     out.push(
         view()
-            .pt(px(if app.form == Form::Terminal {
-                0.0
-            } else {
-                14.0
-            }))
+            .pt(space(app, 14.0))
             .child(kv(app, rows))
             .into_element(),
     );
     if let Some(sent) = &story.sent {
         out.push(
             view()
-                .pt(px(if app.form == Form::Terminal {
-                    0.0
-                } else {
-                    12.0
-                }))
+                .pt(space(app, 12.0))
                 .child(rich_small(
                     app,
                     &vec![span(sent.text.clone()).hue(sent.hue)],
@@ -424,39 +564,58 @@ fn stepper(app: AppState, stages: &[Stage; 4]) -> AnyElement {
         .into_element()
 }
 
-/// Task ids with their marks where the model shows them; pressing an id opens that task.
+/// Each dependency's id, mark and status word (`T-14 ◐ running`); pressing a known one opens its
+/// task, an id corrald does not know is plain text.
 fn ids(app: AppState, dependencies: &[Dependency]) -> AnyElement {
+    let form = app.form;
     view()
         .flex_row()
         .flex_wrap()
         .items_center()
-        .gap(px(10.0))
+        .gap(if form == Form::Terminal {
+            term::cells(2.0)
+        } else {
+            px(12.0)
+        })
         .children(
             dependencies
                 .iter()
                 .map(|dependency| {
-                    let action = dependency.action.clone();
-                    view()
+                    let spoken = format!("{} {}", dependency.id, dependency.status);
+                    let item = view()
                         .flex_row()
                         .items_center()
-                        .gap(px(4.0))
-                        .when(app.form == Form::Phone, |link| {
-                            link.justify_center().min_w(px(TARGET)).min_h(px(TARGET))
+                        .gap(if form == Form::Terminal {
+                            term::cells(1.0)
+                        } else {
+                            px(4.0)
                         })
-                        .cursor_pointer()
-                        .role(AccessibilityRole::Link)
-                        .label(format!("{} {}", dependency.id, dependency.mark.label()))
-                        .test_id(&format!("btn-dep-{}", dependency.id))
-                        .on_press(move || press(app, action.clone()))
+                        .test_id(&format!("dep-{}", dependency.id))
                         .child(
                             mono(app, dependency.id.clone())
                                 .number_of_lines(1u32)
                                 .truncate(),
                         )
-                        .when(dependency.show_mark, |link| {
-                            link.child(mark(app, dependency.mark, Hue::Neutral))
-                        })
-                        .into_element()
+                        .children(dependency.mark.map(|it| mark(app, it, Hue::Neutral)))
+                        .child(dim(app, dependency.status));
+                    match dependency.action.clone() {
+                        Some(action) => item
+                            .when(form == Form::Phone, |link| link.min_h(px(TARGET)))
+                            .cursor_pointer()
+                            .role(AccessibilityRole::Link)
+                            .label(spoken)
+                            .on_press(move || press(app, action.clone()))
+                            .focus_visible(|s| {
+                                s.outline(px(2.0))
+                                    .outline_color(color(Token::Focus))
+                                    .outline_offset(px(1.0))
+                            })
+                            .into_element(),
+                        None => item
+                            .role(AccessibilityRole::Text)
+                            .label(spoken)
+                            .into_element(),
+                    }
                 })
                 .collect::<Vec<_>>(),
         )

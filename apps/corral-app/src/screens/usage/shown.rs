@@ -17,15 +17,20 @@ pub fn shown(app: AppState) -> Page {
 /// retry beside a failed read (one press, one request each).
 pub fn retry(app: AppState) {
     let by = untracked(|| app.usage.with(|state| state.by));
-    app.refresh(usage::series_request(by));
+    app.refresh(
+        app.feed
+            .with_untracked(|feed| usage::series_request(by, feed)),
+    );
     app.act(app.usage, |_, _| vec![Effect::RetryTopic("usage".into())]);
 }
 
 /// Keeps the selected grouping's series requested while the page is open.
 pub fn keep_loaded(app: AppState) {
     let wanted = computed(move || {
-        app.daemon()
-            .then(|| usage::series_request(app.usage.with(|state| state.by)))
+        app.daemon().then(|| {
+            let by = app.usage.with(|state| state.by);
+            app.feed.with(|feed| usage::series_request(by, feed))
+        })
     });
     effect(move || {
         if let Some(series) = wanted.get() {

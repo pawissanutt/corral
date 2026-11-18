@@ -3,7 +3,9 @@
 //! derived detail the app already holds.
 
 use corral_protocol::detail::{DetailBody, DetailRef, TaskDetail, TerminalSnapshot};
-use corral_protocol::rows::{AgentRow, PlanRow, ProjectRow, StatusCount, TaskRow};
+use corral_protocol::rows::{
+    AgentRow, DependencyStatus, PlanRow, ProjectRow, StatusCount, TaskRow,
+};
 use corral_types::{
     CheckKind, EventKind, Role, Run, SessionStatus, Status, UsageBy, UsageGroup, UsageSummary,
     UsageTotal,
@@ -11,7 +13,7 @@ use corral_types::{
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{details, put, records, save, stamp};
+use super::{details, put, records, save, stamp, workspace};
 use crate::model::Id;
 use crate::model::daemon::{self, ClientError, DetailCache, Feed, detail_key};
 
@@ -35,14 +37,19 @@ pub(super) fn rebuild(feed: &mut Feed) {
             save(feed, record.clone());
         }
     }
+    // Rows read each project's effective round limit.
+    feed.projects = projects(feed, &records);
     let rows = records
         .iter()
         .filter(|record| !closed(record.task.status))
-        .map(|record| daemon::Task::new(row(record)))
+        .map(|record| daemon::Task::new(row(feed, record, &records)))
         .collect();
     feed.board_received(1, rows, &[], true);
     feed.plans = plans(&records);
-    feed.projects = projects(feed, &records);
+    let slots = workspace::slots(feed, &records);
+    if let Some(health) = &mut feed.health {
+        health.slots = Some(slots);
+    }
     feed.agents = agents(&records);
     for (id, agent) in feed.agents.clone() {
         let snapshot = terminal(feed, &records, &agent);
@@ -54,7 +61,7 @@ pub(super) fn rebuild(feed: &mut Feed) {
     }
     feed.usage = (!records.is_empty()).then(|| {
         let runs = all_runs(&records);
-        summarize(&usage_rows(feed, &runs), &runs, None)
+        summarize(&usage_rows(feed, &runs), &runs, None, 0)
     });
     refresh_details(feed);
 }
@@ -63,9 +70,10 @@ pub(super) fn closed(status: Status) -> bool {
     matches!(status, Status::Done | Status::Dropped)
 }
 
-/// The served row: the latest worker run, the newest gate, the review of the current round, and
-/// whether the pipeline appended `ready` since the task last changed hands.
-pub(super) fn row(record: &TaskDetail) -> TaskRow {
+/// The served row: the latest worker run, the live reviewer, the newest gate, the review of the
+/// current round, each dependency's status, the effective round limit, and whether the pipeline
+/// appended `ready` since the task last changed hands.
+pub(super) fn row(feed: &Feed, record: &TaskDetail, records: &[TaskDetail]) -> TaskRow {
     let newest = |kind: CheckKind, key: Option<&str>| {
         record
             .checks
@@ -92,12 +100,32 @@ pub(super) fn row(record: &TaskDetail) -> TaskRow {
                 )
             })
             .is_some_and(|event| event.kind == EventKind::Ready);
+    let dependencies = record
+        .task
+        .depends_on
+        .iter()
+        .map(|id| DependencyStatus {
+            id: id.clone(),
+            status: records
+                .iter()
+                .find(|other| other.task.id == *id)
+                .map(|other| other.task.status),
+        })
+        .collect();
     TaskRow {
         task: record.task.clone(),
         run: last_worker(record).cloned(),
         gate: newest(CheckKind::Gate, None),
         review: newest(CheckKind::Review, Some(&round)),
         ready,
+        max_rounds: Some(workspace::max_rounds(feed, record.task.project.as_deref())),
+        reviewer: record
+            .runs
+            .iter()
+            .rev()
+            .find(|run| run.role == Role::Reviewer && run.ended.is_none())
+            .cloned(),
+        dependencies: Some(dependencies),
     }
 }
 
@@ -153,12 +181,19 @@ fn projects(feed: &Feed, records: &[TaskDetail]) -> BTreeMap<Id, ProjectRow> {
     configured
         .iter()
         .map(|(id, config)| {
-            let open = records
-                .iter()
-                .filter(|record| {
-                    record.task.project.as_deref() == Some(id) && !closed(record.task.status)
-                })
-                .count() as u64;
+            let mut counts: BTreeMap<u8, StatusCount> = BTreeMap::new();
+            for record in records.iter().filter(|record| {
+                record.task.project.as_deref() == Some(id) && !closed(record.task.status)
+            }) {
+                counts
+                    .entry(record.task.status as u8)
+                    .or_insert(StatusCount {
+                        status: record.task.status,
+                        count: 0,
+                    })
+                    .count += 1;
+            }
+            let open = counts.values().map(|count| count.count).sum();
             let config = match config {
                 Value::Object(map) => map.clone(),
                 _ => serde_json::Map::new(),
@@ -167,8 +202,10 @@ fn projects(feed: &Feed, records: &[TaskDetail]) -> BTreeMap<Id, ProjectRow> {
                 Id::new(id),
                 ProjectRow {
                     id: id.clone(),
-                    config,
                     open,
+                    open_by_status: Some(counts.into_values().collect()),
+                    effective: Some(workspace::effective(feed, &config)),
+                    config,
                 },
             )
         })
@@ -266,6 +303,7 @@ pub(super) fn usage_rows(feed: &Feed, runs: &[Run]) -> Vec<corral_types::Usage> 
                 run: Some(run.id.clone()),
                 at,
                 profile: Some(run.profile.clone()),
+                harness: Some(run.harness.clone()),
                 model: run.model.clone().unwrap_or_default(),
                 input: 18_000 * scale,
                 output: 2_100 * scale,
@@ -279,13 +317,28 @@ pub(super) fn usage_rows(feed: &Feed, runs: &[Run]) -> Vec<corral_types::Usage> 
     rows
 }
 
+/// The local calendar day of `at`, `offset` minutes east of UTC.
+pub(super) fn local_day(at: jiff::Timestamp, offset: i16) -> String {
+    let shifted = at + jiff::SignedDuration::from_secs(i64::from(offset) * 60);
+    shifted.to_string().chars().take(10).collect()
+}
+
+/// Totals of `rows`, and the runs they cover; grouped `by` a key, each group with its own runs.
+/// Days are local, `offset` minutes east of UTC.
 pub(super) fn summarize(
     rows: &[corral_types::Usage],
     runs: &[Run],
     by: Option<UsageBy>,
+    offset: i16,
 ) -> UsageSummary {
+    let reported = |run: &Run| {
+        rows.iter().any(|row| {
+            row.task.as_deref() == Some(run.task.as_str())
+                && row.run.as_deref() == Some(run.id.as_str())
+        })
+    };
     let mut total = UsageTotal::default();
-    let mut groups: BTreeMap<Option<String>, UsageTotal> = BTreeMap::new();
+    let mut groups: BTreeMap<Option<String>, UsageGroup> = BTreeMap::new();
     for row in rows {
         add(&mut total, row);
         if let Some(by) = by {
@@ -293,27 +346,31 @@ pub(super) fn summarize(
                 UsageBy::Profile => row.profile.clone(),
                 UsageBy::Model => Some(row.model.clone()),
                 UsageBy::Task => row.task.clone(),
-                UsageBy::Day => Some(row.at.to_string().chars().take(10).collect()),
+                UsageBy::Day => Some(local_day(row.at, offset)),
             };
-            add(groups.entry(key).or_default(), row);
+            add(&mut groups.entry(key).or_default().total, row);
         }
     }
-    let covered = runs
-        .iter()
-        .filter(|run| {
-            rows.iter().any(|row| {
-                row.task.as_deref() == Some(run.task.as_str())
-                    && row.run.as_deref() == Some(run.id.as_str())
-            })
-        })
-        .count() as u64;
+    if let Some(by) = by {
+        for run in runs {
+            let key = match by {
+                UsageBy::Profile => Some(run.profile.clone()),
+                UsageBy::Model => run.model.clone(),
+                UsageBy::Task => Some(run.task.clone()),
+                UsageBy::Day => Some(local_day(run.started, offset)),
+            };
+            let group = groups.entry(key).or_default();
+            *group.total_runs.get_or_insert(0) += 1;
+            *group.covered_runs.get_or_insert(0) += u64::from(reported(run));
+        }
+    }
     UsageSummary {
         total,
         groups: groups
             .into_iter()
-            .map(|(key, total)| UsageGroup { key, total })
+            .map(|(key, group)| UsageGroup { key, ..group })
             .collect(),
-        covered_runs: covered,
+        covered_runs: runs.iter().filter(|run| reported(run)).count() as u64,
         total_runs: runs.len() as u64,
     }
 }

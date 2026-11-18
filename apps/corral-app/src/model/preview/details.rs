@@ -4,7 +4,7 @@ use corral_protocol::detail::*;
 use corral_types::{CheckKind, EventKind, Outcome};
 use jiff::Timestamp;
 
-use super::rollup::{all_runs, closed, last_worker, summarize, usage_rows};
+use super::rollup::{all_runs, closed, last_worker, local_day, row, summarize, usage_rows};
 use super::{put, record, records};
 use crate::model::daemon::Feed;
 
@@ -31,13 +31,20 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
     Ok(match target {
         DetailRef::Plan { id } => {
             let parent = record(feed, id).ok_or_else(|| format!("not_found: task {id}"))?;
+            let all = records(feed);
+            let children: Vec<&TaskDetail> = all
+                .iter()
+                .filter(|child| child.task.parent.as_deref() == Some(id))
+                .collect();
             DetailBody::Plan(PlanDetail {
                 parent: parent.task,
-                children: records(feed)
-                    .into_iter()
-                    .filter(|child| child.task.parent.as_deref() == Some(id))
-                    .map(|child| child.task)
-                    .collect(),
+                child_rows: Some(
+                    children
+                        .iter()
+                        .map(|child| row(feed, child, &all))
+                        .collect(),
+                ),
+                children: children.iter().map(|child| child.task.clone()).collect(),
             })
         }
         DetailRef::Review { task } => DetailBody::Review(review(feed, task)?),
@@ -76,14 +83,32 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
             })
         }
         DetailRef::Burnup { scope } => DetailBody::Burnup(burnup(feed, scope)?),
-        DetailRef::UsageSeries { by } => {
+        DetailRef::UsageSeries {
+            from,
+            to,
+            by,
+            utc_offset_minutes,
+        } => {
+            let day = |text: &str| {
+                text.parse::<jiff::civil::Date>()
+                    .map_err(|_| "invalid: usage series date".to_owned())
+            };
+            let (mut at, end) = (day(from)?, day(to)?);
             let runs = all_runs(&records(feed));
             let rows = usage_rows(feed, &runs);
-            DetailBody::UsageSeries(UsageSeries {
-                summary: summarize(&rows, &runs, *by),
-                rows,
-                runs,
-            })
+            let mut days = Vec::new();
+            while at < end && days.len() < 366 {
+                let key = at.to_string();
+                let on = |instant| local_day(instant, *utc_offset_minutes) == key;
+                let day_rows: Vec<_> = rows.iter().filter(|row| on(row.at)).cloned().collect();
+                let day_runs: Vec<_> = runs.iter().filter(|run| on(run.started)).cloned().collect();
+                days.push(UsageDay {
+                    summary: summarize(&day_rows, &day_runs, *by, *utc_offset_minutes),
+                    day: key,
+                });
+                at = at.tomorrow().map_err(|error| error.to_string())?;
+            }
+            DetailBody::UsageSeries(UsageSeries { days })
         }
         DetailRef::Artifacts { filter } => {
             let needle = filter

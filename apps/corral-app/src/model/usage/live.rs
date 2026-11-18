@@ -1,22 +1,19 @@
 //! corral's recorded usage as the Usage page. The coverage line comes first: how many of the
-//! recorded runs reported any usage, and, for the rest, the harnesses they ran on, since a
-//! harness that reports no usage leaves its runs out of every total. Then the totals and one
-//! table grouped by the selected key, each group's reported totals beside its recorded runs and
-//! their time. A cost sums only the requests that reported a price, and says so.
+//! recorded runs reported any usage, since a harness that reports no usage leaves its runs out
+//! of every total. Then the totals and one table grouped by the selected key over the last
+//! [`super::DAYS`] local days, each group's reported totals beside its recorded runs. A cost
+//! sums only the requests that reported a price, and says so.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use corral_protocol::detail::{DetailBody, UsageSeries};
-use corral_types::{Run, UsageBy, UsageSummary, UsageTotal};
-use jiff::Timestamp;
+use corral_types::{UsageBy, UsageGroup, UsageSummary, UsageTotal};
 use jiff::civil::Date;
-use jiff::tz::TimeZone;
 
 use super::{
     Coverage, Figure, GroupRow, Page, Status, UNKNOWN, count, money, series_request, tokens,
 };
 use crate::model::daemon::Feed;
-use crate::model::work::age;
 
 /// The subscription topic of the usage totals.
 const TOPIC: &str = "usage";
@@ -38,31 +35,8 @@ fn status(feed: &Feed) -> Status {
     }
 }
 
-/// Runs that reported no usage, by the harness they ran on, when the series' reports and runs
-/// account for exactly the summary's uncovered runs.
-fn silent_harnesses(series: &UsageSeries, uncovered: u64) -> Option<String> {
-    let reported: BTreeSet<(&str, &str)> = series
-        .rows
-        .iter()
-        .filter_map(|row| Some((row.task.as_deref()?, row.run.as_deref()?)))
-        .collect();
-    let mut harnesses: BTreeMap<&str, u64> = BTreeMap::new();
-    for run in &series.runs {
-        if !reported.contains(&(run.task.as_str(), run.id.as_str())) {
-            *harnesses.entry(run.harness.as_str()).or_default() += 1;
-        }
-    }
-    (harnesses.values().sum::<u64>() == uncovered).then(|| {
-        harnesses
-            .iter()
-            .map(|(harness, runs)| format!("{harness} {runs}"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    })
-}
-
 /// "Covers N of M runs", and why the rest are missing.
-fn coverage(summary: &UsageSummary, series: Option<&UsageSeries>) -> Coverage {
+fn coverage(summary: &UsageSummary) -> Coverage {
     let (covered, total) = (summary.covered_runs, summary.total_runs);
     if total == 0 {
         return Coverage {
@@ -77,10 +51,6 @@ fn coverage(summary: &UsageSummary, series: Option<&UsageSeries>) -> Coverage {
         };
     }
     let rest = total - covered;
-    let harnesses = series
-        .and_then(|series| silent_harnesses(series, rest))
-        .map(|list| format!(" ({list})"))
-        .unwrap_or_default();
     let other = if rest == 1 {
         "The other run".to_owned()
     } else {
@@ -89,7 +59,7 @@ fn coverage(summary: &UsageSummary, series: Option<&UsageSeries>) -> Coverage {
     Coverage {
         line: format!(
             "Covers {covered} of {total} runs. {other} ran on a harness that reports no \
-             usage{harnesses}, so their tokens and cost are not in these totals."
+             usage, so their tokens and cost are not in these totals."
         ),
         partial: true,
     }
@@ -146,21 +116,44 @@ fn figures(total: &UsageTotal) -> Vec<Figure> {
     ]
 }
 
-/// The key a run counts under, as the engine keys its usage groups (days in UTC).
-fn run_key(by: UsageBy, run: &Run) -> Option<String> {
-    match by {
-        UsageBy::Profile => Some(run.profile.clone()),
-        UsageBy::Model => run.model.clone(),
-        UsageBy::Task => Some(run.task.clone()),
-        UsageBy::Day => Some(run.started.to_zoned(TimeZone::UTC).date().to_string()),
+fn add(sum: &mut UsageTotal, total: &UsageTotal) {
+    sum.requests += total.requests;
+    sum.input += total.input;
+    sum.output += total.output;
+    sum.cache_read += total.cache_read;
+    sum.cache_write += total.cache_write;
+    sum.priced_requests += total.priced_requests;
+    if let Some(usd) = total.usd {
+        sum.usd = Some(sum.usd.unwrap_or(0.0) + usd);
     }
 }
 
-/// Runs and their recorded seconds; an open run counts until now.
-#[derive(Default)]
-struct Tally {
-    runs: u64,
-    seconds: u64,
+fn add_runs(sum: &mut Option<u64>, runs: Option<u64>) {
+    if let Some(runs) = runs {
+        *sum.get_or_insert(0) += runs;
+    }
+}
+
+/// The series' day buckets as one summary: totals, runs and each key's group summed.
+fn merged(series: &UsageSeries) -> UsageSummary {
+    let mut summary = UsageSummary::default();
+    let mut groups: BTreeMap<Option<String>, UsageGroup> = BTreeMap::new();
+    for day in &series.days {
+        add(&mut summary.total, &day.summary.total);
+        summary.covered_runs += day.summary.covered_runs;
+        summary.total_runs += day.summary.total_runs;
+        for group in &day.summary.groups {
+            let sum = groups.entry(group.key.clone()).or_default();
+            add(&mut sum.total, &group.total);
+            add_runs(&mut sum.covered_runs, group.covered_runs);
+            add_runs(&mut sum.total_runs, group.total_runs);
+        }
+    }
+    summary.groups = groups
+        .into_iter()
+        .map(|(key, group)| UsageGroup { key, ..group })
+        .collect();
+    summary
 }
 
 fn missing(by: UsageBy) -> &'static str {
@@ -177,7 +170,7 @@ fn header(by: UsageBy) -> &'static str {
         UsageBy::Profile => "Profile",
         UsageBy::Model => "Model",
         UsageBy::Task => "Task",
-        UsageBy::Day => "Day (UTC)",
+        UsageBy::Day => "Day",
     }
 }
 
@@ -196,50 +189,46 @@ fn key_words(by: UsageBy, key: &str, feed: &Feed) -> (String, Option<String>) {
     }
 }
 
-fn rows(by: UsageBy, series: &UsageSeries, now: Timestamp, feed: &Feed) -> Vec<GroupRow> {
-    let mut groups: BTreeMap<Option<String>, (Option<&UsageTotal>, Tally)> = BTreeMap::new();
-    for group in &series.summary.groups {
-        groups.entry(group.key.clone()).or_default().0 = Some(&group.total);
-    }
-    for run in &series.runs {
-        let tally = &mut groups.entry(run_key(by, run)).or_default().1;
-        tally.runs += 1;
-        let end = run.ended.unwrap_or(now);
-        tally.seconds += u64::try_from(end.as_second() - run.started.as_second()).unwrap_or(0);
-    }
-    let mut ordered: Vec<_> = groups.into_iter().collect();
+fn rows(by: UsageBy, summary: &UsageSummary, feed: &Feed) -> Vec<GroupRow> {
+    let mut ordered: Vec<&UsageGroup> = summary
+        .groups
+        .iter()
+        .filter(|group| group.total.requests > 0 || group.total_runs.is_some_and(|runs| runs > 0))
+        .collect();
     match by {
         UsageBy::Day => ordered.reverse(),
         UsageBy::Profile | UsageBy::Model | UsageBy::Task => ordered.sort_by(|a, b| {
-            let requests = |group: &(Option<&UsageTotal>, Tally)| group.0.map_or(0, |t| t.requests);
-            requests(&b.1)
-                .cmp(&requests(&a.1))
-                .then(b.1.1.runs.cmp(&a.1.1.runs))
-                .then(a.0.cmp(&b.0))
+            b.total
+                .requests
+                .cmp(&a.total.requests)
+                .then(b.total_runs.cmp(&a.total_runs))
+                .then(a.key.cmp(&b.key))
         }),
     }
     ordered
         .into_iter()
-        .map(|(key, (total, tally))| {
-            let (key, named, detail) = match key {
+        .map(|group| {
+            let (key, named, detail) = match &group.key {
                 Some(key) => {
-                    let (words, detail) = key_words(by, &key, feed);
+                    let (words, detail) = key_words(by, key, feed);
                     (words, true, detail)
                 }
                 None => (missing(by).to_owned(), false, None),
             };
-            let figure =
-                |value: fn(&UsageTotal) -> String| total.map_or_else(|| UNKNOWN.into(), value);
+            let reported = group.total.requests > 0;
+            let figure = |value: fn(&UsageTotal) -> String| {
+                if reported {
+                    value(&group.total)
+                } else {
+                    UNKNOWN.into()
+                }
+            };
             GroupRow {
                 key,
                 named,
                 detail,
-                runs: count(tally.runs),
-                run_time: if tally.runs == 0 {
-                    UNKNOWN.into()
-                } else {
-                    age(Some(0), tally.seconds)
-                },
+                runs: group.total_runs.map_or_else(|| UNKNOWN.into(), count),
+                run_time: UNKNOWN.into(),
                 requests: figure(|t| count(t.requests)),
                 input: figure(|t| tokens(t.input)),
                 output: figure(|t| tokens(t.output)),
@@ -274,22 +263,21 @@ fn notices(topic: Option<&str>, series: Option<&str>) -> Vec<String> {
 
 /// The live page for grouping `by`.
 pub fn page(by: UsageBy, feed: &Feed) -> Page {
-    let now = Timestamp::from_second(i64::try_from(feed.now).unwrap_or(0))
-        .unwrap_or(Timestamp::UNIX_EPOCH);
-    let cache = feed.detail(&series_request(by));
+    let cache = feed.detail(&series_request(by, feed));
     let series = cache.and_then(|cache| match cache.body() {
-        Some(DetailBody::UsageSeries(series)) => Some(series),
+        Some(DetailBody::UsageSeries(series)) => Some(merged(series)),
         _ => None,
     });
     // The series and its own summary agree with each other; the topic answers sooner.
-    let summary = series.map(|series| &series.summary).or(feed.usage.as_ref());
+    let summary = series.as_ref().or(feed.usage.as_ref());
     let rows = series
-        .map(|series| rows(by, series, now, feed))
+        .as_ref()
+        .map(|series| rows(by, series, feed))
         .unwrap_or_default();
     let series_error = cache
         .and_then(|cache| cache.error.as_ref())
         .map(|error| error.message.as_str());
-    let rows_empty = match (series, series_error) {
+    let rows_empty = match (&series, series_error) {
         (Some(_), _) if rows.is_empty() => Some("corral has recorded no runs or usage yet."),
         (Some(_), _) => None,
         (None, Some(_)) => Some("The grouped totals could not be read."),
@@ -297,7 +285,7 @@ pub fn page(by: UsageBy, feed: &Feed) -> Page {
     };
     Page {
         status: status(feed),
-        coverage: summary.map(|summary| coverage(summary, series)),
+        coverage: summary.map(coverage),
         figures: summary
             .map(|summary| figures(&summary.total))
             .unwrap_or_default(),
@@ -328,35 +316,11 @@ pub fn page(by: UsageBy, feed: &Feed) -> Page {
 mod tests {
     use super::*;
     use crate::model::daemon::{DetailCache, detail_key};
-    use corral_types::{Role, Usage, UsageGroup};
-    use std::path::PathBuf;
+    use corral_types::UsageDay;
 
-    fn run(task: &str, id: &str, profile: &str, harness: &str) -> Run {
-        Run {
-            id: id.into(),
-            task: task.into(),
-            role: Role::Worker,
-            profile: profile.into(),
-            harness: harness.into(),
-            model: None,
-            effort: None,
-            worktree: PathBuf::new(),
-            branch: String::new(),
-            base: String::new(),
-            base_sha: String::new(),
-            session: None,
-            started: "2026-11-15T09:00:00Z".parse().unwrap(),
-            ended: Some("2026-11-15T10:30:00Z".parse().unwrap()),
-            outcome: None,
-            summary: None,
-            head_sha: None,
-            quiet_since: None,
-        }
-    }
-
-    /// The header says what the partial totals cover and names the harnesses of the runs that
-    /// reported nothing; a profile with only silent runs still lists its runs with unknown
-    /// totals rather than vanishing.
+    /// The header says what the partial totals cover and why the rest are missing; a profile
+    /// with only silent runs still lists its runs with unknown totals rather than vanishing, and
+    /// the day buckets add up.
     #[test]
     fn partial_totals_say_which_runs_they_cover_and_why_the_rest_are_missing() {
         let total = UsageTotal {
@@ -367,41 +331,48 @@ mod tests {
             usd: Some(0.5),
             ..UsageTotal::default()
         };
-        let summary = UsageSummary {
-            total: total.clone(),
-            groups: vec![UsageGroup {
-                key: Some("pi".into()),
-                total,
-            }],
-            covered_runs: 1,
-            total_runs: 3,
+        let day = |day: &str, groups: Vec<UsageGroup>, covered, runs| UsageDay {
+            day: day.into(),
+            summary: UsageSummary {
+                total: groups.iter().fold(UsageTotal::default(), |mut sum, group| {
+                    add(&mut sum, &group.total);
+                    sum
+                }),
+                groups,
+                covered_runs: covered,
+                total_runs: runs,
+            },
+        };
+        let group = |key: &str, total: UsageTotal, covered, runs| UsageGroup {
+            key: Some(key.into()),
+            total,
+            covered_runs: Some(covered),
+            total_runs: Some(runs),
         };
         let series = UsageSeries {
-            summary,
-            rows: vec![Usage {
-                task: Some("T-1".into()),
-                run: Some("R1".into()),
-                at: "2026-11-15T09:30:00Z".parse().unwrap(),
-                profile: Some("pi".into()),
-                model: "m".into(),
-                input: 1200,
-                output: 300,
-                cache_read: 0,
-                cache_write: 0,
-                usd: Some(0.5),
-                billing: None,
-            }],
-            runs: vec![
-                run("T-1", "R1", "pi", "pi"),
-                run("T-2", "R1", "claude", "claude-code"),
-                run("T-3", "R1", "claude", "claude-code"),
+            days: vec![
+                day(
+                    "2026-11-14",
+                    vec![group("claude", UsageTotal::default(), 0, 1)],
+                    0,
+                    1,
+                ),
+                day(
+                    "2026-11-15",
+                    vec![
+                        group("pi", total, 1, 1),
+                        group("claude", UsageTotal::default(), 0, 1),
+                    ],
+                    1,
+                    2,
+                ),
             ],
         };
-        let target = series_request(UsageBy::Profile);
         let mut feed = Feed {
             now: 1_763_200_000,
             ..Feed::default()
         };
+        let target = series_request(UsageBy::Profile, &feed);
         feed.details.insert(
             detail_key(&target),
             DetailCache {
@@ -417,7 +388,6 @@ mod tests {
         let coverage = page.coverage.unwrap();
         assert!(coverage.partial);
         assert!(coverage.line.starts_with("Covers 1 of 3 runs."));
-        assert!(coverage.line.contains("claude-code 2"));
         assert!(page.figures[0].detail.is_some());
         let claude = page.rows.iter().find(|row| row.key == "claude").unwrap();
         assert_eq!(claude.runs, "2");
