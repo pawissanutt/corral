@@ -97,6 +97,7 @@ export interface BuildLaunch {
 
 /** `<dataRoot>/build/<id>/session.json`, rewritten atomically. The launcher lists these to resume. */
 export interface BuildSessionRecord {
+  readonly mixedPaid?: true;
   readonly version: 1;
   /** `B-` plus lowercase base36. */
   readonly id: string;

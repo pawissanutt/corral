@@ -25,8 +25,8 @@ export async function selectBuildProfile(build: BuildContext, name: string): Pro
   if (!selected || selected.available === false) throw new Error(selected?.reason ?? `profile_unavailable: ${name}`);
   const route = parseBuildProfileRoute(selected);
   const current = build.session.route;
-  if (current?.paid && (route.name !== current.name || route.binding?.digest !== current.binding?.digest
-      || JSON.stringify(route.paid) !== JSON.stringify(current.paid))) {
+  if ((current?.paid || build.session.mixedPaid) && (route.name !== current?.name || route.binding?.digest !== current?.binding?.digest
+      || JSON.stringify(route.paid) !== JSON.stringify(current?.paid))) {
     throw new Error("paid_admission_required: paid Build route is sticky; profile changes cannot refresh its allowance");
   }
   if (build.session.bare && route.paid) throw new Error("paid_admission_required: Bare API profiles are unavailable; use --build --profile");

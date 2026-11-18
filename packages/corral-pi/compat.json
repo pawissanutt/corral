@@ -5,6 +5,7 @@
   "summary_profile": 1,
   "build_profiles": 1,
   "build_paid": 1,
+  "build_mixed_paid": 1,
   "verdict": "GO",
   "source": {
     "file": "tools/pi-probe/bun-go.json",

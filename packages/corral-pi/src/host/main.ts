@@ -151,7 +151,7 @@ export async function runHost(config: HostConfig, overrides: {
     ...(config.guidance ? { guidance: config.guidance } : {}),
     root: config.root, exportDir: join(config.sessionDir, "exports"), runtimeDir: config.runtimeDir,
     modules, client, events, network,
-    ...(overrides.build ? { build: overrides.build } : {}),
+    ...(overrides.build ? { build: overrides.build, buildApiFetch: rawFetch } : {}),
     ...(!config.daemonHosted && (overrides.build || config.identity.role === "assistant" || config.identity.role === "pm")
       ? { switchProfile: () => restart(PROFILE_EXIT) } : {}),
     ...(config.identity.role === "assistant" && process.argv.includes("--assistant-new")

@@ -164,6 +164,7 @@ export interface HostSessionOptions {
   readonly client: CorralClient;
   readonly events: EventLog;
   readonly network: GuardedFetch;
+  readonly buildApiFetch?: GuardedFetch["fetch"];
   readonly sessionManager: SessionManager;
   /** The pane's herdr projection; absent for a headless host or one outside its bound pane. */
   readonly herdr?: HerdrLifecycle;
@@ -497,14 +498,15 @@ export class HostSession {
       approved: () => this.buildProviders,
       paidModels: async binding => {
         const record = options.build?.paidRecord;
-        if (!record || !isApiConnection(binding.connection)) throw new Error("paid_admission_required: child has no Build allowance");
+        const fetch = options.buildApiFetch;
+        if (!record || !fetch || !isApiConnection(binding.connection)) throw new Error("paid_admission_required: child has no Build allowance");
         const provider = CONNECTIONS[binding.connection].provider;
         const budget = new RunBudget({ sessionId: () => this.sessionId(),
           record: payload => record({ ...payload, binding_digest: binding.digest }),
           onStop: () => {}, cancel: () => {},
         });
         const credentials = options.modules.auth.credentials(authContext(provider, binding.connection));
-        return (await createApiCatalog(credentials, binding, options.network.fetch, budget.physical)).models;
+        return (await createApiCatalog(credentials, binding, fetch, budget.physical)).models;
       },
       parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
       agentDir: options.agentDir, wake: this.inputWake,

@@ -326,12 +326,12 @@ fn command(
             command
         }
     };
-    let recorded = args
+    let (recorded, recorded_mixed) = args
         .resume
         .as_deref()
         .map(|id| profiles::recorded(data_root, id))
         .transpose()?
-        .flatten();
+        .unwrap_or_default();
     let recorded_paid = recorded.as_ref().is_some_and(|route| route.paid.is_some());
     let route = if let Some(name) = &args.profile {
         profiles::resolve(profile_config, name, args, bare)?
@@ -357,7 +357,8 @@ fn command(
             paid: None,
         }
     };
-    profiles::require_host(&assets, args.profile.is_some(), route.paid.is_some())?;
+
+    profiles::require_host(&assets, args.profile.is_some(), route.paid.is_some(), false)?;
     let provider = route.provider.clone();
     let model = route.model.clone();
     let effort = route.effort.clone();
@@ -404,6 +405,11 @@ fn command(
         .api
         .as_ref()
         .filter(|_| workspace.is_some() && !bare && (args.resume.is_none() || retained_mixed));
+    anyhow::ensure!(
+        !recorded_mixed || retained_mixed,
+        "mixed Build allowance is missing; resume cannot create a new balance"
+    );
+    profiles::require_host(&assets, false, false, mixed.is_some())?;
     anyhow::ensure!(
         !retained_mixed || mixed.is_some(),
         "mixed Build approval was revoked"
