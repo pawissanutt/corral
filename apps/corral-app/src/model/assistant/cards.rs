@@ -145,53 +145,27 @@ pub struct AskOption {
     pub action: Option<Action>,
 }
 
-/// An ask_user card: the question, its options and how it was answered.
+/// An agent's question: who asks, the question, its options, the field for the owner's own
+/// words where it takes them, and how this device's answer went.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskUserCard {
-    /// Prompt provenance and time.
+    /// Who asks.
     pub heading: String,
-    /// Linked question.
     pub question: Rich,
-    /// Choices with consequences.
+    /// Each answers at once when chosen.
     pub options: Vec<AskOption>,
-    /// Answer time, input id and response surface, or the pending/refused state of an answer.
+    /// The field for the owner's own words, while the question takes them.
+    pub words: Option<WordsAnswer>,
+    /// How the answer sent from here went.
     pub answer: Option<Rich>,
 }
-/// One line of the write-permission preview.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DiffLine {
-    /// Destination line number, when the preview states it.
-    pub line: Option<u32>,
-    /// Addition or removal marker, empty for context.
-    pub marker: &'static str,
-    /// Exact preview text.
-    pub text: String,
-}
 
-/// A permission button.
+/// What a typed answer to an agent's question names.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PermissionChoice {
-    /// Grant or deny button.
-    pub button: Button,
-}
-
-/// File-write permission prompt, reused in the thread and Inbox.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PermissionCard {
-    /// Request heading and timestamp.
-    pub heading: String,
-    /// Unanswered, answering or answered state.
-    pub state: Chip,
-    /// File and replacement summary.
-    pub path: String,
-    /// Preview lines.
-    pub lines: Vec<DiffLine>,
-    /// Grants and the denial; empty once answered.
-    pub choices: Vec<PermissionChoice>,
-    /// Prompt deadline and first-answer-wins semantics.
-    pub timer_note: Option<String>,
-    /// Preview disclosure (fixture only).
-    pub illustrative: Option<&'static str>,
+pub struct WordsAnswer {
+    pub session: String,
+    pub question: String,
+    pub placeholder: String,
 }
 /// An Idea's unchanged request and the fields the assistant wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]

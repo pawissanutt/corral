@@ -17,6 +17,9 @@ mod segs;
 mod session;
 mod transcript;
 
+pub(crate) use controls::session_menu;
+pub(crate) use transcript::watch as watch_session;
+
 use corral_protocol::app::SESSION_V1;
 use corral_protocol::detail::{DetailRef, STREAM_TERMINAL_V1};
 use corral_protocol::rows::AgentRow;
@@ -162,10 +165,15 @@ fn follow(app: AppState, id: Id) {
     let has_screen =
         computed(move || row.with(|row| row.as_ref().is_some_and(|row| row.run.session.is_some())));
     let streamed = computed(move || app.feed.with(|feed| feed.capable(STREAM_TERMINAL_V1)));
+    let viewed = id.clone();
     let shown = computed(move || {
         has_screen.get()
             && !streamed.get()
-            && (!transcripts.get() || app.agents.with(|state| state.live_view == View::Terminal))
+            && (!transcripts.get()
+                || app.feed.with(|feed| {
+                    app.agents
+                        .with(|state| state.view_for(feed, viewed.as_str()) == View::Terminal)
+                }))
     });
     {
         let capture = capture.clone();

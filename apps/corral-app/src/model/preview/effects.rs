@@ -25,8 +25,7 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
         }
         Effect::Send(request) => send(feed, request),
         Effect::Session { key, .. } => operation(feed, key, effect),
-        Effect::Stop(_) | Effect::Warm(_) => execute_operation(feed, effect).map(|_| ()),
-        Effect::Prompt { answer, .. } => operation(feed, &Id::from(&answer.cmd_id), effect),
+        Effect::Warm(_) => execute_operation(feed, effect).map(|_| ()),
         Effect::Device(op) => match op {
             DeviceOp::Revoke { key, .. } => operation(feed, key, effect),
             _ => device(feed, op).map(|_| ()),
@@ -127,9 +126,7 @@ pub fn operation(feed: &mut Feed, key: &Id, effect: &Effect) -> Result<(), Strin
     }
     let method = match effect {
         Effect::Session { .. } => ASSISTANT_SESSION,
-        Effect::Stop(_) => ASSISTANT_STOP,
         Effect::Warm(_) => ASSISTANT_WARM,
-        Effect::Prompt { .. } => PROMPT_ANSWER,
         Effect::Device(DeviceOp::Revoke { .. }) => corral_protocol::device::DEVICE_REVOKE,
         _ => "preview.local",
     };
@@ -148,23 +145,6 @@ pub fn operation(feed: &mut Feed, key: &Id, effect: &Effect) -> Result<(), Strin
             refusal: None,
         },
     );
-    if let Effect::Prompt { answer, .. } = effect {
-        feed.commands.insert(
-            answer.cmd_id.clone().into(),
-            CommandState {
-                device: Some("preview-device".into()),
-                method: PROMPT_ANSWER.into(),
-                request: serde_json::to_value(answer).map_err(|error| error.to_string())?,
-                status: if result.is_ok() {
-                    CommandStatus::Done
-                } else {
-                    CommandStatus::Refused
-                },
-                error,
-                entry: None,
-            },
-        );
-    }
     result.map(|_| ())
 }
 
@@ -290,41 +270,6 @@ fn execute_operation(feed: &mut Feed, effect: &Effect) -> Result<Value, String> 
             }
             row.state = AssistantState::Ready;
             serde_json::to_value(row).map_err(|error| error.to_string())
-        }
-        Effect::Stop(request) => {
-            let row = feed
-                .assistants
-                .get_mut(request.session.as_str())
-                .ok_or("Preview assistant session does not exist")?;
-            let running = row.turn == Some(request.turn) && row.state == AssistantState::Working;
-            if running {
-                row.state = AssistantState::Ready;
-                row.turn = None;
-                row.rev += 1;
-            }
-            serde_json::to_value(StopAck {
-                session: request.session.clone(),
-                turn: request.turn,
-                outcome: if running {
-                    StopOutcome::Accepted
-                } else {
-                    StopOutcome::AlreadyStopped
-                },
-                reason: Some("Preview · local turn only".into()),
-            })
-            .map_err(|error| error.to_string())
-        }
-        Effect::Prompt { answer, .. } => {
-            let open = feed.threads.values().any(|thread| {
-                thread.entries.values().any(|entry| {
-                    matches!(&entry.card, Some(EntryCard::Prompt { key, rev, .. })
-                        if *key == answer.key && *rev == answer.rev)
-                })
-            });
-            if !open {
-                return Err("No such local preview permission prompt".into());
-            }
-            Ok(json!({"accepted": true, "preview": true}))
         }
         Effect::Device(op) => device(feed, op),
         _ => Err("This preview effect has no operation reply".into()),

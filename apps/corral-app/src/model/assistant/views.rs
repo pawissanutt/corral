@@ -291,6 +291,9 @@ pub struct ThreadHeader {
     /// End session, on a served named session corrald has not ended; it asks this device to
     /// confirm before the canonical `assistant.session` End goes out.
     pub end: Option<Button>,
+    /// The session whose Session menu (Cancel turn, Pause, Resume, Terminate, Relaunch) the
+    /// head carries; none while no control applies.
+    pub menu: Option<crate::model::Id>,
 }
 
 /// The host lifetime explanation every session's facts carry; there is no idle stop.

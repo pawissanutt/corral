@@ -686,6 +686,9 @@ pub fn live_thread_header(state: &State, feed: &Feed, scope: &str) -> ThreadHead
                 end.enabled = end_state(state, feed, scope) != Some(EndState::Pending);
                 end
             }),
+        // The session's controls, addressed to the session itself: the quick thread's current
+        // one, when any control applies to it now.
+        menu: Some(Id::from(id)).filter(|id| !crate::model::agents::controls(feed, id).is_empty()),
     }
 }
 

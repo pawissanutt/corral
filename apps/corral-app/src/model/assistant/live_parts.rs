@@ -123,18 +123,6 @@ pub(super) fn has_history(
         })
 }
 
-/// A stream is only a temporary override. Never replace a newer canonical suffix with an
-/// older stream snapshot, and wait for every part when the server reports completeness.
-pub(super) fn covers(entry: &ThreadEntry, stream: &str) -> bool {
-    let Some(text) = entry.text.as_deref() else {
-        return false;
-    };
-    match &entry.part {
-        Some(part) => part.complete && text.len() as u64 == part.bytes,
-        None => text.starts_with(stream),
-    }
-}
-
 /// Older daemons use a workspace label as the title; prefer the first loaded owner message
 /// without opening every session's history just to paint the wall.
 pub(super) fn title<'a>(

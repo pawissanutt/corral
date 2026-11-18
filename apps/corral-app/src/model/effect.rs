@@ -1,11 +1,10 @@
 //! Canonical reducer effects and the current connection/form environment shared by every feed.
 
 use corral_protocol::app::{ChangesQuery, SeenAdvance};
-use corral_protocol::assistant::{
-    AssistantSend, AssistantSessionOp, AssistantStop, AssistantWarm, ContextRef, PromptAnswer,
-};
+use corral_protocol::assistant::{AssistantSend, AssistantSessionOp, AssistantWarm, ContextRef};
 use corral_protocol::detail::DetailGet;
 use corral_protocol::pane::{PaneFocus, PaneKeys};
+use corral_protocol::session::SessionPromptAnswer;
 
 use crate::model::act::Act;
 use crate::model::id::Id;
@@ -94,17 +93,26 @@ pub enum Effect {
     /// Withdraw or discard this device's unacknowledged send under its own command id. The
     /// client removes a never-sent or refused one locally and asks corrald for the rest.
     CancelSend(Id),
-    /// Answer an assistant permission prompt.
-    Prompt {
-        answer: PromptAnswer,
-        title: String,
+    /// Answer a question an agent asked in its session (`prompt.answer`), read by `key`.
+    Answer {
+        key: Id,
+        answer: SessionPromptAnswer,
     },
     /// Open or close a scoped thread subscription ("quick" or A-n).
     Thread {
         scope: String,
         open: bool,
     },
-    Stop(AssistantStop),
+    /// Send a session control under `key`; one that asks shows the confirm sheet first unless
+    /// this press was its confirmation.
+    Control {
+        session: Id,
+        key: Id,
+        control: crate::model::agents::Control,
+        confirmed: bool,
+    },
+    /// Open the refusal sheet: corrald refused a request with this reason and these steps.
+    Refused(crate::model::act::RefusalSheet),
     Warm(AssistantWarm),
     /// Keep the unsent draft of a thread durably on this device.
     Draft {

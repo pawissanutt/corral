@@ -1,8 +1,6 @@
 //! The typed actions content carries, and the composer keys, so renderers never infer behavior
 //! from labels. Actions carry owned identities from the shared feed.
 
-use corral_protocol::assistant::PromptChoice;
-
 use super::PickKind;
 use crate::model::effect::Effect;
 use crate::model::id::Id;
@@ -73,29 +71,31 @@ pub enum Action {
     CloseAsk,
     /// Open the quick thread in Agents.
     OpenQuickThread,
-    /// Open a thread at a prompt rather than its newest message.
-    OpenPrompt { thread: ThreadRef, key: String },
     /// Submit the app's draft to its selected target.
     Send,
     /// Daemon: open a live record (an assistant thread, or a task or plan an answer rests on).
     OpenLive(Live),
     /// Daemon: the profile that answers a thread's next message.
     PickProfile { thread: String, profile: String },
-    /// Daemon: stop only the running turn of a session.
-    Stop { session: String, turn: u64 },
     /// Daemon: ask this device to confirm ending a named session (`Some`), or cancel (`None`).
     EndSession(Option<String>),
     /// Daemon: end a named session for good after the owner confirmed it on this device.
     ConfirmEnd(String),
     /// Daemon: start a named daemon session, separate from the quick thread.
     NewSession,
-    /// Daemon: file a waiting message as an Idea in its owner's words, with no model.
+    /// Daemon: file an owner message as an Idea in its words, with no model.
     FileEntry(String),
-    /// Daemon: answer a permission or confirmation prompt by key at its revision.
-    Answer {
-        key: String,
-        rev: u32,
-        choice: PromptChoice,
+    /// Daemon: answer the agent's question in place, with an option, words, or both.
+    AnswerQuestion {
+        session: String,
+        question: String,
+        option: Option<String>,
+        text: Option<String>,
+    },
+    /// Daemon: send a session control (Cancel turn, Pause, Resume, Terminate, Relaunch).
+    Control {
+        session: String,
+        control: crate::model::agents::Control,
     },
     /// Daemon: start (`Some(task)`) or leave editing a filed Idea's title.
     EditIdea(Option<String>),

@@ -1,8 +1,8 @@
 //! Owned transcript descriptors populated from the shared feed.
 
 use super::{
-    Action, ActionCard, AskUserCard, AttachmentView, Button, Chip, FileChip, FiledCard,
-    PermissionCard, SavedCard, WaitingBlock,
+    Action, ActionCard, AskUserCard, AttachmentView, Button, Chip, FileChip, FiledCard, SavedCard,
+    WaitingBlock,
 };
 use crate::model::text::Rich;
 
@@ -27,6 +27,10 @@ pub struct OwnerMessage {
     pub files: Vec<FileChip>,
     /// The attachment whose canonical readback is open under the message.
     pub opened: Option<AttachmentView>,
+    /// File as idea: files the message's words as an Idea task, with no model.
+    pub file: Option<Button>,
+    /// How the filing sent from here went.
+    pub filed: Option<Chip>,
 }
 
 /// An owner-authored PM inbox item and optional folded reply.
@@ -60,10 +64,8 @@ pub enum Body {
     Ordered(Vec<Rich>),
     /// Owner-command class and receipt.
     Action(ActionCard),
-    /// Answered or answerable ask_user card.
+    /// An agent's question, answered in place.
     AskUser(AskUserCard),
-    /// Deferred permission prompt.
-    Permission(PermissionCard),
     /// Assistant-filed Idea with editable generated fields.
     Filed(FiledCard),
     /// Host startup explanation.
@@ -97,8 +99,6 @@ pub struct SourceLink {
 pub struct AssistantMessage {
     /// Stable identity of the reply in its thread, for per-reply view state.
     pub key: String,
-    /// One-shot reveal and highlight of the decision opened from Inbox.
-    pub anchored: bool,
     /// Session id in the author header.
     pub id: String,
     /// Reply time.

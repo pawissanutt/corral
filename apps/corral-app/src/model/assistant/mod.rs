@@ -40,16 +40,10 @@ use crate::model::effect::Effect;
 pub struct State {
     pub ids: crate::model::id::IdSupply,
     pub model_menu: bool,
-    pub anchor: Option<(ThreadRef, String)>,
     pub live: LiveState,
 }
 
 impl State {
-    /// Retire the one-shot Inbox reveal.
-    pub fn clear_anchor(&mut self) {
-        self.anchor = None;
-    }
-
     /// Close the model picker before closing Ask.
     pub fn close_menu(&mut self) -> bool {
         let open = self.model_menu;

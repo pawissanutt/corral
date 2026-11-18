@@ -1,12 +1,11 @@
 //! Daemon-mode reducers. Every chat control returns the canonical send, session operation,
-//! prompt answer or engine operation as an `Effect`; nothing completes in this store. An
-//! operation's identity is allocated once per intent and kept.
+//! session control, question answer or engine operation as an `Effect`; nothing completes in
+//! this store. An operation's identity is allocated once per intent and kept.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use corral_protocol::assistant::{
-    self as wire, AssistantSend, AssistantSessionOp, AssistantStop, AssistantWarm, ContextRef,
-    MESSAGE_TEXT_MAX, PromptAnswer, PromptChoice,
+    self as wire, AssistantSend, AssistantSessionOp, AssistantWarm, ContextRef, MESSAGE_TEXT_MAX,
 };
 use corral_protocol::rows::AssistantRow;
 use corral_types::{NewTask, Op, Status, TaskEdit};
@@ -62,10 +61,6 @@ pub struct LiveState {
     pub new_session: Option<Id>,
     /// Why the last New was not started.
     pub new_session_failed: Option<String>,
-    /// Turns asked to stop, by session.
-    pub stopping: BTreeMap<String, u64>,
-    /// Stop request correlation and exact turn; acceptance alone never proves an abort.
-    pub stop_ops: BTreeMap<Id, (String, u64)>,
     /// The named session whose End is being confirmed on this device.
     pub confirm_end: Option<String>,
     /// Ends sent, by session.
@@ -118,47 +113,6 @@ pub fn subject(kind: &str, id: &str) -> String {
 }
 
 impl State {
-    /// A failed Stop releases only its own turn, so the current answer can be retried.
-    pub fn stop_failed(&mut self, session: &str, turn: u64) {
-        if self.live.stopping.get(session) == Some(&turn) {
-            self.live.stopping.remove(session);
-        }
-    }
-
-    pub fn settle_stop(
-        &mut self,
-        key: &Id,
-        operation: &crate::model::daemon::Operation,
-    ) -> Vec<Effect> {
-        use corral_protocol::assistant::{StopAck, StopOutcome};
-        if operation.loading {
-            return Vec::new();
-        }
-        let Some((session, turn)) = self.live.stop_ops.remove(key) else {
-            return Vec::new();
-        };
-        let failure = if let Some(error) = &operation.error {
-            Some(error.message.clone())
-        } else {
-            match operation.decode::<StopAck>() {
-                Some(ack) if ack.session == session && ack.turn == turn => match ack.outcome {
-                    StopOutcome::Accepted | StopOutcome::AlreadyStopped => None,
-                    StopOutcome::Failed | StopOutcome::Other => Some(
-                        ack.reason
-                            .unwrap_or_else(|| "Stop was not accepted.".into()),
-                    ),
-                },
-                _ => Some("Stop replied without a matching acknowledgement.".into()),
-            }
-        };
-        if let Some(why) = failure {
-            self.stop_failed(&session, turn);
-            vec![Effect::Toast(why)]
-        } else {
-            Vec::new()
-        }
-    }
-
     /// Records a session operation's outcome, opening a created session once it arrives.
     pub fn settle(&mut self, key: &Id, outcome: OpOutcome) -> Vec<Effect> {
         if self.live.new_session.as_ref() == Some(key) {
@@ -341,7 +295,7 @@ impl State {
             Action::NewSession
                 | Action::ConfirmEnd(_)
                 | Action::PickProfile { .. }
-                | Action::Stop { .. }
+                | Action::Control { .. }
         ) && !feed.ready()
         {
             self.live.confirm_end = None;
@@ -358,30 +312,21 @@ impl State {
                 self.model_menu = false;
                 vec![Effect::CloseAsk]
             }
-            Action::OpenQuickThread => {
-                self.clear_anchor();
-                vec![
-                    Effect::CloseAsk,
-                    Effect::OpenLive(Live::Thread(Id::from(QUICK))),
-                ]
-            }
+            Action::OpenQuickThread => vec![
+                Effect::CloseAsk,
+                Effect::OpenLive(Live::Thread(Id::from(QUICK))),
+            ],
             Action::OpenLive(live @ Live::Thread(_)) => {
-                self.clear_anchor();
                 vec![Effect::CloseAsk, Effect::OpenLive(live)]
             }
             Action::OpenLive(live) => vec![Effect::OpenLive(live)],
-            Action::OpenPrompt {
-                thread: super::ThreadRef::Live(scope),
-                key,
-            } => {
-                self.anchor = Some((super::ThreadRef::Live(scope.clone()), key));
-                vec![Effect::CloseAsk, Effect::OpenLive(Live::Thread(scope))]
-            }
             Action::PickProfile { thread, profile } => self.pick(thread, profile, feed),
-            Action::Stop { session, turn } => {
-                self.live.stopping.insert(session.clone(), turn);
-                vec![Effect::Stop(AssistantStop { session, turn })]
-            }
+            Action::Control { session, control } => vec![Effect::Control {
+                session: Id::from(session),
+                key: self.ids.next_id(),
+                control,
+                confirmed: false,
+            }],
             Action::EndSession(session) => {
                 self.live.confirm_end = session;
                 Vec::new()
@@ -410,7 +355,14 @@ impl State {
                     "This message is not loaded here; nothing was filed".into(),
                 )],
             },
-            Action::Answer { key, rev, choice } => self.answer(key, rev, choice, feed),
+            Action::AnswerQuestion {
+                session,
+                question,
+                option,
+                text,
+            } => crate::model::agents::answer_prompt(&session, question, option, text)
+                .into_iter()
+                .collect(),
             Action::EditIdea(Some(task)) => {
                 self.live.editing = Some(task);
                 Vec::new()
@@ -480,24 +432,6 @@ impl State {
         vec![Effect::Session {
             key,
             op: AssistantSessionOp::End { session },
-        }]
-    }
-
-    fn answer(&mut self, key: String, rev: u32, choice: PromptChoice, feed: &Feed) -> Vec<Effect> {
-        let remembered = subject("prompt", &key);
-        if let Some(effects) = self.held(&remembered, feed) {
-            return effects;
-        }
-        let cmd_id = self.ids.next_id();
-        self.live.acts.insert(remembered, cmd_id.clone());
-        vec![Effect::Prompt {
-            title: format!("{} · {key}", live::choice_label(choice)),
-            answer: PromptAnswer {
-                cmd_id: cmd_id.to_string(),
-                key,
-                rev,
-                choice,
-            },
         }]
     }
 

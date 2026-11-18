@@ -96,15 +96,22 @@ pub enum ClientRequest {
         request_id: String,
         request: AssistantWarm,
     },
-    AssistantStop {
-        request_id: String,
-        request: AssistantStop,
-    },
     AssistantSession {
         request_id: String,
         request: AssistantSessionOp,
     },
-    PromptAnswer(PromptAnswer),
+    /// `prompt.answer`: an agent's question answered in place, read by `request_id`.
+    PromptAnswer {
+        request_id: String,
+        request: corral_protocol::session::SessionPromptAnswer,
+    },
+    /// A session control (`session.cancel`, `.pause`, `.resume`, `.terminate`, `.relaunch`,
+    /// `.rewind`) addressed by the session's public id, read by `request_id`.
+    Session {
+        request_id: String,
+        method: &'static str,
+        params: serde_json::Value,
+    },
     ChangesPage {
         request_id: String,
         request: ChangesQuery,
@@ -219,7 +226,6 @@ macro_rules! operation {
 operation!(detail, DetailGet, Detail);
 operation!(config_put, ConfigDocument, ConfigPut);
 operation!(assistant_warm, AssistantWarm, AssistantWarm);
-operation!(assistant_stop, AssistantStop, AssistantStop);
 operation!(assistant_session, AssistantSessionOp, AssistantSession);
 operation!(changes_page, ChangesQuery, ChangesPage);
 operation!(seen_advance, SeenAdvance, SeenAdvance);
@@ -250,9 +256,6 @@ pub fn submit(request_id: String, request: OpSubmit) -> bool {
 }
 pub fn assistant_send(request: AssistantSend) -> bool {
     send(ClientRequest::AssistantSend(request))
-}
-pub fn prompt_answer(request: PromptAnswer) -> bool {
-    send(ClientRequest::PromptAnswer(request))
 }
 pub fn thread(scope: String, open: bool) -> bool {
     send(ClientRequest::Thread { scope, open })

@@ -14,7 +14,7 @@ use crate::model::effect::{Effect, PaneRequest};
 use crate::model::hue::Hue;
 use crate::model::id::IdSupply;
 
-use super::live::session_name;
+use super::live::{placement, session_name};
 use super::{Action, State};
 
 /// The keys bar: herdr's names for the keys an agent's screen asks for, and their caps.
@@ -174,9 +174,11 @@ pub fn focus_refusal(feed: &daemon::Feed, row: Option<&AgentRow>) -> Option<Stri
     let Some(row) = row else {
         return Some("corrald lists no live run with this id now".into());
     };
-    match &row.run.session {
+    match row.run.session.as_ref().map(placement) {
         None => Some("No session was recorded for this run".into()),
-        Some(SessionRef::Process { .. }) => Some("A headless session has no pane to focus".into()),
+        Some(SessionRef::Process { .. } | SessionRef::Pi { .. }) => {
+            Some("A headless session has no pane to focus".into())
+        }
         Some(SessionRef::Herdr { .. }) => {
             match feed
                 .session
@@ -234,9 +236,9 @@ pub(super) fn input(
     feed: &daemon::Feed,
 ) -> Option<PaneInput> {
     let pane = session_name(row)?;
-    let closed = match row.run.session.as_ref()? {
+    let closed = match placement(row.run.session.as_ref()?) {
         SessionRef::Herdr { .. } => None,
-        SessionRef::Process { .. } => Some(
+        SessionRef::Process { .. } | SessionRef::Pi { .. } => Some(
             "Headless session: its log takes no keys. Reply, Stop and Retry are in the Session menu."
                 .to_owned(),
         ),

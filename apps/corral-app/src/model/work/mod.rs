@@ -260,6 +260,11 @@ pub enum Press {
     Menu(Record),
     /// Bring run session `<task>_<run>`'s herdr pane forward on corrald's machine.
     Focus(Id),
+    /// Send a session control to session `session`.
+    Control {
+        session: Id,
+        control: crate::model::agents::Control,
+    },
     /// Run entry `index` of the task's Blocked card `next` list, as served now.
     Next {
         task: Id,
@@ -400,6 +405,12 @@ impl State {
             Press::Focus(session) => {
                 vec![crate::model::agents::focus(&mut self.ids, feed, session)]
             }
+            Press::Control { session, control } => vec![Effect::Control {
+                session,
+                key: self.ids.next_id(),
+                control,
+                confirmed: false,
+            }],
             Press::Next { task, index } => match served_next(feed, &task, index) {
                 Some(next) => self.next(&next, false),
                 None => vec![no_longer_blocked(&task)],

@@ -25,6 +25,7 @@ use corral_protocol::device::{
 };
 use corral_protocol::op::OP_SUBMIT;
 use corral_protocol::pane::{PANE_FOCUS, PANE_KEYS};
+use corral_protocol::session as control;
 use corral_protocol::{self as wire, Refusal, app::*, assistant::*, detail::*, subscription::*};
 use nsh_core::prelude::*;
 use serde::Serialize;
@@ -65,8 +66,25 @@ pub(super) fn handles(event: &Event) -> bool {
             DETAIL_GET | CHANGES_PAGE | SEEN_ADVANCE | DEVICE_REVOKE |
             wire::device::PAIR_BEGIN | wire::device::PAIR_STATUS | wire::device::PAIR_CONFIRM | wire::device::PAIR_CANCEL |
             PUSH_STATUS | PUSH_SUBSCRIBE | PUSH_UNSUBSCRIBE | ASSISTANT_SEND | ASSISTANT_WARM |
-            ASSISTANT_STOP | ASSISTANT_SESSION | PROMPT_ANSWER | DEVICE_PAGE |
-            ASSISTANT_CANCEL | ATTACHMENT_BEGIN | ATTACHMENT_PUT | ATTACHMENT_DISCARD))
+            ASSISTANT_SESSION | PROMPT_ANSWER | DEVICE_PAGE |
+            ASSISTANT_CANCEL | ATTACHMENT_BEGIN | ATTACHMENT_PUT | ATTACHMENT_DISCARD |
+            control::SESSION_CANCEL | control::SESSION_PAUSE | control::SESSION_RESUME |
+            control::SESSION_TERMINATE | control::SESSION_RELAUNCH | control::SESSION_REWIND))
+}
+
+/// Whether a refusal of `method` carries a typed `Refusal` the app shows with its reason.
+fn refusable(method: &str) -> bool {
+    matches!(
+        method,
+        OP_SUBMIT
+            | PROMPT_ANSWER
+            | control::SESSION_CANCEL
+            | control::SESSION_PAUSE
+            | control::SESSION_RESUME
+            | control::SESSION_TERMINATE
+            | control::SESSION_RELAUNCH
+            | control::SESSION_REWIND
+    )
 }
 
 pub(super) struct AppState {
@@ -534,34 +552,11 @@ mod tests {
         assert!(state.live.picks.is_empty());
         assert!(state.live.ends.is_empty());
     }
-
-    #[test]
-    fn failed_stop_releases_the_turn_for_retry_without_claiming_abort() {
-        let mut state = crate::model::assistant::State::default();
-        let key = Id::from("failed-stop");
-        state.live.stopping.insert("A-1".into(), 3);
-        state.live.stop_ops.insert(key.clone(), ("A-1".into(), 3));
-        let effects = state.settle_stop(
-            &key,
-            &Operation {
-                method: ASSISTANT_STOP.into(),
-                loading: false,
-                value: None,
-                error: Some(ClientError {
-                    code: "refused".into(),
-                    message: "Stop failed".into(),
-                }),
-                refusal: None,
-            },
-        );
-        assert!(!state.live.stopping.contains_key("A-1"));
-        assert!(state.live.stop_ops.is_empty());
-        assert!(matches!(
-            effects.as_slice(),
-            [crate::model::Effect::Toast(_)]
-        ));
-    }
 }
+
+#[cfg(test)]
+#[path = "app/control_tests.rs"]
+mod control_tests;
 
 fn trim_commands(feed: Signal<Feed>) {
     feed.update(|feed| {

@@ -37,12 +37,29 @@ pub(crate) fn shown_id(row: &AgentRow) -> String {
     row.run.task.clone()
 }
 
+/// Where a session runs: a pi session's placement is the pane or process its host runs in.
+pub(crate) fn placement(session: &SessionRef) -> &SessionRef {
+    match session {
+        SessionRef::Pi { inner, .. } => placement(inner),
+        other => other,
+    }
+}
+
+/// Whether the run's host speaks the pi session socket (cancel, pause, rewind, live text).
+pub(crate) fn is_pi(row: &AgentRow) -> bool {
+    matches!(row.run.session, Some(SessionRef::Pi { .. }))
+}
+
 /// The run's pane (`w1:p2`) or process (`pid 4120`), when the runner recorded one.
 pub(super) fn session_name(row: &AgentRow) -> Option<String> {
-    row.run.session.as_ref().map(|session| match session {
-        SessionRef::Herdr { pane, .. } => pane.clone(),
-        SessionRef::Process { pid, .. } => format!("pid {pid}"),
-    })
+    row.run
+        .session
+        .as_ref()
+        .map(|session| match placement(session) {
+            SessionRef::Herdr { pane, .. } => pane.clone(),
+            SessionRef::Process { pid, .. } => format!("pid {pid}"),
+            SessionRef::Pi { .. } => String::new(),
+        })
 }
 
 /// Unix seconds of an RFC 3339 time.

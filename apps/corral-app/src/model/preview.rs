@@ -3,6 +3,7 @@
 //! plans, projects, live runs, closed page and usage totals are projected from those after every
 //! change, as the daemon projects its own store. The caller supplies the clock; nothing here
 //! contacts a daemon or persists anything.
+mod controls;
 mod details;
 mod effects;
 mod engine;
@@ -25,6 +26,7 @@ use corral_types::{Actor, Event, EventKind};
 use jiff::Timestamp;
 use serde_json::Value;
 
+pub use controls::{answer, control};
 pub use details::detail;
 pub use effects::{effect, operation};
 pub use engine::act;

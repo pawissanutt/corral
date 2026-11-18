@@ -1,14 +1,13 @@
-//! The thread page: its head, the transcript with the composer docked under it, the session's
-//! facts beside them; the same as a pushed phone page; and a pending assistant prompt as Inbox's
-//! detail pane shows it, all from the served thread.
+//! The thread page: its head with the session's controls, the transcript with the composer
+//! docked under it, the session's facts beside them; and the same as a pushed phone page, all
+//! from the served thread.
 
 use std::rc::Rc;
 
 use nsh_core::prelude::*;
 
 use crate::model::assistant::{
-    Action, Button, Fact, LABELS, LivePrompt, PromptCard, PromptPane, QUICK, ThreadHeader,
-    ThreadRef, live_prompt_pane, live_thread_header, quick_id,
+    Action, Button, Fact, LABELS, QUICK, ThreadHeader, ThreadRef, live_thread_header, quick_id,
 };
 use crate::model::{Form, Id};
 use crate::screens::{PhoneBar, PhonePage};
@@ -19,21 +18,19 @@ use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::dot;
 use crate::ui::kit::overlay::{self, Confirm, Modal};
-use crate::ui::kit::page::{Width, body, columns, context, pushed_head, qhead};
+use crate::ui::kit::page::{Width, columns, context, pushed_head};
 use crate::ui::kit::text::{h3, label_value, rich_small};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::parts::{act, model_button, note_size, ring, spacer, words};
-use super::{cards, open_scope, side_facts, transcript, watch_ops};
+use super::{open_scope, side_facts, transcript, watch_ops};
 
 /// The facts column beside the transcript (`grid-template-columns: minmax(0,1fr) 300px`).
 const FACTS_WIDTH: f32 = 300.0;
 /// The transcript rows' inset on the page (`.tm` padding 8 24); the phone's 14.
 const PAGE_INSET: f32 = 24.0;
 const PHONE_INSET: f32 = 14.0;
-/// The prompt pane's measure (`max-width: 760px`).
-const PROMPT_MEASURE: f32 = 760.0;
 
 /// The served thread `id` ("quick" or A-n) on desktop and in a terminal, subscribed while it is
 /// shown: the head (back to Agents, title, the thread's state, where it runs), the transcript
@@ -108,20 +105,22 @@ fn head(app: AppState, source: &ThreadRef) -> AnyElement {
         .end
         .clone()
         .map(|end| end_button(app, end, ButtonKind::Ghost));
+    let menu = header
+        .menu
+        .clone()
+        .map(|session| crate::screens::agents::session_menu(app, session));
     let title = header.title;
     let back = header.back_label;
     if app.form == Form::Terminal {
-        let trailing = match (state, end) {
-            (None, None) => None,
-            (state, end) => Some(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .children(state)
-                    .when_some(end, |row, end| row.child(term::space(2.0)).child(end))
-                    .into_element(),
-            ),
-        };
+        let trailing = (state.is_some() || menu.is_some() || end.is_some()).then(|| {
+            view()
+                .flex_row()
+                .items_center()
+                .children(state)
+                .when_some(menu, |row, menu| row.child(term::space(2.0)).child(menu))
+                .when_some(end, |row, end| row.child(term::space(2.0)).child(end))
+                .into_element()
+        });
         return pushed_head(app, title, back, move || app.back(), trailing);
     }
     view()
@@ -164,7 +163,9 @@ fn head(app: AppState, source: &ThreadRef) -> AnyElement {
                 .flex_shrink(1.0)
                 .min_w(px(0.0)),
         )
-        .when_some(end, |row, end| row.child(spacer()).child(end))
+        .child(spacer())
+        .children(menu)
+        .children(end)
         .into_element()
 }
 
@@ -405,75 +406,5 @@ fn phone_page(app: AppState, source: ThreadRef) -> PhonePage {
         bar: Some(PhoneBar::always(ask::docked(app, source))),
         ask: false,
         scroll: false,
-    }
-}
-
-/// Prompt `key` of thread `thread` as Inbox's detail pane shows it, with its real answers; the
-/// thread is subscribed while the pane is shown.
-pub fn live_prompt(app: AppState, thread: Id, key: Id) -> AnyElement {
-    open_scope(app, thread.clone(), false);
-    dynamic(move || {
-        let pane = app.feed.with(|feed| {
-            app.assistant
-                .with(|state| live_prompt_pane(state, feed, thread.as_str(), key.as_str()))
-        });
-        Some(match pane {
-            LivePrompt::Pane(pane) => prompt_view(app, &pane),
-            LivePrompt::Loading => notice(app, "Loading the prompt from its thread…".into()),
-            LivePrompt::Missing(why) => notice(app, why),
-        })
-    })
-}
-
-fn notice(app: AppState, said: String) -> AnyElement {
-    let form = app.form;
-    let line = words(app, said, note_size(form), Token::Ink3);
-    match form {
-        Form::Phone => view().px(px(18.0)).py(px(14.0)).child(line).into_element(),
-        Form::Desktop | Form::Terminal => body(app, "prompt-pane", line.into_element()),
-    }
-}
-
-/// The needs-you chip and where it came from, the title, the card shared with the thread, that
-/// one answer wins, and the way to the thread. Desktop and terminal: it fills its container and
-/// scrolls its body itself. Phone: the same content unscrolled, for a page body.
-fn prompt_view(app: AppState, pane: &PromptPane) -> AnyElement {
-    let form = app.form;
-    let meta = vec![
-        chip(app, pane.state.label.clone(), pane.state.hue),
-        words(app, pane.origin.clone(), note_size(form), Token::Ink3)
-            .flex_shrink(1.0)
-            .min_w(px(0.0))
-            .into_element(),
-    ];
-    let card = match &pane.card {
-        PromptCard::Permission(card) => cards::permission(app, card),
-        PromptCard::Confirmation(card) => cards::action(app, card),
-    };
-    let content = view()
-        .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
-        .when(form == Form::Desktop, |c| c.max_w(px(PROMPT_MEASURE)))
-        .child(card)
-        .when(form == Form::Terminal, |c| c.child(term::blank()))
-        .child(words(app, pane.note, note_size(form), Token::Ink3))
-        .child(
-            view()
-                .flex_row()
-                .child(model_button(app, &pane.open, ButtonKind::Quiet)),
-        )
-        .into_element();
-    let head = qhead(app, meta, pane.title.clone(), None, Vec::new());
-    match form {
-        Form::Phone => view()
-            .child(head)
-            .child(view().px(px(18.0)).py(px(14.0)).child(content))
-            .into_element(),
-        Form::Desktop | Form::Terminal => view()
-            .flex_1()
-            .flex_col()
-            .min_h(px(0.0))
-            .child(head)
-            .child(body(app, "prompt-pane", content))
-            .into_element(),
     }
 }

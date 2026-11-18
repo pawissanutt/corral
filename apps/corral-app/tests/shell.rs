@@ -449,20 +449,31 @@ fn escape_clears_the_roster_selection_before_leaving_agents() {
     );
 }
 
-/// A run row's Session menu stops its run: Stop asks once, confirming submits `stop`, and the
-/// run leaves the roster.
+/// A run row's Session menu terminates its session: Terminate asks once, confirming sends it,
+/// and the run leaves the roster.
 #[test]
-fn stop_from_a_session_row_asks_once_and_stops_the_run() {
+fn terminate_from_a_session_row_asks_once_and_ends_the_run() {
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
     app.wait_for("id:agent-T-14_R1").unwrap();
     app.right_click("id:agent-T-14_R1").unwrap();
-    app.press("id:btn-stop").unwrap();
+    app.press("id:btn-terminate").unwrap();
     app.wait_for("id:confirm").unwrap();
     app.press("id:confirm-confirm").unwrap();
-    app.wait_for("text:/^Stop T-14 · Done/").unwrap();
+    app.wait_for("text:/Terminated/").unwrap();
     app.wait_for_gone("id:agent-T-14_R1", Duration::from_secs(5))
         .unwrap();
     assert_eq!(app.screen().count("id:confirm").unwrap(), 0);
+}
+
+/// Pause on a session without a pi host is refused, and the refusal sheet says corrald's reason.
+#[test]
+fn pause_on_a_session_without_a_pi_host_shows_the_refusal_reason() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.wait_for("id:agent-T-14_R1").unwrap();
+    app.right_click("id:agent-T-14_R1").unwrap();
+    app.press("id:btn-pause").unwrap();
+    app.wait_for("id:refused").unwrap();
+    app.wait_for("text:/no Pi socket/").unwrap();
 }
 
 /// Review's live reviewer opens its session page: the reviewer run's terminal.

@@ -104,9 +104,15 @@ impl AppState {
                 name,
                 result,
             } => self.attach_loaded(feed, upload, kind, name, result),
-            ClientRequest::PromptAnswer(request) => {
-                self.command(feed, PROMPT_ANSWER, request.cmd_id.clone(), value(request))
-            }
+            ClientRequest::PromptAnswer {
+                request_id,
+                request,
+            } => self.operation(feed, request_id, PROMPT_ANSWER, value(request)),
+            ClientRequest::Session {
+                request_id,
+                method,
+                params,
+            } => self.operation(feed, request_id, method, params),
             ClientRequest::OpSubmit {
                 request_id,
                 request,
@@ -249,10 +255,6 @@ impl AppState {
                 request_id,
                 request,
             } => self.operation(feed, request_id, ASSISTANT_WARM, value(request)),
-            ClientRequest::AssistantStop {
-                request_id,
-                request,
-            } => self.operation(feed, request_id, ASSISTANT_STOP, value(request)),
             ClientRequest::AssistantSession {
                 request_id,
                 request,
@@ -289,45 +291,6 @@ impl AppState {
             );
         });
         if self.ready {
-            vec![out(method, params, Some(id))]
-        } else {
-            vec![]
-        }
-    }
-    /// A prompt answer: refused here when it cannot leave, else sent once under its own id.
-    fn command(
-        &mut self,
-        feed: Signal<Feed>,
-        method: &'static str,
-        id: String,
-        params: Value,
-    ) -> Vec<Outgoing> {
-        trim_commands(feed);
-        if feed.with_untracked(|feed| {
-            feed.commands
-                .get(id.as_str())
-                .is_some_and(|prior| prior.status != CommandStatus::Refused)
-        }) {
-            return vec![];
-        }
-        let mut state = feed.with_untracked(|feed| {
-            command_state(feed, method, params.clone(), CommandStatus::Pending)
-        });
-        if !self.ready {
-            state.status = CommandStatus::Refused;
-            state.error = Some(offline());
-        } else if let Err(problem) = super::super::core::preflight_request(method, &params) {
-            state.status = CommandStatus::Refused;
-            state.error = Some(ClientError {
-                code: "local_admission".into(),
-                message: problem,
-            });
-        }
-        let send = state.status == CommandStatus::Pending;
-        feed.update(|feed| {
-            feed.commands.insert(Id::from(&id), state);
-        });
-        if send {
             vec![out(method, params, Some(id))]
         } else {
             vec![]

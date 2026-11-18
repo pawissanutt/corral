@@ -1,6 +1,5 @@
 use corral_protocol::assistant::{EntryKind, EntryPart, MessageState, ThreadEntry};
 use corral_protocol::rows::{AssistantKind, AssistantLocation, AssistantRow, AssistantState};
-use corral_protocol::subscription::LiveText;
 
 use super::{Body, State, ThreadItem, live_chip, live_items};
 use crate::model::daemon::{Feed, Link, ThreadSnapshot};
@@ -57,7 +56,7 @@ fn text(message: &super::AssistantMessage) -> String {
 }
 
 #[test]
-fn long_answer_parts_render_once_in_numeric_order_and_retire_the_live_override() {
+fn long_answer_parts_render_once_in_numeric_order() {
     // Twelve small suffixes exercise /10 before /2 lexical ordering without a large fixture.
     let parts: Vec<_> = std::iter::once("a".repeat(7 * 1024))
         .chain((1..12).map(|index| format!("[{index}]")))
@@ -96,16 +95,9 @@ fn long_answer_parts_render_once_in_numeric_order_and_retire_the_live_override()
         owner.id = "A-1/M1/text/1".into();
         owner.text = Some("continuation".into());
         thread.entries.insert(owner.id.as_str().into(), owner);
-        thread.live = Some(LiveText {
-            entry: "A-1/M1/answer/0".into(),
-            turn: 1,
-            offset: 0,
-            text: format!("{canonical} streamed"),
-            done: false,
-        });
         let mut feed = Feed::default();
         feed.threads.insert("A-1".into(), thread);
-        assert_eq!(text(&answer(&feed)), format!("{canonical} streamed"));
+        assert_eq!(text(&answer(&feed)), canonical);
         let rows = live_items(&State::default(), &feed, "A-1");
         assert_eq!(
             rows.iter()
@@ -121,29 +113,6 @@ fn long_answer_parts_render_once_in_numeric_order_and_retire_the_live_override()
             })
             .collect();
         assert_eq!(owners, ["owner continuation"]);
-        if metadata {
-            for row in feed.threads.get_mut("A-1").unwrap().entries.values_mut() {
-                if let Some(part) = &mut row.part {
-                    part.complete = true;
-                }
-            }
-        }
-        feed.threads
-            .get_mut("A-1")
-            .unwrap()
-            .live
-            .as_mut()
-            .unwrap()
-            .text = canonical.clone();
-        let settled = answer(&feed);
-        assert_eq!(text(&settled), canonical);
-        assert!(
-            !settled.streaming,
-            "canonical coverage retires even a late done flag"
-        );
-        assert!(settled.stop.is_none());
-        feed.threads.get_mut("A-1").unwrap().live = None;
-        assert_eq!(text(&answer(&feed)), canonical);
     }
 }
 
