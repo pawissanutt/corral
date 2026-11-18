@@ -26,6 +26,8 @@ export function headlessLine(event: BridgeEvent): string | undefined {
       return `${at} denied ${event.tool}`;
     case "network_refused":
       return `${at} network refused: ${JSON.stringify(event.destination)}`;
+    case "usage_report_failed":
+      return `${at} usage report failed: ${event.reason}`;
     case "shutdown":
       return `${at} shutting down`;
     default:

@@ -257,10 +257,6 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                 }),
             ..
         } => {
-            let profile = match (task.as_deref(), run.as_deref()) {
-                (Some(task), Some(run)) => engine.store.get_run(task, run)?.map(|run| run.profile),
-                _ => None,
-            };
             apply(
                 &engine,
                 out,
@@ -269,7 +265,7 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                         task,
                         run,
                         at: Timestamp::now(),
-                        profile,
+                        profile: None,
                         harness: None,
                         model,
                         input,

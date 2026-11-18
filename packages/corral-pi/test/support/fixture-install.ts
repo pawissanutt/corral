@@ -2,12 +2,13 @@
 // the package's installed node_modules linked in, and (with overlays) fixture.json
 // plus the fixture role and auth modules copied to their fixed module paths. Fixture
 // modules exist only inside that temp directory, never in the package's own src/.
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ROLES } from "../../src/roles/types.ts";
+import type { FakeStep } from "../fixtures/auth/fake-transport.ts";
 
 export const PACKAGE_ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const FILES_MAX = 1024;
@@ -108,6 +109,14 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
   }
   bounded(dir);
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+/** Keep the shipped host and roles; script only the offline provider's responses. */
+export function scriptedFixtureInstall(parent: string, steps: readonly FakeStep[]): string {
+  const assets = buildFixtureInstall({ parent, omit: ["role"] });
+  copy(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"));
+  appendFileSync(join(assets.dir, "src/auth/index.ts"), `\nfixtureTransport().script(${JSON.stringify(steps)});\n`);
+  return assets.dir;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

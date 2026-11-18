@@ -1,5 +1,5 @@
 use crate::{
-    Engine, Role, Store, Usage,
+    Engine, Op, Role, Store, Usage,
     tests::{run, task, tempdir},
 };
 
@@ -23,14 +23,13 @@ fn request(at: &str) -> Usage {
 }
 
 #[test]
-fn usage_round_trips_without_creating_an_event() {
+fn usage_add_attributes_the_run_without_creating_an_event() {
     let root = tempdir();
     let engine = Engine::init(root.path(), None).unwrap();
     assert_eq!(engine.usage_summary(None).unwrap(), UsageSummary::default());
     let associated = Usage {
         task: Some("T-001".into()),
         run: Some("R1".into()),
-        profile: Some("worker".into()),
         harness: Some("reported".into()),
         usd: Some(0.125),
         billing: Some("api".into()),
@@ -38,7 +37,14 @@ fn usage_round_trips_without_creating_an_event() {
     };
     engine.store.insert_task(&task("T-001")).unwrap();
     engine.store.insert_run(&run("T-001", "R1")).unwrap();
-    engine.record_usage(&associated).unwrap();
+    engine
+        .apply(
+            Op::UsageAdd {
+                usage: associated.clone(),
+            },
+            false,
+        )
+        .unwrap();
     let unassociated = Usage {
         input: u64::MAX,
         billing: Some("subscription".into()),
@@ -48,7 +54,16 @@ fn usage_round_trips_without_creating_an_event() {
     drop(engine);
 
     let store = Store::open(&root.path().join(".corral-next/corral.db")).unwrap();
-    assert_eq!(store.list_usage().unwrap(), [associated, unassociated]);
+    assert_eq!(
+        store.list_usage().unwrap(),
+        [
+            Usage {
+                profile: Some("generic".into()),
+                ..associated
+            },
+            unassociated
+        ]
+    );
     assert!(
         store
             .events_after(&Default::default(), 0)

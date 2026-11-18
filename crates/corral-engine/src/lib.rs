@@ -134,7 +134,7 @@ impl Engine {
                 applied
             }
             Op::UsageAdd { usage } => {
-                self.record_usage(&usage)?;
+                self.report_usage(usage)?;
                 Applied::default()
             }
             Op::Sync => {

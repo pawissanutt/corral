@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { NativePanels } from "../src/ui/panels.ts";
 import { startPanelHost } from "./support/panel-host.ts";
 
 // Production HostSession + InteractiveMode, offline provider/control-plane transport only.
@@ -9,8 +10,13 @@ test("action catalog retains role restrictions and packaged preferences change r
     await h.physical.until("Keep my draft");
     const bound = h.host.sessionId();
     const actions = h.panels.actions();
-    const answer = actions.find(a => a.id === "inbox.answer-flow");
-    expect(answer?.disabled()).toBeDefined();
+    // Rewind is offered to the worker role only: available here, absent for a reviewer even when the host supplies it.
+    const rewind = actions.find(a => a.id === "rewind");
+    expect(rewind).toBeDefined();
+    expect(rewind?.disabled()).toBeUndefined();
+    const reviewer = new NativePanels({ identity: { store: "st-0123456789abcdef", project: "demo", role: "reviewer", task: "T-001", run: "R2" },
+      cwd: h.work, snapshot: () => null, rewind: async () => ({}) });
+    try { expect(reviewer.actions().some(a => a.id === "rewind")).toBeFalse(); } finally { reviewer.dispose(); }
     expect(actions.every(a => a.scope === "worker · demo")).toBeTrue();
     expect(actions.find(a => a.id === "app.model.select")?.shortcut.toLowerCase()).toContain("ctrl+l");
     expect(actions.some(a => /shell|exec|permission|role\.switch/.test(a.id))).toBeFalse();

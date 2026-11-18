@@ -30,3 +30,15 @@ test("engine argv preserves corrective commands and uses artifact references dir
     ]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("usage can be reported after the task worktree is gone", async () => {
+  const root = mkdtempSync(join(tmpdir(), "corral-usage-"));
+  try {
+    const engine = writeFakeEngine(root);
+    const identity = { store: "local", project: "demo", role: "reviewer" as const, task: "T-1", run: "R2" };
+    const client = new CorralClient({ corral: engine.path, root, cwd: join(root, "removed"), identity });
+    await client.usage({ model: "fixture/model", input: 10, output: 2, cache_read: 0, cache_write: 0 });
+    expect(engine.calls()).toEqual([["--root", root, "--json", "usage", "add", "--model", "fixture/model",
+      "--task", "T-1", "--run", "R2", "--input", "10", "--output", "2", "--cache-read", "0", "--cache-write", "0"]]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

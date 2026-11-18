@@ -67,8 +67,9 @@ test("a compiled host loads its bundled modules, building each role on the insta
     expect(auth.connections).toEqual([
       "anthropic-subscription", "anthropic-api", "openai-subscription", "openai-api", "amazon-bedrock", "llama.cpp",
     ]);
-    // Advertising the native provider never chooses API credentials or admits unbound spending.
-    expect(() => auth.credentials({ provider: "openai", apiEndpoint: "", refreshEndpoint: "" })).toThrow("connection_invalid");
+    // A bundled API provider still refuses the incompatible subscription connection.
+    expect(() => auth.credentials({ provider: "openai", connection: "openai-subscription", apiEndpoint: "", refreshEndpoint: "" }))
+      .toThrow("connection_invalid");
   } finally {
     setBundle(undefined);
   }

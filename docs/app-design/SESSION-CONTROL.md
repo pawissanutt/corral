@@ -1,171 +1,40 @@
 # Session control from the app
 
-Owner decisions of 2026-11-15 for managing agent sessions from the Corral app through the
-daemon. This record governs the session page in Agents, the assistant thread and the
-`session` command family. Where it disagrees with the proposals in
-[ARCHITECTURE.md](ARCHITECTURE.md) (`stream.open`, `session.reply`, `kill`), this record wins.
-
-## Decisions
-
-| # | Decision |
-|---|---|
-| S1 | The interactive surface is a chat over the host bridge, not a byte-stream terminal. herdr 0.9.3 has no attach stream; a streaming terminal waits for a runtime that has one. |
-| S2 | The chat transcript replays the session with the same content the Pi terminal UI shows: nothing the terminal UI draws is dropped or flattened. |
-| S3 | Cancel, Pause and Terminate are three different controls (below). |
-| S4 | Pause keeps the host process alive. |
-| S5 | An owner message typed into a paused session resumes it. Only automated prompts wait. |
-| S6 | Terminate keeps the task's worktree and branch; the task moves to Needs me. Discard stays a separate action. |
-| S7 | Every role is controllable: assistant, worker, reviewer, planner, plan reviewer, gate and PM. The PM can be launched from the app. Assistants come first. |
-| S8 | A foreign harness (no corral-pi bridge) refuses Cancel and Pause with a reason; Terminate closes its pane. |
-| S9 | An app-launched PM runs in a herdr pane (`open_pm`). Every role becomes pane-less later; nothing in this contract may depend on a pane. |
-| S10 | A paired browser has the same authority as a native device, including admin. Authority stays per device and editable, so this can be narrowed later. |
+The daemon controls agent conversations by session id, not pane id. The interactive
+surface is a chat with a transcript and live events, not a byte-stream terminal.
 
 ## Controls
 
-| Control | Effect | Host afterwards |
+Use the Agents row id for a task run (for example `T-001_R1`),
+`T-001/reviewer` for the current reviewer, or `A-1` for chat.
+
+| Control | Daemon request | Effect |
 |---|---|---|
-| Cancel | Cancels the current turn, like Esc in the terminal UI | Alive and idle; any input starts the next turn |
-| Pause | Cancels the current turn and fences the session: no automated input is delivered | Alive and idle until Resume |
-| Resume | Lifts the fence; input queued meanwhile is delivered in order | Working again when input is waiting |
-| Terminate | Stops the host and ends the session | Gone; the transcript stays readable |
-| Relaunch | Fences a lost host and starts the next generation of the same session | Alive |
-| Launch PM | Opens the PM when none is live | Alive |
+| Cancel | `session.cancel {id, turn?}` | Stops the current turn without shutting down the host. |
+| Pause | `session.pause {id}` | Stops the turn and holds automated input. The host stays alive. Not offered for reviewers. |
+| Resume | `session.resume {id}` | Delivers held input in order. An owner message also resumes the session and goes after the held input. |
+| Terminate | `session.terminate {id}` | Stops the addressed host. A task's worktree and branch stay; its run is stopped and the task is Blocked. A chat's transcript stays readable. |
+| Relaunch | `session.relaunch {id}` | Retries a worker or starts review again; chat reopens its existing session. Use the returned `id` for the resulting session. |
+| Rewind | `session.rewind {id, action:"list"}` or `{id, action:"turn", turn}` | Lists or restores worker checkpoints. The host saves current edits under a rescue Git ref before restoring the tree and transcript. |
+| Answer a Pi question | `prompt.answer {session, question, option?, text?}` | Answers the named question with a choice, text, or both. |
 
-Pause is a fact of the session, not of the task. Pausing a task session also places a task
-hold with the reason `session paused`, so automation does not start gate or review work
-for it, and Resume releases that hold only when the pause placed it. Reviewers and gates
-are cancelled by a hold already, so they offer Cancel and Terminate, not Pause.
+Pause is a host state, not a task hold. A gate can still run; its send-back waits
+in the paused worker's `session.json` until Resume or owner input. Pause and held
+input survive restarting the host. A task reply uses `op.submit` with `Op::Reply`.
+Without a Pi socket, Cancel and Pause are refused; Terminate can still stop a
+running non-Pi task session.
 
-Automated input is everything the owner did not type into this session: inbox deliveries,
-sync nudges, PM event wakes and policy pushes, review change requests, question answers
-relayed by another party. It queues where it queues today and is delivered on Resume.
+There is no separate PM. Send an `assistant.send` to `thread:"quick"` to start or
+continue the headless quick chat. No automation setting is needed. Terminate lets
+you relaunch the same chat; End (`assistant.session {op:"end", session}`) preserves
+the transcript but the next quick message opens a new session.
 
-Task/PM fences are durable `session-pauses` records keyed by `ContainerRef::key()` (`pm`
-for the PM), not by an app row's display id. A pause records the exact task hold it inserted;
-lifting it releases only that unchanged hold, never a pre-existing or replacement hold.
-Pause and delivery serialize on the recipient's delivery lock. A fenced inbox still observes
-late receipts, but creates no new send attempt and leaves queued input intact. Direct
-automated nudges defer without consuming retries; shared-PM review requests enter its inbox.
-PM event cursors/frozen batches and deferred policy snapshots survive pause. The PM's initial
-event checkpoint is established before its first pause, so Resume cannot skip events from
-the paused interval. Explicit owner task replies and owner question answers lift the addressed
-session's fence in the same operation; authenticated host/PM relays do not gain owner authority.
-The PM-to-task relay (`agent/ops/pm.rs`) records its answer before checking delivery; a paused
-target keeps that queued answer and the PM's committed receipt, without lifting the fence.
-Automatic replacement is admission-controlled by `session_control::automation_may_start`.
-The PM supervisor holds the same input lock through its restart decision and effect; a pause
-does not spend its recovery budget. Worker/reviewer availability continuations, review watchdog
-relaunch decisions and fresh autopilot retries use the same predicate. Sync's native lost-host
-handler only reports Needs me; it does not automatically launch a replacement.
-Automated PM opening also passes this admission predicate before creating any pane or host.
-Its lock order is nonblocking `deliver-pm`, nonblocking recovery/policy leases, dispatch,
-then records. Recovery notice settlement and launch bookkeeping validate and reuse the held
-delivery claim; settlement/publication take inbox locks only outside dispatch. Final prompts
-inside a submission only try-claim delivery; busy/fenced prompts queue after dispatch releases.
-Deferred review requests carry exact worker/plan/aggregate identities. A pending review may
-genuinely have no pane; inbox delivery binds the real PM reference before its first send,
-without weakening callback policy checks or treating the absent pane as a lost process.
+Local and paired owners use the same commands. Confirm Terminate or Rewind once
+in the client; the daemon does not issue previews or proofs. Do not queue controls
+while offline.
 
-Owner session Pause and availability's financial continuation pause are independent:
-`session-pauses`/assistant thread `paused` fences input, while a continuation intent's
-`Paused` phase records failed or unsafe paid-start recovery. Neither Resume nor owner
-input clears that financial state, and financial reconciliation never clears an owner fence.
-Paid continuation checks both the recorded source session and the proposed successor;
-a new run/review id or generation cannot escape a source Pause or Terminate. Automated
-continuation does not migrate or discard session pause records: it waits until owner
-Resume/input lifts them. Explicit owner Relaunch releases only its addressed generation's
-session pause before paid-start admission.
-If hello bound a host before session Pause won financial activation, its intent stays
-Prepared. Resume/owner input retries activation of that exact healthy bound generation
-without spending a second start or changing a financial pause.
-
-## Terminate, per role
-
-| Role | Effect |
-|---|---|
-| Assistant | The session ends; its record, thread and transcript stay |
-| Worker | The host stops and its pane closes; the run ends as stopped by the owner; the task waits in Needs me without a dispatch slot; worktree and branch stay |
-| Reviewer | The review child ends cancelled, with no verdict |
-| Gate | The gate ends cancelled, with no result |
-| Planner | The plan run ends as stopped by the owner (`cancelled`, with a retained owner-stop reason); its task waits in Needs me |
-| Plan reviewer | The plan review ends cancelled |
-| PM | The host is asked to exit and is not relaunched until the owner launches it again |
-
-A pane the owner opened (an adopted pane, `docs/session-ownership.md`) is never closed or
-typed into: there Terminate only asks the host to exit. Every control passes the herdr
-session ownership guard before it touches a pane.
-
-Task and PM termination first commits a `session-stops` intent, keyed by task id
-(`pm` for the PM), containing the canonical container key, generation, saved owner
-attribution and completion state. Sync finishes pending intents before diagnosing a
-missing host. Generation fencing precedes bridge shutdown, so an exiting host cannot
-publish new mutations. Terminate waits for verified host exit, drains effect executors
-and reaps verified job groups. Unknown/live executors, unverified groups or remaining
-worktree residents keep the intent pending and return `still_alive`, never success.
-Record settlement precedes exact-pane cleanup; cleanup preserves the worktree and branch.
-The completed intent and its single `session_stopped` event commit together.
-
-Workers serialize their intentional outcome as `stopped`, never `failed`. Planner
-termination uses the existing intentional `cancelled` plan-run state and retains the
-reason `Stopped by owner.`; it is held for the owner, without automatic re-planning.
-A stopped PM retains queued input and event cursors. Its stop marker is distinct from a
-pause: Resume and chat input do not clear it. Only explicit `session relaunch pm`,
-`session pm-open`, `corral pm` or `corral pi --pm` launch paths clear the marker.
-
-
-## What the daemon reports
-
-The app never infers what a session supports. Each session carries, per control, whether
-it is available and otherwise a refusal reason (`host_lost`, `no_bridge`, `ended`,
-`not_owned`, `adopted_pane`, and so on). Commands address the session id, never a pane.
-The terminal snapshot and remote keys are optional capabilities that exist only while the
-session has a pane.
-
-## Authority
-
-| Action | Class |
-|---|---|
-| Chat input, Cancel, Pause, Resume, Relaunch, Launch PM | `act` |
-| Terminate | `act`, with a previewed confirmation |
-| Remote keys into a pane | `admin` |
-
-None of these may queue offline.
-
-## Order of delivery
-
-1. Paired browsers get native authority.
-2. Assistant: the session page is the live chat, with Cancel, Pause, Resume, Terminate,
-   New and Take over.
-3. Transcript replay equivalent to the terminal UI, shared by assistant threads and task
-   sessions.
-4. The `session` command family for every role, PM launch, and per-session capabilities.
-5. Live chat for worker, planner, reviewer and PM sessions.
-6. Remote keys for foreign-harness panes.
-
-Pane-less hosts for every role and a byte-stream terminal are later work.
-
-## Decisions made while building
-
-- **Replay target.** A replay equals what a terminal UI shows after reopening the same
-  session from its file. Rows the host never journals are listed under "Not in a replay".
-- **Tool completion in the live stream.** The host reports a tool as ended only once its
-  result is written to the session file, which upstream guarantees at the end of the model
-  turn. A finished tool therefore reads as running until that turn's tools are all done;
-  its partial output still streams.
-- **Owner input lifts a pause.** `task reply`, `session send`, and an owner's answer to a
-  question the session asked all count, for task sessions and assistants alike.
-- **`session send` size.** The same input limit as `corral reply` (8 KiB including
-  framing); worker sends use the reply path itself.
-- **`session keys`.** Named keys only, from a fixed list; `--text` must contain a
-  non-whitespace character, and whitespace is sent as `space`, `tab` or `enter`. It is an
-  admin-class command, so every command is previewed and confirmed: the app gathers up to
-  32 keys and the text into one sequence and sends it as one confirmed command.
-- **Owner only.** PM, worker, reviewer and assistant callers are refused the `session`
-  family.
-- **A stopped or paused PM is not started by automation.** Shared reviews and recovery
-  prompts that need the PM stay queued until the owner launches or resumes it.
-- **Stored device authority is kept.** A browser paired before S10 keeps the authority it
-  stored; an administrator changes it in Settings › Devices, or the browser pairs again.
+The replay and live-topic sections below preserve the earlier app design notes.
+Use `corral-protocol` for the current wire types.
 
 ## Transcript replay
 
