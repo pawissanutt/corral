@@ -532,6 +532,25 @@ pub fn land_prepared(
     rev_sha(repo, base)
 }
 
+/// Fast-forward a local base, letting Git protect any checked-out files.
+/// Caller holds `landing_lock` across rebase, checks and this update.
+pub fn fast_forward(repo: &Path, branch: &str, base: &str) -> Result<()> {
+    let args = ["symbolic-ref", "--quiet", "HEAD"];
+    let out = git_raw(repo, &args)?;
+    let base_ref = format!("refs/heads/{base}");
+    match out.status.code() {
+        Some(0) if String::from_utf8_lossy(&out.stdout).trim_end() == base_ref => {
+            git(repo, &["merge", "--ff-only", "--", branch])?;
+        }
+        Some(0 | 1) => {
+            let refspec = format!("refs/heads/{branch}:{base_ref}");
+            git(repo, &["fetch", ".", &refspec])?;
+        }
+        _ => return Err(fail(repo, &args, &out)),
+    }
+    Ok(())
+}
+
 /// Serialize corral landing across worktrees and workspace stores sharing this repository.
 pub fn landing_lock(repo: &Path) -> Result<std::fs::File> {
     let file = open_landing_lock(repo)?;

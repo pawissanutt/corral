@@ -1,0 +1,342 @@
+use anyhow::{Context, Result};
+use jiff::Timestamp;
+use serde_json::json;
+
+use crate::{
+    Engine, Next, Op, Run,
+    error::refuse,
+    events::{EventKind, NewEvent},
+    model::{Actor, Blocked, Outcome, Status, Task},
+    store::Store,
+};
+
+pub use corral_types::{NewTask, TaskEdit};
+
+impl Engine {
+    pub fn new_task(&self, new: NewTask) -> Result<Task> {
+        if !planning(new.status) {
+            return Err(refuse(
+                "new tasks must start in idea, backlog, or ready",
+                vec![Next::run(Op::New {
+                    task: NewTask {
+                        status: Status::Backlog,
+                        ..new
+                    },
+                })],
+            ));
+        }
+        self.store.transaction(|store| {
+            let now = Timestamp::now();
+            let task = Task {
+                id: store.next_task_id()?,
+                title: new.title,
+                body: new.body,
+                status: new.status,
+                project: new.project,
+                priority: new.priority,
+                kind: new.kind,
+                size: new.size,
+                profile: new.profile,
+                parent: new.parent,
+                depends_on: new.depends_on,
+                blocked: None,
+                round: 0,
+                created: now,
+                updated: now,
+            };
+            store.insert_task(&task)?;
+            self.task_event(
+                store,
+                &task.id,
+                EventKind::Created,
+                json!({"status":task.status,"title":task.title}),
+            )?;
+            Ok(task)
+        })
+    }
+
+    pub fn edit_task(&self, id: &str, edit: TaskEdit) -> Result<Task> {
+        self.store.transaction(|store| {
+            let mut task = store.require_task(id)?;
+            let detail = serde_json::to_value(&edit)?;
+            if let Some(value) = edit.title {
+                task.title = value;
+            }
+            if let Some(value) = edit.body {
+                task.body = value;
+            }
+            if let Some(value) = edit.project {
+                task.project = value;
+            }
+            if let Some(value) = edit.priority {
+                task.priority = value;
+            }
+            if let Some(value) = edit.kind {
+                task.kind = value;
+            }
+            if let Some(value) = edit.size {
+                task.size = value;
+            }
+            if let Some(value) = edit.profile {
+                task.profile = value;
+            }
+            if let Some(value) = edit.parent {
+                task.parent = value;
+            }
+            if let Some(value) = edit.depends_on {
+                task.depends_on = value;
+            }
+            self.touch(&mut task);
+            store.update_task(&task)?;
+            self.task_event(store, id, EventKind::Edited, detail)?;
+            Ok(task)
+        })
+    }
+
+    pub fn comment(&self, id: &str, text: &str) -> Result<Task> {
+        self.store.transaction(|store| {
+            let mut task = store.require_task(id)?;
+            if !task.body.is_empty() {
+                task.body.push_str("\n\n");
+            }
+            task.body.push_str(text);
+            self.touch(&mut task);
+            store.update_task(&task)?;
+            self.task_event(store, id, EventKind::Commented, json!({"text":text}))?;
+            Ok(task)
+        })
+    }
+
+    pub fn move_task(&self, id: &str, status: Status, force: bool) -> Result<Task> {
+        let move_op = || Op::Move {
+            id: id.to_owned(),
+            status,
+        };
+        self.check_force(force, move_op)?;
+        let task = self.store.transaction(|store| {
+            let mut task = store.require_task(id)?;
+            let allowed = (planning(task.status) && planning(status))
+                || (matches!(task.status, Status::Done | Status::Dropped)
+                    && status == Status::Backlog);
+            if !allowed && !force {
+                return Err(refuse(
+                    format!(
+                        "cannot move {} to {} without force",
+                        task.status.as_str(),
+                        status.as_str()
+                    ),
+                    vec![Next::force(move_op())],
+                ));
+            }
+            let from = task.status;
+            self.set_status(store, &mut task, status)?;
+            self.task_event(
+                store,
+                id,
+                EventKind::Moved,
+                json!({"from":from,"to":status}),
+            )?;
+            if force {
+                let skipped: Vec<&str> = if allowed {
+                    Vec::new()
+                } else {
+                    vec!["status rule"]
+                };
+                self.task_event(
+                    store,
+                    id,
+                    EventKind::Forced,
+                    json!({"operation":"move","from":from,"to":status,"skipped":skipped}),
+                )?;
+            }
+            Ok(task)
+        })?;
+        self.clean_terminal_pipeline_lock(&task)?;
+        Ok(task)
+    }
+
+    pub fn drop_task(&self, id: &str) -> Result<Task> {
+        let task = self.store.transaction(|store| {
+            let mut task = store.require_task(id)?;
+            let from = task.status;
+            self.set_status(store, &mut task, Status::Dropped)?;
+            self.task_event(store, id, EventKind::Dropped, json!({"from":from}))?;
+            Ok(task)
+        })?;
+        self.clean_terminal_pipeline_lock(&task)?;
+        Ok(task)
+    }
+
+    pub fn reopen(&self, id: &str) -> Result<Task> {
+        self.store.transaction(|store| {
+            let mut task = store.require_task(id)?;
+            let from = task.status;
+            self.set_status(store, &mut task, Status::Backlog)?;
+            self.task_event(store, id, EventKind::Reopened, json!({"from":from}))?;
+            Ok(task)
+        })
+    }
+
+    fn set_status(&self, store: &Store, task: &mut Task, status: Status) -> Result<()> {
+        if matches!(status, Status::Done | Status::Dropped) {
+            for mut run in store.live_runs_for_task(&task.id)? {
+                self.end_run(store, &mut run, Outcome::Stopped, true)?;
+                store.append_event(&NewEvent {
+                    task: Some(task.id.clone()),
+                    run: Some(run.id),
+                    kind: EventKind::Stopped,
+                    actor: self.actor,
+                    detail: json!({"reason":"terminal task move"}),
+                })?;
+            }
+        }
+        task.status = status;
+        task.blocked = if status == Status::Blocked {
+            Some(Blocked {
+                reason: "moved to blocked".to_owned(),
+                detail: None,
+                next: vec![Next::force(Op::Move {
+                    id: task.id.clone(),
+                    status: Status::Backlog,
+                })],
+            })
+        } else {
+            None
+        };
+        self.touch(task);
+        store.update_task(task)
+    }
+
+    fn touch(&self, task: &mut Task) {
+        task.updated = Timestamp::now();
+        if self.actor == Actor::Owner {
+            task.round = 0;
+        }
+    }
+
+    fn task_event(
+        &self,
+        store: &Store,
+        id: &str,
+        kind: EventKind,
+        detail: serde_json::Value,
+    ) -> Result<()> {
+        self.event(store, Some(id), None, kind, self.actor, detail)
+    }
+
+    pub(crate) fn event(
+        &self,
+        store: &Store,
+        task: Option<&str>,
+        run: Option<&str>,
+        kind: EventKind,
+        actor: Actor,
+        detail: serde_json::Value,
+    ) -> Result<()> {
+        store.append_event(&NewEvent {
+            task: task.map(str::to_owned),
+            run: run.map(str::to_owned),
+            kind,
+            actor,
+            detail,
+        })?;
+        Ok(())
+    }
+
+    pub(crate) fn check_force(&self, force: bool, op: impl FnOnce() -> Op) -> Result<()> {
+        if force && self.actor == Actor::Auto {
+            return Err(refuse("auto never forces", vec![Next::force(op())]));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn end_run(
+        &self,
+        store: &Store,
+        run: &mut Run,
+        outcome: Outcome,
+        stop: bool,
+    ) -> Result<()> {
+        if stop && let Some(session) = &run.session {
+            self.runner
+                .stop(session)
+                .with_context(|| format!("stop session {}:{}", run.task, run.id))?;
+        }
+        run.ended = Some(Timestamp::now());
+        run.outcome = Some(outcome);
+        run.quiet_since = None;
+        store.update_run(run)
+    }
+
+    pub(crate) fn block_in(
+        &self,
+        store: &Store,
+        task: &mut Task,
+        run: Option<&str>,
+        blocked: Blocked,
+        actor: Actor,
+    ) -> Result<()> {
+        if task.blocked.as_ref() == Some(&blocked) {
+            return Ok(());
+        }
+        self.event(
+            store,
+            Some(&task.id),
+            run,
+            EventKind::Blocked,
+            actor,
+            serde_json::to_value(&blocked).context("encode blocked event")?,
+        )?;
+        set_lifecycle(task, Status::Blocked);
+        task.blocked = Some(blocked);
+        store.update_task(task)
+    }
+}
+
+pub(crate) fn set_lifecycle(task: &mut Task, status: Status) {
+    task.status = status;
+    task.blocked = None;
+    task.updated = Timestamp::now();
+}
+
+pub(crate) fn next_reply(id: &str) -> Next {
+    Next::run(Op::Reply {
+        id: id.to_owned(),
+        text: String::new(),
+    })
+}
+
+pub(crate) fn next_retry(id: &str) -> Next {
+    Next::run(Op::Retry {
+        id: id.to_owned(),
+        profile: None,
+        fresh: false,
+        note: None,
+    })
+}
+
+pub(crate) fn next_review(id: &str) -> Next {
+    Next::run(Op::Review {
+        id: id.to_owned(),
+        profile: None,
+    })
+}
+
+pub(crate) fn next_changes(id: &str) -> Next {
+    Next::run(Op::Changes {
+        id: id.to_owned(),
+        text: String::new(),
+    })
+}
+
+pub(crate) fn next_force_approve(id: &str) -> Next {
+    Next::force(Op::Approve { id: id.to_owned() })
+}
+
+fn planning(status: Status) -> bool {
+    matches!(status, Status::Idea | Status::Backlog | Status::Ready)
+}
+
+#[cfg(test)]
+#[path = "tasks_tests.rs"]
+mod tests;
