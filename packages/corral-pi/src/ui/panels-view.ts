@@ -9,12 +9,14 @@ import type { QueuedItem } from "../host/queue-control.ts";
 import { ansi, tint, PACKAGED, type Appearance } from "./appearance.ts";
 
 export interface PanelJob { readonly job: string; readonly state: string; readonly detail?: import("../extensions/jobs/runtime.ts").JobInspection }
+export interface SpendingSnapshot { readonly maxUsd: number; readonly spentUsd: number; readonly paidRoute?: string }
 export interface PanelSnapshot {
   readonly build?: BuildPanelState;
   /** Children and agent messages of a session that is not a build session. */
   readonly fleet?: FleetSnapshot;
   readonly inspector?: InspectorSnapshot;
-  readonly budget?: unknown;
+  /** This session's spending limit (`--max-usd`), what `spend.json` holds against it and the paid route in use; absent without a limit. */
+  readonly budget?: SpendingSnapshot;
   readonly agents?: readonly AgentObservation[];
   readonly bound: boolean;
   readonly model: string | null;

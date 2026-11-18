@@ -313,7 +313,7 @@ export function helperRows(snapshot: PanelSnapshot | null, now: number): AgentRo
       ...(helper.error ? [{ text: "Error: " + plainLabel(helperText(helper.error)), tone: "error" as const }] : []),
       ...(helper.inspectionError ? [{ text: "Inspector warning: " + plainLabel(helperText(helper.inspectionError)), tone: "warning" as const }] : []),
       ...(helper.truncated ? [{ text: retentionNote(helper), tone: "warning" as const, retention: true }] : []),
-      ...(bound ? [] : [{ text: "Host unbound · this observation may be stale.", tone: "warning" as const }]),
+      ...(bound ? [] : [{ text: "Host closed · this observation may be stale.", tone: "warning" as const }]),
     ];
     const end = helperEnd(helper, state);
     return {

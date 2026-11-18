@@ -1,9 +1,9 @@
 // Rows for corral tool calls in the kit's grammar. One entry per corral operation speaks as the agent ("Finished the
 // run", "Attached report: Session record") and takes the outcome from the call's structured result: on success the
-// engine's or host's result itself, on failure its `{reason, next?}`, never the text the model reads. Direct calls,
-// Code Mode children (through `presenterFor`, which may carry only the result text) and the inspector's observed
-// operations share it. Presentation only: tool results are read, never changed.
-import { type AgentToolResult, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+// engine's or host's result itself, on failure its `{reason, next?}`, never the text the model reads. Direct calls
+// and Code Mode children (through `presenterFor`, which may carry only the result text) share it. Presentation only:
+// tool results are read, never changed.
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 
 import type { CorralToolSpec } from "../roles/types.ts";
@@ -14,7 +14,7 @@ import type { PresenterModule, ToolRenderDeps } from "./tool-rendering.ts";
 type Fields = Readonly<Record<string, unknown>>;
 type Op = CorralToolSpec["op"];
 
-/** What the presenter reads from the host. Every field is absent in plain contexts (the inspector). */
+/** What the presenter reads from the host. Every field is absent in plain contexts (a Code Mode child's row). */
 export type CorralDeps = Partial<Pick<ToolRenderDeps, "openView" | "ledger" | "corralSpecs">>;
 
 /** Collapsed prose rows: lines kept once settled, and the newest lines kept while the arguments stream. */
@@ -23,9 +23,6 @@ const STREAM_ROWS = 3;
 /** A failure's reason rows. */
 const REASON_ROWS = 3;
 
-const GLYPH: Readonly<Record<RowState, string>> = {
-  writing: "…", running: "…", ok: "✓", failed: "✗", waiting: "○", "needs-you": "▲", unknown: "!",
-};
 /** Views a corral row points to, and their labels. */
 const VIEW_LABEL: Readonly<Partial<Record<PanelView, string>>> = {
   plan: "Plan", artifacts: "Artifacts", proof: "Proof", task: "Task",
@@ -396,17 +393,3 @@ export function corralPresenter(name: string, deps: CorralDeps = {}): Presenter 
 export const corralPresenters: PresenterModule = {
   presenter: (name, deps) => corralPresenter(name, deps),
 };
-
-/** One plain line for a settled call, as the row reads (`✗ Finish · refused: no task is attached`), at most 240 characters. */
-export function corralSummary(name: string, args: Record<string, unknown>, result: AgentToolResult<unknown>, isError: boolean): string | undefined {
-  const present = corralPresenter(name);
-  if (!present) return undefined;
-  const model = present({
-    name, args: { ...fields(args) }, argsComplete: true, executionStarted: true, result, partial: false, isError,
-    expanded: false, cwd: "", toolCallId: "",
-  });
-  const reason = model.state === "failed" || model.state === "unknown" ? model.body?.[0]?.text : undefined;
-  const line = `${GLYPH[model.state]} ${model.verb}${model.target ? ` ${flat(model.target)}` : ""}`
-    + `${model.outcome ? ` · ${model.outcome}` : ""}${reason ? `: ${flat(reason)}` : ""}`;
-  return line.length > 240 ? `${line.slice(0, 239)}…` : line;
-}

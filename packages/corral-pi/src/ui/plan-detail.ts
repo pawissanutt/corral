@@ -1,5 +1,5 @@
 // The plan's facts for reading: one step's detail for the sidebar and the whole ledger for the shared pager.
-// Pure. Every line restates what the canonical ledger recorded (ids, criteria, waits, drop reasons, spec
+// Pure. Every line restates what the session's plan recorded (ids, criteria, waits, drop reasons, spec
 // revision, auto-continue); nothing here infers acceptance or a state the ledger did not record.
 import { plainLabel } from "./panels-view.ts";
 import type { ContinuedState, TodoProgress } from "./todo.ts";
@@ -94,7 +94,7 @@ export function planLedger(source: PlanSource): PlanLedger {
   const { progress, stale } = source;
   const lines: string[] = [], starts = new Map<string, number>();
   if (progress) ledgerLines(progress, stale, source.continued, lines, starts);
-  else lines.push(stale ? "! No confirmed plan. /todo refresh rereads the canonical ledger." : "No plan yet.");
+  else lines.push(stale ? "! No confirmed plan. /todo refresh rereads it." : "No plan yet.");
   return { title: planTitle(progress), lines, startOf: step => step === undefined ? 0 : starts.get(step) ?? 0 };
 }
 
@@ -106,7 +106,7 @@ function ledgerLines(progress: TodoProgress, stale: boolean, continued: Continue
   lines.push(`${planTitle(progress)} · spec revision ${plainLabel(progress.spec_revision) || "(empty)"}`);
   lines.push([`${steps.length} ${steps.length === 1 ? "step" : "steps"}`,
     ...(["done", "in_progress", "pending", "dropped"] as const).flatMap(state => count(state) ? [`${count(state)} ${STATE_WORD[state]}`] : [])].join(" · "));
-  if (stale) lines.push("! stale: this is the last confirmed revision; /todo refresh rereads the canonical ledger");
+  if (stale) lines.push("! stale: this is the last confirmed revision; /todo refresh rereads the plan");
   for (const phase of progress.phases) {
     const done = phase.steps.filter(step => step.status.state === "done").length;
     lines.push("", `${plainLabel(phase.label)} · id ${plainLabel(phase.id)} · ${done}/${phase.steps.length} done`);

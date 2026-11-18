@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
+import { lstatSync, readFileSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import { z } from "zod";
-import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import {
+  getCapabilities, getImageDimensions, matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type ImageSource, type TuiMouseEvent,
+} from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import { pad, plainLabel, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_TEXT, PANEL_WARNING } from "./panels-view.ts";
 import { onSurface, VIEW_INSET } from "./frame.ts";
@@ -28,6 +32,8 @@ type Entry = ArtifactCatalog[number];
 const ref = (entry: Entry) => `${entry.task}:${entry.id}`;
 
 const MAX_TEXT_LINES = 400;
+/** Bytes a preview reads; a larger artifact is described, not opened. */
+const MAX_PREVIEW_BYTES = 16 * 1024 * 1024;
 /** List rows shown around the selection: beside the detail from SPLIT_MIN, above it below. */
 const WINDOW_SPLIT = 12, WINDOW_STACKED = 8;
 /** The one muted caveat line, longest first; `?` shows the full reading rules instead. */
@@ -37,8 +43,24 @@ const CAVEAT = [
   "last read, not live",
   "not live",
 ];
-/** What a read through the viewer showed about the registered bytes. */
-type Check = "matched" | "mismatched" | "binary";
+/** What the bytes read at open showed against the registered SHA256. */
+type Check = "matched" | "mismatched";
+/** The image type the bytes start with; artifacts carry no file name, so the content decides. */
+function imageMime(bytes: Buffer): string | undefined {
+  if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.subarray(0, 4).toString("latin1") === "GIF8") return "image/gif";
+  if (bytes.subarray(0, 4).toString("latin1") === "RIFF" && bytes.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
+  return undefined;
+}
+/** The preview file the host wrote: an absolute, regular file within the size bound. */
+function previewBytes(path: string): Buffer {
+  if (!isAbsolute(path) || resolve(path) !== path) throw new Error("the host returned no absolute preview path");
+  const stat = lstatSync(path);
+  if (!stat.isFile()) throw new Error("the preview is not a regular file");
+  if (stat.size > MAX_PREVIEW_BYTES) throw new Error(`the artifact exceeds ${MAX_PREVIEW_BYTES / 1024 / 1024} MiB; corral artifact show writes it whole`);
+  return readFileSync(path);
+}
 /** A muted label column beside wrapped text in `tone`. */
 function toned(label: string, value: string, width: number, labels: number, tone: Tone = "none"): string[] {
   const color = tone === "none" ? PANEL_TEXT : toneColor(tone);
@@ -48,8 +70,10 @@ function toned(label: string, value: string, width: number, labels: number, tone
 export interface ArtifactViewOptions {
   readonly identity: HostIdentity;
   readonly load?: () => Promise<unknown>;
-  /** `corral artifact show <reference>`: the artifact's bytes as UTF-8 text. */
-  readonly viewer?: (reference: string) => Promise<string>;
+  /** `corral artifact show <reference>` into a private file; returns its absolute path. */
+  readonly file?: (reference: string) => Promise<string>;
+  /** Fits an image into the main reading area (the workbench's image viewer); false when it cannot open now. */
+  readonly openImage?: (source: ImageSource) => boolean;
   /** The existing `/corral-export` flow; its refusal message is shown verbatim. */
   readonly exportSession?: () => Promise<string>;
   readonly bound: () => boolean;
@@ -139,11 +163,13 @@ export class ArtifactView implements Component {
     if (data === "x") { void this.exportSession(); return true; }
     return false;
   }
+  /** A click selects a row; a click on the selected row opens it, as Enter does. */
   handleMouse(event: TuiMouseEvent) {
     if (!this.options.canInteract() || event.type !== "click" || event.button !== "left" || event.shift || event.alt || event.ctrl) return undefined;
     const reference = this.hits.get(event.y);
     if (reference === undefined || event.x >= this.hitWidth) return undefined;
-    if (reference !== this.selected) this.opened = undefined;
+    if (reference === this.selected) { void this.open(); return { handled: true }; }
+    this.opened = undefined;
     this.selected = reference; this.options.changed(); return { handled: true };
   }
   private mark(): void {
@@ -157,25 +183,38 @@ export class ArtifactView implements Component {
   }
   private say(text: string): void { if (!this.disposed) { this.notice = plainLabel(text).slice(0, 2000); this.options.changed(); } }
   /**
-   * Reads the selected artifact through the viewer. Its bytes arrive decoded as UTF-8, so text shows only when
-   * re-encoding them gives the registered SHA256; binary content (decoded with replacement characters) is not shown.
+   * Reads the selected artifact's exact bytes from the file the host wrote and shows them only when they hash to the
+   * registered SHA256: an image fits the main reading area (graphics terminals only), UTF-8 text shows below the
+   * fields, and any other binary content is described, not drawn.
    */
   private async open(): Promise<void> {
     const entry = this.entry(this.selected);
     if (!entry) { this.say("No artifact selected"); return; }
     const reference = ref(entry);
     const show = (lines: string[]) => { if (!this.disposed && this.selected === reference) { this.opened = { reference, title: entry.title, lines }; this.notice = ""; this.options.changed(); } };
-    if (!this.options.viewer) { show(["Viewer unavailable in this host"]); return; }
+    if (!this.options.file) { show(["Preview unavailable in this host"]); return; }
     try {
-      const text = await this.options.viewer(reference);
-      const hash = createHash("sha256").update(text, "utf8").digest("hex");
-      const check: Check = hash === entry.sha256 ? "matched" : text.includes("\uFFFD") ? "binary" : "mismatched";
+      const path = await this.options.file(reference), bytes = previewBytes(path);
+      const hash = createHash("sha256").update(bytes).digest("hex");
+      const check: Check = hash === entry.sha256 ? "matched" : "mismatched";
       this.checked.set(reference, check);
-      if (check === "binary") { show(["Binary content · not shown in the terminal", `corral artifact show ${reference} writes its ${entry.bytes.toLocaleString("en-US")} bytes to stdout`]); return; }
       if (check === "mismatched") { show(["Not displayed: bytes differ from the registered artifact", `MISMATCH: bytes at open hash ${hash}; registered ${entry.sha256}`]); return; }
+      const mime = imageMime(bytes);
+      if (mime) {
+        const data = bytes.toString("base64"), dimensions = getImageDimensions(data, mime);
+        const facts = [`${dimensions ? `${dimensions.widthPx}×${dimensions.heightPx}px` : "dimensions unreadable"} · ${mime}`, `File: ${path}`];
+        if (!getCapabilities().images || !dimensions) { show(["Image · this terminal cannot draw graphics", ...facts]); return; }
+        if (this.disposed || this.selected !== reference) return;
+        show(["Image · shown in the reading area; Esc or a click returns", ...facts]);
+        this.options.openImage?.({ data, mimeType: mime, dimensions, filename: entry.title });
+        return;
+      }
+      let text: string;
+      try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+      catch { show(["Binary content · not shown in the terminal", `File: ${path}`]); return; }
       const lines = text.split("\n").map(line => line.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, " "));
-      show([...lines.slice(0, MAX_TEXT_LINES), ...(lines.length > MAX_TEXT_LINES ? [`… ${lines.length - MAX_TEXT_LINES} more lines · corral artifact show ${reference}`] : [])]);
-    } catch (error) { show([`Viewer unavailable: ${error instanceof Error ? error.message : String(error)}`]); }
+      show([...lines.slice(0, MAX_TEXT_LINES), ...(lines.length > MAX_TEXT_LINES ? [`… ${lines.length - MAX_TEXT_LINES} more lines · File: ${path}`] : [])]);
+    } catch (error) { show([`Preview unavailable: ${error instanceof Error ? error.message : String(error)}`]); }
   }
   private async exportSession(): Promise<void> {
     if (!this.options.exportSession) { this.say("Session export unavailable: session_export is not enabled for this role"); return; }
@@ -191,8 +230,7 @@ export class ArtifactView implements Component {
     const tags = slot < 0 ? "" : chip(slot ? "B" : "A");
     const out = [`${PANEL_TEXT}${bold(truncateToWidth(plainLabel(entry.title), Math.max(1, width - visibleWidth(tags) - 2), "…"))}${tags ? `  ${tags}` : ""}`];
     const check = this.checked.get(reference), labels = 10;
-    const digest = check === undefined ? "bytes not re-hashed" : check === "matched" ? "bytes matched at open"
-      : check === "binary" ? "binary content · not re-hashed as text" : "BYTES MISMATCHED at open";
+    const digest = check === undefined ? "bytes not re-hashed" : check === "matched" ? "bytes matched at open" : "BYTES MISMATCHED at open";
     out.push(...toned("Reference", reference, width, labels), ...toned("Kind", entry.kind ?? "", width, labels),
       ...toned("By", entry.by, width, labels), ...toned("Added", entry.at, width, labels),
       ...toned("Size", `${entry.bytes.toLocaleString("en-US")} bytes`, width, labels),
@@ -260,7 +298,7 @@ export class ArtifactView implements Component {
     if (this.notice) full(PANEL_TEXT + plainLabel(this.notice));
     if (legend) {
       full(`${PANEL_MUTED}Read-only canonical catalog at the last read, not a live subscription. Content is read only on Enter, never on focus or selection.${PANEL_TEXT}`);
-      full(`${PANEL_MUTED}Enter shows text whose bytes match the registered SHA256; binary content is not shown in the terminal. By names who registered the artifact.${PANEL_TEXT}`);
+      full(`${PANEL_MUTED}Enter, or a click on the selected row, opens it when its bytes match the registered SHA256: text below, an image in the reading area of a graphics terminal; other binary content is not shown. By names who registered the artifact.${PANEL_TEXT}`);
       full(`${PANEL_MUTED}A and B mark the two artifacts chosen with m, in your selection order.${PANEL_TEXT}`);
     } else {
       const caveat = CAVEAT.find(c => visibleWidth(c) <= width) ?? CAVEAT.at(-1) ?? "";

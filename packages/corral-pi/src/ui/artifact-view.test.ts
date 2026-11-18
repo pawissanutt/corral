@@ -1,7 +1,9 @@
 import { test, expect } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getCapabilities, setCapabilities, stripTerminalSequences, visibleWidth, type ImageSource } from "@earendil-works/pi-tui";
 import { ArtifactView, COMPARE_ROW_MIN, type ArtifactCatalog } from "./artifact-view.ts";
 import { VIEW_INSET } from "./frame.ts";
 import { clock } from "./panel-parts.ts";
@@ -11,8 +13,10 @@ const identity = { store: "s", project: "demo", role: "worker" as const, task: "
 const png = readFileSync(new URL("../../test/fixtures/images/zoom.png", import.meta.url));
 const sha = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 const REPORT = "# Report\nbody line\u001b[31m";
-/** What `corral artifact show` prints, decoded as UTF-8 the way the host decodes it. */
-const SHOWN: Readonly<Record<string, string>> = { "T-1:1": "owner notes", "T-1:2": png.toString("utf8"), "T-1:3": REPORT, "T-1:4": "edited after registration" };
+/** The bytes `corral artifact show` writes for each reference. */
+const SHOWN: Readonly<Record<string, Buffer | string>> = {
+  "T-1:1": "owner notes", "T-1:2": png, "T-1:3": REPORT, "T-1:4": "edited after registration", "T-1:5": Buffer.from([0x00, 0xff, 0xfe, 0x01]),
+};
 const row = (id: number, title: string, extra: Partial<ArtifactCatalog[number]> = {}): ArtifactCatalog[number] => ({
   task: "T-1", id, sha256: sha(SHOWN[`T-1:${id}`] ?? title), bytes: 10, kind: "report", title, at: `2026-01-0${id}T00:00:00Z`, by: "agent", ...extra,
 });
@@ -24,12 +28,13 @@ const catalog: ArtifactCatalog = [
   row(4, "changed.md", { sha256: "0".repeat(64) }),
 ];
 function harness(data: unknown, extra: { exportSession?: () => Promise<string> } = {}) {
-  const calls: string[] = [];
+  const calls: string[] = [], images: ImageSource[] = [], dir = mkdtempSync(join(tmpdir(), "artifact-view-"));
   let reads = 0;
   const view = new ArtifactView({ identity, load: async () => { reads++; return data; },
-    viewer: async reference => { calls.push(reference); return SHOWN[reference] ?? ""; },
+    file: async reference => { calls.push(reference); const path = join(dir, reference); writeFileSync(path, SHOWN[reference] ?? ""); return path; },
+    openImage: source => { images.push(source); return true; },
     bound: () => true, changed: () => {}, canInteract: () => true, ...extra });
-  return { view, calls, reads: () => reads };
+  return { view, calls, images, reads: () => reads };
 }
 /** The view's text at a stacked width (list above detail), so detail rows read in order. */
 const text = (view: ArtifactView, width = 100) => view.render(width).map(row => stripTerminalSequences(row).trimEnd()).join(" ").replace(/\s+/g, " ");
@@ -54,23 +59,47 @@ test("catalog renders newest first with its provenance and reads no content", as
   expect(calls).toEqual([]);
 });
 
-test("Enter shows text whose bytes match; binary and changed bytes are not shown", async () => {
+test("Enter shows text whose bytes match; changed bytes and other binary content are not shown", async () => {
+  const { view, calls, images } = harness([...catalog, row(5, "core.bin", { kind: "dump" })]);
+  const capabilities = getCapabilities();
+  try {
+    setCapabilities({ ...capabilities, images: null });
+    await view.refresh();
+    view.handleInput("\r"); await settle();
+    expect(text(view)).toContain("Binary content · not shown in the terminal");
+    view.handleInput("j"); view.handleInput("\r"); await settle();
+    expect(text(view)).toContain("Not displayed: bytes differ from the registered artifact");
+    expect(text(view)).toContain(`MISMATCH: bytes at open hash ${sha(SHOWN["T-1:4"] ?? "")}`);
+    expect(text(view)).toContain("BYTES MISMATCHED at open");
+    expect(text(view)).not.toContain("edited after registration");
+    view.handleInput("j"); view.handleInput("\r"); await settle();
+    expect(text(view)).toContain("body line");
+    expect(text(view)).toContain("bytes matched at open");
+    expect(view.render(100).join("")).not.toContain("\u001b[31m");
+    // Without graphics an image is described, never drawn as text.
+    view.handleInput("j"); view.handleInput("\r"); await settle();
+    expect(text(view)).toContain("Image · this terminal cannot draw graphics");
+    expect(images).toHaveLength(0);
+    // With graphics it opens in the reading area, its exact bytes and title.
+    setCapabilities({ ...capabilities, images: "kitty" });
+    view.handleInput("\r"); await settle();
+    expect(text(view)).toContain("Image · shown in the reading area");
+    expect(images.map(image => [image.mimeType, image.filename, image.data])).toEqual([["image/png", "shot.png", png.toString("base64")]]);
+    expect(calls).toEqual(["T-1:5", "T-1:4", "T-1:3", "T-1:2", "T-1:2"]);
+  } finally { setCapabilities(capabilities); }
+});
+
+test("a click selects a row and a click on the selected row opens it", async () => {
   const { view, calls } = harness(catalog);
   await view.refresh();
-  view.handleInput("\r"); await settle();
-  expect(text(view)).toContain("Not displayed: bytes differ from the registered artifact");
-  expect(text(view)).toContain(`MISMATCH: bytes at open hash ${sha(SHOWN["T-1:4"] ?? "")}`);
-  expect(text(view)).toContain("BYTES MISMATCHED at open");
-  expect(text(view)).not.toContain("edited after registration");
-  view.handleInput("j"); view.handleInput("\r"); await settle();
+  const rows = view.render(100).map(line => stripTerminalSequences(line));
+  const at = rows.findIndex(line => line.includes("report.md"));
+  const click = { type: "click", button: "left", x: 4, y: at, shift: false, alt: false, ctrl: false } as Parameters<ArtifactView["handleMouse"]>[0];
+  view.handleMouse(click); await settle();
+  expect(calls).toEqual([]);
+  view.handleMouse(click); await settle();
+  expect(calls).toEqual(["T-1:3"]);
   expect(text(view)).toContain("body line");
-  expect(text(view)).toContain("bytes matched at open");
-  expect(view.render(100).join("")).not.toContain("\u001b[31m");
-  view.handleInput("j"); view.handleInput("\r"); await settle();
-  expect(text(view)).toContain("Binary content · not shown in the terminal");
-  expect(text(view)).toContain(`corral artifact show T-1:2 writes its ${png.length.toLocaleString("en-US")} bytes to stdout`);
-  expect(text(view)).toContain("binary content · not re-hashed as text");
-  expect(calls).toEqual(["T-1:4", "T-1:3", "T-1:2"]);
 });
 
 test("comparison uses only explicit selection order and never infers before/after", async () => {
@@ -121,7 +150,7 @@ test("a failed reread keeps the last catalog; another task's rows are refused", 
     const shown = text(flaky, width);
     expect(shown).toContain(clock(readAt ?? NaN));
     expect(shown).toContain("db locked");
-    expect(shown).toContain("host unbound");
+    expect(shown).toContain("host closed");
   }
   expect(text(flaky)).toContain("changed.md");
   const foreign = harness([...catalog, row(5, "elsewhere.md", { task: "T-9" })]);
@@ -155,5 +184,5 @@ test("from SPLIT_MIN the list sits beside the detail; by words line up under the
   expect(text(view)).toContain("not live"); expect(text(view)).not.toContain("never on focus or selection");
   legend = true;
   expect(text(view)).toContain("Content is read only on Enter, never on focus or selection");
-  expect(text(view)).toContain("binary content is not shown in the terminal");
+  expect(text(view)).toContain("other binary content is not shown");
 });

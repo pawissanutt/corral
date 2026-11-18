@@ -105,7 +105,7 @@ export interface EmptyChat {
 function emptyCopy(identity: HostIdentity): { readonly lead: string; readonly rest: string; readonly more?: string } {
   switch (identity.role) {
     case "build":
-      return { lead: "Build session, unbound.", rest: "Describe what to build and press Enter.",
+      return { lead: "Build session.", rest: "Describe what to build and press Enter.",
         more: "Independent slices run in parallel in one worktree, each on the profile that fits it. Nothing is filed on the board until you choose an exit." };
     case "assistant":
       return { lead: `Assistant ${identity.assistant ?? ""}`.trimEnd() + ".", rest: "What you send goes to this assistant." };

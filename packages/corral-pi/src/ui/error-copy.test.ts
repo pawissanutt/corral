@@ -6,21 +6,16 @@ import { PANEL_ERROR } from "./panels-view.ts";
 const base: ErrorInput = { stopReason: "error", partial: false, toolCallsNotRun: 0, retryAttempts: 0 };
 const rows = (input: ErrorInput, width: number) => presentError(input).render(width).map(line => stripTerminalSequences(line));
 
-// Real error texts from session files.
-const RECEIPTS = 'budget record refused: {"code":"receipt_limit","reason":"the container already holds 16384 receipts"}';
-const CONFLICT = "call_failed: corral agent call --op event: exit=1, signal=null, timed_out=false; error: committing record unit: "
-  + 'concurrent write refused: Conflict { subject: "record assistant-containers/A-77", expected: "Some(2089)", found: "Some(2090)" }';
+// Real error texts from session files and the host's spending cap.
+const SPENDING = "spending cap reached; use corral retry --profile <p> to start a new run";
 const CODEX = "Codex error: An error occurred while processing your request. You can retry your request, or contact us through our "
   + "help center at help.openai.com if the error persists. Please include the request ID e8405ef7-bfee-4427-a8ca-d47ff4e35f7c in your message.";
 const cases: readonly { readonly input: ErrorInput; readonly facts: readonly string[] }[] = [
   { input: { ...base, errorMessage: "openai-subscription: unknown (unknown)",
     providerFailure: { version: 1, connection: "openai-subscription", category: "unknown", scope: "unknown", request_ref: "8f3a1c2d9e" } },
   facts: ["OpenAI subscription", "8f3a1c2d", "Nothing was lost"] },
-  { input: { ...base, errorMessage: RECEIPTS }, facts: ["16,384 receipts", "cannot continue"] },
-  { input: { ...base, errorMessage: 'budget record refused: {"code":"review_closed","reason":"review child review_closed"}' }, facts: ["review", "closed"] },
-  { input: { ...base, errorMessage: 'budget record refused: {"code":"run_ended","reason":"the named run no longer accepts work"}' }, facts: ["run", "ended"] },
-  { input: { ...base, errorMessage: CONFLICT }, facts: ["not recorded", "retry"] },
-  { input: { ...base, errorMessage: "call_timeout: corral agent call --op event: exit=null, signal=SIGKILL, timed_out=true; " }, facts: ["in time", "retry"] },
+  { input: { ...base, errorMessage: SPENDING }, facts: ["spending cap", "Nothing was sent", "corral retry --profile"] },
+  { input: { ...base, errorMessage: "openai-api: local_budget (request)" }, facts: ["spending cap", "not sent to the model"] },
   { input: { ...base, errorMessage: CODEX }, facts: ["e8405ef7", "retry"] },
 ];
 
@@ -38,9 +33,9 @@ test("each known failure is a sentence and a next step, without its raw code", (
   }
 });
 
-test("the receipt-limit copy says the agent cannot continue and promises no fix", () => {
-  const copy = errorCopy({ ...base, errorMessage: RECEIPTS });
-  expect(copy.step ?? "").toMatch(/cannot continue until the receipt limit/);
+test("the spending-cap copy says the request was not sent and names the command that starts a new run", () => {
+  const copy = errorCopy({ ...base, errorMessage: SPENDING });
+  expect(copy.step ?? "").toContain("corral retry --profile");
   expect(`${copy.sentence} ${copy.step ?? ""}`).not.toMatch(/fixed|will be|automatically/);
 });
 
@@ -55,12 +50,12 @@ test("a reset time from the provider appears as a clock time", () => {
 });
 
 test("expanding shows the raw text the collapsed rows leave out", () => {
-  const view = new ErrorRows(errorCopy({ ...base, errorMessage: RECEIPTS }));
+  const view = new ErrorRows(errorCopy({ ...base, errorMessage: SPENDING }));
   const collapsed = view.render(100).length;
   view.setExpanded(true);
   const open = view.render(100).map(line => stripTerminalSequences(line));
   expect(open.length).toBeGreaterThan(collapsed);
-  expect(open.join(" ")).toContain('"code":"receipt_limit"');
+  expect(open.join(" ")).toContain("spending cap reached; use corral retry");
 });
 
 test("expanded shows the whole raw text, however long", () => {
@@ -84,7 +79,7 @@ test("a stopped turn names who stopped it only when the host knows, never in the
   const stop: ErrorInput = { ...base, stopReason: "aborted", errorMessage: "Operation aborted", toolCallsNotRun: 2 };
   const cases: readonly [StopCause | undefined, RegExp][] = [
     ["owner", /^ ○ stopped by you · 2 tool calls did not run/],
-    ["budget", /^ ○ stopped: the run budget was reached/],
+    ["budget", /^ ○ stopped: the spending cap was reached/],
     [undefined, /^ ○ stopped · 2 tool calls did not run/],
   ];
   for (const [cause, shape] of cases) {

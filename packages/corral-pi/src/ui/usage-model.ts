@@ -1,6 +1,6 @@
 import type { ContextUsage } from "@earendil-works/pi-coding-agent";
 import type { Role } from "../roles/types.ts";
-import type { PanelSnapshot } from "./panels-view.ts";
+import type { PanelSnapshot, SpendingSnapshot } from "./panels-view.ts";
 import { childHue } from "./build/contract.ts";
 
 export interface UsageIdentity { role: Role; project: string; task?: string; run?: string; assistant?: string; build?: string }
@@ -14,11 +14,11 @@ export function sessionCost(snapshot: PanelSnapshot | null): { total: number; pa
   return { total: (snapshot.cost ?? 0) + priced.reduce((sum, child) => sum + (child.usage.cost ?? 0), 0),
     partial: snapshot.cost === undefined || children.some(child => child.usage.cost === undefined && child.usage.turns > 0) };
 }
-export interface UsageModel { identity: UsageIdentity; session: SessionUsage | undefined }
+export interface UsageModel { identity: UsageIdentity; session: SessionUsage | undefined; spending: SpendingSnapshot | undefined }
 export function usageModel({ identity, snapshot }: { identity: UsageIdentity; snapshot: PanelSnapshot | null }): UsageModel {
   const children = snapshot?.build?.fleet.children ?? [];
   const total = snapshot?.build ? sessionCost(snapshot) : undefined;
-  return { identity,
+  return { identity, spending: snapshot?.budget,
     session: snapshot ? { model: snapshot.model, effort: snapshot.effort, context: snapshot.context,
       rows: [{ key: "pane", name: "Pane", hue: undefined, tokens: snapshot.tokens, cost: snapshot.cost,
         contextPercent: snapshot.context?.percent ?? undefined },

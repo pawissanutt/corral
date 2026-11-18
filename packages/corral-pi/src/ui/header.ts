@@ -35,7 +35,7 @@ export interface Notice { readonly text: string; readonly tone: "text" | "succes
 export interface HeaderStatus { readonly long: string; readonly short: string; readonly tone: BadgeTone | "muted"; readonly clickable: boolean }
 export interface HeaderInput {
   readonly title: string; readonly state: "Working" | "Idle" | "Unavailable";
-  /** The reversed chip at the right edge: `text` when it fits (`⚑ 3 decisions`), else `short` (`⚑ 3`). */
+  /** The reversed chip at the right edge: `text` when it fits (`▲ 2 needs you`), else `short` (`▲ 2`). */
   readonly attention?: { readonly text: string; readonly short?: string; readonly tone: BadgeTone }; readonly notice?: Notice;
   /** Row 2: `left` keeps most of the row; `right` reads `rightShort` (when given) once both do not fit. */
   readonly context?: { readonly left: string; readonly right?: string; readonly rightShort?: string };
@@ -286,7 +286,7 @@ export function headerFrame(input: HeaderInput, width: number, options: { readon
   const word = (small ? input.state.toLowerCase() : input.state) + (mark?.elapsed && !options.tiny ? " · " + mark.elapsed : "");
   const statusText = notice ? plainLabel(notice.text) : !status ? word
     : !small && visibleWidth(chipShort) + chipGap + markWidth + visibleWidth(plainLabel(status.long)) + 2 + keep <= inner ? plainLabel(status.long) : plainLabel(status.short);
-  // The chip says what it counts (`⚑ 3 decisions`) while that leaves the title its room, else its short form.
+  // The chip says what it counts (`▲ 2 needs you`) while that leaves the title its room, else its short form.
   const chipText = visibleWidth(chipLong) + chipGap + markWidth + visibleWidth(statusText) + 2 + keep <= inner ? chipLong : chipShort;
   const chipWidth = visibleWidth(chipText);
   const state = (mark ? mark.glyph + " " : "") + (notice ? toneColor(notice.tone) : status ? toneColor(status.tone) : PANEL_MUTED) + statusText;

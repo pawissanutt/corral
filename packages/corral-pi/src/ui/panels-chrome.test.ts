@@ -10,14 +10,13 @@ const snapshot = (bound: boolean) => ({ bound, model: "openai/gpt-6.1-sol", effo
 const bar = (identity: HostIdentity, bound: boolean, width: number, folded?: { model: string; effort: string }) =>
   statusBar(identity, snapshot(bound), new Map(), width, false, folded);
 
-test("a build session has no binding segment, a bound role reads bound, and the role keeps three letters when tiny", () => {
+test("no role draws a binding segment, and the role keeps three letters when tiny", () => {
   for (const width of [140, 105, 92, 61, 46]) {
-    const build = bar({ ...worker, role: "build" }, false, width).map(stripTerminalSequences).join("\n");
-    expect(build).not.toContain("unbound"); expect(build).not.toContain("○");
-    const bound = bar(worker, true, width).map(stripTerminalSequences).join("\n");
-    expect(bound).toContain("● bound");
-    expect(bound).not.toContain("gen");
-    expect(bound).toContain(width < 64 ? " WRK " : " WORKER ");
+    for (const identity of [worker, { ...worker, role: "build" as const }]) for (const bound of [true, false]) {
+      const text = bar(identity, bound, width).map(stripTerminalSequences).join("\n");
+      expect(text).not.toMatch(/bound|[●○]/);
+    }
+    expect(bar(worker, true, width).map(stripTerminalSequences).join("\n")).toContain(width < 64 ? " WRK " : " WORKER ");
   }
 });
 
