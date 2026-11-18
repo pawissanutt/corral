@@ -59,6 +59,7 @@ pub(crate) fn rpc_error(conn: &mut dyn Conn, id: Value, mut error: rpc::Error) -
         error = rpc::Error::refused(corral_types::Refusal {
             reason: error.message,
             next: Vec::new(),
+            problems: None,
         })
         .context("encode refusal details")?;
     }

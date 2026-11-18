@@ -163,6 +163,9 @@ fn poll_loop(shared: &Shared, store: &Store, mut seq: u64, mut version: u64) {
         if shared.lock().stop {
             break;
         }
+        if let Err(error) = shared.refresh_config() {
+            eprintln!("corrald configuration poll: {error:#}");
+        }
         let result = (|| -> Result<()> {
             // Sample data_version first so a non-event commit racing this scan is seen next time.
             let observed_version = store.data_version()?;

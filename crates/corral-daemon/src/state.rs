@@ -22,6 +22,7 @@ pub(crate) struct Shared {
     devices: Arc<Devices>,
     epoch: u64,
     revision: AtomicU64,
+    config_fingerprint: Mutex<Option<[u8; 32]>>,
     pub(crate) latest_seq: AtomicU64,
     pub(crate) row_cache: crate::views::RowCache,
     pub(crate) terminal_cache: crate::topics::TerminalCache,
@@ -61,12 +62,14 @@ impl Shared {
             .map_err(|error| anyhow::anyhow!("generate daemon epoch: {error}"))?;
         // Cursor epochs travel through browser clients, including implementations using JS numbers.
         let epoch = u64::from_ne_bytes(epoch) & ((1 << 53) - 1);
+        let config_fingerprint = Mutex::new(crate::config::fingerprint(&root)?);
         Ok(Self {
             root,
             runner,
             devices: Arc::new(devices),
             epoch,
             revision: AtomicU64::new(1),
+            config_fingerprint,
             latest_seq: AtomicU64::new(0),
             row_cache: Default::default(),
             terminal_cache: Default::default(),
@@ -129,6 +132,34 @@ impl Shared {
 
     pub(crate) fn publish(&self) {
         self.revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn config_fingerprint(&self) -> Option<[u8; 32]> {
+        *self
+            .config_fingerprint
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub(crate) fn refresh_config(&self) -> Result<()> {
+        self.update_config_fingerprint(|| crate::config::fingerprint(&self.root))
+    }
+
+    pub(crate) fn update_config_fingerprint(
+        &self,
+        observe: impl FnOnce() -> Result<Option<[u8; 32]>>,
+    ) -> Result<()> {
+        let mut last = self
+            .config_fingerprint
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let current = observe()?;
+        if *last != current {
+            *last = current;
+            self.publish();
+            self.nudge(None);
+        }
+        Ok(())
     }
 
     pub(crate) fn health(&self) -> Health {

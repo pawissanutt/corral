@@ -72,7 +72,11 @@ pub enum DetailRef {
         reference: String,
     },
     Artifacts {
+        /// Whitespace-separated words, all of which must match.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         filter: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        narrowing: Option<ArtifactNarrowing>,
     },
     /// Attachment bytes are returned as `DetailBody::Artifact`, as in the chat wire.
     Attachment {

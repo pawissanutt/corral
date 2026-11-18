@@ -4,6 +4,7 @@ pub fn refuse(reason: impl Into<String>, next: Vec<Next>) -> anyhow::Error {
     Refusal {
         reason: reason.into(),
         next,
+        problems: None,
     }
     .into()
 }

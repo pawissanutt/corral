@@ -64,6 +64,30 @@
         ],
         "type": "string"
       },
+      "ArtifactNarrowing": {
+        "description": "All supplied filters must match. Prefixes are case-insensitive.",
+        "properties": {
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ArtifactPage": {
         "properties": {
           "content": {
@@ -808,6 +832,13 @@
       "ConfigDocument": {
         "description": "The `config.get` result and `config.put` parameters. Raw TOML preserves comments and formatting.",
         "properties": {
+          "revision": {
+            "description": "Content fingerprint of the returned file; not a write precondition.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "toml": {
             "type": "string"
           }
@@ -819,6 +850,10 @@
       },
       "ConfigGet": {
         "type": "object"
+      },
+      "ConfigProblem": {
+        "type": "object",
+        "x-rust-type": "corral_types::ConfigProblem"
       },
       "ContextRef": {
         "properties": {
@@ -1356,6 +1391,7 @@
           {
             "properties": {
               "filter": {
+                "description": "Whitespace-separated words, all of which must match.",
                 "type": [
                   "string",
                   "null"
@@ -1364,6 +1400,16 @@
               "kind": {
                 "const": "artifacts",
                 "type": "string"
+              },
+              "narrowing": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ArtifactNarrowing"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -4771,9 +4817,17 @@
       },
       "SettingsSnapshot": {
         "properties": {
+          "built_in_defaults": {
+            "additionalProperties": true,
+            "description": "Built-in engine configuration with no workspace overrides.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "config": {
             "additionalProperties": true,
-            "description": "Parsed `corral.toml` as serialized by the engine.",
+            "description": "Parsed `corral.toml` as serialized by the engine; empty on a parse error.",
             "type": "object"
           },
           "devices": {
@@ -4796,6 +4850,32 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfigProblem"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Parse problem in an externally edited file; `config.get` still returns the raw TOML."
+          },
+          "project_defaults": {
+            "additionalProperties": true,
+            "description": "Unconfigured project resolved against the built-in workspace defaults.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision": {
+            "description": "Content fingerprint of `corral.toml`, including comments and formatting.",
+            "type": [
+              "string",
+              "null"
             ]
           }
         },
@@ -6437,6 +6517,17 @@
       "name": "config.put",
       "params": [
         {
+          "name": "revision",
+          "required": false,
+          "schema": {
+            "description": "Content fingerprint of the returned file; not a write precondition.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
           "name": "toml",
           "required": true,
           "schema": {
@@ -7639,6 +7730,7 @@
           "name": "filter",
           "required": false,
           "schema": {
+            "description": "Whitespace-separated words, all of which must match.",
             "type": [
               "string",
               "null"
@@ -7743,6 +7835,20 @@
               {
                 "const": "other",
                 "type": "string"
+              }
+            ]
+          }
+        },
+        {
+          "name": "narrowing",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactNarrowing"
+              },
+              {
+                "type": "null"
               }
             ]
           }

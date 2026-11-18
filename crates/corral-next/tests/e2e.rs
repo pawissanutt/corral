@@ -65,6 +65,7 @@ set -eu
 printf '%s\n' "$CORRAL_TASK" > landed.txt
 git add landed.txt
 git commit -m "fixture agent change"
+{corral} artifact add {task} landed.txt --kind evidence
 {corral} done {task} --summary 'Fixture agent finished'
 '''
 
@@ -210,6 +211,11 @@ fn headless_agent_lands_and_a_refusal_command_is_runnable() {
         log.iter()
             .any(|event| event.kind == EventKind::Done && event.actor == Actor::Agent)
     );
+    assert!(log.iter().any(|event| {
+        event.kind == EventKind::Artifact
+            && event.detail["kind"] == "evidence"
+            && event.run.as_deref() == Some(run.id.as_str())
+    }));
 
     let prerequisite = ws.new_task("unmet dependency", &[]).task.unwrap().id;
     let checkout = ws.root.join("release checkout");

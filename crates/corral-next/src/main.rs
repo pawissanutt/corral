@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use clap::{Parser, error::ErrorKind};
 use corral_engine::{
     Config, Engine, NewTask, Op, Status, Usage, events::EventFilter, refuse, store::TaskFilter,
@@ -292,11 +292,16 @@ fn apply(engine: &Engine, out: &mut Output<'_>, op: Op, force: bool) -> Result<(
 }
 
 fn check_config(root: &Path, out: &mut Output<'_>) -> Result<()> {
-    let config = Config::load(&root.join(".corral-next/corral.toml"))?;
-    let problems = config.validate(root);
-    if !problems.is_empty() {
-        bail!("configuration problems:\n  {}", problems.join("\n  "));
-    }
+    let path = root.join(".corral-next/corral.toml");
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("read configuration {}", path.display()))?;
+    let config = Config::check(root, &text).map_err(|problems| {
+        let mut message = String::from("configuration problems:");
+        for problem in problems {
+            message.push_str(&format!("\n  {problem}"));
+        }
+        anyhow::anyhow!(message)
+    })?;
     out.value(&config, |out, _| writeln!(out, "Configuration is valid"))
 }
 

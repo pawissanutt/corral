@@ -9,8 +9,8 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_engine::{
-    Check, CheckKind, Engine, Role, Run, SessionStatus, Status, Task, store::TaskFilter,
-    usage::UsageSummary,
+    Check, CheckKind, Config, ConfigProblem, Engine, Role, Run, SessionStatus, Status, Task,
+    store::TaskFilter, usage::UsageSummary,
 };
 use corral_protocol::{
     Health,
@@ -27,7 +27,10 @@ pub(crate) enum Rows {
     Health(Vec<Health>),
     Tasks(Vec<TaskRow>),
     Plans(Vec<PlanRow>),
-    Projects(Vec<ProjectRow>),
+    Projects {
+        rows: Vec<ProjectRow>,
+        revision: Option<[u8; 32]>,
+    },
     Agents(Vec<AgentRow>),
     Usage(Vec<UsageSummary>),
     Assistant(Vec<AssistantRow>),
@@ -44,7 +47,7 @@ macro_rules! each {
             Rows::Health($rows) => $body,
             Rows::Tasks($rows) => $body,
             Rows::Plans($rows) => $body,
-            Rows::Projects($rows) => $body,
+            Rows::Projects { rows: $rows, .. } => $body,
             Rows::Agents($rows) => $body,
             Rows::Usage($rows) => $body,
             Rows::Assistant($rows) => $body,
@@ -64,7 +67,7 @@ impl Rows {
             Self::Health(_) => "health".into(),
             Self::Tasks(rows) => rows[index].task.id.as_str().into(),
             Self::Plans(rows) => rows[index].parent.id.as_str().into(),
-            Self::Projects(rows) => rows[index].id.as_str().into(),
+            Self::Projects { rows, .. } => rows[index].id.as_str().into(),
             Self::Agents(rows) => {
                 let run = &rows[index].run;
                 format!("{}_{}", run.task, run.id).into()
@@ -211,6 +214,18 @@ fn read(shared: &Shared, topic: Topic) -> Result<Rows> {
     if topic == Topic::Assistant {
         return Ok(Rows::Assistant(crate::assistant::rows(shared)?));
     }
+    if topic == Topic::Settings {
+        return settings(shared);
+    }
+    if topic == Topic::Projects {
+        let revision = shared.config_fingerprint();
+        let rows = match shared.engine() {
+            Ok(engine) => projects(&engine)?,
+            Err(error) if error.downcast_ref::<ConfigProblem>().is_some() => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        return Ok(Rows::Projects { rows, revision });
+    }
     let engine = shared.engine()?;
     match topic {
         Topic::Tasks => engine
@@ -219,17 +234,29 @@ fn read(shared: &Shared, topic: Topic) -> Result<Rows> {
         Topic::Plans => engine
             .store
             .read_snapshot(|| Ok(Rows::Plans(plans(&engine)?))),
-        Topic::Projects => Ok(Rows::Projects(projects(&engine)?)),
         Topic::Agents => Ok(Rows::Agents(agents(&engine)?)),
         Topic::Usage => Ok(Rows::Usage(vec![engine.usage_summary(None)?])),
-        Topic::Settings => Ok(Rows::Settings(vec![SettingsSnapshot {
-            config: object(&engine.config)?,
-            listener: shared.devices().listener(),
-            hostname: crate::devices::reach::hostname(),
-            devices: shared.devices().list()?,
-        }])),
         _ => bail!("unsupported topic"),
     }
+}
+
+fn settings(shared: &Shared) -> Result<Rows> {
+    let document = crate::config::get(shared)?;
+    let (config, problem) = match Config::parse(&document.toml) {
+        Ok(parsed) => (object(&parsed)?, None),
+        Err(problem) => (Default::default(), Some(problem)),
+    };
+    let built_in = Config::default();
+    Ok(Rows::Settings(vec![SettingsSnapshot {
+        config,
+        listener: shared.devices().listener(),
+        hostname: crate::devices::reach::hostname(),
+        devices: shared.devices().list()?,
+        revision: document.revision,
+        built_in_defaults: Some(object(&built_in)?),
+        project_defaults: Some(object(&built_in.project_defaults())?),
+        problem,
+    }]))
 }
 
 fn object(value: &impl Serialize) -> Result<serde_json::Map<String, serde_json::Value>> {

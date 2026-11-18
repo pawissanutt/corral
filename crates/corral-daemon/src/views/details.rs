@@ -7,7 +7,9 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use corral_engine::{Engine, EventKind, events::EventFilter, store::TaskFilter};
+use corral_engine::{
+    Engine, EventKind, artifacts::ArtifactFilter, events::EventFilter, store::TaskFilter,
+};
 use corral_protocol::detail::*;
 use jiff::Timestamp;
 use serde::Serialize;
@@ -43,6 +45,9 @@ pub(super) fn read(engine: &Engine, query: DetailGet) -> Result<DetailReply> {
         let seq = engine.store.latest_seq()?;
         match &query.target {
             DetailRef::Artifact { reference } => return artifact(engine, &query, seq, reference),
+            DetailRef::Artifacts { filter, narrowing } => {
+                return artifacts(engine, &query, seq, filter.as_deref(), narrowing.as_ref());
+            }
             DetailRef::ReviewFile { task, path } => {
                 return review::file(engine, &query, seq, task, path);
             }
@@ -126,23 +131,65 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
                 days: engine.usage_series(window, *by)?,
             })
         }
-        DetailRef::Artifacts { filter } => {
-            let mut rows = store.list_artifacts(None)?;
-            if let Some(filter) = filter.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                let needle = filter.to_lowercase();
-                rows.retain(|row| {
-                    row.title.to_lowercase().contains(&needle)
-                        || row
-                            .kind
-                            .as_ref()
-                            .is_some_and(|kind| kind.to_lowercase().contains(&needle))
-                        || row.reference().to_ascii_lowercase().contains(&needle)
-                });
-            }
-            DetailBody::Artifacts(ArtifactsPage { rows })
-        }
         _ => bail!("invalid: unsupported detail"),
     })
+}
+
+fn artifacts(
+    engine: &Engine,
+    query: &DetailGet,
+    seq: u64,
+    words: Option<&str>,
+    narrowing: Option<&ArtifactNarrowing>,
+) -> Result<DetailReply> {
+    let selector = fingerprint(&query.target)?;
+    let before = query
+        .page
+        .as_deref()
+        .map(|token| {
+            let (key, anchor) = token
+                .split_once(':')
+                .context("invalid: artifact page token")?;
+            ensure!(
+                key == selector,
+                "invalid: artifact page belongs to a different selection"
+            );
+            let (at, reference) = anchor
+                .split_once('/')
+                .context("invalid: artifact page anchor")?;
+            let (task, id) = reference
+                .rsplit_once(':')
+                .context("invalid: artifact page reference")?;
+            task_number(task)?;
+            ensure!(id.parse::<u32>().is_ok(), "invalid: artifact page ordinal");
+            Ok::<_, anyhow::Error>((
+                at.parse().context("invalid: artifact page timestamp")?,
+                reference,
+            ))
+        })
+        .transpose()?;
+    let filter = ArtifactFilter {
+        words,
+        kind: narrowing.and_then(|filters| filters.kind.as_deref()),
+        task: narrowing.and_then(|filters| filters.task.as_deref()),
+        project: narrowing.and_then(|filters| filters.project.as_deref()),
+    };
+    let mut page = RowPage::new(0);
+    let rows = page.take(
+        engine
+            .store
+            .artifacts_before(filter, before, ROW_LIMIT + 1)?,
+    )?;
+    let next = if page.more {
+        rows.last()
+            .map(|row| format!("{selector}:{}/{}", row.at, row.reference()))
+    } else {
+        None
+    };
+    let body = DetailBody::Artifacts(ArtifactsPage { rows });
+    let etag = fingerprint(&(&query.target, &query.page, &body, &next))?;
+    let unchanged = query.etag.as_ref() == Some(&etag);
+    reply_page(seq, etag, body, next, unchanged)
 }
 
 fn burnup(engine: &Engine, scope: &str) -> Result<Burnup> {
@@ -252,6 +299,16 @@ pub(super) fn reply(
     next: Option<String>,
 ) -> Result<DetailReply> {
     let unchanged = query.page.is_none() && query.etag.as_ref() == Some(&etag);
+    reply_page(seq, etag, body, next, unchanged)
+}
+
+fn reply_page(
+    seq: u64,
+    etag: String,
+    body: DetailBody,
+    next: Option<String>,
+    unchanged: bool,
+) -> Result<DetailReply> {
     let reply = DetailReply {
         etag,
         as_of: Timestamp::now().to_string(),
@@ -347,7 +404,6 @@ fn paginate(body: &mut DetailBody, offset: usize) -> Result<Option<usize>> {
         DetailBody::Timeline(model) => paginate_fields!(model, runs, events),
         DetailBody::Burnup(model) => paginate_fields!(model, events),
         DetailBody::UsageSeries(model) => paginate_fields!(model, days),
-        DetailBody::Artifacts(model) => paginate_fields!(model, rows),
         _ => ensure!(offset == 0, "invalid: unexpected detail page token"),
     }
     ensure!(

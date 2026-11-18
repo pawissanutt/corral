@@ -12,4 +12,7 @@ pub struct ConfigGet {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigDocument {
     pub toml: String,
+    /// Content fingerprint of the returned file; not a write precondition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
 }
