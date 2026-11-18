@@ -1,10 +1,12 @@
 //! Agents roster and session state, reducers and presentation data.
 //!
 //! The roster lists corrald's live runs (`agents.v1`: role, profile, model, session status and
-//! quiet time) beside the assistant sessions, the quick thread pinned first. Each run's row and
-//! page carry the shared Actions menu of its task; the page shows its pane's terminal. The
-//! presentation types here are owned so every data source uses the same feed-backed roster and
-//! session pages.
+//! quiet time) beside the assistant sessions, the quick thread pinned first. Each run's row,
+//! panel and page carry its Session menu (`menu`): Reply, Stop, Retry, Focus pane, then its
+//! task's Actions menu. The page shows the run's terminal (its pane's screen, or a headless
+//! session's log tail) with the pane's keys bar and type field (`pane`). Recorded transcripts
+//! are read only from a corrald that serves them (`session.v1`). The presentation types here are
+//! owned so every data source uses the same feed-backed roster and session pages.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,6 +25,8 @@ mod items;
 mod live;
 mod live_reply;
 mod live_session;
+mod menu;
+mod pane;
 mod replay;
 mod replay_marks;
 mod replay_pairs;
@@ -38,6 +42,8 @@ pub mod screen;
 pub use fleet::{Fleet, FleetEntry, FleetLine, FleetSection};
 pub use items::{Card, Divider, Footer, Marker, More, Picture, Prose, Section, Thinking};
 pub use live_session::session as live_session;
+pub use menu::{SESSION_MENU_LABEL, session_verbs};
+pub use pane::{KEYS, PaneAsk, PaneInput, PaneKey, PaneSent, focus, focus_refusal};
 pub use replay::fetches;
 pub use roster::{RoleTab, Roster, RosterRole, RosterRow, roster};
 pub use roster_panel::{
@@ -113,6 +119,8 @@ pub struct State {
     /// Sessions whose transcript shows an earlier page rather than the latest messages. Such a
     /// page is not replaced by the latest until the owner asks for it.
     pub earlier: BTreeSet<Id>,
+    /// The latest pane request per run session (keys or Focus pane), whose outcome it shows.
+    pub pane: BTreeMap<Id, PaneSent>,
 }
 impl State {
     /// Toggle a daemon session's transcript and terminal.
@@ -198,6 +206,11 @@ impl State {
                 self.live_view = view;
                 vec![]
             }
+            Action::Pane {
+                session,
+                text,
+                keys,
+            } => self.type_into(session, text, keys, feed),
             Action::ToggleView => {
                 self.toggle_live_view();
                 vec![]
@@ -300,6 +313,13 @@ pub enum Action {
     Newer(Id),
     /// Revalidate a session page or terminal capture.
     Refresh(DetailRef),
+    /// Type `text` literally into run session `session`'s pane, then press `keys` (herdr's
+    /// key names).
+    Pane {
+        session: Id,
+        text: String,
+        keys: Vec<String>,
+    },
 }
 
 /// Terminal line classification, including prompt and success lines.
@@ -506,16 +526,17 @@ pub struct Terminal {
     /// Revalidate the capture.
     pub refresh: Option<Action>,
 }
-/// The strip under a session's head: its state, what a blocked screen waits on, and the run's
-/// task, whose Actions menu (every engine operation) the strip carries.
+/// The strip under a session's head: its state and what a blocked screen waits on; on the
+/// phone it also carries the run's Session menu, which desktop and terminal put in the head.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Bar {
     pub state: Option<(&'static str, Hue)>,
     pub lead: Option<String>,
-    pub task: Option<Id>,
+    /// The run session whose Session menu shows; none for an id without a task.
+    pub menu: Option<Id>,
 }
-/// Session header and selected surface; both surfaces are supplied for switching. A run without
-/// a recorded pane or process has no terminal, and no switch.
+/// Session header and selected surface. The Transcript | Terminal switch shows only where both
+/// exist: a recorded pane or process, and a corrald that serves transcripts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Session {
     pub id: String,
@@ -526,6 +547,8 @@ pub struct Session {
     pub phone_title: String,
     pub desktop_back_label: &'static str,
     pub back: Action,
+    /// Whether the Transcript | Terminal switch shows.
+    pub switch: bool,
     pub view: View,
     pub switch_labels: [&'static str; 2],
     pub switch_actions: [Action; 2],
@@ -536,6 +559,8 @@ pub struct Session {
     pub transcript: Transcript,
     pub terminal: Option<Terminal>,
     pub reply: Reply,
+    /// The pane's keys bar and type field under the terminal; none without a recorded session.
+    pub pane: Option<PaneInput>,
     pub run_details: Run,
     /// The session's child agents and their messages, beside the run; none when it has neither.
     pub fleet: Option<Fleet>,

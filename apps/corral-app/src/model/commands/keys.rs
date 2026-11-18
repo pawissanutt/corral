@@ -7,7 +7,6 @@
 
 use crate::model::{Destination, Live};
 
-const MOVE: &[&str] = &["j", "k", "down", "up"];
 const MOVE_MENU: &[&str] = &["j", "k", "down", "up", "."];
 const LIVE_MOVE_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "."];
 const MENU: &[&str] = &["."];
@@ -16,9 +15,9 @@ const MENU: &[&str] = &["."];
 pub fn list_keys_live(destination: Destination, top: Option<&Live>) -> &'static [&'static str] {
     match (destination, top) {
         (Destination::Now, None | Some(Live::Task(_))) => LIVE_MOVE_OPEN,
-        (Destination::Review, None | Some(Live::Review(_))) => MENU,
-        (Destination::Plans, _) => MOVE_MENU,
-        (Destination::Agents, None) => MOVE,
+        (Destination::Review | Destination::Agents, None) | (Destination::Plans, _) => MOVE_MENU,
+        (Destination::Review, Some(Live::Review(_)))
+        | (Destination::Agents, Some(Live::Session(_))) => MENU,
         _ => &[],
     }
 }
@@ -32,7 +31,7 @@ pub fn key_legend_live(
     off_board: bool,
 ) -> Vec<(&'static str, &'static str)> {
     match (destination, top) {
-        (_, Some(Live::Session(_))) => vec![("`", "transcript/terminal")],
+        (_, Some(Live::Session(_))) => vec![(".", "session menu")],
         (_, Some(Live::Thread(_))) => Vec::new(),
         (Destination::Now, _) => {
             let mut legend = vec![("j k", "move")];
@@ -43,8 +42,8 @@ pub fn key_legend_live(
             legend
         }
         (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member"), (".", "actions")],
-        (Destination::Agents, _) => vec![("j k", "session")],
-        (Destination::Review, _) => vec![("s", "split"), (".", "actions")],
+        (Destination::Agents, _) => vec![("j k", "session"), (".", "session menu")],
+        (Destination::Review, _) => vec![("j k", "candidate"), ("s", "split"), (".", "actions")],
         _ => Vec::new(),
     }
 }

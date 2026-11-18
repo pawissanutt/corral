@@ -1,10 +1,14 @@
-//! One live run from corrald: its row in Agents, its pane's screen (read live where corrald
-//! serves it, else a recorded capture), the strip under its head with its task's Actions menu,
-//! its reply box (`live_reply`) and, once the chat host serves it, its bounded transcript page. A
-//! run without a recorded pane or process has no terminal; none is drawn for it.
+//! One live run from corrald: its row in Agents, its terminal (its herdr pane's screen, or the
+//! tail of a headless session's log, read live where corrald serves it, else a recorded
+//! capture) with the pane's keys bar and type field (`pane`), the strip under its head, its
+//! Session menu and, from a corrald that serves them (`session.v1`), its bounded transcript
+//! page with the reply box (`live_reply`). A run without a recorded pane or process has no
+//! terminal; none is drawn for it.
 
+use corral_protocol::app::SESSION_V1;
 use corral_protocol::detail::{DetailBody, DetailRef, SessionPage, TerminalSnapshot};
 use corral_protocol::rows::AgentRow;
+use corral_types::SessionRef;
 
 use crate::model::Id;
 use crate::model::board::STAGES;
@@ -12,14 +16,15 @@ use crate::model::daemon::{self, DetailCache, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::text::{Rich, Span, span};
+use crate::model::work::session_task;
 
 use super::live::{
     clock, clock_at, excerpt, quiet, role_label, session_name, shown_id, stale, unix,
 };
 use super::replay::transcript;
 use super::{
-    Action, Bar, FactValue, Feed, LineClass, Run, RunFact, Session, State, Terminal, View, line,
-    live_reply, screen, tail_line,
+    Action, Bar, FactValue, Feed, Fill, LineClass, Run, RunFact, Session, State, Terminal,
+    Transcript, View, line, live_reply, pane, screen, tail_line,
 };
 
 /// Seconds within which a screen read counts as "just now": it is read about once a second.
@@ -85,8 +90,8 @@ fn reason(message: &str) -> &str {
 }
 
 /// The run's screen: its herdr pane read live where corrald serves it, or the tail of a process
-/// session's log. Live rows stay as read; only a current read is `Live`. Read-only: keys are
-/// typed in the pane itself.
+/// session's log. Live rows stay as read; only a current read is `Live`. Keys go to a pane from
+/// the session page's keys bar; a log takes none.
 pub(super) fn terminal(
     id: &Id,
     row: &AgentRow,
@@ -94,6 +99,8 @@ pub(super) fn terminal(
     feed: &daemon::Feed,
 ) -> Terminal {
     let pane = session_name(row).unwrap_or_else(|| "no session".into());
+    let log = matches!(row.run.session, Some(SessionRef::Process { .. }));
+    let current_words = if log { "log tail" } else { "live terminal" };
     let capture = snapshot(cache);
     let loading = cache.is_none_or(|cache| cache.loading);
     let error = cache.and_then(|cache| cache.error.as_ref());
@@ -109,7 +116,7 @@ pub(super) fn terminal(
         Some(capture) if capture.live => {
             let read = read_when(read_at(cache, capture), feed);
             match (error, unavailable) {
-                _ if current => format!("live terminal · read {read}"),
+                _ if current => format!("{current_words} · read {read}"),
                 _ if gone => format!("pane gone · last screen read {read}"),
                 (_, Some(why)) => format!("{} · last screen read {read}", reason(&why.message)),
                 (Some(error), _) => format!(
@@ -122,7 +129,7 @@ pub(super) fn terminal(
             }
         }
         Some(capture) => format!(
-            "snapshot · captured {} · read-only",
+            "snapshot · captured {}",
             clock(Some(capture.captured_at.as_str()), feed)
                 .unwrap_or_else(|| "at an unknown time".into())
         ),
@@ -156,9 +163,13 @@ pub(super) fn terminal(
         } else {
             Feed::Snapshot
         },
-        heading: format!("{} · {pane}", row.run.harness),
+        heading: if log {
+            format!("{} · {pane} · session.log", row.run.harness)
+        } else {
+            format!("{} · {pane}", row.run.harness)
+        },
         status,
-        input: "read-only".into(),
+        input: if log { "read-only log" } else { "herdr pane" }.into(),
         lines: capture
             .map(|capture| {
                 if capture.live {
@@ -258,7 +269,10 @@ fn facts(
 /// attribution, as replies carry it.
 pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str) -> Session {
     let row = feed.agents.get(id.as_str());
-    let session_cache = feed.detail(&DetailRef::Session { id: id.to_string() });
+    let transcripts = feed.capable(SESSION_V1);
+    let session_cache = transcripts
+        .then(|| feed.detail(&DetailRef::Session { id: id.to_string() }))
+        .flatten();
     let body = page(session_cache);
     let role = row
         .map(|row| row.run.role.as_str().to_owned())
@@ -334,10 +348,11 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str)
                 .collect()
         })
         .unwrap_or_default();
-    let view = if terminal.is_some() {
-        state.live_view
-    } else {
-        View::Transcript
+    let switch = transcripts && terminal.is_some();
+    let view = match &terminal {
+        Some(_) if !transcripts => View::Terminal,
+        Some(_) => state.live_view,
+        None => View::Transcript,
     };
     Session {
         id: shown.clone(),
@@ -349,6 +364,7 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str)
         desktop_back_label: "Agents",
         back: Action::Back,
         view,
+        switch,
         switch_labels: ["Transcript", "Terminal"],
         switch_actions: [
             Action::SetView(View::Transcript),
@@ -359,9 +375,14 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str)
         controls: Bar {
             state: row.map(|row| super::live::status(&row.status).chip()),
             lead: row.and_then(excerpt).map(str::to_owned),
-            task: task.as_deref().map(Id::new),
+            menu: session_task(id).map(|_| id.clone()),
         },
-        transcript: transcript(id, state, session_cache, feed),
+        transcript: if transcripts {
+            transcript(id, state, session_cache, feed)
+        } else {
+            unserved()
+        },
+        pane: row.and_then(|row| pane::input(state, id, row, feed)),
         terminal,
         reply: live_reply::reply(id, row, &shown, state, feed, env, via),
         run_details: Run {
@@ -374,6 +395,24 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str)
             steps,
         },
         fleet: super::fleet::fleet(state, id, feed),
+    }
+}
+
+/// What a run without a terminal shows while corrald serves no transcripts.
+fn unserved() -> Transcript {
+    Transcript {
+        messages: Vec::new(),
+        older: None,
+        newer: None,
+        paging: false,
+        fill: Fill::Empty {
+            heading: "No terminal",
+            paragraph: "corrald recorded no pane or process for this run, and it serves no session transcripts yet.".into(),
+        },
+        stale: None,
+        disclaimer: None,
+        live: Vec::new(),
+        after: Vec::new(),
     }
 }
 
@@ -442,6 +481,6 @@ mod tests {
         );
         assert!(terminal.verbatim);
         assert!(terminal.styled.is_empty());
-        assert_eq!(page.controls.task, Some(Id::from("T-1")));
+        assert_eq!(page.controls.menu, Some(Id::from(id)));
     }
 }

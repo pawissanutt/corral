@@ -484,6 +484,8 @@ fn terminal_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEl
         let go = confirm.on_confirm.clone();
         let word = confirm.word;
         let expected = word.clone();
+        // A wrong word keeps the field focused, so it can be corrected and sent again.
+        let field = element_ref();
         view().child(term::hrule()).child(
             view()
                 .flex_row()
@@ -500,6 +502,7 @@ fn terminal_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEl
                 .child(term::space(2.0))
                 .child(
                     input()
+                        .element_ref(&field)
                         .test_id(&format!("{test_id}-word"))
                         .label(format!("Type {word} to confirm"))
                         .placeholder(word)
@@ -507,6 +510,8 @@ fn terminal_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEl
                         .on_submit(move |typed: &str| {
                             if typed.trim() == expected {
                                 go();
+                            } else {
+                                after_answer(move || field.focus());
                             }
                         })
                         .flex_1()

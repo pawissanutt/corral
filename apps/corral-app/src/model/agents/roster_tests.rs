@@ -176,7 +176,7 @@ fn a_blocked_task_waits_on_the_owner_from_the_runs_panel() {
         "device",
     )
     .expect("selected run panel");
-    assert_eq!(panel.task, Some(Id::from("T-1")));
+    assert_eq!(panel.menu, Some(Id::from("T-1_R1")));
     assert_eq!(
         panel.waits.map(|wait| wait.text),
         Some("gate failed twice".to_owned())

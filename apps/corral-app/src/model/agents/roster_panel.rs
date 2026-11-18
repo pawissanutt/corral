@@ -1,5 +1,7 @@
-//! The selected roster session's story: its run facts, what blocks its task, its recorded words
-//! and its pane's screen. Board stages never masquerade as the session's own steps.
+//! The selected roster session's story: its run facts, what blocks its task, what it does now,
+//! its recorded words (from a corrald that serves transcripts) and its pane's screen. Board
+//! stages never masquerade as the session's own steps.
+use corral_protocol::app::SESSION_V1;
 use corral_protocol::detail::{DetailRef, SessionItem, SessionPage};
 
 use crate::model::daemon;
@@ -8,7 +10,7 @@ use crate::model::projects::ProjectFilter;
 use crate::model::{Hue, Id, Live, assistant};
 
 use super::roster::{self, Source};
-use super::{Action, Reply, ReplyMode, State, Terminal, live, live_reply, live_session};
+use super::{Action, Reply, ReplyMode, State, Terminal, live, live_reply, live_session, pane};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RosterPanelTab {
@@ -61,8 +63,8 @@ pub struct Recent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RosterPanel {
     pub session: Id,
-    /// The run's task, whose Actions menu the panel head carries; none for an assistant.
-    pub task: Option<Id>,
+    /// The run session whose Session menu the panel head carries; none for an assistant.
+    pub menu: Option<Id>,
     pub chip: String,
     pub hue: Hue,
     pub role: String,
@@ -80,7 +82,10 @@ pub struct RosterPanel {
     pub doing_title: &'static str,
     pub doing: String,
     pub quiet: String,
-    pub recent: Recent,
+    /// What it said and did, from a corrald that serves transcripts.
+    pub recent: Option<Recent>,
+    /// How the latest pane request (keys or Focus pane) ended, in its tone.
+    pub pane: Option<(Hue, String)>,
     pub terminal: Option<Terminal>,
     /// Keep these details loaded while this panel is visible.
     pub wants: Vec<DetailRef>,
@@ -207,7 +212,12 @@ pub fn roster_panel(
     let target = DetailRef::Session {
         id: selected.to_string(),
     };
-    let mut wants = vec![target.clone()];
+    // An assistant's recorded words come with chat; a run's only from a corrald serving them.
+    let transcripts = source.row.is_none() || feed.capable(SESSION_V1);
+    let mut wants = Vec::new();
+    if transcripts {
+        wants.push(target.clone());
+    }
     let terminal = source
         .row
         .filter(|agent| agent.run.session.is_some())
@@ -264,7 +274,7 @@ pub fn roster_panel(
     }
     Some(RosterPanel {
         session: selected.clone(),
-        task: row.task,
+        menu: row.task.as_ref().map(|_| selected.clone()),
         chip: row.chip,
         hue: row.hue,
         role: row.role,
@@ -282,7 +292,10 @@ pub fn roster_panel(
         doing_title: "Doing now",
         doing: source.doing(feed),
         quiet: row.quiet,
-        recent: recent(feed, &target, source.role()),
+        recent: transcripts.then(|| recent(feed, &target, source.role())),
+        pane: source
+            .row
+            .and_then(|agent| pane::outcome(state, agent, feed)),
         terminal,
         wants,
         reply,

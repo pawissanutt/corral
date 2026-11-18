@@ -173,7 +173,7 @@ pub fn commands(
     }
     if live && managed {
         live_needs_you(&mut rows, feed, query);
-        live_verbs(&mut rows, record);
+        live_verbs(&mut rows, record, feed);
     }
     rows.extend(
         crate::model::nav::navigation(feed)
@@ -378,15 +378,18 @@ fn live_needs_you(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
     push_live(rows, "Needs you", query, open);
 }
 
-/// The Actions menu of the selected task, then the workspace's own.
-fn live_verbs(rows: &mut Vec<Command>, record: Option<&crate::model::work::Record>) {
-    use crate::model::work::{Record, record_verbs};
+/// The Actions menu of the selected task, or the Session menu of the selected run, then the
+/// workspace's own.
+fn live_verbs(rows: &mut Vec<Command>, record: Option<&crate::model::work::Record>, feed: &Feed) {
+    use crate::model::work::{Press, Record, record_verbs};
     let workspace = Record::Workspace;
     let record = record.unwrap_or(&workspace);
-    rows.extend(record_verbs(record).into_iter().map(|verb| {
-        let label = match record {
-            Record::Task(id) => format!("{} {id}", verb.label),
-            Record::Workspace => verb.label,
+    let verbs = record_verbs(record, feed).into_iter();
+    // Focus pane where it cannot work stays out: the palette has no room to say why.
+    rows.extend(verbs.filter(|verb| verb.enabled).map(|verb| {
+        let label = match (record, &verb.press) {
+            (_, Press::Menu(_)) | (Record::Workspace, _) => verb.label,
+            (Record::Task(id) | Record::Session(id), _) => format!("{} {id}", verb.label),
         };
         row(
             format!("verb:{}", verb.slug),
@@ -397,7 +400,7 @@ fn live_verbs(rows: &mut Vec<Command>, record: Option<&crate::model::work::Recor
         )
     }));
     if !matches!(record, Record::Workspace) {
-        rows.extend(record_verbs(&workspace).into_iter().map(|verb| {
+        rows.extend(record_verbs(&workspace, feed).into_iter().map(|verb| {
             row(
                 format!("verb:{}", verb.slug),
                 "Workspace actions",

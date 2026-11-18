@@ -25,7 +25,7 @@ pub(super) fn op(
     let id = match record {
         Record::Task(id) => id.to_string(),
         Record::Workspace if verb == Verb::NewTask => String::new(),
-        Record::Workspace => return Err("Choose a task first.".into()),
+        Record::Workspace | Record::Session(_) => return Err("Choose a task first.".into()),
     };
     Ok(match verb {
         Verb::Edit => Op::Edit {
