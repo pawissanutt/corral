@@ -15,7 +15,7 @@ use crate::{
         nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, SIDEBAR_LABEL, THIS_DEVICE},
     },
     screens,
-    shell::{confirmation, destinations, projects, section_short, terminal_bar, toast},
+    shell::{confirmation, destinations, projects, refusal, section_short, terminal_bar, toast},
     state::AppState,
     ui::{
         ask, atoms, composer,
@@ -143,6 +143,7 @@ fn content(app: AppState, focus: Focus) -> AnyElement {
             )
             .child(palette::palette(app))
             .child(confirmation(app))
+            .child(refusal(app))
             .child(screens::now::verb_composer(app)),
     )
     .flex_1()
@@ -454,16 +455,14 @@ const KEEP_PAGE: u8 = 12;
 /// Settings (whose key, `,`, says nothing by itself) last.
 fn keep(destination: Destination) -> u8 {
     match destination {
-        Destination::Builds => 0,
-        Destination::Usage => 1,
-        Destination::Timeline => 2,
-        Destination::Plans => 3,
-        Destination::Review => 4,
-        Destination::Changes => 5,
-        Destination::Agents => 6,
-        Destination::Settings => 7,
-        Destination::Now => 8,
-        Destination::Inbox => 9,
+        Destination::Usage => 0,
+        Destination::Timeline => 1,
+        Destination::Plans => 2,
+        Destination::Review => 3,
+        Destination::Changes => 4,
+        Destination::Agents => 5,
+        Destination::Settings => 6,
+        Destination::Now => 7,
     }
 }
 
@@ -677,14 +676,13 @@ mod tests {
     #[test]
     fn key_line_drops_names_and_groups_before_any_key_is_cut() {
         let views = [
-            (Destination::Inbox, None),
             (Destination::Now, None),
             (Destination::Plans, None),
             (Destination::Review, None),
             (Destination::Settings, None),
             (
-                Destination::Inbox,
-                Some(Live::Question(crate::model::Id::new("T-868/R1/Q1"))),
+                Destination::Agents,
+                Some(Live::Session(crate::model::Id::new("T-14_R1"))),
             ),
         ];
         for (destination, live) in views {

@@ -21,8 +21,8 @@ use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 use super::list::{Disclosure, disclosure_head, revealing};
 use super::parts::{press, pressable, quiet};
 use super::rows::{
-    self, ACTOR, DATE, DELTA, DESK_PAD, Fit, ID, PHONE_PAD, PROJECT, RAIL, blank,
-    column, figures, optional, pressable_line, words,
+    self, ACTOR, DATE, DELTA, DESK_PAD, Fit, ID, PHONE_PAD, PROJECT, RAIL, blank, column, figures,
+    optional, pressable_line, words,
 };
 
 /// The test id of a Closed control.

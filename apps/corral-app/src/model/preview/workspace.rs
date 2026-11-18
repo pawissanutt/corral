@@ -86,9 +86,27 @@ fn config(projects: bool) -> Map<String, Value> {
 
 pub(super) fn devices(now: u64) -> Vec<DeviceInfo> {
     [
-        ("preview-device", "Preview desktop", DevicePlatform::Native, DeviceReach::Unix, 40),
-        ("preview-phone", "Preview phone", DevicePlatform::Native, DeviceReach::Tailscale, 12),
-        ("preview-browser", "Preview laptop browser", DevicePlatform::Web, DeviceReach::Lan, 6),
+        (
+            "preview-device",
+            "Preview desktop",
+            DevicePlatform::Native,
+            DeviceReach::Unix,
+            40,
+        ),
+        (
+            "preview-phone",
+            "Preview phone",
+            DevicePlatform::Native,
+            DeviceReach::Tailscale,
+            12,
+        ),
+        (
+            "preview-browser",
+            "Preview laptop browser",
+            DevicePlatform::Web,
+            DeviceReach::Lan,
+            6,
+        ),
     ]
     .into_iter()
     .map(|(id, name, platform, reach, days)| DeviceInfo {
@@ -127,52 +145,129 @@ pub(super) fn device_row(device: &DeviceInfo) -> DeviceRow {
     }
 }
 
-
 /// The event log that produced the records, oldest first.
 fn history(feed: &mut Feed, records: &[TaskDetail]) {
     let mut all = Vec::new();
     let mut log = Vec::new();
     for record in records {
         let task = &record.task;
-        let actor = if task.status == Status::Idea { Actor::Assistant } else { Actor::Owner };
-        log.push((task.created, None, EventKind::Created, actor, json!({"status": task.status, "title": task.title})));
+        let actor = if task.status == Status::Idea {
+            Actor::Assistant
+        } else {
+            Actor::Owner
+        };
+        log.push((
+            task.created,
+            None,
+            EventKind::Created,
+            actor,
+            json!({"status": task.status, "title": task.title}),
+        ));
         if !task.depends_on.is_empty() {
-            log.push((task.updated, None, EventKind::Edited, Actor::Owner, json!({"fields": ["depends_on"]})));
+            log.push((
+                task.updated,
+                None,
+                EventKind::Edited,
+                Actor::Owner,
+                json!({"fields": ["depends_on"]}),
+            ));
         }
         if task.status == Status::Ready {
-            log.push((task.updated, None, EventKind::Moved, Actor::Owner, json!({"from": "backlog", "to": "ready"})));
+            log.push((
+                task.updated,
+                None,
+                EventKind::Moved,
+                Actor::Owner,
+                json!({"from": "backlog", "to": "ready"}),
+            ));
         }
         for run in &record.runs {
             let id = Some(run.id.clone());
             match run.role {
-                Role::Worker => log.push((run.started, id.clone(), EventKind::Dispatched, Actor::Owner, json!({"profile": run.profile, "base": run.base}))),
-                Role::Reviewer => log.push((run.started, id.clone(), EventKind::ReviewStarted, Actor::Auto, json!({"profile": run.profile, "round": task.round}))),
+                Role::Worker => log.push((
+                    run.started,
+                    id.clone(),
+                    EventKind::Dispatched,
+                    Actor::Owner,
+                    json!({"profile": run.profile, "base": run.base}),
+                )),
+                Role::Reviewer => log.push((
+                    run.started,
+                    id.clone(),
+                    EventKind::ReviewStarted,
+                    Actor::Auto,
+                    json!({"profile": run.profile, "round": task.round}),
+                )),
             }
             let Some(ended) = run.ended else { continue };
             match run.outcome {
-                Some(Outcome::Done) if run.role == Role::Worker => log.push((ended, id, EventKind::Done, Actor::Agent, json!({"sha": run.head_sha, "summary": run.summary}))),
+                Some(Outcome::Done) if run.role == Role::Worker => log.push((
+                    ended,
+                    id,
+                    EventKind::Done,
+                    Actor::Agent,
+                    json!({"sha": run.head_sha, "summary": run.summary}),
+                )),
                 Some(Outcome::Landed) => {
-                    let submitted = ended.checked_sub(jiff::SignedDuration::from_hours(2)).unwrap_or(ended);
-                    log.push((submitted, id.clone(), EventKind::Done, Actor::Agent, json!({"sha": run.head_sha, "summary": run.summary})));
-                    log.push((ended, id.clone(), EventKind::Landed, Actor::Owner, json!({"sha": run.head_sha, "base": run.base})));
+                    let submitted = ended
+                        .checked_sub(jiff::SignedDuration::from_hours(2))
+                        .unwrap_or(ended);
+                    log.push((
+                        submitted,
+                        id.clone(),
+                        EventKind::Done,
+                        Actor::Agent,
+                        json!({"sha": run.head_sha, "summary": run.summary}),
+                    ));
+                    log.push((
+                        ended,
+                        id.clone(),
+                        EventKind::Landed,
+                        Actor::Owner,
+                        json!({"sha": run.head_sha, "base": run.base}),
+                    ));
                     if task.id == "T-4" {
-                        log.push((ended, id, EventKind::Forced, Actor::Owner, json!({"operation": "approve", "skipped": ["gate"]})));
+                        log.push((
+                            ended,
+                            id,
+                            EventKind::Forced,
+                            Actor::Owner,
+                            json!({"operation": "approve", "skipped": ["gate"]}),
+                        ));
                     }
                 }
-                Some(Outcome::Stopped) => log.push((ended, id, EventKind::Stopped, Actor::Owner, json!({"reason": "stopped by owner"}))),
+                Some(Outcome::Stopped) => log.push((
+                    ended,
+                    id,
+                    EventKind::Stopped,
+                    Actor::Owner,
+                    json!({"reason": "stopped by owner"}),
+                )),
                 _ => {}
             }
         }
         for check in &record.checks {
             let detail = match check.kind {
                 CheckKind::Gate => serde_json::to_value(check).unwrap_or(Value::Null),
-                CheckKind::Review => json!({"approve": check.result == CheckResult::Pass, "notes": check.notes, "round": check.key}),
+                CheckKind::Review => {
+                    json!({"approve": check.result == CheckResult::Pass, "notes": check.notes, "round": check.key})
+                }
             };
-            let kind = if check.kind == CheckKind::Gate { EventKind::Gate } else { EventKind::Verdict };
+            let kind = if check.kind == CheckKind::Gate {
+                EventKind::Gate
+            } else {
+                EventKind::Verdict
+            };
             log.push((check.at, None, kind, check.by, detail));
         }
         if let Some(blocked) = &task.blocked {
-            log.push((task.updated, None, EventKind::Blocked, Actor::Auto, serde_json::to_value(blocked).unwrap_or(Value::Null)));
+            log.push((
+                task.updated,
+                None,
+                EventKind::Blocked,
+                Actor::Auto,
+                serde_json::to_value(blocked).unwrap_or(Value::Null),
+            ));
         }
         match task.id.as_str() {
             "T-11" => log.push((task.updated, None, EventKind::Ready, Actor::Auto, json!({"sha": record.runs.first().and_then(|run| run.head_sha.clone())}))),
@@ -181,7 +276,13 @@ fn history(feed: &mut Feed, records: &[TaskDetail]) {
             _ => {}
         }
         if task.status == Status::Dropped {
-            log.push((task.updated, None, EventKind::Dropped, Actor::Owner, json!({"from": "backlog"})));
+            log.push((
+                task.updated,
+                None,
+                EventKind::Dropped,
+                Actor::Owner,
+                json!({"from": "backlog"}),
+            ));
         }
         for (ts, run, kind, actor, detail) in log.drain(..) {
             all.push((ts, task.id.clone(), run, kind, actor, detail));

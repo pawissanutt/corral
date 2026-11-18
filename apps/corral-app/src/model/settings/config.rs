@@ -91,7 +91,10 @@ pub fn groups(config: &Map<String, Value>) -> Vec<Group> {
                     name: name.to_owned(),
                     facts: vec![
                         ("Harness", shown(profile.get("harness"), "not set")),
-                        ("Model", shown(profile.get("model"), "the harness's default")),
+                        (
+                            "Model",
+                            shown(profile.get("model"), "the harness's default"),
+                        ),
                         (
                             "Effort",
                             shown(profile.get("effort"), "the harness's default"),
@@ -155,10 +158,7 @@ pub fn groups(config: &Map<String, Value>) -> Vec<Group> {
                     "Quiet after",
                     seconds(at(config, &["sync", "quiet_after_secs"])),
                 ),
-                (
-                    "Sync every",
-                    seconds(at(config, &["sync", "watch_secs"])),
-                ),
+                ("Sync every", seconds(at(config, &["sync", "watch_secs"]))),
             ]),
         },
     ]
@@ -191,10 +191,16 @@ fn project_facts(config: &Map<String, Value>, project: &Map<String, Value>) -> V
         ("Gate", lines(get("gate"), "none")),
         ("Reviewer", shown(get("reviewer"), "not set")),
         ("Profile", inherit("profile", "not set")),
-        ("Base branch", inherit("base", "the repository's default branch")),
+        (
+            "Base branch",
+            inherit("base", "the repository's default branch"),
+        ),
         ("Auto dispatch", inherit("auto_dispatch", "off")),
         ("Auto land", inherit("auto_land", "off")),
-        ("Running slots", shown(get("running"), "the workspace limit")),
+        (
+            "Running slots",
+            shown(get("running"), "the workspace limit"),
+        ),
         ("Review rounds", inherit("max_rounds", "not set")),
         ("Branch prefix", inherit("branch_prefix", "none")),
         // Names only: values can be credentials, and this page is read on shared screens.

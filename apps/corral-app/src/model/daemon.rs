@@ -408,7 +408,6 @@ pub fn age(since: Option<u64>, now: u64) -> String {
     crate::model::work::age(since, now)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

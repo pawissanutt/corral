@@ -64,7 +64,10 @@ fn a_blocked_task_needs_you_with_its_reason_and_one_button_per_next_step() {
     let page = page(&state, &feed, &selection, &ProjectFilter::All);
     let keys: Vec<_> = page.sections.iter().map(|s| s.key.as_str()).collect();
     assert_eq!(keys, ["you", "workers"]);
-    assert_eq!(page.sections[0].rows[0].line.now, "dependency T-1 is not done");
+    assert_eq!(
+        page.sections[0].rows[0].line.now,
+        "dependency T-1 is not done"
+    );
     assert_eq!(page.waiting.groups[0].key, GroupKey::Backlog);
     let NowPanel::Task(Inspector::LiveStory(story)) = &page.panel else {
         panic!("the selected blocked task shows its story");

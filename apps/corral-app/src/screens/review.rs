@@ -225,7 +225,12 @@ fn keep_current(cx: &Ctx) {
                     })
                     .count()
             });
-            Some((task.id.clone(), task.row.clone(), feed.link == Link::Up, settled))
+            Some((
+                task.id.clone(),
+                task.row.clone(),
+                feed.link == Link::Up,
+                settled,
+            ))
         })
     });
     let refresh = act(cx, Action::Refresh);

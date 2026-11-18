@@ -19,7 +19,7 @@ use crate::ui::kit::overlay::{Modal, modal};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-use super::parts::{press, pressable};
+use super::parts::press;
 
 /// The phone's least touch target.
 const TARGET: f32 = 44.0;
@@ -93,11 +93,11 @@ fn backdrop(s: StyleRefinement) -> StyleRefinement {
     s.bg(color(Token::Shell).opacity(0.5))
 }
 
-/// Every verb of the record, in the table's order: the available ones run when chosen (a verb
-/// with fields opens the composer instead), the unavailable ones stay in place, dimmed, with
-/// the model's reason under them.
+/// Every engine operation of the record, in the table's order; each runs when chosen, or
+/// opens the composer when it asks for input. Nothing is predicted or disabled: the engine
+/// decides, and a refusal opens its sheet.
 fn items(app: AppState, record: &Record) -> AnyElement {
-    let verbs = app.feed.with(|feed| work::record_verbs(feed, record));
+    let verbs = work::record_verbs(record);
     view()
         .children(
             verbs
@@ -177,37 +177,6 @@ fn item(app: AppState, verb: VerbAction) -> AnyElement {
         .focus(|s| s.bg(color(Token::Hover)))
         .child(content.test_id(&format!("btn-{slug}")))
         .into_element()
-}
-
-/// The verbs of a record as an action row where no story carries them (a Review candidate):
-/// each verb's button (`btn-<slug>`), dimmed while it cannot run, then the reasons why. Nothing
-/// when the record has no verbs.
-pub(crate) fn verb_buttons(app: AppState, verbs: Vec<VerbAction>) -> Option<AnyElement> {
-    if verbs.is_empty() {
-        return None;
-    }
-    let buttons: Vec<Button> = verbs
-        .into_iter()
-        .map(|verb| {
-            let mut button =
-                Button::new(verb.label, verb.press, work::ButtonKind::Ghost).enabled(verb.enabled);
-            button.reason = verb.reason;
-            button
-        })
-        .collect();
-    Some(
-        view()
-            .child(
-                view().flex_row().flex_wrap().gap(px(8.0)).children(
-                    buttons
-                        .iter()
-                        .map(|button| pressable(app, button, false))
-                        .collect::<Vec<_>>(),
-                ),
-            )
-            .children(reasons(app, &buttons))
-            .into_element(),
-    )
 }
 
 /// Why the commands of `buttons` that cannot run now cannot: the commands sharing a reason
@@ -318,16 +287,13 @@ pub fn verb_composer(app: AppState) -> AnyElement {
     })
 }
 
-/// The keyboard's command menu for the record the work state names: every verb of the table in
-/// its order, the first available one focused, so Tab moves, Return runs, Escape closes; an
-/// unavailable verb stays in place, quieter, with its reason. test_id "verbs".
+/// The keyboard's command menu for the record the work state names: every operation in the
+/// table's order, the first one focused, so Tab moves, Return runs, Escape closes.
+/// test_id "verbs".
 fn command_menu(app: AppState) -> Modal {
     let form = app.form;
     let record = app.work.with_untracked(|state| state.menu.clone());
-    let verbs = record.as_ref().map_or_else(Vec::new, |record| {
-        app.feed
-            .with_untracked(|feed| work::record_verbs(feed, record))
-    });
+    let verbs = record.as_ref().map_or_else(Vec::new, work::record_verbs);
     let first = element_ref();
     let mut focused = false;
     let rows: Vec<AnyElement> = verbs
@@ -479,6 +445,9 @@ fn composer(app: AppState) -> Modal {
                     .text_size(px(14.0))
                     .font_weight(FontWeight::SEMIBOLD),
             };
+            if !field.choices.is_empty() {
+                return choice_row(app, field, index, values, caption);
+            }
             let entry = input()
                 .test_id(&format!("field-verb-{index}"))
                 .label(field.label)
@@ -592,6 +561,61 @@ fn composer(app: AppState) -> Modal {
         done: None,
         confirm: None,
     }
+}
+
+/// A closed set of values (a status, a verdict, yes or no) as one button each, the chosen one
+/// filled: a press picks it, Tab walks them, and Return or Space presses the focused one.
+/// test_id `seg-<field>-<value>`, the field label lower-cased with dashes.
+fn choice_row(
+    app: AppState,
+    field: &work::VerbField,
+    index: usize,
+    values: Signal<Vec<String>>,
+    caption: Text,
+) -> AnyElement {
+    let group = field.label.to_lowercase().replace(' ', "-");
+    let buttons: Vec<AnyElement> = field
+        .choices
+        .iter()
+        .map(|&choice| {
+            let id = format!("seg-{group}-{choice}");
+            dynamic(move || {
+                let chosen =
+                    values.with(|values| values.get(index).map(String::as_str) == Some(choice));
+                button_with(
+                    app,
+                    choice,
+                    if chosen {
+                        ButtonKind::Primary
+                    } else {
+                        ButtonKind::Ghost
+                    },
+                    ButtonOptions::default(),
+                    id.clone(),
+                    move || {
+                        values.update(|values| {
+                            if let Some(value) = values.get_mut(index) {
+                                *value = choice.to_owned();
+                            }
+                        })
+                    },
+                )
+            })
+        })
+        .collect();
+    view()
+        .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
+        .child(caption)
+        .child(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(if app.form == Form::Terminal { 8.0 } else { 6.0 }))
+                .role(AccessibilityRole::Radiogroup)
+                .label(field.label)
+                .children(buttons),
+        )
+        .into_element()
 }
 
 #[cfg(test)]

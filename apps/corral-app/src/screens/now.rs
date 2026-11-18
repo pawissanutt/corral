@@ -34,7 +34,7 @@ use crate::ui::tokens::{Token, color};
 
 pub use phone::live_task_phone;
 pub use verbs::verb_composer;
-pub(crate) use verbs::{verb_buttons, verb_menu, with_menu};
+pub(crate) use verbs::{verb_menu, with_menu};
 
 use list::{main_column, scope_note};
 use parts::{dim_when, keep_loaded, now_page, shown_task, stale};

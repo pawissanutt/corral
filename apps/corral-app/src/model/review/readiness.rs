@@ -129,8 +129,7 @@ pub(super) fn readiness_chain(feed: &Feed, shown: &Shown) -> Vec<ReadyLink> {
                 "corrald marked this candidate ready: approve and land it, or request changes."
                     .into()
             } else {
-                "The pipeline has not marked this candidate ready; you can still decide now."
-                    .into()
+                "The pipeline has not marked this candidate ready; you can still decide now.".into()
             },
         },
     ]

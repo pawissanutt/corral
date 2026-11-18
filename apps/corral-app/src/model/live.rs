@@ -53,9 +53,11 @@ impl Live {
 
     pub fn id(&self) -> &Id {
         match self {
-            Live::Task(id) | Live::Plan(id) | Live::Session(id) | Live::Thread(id) | Live::Review(id) => {
-                id
-            }
+            Live::Task(id)
+            | Live::Plan(id)
+            | Live::Session(id)
+            | Live::Thread(id)
+            | Live::Review(id) => id,
         }
     }
 

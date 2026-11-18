@@ -118,7 +118,13 @@ fn note(app: AppState, note: &DetailNote) -> AnyElement {
 /// one button per next step, the first primary (`btn-next-<n>`). A forced step reads "… anyway";
 /// the app asks once before it runs.
 fn blocked(app: AppState, card: &BlockedCard) -> AnyElement {
-    let space = |pixels: f32| px(if app.form == Form::Terminal { 0.0 } else { pixels });
+    let space = |pixels: f32| {
+        px(if app.form == Form::Terminal {
+            0.0
+        } else {
+            pixels
+        })
+    };
     view()
         .gap(space(8.0))
         .pb(space(14.0))

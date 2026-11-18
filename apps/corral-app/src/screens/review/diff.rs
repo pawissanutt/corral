@@ -7,8 +7,7 @@ use nsh_core::prelude::*;
 
 use crate::model::board::LineKind;
 use crate::model::review::{
-    Button, DiffContent, DiffView, FileBody, FileView, HunkView, NumberedLine, SplitRow,
-    UnifiedRow,
+    Button, DiffContent, DiffView, FileBody, FileView, HunkView, NumberedLine, SplitRow, UnifiedRow,
 };
 use crate::model::{Form, Hue};
 use crate::state::AppState;
@@ -194,7 +193,9 @@ fn hunk(cx: &Ctx, part: &HunkView) -> AnyElement {
 }
 
 fn unified_rows(app: AppState, rows: &[UnifiedRow]) -> Vec<AnyElement> {
-    rows.iter().map(|row| unified_line(app, &row.line)).collect()
+    rows.iter()
+        .map(|row| unified_line(app, &row.line))
+        .collect()
 }
 
 fn split_rows(app: AppState, rows: &[SplitRow]) -> Vec<AnyElement> {
@@ -219,7 +220,9 @@ fn unified_line(app: AppState, line: &NumberedLine) -> AnyElement {
     view()
         .flex_row()
         .bg(tint(line.kind))
-        .when(form == Form::Desktop, |row| row.child(gutter(form, line.old)))
+        .when(form == Form::Desktop, |row| {
+            row.child(gutter(form, line.old))
+        })
         .child(gutter(form, line.new))
         .child(sign(form, line))
         .child(code_cell(form, line))

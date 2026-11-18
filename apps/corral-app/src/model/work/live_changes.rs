@@ -111,7 +111,11 @@ pub fn live_changes_filtered(
         let events = format!(
             "{} {}event{}",
             unseen.count,
-            if unseen.total { "new " } else { "loaded unseen " },
+            if unseen.total {
+                "new "
+            } else {
+                "loaded unseen "
+            },
             if unseen.count == 1 { "" } else { "s" }
         );
         let cursor =
@@ -206,7 +210,10 @@ mod tests {
         feed.capabilities.insert(CHANGES_V1.into());
         feed.changes.extend([
             (1, event(1, EventKind::Gate, json!({"result": "fail"}))),
-            (2, event(2, EventKind::Blocked, json!({"reason": "gate failed"}))),
+            (
+                2,
+                event(2, EventKind::Blocked, json!({"reason": "gate failed"})),
+            ),
             (
                 3,
                 event(
@@ -215,7 +222,14 @@ mod tests {
                     json!({"operation": "dispatch", "skipped": ["dependencies"]}),
                 ),
             ),
-            (4, event(4, EventKind::Landed, json!({"sha": "abcdef123", "base": "main"}))),
+            (
+                4,
+                event(
+                    4,
+                    EventKind::Landed,
+                    json!({"sha": "abcdef123", "base": "main"}),
+                ),
+            ),
         ]);
         feed.seen = Some(SeenCursor {
             through: 2,

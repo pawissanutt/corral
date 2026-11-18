@@ -132,6 +132,14 @@ mod tests {
         assert_eq!(edit.title, None);
         assert_eq!(edit.project, Some(None));
         assert_eq!(edit.priority, Some(Priority::P1));
-        assert!(op(&Record::Task(Id::new("T-1")), Verb::Edit, &initial, &initial).is_err());
+        assert!(
+            op(
+                &Record::Task(Id::new("T-1")),
+                Verb::Edit,
+                &initial,
+                &initial
+            )
+            .is_err()
+        );
     }
 }

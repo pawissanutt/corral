@@ -474,12 +474,7 @@ fn burnup_section(app: AppState, data: Memo<Shown>) -> AnyElement {
                 .flex_row()
                 .when(form != Form::Terminal, |row| row.pb(px(6.0)))
                 .child(scope::picker(app));
-            burnup_body(
-                app,
-                (series, state),
-                alike,
-                Some(scope.into_element()),
-            )
+            burnup_body(app, (series, state), alike, Some(scope.into_element()))
         })
     })
 }

@@ -224,7 +224,11 @@ mod tests {
                 "verdict", "changes", "approve", "retry", "stop", "drop", "reopen"
             ]
         );
-        assert!(verbs.iter().all(|verb| verb.enabled && verb.reason.is_none()));
+        assert!(
+            verbs
+                .iter()
+                .all(|verb| verb.enabled && verb.reason.is_none())
+        );
     }
 
     #[test]

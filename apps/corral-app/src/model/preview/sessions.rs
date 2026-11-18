@@ -47,9 +47,17 @@ pub(super) fn populate(feed: &mut Feed) {
     let mut entries = vec![owner, answer];
     for (task, words) in [
         ("T-19", "changes should group under their parent task"),
-        ("T-20", "keep a green gate when a rebase leaves the tree unchanged"),
+        (
+            "T-20",
+            "keep a green gate when a rebase leaves the tree unchanged",
+        ),
     ] {
-        let mut filed = entry(&format!("preview-filed:{task}"), &answered, EntryKind::Idea, words);
+        let mut filed = entry(
+            &format!("preview-filed:{task}"),
+            &answered,
+            EntryKind::Idea,
+            words,
+        );
         filed.card = Some(EntryCard::Idea {
             task: task.into(),
             title: super::record(feed, task)
@@ -65,7 +73,9 @@ pub(super) fn populate(feed: &mut Feed) {
     for scope in ["quick", "A-7"] {
         if let Some(thread) = feed.threads.get_mut(scope) {
             for entry in &entries {
-                thread.entries.insert(entry.id.clone().into(), entry.clone());
+                thread
+                    .entries
+                    .insert(entry.id.clone().into(), entry.clone());
             }
         }
     }

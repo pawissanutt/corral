@@ -17,9 +17,9 @@ use crate::model::text::{Rich, span};
 use crate::model::{Id, Live, Selection};
 
 use super::{
-    Button, ButtonKind, Dependency, EMPTY_BOARD, Inspector, NO_BOARD, NowTab, Press, Record,
-    Stage, State, Tail, TailLine, daemon_selection_filtered, group_key, group_label, session_for,
-    stamp, stamp_at, when_at,
+    Button, ButtonKind, Dependency, EMPTY_BOARD, Inspector, NO_BOARD, NowTab, Press, Record, Stage,
+    State, Tail, TailLine, daemon_selection_filtered, group_key, group_label, session_for, stamp,
+    stamp_at, when_at,
 };
 
 /// The detail reference of a task.

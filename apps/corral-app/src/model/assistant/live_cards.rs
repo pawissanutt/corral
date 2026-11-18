@@ -55,10 +55,17 @@ pub fn command_line(command: &Value) -> String {
     let args = command.get("args");
     let mut line = "corral".to_owned();
     let named = ["id", "key", "task", "entry", "session", "into"];
-    let parts = [field(command, "family"), args.and_then(|args| field(args, "verb"))]
-        .into_iter()
-        .chain(named.into_iter().map(|name| args.and_then(|args| field(args, name))))
-        .flatten();
+    let parts = [
+        field(command, "family"),
+        args.and_then(|args| field(args, "verb")),
+    ]
+    .into_iter()
+    .chain(
+        named
+            .into_iter()
+            .map(|name| args.and_then(|args| field(args, name))),
+    )
+    .flatten();
     for part in parts {
         line.push(' ');
         line.push_str(part);
@@ -280,9 +287,8 @@ pub(super) fn prompt_body(
             })
             .collect(),
         choices,
-        timer_note: (!settled).then(|| {
-            "This prompt stays answerable here on every device; one answer wins.".into()
-        }),
+        timer_note: (!settled)
+            .then(|| "This prompt stays answerable here on every device; one answer wins.".into()),
         illustrative: None,
     })
 }

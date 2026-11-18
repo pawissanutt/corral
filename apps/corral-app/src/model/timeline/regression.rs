@@ -104,9 +104,27 @@ fn runs_and_events_draw_spans_waits_and_idle_on_the_task_lane() {
     let page = TimelinePage {
         runs: vec![run],
         events: vec![
-            event(1, "2026-11-15T08:00:00Z", "T-1", EventKind::Blocked, Actor::Auto),
-            event(2, "2026-11-15T08:20:00Z", "T-1", EventKind::Commented, Actor::Owner),
-            event(3, "2026-11-15T08:45:00Z", "T-1", EventKind::Resumed, Actor::Owner),
+            event(
+                1,
+                "2026-11-15T08:00:00Z",
+                "T-1",
+                EventKind::Blocked,
+                Actor::Auto,
+            ),
+            event(
+                2,
+                "2026-11-15T08:20:00Z",
+                "T-1",
+                EventKind::Commented,
+                Actor::Owner,
+            ),
+            event(
+                3,
+                "2026-11-15T08:45:00Z",
+                "T-1",
+                EventKind::Resumed,
+                Actor::Owner,
+            ),
         ],
     };
     let plot = plot(&page, &window, Grouping::ByTask, &feed);
@@ -136,10 +154,34 @@ fn burnup_counts_created_and_landed_tasks_once() {
     let burnup = WireBurnup {
         scope: "workspace".into(),
         events: vec![
-            event(1, "2026-11-10T08:00:00Z", "T-1", EventKind::Created, Actor::Owner),
-            event(2, "2026-11-11T08:00:00Z", "T-2", EventKind::Created, Actor::Owner),
-            event(3, "2026-11-12T08:00:00Z", "T-1", EventKind::Landed, Actor::Owner),
-            event(4, "2026-11-13T08:00:00Z", "T-1", EventKind::Landed, Actor::Owner),
+            event(
+                1,
+                "2026-11-10T08:00:00Z",
+                "T-1",
+                EventKind::Created,
+                Actor::Owner,
+            ),
+            event(
+                2,
+                "2026-11-11T08:00:00Z",
+                "T-2",
+                EventKind::Created,
+                Actor::Owner,
+            ),
+            event(
+                3,
+                "2026-11-12T08:00:00Z",
+                "T-1",
+                EventKind::Landed,
+                Actor::Owner,
+            ),
+            event(
+                4,
+                "2026-11-13T08:00:00Z",
+                "T-1",
+                EventKind::Landed,
+                Actor::Owner,
+            ),
         ],
     };
     let series = burnup_series(&burnup, feed.now, &feed).unwrap();

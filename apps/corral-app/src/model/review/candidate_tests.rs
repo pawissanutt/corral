@@ -31,10 +31,20 @@ fn gate(result: CheckResult) -> Check {
 
 /// `T-1` in Review with `gate`, `ready` as given, and `T-2` still running.
 fn feed(gate: Option<Check>, ready: bool) -> Feed {
-    let mut row = task_row(bare_task("T-1", "Candidate", Status::Review, Timestamp::UNIX_EPOCH));
+    let mut row = task_row(bare_task(
+        "T-1",
+        "Candidate",
+        Status::Review,
+        Timestamp::UNIX_EPOCH,
+    ));
     row.gate = gate;
     row.ready = ready;
-    let running = task_row(bare_task("T-2", "Running", Status::Running, Timestamp::UNIX_EPOCH));
+    let running = task_row(bare_task(
+        "T-2",
+        "Running",
+        Status::Running,
+        Timestamp::UNIX_EPOCH,
+    ));
     let mut feed = Feed::default();
     feed.board_received(1, vec![Task::new(row), Task::new(running)], &[], true);
     feed
@@ -82,7 +92,14 @@ fn land_anyway_appears_only_while_the_gate_is_red() {
     let labels = |feed: &Feed| -> Vec<Action> {
         let page = page(&State::default(), feed);
         page.detail
-            .map(|detail| detail.decide.secondary.into_iter().map(|b| b.action).collect())
+            .map(|detail| {
+                detail
+                    .decide
+                    .secondary
+                    .into_iter()
+                    .map(|b| b.action)
+                    .collect()
+            })
             .unwrap_or_default()
     };
     assert!(!labels(&feed(Some(gate(CheckResult::Pass)), false)).contains(&Action::LandAnyway));
@@ -111,7 +128,10 @@ fn deciding_submits_the_engine_operation_without_predicting_a_refusal() {
         id: "T-1".into(),
         onto: None,
     };
-    assert_eq!(sent(submit(Action::Approve)), Some((approve.clone(), false)));
+    assert_eq!(
+        sent(submit(Action::Approve)),
+        Some((approve.clone(), false))
+    );
     assert_eq!(sent(submit(Action::LandAnyway)), Some((approve, true)));
     assert_eq!(
         sent(submit(Action::Gate)),
@@ -148,5 +168,8 @@ fn a_review_body_without_a_finished_run_says_so_instead_of_an_empty_diff() {
     };
     assert!(notice.text.contains("no completed worker run"));
     assert!(diff.files.is_empty());
-    assert!(diff.empty.is_some_and(|line| line.contains("No worker run")));
+    assert!(
+        diff.empty
+            .is_some_and(|line| line.contains("No worker run"))
+    );
 }

@@ -757,6 +757,7 @@ fn content(app: AppState) -> AnyElement {
         .child(ask_surface(app))
         .child(palette(app))
         .child(confirmation(app))
+        .child(crate::shell::refusal(app))
         .child(crate::screens::now::verb_composer(app))
         .child(toast(app))
         .into_element()

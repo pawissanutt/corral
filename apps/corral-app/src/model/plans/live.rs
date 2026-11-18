@@ -94,7 +94,11 @@ pub(super) fn row_project(feed: &Feed, row: &PlanRow, filter: &ProjectFilter) ->
     if !feed.capable(corral_protocol::PROJECTS_V1) {
         return None;
     }
-    project_chip(feed, &plan_filter(feed, filter), row.parent.project.as_deref())
+    project_chip(
+        feed,
+        &plan_filter(feed, filter),
+        row.parent.project.as_deref(),
+    )
 }
 
 /// Each member's dependency layer: the longest chain of prerequisites within the plan, from 0
@@ -292,7 +296,12 @@ fn plan_view(
     let parent = feed.board.task(id).map_or(&detail.parent, |row| row.task());
     let selected = state
         .member_of(id)
-        .filter(|member| detail.children.iter().any(|child| child.id == member.as_str()))
+        .filter(|member| {
+            detail
+                .children
+                .iter()
+                .any(|child| child.id == member.as_str())
+        })
         .cloned();
     let updated = when(&parent.updated.to_string(), feed);
     let story = if phone {

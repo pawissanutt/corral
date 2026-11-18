@@ -61,59 +61,199 @@ const PLAN: Option<&str> = Some("T-1");
 const SEEDS: &[Seed] = &[
     Seed {
         priority: Priority::P1,
-        ..seed("T-1", "Simple engine app", Status::Backlog, CORRAL, None, (8 * DAY, 2 * HOUR), "")
+        ..seed(
+            "T-1",
+            "Simple engine app",
+            Status::Backlog,
+            CORRAL,
+            None,
+            (8 * DAY, 2 * HOUR),
+            "",
+        )
     },
-    seed("T-2", "Shared Actions menu", Status::Done, CORRAL, PLAN, (8 * DAY - HOUR, 2 * HOUR),
-        "One Actions menu lists every engine operation for a task, always enabled."),
-    seed("T-3", "Builds destination", Status::Dropped, CORRAL, PLAN, (8 * DAY - 2 * HOUR, DAY),
-        "A Builds page for published build sessions."),
-    seed("T-4", "Refusal sheet with typed next steps", Status::Done, CORRAL, None, (7 * DAY, 26 * HOUR),
-        "A refused operation shows its reason and one button per next step."),
-    seed("T-5", "One op.submit on the wire", Status::Done, CORRAL, None, (7 * DAY - HOUR, 2 * DAY),
-        "Every engine operation travels as one op.submit request."),
-    seed("T-6", "Landing page copy", Status::Done, Some("site"), None, (6 * DAY, 3 * DAY),
-        "The landing page says what Corral does in two sentences."),
-    seed("T-7", "Device authority editor", Status::Dropped, CORRAL, None, (6 * DAY - HOUR, 4 * DAY),
-        "Per-device authority switches in Settings."),
+    seed(
+        "T-2",
+        "Shared Actions menu",
+        Status::Done,
+        CORRAL,
+        PLAN,
+        (8 * DAY - HOUR, 2 * HOUR),
+        "One Actions menu lists every engine operation for a task, always enabled.",
+    ),
+    seed(
+        "T-3",
+        "Builds destination",
+        Status::Dropped,
+        CORRAL,
+        PLAN,
+        (8 * DAY - 2 * HOUR, DAY),
+        "A Builds page for published build sessions.",
+    ),
+    seed(
+        "T-4",
+        "Refusal sheet with typed next steps",
+        Status::Done,
+        CORRAL,
+        None,
+        (7 * DAY, 26 * HOUR),
+        "A refused operation shows its reason and one button per next step.",
+    ),
+    seed(
+        "T-5",
+        "One op.submit on the wire",
+        Status::Done,
+        CORRAL,
+        None,
+        (7 * DAY - HOUR, 2 * DAY),
+        "Every engine operation travels as one op.submit request.",
+    ),
+    seed(
+        "T-6",
+        "Landing page copy",
+        Status::Done,
+        Some("site"),
+        None,
+        (6 * DAY, 3 * DAY),
+        "The landing page says what Corral does in two sentences.",
+    ),
+    seed(
+        "T-7",
+        "Device authority editor",
+        Status::Dropped,
+        CORRAL,
+        None,
+        (6 * DAY - HOUR, 4 * DAY),
+        "Per-device authority switches in Settings.",
+    ),
     Seed {
         priority: Priority::P1,
-        ..seed("T-8", "Restore paused sessions after a daemon restart", Status::Blocked, CORRAL, PLAN,
-            (4 * DAY, 25 * MINUTE), "A paused session is still paused after corrald restarts.")
+        ..seed(
+            "T-8",
+            "Restore paused sessions after a daemon restart",
+            Status::Blocked,
+            CORRAL,
+            PLAN,
+            (4 * DAY, 25 * MINUTE),
+            "A paused session is still paused after corrald restarts.",
+        )
     },
     Seed {
         priority: Priority::P0,
-        ..seed("T-9", "Pairing page survives a refresh", Status::Blocked, CORRAL, None,
-            (3 * DAY + 12 * HOUR, 50 * MINUTE), "A paired browser stays paired across a page refresh.")
+        ..seed(
+            "T-9",
+            "Pairing page survives a refresh",
+            Status::Blocked,
+            CORRAL,
+            None,
+            (3 * DAY + 12 * HOUR, 50 * MINUTE),
+            "A paired browser stays paired across a page refresh.",
+        )
     },
-    seed("T-10", "Usage page explains missing records", Status::Review, CORRAL, None,
+    seed(
+        "T-10",
+        "Usage page explains missing records",
+        Status::Review,
+        CORRAL,
+        None,
         (2 * DAY + 12 * HOUR, 30 * MINUTE),
-        "The Usage page says what its totals cover and why some runs have no records."),
+        "The Usage page says what its totals cover and why some runs have no records.",
+    ),
     Seed {
         priority: Priority::P1,
-        ..seed("T-11", "Collapse the sidebar on narrow screens", Status::Review, CORRAL, PLAN,
-            (2 * DAY, 40 * MINUTE), "The sidebar folds to its rail below the narrow breakpoint and stays available.")
+        ..seed(
+            "T-11",
+            "Collapse the sidebar on narrow screens",
+            Status::Review,
+            CORRAL,
+            PLAN,
+            (2 * DAY, 40 * MINUTE),
+            "The sidebar folds to its rail below the narrow breakpoint and stays available.",
+        )
     },
-    seed("T-12", "Timeline zoom presets", Status::Ready, CORRAL, PLAN, (30 * HOUR, 5 * HOUR),
-        "Hour, day and week presets for the Timeline."),
-    seed("T-13", "Changes list marks forced events", Status::Review, CORRAL, None, (28 * HOUR, 8 * MINUTE),
-        "A forced event in Changes lists what it skipped."),
+    seed(
+        "T-12",
+        "Timeline zoom presets",
+        Status::Ready,
+        CORRAL,
+        PLAN,
+        (30 * HOUR, 5 * HOUR),
+        "Hour, day and week presets for the Timeline.",
+    ),
+    seed(
+        "T-13",
+        "Changes list marks forced events",
+        Status::Review,
+        CORRAL,
+        None,
+        (28 * HOUR, 8 * MINUTE),
+        "A forced event in Changes lists what it skipped.",
+    ),
     Seed {
         priority: Priority::P1,
-        ..seed("T-14", "Real dates on the timeline", Status::Running, CORRAL, PLAN, (26 * HOUR, 2 * HOUR),
-            "Timeline axes show the real calendar dates of the runs they draw.")
+        ..seed(
+            "T-14",
+            "Real dates on the timeline",
+            Status::Running,
+            CORRAL,
+            PLAN,
+            (26 * HOUR, 2 * HOUR),
+            "Timeline axes show the real calendar dates of the runs they draw.",
+        )
     },
-    seed("T-15", "Terminal keys bar for foreign harnesses", Status::Running, Some("site"), None,
-        (22 * HOUR, 4 * HOUR), "A keys bar under a foreign harness's pane sends Enter, Escape and arrows."),
-    seed("T-16", "Inline artifact previews", Status::Ready, CORRAL, None, (20 * HOUR, 9 * HOUR),
-        "Text artifacts open inline on the task page."),
-    seed("T-17", "Edit corral.toml from Settings", Status::Backlog, CORRAL, None, (18 * HOUR, 7 * HOUR),
-        "Settings edits the raw corral.toml and shows the daemon's validation error."),
-    seed("T-18", "Phone lock-screen notifications", Status::Backlog, None, None, (15 * HOUR, 15 * HOUR),
-        "A blocked task notifies the paired phone."),
-    seed("T-19", "Group changes by plan", Status::Idea, None, None, (10 * HOUR, 10 * HOUR),
-        "Changes can be grouped under their parent task."),
-    seed("T-20", "Keep gate results across rebases", Status::Idea, CORRAL, None, (6 * HOUR, 6 * HOUR),
-        "A rebase that leaves the tree unchanged keeps its green gate."),
+    seed(
+        "T-15",
+        "Terminal keys bar for foreign harnesses",
+        Status::Running,
+        Some("site"),
+        None,
+        (22 * HOUR, 4 * HOUR),
+        "A keys bar under a foreign harness's pane sends Enter, Escape and arrows.",
+    ),
+    seed(
+        "T-16",
+        "Inline artifact previews",
+        Status::Ready,
+        CORRAL,
+        None,
+        (20 * HOUR, 9 * HOUR),
+        "Text artifacts open inline on the task page.",
+    ),
+    seed(
+        "T-17",
+        "Edit corral.toml from Settings",
+        Status::Backlog,
+        CORRAL,
+        None,
+        (18 * HOUR, 7 * HOUR),
+        "Settings edits the raw corral.toml and shows the daemon's validation error.",
+    ),
+    seed(
+        "T-18",
+        "Phone lock-screen notifications",
+        Status::Backlog,
+        None,
+        None,
+        (15 * HOUR, 15 * HOUR),
+        "A blocked task notifies the paired phone.",
+    ),
+    seed(
+        "T-19",
+        "Group changes by plan",
+        Status::Idea,
+        None,
+        None,
+        (10 * HOUR, 10 * HOUR),
+        "Changes can be grouped under their parent task.",
+    ),
+    seed(
+        "T-20",
+        "Keep gate results across rebases",
+        Status::Idea,
+        CORRAL,
+        None,
+        (6 * HOUR, 6 * HOUR),
+        "A rebase that leaves the tree unchanged keeps its green gate.",
+    ),
 ];
 
 const PLAN_BODY: &str = "## Goal\nThe app runs on the simple engine: one task list, one Actions menu, typed refusals.\n\n## Steps\n1. Shared Actions menu (T-2)\n2. Restore paused sessions (T-8)\n3. Narrow sidebar (T-11)\n4. Real timeline dates (T-14), then zoom presets (T-12)\n\n## Notes\nBuilds merge into Agents; the Builds destination was dropped (T-3).";
@@ -162,18 +302,36 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
         let mut run = run(feed, record, Role::Worker, profile, started);
         finish(feed, &mut run, landed, Outcome::Landed);
         record.runs.push(run);
-        record.checks.push(gate(feed, record, true, None, landed + 40 * MINUTE));
-        record.artifacts.push(artifact(feed, record, "diff", "diff", landed + HOUR));
-        record.artifacts.push(artifact(feed, record, "log", "gate log", landed + 40 * MINUTE));
+        record
+            .checks
+            .push(gate(feed, record, true, None, landed + 40 * MINUTE));
+        record
+            .artifacts
+            .push(artifact(feed, record, "diff", "diff", landed + HOUR));
+        record.artifacts.push(artifact(
+            feed,
+            record,
+            "log",
+            "gate log",
+            landed + 40 * MINUTE,
+        ));
     };
     match id.as_str() {
         "T-2" => {
             landed(record, 30 * HOUR, 2 * HOUR, "omp-sol");
-            record.checks.push(review(feed, record, true, None, 2 * HOUR + 30 * MINUTE));
+            record
+                .checks
+                .push(review(feed, record, true, None, 2 * HOUR + 30 * MINUTE));
         }
         "T-4" => {
             landed(record, 3 * DAY, 26 * HOUR, "omp-sol");
-            let red = gate(feed, record, false, Some("tui::snapshot::narrow timed out after 60s"), 27 * HOUR);
+            let red = gate(
+                feed,
+                record,
+                false,
+                Some("tui::snapshot::narrow timed out after 60s"),
+                27 * HOUR,
+            );
             record.checks = vec![red];
         }
         "T-5" => landed(record, 4 * DAY, 2 * DAY, "omp-sol"),
@@ -184,7 +342,9 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
             record.runs.push(run);
         }
         "T-8" => {
-            record.runs.push(run(feed, record, Role::Worker, "omp-sol", 3 * HOUR));
+            record
+                .runs
+                .push(run(feed, record, Role::Worker, "omp-sol", 3 * HOUR));
             record.task.blocked = Some(Blocked {
                 reason: "worker needs a reply".into(),
                 detail: Some("Should a paused session stay paused after corrald restarts, or resume its queue? Resuming may deliver queued messages twice.".into()),
@@ -200,16 +360,33 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
             second.quiet_since = Some(ago(feed, 45 * MINUTE));
             record.runs.push(second);
             record.task.round = 2;
-            record.checks.push(gate(feed, record, true, None, 19 * HOUR + 30 * MINUTE));
-            record.checks.push(review(feed, record, false, Some(notes), 50 * MINUTE));
-            record.artifacts.push(artifact(feed, record, "diff", "diff", 20 * HOUR));
+            record
+                .checks
+                .push(gate(feed, record, true, None, 19 * HOUR + 30 * MINUTE));
+            record
+                .checks
+                .push(review(feed, record, false, Some(notes), 50 * MINUTE));
+            record
+                .artifacts
+                .push(artifact(feed, record, "diff", "diff", 20 * HOUR));
             record.task.blocked = Some(Blocked {
                 reason: "automatic change rounds exhausted".into(),
                 detail: Some(notes.into()),
                 next: vec![
-                    Next::run(Op::Changes { id: id.clone(), text: String::new() }),
-                    Next::run(Op::Retry { id: id.clone(), profile: None, fresh: false, note: None }),
-                    Next::force(Op::Approve { id: id.clone(), onto: None }),
+                    Next::run(Op::Changes {
+                        id: id.clone(),
+                        text: String::new(),
+                    }),
+                    Next::run(Op::Retry {
+                        id: id.clone(),
+                        profile: None,
+                        fresh: false,
+                        note: None,
+                    }),
+                    Next::force(Op::Approve {
+                        id: id.clone(),
+                        onto: None,
+                    }),
                 ],
             });
         }
@@ -217,8 +394,16 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
             let mut run = run(feed, record, Role::Worker, "omp-sol", 7 * HOUR);
             finish(feed, &mut run, 40 * MINUTE, Outcome::Done);
             record.runs.push(run);
-            record.artifacts.push(artifact(feed, record, "diff", "diff", 40 * MINUTE));
-            let mut red = gate(feed, record, false, Some("usage::coverage::uncovered_runs_are_named: left 3, right 2"), 30 * MINUTE);
+            record
+                .artifacts
+                .push(artifact(feed, record, "diff", "diff", 40 * MINUTE));
+            let mut red = gate(
+                feed,
+                record,
+                false,
+                Some("usage::coverage::uncovered_runs_are_named: left 3, right 2"),
+                30 * MINUTE,
+            );
             let log = artifact(feed, record, "log", "gate log", 30 * MINUTE);
             red.log = Some(log.reference());
             record.artifacts.push(log);
@@ -228,37 +413,85 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
             let mut worker = run(feed, record, Role::Worker, "omp-sol", 9 * HOUR);
             finish(feed, &mut worker, 3 * HOUR, Outcome::Done);
             record.runs.push(worker);
-            let mut reviewer = run(feed, record, Role::Reviewer, "omp-sol-review", 2 * HOUR + 30 * MINUTE);
+            let mut reviewer = run(
+                feed,
+                record,
+                Role::Reviewer,
+                "omp-sol-review",
+                2 * HOUR + 30 * MINUTE,
+            );
             finish(feed, &mut reviewer, 45 * MINUTE, Outcome::Done);
             record.runs.push(reviewer);
-            record.checks.push(gate(feed, record, true, None, 2 * HOUR + 50 * MINUTE));
-            record.checks.push(review(feed, record, true, Some("Rail keeps every destination; focus order unchanged."), 45 * MINUTE));
-            record.artifacts.push(artifact(feed, record, "diff", "diff", 3 * HOUR));
-            record.artifacts.push(artifact(feed, record, "log", "gate log", 2 * HOUR + 50 * MINUTE));
-            record.artifacts.push(artifact(feed, record, "report", "narrow-sidebar-report.html", 3 * HOUR));
+            record
+                .checks
+                .push(gate(feed, record, true, None, 2 * HOUR + 50 * MINUTE));
+            record.checks.push(review(
+                feed,
+                record,
+                true,
+                Some("Rail keeps every destination; focus order unchanged."),
+                45 * MINUTE,
+            ));
+            record
+                .artifacts
+                .push(artifact(feed, record, "diff", "diff", 3 * HOUR));
+            record.artifacts.push(artifact(
+                feed,
+                record,
+                "log",
+                "gate log",
+                2 * HOUR + 50 * MINUTE,
+            ));
+            record.artifacts.push(artifact(
+                feed,
+                record,
+                "report",
+                "narrow-sidebar-report.html",
+                3 * HOUR,
+            ));
         }
         "T-12" => record.task.depends_on = vec!["T-14".into()],
         "T-13" => {
             let mut worker = run(feed, record, Role::Worker, "omp-sol", 5 * HOUR);
             finish(feed, &mut worker, HOUR, Outcome::Done);
             record.runs.push(worker);
-            record.runs.push(run(feed, record, Role::Reviewer, "omp-sol-review", 8 * MINUTE));
-            record.checks.push(gate(feed, record, true, None, 30 * MINUTE));
-            record.artifacts.push(artifact(feed, record, "diff", "diff", HOUR));
+            record.runs.push(run(
+                feed,
+                record,
+                Role::Reviewer,
+                "omp-sol-review",
+                8 * MINUTE,
+            ));
+            record
+                .checks
+                .push(gate(feed, record, true, None, 30 * MINUTE));
+            record
+                .artifacts
+                .push(artifact(feed, record, "diff", "diff", HOUR));
         }
-        "T-14" => record.runs.push(run(feed, record, Role::Worker, "omp-sol", 2 * HOUR)),
+        "T-14" => record
+            .runs
+            .push(run(feed, record, Role::Worker, "omp-sol", 2 * HOUR)),
         "T-15" => {
             let mut run = run(feed, record, Role::Worker, "codex-terra", 4 * HOUR);
             run.quiet_since = Some(ago(feed, 25 * MINUTE));
             record.runs.push(run);
         }
-        "T-17" => record.task.body.push_str("\n\nKeep comments and formatting: the daemon writes the TOML document as typed."),
+        "T-17" => record.task.body.push_str(
+            "\n\nKeep comments and formatting: the daemon writes the TOML document as typed.",
+        ),
         _ => {}
     }
 }
 
 /// A new run of `record`, numbered after its existing runs and started `started` seconds ago.
-pub(super) fn run(feed: &Feed, record: &TaskDetail, role: Role, profile: &str, started: u64) -> Run {
+pub(super) fn run(
+    feed: &Feed,
+    record: &TaskDetail,
+    role: Role,
+    profile: &str,
+    started: u64,
+) -> Run {
     let task = &record.task.id;
     let id = format!("R{}", record.runs.len() + 1);
     let root = match record.task.project.as_deref() {
@@ -271,8 +504,22 @@ pub(super) fn run(feed: &Feed, record: &TaskDetail, role: Role, profile: &str, s
         role,
         profile: profile.into(),
         harness: harness(profile).into(),
-        model: Some(if harness(profile) == "codex" { "terra" } else { "sol" }.into()),
-        effort: Some(if role == Role::Reviewer { "xhigh" } else { "high" }.into()),
+        model: Some(
+            if harness(profile) == "codex" {
+                "terra"
+            } else {
+                "sol"
+            }
+            .into(),
+        ),
+        effort: Some(
+            if role == Role::Reviewer {
+                "xhigh"
+            } else {
+                "high"
+            }
+            .into(),
+        ),
         worktree: PathBuf::from(format!("{root}/.worktrees/{task}")),
         branch: format!("corral/{task}"),
         base_sha: sha(&format!("{base}@{task}"), 40),
@@ -292,7 +539,11 @@ pub(super) fn run(feed: &Feed, record: &TaskDetail, role: Role, profile: &str, s
 }
 
 pub(super) fn harness(profile: &str) -> &'static str {
-    if profile.starts_with("codex") { "codex" } else { "omp" }
+    if profile.starts_with("codex") {
+        "codex"
+    } else {
+        "omp"
+    }
 }
 
 /// End `run` `ended` seconds ago; a worker that submitted has a head commit and summary.
@@ -306,7 +557,13 @@ pub(super) fn finish(feed: &Feed, run: &mut Run, ended: u64, outcome: Outcome) {
 }
 
 /// A gate check on the task's latest submitted head.
-pub(super) fn gate(feed: &Feed, record: &TaskDetail, pass: bool, notes: Option<&str>, at: u64) -> Check {
+pub(super) fn gate(
+    feed: &Feed,
+    record: &TaskDetail,
+    pass: bool,
+    notes: Option<&str>,
+    at: u64,
+) -> Check {
     let head = record
         .runs
         .iter()
@@ -317,7 +574,11 @@ pub(super) fn gate(feed: &Feed, record: &TaskDetail, pass: bool, notes: Option<&
         task: record.task.id.clone(),
         kind: CheckKind::Gate,
         key: head,
-        result: if pass { CheckResult::Pass } else { CheckResult::Fail },
+        result: if pass {
+            CheckResult::Pass
+        } else {
+            CheckResult::Fail
+        },
         notes: notes.map(str::to_owned),
         log: None,
         by: Actor::Auto,
@@ -326,12 +587,22 @@ pub(super) fn gate(feed: &Feed, record: &TaskDetail, pass: bool, notes: Option<&
 }
 
 /// A review check for the task's current round.
-pub(super) fn review(feed: &Feed, record: &TaskDetail, approve: bool, notes: Option<&str>, at: u64) -> Check {
+pub(super) fn review(
+    feed: &Feed,
+    record: &TaskDetail,
+    approve: bool,
+    notes: Option<&str>,
+    at: u64,
+) -> Check {
     Check {
         task: record.task.id.clone(),
         kind: CheckKind::Review,
         key: record.task.round.to_string(),
-        result: if approve { CheckResult::Pass } else { CheckResult::Fail },
+        result: if approve {
+            CheckResult::Pass
+        } else {
+            CheckResult::Fail
+        },
         notes: notes.map(str::to_owned),
         log: None,
         by: Actor::Reviewer,
@@ -339,7 +610,13 @@ pub(super) fn review(feed: &Feed, record: &TaskDetail, approve: bool, notes: Opt
     }
 }
 
-pub(super) fn artifact(feed: &Feed, record: &TaskDetail, kind: &str, title: &str, at: u64) -> Artifact {
+pub(super) fn artifact(
+    feed: &Feed,
+    record: &TaskDetail,
+    kind: &str,
+    title: &str,
+    at: u64,
+) -> Artifact {
     let id = record.artifacts.len() as u32 + 1;
     Artifact {
         task: record.task.id.clone(),
@@ -349,7 +626,11 @@ pub(super) fn artifact(feed: &Feed, record: &TaskDetail, kind: &str, title: &str
         kind: Some(kind.into()),
         title: title.into(),
         at: ago(feed, at),
-        by: if kind == "log" { Actor::Auto } else { Actor::Agent },
+        by: if kind == "log" {
+            Actor::Auto
+        } else {
+            Actor::Agent
+        },
     }
 }
 

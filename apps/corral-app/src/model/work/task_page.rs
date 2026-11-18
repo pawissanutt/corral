@@ -109,7 +109,13 @@ pub enum TaskPage {
 /// once the complete board does not.
 pub fn task_page(state: &State, feed: &Feed, id: &Id) -> TaskPage {
     let page = |task: &daemon::Task| TaskPage::Ready {
-        story: Box::new(task_inspector(state, feed, task, NowTab::Story, Form::Phone)),
+        story: Box::new(task_inspector(
+            state,
+            feed,
+            task,
+            NowTab::Story,
+            Form::Phone,
+        )),
         buttons: super::task_buttons(feed, task, true),
         // A task that never ran has no run, so no terminal either way.
         log: if task.row.run.is_some() || task.rail[0].at.is_some() {

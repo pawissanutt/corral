@@ -59,7 +59,6 @@ mod tests {
         feed.devices.push(DeviceRow {
             id: "secret-device-id".into(),
             name: "Owner phone".into(),
-            authority: None,
             platform: "web",
             enrolled: String::new(),
             revoked: None,

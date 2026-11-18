@@ -687,8 +687,7 @@ mod tests {
             store: Some("/workspace/.corral".into()),
             ..Default::default()
         };
-        feed.capabilities
-            .insert(corral_protocol::TASKS_V1.into());
+        feed.capabilities.insert(corral_protocol::TASKS_V1.into());
         feed.mark_stale();
         feed.link = daemon::Link::Down;
         assert!(feed.session.is_none());

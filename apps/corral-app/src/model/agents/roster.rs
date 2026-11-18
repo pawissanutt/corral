@@ -174,10 +174,16 @@ impl<'a> Source<'a> {
         self.assistant.and_then(|row| row.profile.clone())
     }
     pub fn is_stale(self, feed: &daemon::Feed) -> bool {
-        live::stale(feed, if self.row.is_some() { "agents" } else { "assistant" })
-            || self
-                .task(feed)
-                .is_some_and(|task| task.rail.iter().any(|step| step.mark == Mark::Stale))
+        live::stale(
+            feed,
+            if self.row.is_some() {
+                "agents"
+            } else {
+                "assistant"
+            },
+        ) || self
+            .task(feed)
+            .is_some_and(|task| task.rail.iter().any(|step| step.mark == Mark::Stale))
     }
 }
 
@@ -187,7 +193,9 @@ fn in_scope(source: Source<'_>, feed: &daemon::Feed, filter: &ProjectFilter) -> 
         Some(row) => feed
             .board
             .task(&row.run.task)
-            .map_or(*filter == ProjectFilter::All, |task| filter.matches(task.project())),
+            .map_or(*filter == ProjectFilter::All, |task| {
+                filter.matches(task.project())
+            }),
     }
 }
 
@@ -206,8 +214,9 @@ pub(super) fn selected<'a>(
         row,
         assistant: assistant.map(|(_, row)| row),
     };
-    (in_scope(source, feed, &filter.resolved(feed)) && (source.row.is_some() || source.pinned(feed)))
-        .then_some(source)
+    (in_scope(source, feed, &filter.resolved(feed))
+        && (source.row.is_some() || source.pinned(feed)))
+    .then_some(source)
 }
 
 pub(super) fn scoped<'a>(feed: &'a daemon::Feed, filter: &ProjectFilter) -> Vec<Source<'a>> {

@@ -85,7 +85,8 @@ fn project_sessions_are_the_live_runs_on_its_own_tasks() {
         &[],
     );
     for task in ["T-1", "T-2"] {
-        feed.agents.insert(Id::from(format!("{task}_R1")), agent(task));
+        feed.agents
+            .insert(Id::from(format!("{task}_R1")), agent(task));
     }
     let page = page(&feed, &Id::from("corral")).expect("project page");
     let ids: Vec<_> = page

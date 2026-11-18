@@ -6,14 +6,16 @@
 use corral_protocol::detail::{DetailBody, DetailRef, SessionPage, TerminalSnapshot};
 use corral_protocol::rows::AgentRow;
 
+use crate::model::Id;
 use crate::model::board::STAGES;
 use crate::model::daemon::{self, DetailCache, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::text::{Rich, Span, span};
-use crate::model::Id;
 
-use super::live::{clock, clock_at, excerpt, quiet, role_label, session_name, shown_id, stale, unix};
+use super::live::{
+    clock, clock_at, excerpt, quiet, role_label, session_name, shown_id, stale, unix,
+};
 use super::replay::transcript;
 use super::{
     Action, Bar, FactValue, Feed, LineClass, Run, RunFact, Session, State, Terminal, View, line,
@@ -199,7 +201,12 @@ fn identifier(name: Option<String>, unknown: &str) -> Span {
 
 /// The run's facts beside its transcript: its task and rail, role, profile, model, session,
 /// branch, start and how long it has been quiet.
-fn facts(row: Option<&AgentRow>, board_task: Option<&daemon::Task>, task: &str, feed: &daemon::Feed) -> Vec<RunFact> {
+fn facts(
+    row: Option<&AgentRow>,
+    board_task: Option<&daemon::Task>,
+    task: &str,
+    feed: &daemon::Feed,
+) -> Vec<RunFact> {
     let mut value = vec![span(task.to_owned()).mono()];
     if let Some(found) = board_task {
         value.extend([span(" "), span(found.title().to_owned())]);
@@ -224,10 +231,7 @@ fn facts(row: Option<&AgentRow>, board_task: Option<&daemon::Task>, task: &str, 
             ],
         ),
         fact("Profile", vec![span(run.profile.clone()).mono()]),
-        fact(
-            "Model",
-            vec![identifier(run.model.clone(), "not recorded")],
-        ),
+        fact("Model", vec![identifier(run.model.clone(), "not recorded")]),
         fact(
             "Session",
             vec![
@@ -239,7 +243,9 @@ fn facts(row: Option<&AgentRow>, board_task: Option<&daemon::Task>, task: &str, 
         fact("Branch", vec![span(run.branch.clone()).mono()]),
         fact(
             "Started",
-            vec![span(clock_at(run.started, feed).unwrap_or_else(|| "unknown".into()))],
+            vec![span(
+                clock_at(run.started, feed).unwrap_or_else(|| "unknown".into()),
+            )],
         ),
     ]);
     if let Some(quiet) = quiet(row, feed) {
@@ -273,16 +279,14 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str)
     let title = board_task
         .map(|task| task.title().to_owned())
         .unwrap_or_else(|| role_label(&role));
-    let terminal = row
-        .filter(|row| row.run.session.is_some())
-        .map(|row| {
-            terminal(
-                id,
-                row,
-                feed.detail(&DetailRef::Terminal { id: id.to_string() }),
-                feed,
-            )
-        });
+    let terminal = row.filter(|row| row.run.session.is_some()).map(|row| {
+        terminal(
+            id,
+            row,
+            feed.detail(&DetailRef::Terminal { id: id.to_string() }),
+            feed,
+        )
+    });
     let mut sub = vec![
         [Some(role_label(&role)), run.clone()]
             .into_iter()

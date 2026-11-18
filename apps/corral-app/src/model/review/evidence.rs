@@ -61,9 +61,10 @@ fn page<'a>(feed: &'a Feed, reference: &str) -> Result<&'a ArtifactPage, Option<
     };
     match cache.body() {
         Some(DetailBody::Artifact(page)) => Ok(page),
-        _ => Err(cache.error.as_ref().map(|error| {
-            format!("corrald could not serve this artifact: {}", error.message)
-        })),
+        _ => Err(cache
+            .error
+            .as_ref()
+            .map(|error| format!("corrald could not serve this artifact: {}", error.message))),
     }
 }
 

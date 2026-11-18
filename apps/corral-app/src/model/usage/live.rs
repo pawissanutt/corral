@@ -211,8 +211,7 @@ fn rows(by: UsageBy, series: &UsageSeries, now: Timestamp, feed: &Feed) -> Vec<G
     match by {
         UsageBy::Day => ordered.reverse(),
         UsageBy::Profile | UsageBy::Model | UsageBy::Task => ordered.sort_by(|a, b| {
-            let requests =
-                |group: &(Option<&UsageTotal>, Tally)| group.0.map_or(0, |t| t.requests);
+            let requests = |group: &(Option<&UsageTotal>, Tally)| group.0.map_or(0, |t| t.requests);
             requests(&b.1)
                 .cmp(&requests(&a.1))
                 .then(b.1.1.runs.cmp(&a.1.1.runs))
@@ -229,9 +228,8 @@ fn rows(by: UsageBy, series: &UsageSeries, now: Timestamp, feed: &Feed) -> Vec<G
                 }
                 None => (missing(by).to_owned(), false, None),
             };
-            let figure = |value: fn(&UsageTotal) -> String| {
-                total.map_or_else(|| UNKNOWN.into(), value)
-            };
+            let figure =
+                |value: fn(&UsageTotal) -> String| total.map_or_else(|| UNKNOWN.into(), value);
             GroupRow {
                 key,
                 named,
@@ -285,7 +283,9 @@ pub fn page(by: UsageBy, feed: &Feed) -> Page {
     });
     // The series and its own summary agree with each other; the topic answers sooner.
     let summary = series.map(|series| &series.summary).or(feed.usage.as_ref());
-    let rows = series.map(|series| rows(by, series, now, feed)).unwrap_or_default();
+    let rows = series
+        .map(|series| rows(by, series, now, feed))
+        .unwrap_or_default();
     let series_error = cache
         .and_then(|cache| cache.error.as_ref())
         .map(|error| error.message.as_str());
@@ -298,7 +298,9 @@ pub fn page(by: UsageBy, feed: &Feed) -> Page {
     Page {
         status: status(feed),
         coverage: summary.map(|summary| coverage(summary, series)),
-        figures: summary.map(|summary| figures(&summary.total)).unwrap_or_default(),
+        figures: summary
+            .map(|summary| figures(&summary.total))
+            .unwrap_or_default(),
         group_title: format!("By {}", header(by).to_lowercase()),
         headers: [
             header(by),

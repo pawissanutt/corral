@@ -37,8 +37,8 @@ pub use outline::{CandidateHeader, OutlineGroup, OutlineRow, candidate_header, o
 pub use readiness::{ReadyLink, ReviewQuote};
 pub use view::{
     ArtifactContent, ArtifactView, ArtifactsView, Body, Button, ButtonStyle, Chip, DecideBar,
-    DiffContent, DiffView, FileBody, FileView, HunkView, LayoutChoice, LogView, Notice,
-    ReportView, StatusLine, TabView, effective_layout,
+    DiffContent, DiffView, FileBody, FileView, HunkView, LayoutChoice, LogView, Notice, ReportView,
+    StatusLine, TabView, effective_layout,
 };
 
 use std::collections::BTreeSet;

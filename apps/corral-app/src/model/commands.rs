@@ -66,7 +66,8 @@ pub const CONFIRM_CANCEL: &str = "Cancel";
 pub const CONFIRM_CHECK: &str = "Tapping Confirm sends it. Nothing has been sent yet.";
 
 /// The refusal sheet's line under its title.
-pub const REFUSED_SUB: &str = "The engine refused this. Each button below is a step that gets past it.";
+pub const REFUSED_SUB: &str =
+    "The engine refused this. Each button below is a step that gets past it.";
 
 /// A live command's confirming button: generic on phone, else its title's first verb.
 pub fn act_confirm_label(title: &str, form: Form) -> String {
@@ -555,11 +556,9 @@ pub fn run(
 /// The destination's shortcut as a static key cap for renderers.
 pub const fn destination_key(destination: Destination) -> Option<&'static str> {
     Some(match destination {
-        Destination::Inbox => "i",
         Destination::Now => "n",
         Destination::Changes => ".",
         Destination::Plans => "p",
-        Destination::Builds => "b",
         Destination::Agents => "a",
         Destination::Review => "r",
         Destination::Timeline => "t",

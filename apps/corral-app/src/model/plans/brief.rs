@@ -29,8 +29,7 @@ fn headline(feed: &Feed, plan: &Id, detail: &PlanDetail) -> Rich {
     let done = members.iter().filter(|member| member.done()).count();
     let progress = format!("{done} of {total} done.");
     let moving = members.iter().filter(|member| member.moving()).count();
-    let (lead, hue, rest) = if let Some(member) = members.iter().find(|member| member.needs_you())
-    {
+    let (lead, hue, rest) = if let Some(member) = members.iter().find(|member| member.needs_you()) {
         (
             format!("{} needs you.", member.id()),
             Hue::You,

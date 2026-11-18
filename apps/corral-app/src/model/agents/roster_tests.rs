@@ -136,7 +136,11 @@ fn quick_thread_leads_a_blocked_run_and_each_run_row_carries_its_task_menu() {
         .collect();
     assert_eq!(
         rows,
-        [("A-7", None), ("T-2_R3", Some("T-2")), ("T-1_R1", Some("T-1"))]
+        [
+            ("A-7", None),
+            ("T-2_R3", Some("T-2")),
+            ("T-1_R1", Some("T-1"))
+        ]
     );
     assert!(model.rows[0].pinned);
     assert_eq!(model.rows[1].doing, "Allow edit? (y/n)");
@@ -158,7 +162,8 @@ fn a_blocked_task_waits_on_the_owner_from_the_runs_panel() {
         detail: None,
         next: vec![],
     });
-    feed.board.apply_batch(2, vec![Task::new(task_row(stuck))], &[]);
+    feed.board
+        .apply_batch(2, vec![Task::new(task_row(stuck))], &[]);
     let state = State {
         roster_session: Some("T-1_R1".into()),
         ..State::default()
@@ -182,9 +187,8 @@ fn a_blocked_task_waits_on_the_owner_from_the_runs_panel() {
 fn quiet_time_follows_the_runners_quiet_since_and_stays_unknown_without_it() {
     let mut quiet = agent("T-1", "R1", Role::Worker);
     let feed_now = 1_800_000_000;
-    quiet.run.quiet_since = Some(
-        jiff::Timestamp::from_second(feed_now - 9 * 60).expect("valid timestamp"),
-    );
+    quiet.run.quiet_since =
+        Some(jiff::Timestamp::from_second(feed_now - 9 * 60).expect("valid timestamp"));
     let feed = feed(vec![quiet, agent("T-2", "R1", Role::Worker)]);
     let model = roster(
         &State::default(),

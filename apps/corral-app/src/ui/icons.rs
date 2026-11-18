@@ -9,11 +9,9 @@ use nsh_core::prelude::*;
 use crate::model::glance::StatIcon;
 use crate::model::{Destination, PhoneTab};
 
-const INBOX: ImageAsset = asset!("icons/inbox.svg");
 const NOW: ImageAsset = asset!("icons/now.svg");
 const CHANGES: ImageAsset = asset!("icons/changes.svg");
 const PLANS: ImageAsset = asset!("icons/plans.svg");
-const BUILDS: ImageAsset = asset!("icons/builds.svg");
 const AGENTS: ImageAsset = asset!("icons/agents.svg");
 const REVIEW: ImageAsset = asset!("icons/review.svg");
 const TIMELINE: ImageAsset = asset!("icons/timeline.svg");
@@ -55,12 +53,9 @@ const FILES: ImageAsset = asset!("icons/note.svg");
 /// The mock's sprite (`ui.js`, `i-*`). `Ask` is the sprite's `i-chat` speech bubble.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
-    Inbox,
     Now,
     Changes,
     Plans,
-    /// A branch merged into its base: work a build session landed.
-    Builds,
     Agents,
     Review,
     Timeline,
@@ -125,11 +120,9 @@ impl Icon {
     /// The destination's own icon.
     pub const fn destination(destination: Destination) -> Icon {
         match destination {
-            Destination::Inbox => Icon::Inbox,
             Destination::Now => Icon::Now,
             Destination::Changes => Icon::Changes,
             Destination::Plans => Icon::Plans,
-            Destination::Builds => Icon::Builds,
             Destination::Agents => Icon::Agents,
             Destination::Review => Icon::Review,
             Destination::Timeline => Icon::Timeline,
@@ -141,7 +134,6 @@ impl Icon {
     /// The phone tab's icon: its destination's, and the three dots for More.
     pub const fn phone_tab(tab: PhoneTab) -> Icon {
         match tab {
-            PhoneTab::Inbox => Icon::Inbox,
             PhoneTab::Now => Icon::Now,
             PhoneTab::Agents => Icon::Agents,
             PhoneTab::Plans => Icon::Plans,
@@ -169,11 +161,9 @@ impl Icon {
 
     const fn asset(self) -> ImageAsset {
         match self {
-            Icon::Inbox => INBOX,
             Icon::Now => NOW,
             Icon::Changes => CHANGES,
             Icon::Plans => PLANS,
-            Icon::Builds => BUILDS,
             Icon::Agents => AGENTS,
             Icon::Review => REVIEW,
             Icon::Timeline => TIMELINE,

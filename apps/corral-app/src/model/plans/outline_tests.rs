@@ -76,7 +76,11 @@ fn path_to_done_lists_open_members_and_runs_a_blocked_ones_served_next_step() {
     feed.board_received(1, vec![Task::new(task_row(stuck.clone()))], &[], true);
     let detail = PlanDetail {
         parent: task("T-1", Status::Backlog),
-        children: vec![task("T-2", Status::Done), stuck, task("T-4", Status::Dropped)],
+        children: vec![
+            task("T-2", Status::Done),
+            stuck,
+            task("T-4", Status::Dropped),
+        ],
     };
     let path = path_to_done(&feed, &Id::new("T-1"), &detail);
     assert_eq!((path.done, path.total), (1, 2));

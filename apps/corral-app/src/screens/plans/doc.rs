@@ -14,7 +14,8 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 /// The reading measure of a document (`.doc` 76ch at 13.5 pt).
 const MEASURE: f32 = 620.0;
 const DOCUMENT: &str = "Document";
-const DOCUMENT_HINT: &str = "The plan's task body as written; edit it from the plan's Actions menu.";
+const DOCUMENT_HINT: &str =
+    "The plan's task body as written; edit it from the plan's Actions menu.";
 const NO_DOCUMENT: &str = "The plan's task has no body yet.";
 
 fn element_view() -> View {

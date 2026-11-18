@@ -166,7 +166,8 @@ impl Clock<'_> {
     fn span(&mut self, id: &str, kind: Kind, from: Timestamp, to: Option<Timestamp>, what: &str) {
         let (start, end) = (
             self.window.minutes(from).max(0),
-            to.map_or(self.now, |to| self.window.minutes(to)).min(self.now),
+            to.map_or(self.now, |to| self.window.minutes(to))
+                .min(self.now),
         );
         if end < start {
             return;

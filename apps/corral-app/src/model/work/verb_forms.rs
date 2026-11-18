@@ -4,10 +4,10 @@
 use corral_types::{Next, Op, Status};
 
 use super::{Record, Sent, State, Verb, VerbField};
+use crate::model::Id;
 use crate::model::act::Act;
 use crate::model::daemon::Feed;
 use crate::model::effect::Effect;
-use crate::model::Id;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerbComposer {
@@ -51,7 +51,12 @@ fn specs(verb: Verb) -> Vec<Spec> {
             field("Body", "Markdown: Goal, Acceptance, Notes", false, &[]),
             field("Project", "Project id; empty clears it", false, &[]),
             field("Priority", "", true, &PRIORITIES),
-            field("Profile", "Pinned worker profile; empty clears it", false, &[]),
+            field(
+                "Profile",
+                "Pinned worker profile; empty clears it",
+                false,
+                &[],
+            ),
             field("Base", "Branch to start from and land onto", false, &[]),
             field("Parent", "Parent task id", false, &[]),
             field("Depends on", "Task ids, comma separated", false, &[]),
@@ -59,8 +64,18 @@ fn specs(verb: Verb) -> Vec<Spec> {
         Verb::Comment => vec![field("Comment", "Your comment", true, &[])],
         Verb::Move => vec![field("Status", "", true, &STATUSES)],
         Verb::Dispatch => vec![
-            field("Profile", "Worker profile; empty uses the resolved default", false, &[]),
-            field("Base", "Base branch; empty uses the resolved default", false, &[]),
+            field(
+                "Profile",
+                "Worker profile; empty uses the resolved default",
+                false,
+                &[],
+            ),
+            field(
+                "Base",
+                "Base branch; empty uses the resolved default",
+                false,
+                &[],
+            ),
         ],
         Verb::Reply => vec![field("Reply", "What the worker should hear", true, &[])],
         Verb::Done => vec![field("Summary", "What changed", true, &[])],
@@ -76,7 +91,12 @@ fn specs(verb: Verb) -> Vec<Spec> {
         ],
         Verb::Changes => vec![field("Notes", "What to change", true, &[])],
         Verb::Retry => vec![
-            field("Profile", "Worker profile; empty keeps the default", false, &[]),
+            field(
+                "Profile",
+                "Worker profile; empty keeps the default",
+                false,
+                &[],
+            ),
             field("From base", "", true, &YES_NO),
             field("Note", "Sent to the new run", false, &[]),
         ],
@@ -96,13 +116,15 @@ pub(super) fn fields(verb: Verb, task: Option<&corral_types::Task>) -> Vec<VerbF
     specs(verb)
         .into_iter()
         .zip(values)
-        .map(|((label, placeholder, required, choices), value)| VerbField {
-            label,
-            placeholder,
-            required,
-            value,
-            choices,
-        })
+        .map(
+            |((label, placeholder, required, choices), value)| VerbField {
+                label,
+                placeholder,
+                required,
+                value,
+                choices,
+            },
+        )
         .collect()
 }
 
@@ -127,7 +149,12 @@ fn defaults(verb: Verb, task: Option<&corral_types::Task>) -> Vec<String> {
         (Verb::Move, task) => vec![task.map_or("backlog", |task| task.status.as_str()).into()],
         (Verb::Verdict, _) => vec!["approve".into(), String::new()],
         (Verb::Retry, _) => vec![String::new(), "no".into(), String::new()],
-        (Verb::NewTask, _) => vec![String::new(), String::new(), String::new(), "backlog".into()],
+        (Verb::NewTask, _) => vec![
+            String::new(),
+            String::new(),
+            String::new(),
+            "backlog".into(),
+        ],
         (verb, _) => vec![String::new(); specs(verb).len()],
     }
 }
@@ -153,7 +180,11 @@ fn next_values(op: &Op) -> Option<(Verb, Vec<String>)> {
             ..
         } => (
             Verb::Retry,
-            vec![text(profile), YES_NO[usize::from(*fresh)].into(), text(note)],
+            vec![
+                text(profile),
+                YES_NO[usize::from(*fresh)].into(),
+                text(note),
+            ],
         ),
         _ => return None,
     })
@@ -239,7 +270,9 @@ impl State {
         }
         let op = match problem {
             Some(problem) => Err(problem),
-            None => super::verb_build::op(&composer.record, composer.verb, &values, &composer.initial),
+            None => {
+                super::verb_build::op(&composer.record, composer.verb, &values, &composer.initial)
+            }
         };
         match op {
             Ok(op) => self.send(&composer.record, op, composer.force, composer.confirmed),

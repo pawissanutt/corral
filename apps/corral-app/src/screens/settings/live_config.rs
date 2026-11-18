@@ -6,9 +6,9 @@ use nsh_core::prelude::*;
 
 use super::live_sections::{facts, snapshot_section};
 use super::parts::{Record, cell, records, space};
+use crate::model::Hue;
 use crate::model::settings::config::{self, Body, Group, Item};
 use crate::model::text::span;
-use crate::model::Hue;
 use crate::state::AppState;
 use crate::ui::kit::notice::notice;
 use crate::ui::kit::text::h3;

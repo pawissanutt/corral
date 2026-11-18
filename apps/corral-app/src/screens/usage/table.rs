@@ -136,10 +136,7 @@ pub fn table(app: AppState, page: &Page, records: bool) -> AnyElement {
     view()
         .test_id("usage-groups")
         .gap(px(8.0))
-        .children(
-            page.rows_empty
-                .map(|words| dim(app, words).into_element()),
-        )
+        .children(page.rows_empty.map(|words| dim(app, words).into_element()))
         .when(!page.rows.is_empty(), |table| table.child(body))
         .into_element()
 }

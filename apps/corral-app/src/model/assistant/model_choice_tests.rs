@@ -15,7 +15,11 @@ fn only_the_chat_hosts_profiles_are_models_and_the_exact_one_is_selected() {
     .unwrap();
     feed.settings = Some(snapshot);
     let list = model_list(&feed, "A-1", Some("subscription"));
-    let names: Vec<_> = list.options.iter().map(|option| option.name.as_str()).collect();
+    let names: Vec<_> = list
+        .options
+        .iter()
+        .map(|option| option.name.as_str())
+        .collect();
     assert_eq!(names, ["api", "subscription"]);
     assert!(!list.options[0].selected);
     assert!(list.options[1].selected);

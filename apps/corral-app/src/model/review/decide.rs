@@ -7,8 +7,8 @@ use corral_protocol::detail::{DetailGet, DetailRef};
 use corral_types::Op;
 
 use crate::model::act::{self, Act, ActStatus};
-use crate::model::effect::{Effect, Env};
 use crate::model::daemon::Feed;
+use crate::model::effect::{Effect, Env};
 use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::{Live, Selection};
@@ -30,7 +30,11 @@ fn status_line(feed: &Feed, sent: &Sent) -> Option<StatusLine> {
         ActStatus::Failed(_) => Hue::Fail,
     };
     Some(StatusLine {
-        text: vec![span(sent.title.clone()).bold(), span(" · "), span(status.line())],
+        text: vec![
+            span(sent.title.clone()).bold(),
+            span(" · "),
+            span(status.line()),
+        ],
         hue,
         actions: if status.settled() {
             vec![button(
@@ -180,10 +184,7 @@ impl State {
         if self.tab != super::Tab::Log {
             return None;
         }
-        let reference = shown
-            .check(corral_types::CheckKind::Gate)?
-            .log
-            .as_deref()?;
+        let reference = shown.check(corral_types::CheckKind::Gate)?.log.as_deref()?;
         Some(fetch(feed, artifact_ref(reference)))
     }
 

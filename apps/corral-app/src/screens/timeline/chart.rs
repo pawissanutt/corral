@@ -411,7 +411,14 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
     }
 
     p = lane_label(p, layout, phone, layout.top, layout.owner_label, 0.0);
-    p = dots(p, layout, phone, layout.top, &layout.owner, now(hue_ink(Hue::You)));
+    p = dots(
+        p,
+        layout,
+        phone,
+        layout.top,
+        &layout.owner,
+        now(hue_ink(Hue::You)),
+    );
     let auto_y = auto_y(layout);
     p = lane_label(p, layout, phone, auto_y, layout.auto_label, 0.0);
     p = dots(p, layout, phone, auto_y, &layout.auto, ink(Token::Ink3));
@@ -488,9 +495,7 @@ fn dots(
 ) -> Painter {
     let y = bar_top(layout, phone, lane_y, DOT) + DOT / 2.0;
     markers.iter().fold(p.fill_color(fill), |p, marker| {
-        p.begin_path()
-            .arc(marker.x, y, DOT_RADIUS, 0.0, TAU)
-            .fill()
+        p.begin_path().arc(marker.x, y, DOT_RADIUS, 0.0, TAU).fill()
     })
 }
 
@@ -498,10 +503,7 @@ fn dots(
 fn hit_boxes(layout: &Layout, form: Form) -> Vec<AnyElement> {
     let phone = form == Form::Phone;
     let mut boxes = Vec::new();
-    for (lane_y, markers) in [
-        (layout.top, &layout.owner),
-        (auto_y(layout), &layout.auto),
-    ] {
+    for (lane_y, markers) in [(layout.top, &layout.owner), (auto_y(layout), &layout.auto)] {
         let dot_top = bar_top(layout, phone, lane_y, DOT);
         for marker in markers {
             boxes.push(hit(

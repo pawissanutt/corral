@@ -460,7 +460,7 @@ mod tests {
     }
 
     fn owners(feed: Signal<Feed>) -> Vec<String> {
-        feed.with_untracked(|feed| live_items(&State::default(), feed, "A-3", true))
+        feed.with_untracked(|feed| live_items(&State::default(), feed, "A-3"))
             .into_iter()
             .filter_map(|item| match item {
                 ThreadItem::Owner(message) => Some(message.text),
