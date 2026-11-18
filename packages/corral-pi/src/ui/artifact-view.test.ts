@@ -1,233 +1,159 @@
 import { test, expect } from "bun:test";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { getCapabilities, setCapabilities, stripTerminalSequences, visibleWidth, type ImageSource } from "@earendil-works/pi-tui";
+import { readFileSync } from "node:fs";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { ArtifactView, COMPARE_ROW_MIN, type ArtifactCatalog } from "./artifact-view.ts";
 import { VIEW_INSET } from "./frame.ts";
 import { clock } from "./panel-parts.ts";
 import { SPLIT_MIN } from "./proof-view.ts";
 
-const identity = { store: "s", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
-const HEAD = "b".repeat(40), OLD = "a".repeat(40);
+const identity = { store: "s", project: "demo", role: "worker" as const, task: "T-1" };
 const png = readFileSync(new URL("../../test/fixtures/images/zoom.png", import.meta.url));
 const sha = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
-
-function fixture() {
-  const store = mkdtempSync(join(tmpdir(), "artifact-view-"));
-  mkdirSync(join(store, "artifacts/T-001/R1"), { recursive: true });
-  copyFileSync(new URL("../../test/fixtures/images/zoom.png", import.meta.url), join(store, "artifacts/T-001/R1/1111-shot.png"));
-  const row = (name: string, extra: Partial<ArtifactCatalog["artifacts"][number]> = {}) => ({
-    reference: `T-001:R1:${name}`, run: "R1", kind: "report", title: name, path: `artifacts/T-001/R1/${name}`, sha256: sha(name),
-    bytes: 10, added: "2026-01-01T00:00:00Z", compressed: false, purged: false, available: true, raw: join(store, "artifacts/T-001/R1", name), evidence: [], evidence_omitted: 0, ...extra,
-  });
-  const catalog: ArtifactCatalog = { version: 1, task: "T-001", run: "R1", store, head: HEAD, more: true, artifacts: [
-    row("1111-shot.png", { kind: "screenshot", sha256: sha(png), bytes: png.length,
-      evidence: [{ criterion: "C1", key: "c1-obs", status: "pass", captured: "2026-01-02T00:00:00Z", head: OLD, hash_match: true }] }),
-    row("2222-report.md", { evidence: [{ criterion: "C2", key: "c2-obs", status: "pass", captured: "2026-01-02T00:00:00Z", head: HEAD, hash_match: false }] }),
-    row("3333-gone.log", { kind: "log", available: false, raw: null }),
-    row("4444-page.html"),
-    { ...row("5555-other.md"), reference: "T-001:R2:5555-other.md", run: "R2", path: "artifacts/T-001/R2/5555-other.md" },
-  ] };
-  return { store, catalog };
-}
-function harness(catalog: unknown, extra: { exportSession?: () => Promise<string> } = {}, decoded = "") {
-  const calls: string[] = [], images: ImageSource[] = [];
+const REPORT = "# Report\nbody line\u001b[31m";
+/** What `corral artifact show` prints, decoded as UTF-8 the way the host decodes it. */
+const SHOWN: Readonly<Record<string, string>> = { "T-1:1": "owner notes", "T-1:2": png.toString("utf8"), "T-1:3": REPORT, "T-1:4": "edited after registration" };
+const row = (id: number, title: string, extra: Partial<ArtifactCatalog[number]> = {}): ArtifactCatalog[number] => ({
+  task: "T-1", id, sha256: sha(SHOWN[`T-1:${id}`] ?? title), bytes: 10, kind: "report", title, at: `2026-01-0${id}T00:00:00Z`, by: "agent", ...extra,
+});
+/** The engine's `artifact list` order: oldest first. */
+const catalog: ArtifactCatalog = [
+  row(1, "notes.md", { kind: null, by: "owner" }),
+  row(2, "shot.png", { kind: "screenshot", sha256: sha(png), bytes: png.length }),
+  row(3, "report.md"),
+  row(4, "changed.md", { sha256: "0".repeat(64) }),
+];
+function harness(data: unknown, extra: { exportSession?: () => Promise<string> } = {}) {
+  const calls: string[] = [];
   let reads = 0;
-  const view = new ArtifactView({ identity, load: async () => { reads++; return catalog; },
-    viewer: async (reference, viewer) => { calls.push(`${viewer} ${reference}`); return viewer === "serve" ? "http://127.0.0.1:1/x" : reference.endsWith(".png") ? `png image\n${decoded}` : "# Report\nbody line\u001b[31m"; },
-    openImage: source => { images.push(source); return true; }, bound: () => true, changed: () => {}, canInteract: () => true, ...extra });
-  return { view, calls, images, reads: () => reads };
+  const view = new ArtifactView({ identity, load: async () => { reads++; return data; },
+    viewer: async reference => { calls.push(reference); return SHOWN[reference] ?? ""; },
+    bound: () => true, changed: () => {}, canInteract: () => true, ...extra });
+  return { view, calls, reads: () => reads };
 }
 /** The view's text at a stacked width (list above detail), so detail rows read in order. */
 const text = (view: ArtifactView, width = 100) => view.render(width).map(row => stripTerminalSequences(row).trimEnd()).join(" ").replace(/\s+/g, " ");
-const settle = () => new Promise(resolve => setImmediate(resolve));
+/** One macrotask turn: the viewer and export promises Enter and x start have settled. */
+const settle = () => { const { promise, resolve } = Promise.withResolvers<void>(); setImmediate(resolve); return promise; };
 
-test("catalog renders provenance without reading files or starting viewers", async () => {
-  const { store, catalog } = fixture();
-  try {
-    const { view, calls, images, reads } = harness(catalog);
-    await view.refresh();
-    for (let i = 0; i < 50; i++) { view.render(140); view.render(52); }
-    expect(reads()).toBe(1); expect(calls).toEqual([]); expect(images).toEqual([]);
-    const wide = text(view);
-    expect(wide).toContain("GAP: newest 5 rows only");
-    expect(wide).toContain(`registered against HEAD ${OLD.slice(0, 12)} (differs from bound HEAD at read · historical; freshness not evaluated)`);
-    expect(wide).toContain("Candidate none recorded · only evidence links carry a registration HEAD");
-    expect(wide).toContain("bytes not re-hashed");
-    view.handleInput("j");
-    expect(text(view)).toContain("same SHA as bound HEAD at read; freshness not evaluated) · recorded hash MISMATCH");
-    view.handleInput("j");
-    expect(text(view)).toContain("ABSENT: no snapshot file or live blob at read");
-    expect(text(view)).toContain("none of R1 names this snapshot · association unknown");
-    view.handleInput("j"); view.handleInput("j");
-    expect(text(view)).toContain("unknown · run R2 evidence not read");
-    expect(view.render(52).every(row => visibleWidth(row) <= 52)).toBe(true);
-    expect(calls).toEqual([]);
-  } finally { rmSync(store, { recursive: true, force: true }); }
+test("catalog renders newest first with its provenance and reads no content", async () => {
+  const { view, calls, reads } = harness(catalog);
+  await view.refresh();
+  for (let i = 0; i < 50; i++) { view.render(140); view.render(52); }
+  expect(reads()).toBe(1); expect(calls).toEqual([]);
+  const shown = text(view);
+  expect(shown).toContain("4 artifacts, newest first");
+  expect(shown.indexOf("changed.md") < shown.indexOf("notes.md")).toBe(true);
+  expect(shown).toContain("Reference T-1:4");
+  expect(shown).toContain("By agent");
+  expect(shown).toContain("Added 2026-01-04T00:00:00Z");
+  expect(shown).toContain("bytes not re-hashed");
+  view.handleInput("j"); view.handleInput("j"); view.handleInput("j");
+  expect(text(view)).toContain("Kind — By owner");
+  expect(view.render(52).every(row => visibleWidth(row) <= 52)).toBe(true);
+  expect(calls).toEqual([]);
 });
 
-test("Enter opens images with verified bytes, text fallback without graphics, and reports through corral show", async () => {
-  const { store, catalog } = fixture();
-  const caps = getCapabilities();
-  try {
-    const { view, calls, images } = harness(catalog);
-    await view.refresh();
-    setCapabilities({ ...caps, images: null });
-    view.handleInput("\r"); await settle();
-    expect(images).toEqual([]);
-    expect(text(view)).toContain("Graphics unavailable in this terminal · text/path fallback");
-    expect(text(view)).toContain(join(store, "artifacts/T-001/R1/1111-shot.png"));
-    expect(text(view)).toContain("Bytes at open match the registered SHA256");
-    expect(text(view)).toContain("bytes matched at open");
-    setCapabilities({ ...caps, images: "kitty" });
-    view.handleInput("\r"); await settle();
-    expect(images.length).toBe(1);
-    expect(images[0]?.mimeType).toBe("image/png");
-    view.handleInput("j"); view.handleInput("\r"); await settle(); await settle();
-    expect(calls).toEqual(["show T-001:R1:2222-report.md"]);
-    expect(text(view)).toContain("body line");
-    expect(view.render(100).join("")).not.toContain("\u001b[31m");
-    view.handleInput("j"); view.handleInput("\r"); await settle();
-    expect(text(view)).toContain("Unavailable · not opened");
-    view.handleInput("j"); view.handleInput("\r"); await settle();
-    expect(text(view)).toContain("Browser document · not rendered in the terminal");
-    expect(calls).toEqual(["show T-001:R1:2222-report.md"]);
-    view.handleInput("o"); await settle(); await settle();
-    expect(calls).toEqual(["show T-001:R1:2222-report.md", "serve T-001:R1:4444-page.html"]);
-    expect(text(view)).toContain("Browser requested");
-  } finally { setCapabilities(caps); rmSync(store, { recursive: true, force: true }); }
-});
-
-test("image reads stay confined to the artifact store and report hash mismatches", async () => {
-  const { store, catalog } = fixture();
-  const caps = getCapabilities();
-  try {
-    setCapabilities({ ...caps, images: null });
-    const escaped = { ...catalog, artifacts: [{ ...catalog.artifacts[0]!, raw: join(store, "../outside.png") }] };
-    const outside = harness(escaped); await outside.view.refresh();
-    outside.view.handleInput("\r"); await settle();
-    expect(text(outside.view)).toContain("Viewer unavailable: snapshot path outside the artifact store");
-    symlinkSync(join(store, "artifacts/T-001/R1/1111-shot.png"), join(store, "artifacts/T-001/R1/link.png"));
-    const linked = harness({ ...catalog, artifacts: [{ ...catalog.artifacts[0]!, raw: join(store, "artifacts/T-001/R1/link.png") }] }); await linked.view.refresh();
-    linked.view.handleInput("\r"); await settle();
-    expect(text(linked.view)).toContain("snapshot is not a regular file");
-    const decoded = join(store, "decoded-copy.png"); copyFileSync(join(store, "artifacts/T-001/R1/1111-shot.png"), decoded);
-    const blob = harness({ ...catalog, artifacts: [{ ...catalog.artifacts[0]!, raw: null }] }, {}, decoded); await blob.view.refresh();
-    blob.view.handleInput("\r"); await settle(); await settle();
-    expect(blob.calls).toEqual(["show T-001:R1:1111-shot.png"]);
-    expect(text(blob.view)).toContain(`Path: ${decoded}`);
-    expect(text(blob.view)).toContain("Bytes at open match the registered SHA256");
-    const changed = harness({ ...catalog, artifacts: [{ ...catalog.artifacts[0]!, sha256: "0".repeat(64) }] }); await changed.view.refresh();
-    changed.view.handleInput("\r"); await settle();
-    expect(text(changed.view)).toContain("MISMATCH: bytes at open hash");
-    expect(text(changed.view)).toContain("Not displayed: bytes differ from the registered artifact");
-    expect(text(changed.view)).toContain("BYTES MISMATCHED at open");
-  } finally { setCapabilities(caps); rmSync(store, { recursive: true, force: true }); }
+test("Enter shows text whose bytes match; binary and changed bytes are not shown", async () => {
+  const { view, calls } = harness(catalog);
+  await view.refresh();
+  view.handleInput("\r"); await settle();
+  expect(text(view)).toContain("Not displayed: bytes differ from the registered artifact");
+  expect(text(view)).toContain(`MISMATCH: bytes at open hash ${sha(SHOWN["T-1:4"] ?? "")}`);
+  expect(text(view)).toContain("BYTES MISMATCHED at open");
+  expect(text(view)).not.toContain("edited after registration");
+  view.handleInput("j"); view.handleInput("\r"); await settle();
+  expect(text(view)).toContain("body line");
+  expect(text(view)).toContain("bytes matched at open");
+  expect(view.render(100).join("")).not.toContain("\u001b[31m");
+  view.handleInput("j"); view.handleInput("\r"); await settle();
+  expect(text(view)).toContain("Binary content · not shown in the terminal");
+  expect(text(view)).toContain(`corral artifact show T-1:2 writes its ${png.length.toLocaleString("en-US")} bytes to stdout`);
+  expect(text(view)).toContain("binary content · not re-hashed as text");
+  expect(calls).toEqual(["T-1:4", "T-1:3", "T-1:2"]);
 });
 
 test("comparison uses only explicit selection order and never infers before/after", async () => {
-  const { store, catalog } = fixture();
-  try {
-    const { view } = harness(catalog);
-    await view.refresh();
-    view.handleInput("c");
-    expect(view.compare).toBe(false);
-    expect(text(view)).toContain("Comparison needs two artifacts selected explicitly with m");
-    view.handleInput("j"); view.handleInput("m"); view.handleInput("k"); view.handleInput("m");
-    expect(view.marks).toEqual(["T-001:R1:2222-report.md", "T-001:R1:1111-shot.png"]);
-    view.handleInput("j"); view.handleInput("j"); view.handleInput("m");
-    expect(text(view)).toContain("Two artifacts already selected");
-    view.handleInput("c");
-    const wide = text(view);
-    expect(wide).toContain("A and B in your selection order · no before/after, candidate order or freshness implied");
-    expect(wide).toContain("Registered bytes differ (different SHA256)");
-    expect(wide).toContain("Title 2222-report.md │ 1111-shot.png");
-    expect(text(view, 60)).toContain("Title B 1111-shot.png");
-    // One row per field from COMPARE_ROW_MIN main-view columns; the workbench renders the view VIEW_INSET narrower.
-    expect(text(view, COMPARE_ROW_MIN - VIEW_INSET)).toContain("Title 2222-report.md │ 1111-shot.png");
-    expect(text(view, COMPARE_ROW_MIN - VIEW_INSET - 1)).toContain("Title B 1111-shot.png");
-    expect(wide).not.toMatch(/\b(before|after):/i);
-    view.handleInput("k"); view.handleInput("k"); view.handleInput("m");
-    expect(view.compare).toBe(false);
-    expect(view.marks).toEqual(["T-001:R1:2222-report.md"]);
-  } finally { rmSync(store, { recursive: true, force: true }); }
+  const { view } = harness(catalog);
+  await view.refresh();
+  view.handleInput("c");
+  expect(view.compare).toBe(false);
+  expect(text(view)).toContain("Comparison needs two artifacts selected explicitly with m");
+  view.handleInput("j"); view.handleInput("j"); view.handleInput("m"); view.handleInput("k"); view.handleInput("m");
+  expect(view.marks).toEqual(["T-1:2", "T-1:3"]);
+  view.handleInput("k"); view.handleInput("m");
+  expect(text(view)).toContain("Two artifacts already selected");
+  view.handleInput("c");
+  const wide = text(view);
+  expect(wide).toContain("A and B in your selection order · no before/after, candidate order or freshness implied");
+  expect(wide).toContain("Registered bytes differ (different SHA256)");
+  expect(wide).toContain("Title shot.png │ report.md");
+  expect(text(view, 60)).toContain("Title B report.md");
+  // One row per field from COMPARE_ROW_MIN main-view columns; the workbench renders the view VIEW_INSET narrower.
+  expect(text(view, COMPARE_ROW_MIN - VIEW_INSET)).toContain("Title shot.png │ report.md");
+  expect(text(view, COMPARE_ROW_MIN - VIEW_INSET - 1)).toContain("Title B report.md");
+  expect(wide).not.toMatch(/\b(before|after):/i);
+  view.handleInput("j"); view.handleInput("m");
+  expect(view.compare).toBe(false);
+  expect(view.marks).toEqual(["T-1:2"]);
 });
 
-test("export reaches the existing flow; refusals and stale reads stay visible", async () => {
-  const { store, catalog } = fixture();
-  try {
-    const refused = harness(catalog, { exportSession: async () => { throw new Error("session_export is not enabled for this role"); } });
-    await refused.view.refresh();
-    refused.view.handleInput("x"); await settle(); await settle();
-    expect(text(refused.view)).toContain("Session export refused: session_export is not enabled for this role");
-    const allowed = harness(catalog, { exportSession: async () => "corral: session export committed: /tmp/session.html" });
-    await allowed.view.refresh();
-    allowed.view.handleInput("x"); await settle(); await settle();
-    expect(text(allowed.view)).toContain("corral: session export committed");
-    const absent = harness(catalog); await absent.view.refresh();
-    absent.view.handleInput("x"); await settle();
-    expect(text(absent.view)).toContain("Session export unavailable");
-    let fail = false, bound = true;
-    const flaky = new ArtifactView({ identity, load: async () => { if (fail) throw new Error("db locked"); return catalog; }, openImage: () => true, bound: () => bound, changed: () => {}, canInteract: () => true });
-    await flaky.refresh();
-    const readAt = flaky.state.readAt;
-    fail = true; bound = false; await flaky.refresh();
-    expect(flaky.state).toMatchObject({ phase: "retained", readAt, error: "db locked" });
-    for (const width of [44, 68, 101]) {
-      const shown = text(flaky, width);
-      expect(shown).toContain(clock(readAt ?? NaN));
-      expect(shown).toContain("db locked");
-      expect(shown).toContain("host unbound");
-    }
-    expect(text(flaky)).toContain("1111-shot.png");
-    const foreign = new ArtifactView({ identity, load: async () => ({ ...catalog, run: "R9" }), openImage: () => true, bound: () => true, changed: () => {}, canInteract: () => false });
-    await foreign.refresh();
-    expect(foreign.current).toBeUndefined();
-    expect(foreign.state.phase).toBe("failed");
-    expect(text(foreign)).toContain("R9");
-    expect(text(foreign)).not.toContain("1111-shot.png");
-  } finally { rmSync(store, { recursive: true, force: true }); }
+test("export reaches the existing flow and shows its refusal", async () => {
+  const refused = harness(catalog, { exportSession: async () => { throw new Error("session_export is not enabled for this role"); } });
+  refused.view.handleInput("x"); await settle();
+  expect(text(refused.view)).toContain("Session export refused: session_export is not enabled for this role");
+  const allowed = harness(catalog, { exportSession: async () => "corral: session export committed: /tmp/session.html" });
+  allowed.view.handleInput("x"); await settle();
+  expect(text(allowed.view)).toContain("corral: session export committed");
+  const absent = harness(catalog);
+  absent.view.handleInput("x");
+  expect(text(absent.view)).toContain("Session export unavailable");
 });
 
-test("openPath opens the artifact registered at that path, not the catalog's first row", async () => {
-  const { store, catalog } = fixture();
-  try {
-    const { view, calls } = harness(catalog);
-    await view.openPath("artifacts/T-001/R1/2222-report.md");
-    expect(calls).toEqual(["show T-001:R1:2222-report.md"]);
-    await view.openPath("artifacts/T-001/R1/missing.log");
-    expect(calls).toHaveLength(1);
-    expect(view.notice).toContain("not opened");
-  } finally { rmSync(store, { recursive: true, force: true }); }
+test("a failed reread keeps the last catalog; another task's rows are refused", async () => {
+  let fail = false, bound = true;
+  const flaky = new ArtifactView({ identity, load: async () => { if (fail) throw new Error("db locked"); return catalog; }, bound: () => bound, changed: () => {}, canInteract: () => true });
+  await flaky.refresh();
+  const readAt = flaky.state.readAt;
+  fail = true; bound = false; await flaky.refresh();
+  expect(flaky.state).toMatchObject({ phase: "retained", readAt, error: "db locked" });
+  for (const width of [44, 68, 101]) {
+    const shown = text(flaky, width);
+    expect(shown).toContain(clock(readAt ?? NaN));
+    expect(shown).toContain("db locked");
+    expect(shown).toContain("host unbound");
+  }
+  expect(text(flaky)).toContain("changed.md");
+  const foreign = harness([...catalog, row(5, "elsewhere.md", { task: "T-9" })]);
+  await foreign.view.refresh();
+  expect(foreign.view.current).toBeUndefined();
+  expect(foreign.view.state.phase).toBe("failed");
+  expect(text(foreign.view)).toContain("the read returned T-9, not this session's task");
+  expect(text(foreign.view)).not.toContain("notes.md");
 });
 
-test("from SPLIT_MIN the list sits beside the detail; state words line up under their header; back link and legend", async () => {
-  const { store, catalog } = fixture();
-  try {
-    let legend = false;
-    const view = new ArtifactView({ identity, load: async () => catalog, openImage: () => true, bound: () => true, changed: () => {}, canInteract: () => true, legend: () => legend });
-    await view.refresh();
-    for (const width of [138, SPLIT_MIN - VIEW_INSET, SPLIT_MIN - VIEW_INSET - 1, 59, 44]) {
-      const rows = view.render(width).map(row => stripTerminalSequences(row));
-      for (const row of view.render(width)) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
-      expect(rows.some(row => row.includes("┬"))).toBe(width + VIEW_INSET >= SPLIT_MIN);
-      expect(rows[0]?.startsWith("‹ Proof · Artifacts")).toBe(true);
-      // The absent row says ABSENT under the state header; the selected row carries the bar.
-      const header = rows.find(row => /^ +(kind +)?title/.test(row)) ?? "";
-      // Titles clip to their column, so the absent row is found by the start of its title.
-      const absent = rows.find(row => row.includes("3333-gone")) ?? "";
-      expect(absent.slice(header.indexOf("state")).startsWith("! ABSENT")).toBe(true);
-      expect(rows.some(row => row.startsWith("▌") && row.includes("1111-shot.png"))).toBe(true);
-    }
-    expect(view.backAt(0, 0)).toBe(true); expect(view.backAt("‹ Proof".length - 1, 0)).toBe(true);
-    expect(view.backAt("‹ Proof".length, 0)).toBe(false); expect(view.backAt(0, 1)).toBe(false);
-    // The full digest appears once, on its own detail row; the caveat is one line until `?` shows the legend.
-    expect(text(view, 138).split(sha(png)).length).toBe(2);
-    expect(text(view)).toContain("not live"); expect(text(view)).not.toContain("never on focus or selection");
-    legend = true;
-    expect(text(view)).toContain("Viewers start only on Enter or o, never on focus or selection");
-    expect(text(view)).toContain(`Bound worktree HEAD ${HEAD} at read · a SHA, not a freshness verdict`);
-  } finally { rmSync(store, { recursive: true, force: true }); }
+test("from SPLIT_MIN the list sits beside the detail; by words line up under their header; back link and legend", async () => {
+  let legend = false;
+  const view = new ArtifactView({ identity, load: async () => catalog, bound: () => true, changed: () => {}, canInteract: () => true, legend: () => legend });
+  await view.refresh();
+  for (const width of [138, SPLIT_MIN - VIEW_INSET, SPLIT_MIN - VIEW_INSET - 1, 59, 44]) {
+    const rows = view.render(width).map(row => stripTerminalSequences(row));
+    for (const row of view.render(width)) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+    expect(rows.some(row => row.includes("┬"))).toBe(width + VIEW_INSET >= SPLIT_MIN);
+    expect(rows[0]?.startsWith("‹ Proof · Artifacts")).toBe(true);
+    // The owner's row says owner under the by header; the selected (newest) row carries the bar.
+    const header = rows.find(row => /^ +(kind +)?title/.test(row)) ?? "";
+    // Titles clip to their column, so the owner's row is found by the start of its title.
+    const owned = rows.find(row => row.includes("notes")) ?? "";
+    expect(owned.slice(header.indexOf(" by") + 1).startsWith("owner")).toBe(true);
+    expect(rows.some(row => row.startsWith("▌") && row.includes("changed"))).toBe(true);
+  }
+  expect(view.backAt(0, 0)).toBe(true); expect(view.backAt("‹ Proof".length - 1, 0)).toBe(true);
+  expect(view.backAt("‹ Proof".length, 0)).toBe(false); expect(view.backAt(0, 1)).toBe(false);
+  // The full digest appears once, on its own detail row; the caveat is one line until `?` shows the legend.
+  expect(text(view, 138).split("0".repeat(64)).length).toBe(2);
+  expect(text(view)).toContain("not live"); expect(text(view)).not.toContain("never on focus or selection");
+  legend = true;
+  expect(text(view)).toContain("Content is read only on Enter, never on focus or selection");
+  expect(text(view)).toContain("binary content is not shown in the terminal");
 });

@@ -1,9 +1,10 @@
 import { resolve, basename } from "node:path";
 import { realpath } from "node:fs/promises";
-import type { Inspection } from "./inspection.ts";
 import { parseChangedPaths, readCandidateDiff } from "./candidate-git.ts";
 import { gitFailure, panelGit, repositoryRoot, parseStatus, parseNumstat, untrackedStats, comparisonArgs, relevantFile, readPanelDiff, FILE_LIMIT, type Comparison } from "./panels-git.ts";
 import type { PanelFile } from "./panels-view.ts";
+/** A task run's committed candidate: its worktree and commit range; no `head` means the worktree's current HEAD. */
+export interface Candidate { readonly task: string; readonly run: string; readonly root: string; readonly base: string; readonly head?: string }
 export const COMPARISONS: readonly Comparison[] = ["candidate", "session", "all", "unstaged", "staged"];
 /** The HEAD each repository root had when this session first read it; persisted so resume keeps it. */
 export interface ReviewBases { get(root: string): string | undefined; set(root: string, head: string): void }
@@ -69,7 +70,7 @@ export class ReviewStore {
   get comparisons(): readonly Comparison[] { return this.explicitScope || !this.candidate ? COMPARISONS.filter(value => value !== "candidate") : COMPARISONS; }
   private readonly abort = new AbortController();
   private active: Promise<void> | undefined;
-  constructor(cwd: string, private readonly changed: () => void, private readonly candidate?: () => Promise<Inspection>, public scopeRequired = false, private strictRoot = false, private readonly bases: ReviewBases = memoryBases()) {
+  constructor(cwd: string, private readonly changed: () => void, private readonly candidate?: () => Promise<Candidate>, public scopeRequired = false, private strictRoot = false, private readonly bases: ReviewBases = memoryBases()) {
     this.root = resolve(cwd); if (candidate) this.comparison = "candidate";
   }
   get name(): string { return basename(this.root); }
@@ -153,13 +154,14 @@ export class ReviewStore {
     if (!this.candidate) throw new Error("No task/run candidate bound to this session; c selects working changes");
     const data = await this.candidate();
     const root = await repositoryRoot(data.root, this.abort.signal);
+    const head = data.head ?? (await panelGit(root, ["rev-parse", "--verify", "HEAD"], this.abort.signal)).trim();
     const [paths, stats, status] = await Promise.all([
-      panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--name-status", "-z", data.base, data.head], this.abort.signal),
-      panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", data.base, data.head], this.abort.signal),
+      panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--name-status", "-z", data.base, head], this.abort.signal),
+      panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", data.base, head], this.abort.signal),
       panelGit(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], this.abort.signal).then(parseStatus, () => undefined),
     ]);
     if (this.disposed || epoch !== this.epoch) return;
-    this.root = root; this.head = data.head; this.candidateBase = data.base; this.branch = data.task + "/" + data.run;
+    this.root = root; this.head = head; this.candidateBase = data.base; this.branch = data.task + "/" + data.run;
     this.files = parseChangedPaths(paths); this.worktree = status; this.stats = parseNumstat(stats); this.error = undefined;
     this.checkedAt = Date.now(); this.revision++;
     if (this.selected === undefined) this.selected = this.visible[0]?.path;

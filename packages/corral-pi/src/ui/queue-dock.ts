@@ -65,14 +65,14 @@ function movable(items: readonly QueuedItem[], key: string, delta: -1 | 1): bool
   return at >= 0 && !!self?.editable && !!other?.editable && other.policy === self.policy;
 }
 
-/** Queued input that is not the owner's, counted by where it came from: `3 inbox deliveries · 2 extension notices`. */
+/** Queued input that is not the owner's, counted by where it came from: `3 automatic messages · 2 extension notices`. */
 function sources(items: readonly QueuedItem[]): string {
   const count = (origin: QueuedItem["origin"]) => items.filter(item => item.origin === origin).length;
   const parts: string[] = [];
   const add = (n: number, one: string, many: string) => { if (n) parts.push(`${n} ${n === 1 ? one : many}`); };
-  add(count("corral-inbox"), "inbox delivery", "inbox deliveries");
+  add(count("auto"), "automatic message", "automatic messages");
   add(count("extension"), "extension notice", "extension notices");
-  add(items.filter(item => item.origin !== "corral-inbox" && item.origin !== "extension").length, "queued notice", "queued notices");
+  add(items.filter(item => item.origin !== "auto" && item.origin !== "extension").length, "queued notice", "queued notices");
   return parts.join(" · ");
 }
 

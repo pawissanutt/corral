@@ -1,43 +1,19 @@
-// Graph (`g` from Task) and Timeline (`l`): the house list-plus-detail layout over the cached lifecycle projection.
-// Row 0 is the back line `‹ Task · Graph`, then one chip row with source, freshness, counts and gaps, one muted caveat
-// line and, behind the shared `?` legend, every other caveat. From SPLIT_MIN main-view columns the list sits left of
-// the selected record's detail; below, the detail stacks under the list. The list fills the rows the view is given.
-import { z } from "zod";
+// Timeline (`l` from Task): the house list-plus-detail layout over this host's session event log, observed live.
+// Row 0 is the back line `‹ Task · Events`, then one chip row with source, position, last sequence and gaps, one muted
+// caveat line and, behind the shared `?` legend, every other caveat. From SPLIT_MIN main-view columns the list sits left
+// of the selected event's detail; below, the detail stacks under the list. The list fills the rows the view is given.
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import type { BridgeEvent } from "../bridge/events.ts";
 import type { InspectorSnapshot } from "./inspector.ts";
-import type { AgentObservation } from "./agents-model.ts";
-import { pad, plainLabel, PANEL_BLUE, PANEL_MUTED, PANEL_RULE, PANEL_TEXT, PANEL_WARNING } from "./panels-view.ts";
+import { pad, plainLabel, PANEL_MUTED, PANEL_RULE, PANEL_TEXT, PANEL_WARNING } from "./panels-view.ts";
 import { VIEW_INSET } from "./frame.ts";
 import {
-  backLine, bold, cells, chip, chipHeader, clock, field, fitColumns, glyphRows, headerRow, listRow, sectionRule, stateBanner, stateRow, toneColor, wrap,
+  backLine, bold, cells, chip, chipHeader, clock, field, fitColumns, headerRow, listRow, sectionRule, stateRow, wrap,
   type ColumnLayout,
 } from "./panel-parts.ts";
-import { readState, type ReadState } from "./read-state.ts";
+import type { ReadState } from "./read-state.ts";
 import { LIST_WIDTH, SPLIT_MIN } from "./proof-view.ts";
-
-/**
- * Main-view columns from which the graph detail draws its edges as arrows; below, the same edges read as words. The
- * workbench draws this view VIEW_INSET cells narrower than the main view, so the comparison adds them back.
- */
-export const GRAPH_MIN = 90;
-
-const Label = z.string().max(4096);
-const Schema = z.object({
-  version: z.literal(1), task: Label, run: Label,
-  nodes: z.array(z.object({ id: Label, title: Label, status: Label.nullable(), depends_on: z.array(Label).max(24), parent: Label.nullable(), missing: z.boolean() })).max(24),
-  graph_gap: z.boolean(), event_gap: z.boolean(), end: z.number().nonnegative(),
-  events: z.array(z.object({ source: Label, sequence: z.number().nonnegative(), event: z.object({
-    ts: Label, task: Label.nullable().optional(), run: Label.nullable().optional(), kind: Label, actor: Label.nullable().optional(), via: Label.nullable().optional(), detail: z.unknown(),
-  }) })).max(80),
-});
-export type LifecycleSnapshot = z.infer<typeof Schema>;
-type GraphNode = LifecycleSnapshot["nodes"][number];
-type EventEntry = LifecycleSnapshot["events"][number];
-function eventRun(detail: unknown): string | undefined {
-  return typeof detail === "object" && detail !== null && "run" in detail && typeof detail.run === "string" ? detail.run : undefined;
-}
 
 /**
  * Workbench wiring: the shared `?` legend, the rows the view is shown in (0 or absent: draw the whole list) and whether
@@ -45,39 +21,26 @@ function eventRun(detail: unknown): string | undefined {
  */
 export interface LifecycleViewOptions { readonly legend?: () => boolean; readonly rows?: () => number; readonly focused?: () => boolean }
 
-/** One view's content before layout. */
+/** The view's content before layout. */
 interface Frame {
   readonly chips: readonly string[];
-  /** The source's read state, drawn by the shared chip row and problem line; the host's binding is `unbound`, a separate fact. */
-  readonly state: ReadState; readonly unbound: boolean; readonly subject: string;
-  /** Warning sentences beyond the read state, each wrapped whole (never clipped). */
-  readonly alerts: readonly string[];
-  /** The one muted caveat row. */
-  readonly line: string;
   readonly legend: readonly string[];
   readonly layouts: readonly ColumnLayout[];
   readonly rows: readonly (readonly string[])[];
   readonly selected: number;
   readonly empty: string;
-  /** Drawn in place of the list and detail while there is nothing to list (the state row, or nothing at all). */
+  /** Drawn in place of the list and detail while there is nothing to list. */
   readonly body: ((width: number) => string[]) | undefined;
   readonly detail: (width: number) => string[];
-  readonly after: ((width: number) => string[]) | undefined;
 }
 
-const VALUE_CAP = 2048, PAIR_CAP = 60, DEPTH_CAP = 6;
+const VALUE_CAP = 2048, PAIR_CAP = 60, DEPTH_CAP = 6, WINDOW = 80;
 /** Host events are observed live in this process, never read: no read phase, no freshness note, no reread. */
 const OBSERVED: ReadState = { phase: "not_applicable", readAt: undefined, refreshing: false };
-const READ_ONLY = (identity: HostIdentity) => `Read-only · ${identity.task ?? "no task"} / ${identity.run ?? "no run"} · No queue, move or dispatch controls.`;
-const SNAPSHOT = "Canonical snapshot at last reconcile · not a live subscription.";
+const LINE = "Host observations · NOT canonical task settlement";
 
 const muted = (text: string) => PANEL_MUTED + text + PANEL_TEXT;
 const clip = (text: string, width: number) => truncateToWidth(text, Math.max(0, width), "…");
-/** An error in plain words: no exception class prefix, and a schema dump becomes a sentence. */
-function plainError(text: string): string {
-  const words = plainLabel(text).replace(/^\w*Error:\s*/, "");
-  return /^[[{]/.test(words) ? "the read returned data of an unexpected shape" : words;
-}
 function eventTime(ts: string): string {
   const at = Date.parse(ts);
   return Number.isFinite(at) ? clock(at, true) : plainLabel(ts);
@@ -92,7 +55,7 @@ function excerpt(text: string): string {
 }
 
 interface Pair { readonly key: string; readonly value: string }
-/** Event detail as label/value pairs: nested objects as `a.b`, arrays of objects as `a[0].b`, bounded in depth and count. */
+/** Event payload as label/value pairs: nested objects as `a.b`, arrays of objects as `a[0].b`, bounded in depth and count. */
 function flatten(value: unknown): { readonly pairs: Pair[]; readonly more: number } {
   const pairs: Pair[] = [];
   let more = 0;
@@ -125,110 +88,36 @@ function pairRows(value: unknown, width: number): string[] {
   if (more) rows.push(muted(`… ${more} more fields`));
   return rows;
 }
-/** A label/value row like `field`, whose value keeps its own colours. */
-function styledField(label: string, value: string, width: number, labelWidth: number): string[] {
-  return wrap(PANEL_TEXT + value, width - labelWidth - 1).map((row, i) => `${PANEL_MUTED}${pad(i ? "" : label, labelWidth)}${PANEL_TEXT} ${row}`);
-}
 
-/** Glyph, word and colour of a task status; the word always shows beside the colour. */
-function nodeState(node: GraphNode): readonly [glyph: string, word: string, color: string] {
-  if (node.missing) return ["!", "missing", PANEL_WARNING];
-  const status = node.status;
-  if (status === null) return ["!", "unavailable", PANEL_WARNING];
-  const key = status.toLowerCase();
-  if (/^(done|merged|landed|closed|accepted)$/.test(key)) return ["✓", status, toneColor("ok")];
-  if (/fail|cancel|reject|abandon/.test(key)) return ["✗", status, toneColor("bad")];
-  if (/block/.test(key)) return ["!", status, toneColor("warn")];
-  if (/running|progress|active|gate|review/.test(key)) return ["●", status, PANEL_BLUE];
-  return ["○", status, PANEL_MUTED];
-}
-/** How `node` relates to the bound task, in the canonical edges' own terms. */
-function relationOf(data: LifecycleSnapshot, node: GraphNode): string {
-  const root = data.nodes.find(item => item.id === data.task), out: string[] = [];
-  if (node.id === data.task) out.push("this task");
-  if (root?.depends_on.includes(node.id)) out.push("prerequisite");
-  if (root?.parent === node.id) out.push("parent");
-  if (node.depends_on.includes(data.task)) out.push("dependent");
-  if (node.parent === data.task) out.push("subtask");
-  return out.join(", ") || "indirect";
-}
-
-/** Cached bounded projection. Render never reads a log, traverses a history or invokes mutations. */
+/** This host's session events, newest window only. Render never reads a log or invokes mutations. */
 export class LifecycleView implements Component {
-  mode: "graph" | "timeline" = "graph";
-  source: "task" | "host" = "task";
-  private hostSeq: number | undefined;
-  current: LifecycleSnapshot | undefined;
-  refreshing = false;
-  /** The last read's failure in plain words, and when it failed; cleared by a successful read. */
-  private error: string | undefined; private failedAt: number | undefined;
-  private active: Promise<void> | undefined;
-  private disposed = false;
   private selected = 0;
+  /** The selected event's sequence: the selection follows its event while the window slides. */
+  private seq: number | undefined;
   /** First list row shown while the list is windowed; follows the selection. */
   private top = 0;
-  private readAt: number | undefined;
   private backTo = 0;
   /** List rows by content row; a click selects only within the list's columns `[0, hitWidth)`. */
   private hits = new Map<number, number>(); private hitWidth = 0;
-  constructor(private readonly identity: HostIdentity, private readonly load: (() => Promise<unknown>) | undefined,
-    private readonly agents: () => readonly AgentObservation[] | undefined, private readonly bound: () => boolean,
+  constructor(private readonly identity: HostIdentity, private readonly bound: () => boolean,
     private readonly changed: () => void, private readonly canInteract: () => boolean,
-    private readonly host: () => InspectorSnapshot | undefined = () => undefined,
-    private readonly options: LifecycleViewOptions = {}) {}
+    private readonly host: () => InspectorSnapshot | undefined, private readonly options: LifecycleViewOptions = {}) {}
   /** The `‹ Task` back link: view-local columns `[from, to)` on content row `row`. The view itself ignores clicks there. */
   get back(): { readonly row: number; readonly from: number; readonly to: number } {
     return { row: 0, from: 0, to: this.backTo };
   }
-  /** A canonical lifecycle read exists for this session: a reader and a bound task and run. */
-  get applicable(): boolean { return !!this.load && !!this.identity.task && !!this.identity.run; }
-  /** Where the canonical read stands. Retained rows keep their read time after a failed reread. */
-  get state(): ReadState {
-    return readState({ applicable: this.applicable, reason: this.load ? "no_task_run" : "no_reader", hasData: this.current !== undefined, stale: false,
-      refreshing: this.refreshing, checkedAt: this.readAt, error: this.error, failedAt: this.failedAt });
-  }
-  /** Rereads the canonical projection; nothing to do when no read applies. */
-  refresh(): Promise<void> {
-    if (this.active || this.disposed || !this.applicable) return this.active ?? Promise.resolve();
-    this.active = this.read().finally(() => { this.active = undefined; });
-    return this.active;
-  }
-  private async read(): Promise<void> {
-    const load = this.load;
-    if (!load) return;
-    this.refreshing = true; this.changed();
-    try {
-      const data = Schema.parse(await load());
-      if (data.task !== this.identity.task || data.run !== this.identity.run) throw new Error(`the read returned ${data.task} / ${data.run}, not this session's task and run`);
-      if (data.events.some(e => e.event.task !== data.task || ((e.event.run ?? eventRun(e.event.detail)) !== undefined && (e.event.run ?? eventRun(e.event.detail)) !== data.run))) throw new Error("the read held an event of another task or run");
-      if (this.disposed) return;
-      const previous = this.current;
-      if (previous) {
-        if (this.mode === "graph") {
-          const id = previous.nodes[this.selected]?.id;
-          if (id) this.selected = data.nodes.findIndex(node => node.id === id);
-        } else {
-          const entry = previous.events[this.selected];
-          if (entry) this.selected = data.events.findIndex(item => item.source === entry.source && item.sequence === entry.sequence);
-        }
-      }
-      this.current = data; this.error = undefined; this.failedAt = undefined; this.readAt = Date.now();
-    } catch (error) { if (!this.disposed) { this.error = plainError(String(error)); this.failedAt = Date.now(); } }
-    finally { this.refreshing = false; if (!this.disposed) this.changed(); }
+  private window(): readonly BridgeEvent[] {
+    return this.host()?.events.events.slice(-WINDOW) ?? [];
   }
   handleInput(data: string): boolean {
     if (!this.canInteract()) return false;
-    if (this.mode === "timeline" && (data === "h" || data === "c")) { this.source = data === "h" ? "host" : "task"; this.selected = 0; this.hostSeq = undefined; this.changed(); return true; }
-    if (data === "r") { void this.refresh(); return true; }
     if (data === "j" || data === "k" || matchesKey(data, "down") || matchesKey(data, "up")) {
-      const host = this.mode === "timeline" && this.source === "host" ? this.host()?.events.events.slice(-80) : undefined;
-      if (host && this.hostSeq !== undefined) this.selected = host.findIndex(e => e.seq === this.hostSeq);
-      const count = host ? host.length : this.mode === "graph" ? this.current?.nodes.length : this.current?.events.length;
-      this.selected = Math.max(0, Math.min((count ?? 1) - 1, this.selected + (data === "j" || matchesKey(data, "down") ? 1 : -1)));
-      if (host) this.hostSeq = host[this.selected]?.seq;
+      const events = this.window();
+      if (this.seq !== undefined) this.selected = events.findIndex(e => e.seq === this.seq);
+      this.selected = Math.max(0, Math.min(events.length - 1, this.selected + (data === "j" || matchesKey(data, "down") ? 1 : -1)));
+      this.seq = events[this.selected]?.seq;
       this.changed(); return true;
     }
-    if (matchesKey(data, "enter")) { this.changed(); return true; }
     return false;
   }
   handleMouse(event: TuiMouseEvent) {
@@ -236,210 +125,77 @@ export class LifecycleView implements Component {
     const index = this.hits.get(event.y);
     if (index === undefined || event.x >= this.hitWidth) return undefined;
     this.selected = index;
-    if (this.mode === "timeline" && this.source === "host") this.hostSeq = this.host()?.events.events.slice(-80)[index]?.seq;
+    this.seq = this.window()[index]?.seq;
     this.changed(); return { handled: true };
   }
   render(width: number): string[] {
     const w = Math.max(1, width);
     this.hits.clear();
     const right = `${this.identity.task ?? "no task"} / ${this.identity.run ?? "no run"} · read-only`;
-    const back = backLine("Task", this.mode === "graph" ? "Graph" : "Events", right, w);
+    const back = backLine("Task", "Events", right, w);
     this.backTo = back.to;
-    const frame = this.mode === "graph" ? this.graphFrame(w) : this.source === "host" ? this.hostFrame() : this.eventFrame();
-    return this.layout(frame, back.line, w);
+    return this.layout(this.frame(), back.line, w);
   }
 
-  /**
-   * The source chip and read state of a canonical frame, shared by Graph and the canonical timeline. Without retained
-   * rows the state row stands in place of the list; `nothing` says what a failed read does not infer.
-   */
-  private canonical(subject: string, nothing: string): Pick<Frame, "chips" | "state" | "unbound" | "subject" | "alerts" | "body"> {
-    const state = this.state;
-    const why = state.phase === "failed" ? nothing : this.identity.task && this.identity.run ? "this host has no lifecycle reader." : "this session has no task run.";
-    return { chips: state.phase === "not_applicable" ? [] : [chip("canonical")], state, unbound: !this.bound(), subject, alerts: [],
-      body: this.current ? undefined : bodyWidth => stateRow(state, subject, bodyWidth, why) };
-  }
-  private clampSelection(count: number): number {
-    this.selected = Math.max(-1, Math.min(this.selected, count - 1));
-    return this.selected;
-  }
-  private position(count: number, noun: string): string {
-    if (!count) return chip(`0 ${noun}`);
-    return chip(`${this.selected >= 0 && this.selected < count ? this.selected + 1 : "–"}/${count} ${noun}`);
+  private position(count: number): string {
+    if (!count) return chip("0 events");
+    return chip(`${this.selected >= 0 && this.selected < count ? this.selected + 1 : "–"}/${count} events`);
   }
 
-  private graphFrame(width: number): Frame {
-    const data = this.current, read = this.canonical("task graph", "No graph shown · nothing is inferred from its absence"), arrows = width + VIEW_INSET >= GRAPH_MIN;
-    const nodes = data?.nodes ?? [], selected = data ? this.clampSelection(nodes.length) : this.selected;
-    const id = Math.min(12, Math.max(4, ...nodes.map(node => visibleWidth(plainLabel(node.id)))));
-    const legend = [READ_ONLY(this.identity),
-      "Task graph: task ─depends_on→ prerequisite · task ┄task-parent→ parent. Below the graph width the same canonical edges read as a dependency list.",
-      SNAPSHOT,
-      ...(data?.graph_gap ? ["GAP: graph capped at 24 nodes/edges per task; omitted targets remain unknown."] : []),
-      "Agent-parent provenance comes from host observations, NOT task dependency edges. No agent parent is inferred from conversation order.",
-      "✓ done · ● running or in review · ○ other state · ! blocked, missing or unavailable · ✗ failed or cancelled"];
-    return {
-      ...read,
-      chips: [...read.chips, ...(data ? [this.position(nodes.length, "tasks"), ...(data.graph_gap ? [chip("gap · capped at 24", "warn")] : [])] : [])],
-      line: arrows ? "Task graph: task ─depends_on→ prerequisite · task ┄task-parent→ parent" : "Dependency list · same canonical edges and details",
-      legend,
-      layouts: [
-        { columns: [{ label: "task", width: id }, { label: "state", width: 13 }, { label: "relation", width: 20 }, { label: "title", width: 10 }], flex: 3 },
-        { columns: [{ label: "task", width: id }, { label: "state", width: 13 }, { label: "relation", width: 8 }], flex: 2 },
-        { columns: [{ label: "task", width: id }, { label: "state", width: 4 }], flex: 1 },
-      ],
-      rows: data ? data.nodes.map(node => {
-        const [glyph, word, color] = nodeState(node);
-        return [PANEL_TEXT + plainLabel(node.id), `${color}${glyph} ${plainLabel(word)}${PANEL_TEXT}`, muted(relationOf(data, node)), PANEL_TEXT + plainLabel(node.title)];
-      }) : [],
-      selected, empty: "No task in this bounded window · not proof of no dependencies",
-      detail: detailWidth => data ? this.nodeDetail(data, nodes[selected], detailWidth, arrows) : [],
-      after: detailWidth => this.agentRows(detailWidth),
-    };
-  }
-  private nodeDetail(data: LifecycleSnapshot, node: GraphNode | undefined, width: number, arrows: boolean): string[] {
-    if (!node) return data.nodes.length ? wrap(PANEL_WARNING + "! Selected identity no longer in this window · j/k or click to select an existing record" + PANEL_TEXT, width) : [];
-    const [glyph, word, color] = nodeState(node), L = 10;
-    const out = [clip(`${PANEL_TEXT}${bold(plainLabel(node.id))} ${color}${glyph} ${plainLabel(word)}${PANEL_TEXT}`, width)];
-    out.push(...field("Title", node.title, width, L), ...field("Relation", relationOf(data, node), width, L));
-    if (node.missing) out.push(...styledField("Record", `${PANEL_WARNING}! missing / unavailable${PANEL_TEXT}`, width, L));
-    const dep = (target: string) => {
-      const found = data.nodes.find(item => item.id === target);
-      const status = !found || found.missing ? `${PANEL_WARNING}missing / unavailable${PANEL_TEXT}` : muted(plainLabel(found.status ?? "unavailable"));
-      const unmet = found && !found.missing && found.status !== "done" ? `${PANEL_WARNING} · unmet prerequisite${PANEL_TEXT}` : "";
-      return `${plainLabel(target)} ${status}${unmet}`;
-    };
-    if (arrows) {
-      const edges = [...node.depends_on.map(target => `─depends_on→ ${dep(target)}`), ...(node.parent ? [`┄task-parent→ ${plainLabel(node.parent)}`] : [])];
-      if (!edges.length) out.push(...field("Edges", "none", width, L));
-      edges.forEach((edge, i) => out.push(...styledField(i ? "" : "Edges", `${muted(i === edges.length - 1 ? "└" : "├")}${edge}`, width, L)));
-    } else {
-      if (!node.depends_on.length) out.push(...field("Requires", "none", width, L));
-      node.depends_on.forEach((target, i) => out.push(...styledField(i ? "" : "Requires", dep(target), width, L)));
-      out.push(...field("Parent", node.parent ?? "none", width, L));
-    }
-    const needed = data.nodes.filter(item => item.depends_on.includes(node.id)).map(item => item.id);
-    if (needed.length) out.push(...field("Needed by", needed.join(", "), width, L));
-    return out;
-  }
-  private agentRows(width: number): string[] {
-    const agents = this.agents(), out = ["", sectionRule("Agent parents · host observations", width)];
-    if (!agents) out.push(muted("Agent/session source unavailable"));
-    else if (!agents.length) out.push(muted("No agent observed in this host"));
-    for (const agent of agents?.slice(0, 100) ?? []) {
-      out.push(clip(`${PANEL_TEXT}${plainLabel(agent.id)} ${PANEL_MUTED}┄agent-parent→ ${PANEL_TEXT}${plainLabel(agent.parent ?? "host root")}`
-        + `${PANEL_MUTED} · session ${plainLabel(agent.session)} · ${plainLabel(agent.state)}${PANEL_TEXT}`, width));
-    }
-    return out;
-  }
-
-  private eventFrame(): Frame {
-    const data = this.current, read = this.canonical("task events", "No events shown · nothing is inferred from their absence"), events = data?.events ?? [];
-    const selected = data ? this.clampSelection(events.length) : this.selected;
-    const runOf = (entry: EventEntry) => plainLabel(entry.event.run ?? eventRun(entry.event.detail) ?? "–");
-    const seq = Math.max(1, ...events.map(entry => String(entry.sequence).length));
-    const run = Math.min(10, Math.max(3, ...events.map(entry => visibleWidth(runOf(entry)))));
-    const legend = [READ_ONLY(this.identity),
-      "Canonical task events · a separate source from host/session events, never merged or timestamp-sorted.",
-      `Source: canonical database events · append sequence (not timestamp-sorted) · end sequence ${data?.end ?? "unknown"}.`,
-      "Bound task/run events and task-wide events only · host/session events are a separate source.",
-      data?.event_gap ? "GAP: bounded page / omitted, malformed or oversized events." : "Complete bounded task page at read boundary; other scopes are not included.",
-      SNAPSHOT,
-      `Times are local; the detail adds the recorded timestamp. – in the run column marks a task-wide event. Values over ${VALUE_CAP} characters end in "… [detail excerpt]".`];
-    return {
-      ...read,
-      chips: [...read.chips, ...(data ? [this.position(events.length, "events"), ...(data.event_gap ? [chip("gap · bounded page", "warn")] : []), chip(`end #${data.end}`)] : [])],
-      line: "Canonical task events in append order · never merged with host events or timestamp-sorted",
-      legend,
-      layouts: [
-        { columns: [{ label: "#", width: seq, align: "right" }, { label: "time", width: 8 }, { label: "kind", width: 8 }, { label: "run", width: run }], flex: 2 },
-        { columns: [{ label: "#", width: seq, align: "right" }, { label: "kind", width: 6 }, { label: "run", width: run }], flex: 1 },
-        { columns: [{ label: "#", width: seq, align: "right" }, { label: "kind", width: 1 }], flex: 1 },
-      ],
-      rows: events.map(entry => [muted(String(entry.sequence)), muted(eventTime(entry.event.ts)), PANEL_TEXT + plainLabel(entry.event.kind), muted(runOf(entry))]),
-      selected, empty: "No matching events in this bounded window · not proof of no history",
-      detail: detailWidth => {
-        const entry = events[selected];
-        if (!data || !events.length) return [];
-        if (!entry) return wrap(PANEL_WARNING + "! Selected identity no longer in this window · j/k or click to select an existing record" + PANEL_TEXT, detailWidth);
-        const e = entry.event, L = 7;
-        return [clip(`${PANEL_TEXT}${bold(plainLabel(e.kind))}${PANEL_MUTED} · #${entry.sequence}${PANEL_TEXT}`, detailWidth),
-          ...field("Time", stampOf(e.ts), detailWidth, L),
-          ...field("Task", `${e.task ?? "task-wide"} · run ${e.run ?? eventRun(e.detail) ?? "task-wide"}`, detailWidth, L),
-          ...field("Actor", `${e.actor ?? "unavailable"} · via ${e.via ?? "unavailable"}`, detailWidth, L),
-          ...field("Source", `${entry.source}@${entry.sequence}`, detailWidth, L),
-          sectionRule("Detail", detailWidth), ...pairRows(e.detail, detailWidth)];
-      },
-      after: undefined,
-    };
-  }
-
-  private hostFrame(): Frame {
-    const host = this.host(), page = host?.events, bound = this.bound(), source = chip("host log · not canonical");
-    const legend = [READ_ONLY(this.identity),
-      "Scoped host/session events · a separate source from canonical task events, never merged or timestamp-sorted.",
+  private frame(): Frame {
+    const host = this.host(), page = host?.events, bound = this.bound();
+    const legend = [`Read-only · ${this.identity.task ?? "no task"} / ${this.identity.run ?? "no run"} · No queue, move or dispatch controls.`,
+      "Scoped host/session events · in append order, never timestamp-sorted.",
       bound ? "Bound host observations · NOT canonical task settlement." : "Host unbound · these observations may be stale · NOT canonical task settlement.",
-      ...(host && page ? [`Session ${host.session} · bound session ${host.boundSession ?? "unavailable"} · g${page.generation} · last #${page.last}.`] : []),
+      ...(host && page ? [`Session ${host.session} · bound session ${host.boundSession ?? "unavailable"} · last #${page.last}.`] : []),
       ...(page?.gap ? [`GAP: ${page.gap.missing} host events missing; resumed #${page.gap.resumed}.`] : []),
-      ...(page && (page.more || page.events.length > 80) ? ["GAP: host event window capped / incomplete; older or additional events unavailable."] : []),
-      "Append sequence within this host generation only; earlier sessions unavailable. No success inferred."];
-    const line = "Host observations · NOT canonical task settlement";
-    // Host events are observed, not read: the frame carries no read phase, only the host's binding.
-    const absent = (chips: readonly string[], alerts: readonly string[], body: (bodyWidth: number) => string[]): Frame => ({ chips, state: OBSERVED,
-      unbound: !bound, subject: "host events", alerts, line, legend, body, layouts: [], rows: [], selected: -1, empty: "", detail: () => [], after: undefined });
-    if (!host || !page) return absent([], [], bodyWidth => stateRow(OBSERVED, "session event log", bodyWidth, "this host does not expose its session event log."));
-    // Another generation's events are never listed under this session.
-    if (page.generation !== this.identity.generation) {
-      return absent([source], [`Host log is generation ${page.generation}; this session is generation ${this.identity.generation} · events not shown`], () => []);
+      ...(page && (page.more || page.events.length > WINDOW) ? ["GAP: host event window capped / incomplete; older or additional events unavailable."] : []),
+      "Append sequence within this host process only; earlier sessions unavailable. No success inferred."];
+    if (!host || !page) {
+      return { chips: [], legend, layouts: [], rows: [], selected: -1, empty: "", detail: () => [],
+        body: bodyWidth => stateRow(OBSERVED, "session event log", bodyWidth, "this host does not expose its session event log.") };
     }
-    const events = page.events.slice(-80);
-    if (this.hostSeq !== undefined) this.selected = events.findIndex(event => event.seq === this.hostSeq);
+    const events = this.window();
+    if (this.seq !== undefined) this.selected = events.findIndex(event => event.seq === this.seq);
     const selected = this.selected, current = events[selected];
-    if (current) this.hostSeq = current.seq;
+    if (current) this.seq = current.seq;
     const seq = Math.max(1, ...events.map(event => String(event.seq).length));
     return {
-      chips: [source, this.position(events.length, "events"), chip(`g${page.generation} · last #${page.last}`),
+      chips: [chip("host log · not canonical"), this.position(events.length), chip(`last #${page.last}`),
         ...(page.gap ? [chip(`gap · ${page.gap.missing} missing, resumed #${page.gap.resumed}`, "warn")] : []),
-        ...(page.more || page.events.length > 80 ? [chip("gap · window capped", "warn")] : [])],
-      state: OBSERVED, unbound: !bound, subject: "host events", alerts: [], line, legend, body: undefined,
+        ...(page.more || page.events.length > WINDOW ? [chip("gap · window capped", "warn")] : [])],
+      legend, body: undefined,
       layouts: [
         { columns: [{ label: "#", width: seq, align: "right" }, { label: "time", width: 8 }, { label: "kind", width: 8 }], flex: 2 },
         { columns: [{ label: "#", width: seq, align: "right" }, { label: "kind", width: 1 }], flex: 1 },
       ],
       rows: events.map(event => [muted(String(event.seq)), muted(eventTime(event.at)),
         PANEL_TEXT + plainLabel(event.kind) + (event.omitted ? muted(" · payload omitted") : "")]),
-      selected, empty: "No host event in this generation's window",
-      detail: detailWidth => this.hostDetail(host, current, detailWidth, events.length > 0),
-      after: undefined,
+      selected, empty: "No host event in this process's window",
+      detail: detailWidth => this.detail(host, current, detailWidth, events.length > 0),
     };
   }
-  private hostDetail(host: InspectorSnapshot, event: BridgeEvent | undefined, width: number, any: boolean): string[] {
+  private detail(host: InspectorSnapshot, event: BridgeEvent | undefined, width: number, any: boolean): string[] {
     if (!event) return any ? wrap(PANEL_WARNING + "! Selected session event unavailable / evicted · j/k select existing event" + PANEL_TEXT, width) : [];
-    const L = 8, payload = Object.fromEntries(Object.entries(event).filter(([key]) => !["seq", "generation", "at", "kind"].includes(key)));
-    const out = [clip(`${PANEL_TEXT}${bold(plainLabel(event.kind))}${PANEL_MUTED} · #${event.seq} · g${event.generation}${PANEL_TEXT}`, width),
+    const L = 8, payload = Object.fromEntries(Object.entries(event).filter(([key]) => !["seq", "at", "kind"].includes(key)));
+    const out = [clip(`${PANEL_TEXT}${bold(plainLabel(event.kind))}${PANEL_MUTED} · #${event.seq}${PANEL_TEXT}`, width),
       ...field("Time", stampOf(event.at), width, L),
-      ...field("Session", `${host.session} / g${event.generation} / #${event.seq}`, width, L),
+      ...field("Session", `${host.session} / #${event.seq}`, width, L),
       ...field("Bound", host.boundSession ?? "unavailable", width, L)];
     if (Object.keys(payload).length) out.push(sectionRule("Payload", width), ...pairRows(payload, width));
     return out;
   }
 
   /**
-   * Back line, the chip row with the read state, the problem line, other alerts, the caveat row, the legend, then the
-   * list beside (or above) the detail; while nothing is listed, the frame's body stands in their place.
+   * Back line, the chip row with the host's binding, the caveat row, the legend, then the list beside (or above) the
+   * detail; while nothing is listed, the frame's body stands in their place.
    */
   private layout(frame: Frame, back: string, width: number): string[] {
     const lines = [back], legend = this.options.legend?.() ?? false;
-    lines.push(...chipHeader(frame.chips, width, frame.state, Date.now(), { unbound: frame.unbound }));
-    lines.push(...stateBanner(frame.state, frame.subject, width, legend));
-    for (const alert of frame.alerts) lines.push(...glyphRows(`! ${alert}`, width, PANEL_WARNING));
-    if (frame.line) lines.push(muted(clip(plainLabel(frame.line), width)));
+    lines.push(...chipHeader(frame.chips, width, OBSERVED, Date.now(), { unbound: !this.bound() }));
+    lines.push(muted(clip(LINE, width)));
     if (legend) for (const text of frame.legend) lines.push(...wrap(muted(plainLabel(text)), width));
-    if (frame.body) {
-      lines.push(...frame.body(width));
-      if (frame.after) lines.push(...frame.after(width));
-      return lines;
-    }
+    if (frame.body) return [...lines, ...frame.body(width)];
 
     const wide = width + VIEW_INSET >= SPLIT_MIN, listWidth = wide ? LIST_WIDTH : width;
     this.hitWidth = listWidth;
@@ -476,9 +232,7 @@ export class LifecycleView implements Component {
       for (const row of left) { if (row.index !== undefined) this.hits.set(lines.length, row.index); lines.push(row.text); }
       if (detail.length) lines.push(rule, ...detail);
     }
-    if (frame.after) lines.push(...frame.after(width));
     return lines;
   }
   invalidate(): void {}
-  dispose(): void { this.disposed = true; }
 }

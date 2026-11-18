@@ -1,4 +1,4 @@
-// Read-only host observations. Neither a tool commit nor an agent assertion is gate acceptance.
+// Read-only host observations. Neither an operation's ok nor an agent assertion is gate acceptance.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { BridgeEvent, EventLog, EventPage } from "../bridge/events.ts";
 import type { CapabilitySet } from "../roles/types.ts";
@@ -8,15 +8,13 @@ import { plainLabel } from "./panels-view.ts";
 import { observedCorralResult } from "./receipt-source.ts";
 
 /**
- * One corral operation this host observed: when, which tool, whether a Code Mode cell made it, the receipt state
- * (`no receipt` when the result carried none) and the presenter's one-line summary (`""` without a presenter).
- * Never the receipt body or the tool arguments, which may hold private text.
+ * One corral operation this host observed: when, which tool, whether a Code Mode cell made it, whether its result was
+ * an error and the presenter's one-line summary (`""` without a presenter). Never the result body or the tool
+ * arguments, which may hold private text.
  */
-export interface ReceiptRow { readonly at: number; readonly tool: string; readonly nested: boolean; readonly state: string; readonly summary: string }
-/** Receipt states a corral result can carry; anything else reads `no receipt`. */
-const RECEIPT_STATES: Readonly<Record<string, true>> = { committed: true, rejected: true, reserved: true, queued: true, uncertain: true, abandoned: true };
+export interface OperationRow { readonly at: number; readonly tool: string; readonly nested: boolean; readonly state: "ok" | "failed"; readonly summary: string }
 /** Operations kept; older ones are counted, not kept. */
-const RECEIPT_RING = 24;
+const OPERATION_RING = 24;
 /** Summary characters a readable line keeps so its state still shows; the exact records keep all of it. */
 const SUMMARY_CELLS = 96;
 
@@ -36,38 +34,37 @@ export interface InspectorSnapshot {
   readonly settings: readonly string[];
   readonly budget: readonly string[];
   readonly events: EventPage;
-  readonly receipts: readonly ReceiptRow[];
+  readonly receipts: readonly OperationRow[];
   readonly receiptsOmitted: number;
 }
 
-/** Retains bounded observations, not receipt bodies or tool arguments that may contain private text. */
+/** Retains bounded observations, not result bodies or tool arguments that may contain private text. */
 export class InspectorActivity {
-  private readonly receipts: ReceiptRow[] = [];
+  private readonly operations: OperationRow[] = [];
   private omitted = 0;
   constructor(private readonly events: EventLog, private readonly changed: () => void) {}
 
   extend(pi: ExtensionAPI, allowed: ReadonlySet<string>): void {
     pi.on("tool_result", event => {
       if (!allowed.has(event.toolName) || !observedCorralResult(event)) return;
-      const details = event.details as { state?: unknown } | undefined;
-      const state = typeof details?.state === "string" && RECEIPT_STATES[details.state] === true ? details.state : "no receipt";
       const summary = corralSummary(event.toolName, event.input, { content: event.content, details: event.details }, event.isError) ?? "";
-      this.receipts.push({ at: Date.now(), tool: event.toolName, nested: event.parentToolCallId !== undefined, state, summary });
-      if (this.receipts.length > RECEIPT_RING) { this.receipts.shift(); this.omitted++; }
+      this.operations.push({ at: Date.now(), tool: event.toolName, nested: event.parentToolCallId !== undefined,
+        state: event.isError ? "failed" : "ok", summary });
+      if (this.operations.length > OPERATION_RING) { this.operations.shift(); this.omitted++; }
       this.changed();
     });
   }
 
   snapshot(): Pick<InspectorSnapshot, "events" | "receipts" | "receiptsOmitted"> {
     // Request the entire bounded ring; unlike a zero-based count, a dropped prefix is explicit.
-    return { events: this.events.since(0, 512 * 8192, 512), receipts: [...this.receipts], receiptsOmitted: this.omitted };
+    return { events: this.events.since(0, 512 * 8192, 512), receipts: [...this.operations], receiptsOmitted: this.omitted };
   }
 }
 
 export function inspectorContext(info: InspectorSnapshot): string[] {
   const caps = info.capabilities;
   return [
-    "Effective generation configuration",
+    "Effective configuration",
     ...(caps ? [`Preset ${caps.preset} · catalog ${caps.catalog}`, `Snapshot digest ${caps.digest}`,
       `Enabled capabilities: ${caps.enabled.join(", ") || "none"}`] : ["Capabilities unavailable · legacy launch"]),
     `Project-text trust: ${info.guidance.projectText === null ? "unavailable · legacy launch" : info.guidance.projectText ? "enabled" : "disabled"}`,
@@ -92,67 +89,57 @@ function clock(at: number | string, now: number): string {
   return `${day} ${time}`;
 }
 const words = (kind: string) => plainLabel(kind.replace(/^corral_/, "").replace(/_/g, " "));
-/** The presenter's own glyph, kept only where the receipt state does not say otherwise; `✓` needs a receipt. */
-function receiptGlyph(row: ReceiptRow): string {
-  const own = /^([✓✗○▲!…]) /.exec(row.summary)?.[1];
-  if (row.state === "rejected") return "✗";
-  if (row.state === "uncertain" || row.state === "abandoned") return "!";
-  if (row.state === "queued" || row.state === "reserved") return "○";
-  if (row.state === "no receipt") return own === "✗" ? "✗" : "!";
-  return own ?? "○";
-}
-function stateWords(row: ReceiptRow, glyph: string): string {
-  if (row.state === "uncertain" || row.state === "abandoned") return `${row.state} · outcome unknown`;
-  if (row.state === "no receipt") return glyph === "✗" ? "no receipt · failed" : "no receipt · outcome unknown";
-  return row.state;
+/** A failed result is always `✗`; otherwise the presenter's own glyph (a wait reads `○`), `✓` without one. */
+function operationGlyph(row: OperationRow): string {
+  if (row.state === "failed") return "✗";
+  return /^([✓✗○▲!…]) /.exec(row.summary)?.[1] ?? "✓";
 }
 function eventRaw(event: BridgeEvent): string {
   const omitted = event.omitted === undefined ? ""
     : ` · omitted ${plainLabel(String(event.omitted))}${typeof event.bytes === "number" ? `, ${event.bytes} bytes` : ""}`;
-  return `#${event.seq} ${plainLabel(event.at)} · g${event.generation} · ${plainLabel(event.kind)}${omitted}`;
+  return `#${event.seq} ${plainLabel(event.at)} · ${plainLabel(event.kind)}${omitted}`;
 }
 
 /**
- * Host events and the corral operations this host observed, for the receipts pager. `lines` read in words: local
- * time, the event or operation, its outcome. `raw` holds the exact records kept: sequence, generation, ISO time,
- * raw kind, tool, receipt state and the whole summary; never an event payload. Gaps, a partial page and omitted
- * operations are stated in both, and nothing without a receipt reads as success.
+ * Host events and the corral operations this host observed, for the operations pager. `lines` read in words: local
+ * time, the event or operation, its outcome. `raw` holds the exact records kept: sequence, ISO time, raw kind, tool,
+ * ok or failed and the whole summary; never an event payload. Gaps, a partial page and omitted operations are stated
+ * in both.
  */
 export function receiptLines(info: InspectorSnapshot, now: number): { readonly lines: PagerLine[]; readonly raw: PagerLine[] } {
   const page = info.events, gap = page.gap;
-  const lines: PagerLine[] = [{ text: `EVENTS · this host, generation ${page.generation}`, heading: true }];
-  const raw: PagerLine[] = [{ text: `events · generation ${page.generation} · last #${page.last} · next #${page.next}`, heading: true }];
+  const lines: PagerLine[] = [{ text: "EVENTS · this host", heading: true }];
+  const raw: PagerLine[] = [{ text: `events · last #${page.last} · next #${page.next}`, heading: true }];
   for (const event of page.events) {
     lines.push({ text: `${clock(event.at, now)}  ${words(event.kind)}${event.omitted === undefined ? "" : " · payload omitted"}` });
     raw.push({ text: eventRaw(event) });
   }
-  if (!page.events.length) { lines.push({ text: "○ no events in this generation yet" }); raw.push({ text: "events · none" }); }
+  if (!page.events.length) { lines.push({ text: "○ no events in this host yet" }); raw.push({ text: "events · none" }); }
   if (gap) {
-    lines.push({ text: `! ${gap.missing} earlier event${gap.missing === 1 ? "" : "s"} of this generation left the host's log`
+    lines.push({ text: `! ${gap.missing} earlier event${gap.missing === 1 ? "" : "s"} left the host's log`
       + ` (#${gap.after + 1}–#${gap.resumed - 1}) · reconcile from canonical records` });
     raw.push({ text: `gap · after #${gap.after} · resumed #${gap.resumed} · ${gap.missing} missing · reconcile` });
-  } else { lines.push({ text: "○ no gap in this generation's log" }); raw.push({ text: "gap · none" }); }
+  } else { lines.push({ text: "○ no gap in this host's log" }); raw.push({ text: "gap · none" }); }
   if (page.more) {
     lines.push({ text: "! more events than one page holds · later events are not shown" });
     raw.push({ text: `more · true · next #${page.next}` });
   }
   lines.push({ text: "" }, { text: "CORRAL OPERATIONS · observed in this host only", heading: true });
-  raw.push({ text: "" }, { text: `receipts · last ${RECEIPT_RING} kept · ${info.receipts.length} shown`, heading: true });
+  raw.push({ text: "" }, { text: `operations · last ${OPERATION_RING} kept · ${info.receipts.length} shown`, heading: true });
   for (const row of info.receipts) {
-    const glyph = receiptGlyph(row);
     const said = plainLabel(row.summary.replace(/^[✓✗○▲!…] /, ""));
     const body = !said ? words(row.tool) : said.length > SUMMARY_CELLS ? `${said.slice(0, SUMMARY_CELLS - 1)}…` : said;
-    lines.push({ text: `${clock(row.at, now)}  ${glyph} ${body} · ${words(row.tool)} · ${stateWords(row, glyph)}${row.nested ? " · in a Code Mode cell" : ""}` });
+    lines.push({ text: `${clock(row.at, now)}  ${operationGlyph(row)} ${body} · ${words(row.tool)} · ${row.state}${row.nested ? " · in a Code Mode cell" : ""}` });
     raw.push({ text: `${new Date(row.at).toISOString()} · ${plainLabel(row.tool)} · ${row.state}${row.nested ? " · Code Mode child" : ""}`
       + ` · ${plainLabel(row.summary) || "no summary"}` });
   }
-  if (!info.receipts.length) { lines.push({ text: "○ no corral operation observed in this host yet" }); raw.push({ text: "receipts · none" }); }
+  if (!info.receipts.length) { lines.push({ text: "○ no corral operation observed in this host yet" }); raw.push({ text: "operations · none" }); }
   if (info.receiptsOmitted) {
     lines.push({ text: `○ ${info.receiptsOmitted} older operation${info.receiptsOmitted === 1 ? "" : "s"} not kept` });
-    raw.push({ text: `omitted · ${info.receiptsOmitted} older receipts` });
+    raw.push({ text: `omitted · ${info.receiptsOmitted} older operations` });
   }
   const earlier = "○ operations of earlier sessions and hosts are not shown here";
-  const footer = "Committed means recorded, not a gate pass or criterion acceptance.";
+  const footer = "An operation's ok is the engine's answer, not a gate pass or criterion acceptance.";
   lines.push({ text: earlier }, { text: "" }, { text: footer });
   raw.push({ text: earlier }, { text: "" }, { text: footer });
   return { lines, raw };

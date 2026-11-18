@@ -55,17 +55,14 @@ export interface NativePanelsOptions {
   readonly fleetControl?: FleetControl;
   readonly identity: HostIdentity;
   readonly cwd: string;
-  readonly inspection?: () => Promise<unknown>;
-  readonly lifecycle?: () => Promise<unknown>;
   readonly artifacts?: () => Promise<unknown>;
-  readonly artifactViewer?: (reference: string, viewer: "show" | "serve") => Promise<string>;
+  readonly artifactViewer?: (reference: string) => Promise<string>;
   readonly exportSession?: () => Promise<string>;
   readonly readTranscript?: (id: string) => Promise<string>;
   readonly jobControl?: JobControl;
   readonly queueControl?: QueueControl;
   readonly readTask?: () => Promise<unknown>;
   readonly snapshot: () => PanelSnapshot | null;
-  readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
   readonly readHistory?: HistoryRead;
   readonly projectDir?: string;
   readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
@@ -81,15 +78,15 @@ export interface NativePanelsOptions {
   readonly marks?: MarkSink;
 }
 /** Views a tool row's clickable label can open by name; `plan` is the sidebar's Plan tab. */
-export type PanelView = "chat" | "agents" | "changes" | "task" | "proof" | "artifacts" | "inbox" | "usage" | "board" | "plan";
-/** `/panels <target>` names for main views; history, receipts, project, refresh and toggle are actions. */
+export type PanelView = "chat" | "agents" | "changes" | "task" | "proof" | "artifacts" | "usage" | "board" | "plan";
+/** `/panels <target>` names for main views; history, operations, project, refresh and toggle are actions. */
 const PANEL_VIEWS: Readonly<Record<string, MainView>> = {
   chat: "conversation", files: "changes", changes: "changes", agents: "agents", activity: "agents", jobs: "agents", helpers: "agents",
-  usage: "usage", evidence: "evidence", proof: "evidence", inbox: "inbox", task: "task", graph: "graph", timeline: "timeline", board: "board",
+  usage: "usage", evidence: "evidence", proof: "evidence", task: "task", timeline: "timeline", board: "board",
 };
 /** Views that read the bound task; sessions without one do not offer them. */
-const TASK_VIEWS: Readonly<Partial<Record<MainView, true>>> = { task: true, evidence: true, graph: true, timeline: true };
-const PANEL_TARGETS = "chat, agents, changes, task, proof, inbox, usage, graph, timeline, history, receipts, project, refresh or toggle";
+const TASK_VIEWS: Readonly<Partial<Record<MainView, true>>> = { task: true, evidence: true, timeline: true };
+const PANEL_TARGETS = "chat, agents, changes, task, proof, usage, timeline, history, operations, project, refresh or toggle";
 
 /** Where keys go when no Pi dialog or overlay is open: Pi's editor, the main view, the sidebar, the queue, the owner questions or a docked build dialog. */
 export type PanelFocus = "composer" | "main" | "sidebar" | "queue" | "questions" | "choice";
@@ -995,7 +992,7 @@ export class NativePanels implements PanelSurface {
   }
   /**
    * Opens a view by name, for a tool row's clickable label. `select` picks inside it: an Agents row key (`job:<id>`,
-   * `helper:<request>`; a bare id reads as a job), a Changes file path or an artifact path. `plan` shows the
+   * `helper:<request>`; a bare id reads as a job) or a Changes file path. `plan` shows the
    * sidebar's Plan tab (the rail, or the drawer below the rail's width). A view this session lacks says why in a
    * notice and changes nothing.
    */
@@ -1003,16 +1000,15 @@ export class NativePanels implements PanelSurface {
     if (this.disposed) return;
     const taskBound = !!this.options.identity.task;
     const missing = (view === "task" || view === "proof" || view === "artifacts") && !taskBound ? "this session has no bound task"
-      : view === "board" && !this.options.build?.board ? (this.build ? "a bare session has no board" : "only a build session has a board")
-      : view === "inbox" && this.build ? "a build session has no inbox" : undefined;
+      : view === "board" && !this.options.build?.board ? (this.build ? "a bare session has no board" : "only a build session has a board") : undefined;
     if (missing) { this.workbench.notice(`Cannot open ${view}: ${missing}`, "warning"); return; }
     switch (view) {
       case "chat": this.workbench.chat(); break;
       case "agents": this.workbench.openAgents(select === undefined || select.includes(":") ? select : `job:${select}`); break;
       case "changes": if (select) void this.workbench.openFile(select); else this.workbench.setView("changes"); break;
       case "proof": this.workbench.setView("evidence"); break;
-      case "artifacts": this.workbench.setView("artifacts"); if (select) void this.workbench.artifacts.openPath(select); break;
-      case "task": case "inbox": case "usage": case "board": this.workbench.setView(view); break;
+      case "artifacts": this.workbench.setView("artifacts"); break;
+      case "task": case "usage": case "board": this.workbench.setView(view); break;
       case "plan":
         this.sidebar.tab = "plan";
         if ((this.terminal?.physical.columns ?? 0) < PANEL_BREAKPOINT) { this.sidebar.drawer = true; this.drawerByKey = false; }
@@ -1029,9 +1025,9 @@ export class NativePanels implements PanelSurface {
   private async panelCommand(args: string): Promise<void> {
     const value = args.trim().toLowerCase();
     if (value === "history") { await this.workbench.openHistory(); return; }
-    if (value === "receipts") { await this.showReceipts(); return; }
+    if (value === "operations") { await this.showOperations(); return; }
     if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
-    if (value === "refresh") { await this.workbench.inspection.refresh(true); await this.loadFiles(); if (this.workbench.view === "inbox") await this.workbench.inbox.refresh(); return; }
+    if (value === "refresh") { await this.workbench.task.refresh(true); await this.loadFiles(); return; }
     if (value === "toggle") { this.toggleSidebar(); return; }
     const view = value === "board" && !this.options.build?.board ? undefined : PANEL_VIEWS[value];
     if (view && (!TASK_VIEWS[view] || this.options.identity.task)) {
@@ -1042,16 +1038,16 @@ export class NativePanels implements PanelSurface {
     this.workbench.notice(`/panels ${plainLabel(value) || "(empty)"}: choose ${PANEL_TARGETS}`, "warning");
   }
   /**
-   * The bounded host receipt and event observations, read-only: time, event and outcome in words, with `d` switching
-   * to the exact records (sequence, generation, ISO time, raw kind). Both wrap, so no record is clipped.
+   * The bounded host event and corral operation observations, read-only: time, event and outcome in words, with `d`
+   * switching to the exact records (sequence, ISO time, raw kind). Both wrap, so no record is clipped.
    */
-  private async showReceipts(): Promise<void> {
+  private async showOperations(): Promise<void> {
     const ui = this.ui, info = this.snapshot()?.inspector;
     if (!ui) return;
-    if (!info) { this.workbench.notice("Host receipts and events unavailable from this host", "warning"); return; }
+    if (!info) { this.workbench.notice("Host events and operations unavailable from this host", "warning"); return; }
     const { lines, raw } = receiptLines(info, Date.now());
     this.overlay = "pager"; this.refresh();
-    try { await openPager(ui, { title: "Host receipts and events", lines, raw, wrap: true }); }
+    try { await openPager(ui, { title: "Host events and operations", lines, raw, wrap: true }); }
     finally { this.overlay = undefined; this.refresh(); }
   }
   /**
@@ -1073,7 +1069,7 @@ export class NativePanels implements PanelSurface {
       panel("views", "agents", "Agents", "F8"),
       panel("views", "changes", "Changes", "F7"),
       ...(taskBound ? [panel("views", "task", "Task", "F5"), panel("views", "proof", "Proof", "F10")] : []),
-      ...(build ? (build.board ? [build.board] : []) : [panel("views", "inbox", "Inbox", "F11")]),
+      ...(build?.board ? [build.board] : []),
       panel("views", "usage", "Usage"),
       action("inspect", "agents.details", "Agent details", "", async () => { await this.workbench.openAgentDetails(); }, () => {
         if (ready()) return ready();
@@ -1081,28 +1077,18 @@ export class NativePanels implements PanelSurface {
         return !row ? "no agent selected" : row.meta.length ? undefined : "no details for this agent";
       }),
       panel("inspect", "history", "Browse history"),
-      ...(taskBound ? [panel("inspect", "graph", "Lifecycle graph"), panel("inspect", "timeline", "Lifecycle events")] : []),
-      panel("inspect", "receipts", "Host receipts and events"),
+      ...(taskBound ? [panel("inspect", "timeline", "Host events timeline")] : []),
+      panel("inspect", "operations", "Host events and operations"),
       action("inspect", "notices", "Recent notices", "", () => this.showNotices(),
         () => ready() ?? (this.workbench.recentNotices().length ? undefined : "no notices yet")),
       action("message", "queue.edit", "Edit the last queued input", dequeue ? keyLabel(dequeue) : "", () => { void this.queue.editLast(); }, queued),
       action("message", "queue.focus", "Focus the queue", focus ? keyLabel(focus) : "", () => { this.focusQueue(); }, queued),
-      action("message", "inbox.answer-flow", "How to answer the selected decision · nothing is sent", "", () => {
-        this.workbench.setView("inbox"); this.workbench.focused = true; this.workbench.handleInput("a");
-      }, () => {
-        if (ready()) return ready();
-        const role = identity.role, item = this.workbench.inbox.current;
-        if (role !== "pm" && role !== "assistant") return "this role cannot answer";
-        if (!item?.pending || !item.response) return "no pending decision with an answer route selected";
-        if (role === "pm" && (!item.pm_eligible || item.scope !== identity.project)) return "owner only or outside PM scope";
-        return undefined;
-      }),
       ...(build?.message ?? []),
       action("model", "app.model.select", "Select model", this.nativeKeys?.("app.model.select") ?? "", () => this.nativeAction?.("app.model.select")),
       action("model", "app.thinking.cycle", "Cycle effort", this.nativeKeys?.("app.thinking.cycle") ?? "", () => this.nativeAction?.("app.thinking.cycle"),
         () => !this.snapshot()?.effortAvailable ? "this model has no effort levels" : ready()),
       panel("workspace", "project", "Show files from another project…"),
-      panel("workspace", "refresh", taskBound ? "Reread proof, usage and files" : "Reread files"),
+      panel("workspace", "refresh", taskBound ? "Reread task, proof and files" : "Reread files"),
       action("workspace", "sidebar.focus", "Sidebar: focus, then the next tab", "F6", () => this.sidebarKey()),
       panel("workspace", "toggle", "Sidebar: collapse or expand", sidebarKeyLabel(this.sidebarToggle)),
       ...(build?.refresh ? [build.refresh] : []),
@@ -1196,7 +1182,7 @@ export class NativePanels implements PanelSurface {
     const ui = this.ui;
     if (!ui || !this.canInteract) return;
     const identity = this.options.identity, answerKey = this.questions ? questionsKey() : undefined;
-    const groups = keyGroups({ taskBound: !!identity.task, answer: identity.role === "pm" || identity.role === "assistant",
+    const groups = keyGroups({ taskBound: !!identity.task,
       jobs: this.snapshot()?.jobs != null, queueControl: this.queue.controllable, lifecycle: !!identity.task,
       sidebarKey: this.sidebarToggle, ...(answerKey ? { questionsKey: answerKey } : {}), ...(this.build ? { build: true, board: !!this.options.build?.board } : {}),
       ...(this.profiles ? { profiles: true, ...(this.profiles.key ? { profileKey: this.profiles.key } : {}) } : {}) });

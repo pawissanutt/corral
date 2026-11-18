@@ -98,8 +98,6 @@ function emptyCopy(identity: HostIdentity): { readonly lead: string; readonly re
     case "build":
       return { lead: "Build session, unbound.", rest: "Describe what to build and press Enter.",
         more: "Independent slices run in parallel in one worktree, each on the profile that fits it. Nothing is filed on the board until you choose an exit." };
-    case "pm":
-      return { lead: `Project manager for ${identity.project || "this project"}.`, rest: "What you send goes to this project's PM agent." };
     case "assistant":
       return { lead: `Assistant ${identity.assistant ?? ""}`.trimEnd() + ".", rest: "What you send goes to this assistant." };
     default:

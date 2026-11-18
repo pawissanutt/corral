@@ -1,5 +1,5 @@
 // A nested result is observable only inside the authenticated Code Mode child that executed it.
-// A parent ID or receipt-shaped object alone cannot grant provenance to an arbitrary tool.
+// A parent ID or result-shaped object alone cannot grant provenance to an arbitrary tool.
 import { nestedChild } from "../extensions/codemode/child.ts";
 
 export function observedCorralResult(event: {
