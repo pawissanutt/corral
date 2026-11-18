@@ -246,7 +246,8 @@ fn body(
 }
 
 /// A row of the list; while `focus` names it, it takes the keyboard focus and lets go of the
-/// name.
+/// name. While it is the row that holds the focus (`AppState::focused_row`) it takes it too:
+/// built again as the task changes section, or named by a reply sent beside the list.
 fn task(
     app: AppState,
     row: &work::NowTaskRow,
@@ -265,6 +266,13 @@ fn task(
             }
         });
     }
+    let focused_row = app.focused_row;
+    let me = id.clone();
+    effect(move || {
+        if focused_row.with(|held| held.as_deref() == Some(me.as_str())) {
+            after_answer(move || handle.focus());
+        }
+    });
     let selected = computed(move || page.with(|page| task_selected(page, &id)));
     revealing(selected, task_row(app, row, selected, fit, Some(handle)))
 }

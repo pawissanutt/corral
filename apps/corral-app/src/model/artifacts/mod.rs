@@ -1,10 +1,10 @@
 //! The artifact finder: every task's artifacts, read from corrald one served page at a time as
 //! the list is walked, narrowed by a filter that keeps the keyboard. Words match an artifact's
 //! title, kind and reference; `kind:`, `task:` and `project:` narrow by that field; every token
-//! must match. corrald filters by one text over title, kind and reference, so the request
-//! carries the most selective token and the rest narrow the served rows here. The selected
-//! artifact's content shows beside the results (under them where the page is narrow) and opens
-//! full size; from either, its task opens.
+//! must match. The request carries the field tokens as corrald's narrowing and the words as its
+//! filter, so corrald pages through matching rows only, newest first. The selected artifact's
+//! content shows beside the results (under them where the page is narrow) and opens full size;
+//! from either, its task opens.
 
 mod content;
 #[cfg(test)]
@@ -13,7 +13,7 @@ mod tests;
 pub use content::{Body, Content, Line, PREVIEW_LINES, content, target as content_target};
 pub(crate) use content::{log_hue, plain_text, utf8_text};
 
-use corral_protocol::detail::{DetailBody, DetailGet, DetailRef};
+use corral_protocol::detail::{ArtifactNarrowing, DetailBody, DetailGet, DetailRef};
 use corral_types::Artifact;
 
 use crate::model::daemon::{DetailCache, Feed};
@@ -134,19 +134,20 @@ impl Query {
         query
     }
 
-    /// The list request: corrald's one text filter carries the most selective token, a task's
-    /// reference prefix, else the longest word, else the kind.
+    /// The list request: the words as corrald's filter and one value of each field as its
+    /// narrowing (the longest prefix of a kind or project, the first task); a second value of
+    /// the same field narrows the served rows here.
     pub fn request(&self) -> DetailRef {
-        let filter = match self.tasks.as_slice() {
-            [task] => Some(format!("{task}:")),
-            _ => self
-                .words
-                .iter()
-                .max_by_key(|word| word.len())
-                .or(self.kinds.first())
-                .cloned(),
+        let longest = |values: &[String]| values.iter().max_by_key(|value| value.len()).cloned();
+        let narrowing = ArtifactNarrowing {
+            kind: longest(&self.kinds),
+            task: self.tasks.first().cloned(),
+            project: longest(&self.projects),
         };
-        DetailRef::Artifacts { filter }
+        DetailRef::Artifacts {
+            filter: (!self.words.is_empty()).then(|| self.words.join(" ")),
+            narrowing: (narrowing != ArtifactNarrowing::default()).then_some(narrowing),
+        }
     }
 
     /// Whether the artifact, of a task in `project`, matches every token.
@@ -175,9 +176,13 @@ impl Query {
     }
 }
 
-/// The project of an artifact's task, from what the app holds: the board, the task's detail, a
-/// Closed page. corrald's artifact rows do not carry it.
-pub fn project_of(feed: &Feed, task: &str) -> Option<String> {
+/// The project of an artifact's task: as corrald's row states it, else from what the app holds
+/// (the board, the task's detail, a Closed page).
+pub fn project_of(feed: &Feed, artifact: &Artifact) -> Option<String> {
+    if artifact.project.is_some() {
+        return artifact.project.clone();
+    }
+    let task = artifact.task.as_str();
     if let Some(row) = feed.board.task(task) {
         return row.task().project.clone();
     }
@@ -206,20 +211,21 @@ fn task_title(feed: &Feed, task: &str) -> Option<String> {
     }
 }
 
-/// The served rows in served page order, each page newest first, and the next page's token
-/// while nothing is loading or failed.
+/// The served rows in served order (corrald's, newest first across pages), and the next page's
+/// token while nothing is loading or failed.
 fn served<'a>(feed: &'a Feed, target: &DetailRef) -> (Vec<&'a Artifact>, Option<&'a str>) {
     let Some(cache) = feed.detail(target) else {
         return (Vec::new(), None);
     };
-    let mut rows: Vec<&Artifact> = Vec::new();
-    for page in &cache.pages {
-        if let Some(DetailBody::Artifacts(page)) = &page.body {
-            let start = rows.len();
-            rows.extend(page.rows.iter());
-            rows[start..].sort_by(|a, b| b.at.cmp(&a.at).then_with(|| b.id.cmp(&a.id)));
-        }
-    }
+    let rows = cache
+        .pages
+        .iter()
+        .filter_map(|page| match &page.body {
+            Some(DetailBody::Artifacts(page)) => Some(page.rows.iter()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
     let next = if cache.loading || cache.error.is_some() {
         None
     } else {
@@ -234,7 +240,7 @@ fn visible<'a>(state: &State, feed: &'a Feed) -> (Vec<&'a Artifact>, Option<&'a 
     let (rows, next) = served(feed, &query.request());
     let rows = rows
         .into_iter()
-        .filter(|row| query.matches(row, project_of(feed, &row.task).as_deref()))
+        .filter(|row| query.matches(row, project_of(feed, row).as_deref()))
         .collect();
     (rows, next)
 }
@@ -357,6 +363,8 @@ pub struct Row {
     pub kind: String,
     pub title: String,
     pub project: Option<String>,
+    /// The run that recorded it, when a run did (`R2`).
+    pub run: Option<String>,
     /// When it was added: the clock today, else the day.
     pub at: String,
     /// What a screen reader hears for the row.
@@ -401,9 +409,9 @@ pub struct Preview {
     pub reference: String,
     pub title: String,
     pub task: Id,
-    /// Labelled facts in display order: kind, size, task, project, added, hash.
+    /// Labelled facts in display order: kind, size, task, run, project, added, hash.
     pub facts: Vec<(&'static str, String)>,
-    /// The same facts on one line: kind, size, task, project, when, the hash's start.
+    /// The same facts on one line: kind, size, task (and run), project, when, the hash's start.
     pub summary: String,
     pub content: Content,
     /// The button that opens its task.
@@ -419,14 +427,22 @@ pub struct Page {
     pub full: Option<Preview>,
 }
 
+/// The task, and the run that recorded it where one did: `T-12 R2`.
+fn source(artifact: &Artifact) -> String {
+    match &artifact.run {
+        Some(run) => format!("{} {run}", artifact.task),
+        None => artifact.task.clone(),
+    }
+}
+
 fn row(feed: &Feed, artifact: &Artifact) -> Row {
     let kind = artifact.kind.clone().unwrap_or_else(|| "artifact".into());
-    let project = project_of(feed, &artifact.task);
+    let project = project_of(feed, artifact);
     let at = stamp_at(artifact.at, feed);
     let label = format!(
         "{kind} {}, {}{}, added {at}",
         artifact.title,
-        artifact.task,
+        source(artifact),
         project
             .as_deref()
             .map(|project| format!(" in {project}"))
@@ -438,6 +454,7 @@ fn row(feed: &Feed, artifact: &Artifact) -> Row {
         kind,
         title: artifact.title.clone(),
         project,
+        run: artifact.run.clone(),
         at,
         label,
     }
@@ -452,7 +469,7 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
     };
     let kind = artifact.kind.clone().unwrap_or_else(|| "artifact".into());
     let size = crate::model::agents::size(artifact.bytes);
-    let project = project_of(feed, &artifact.task);
+    let project = project_of(feed, artifact);
     let added = format!(
         "{} by {}",
         when_at(artifact.at, feed),
@@ -461,7 +478,7 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
     let summary = [
         Some(kind.clone()),
         Some(size.clone()),
-        Some(task.to_string()),
+        Some(source(artifact)),
         project.clone(),
         Some(added.clone()),
         Some(format!("sha256 {hash}")),
@@ -481,6 +498,9 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
             },
         ),
     ];
+    if let Some(run) = &artifact.run {
+        facts.push(("Run", run.clone()));
+    }
     if let Some(project) = project {
         facts.push(("Project", project));
     }

@@ -65,5 +65,6 @@ fn refusal(reason: String) -> Refusal {
     Refusal {
         reason,
         next: Vec::new(),
+        problems: None,
     }
 }

@@ -23,6 +23,7 @@ use super::{confirmation, destinations, lock, refusal, stale, toast};
 use crate::{
     model::{
         Availability, DataState, Destination, Live, Overlay, PhoneTab, ProjectFilter, Route,
+        SettingsSection,
         nav::{ASK_BUTTON, ASK_BUTTON_LABEL, NavigationItem, NavigationTarget, phone_navigation},
         projects::{PROJECTS_HEADING, PROJECTS_MORE_SUBTITLE, Projects},
         work::{self, MoreRow},
@@ -269,6 +270,10 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
         }
         _ => SharedString::from(title).into_reactive(),
     };
+    // Configuration with unsaved edits stays on a back press or swipe until the confirm sheet
+    // has asked; every other page pops at once.
+    let config = matches!(entry, Entry::Section(SettingsSection::Config));
+    let holds = computed(move || config && app.settings.with(|state| state.config.dirty()));
     let page = nav_page()
         .title(title.clone())
         .header_style_with(|s| {
@@ -276,9 +281,16 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
                 .text_color(color(Token::Ink))
                 .tint_color(color(Token::Ink2))
         })
+        .pop_on_back(move || !holds.get())
         // The browser's back and Escape slide this page out before it is dismissed: the page
         // under it shows again first.
-        .on_back_press(move || nav.uncover(depth))
+        .on_back_press(move || {
+            if holds.get_untracked() {
+                app.asks_before_leaving_config();
+            } else {
+                nav.uncover(depth);
+            }
+        })
         .on_dismiss(move || nav.back_to(depth));
     let page = if matches!(os(), Os::Ios | Os::Android) {
         match trailing {

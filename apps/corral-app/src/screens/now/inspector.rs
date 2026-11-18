@@ -210,13 +210,18 @@ fn next_steps(app: AppState, card: &BlockedCard) -> Option<AnyElement> {
     })
 }
 
-/// Sends the box's words as its step, then empties the box; nothing goes out empty.
+/// Sends the box's words as its step, then empties the box; nothing goes out empty. The step
+/// takes the task out of Blocked and the box with it, so beside the list the keyboard focus goes
+/// to the task's row first rather than out of the app.
 fn send_reply(app: AppState, draft: Signal<String>, reply: &ReplyBox) {
     let words = draft.get_untracked();
     if words.trim().is_empty() {
         return;
     }
     draft.set(String::new());
+    if app.form != Form::Phone {
+        app.focused_row.set(Some(reply.task.to_string()));
+    }
     press(app, reply.press(words));
 }
 

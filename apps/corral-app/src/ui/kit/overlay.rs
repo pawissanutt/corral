@@ -1,12 +1,14 @@
 //! What shows over a page for a moment: the toast, and the modal host that carries both the
 //! fresh confirmation of a high-risk command and the phone's generic sheet (a thread, a pairing
 //! code). Both are hosts: they take when to show (`open`, the toast's text) and what closing
-//! does (`on_close`); the shell wires them to the app state.
+//! does (`on_close`); the shell wires them to the app state. A press-opened menu counts itself
+//! open (`counted`), so the terminal's key line can give a menu's keys.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nsh_base::{SheetEvent, dialog, sheet};
+use nsh_base::{MenuEvent, SheetEvent, dialog, sheet};
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
@@ -25,6 +27,27 @@ const DIALOG_MARGIN: f32 = 48.0;
 /// title row take of it.
 const SHEET_SHARE: f32 = 0.82;
 const SHEET_HEAD: f32 = 72.0;
+
+/// A menu's `on_open_change`: counts it among `AppState::menus` while it is open, and no longer
+/// once it closes or goes with its trigger, so the key line gives a menu's keys whether the key
+/// or a press opened it.
+pub fn counted(app: AppState) -> impl Fn(&MenuEvent) + 'static {
+    let open = Rc::new(Cell::new(false));
+    let menus = app.menus;
+    let held = open.clone();
+    cleanup(move || {
+        if held.replace(false) {
+            menus.update(|n| *n = n.saturating_sub(1));
+        }
+    });
+    move |event: &MenuEvent| {
+        if let MenuEvent::OpenChange(now, _) = event
+            && open.replace(*now) != *now
+        {
+            menus.update(|n| *n = if *now { *n + 1 } else { n.saturating_sub(1) });
+        }
+    }
+}
 
 /// What a modal shows. Made afresh on each opening by the `content` closure of [`modal`].
 pub struct Modal {

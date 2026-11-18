@@ -2,9 +2,11 @@
 //! shows one part at a time (Workspace, Projects, Profiles, Harnesses, Routing, Artifacts, or
 //! the whole File as text), and keeps a save bar pinned under it: what is unsaved, Save,
 //! Discard and Read again. A refused save leaves the draft and lists its reasons at the top, each
-//! naming a field a button to it, and on the field itself. IDs: `tab-config-<n>` for the parts,
+//! naming a field a button to it (a syntax error's to File), and on the field itself. Over them
+//! the page says when the file changed elsewhere since it was read (with Read again) and when
+//! the file on disk does not parse (opening File). IDs: `tab-config-<n>` for the parts,
 //! `seg-config-<part>-<name>` for an entry, `btn-config-save`, `btn-config-discard`,
-//! `btn-config-reload`, `btn-config-reason-<n>`, `field-config-file`.
+//! `btn-config-reload`, `btn-config-reread`, `btn-config-reason-<n>`, `field-config-file`.
 
 use nsh_core::prelude::*;
 
@@ -12,7 +14,7 @@ use super::config_fields::{edit, entry, field};
 use super::parts::{button_row, cell, frame, space};
 use crate::model::Form;
 use crate::model::settings::document::{Path, RuleEdit};
-use crate::model::settings::editor::{Edit, Part};
+use crate::model::settings::editor::{self, Edit, Part};
 use crate::model::settings::form::{self, Entries, Group, Live, Shape};
 use crate::model::text::span;
 use crate::screens::{PhoneBar, PhonePage};
@@ -60,7 +62,8 @@ pub fn phone(app: AppState) -> PhonePage {
 }
 
 /// Reads the file whenever the editor has none, is not reading it, and has no problem to show;
-/// after a failure, Read again asks once more.
+/// after a failure, Read again asks once more. A file on disk that newly fails to parse opens
+/// the plain-text view.
 fn open(app: AppState) {
     let wanted = computed(move || {
         app.settings.with(|state| {
@@ -72,6 +75,14 @@ fn open(app: AppState) {
         if wanted.get() {
             untracked(|| app.act(app.settings, |state, _| state.open_config()));
         }
+    });
+    let disk = computed(move || {
+        app.feed
+            .with(|feed| feed.settings.as_ref().and_then(|s| s.problem.clone()))
+    });
+    effect(move || {
+        let problem = disk.get();
+        untracked(|| app.act(app.settings, move |state, _| state.disk_problem(problem)));
     });
 }
 
@@ -108,21 +119,50 @@ fn content(app: AppState) -> AnyElement {
     frame(app, "Configuration", 12.0, vec![notices(app), parts])
 }
 
-/// Why the file is not read or the last save failed, and a refusal's reasons.
+/// The file on disk not parsing, an edit made elsewhere, why the file is not read or the last
+/// save failed, and a refusal's reasons.
 fn notices(app: AppState) -> AnyElement {
     let shown = computed(move || {
         app.settings.with(|state| {
-            (
-                state.config.problem.clone(),
-                state.config.reasons.clone(),
-                state.config.saved.is_some(),
-            )
+            app.feed.with(|feed| {
+                (
+                    feed.settings
+                        .as_ref()
+                        .and_then(|s| s.problem.as_ref())
+                        .map(editor::on_disk),
+                    state.config.changed_elsewhere(feed),
+                    state.config.problem.clone(),
+                    state.config.reasons.clone(),
+                    state.config.saved.is_some(),
+                )
+            })
         })
     });
     dynamic(move || {
-        let (problem, reasons, loaded) = shown.get();
+        let (disk, elsewhere, problem, reasons, loaded) = shown.get();
         untracked(move || {
             let mut parts = Vec::new();
+            if let Some(disk) = disk {
+                parts.push(error(app, &vec![span(disk)], None));
+                parts.push(space(app, 10.0));
+            }
+            if elsewhere {
+                let again = button(
+                    app,
+                    "Read again",
+                    ButtonKind::Ghost,
+                    "btn-config-reread",
+                    move || {
+                        app.act(app.settings, |state, _| state.reread_config());
+                    },
+                );
+                parts.push(error(
+                    app,
+                    &vec![span(editor::CHANGED_ELSEWHERE)],
+                    Some(again),
+                ));
+                parts.push(space(app, 10.0));
+            }
             if let Some(problem) = problem {
                 let again = (!loaded).then(|| {
                     button(
@@ -142,9 +182,10 @@ fn notices(app: AppState) -> AnyElement {
                 let mut lines: Vec<AnyElement> =
                     vec![cell(app, form::REFUSED, Token::Ink, true).into_element()];
                 for (at, reason) in reasons.into_iter().enumerate() {
-                    lines.push(match reason.at {
-                        None => cell(app, reason.line, Token::Fail, false).into_element(),
-                        Some(path) => reason_button(app, at, path, reason.line),
+                    lines.push(match (reason.at, reason.position) {
+                        (Some(path), _) => reason_button(app, at, Some(path), reason.line),
+                        (None, Some(_)) => reason_button(app, at, None, reason.line),
+                        (None, None) => cell(app, reason.line, Token::Fail, false).into_element(),
                     });
                 }
                 parts.push(
@@ -163,9 +204,13 @@ fn notices(app: AppState) -> AnyElement {
     .into_element()
 }
 
-/// A reason naming a key: where it is and what is wrong, pressing it shows that field.
-fn reason_button(app: AppState, at: usize, path: Path, line: String) -> AnyElement {
-    let label = format!("{}: {line}", form::place(&path));
+/// A reason with a place: on a key, where it is and what is wrong, pressing it shows that
+/// field; at a line and column, pressing it shows the File.
+fn reason_button(app: AppState, at: usize, path: Option<Path>, line: String) -> AnyElement {
+    let label = match &path {
+        Some(path) => format!("{}: {line}", form::place(path)),
+        None => line,
+    };
     view()
         .flex_row()
         .child(button(
@@ -175,7 +220,10 @@ fn reason_button(app: AppState, at: usize, path: Path, line: String) -> AnyEleme
             format!("btn-config-reason-{at}"),
             move || {
                 let path = path.clone();
-                app.act(app.settings, move |state, _| state.show_config(&path));
+                app.act(app.settings, move |state, _| match &path {
+                    Some(path) => state.show_config(path),
+                    None => state.config_part(Part::File),
+                });
             },
         ))
         .into_element()

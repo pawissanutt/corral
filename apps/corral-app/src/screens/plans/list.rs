@@ -188,7 +188,7 @@ fn plan_row(
 /// revealed only once the scroll has run: a rebuild of the rows before then (the selected plan's
 /// detail arriving, the feed's clock) drops the pending scroll with the row it was for, and the
 /// rebuilt row asks again.
-fn revealing(id: Id, revealed: Stored<Option<Id>>, row: AnyElement) -> AnyElement {
+pub(super) fn revealing(id: Id, revealed: Stored<Option<Id>>, row: AnyElement) -> AnyElement {
     let handle = element_ref();
     if revealed.with(|shown| shown.as_ref() != Some(&id)) {
         after_answer(move || {

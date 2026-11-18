@@ -11,7 +11,7 @@ use nsh_core::prelude::*;
 use crate::model::Form;
 use crate::model::projects::BRANCHES_CAPTION;
 use crate::model::review::{Action, Target};
-use crate::model::text::Rich;
+use crate::model::text::{Rich, flat};
 use crate::ui::kit::hint::hinted;
 use crate::ui::kit::suggest::suggestions;
 use crate::ui::term;
@@ -123,7 +123,8 @@ fn line(cx: &Ctx, target: &Target) -> AnyElement {
     };
     let caption = hinted(app, caption, target.hint.clone());
     // What approving does follows the field and rewords as the branch changes; the phone says
-    // it in the confirm sheet instead.
+    // it in the confirm sheet instead. A terminal shows it only whole: clipped to its first word
+    // it says nothing, and the Approve button's hint and its confirmation still say it.
     let explanation = computed(move || {
         page.with(|page| {
             page.detail
@@ -131,16 +132,33 @@ fn line(cx: &Ctx, target: &Target) -> AnyElement {
                 .and_then(|detail| detail.decide.explanation.clone())
         })
     });
+    let room = signal(0.0_f32);
+    let terminal = form == Form::Terminal;
     let said = dynamic(move || {
         let words: Option<Rich> = explanation.get();
-        words.map(|words| {
-            rich_at(app, &words, 12.0, Token::Ink3, false)
-                .number_of_lines(1u32)
-                .truncate()
-                .flex_1()
-                .min_w(px(0.0))
-        })
+        let cells = room.get() / term::cells(1.0).0;
+        words
+            .filter(|words| !terminal || flat(words).chars().count() as f32 <= cells)
+            .map(|words| {
+                rich_at(app, &words, 12.0, Token::Ink3, false)
+                    .number_of_lines(1u32)
+                    .truncate()
+                    .flex_1()
+                    .min_w(px(0.0))
+            })
     });
+    let said = view()
+        .flex_1()
+        .min_w(px(0.0))
+        .when(terminal, |slot| {
+            slot.on_layout(move |frame: &Bounds<Points>| {
+                let width = frame.size.width.0;
+                if room.with_untracked(|now| *now != width) {
+                    room.set(width);
+                }
+            })
+        })
+        .child(said);
     let branches = computed(move || {
         page.with(|page| {
             page.detail
@@ -165,7 +183,7 @@ fn line(cx: &Ctx, target: &Target) -> AnyElement {
                     .child(term::space(1.0))
                     .child(field)
                     .child(term::space(2.0))
-                    .child(view().flex_1().min_w(px(0.0)).child(said)),
+                    .child(said),
             )
             .child(view().px(term::cells(1.0)).child(offered))
             .into_element(),
@@ -177,12 +195,7 @@ fn line(cx: &Ctx, target: &Target) -> AnyElement {
             .bg(color(Token::Bg))
             .border_t(px(1.0))
             .border_color(color(Token::Rule))
-            .child(
-                row.gap(px(10.0))
-                    .child(caption)
-                    .child(field)
-                    .child(view().flex_1().min_w(px(0.0)).child(said)),
-            )
+            .child(row.gap(px(10.0)).child(caption).child(field).child(said))
             .child(offered)
             .into_element(),
         Form::Phone => view()

@@ -1,10 +1,11 @@
 //! The sample workspace's `corral.toml`: `config.get` returns its text, comments included, and
-//! `config.put` checks a candidate as corrald's engine does for the sample's keys, refusing with
-//! one reason per line in the engine's words and leaving the text unchanged, or replaces it and
-//! re-projects the settings and project rows from it.
+//! its revision, and `config.put` checks a candidate as corrald's engine does for the sample's
+//! keys, refusing with one problem per key (or a syntax error at its line and column) and
+//! leaving the text unchanged, or replaces it and re-projects the settings and project rows
+//! from it.
 
 use corral_protocol::rows::SettingsSnapshot;
-use corral_types::Refusal;
+use corral_types::{ConfigProblem, Refusal};
 use serde_json::{Map, Value, json};
 
 use crate::model::Id;
@@ -101,34 +102,71 @@ listen = "127.0.0.1:7778"
 web_origin = ["http://127.0.0.1:8080"]
 "#;
 
-/// The parsed configuration the settings topic carries: the file's keys over the engine's
-/// defaults, as corrald serializes its parsed `Config`.
-pub(super) fn parsed(text: &str) -> Map<String, Value> {
-    let mut config = document::parse(text)
-        .map(|doc| document::json(&doc))
-        .unwrap_or_default();
+/// The engine's built-in configuration, as corrald serializes `Config::default()` for the
+/// sample's tables.
+fn built_in() -> Map<String, Value> {
     let defaults = json!({
         "limits": { "running": 4 },
         "defaults": {
-            "branch_prefix": "corral/", "max_rounds": 2, "profile": "omp-sol",
+            "base": null, "branch_prefix": "corral/", "max_rounds": 2, "profile": "omp-sol",
             "auto_dispatch": false, "auto_land": false
         },
         "runner": { "mode": "herdr" },
         "sync": { "quiet_after_secs": 120, "watch_secs": 5 },
         "artifacts": { "globs": ["docs/**/records/*", "**/*report*.html"], "max_bytes": 20_000_000 }
     });
-    if let Value::Object(defaults) = defaults {
-        for (table, keys) in defaults {
-            let Value::Object(keys) = keys else {
-                continue;
-            };
-            let entry = config
-                .entry(table)
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Value::Object(entry) = entry {
-                for (key, value) in keys {
-                    entry.entry(key).or_insert(value);
-                }
+    match defaults {
+        Value::Object(defaults) => defaults,
+        _ => Map::new(),
+    }
+}
+
+/// An unconfigured project resolved against the built-in workspace defaults.
+fn project_defaults() -> Map<String, Value> {
+    match json!({
+        "path": "", "base": null, "gate": [], "reviewer": null, "profile": "omp-sol",
+        "running": null, "env": {}, "auto_dispatch": false, "auto_land": false,
+        "max_rounds": 2, "branch_prefix": "corral/"
+    }) {
+        Value::Object(project) => project,
+        _ => Map::new(),
+    }
+}
+
+/// The file's content fingerprint, as corrald states it beside the text.
+fn revision(text: &str) -> String {
+    super::sample::sha(text, 16)
+}
+
+/// The settings snapshot for `text`: the parsed configuration, its revision and the engine's
+/// defaults, around the listener and devices `base` carries.
+pub(super) fn snapshot(text: &str, base: SettingsSnapshot) -> SettingsSnapshot {
+    SettingsSnapshot {
+        config: parsed(text),
+        revision: Some(revision(text)),
+        built_in_defaults: Some(built_in()),
+        project_defaults: Some(project_defaults()),
+        problem: None,
+        ..base
+    }
+}
+
+/// The parsed configuration the settings topic carries: the file's keys over the engine's
+/// defaults, as corrald serializes its parsed `Config`.
+fn parsed(text: &str) -> Map<String, Value> {
+    let mut config = document::parse(text)
+        .map(|doc| document::json(&doc))
+        .unwrap_or_default();
+    for (table, keys) in built_in() {
+        let Value::Object(keys) = keys else {
+            continue;
+        };
+        let entry = config
+            .entry(table)
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Value::Object(entry) = entry {
+            for (key, value) in keys.into_iter().filter(|(_, value)| !value.is_null()) {
+                entry.entry(key).or_insert(value);
             }
         }
     }
@@ -137,25 +175,30 @@ pub(super) fn parsed(text: &str) -> Map<String, Value> {
 
 /// Answers `config.get` (no `put`) or `config.put` under `key`, as corrald records a reply.
 pub fn config(feed: &mut Feed, key: &Id, put: Option<&str>) {
-    let (value, refusal) = match put {
+    let (value, problems) = match put {
         None => (feed.sample_config.clone(), None),
         Some(text) => match check(text) {
-            Ok(config) => {
+            Ok(()) => {
                 feed.sample_config = Some(text.to_owned());
-                if let Some(settings) = &mut feed.settings {
-                    settings.config = config;
-                } else {
-                    feed.settings = Some(SettingsSnapshot {
-                        config,
-                        ..SettingsSnapshot::default()
-                    });
-                }
+                let base = feed.settings.take().unwrap_or_default();
+                feed.settings = Some(snapshot(text, base));
                 super::rollup::rebuild(feed);
                 (Some(text.to_owned()), None)
             }
-            Err(reason) => (None, Some(reason)),
+            Err(problems) => (None, Some(problems)),
         },
     };
+    let refusal = problems.map(|problems| {
+        let mut reason = String::from("configuration problems:");
+        for problem in &problems {
+            reason.push_str(&format!("\n{problem}"));
+        }
+        Refusal {
+            reason,
+            next: Vec::new(),
+            problems: Some(problems),
+        }
+    });
     feed.operations.insert(
         key.clone(),
         Operation {
@@ -166,27 +209,53 @@ pub fn config(feed: &mut Feed, key: &Id, put: Option<&str>) {
             }
             .into(),
             loading: false,
-            value: value.map(|toml| json!({ "toml": toml })),
+            value: value.map(|toml| json!({ "revision": revision(&toml), "toml": toml })),
             error: refusal
                 .as_ref()
-                .map(|reason| crate::model::daemon::ClientError {
+                .map(|refusal| crate::model::daemon::ClientError {
                     code: "refused".into(),
-                    message: reason.clone(),
+                    message: refusal.reason.clone(),
                 }),
-            refusal: refusal.map(|reason| Refusal {
-                reason,
-                next: Vec::new(),
-            }),
+            refusal,
         },
     );
 }
 
 const BUILT_IN_HARNESSES: [&str; 4] = ["omo", "omp", "claude", "generic"];
 
-/// The engine's check of the sample's keys: the parsed configuration, or every problem, one
-/// per line.
-fn check(text: &str) -> Result<Map<String, Value>, String> {
-    let doc = document::parse(text)?;
+/// A problem the engine names by key.
+fn keyed(key: impl Into<String>, message: impl Into<String>) -> ConfigProblem {
+    ConfigProblem {
+        key: Some(key.into()),
+        message: message.into(),
+        line: None,
+        column: None,
+    }
+}
+
+/// A syntax error at its 1-based line and column, as the engine reports one.
+fn syntax(text: &str, error: &toml_edit::TomlError) -> ConfigProblem {
+    let start = error.span().map_or(0, |span| span.start);
+    let before = &text[..text.floor_char_boundary(start)];
+    ConfigProblem {
+        key: None,
+        message: error.message().to_owned(),
+        line: Some(before.matches('\n').count() + 1),
+        column: Some(
+            before
+                .rsplit('\n')
+                .next()
+                .map_or(1, |s| s.chars().count() + 1),
+        ),
+    }
+}
+
+/// The engine's check of the sample's keys: every problem, each naming its key, or the one
+/// syntax error.
+fn check(text: &str) -> Result<(), Vec<ConfigProblem>> {
+    let doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| vec![syntax(text, &error)])?;
     let config = parsed(text);
     // Indexing a `Value` reads a missing key as null; a `Map` index would panic.
     let root = Value::Object(config.clone());
@@ -196,23 +265,23 @@ fn check(text: &str) -> Result<Map<String, Value>, String> {
     let projects = names("projects").unwrap_or_default();
     let harnesses = names("harnesses").unwrap_or_default();
     let mut problems = Vec::new();
-    let profile = |name: &Value, field: String, problems: &mut Vec<String>| {
+    let profile = |name: &Value, field: String, problems: &mut Vec<ConfigProblem>| {
         let name = name.as_str().unwrap_or_default();
         if !profiles.iter().any(|known| known == name) {
-            problems.push(format!("{field}: unknown profile {name:?}"));
+            problems.push(keyed(field, format!("unknown profile {name:?}")));
         }
     };
     if root["limits"]["running"].as_u64() == Some(0) {
-        problems.push("limits.running must be greater than zero".into());
+        problems.push(keyed("limits.running", "must be greater than zero"));
     }
     if !matches!(root["runner"]["mode"].as_str(), Some("process" | "herdr")) {
-        problems.push("runner.mode must be process or herdr".into());
+        problems.push(keyed("runner.mode", "must be process or herdr"));
     }
     if root["defaults"]["base"]
         .as_str()
         .is_some_and(|base| base.trim().is_empty())
     {
-        problems.push("defaults.base must not be empty".into());
+        problems.push(keyed("defaults.base", "must not be empty"));
     }
     if let Some(name) = root["defaults"].get("profile") {
         profile(name, "defaults.profile".into(), &mut problems);
@@ -222,8 +291,9 @@ fn check(text: &str) -> Result<Map<String, Value>, String> {
             .as_str()
             .is_none_or(|command| command.trim().is_empty())
         {
-            problems.push(format!(
-                "harnesses.{name}: name and command must not be empty"
+            problems.push(keyed(
+                format!("harnesses.{name}.command"),
+                "must not be empty",
             ));
         }
     }
@@ -231,21 +301,27 @@ fn check(text: &str) -> Result<Map<String, Value>, String> {
         let harness = entry["harness"].as_str().unwrap_or_default();
         if !harnesses.iter().any(|known| known == harness) && !BUILT_IN_HARNESSES.contains(&harness)
         {
-            problems.push(format!("profiles.{name}: unknown harness {harness:?}"));
+            problems.push(keyed(
+                format!("profiles.{name}.harness"),
+                format!("unknown harness {harness:?}"),
+            ));
         }
     }
     for (name, project) in table("projects").into_iter().flatten() {
         if project["path"].as_str().is_none_or(str::is_empty) {
-            problems.push(format!("projects.{name}.path must not be empty"));
+            problems.push(keyed(format!("projects.{name}.path"), "must not be empty"));
         }
         if project["base"]
             .as_str()
             .is_some_and(|base| base.trim().is_empty())
         {
-            problems.push(format!("projects.{name}.base must not be empty"));
+            problems.push(keyed(format!("projects.{name}.base"), "must not be empty"));
         }
         if project["running"].as_u64() == Some(0) {
-            problems.push(format!("projects.{name}.running must be greater than zero"));
+            problems.push(keyed(
+                format!("projects.{name}.running"),
+                "must be greater than zero",
+            ));
         }
         for key in ["profile", "reviewer"] {
             if let Some(named) = project.get(key) {
@@ -257,8 +333,9 @@ fn check(text: &str) -> Result<Map<String, Value>, String> {
             &document::Path::entry("projects", name, "gate"),
         ));
         if gate.iter().any(|line| line.trim().is_empty()) {
-            problems.push(format!(
-                "projects.{name}.gate contains an empty line or NUL"
+            problems.push(keyed(
+                format!("projects.{name}.gate"),
+                "contains an empty line or NUL",
             ));
         }
     }
@@ -277,15 +354,16 @@ fn check(text: &str) -> Result<Map<String, Value>, String> {
         if let Some(project) = rule["project"].as_str()
             && !projects.iter().any(|known| known == project)
         {
-            problems.push(format!(
-                "routing[{index}].project: unknown project {project:?}"
+            problems.push(keyed(
+                format!("routing[{index}].project"),
+                format!("unknown project {project:?}"),
             ));
         }
     }
     if problems.is_empty() {
-        Ok(config)
+        Ok(())
     } else {
-        Err(problems.join("\n"))
+        Err(problems)
     }
 }
 
@@ -298,6 +376,9 @@ mod tests {
         assert!(check(&sample(true)).is_ok(), "{:?}", check(&sample(true)));
         let text = sample(true).replace("profile = \"codex-terra\"", "profile = \"nope\"");
         let refused = check(&text).unwrap_err();
-        assert_eq!(refused, "projects.site.profile: unknown profile \"nope\"");
+        assert_eq!(
+            refused,
+            [keyed("projects.site.profile", "unknown profile \"nope\"")]
+        );
     }
 }

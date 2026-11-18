@@ -22,7 +22,10 @@ fn an_older_closed_page_retires_the_newest_closed_page_but_no_other_list() {
     let feed = signal(Feed::default());
     let mut app = AppState::new();
     app.ready = true;
-    let artifacts = DetailRef::Artifacts { filter: None };
+    let artifacts = DetailRef::Artifacts {
+        filter: None,
+        narrowing: None,
+    };
     let newest = DetailRef::Closed { before: None };
     let older = DetailRef::Closed {
         before: Some("anchor-1".into()),

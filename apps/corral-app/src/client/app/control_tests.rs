@@ -22,6 +22,7 @@ fn pause_on_a_session_without_a_pi_host_shows_corralds_reason() {
     let refusal = Refusal {
         reason: reason.into(),
         next: Vec::new(),
+        problems: None,
     };
     app.event(
         feed,
