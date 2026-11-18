@@ -73,6 +73,8 @@ pub enum Effect {
     Device(crate::model::devices::DeviceOp),
     /// Fetch, revalidate or page a detail.
     Detail(DetailGet),
+    /// Open the artifact finder narrowed to one task's artifacts.
+    FindArtifacts(Id),
     /// Resolve the complete recorded item behind a transcript preview.
     SessionItem {
         session: Id,

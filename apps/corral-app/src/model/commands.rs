@@ -566,6 +566,7 @@ pub const fn destination_key(destination: Destination) -> Option<&'static str> {
         Destination::Review => "r",
         Destination::Timeline => "t",
         Destination::Usage => "u",
+        Destination::Artifacts => "f",
         Destination::Settings => ",",
     })
 }

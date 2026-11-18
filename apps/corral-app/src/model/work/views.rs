@@ -170,6 +170,7 @@ const DAEMON_MORE: &[MoreRow] = &[
     bare(Destination::Review, "Review"),
     bare(Destination::Timeline, "Timeline"),
     bare(Destination::Usage, "Usage"),
+    bare(Destination::Artifacts, "Artifacts"),
     bare(Destination::Settings, "Settings"),
 ];
 

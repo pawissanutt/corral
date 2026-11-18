@@ -140,7 +140,7 @@ impl AppState {
                 .feed
                 .with_untracked(|feed| feed.detail(&target).is_none())
             {
-                self.preview_detail(target);
+                self.preview_detail(target, None);
             }
             return;
         }
@@ -162,7 +162,7 @@ impl AppState {
     /// Revalidates the detail with its etag, unless a request is already loading.
     pub fn refresh(&self, target: DetailRef) {
         if self.fixture() {
-            self.preview_detail(target);
+            self.preview_detail(target, None);
             return;
         }
         let wanted = self.feed.with_untracked(|feed| match feed.detail(&target) {

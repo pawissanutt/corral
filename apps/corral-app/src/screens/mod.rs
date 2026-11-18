@@ -5,6 +5,7 @@
 //! Connection page and this device's own preferences need no connection).
 
 pub mod agents;
+pub mod artifacts;
 pub mod assistant;
 pub mod changes;
 pub mod landing;
@@ -156,6 +157,7 @@ fn screen(app: AppState, destination: Destination) -> AnyElement {
         Destination::Review => review::screen(app),
         Destination::Timeline => timeline::screen(app),
         Destination::Usage => usage::screen(app),
+        Destination::Artifacts => artifacts::screen(app),
         Destination::Settings => settings::screen(app),
     }
 }

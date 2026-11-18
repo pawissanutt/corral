@@ -45,13 +45,15 @@ pub enum Destination {
     Timeline,
     /// Usage.
     Usage,
+    /// Every task's artifacts: the finder.
+    Artifacts,
     /// Settings.
     Settings,
 }
 
 impl Destination {
     /// Destinations in navigation order.
-    pub const ALL: [Destination; 8] = [
+    pub const ALL: [Destination; 9] = [
         Self::Now,
         Self::Changes,
         Self::Plans,
@@ -59,6 +61,7 @@ impl Destination {
         Self::Review,
         Self::Timeline,
         Self::Usage,
+        Self::Artifacts,
         Self::Settings,
     ];
     /// The display label.
@@ -71,6 +74,7 @@ impl Destination {
             Self::Review => "Review",
             Self::Timeline => "Timeline",
             Self::Usage => "Usage",
+            Self::Artifacts => "Artifacts",
             Self::Settings => "Settings",
         }
     }
@@ -84,6 +88,7 @@ impl Destination {
             Self::Review => "review",
             Self::Timeline => "timeline",
             Self::Usage => "usage",
+            Self::Artifacts => "artifacts",
             Self::Settings => "settings",
         }
     }
@@ -105,6 +110,7 @@ impl Destination {
             Self::Review => 'r',
             Self::Timeline => 't',
             Self::Usage => 'u',
+            Self::Artifacts => 'f',
             Self::Settings => ',',
         }
     }
@@ -196,11 +202,12 @@ impl PhoneTab {
     /// Phone tabs in display order.
     pub const ALL: [PhoneTab; 4] = [Self::Now, Self::Agents, Self::Plans, Self::More];
     /// Destinations listed under More.
-    pub const MORE: [Destination; 5] = [
+    pub const MORE: [Destination; 6] = [
         Destination::Changes,
         Destination::Review,
         Destination::Timeline,
         Destination::Usage,
+        Destination::Artifacts,
         Destination::Settings,
     ];
     /// The display label.

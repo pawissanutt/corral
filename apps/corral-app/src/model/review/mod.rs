@@ -32,6 +32,7 @@ pub use diff::{
     Highlight, NumberedLine, ParsedHunk, ParsedPatch, SplitRow, UnifiedRow, parse_patch,
     split_rows, unified_rows, word_mark,
 };
+pub(crate) use live::actor;
 pub use live::{candidates_filtered, selected_filtered};
 pub use loop_page::{LoopCandidate, LoopContent, LoopPage, loop_page_filtered};
 pub use outline::{CandidateHeader, OutlineGroup, OutlineRow, candidate_header, outline_filtered};

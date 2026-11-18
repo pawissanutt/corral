@@ -7,6 +7,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use corral_protocol::detail::{ArtifactEncoding, ArtifactPage, DetailBody};
 
+use crate::model::artifacts::{plain_text, utf8_text};
 use crate::model::assistant::sniff_image;
 use crate::model::daemon::Feed;
 use crate::model::effect::Env;
@@ -16,43 +17,6 @@ use crate::model::nav::Form;
 use super::live::{Shown, actor, artifact_ref};
 use super::view::{ArtifactContent, ArtifactView, ArtifactsView, Body, ButtonStyle, button};
 use super::{Action, State};
-
-/// Removes ANSI escape sequences and other control characters except line breaks and tabs.
-fn plain_text(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\u{1b}' => match chars.peek() {
-                Some('[') => {
-                    chars.next();
-                    // CSI: parameters and intermediates up to a final byte in @..~.
-                    for c in chars.by_ref() {
-                        if ('@'..='~').contains(&c) {
-                            break;
-                        }
-                    }
-                }
-                Some(']') => {
-                    chars.next();
-                    // OSC: up to BEL or ST.
-                    while let Some(c) = chars.next() {
-                        if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
-                            break;
-                        }
-                    }
-                }
-                _ => {
-                    chars.next();
-                }
-            },
-            '\n' | '\t' => out.push(c),
-            c if c.is_control() => {}
-            c => out.push(c),
-        }
-    }
-    out
-}
 
 /// The assembled page of an artifact once it has arrived, or why it has not.
 fn page<'a>(feed: &'a Feed, reference: &str) -> Result<&'a ArtifactPage, Option<String>> {
@@ -148,19 +112,6 @@ fn content(feed: &Feed, reference: &str, env: Env) -> ArtifactContent {
 const BINARY: &str =
     "This artifact is binary and not an image, so the app lists it without showing its contents.";
 
-/// The bytes as text when they are UTF-8 without NULs. A truncated page may end inside a
-/// character; its complete prefix still counts.
-fn utf8_text(bytes: &[u8], truncated: bool) -> Option<&str> {
-    let text = match std::str::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(error) if truncated && error.error_len().is_none() => {
-            std::str::from_utf8(&bytes[..error.valid_up_to()]).ok()?
-        }
-        Err(_) => return None,
-    };
-    (!text.contains('\0')).then_some(text)
-}
-
 /// The Artifacts tab: the task's records from its detail, opened ones with their contents.
 pub(super) fn artifacts(state: &State, feed: &Feed, shown: &Shown, env: Env) -> Body {
     let Some(detail) = shown.detail else {
@@ -209,28 +160,4 @@ pub(super) fn artifacts(state: &State, feed: &Feed, shown: &Shown, env: Env) -> 
             .then_some("No artifacts are recorded for this task."),
         note: "Contents come from corrald's artifact catalog in bounded pages, never from a file path on this device.",
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn terminal_control_sequences_never_reach_the_page() {
-        assert_eq!(
-            plain_text("\u{1b}[1mbold\u{1b}[0m\r\n\u{1b}]0;title\u{7}ok\u{8}"),
-            "bold\nok"
-        );
-    }
-
-    #[test]
-    fn served_bytes_are_text_only_when_utf8_without_nul() {
-        assert_eq!(utf8_text(b"summary\n", false), Some("summary\n"));
-        assert_eq!(utf8_text("caf\u{e9}".as_bytes(), false), Some("caf\u{e9}"));
-        assert_eq!(utf8_text(&"caf\u{e9}".as_bytes()[..4], true), Some("caf"));
-        assert_eq!(utf8_text(&"caf\u{e9}".as_bytes()[..4], false), None);
-        assert_eq!(utf8_text(b"a\0b", false), None);
-        assert_eq!(utf8_text(&[0xff, 0xfe], false), None);
-        assert_eq!(utf8_text(b"", false), Some(""));
-    }
 }

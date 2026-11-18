@@ -127,6 +127,7 @@ impl Icon {
             Destination::Review => Icon::Review,
             Destination::Timeline => Icon::Timeline,
             Destination::Usage => Icon::Usage,
+            Destination::Artifacts => Icon::Files,
             Destination::Settings => Icon::Settings,
         }
     }

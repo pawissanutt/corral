@@ -4,6 +4,8 @@
 pub mod act;
 /// Agent sessions and worker wall.
 pub mod agents;
+/// The artifact finder over every task's artifacts.
+pub mod artifacts;
 /// Ask and assistant threads.
 pub mod assistant;
 /// Shared board snapshot.

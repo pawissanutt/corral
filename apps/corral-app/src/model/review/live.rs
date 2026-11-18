@@ -175,7 +175,7 @@ pub(super) fn when(at: jiff::Timestamp, feed: &Feed) -> String {
 }
 
 /// Who recorded a check or an artifact.
-pub(super) const fn actor(actor: Actor) -> &'static str {
+pub(crate) const fn actor(actor: Actor) -> &'static str {
     match actor {
         Actor::Owner => "you",
         Actor::Agent => "the worker",
@@ -270,21 +270,11 @@ pub(super) fn log(feed: &Feed, shown: &Shown) -> Body {
         TextPage::Failed(why) => return Body::Notice(why),
         TextPage::Text { text, truncated } => (text, truncated),
     };
-    let hue = |line: &str| {
-        let lower = line.to_ascii_lowercase();
-        if lower.contains("fail") || lower.contains("error") {
-            Hue::Fail
-        } else if lower.contains("pass") {
-            Hue::Ok
-        } else {
-            Hue::Neutral
-        }
-    };
     let lines: Vec<LogView> = text
         .lines()
         .map(|line| LogView {
             text: line.to_owned(),
-            hue: hue(line),
+            hue: crate::model::artifacts::log_hue(line),
         })
         .collect();
     let result = match gate.result {

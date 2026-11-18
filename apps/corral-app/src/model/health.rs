@@ -218,7 +218,8 @@ pub const fn capability(destination: Destination) -> Option<&'static str> {
         Destination::Review => Some(wire::REVIEW_V1),
         Destination::Timeline => Some(wire::TIMELINE_V1),
         Destination::Usage => Some(wire::USAGE_V1),
-        Destination::Now | Destination::Settings => None,
+        // Artifacts are a detail of the core wire, which every corrald serves.
+        Destination::Now | Destination::Artifacts | Destination::Settings => None,
     }
 }
 

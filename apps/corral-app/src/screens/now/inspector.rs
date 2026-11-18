@@ -370,7 +370,8 @@ fn story_rest(app: AppState, story: &LiveStory) -> AnyElement {
     view().children(out).into_element()
 }
 
-/// The selected daemon task's artifacts: each one's title over its source reference.
+/// The selected daemon task's artifacts: each one's title over its source reference, then the
+/// way to every task's artifacts with this task's token filled in.
 fn live_evidence(app: AppState, evidence: &LiveEvidence) -> AnyElement {
     view()
         .child(h3(app, evidence.title.clone(), None))
@@ -394,6 +395,13 @@ fn live_evidence(app: AppState, evidence: &LiveEvidence) -> AnyElement {
                     .collect(),
             ))
         })
+        .when(app.form == Form::Terminal, |list| list.child(term::blank()))
+        .child(
+            view()
+                .flex_row()
+                .when(app.form != Form::Terminal, |row| row.mt(px(10.0)))
+                .child(pressable(app, &evidence.find, false)),
+        )
         .into_element()
 }
 

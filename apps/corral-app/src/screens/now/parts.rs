@@ -109,6 +109,7 @@ pub(crate) fn press_id(press: &Press) -> String {
         Press::RetryBoard => "btn-retry-board".into(),
         Press::Closed(press) => super::closed::press_id(press).into(),
         Press::ClearSelection => "btn-clear-selection".into(),
+        Press::FindArtifacts(_) => "btn-find-artifacts".into(),
     }
 }
 

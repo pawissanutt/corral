@@ -284,6 +284,8 @@ pub enum Press {
     RetryBoard,
     /// The Closed section's toggle and pager.
     Closed(ClosedPress),
+    /// Open the artifact finder with this task's token filled in.
+    FindArtifacts(Id),
 }
 
 impl From<Action> for Press {
@@ -443,6 +445,7 @@ impl State {
                 limit: CHANGES_PER_PAGE,
             })],
             Press::Closed(press) => self.closed.press(press),
+            Press::FindArtifacts(task) => vec![Effect::FindArtifacts(task)],
         }
     }
 

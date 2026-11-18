@@ -1,16 +1,18 @@
 //! Details served from the sample records, shaped as corrald shapes them.
 
 use corral_protocol::detail::*;
-use corral_types::{CheckKind, EventKind, Outcome};
+use corral_types::{EventKind, Outcome};
 use jiff::Timestamp;
 
 use super::rollup::{all_runs, closed, last_worker, local_day, row, summarize, usage_rows};
 use super::{put, record, records};
 use crate::model::daemon::Feed;
 
-/// Fetch `target` into `feed.details`; Err for a record the sample does not hold.
-pub fn detail(feed: &mut Feed, target: &DetailRef) -> Result<(), String> {
+/// Fetch `target` into `feed.details`, a walked list up to the page `page` asks for; Err for a
+/// record the sample does not hold.
+pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result<(), String> {
     match target {
+        DetailRef::Artifacts { filter } => super::artifacts::list(feed, filter.as_deref(), page),
         DetailRef::Task { id } => record(feed, id)
             .map(|_| ())
             .ok_or_else(|| format!("not_found: task {id}")),
@@ -141,30 +143,9 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
             }
             DetailBody::UsageSeries(UsageSeries { days })
         }
-        DetailRef::Artifacts { filter } => {
-            let needle = filter
-                .as_deref()
-                .map(str::trim)
-                .filter(|filter| !filter.is_empty())
-                .map(str::to_lowercase);
-            DetailBody::Artifacts(ArtifactsPage {
-                rows: records(feed)
-                    .into_iter()
-                    .flat_map(|record| record.artifacts)
-                    .filter(|row| {
-                        needle.as_deref().is_none_or(|needle| {
-                            row.title.to_lowercase().contains(needle)
-                                || row
-                                    .kind
-                                    .as_deref()
-                                    .is_some_and(|kind| kind.contains(needle))
-                                || row.reference().to_lowercase().contains(needle)
-                        })
-                    })
-                    .collect(),
-            })
+        DetailRef::Artifact { reference } => {
+            DetailBody::Artifact(super::artifacts::content(feed, reference)?)
         }
-        DetailRef::Artifact { reference } => DetailBody::Artifact(artifact(feed, reference)?),
         DetailRef::Closed { before } => {
             let mut rows: Vec<_> = records(feed)
                 .into_iter()
@@ -236,10 +217,10 @@ fn review(feed: &Feed, task: &str) -> Result<ReviewDetail, String> {
     })
 }
 
-type SampleFile = (&'static str, u32, u32, &'static str);
+pub(super) type SampleFile = (&'static str, u32, u32, &'static str);
 
 /// The changed files of each sample candidate, with one hunk each.
-fn files(task: &str) -> &'static [SampleFile] {
+pub(super) fn files(task: &str) -> &'static [SampleFile] {
     match task {
         "T-9" => &[
             (
@@ -298,7 +279,7 @@ fn files(task: &str) -> &'static [SampleFile] {
     }
 }
 
-fn patch(task: &str, path: &str) -> String {
+pub(super) fn patch(task: &str, path: &str) -> String {
     files(task)
         .iter()
         .find(|(file, ..)| *file == path)
@@ -344,56 +325,5 @@ fn burnup(feed: &Feed, scope: &str) -> Result<Burnup, String> {
             .filter(|event| event.task.as_deref().is_some_and(member))
             .cloned()
             .collect(),
-    })
-}
-
-fn artifact(feed: &Feed, reference: &str) -> Result<ArtifactPage, String> {
-    let (task, key) = reference
-        .rsplit_once(':')
-        .ok_or_else(|| format!("invalid: artifact reference {reference}"))?;
-    let record = record(feed, task).ok_or_else(|| format!("not_found: task {task}"))?;
-    let row = record
-        .artifacts
-        .iter()
-        .find(|row| row.id.to_string() == key)
-        .ok_or_else(|| format!("not_found: artifact {reference}"))?;
-    let (media_type, content) = match row.kind.as_deref() {
-        Some("diff") => (
-            "text/x-diff",
-            files(task)
-                .iter()
-                .map(|(path, ..)| patch(task, path))
-                .collect::<String>(),
-        ),
-        Some("log") => (
-            "text/plain",
-            record
-                .checks
-                .iter()
-                .filter(|check| check.kind == CheckKind::Gate)
-                .map(|check| {
-                    format!(
-                        "$ just check\n{} · {}\n",
-                        check.notes.as_deref().unwrap_or("all checks passed"),
-                        check.at
-                    )
-                })
-                .collect(),
-        ),
-        _ => (
-            "text/html",
-            format!(
-                "<!doctype html><title>{}</title><h1>{}</h1><p>Preview sample report.</p>",
-                row.title, record.task.title
-            ),
-        ),
-    };
-    Ok(ArtifactPage {
-        task: task.into(),
-        key: key.into(),
-        media_type: Some(media_type.into()),
-        encoding: ArtifactEncoding::Text,
-        content,
-        truncated: false,
     })
 }
