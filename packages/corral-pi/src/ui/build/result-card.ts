@@ -62,6 +62,7 @@ export function exitProgress(exit: Pick<ExitState, "phase" | "detail"> & { reado
   switch (exit.phase) {
     case "rebasing": return { glyph: "●", tone: "accent", text: detail ?? "Rebasing onto the base branch." };
     case "verifying": return { glyph: "●", tone: "accent", text: detail ?? "Running the full gate on the rebased head." };
+    case "repairing": return { glyph: "●", tone: "accent", text: detail ?? "The full gate failed; the session is fixing it before Land runs again." };
     case "landing": return { glyph: "●", tone: "accent", text: detail ?? "Fast-forwarding the base branch." };
     case "kept": return { glyph: "✓", tone: "success", text: detail ?? "Kept on the branch." };
     case "landed": {

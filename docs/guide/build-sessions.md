@@ -210,6 +210,16 @@ is retried with a fresh rebase and full gate, up to three attempts. Refusal code
 `worktree_dirty` and `head_mismatch`. A failed exit leaves the session open. The worktree is
 never removed automatically, and build landing does not run the project's post-land operation.
 
+When the full gate fails during Land, the host hands the failed command and log to the
+session and waits for that turn to end; the owner does not have to steer it. Land then runs
+again by itself with a fresh rebase and full gate, for at most three repairs per Land
+choice. It resumes only if the session committed a fix, the worktree is clean and no child
+is live. Under `review` policy the repaired head also needs an approving review with all
+findings resolved, unless the owner gave an override reason when choosing Land; that reason
+then covers the repair commits too. Stopping the repair turn, a turn that ends without a
+new commit, or a gate that still fails after the third repair ends Land as a failed exit.
+Rebase conflicts and landing refusals are not repaired automatically.
+
 ## Build record
 
 The host publishes a tracked build record, not a task. It contains intent, repository and
