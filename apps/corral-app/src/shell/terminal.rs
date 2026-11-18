@@ -11,7 +11,7 @@ use crate::{
     model::{
         DataState, Destination, Live, Overlay, SettingsSection, Workspace,
         assistant::COMPOSER_KEYS,
-        commands::{destination_key, key_legend_live},
+        commands::{Surface, destination_key, key_legend_live},
         nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, SIDEBAR_LABEL, THIS_DEVICE},
     },
     screens,
@@ -45,30 +45,40 @@ pub fn shell(app: AppState) -> AnyElement {
     let collapsed = computed(move || term::sidebar_collapsed(app));
     let focus = Focus::watch();
     let typing = computed(move || focus.typing(app));
+    // The top bar comes after the page in the tree, drawn above it: when the focused control
+    // goes with what it did (an answer sent, an entry removed, a session opened in the list's
+    // place), the next Tab starts in the page rather than on the top bar's chips.
     view()
         .flex_1()
-        .flex_col()
-        .child(terminal_bar::top_bar(app))
+        .flex_col_reverse()
         .child(
-            // The page comes first in the tree, the sidebar laid out to its left: the terminal's
-            // keys with nothing focused (Page Down, the arrows, Tab) start at the first scroll or
-            // control in the tree. Were that the sidebar's, the focus would land unseen on its
-            // selected row, banded already, and Space or Enter there would leave the page.
             view()
                 .flex_1()
                 .min_h(px(0.0))
-                .flex_row_reverse()
-                .child(content(app, focus))
-                .child(dynamic(move || {
-                    if collapsed.get() {
-                        untracked(|| rail(app, current, shown))
-                    } else {
-                        untracked(|| sidebar(app, current, shown, workspace))
-                    }
-                })),
+                .flex_col()
+                .child(
+                    // The page comes first in the tree, the sidebar laid out to its left: the
+                    // terminal's keys with nothing focused (Page Down, the arrows, Tab) start at
+                    // the first scroll or control in the tree. Were that the sidebar's, the
+                    // focus would land unseen on its selected row, banded already, and Space or
+                    // Enter there would leave the page.
+                    view()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .flex_row_reverse()
+                        .child(content(app, focus))
+                        .child(dynamic(move || {
+                            if collapsed.get() {
+                                untracked(|| rail(app, current, shown))
+                            } else {
+                                untracked(|| sidebar(app, current, shown, workspace))
+                            }
+                        })),
+                )
+                .child(toast(app))
+                .child(key_line(app, typing, shown)),
         )
-        .child(toast(app))
-        .child(key_line(app, typing, shown))
+        .child(terminal_bar::top_bar(app))
         .child(ask::hotkey(app))
         .into_element()
 }
@@ -500,15 +510,17 @@ fn fits() -> impl Iterator<Item = Fit> {
 
 /// The key line for what is in view. While Ask's field has the keys, letters typed go into it:
 /// the line gives the composer's own keys and Go to, the one chord that still reaches past it.
-/// Otherwise the keys of the page in view (when the model gives it any and the destination is
-/// served), the `shown` destinations, then Ask and Go to. A destination whose key the page
-/// takes for itself (`.`, Changes, opens a list's menu) is left out rather than listed twice
-/// with two meanings. `off_board`: Now's selection is off the board.
+/// While a surface stands over the page (`surface`) the page's keys do nothing: the line gives
+/// the surface's own. Otherwise the keys of the page in view (when the model gives it any and
+/// the destination is served), the `shown` destinations, then Ask and Go to. A destination whose
+/// key the page takes for itself (`.`, Changes, opens a list's menu) is left out rather than
+/// listed twice with two meanings. `off_board`: Now's selection is off the board.
 fn line(
     destination: Destination,
     live: Option<Live>,
     served: bool,
     typing: bool,
+    surface: Option<Surface>,
     off_board: bool,
     shown: &[Destination],
 ) -> Line {
@@ -521,6 +533,22 @@ fn line(
                 .collect(),
             destinations: Vec::new(),
             actions: vec![go_to],
+            sidebar: None,
+        };
+    }
+    if let Some(surface) = surface {
+        return Line {
+            own: surface
+                .keys()
+                .into_iter()
+                .map(|(keys, name)| Entry::new(keys, name, KEEP_PAGE))
+                .collect(),
+            destinations: Vec::new(),
+            actions: if surface.reaches_past() {
+                vec![go_to]
+            } else {
+                Vec::new()
+            },
             sidebar: None,
         };
     }
@@ -606,6 +634,35 @@ impl Line {
     }
 }
 
+/// Tracked: the surface standing over the page and taking its keys, the newest first: the
+/// palette, the confirmation, the refusal sheet, the rewind sheet, an operation's form, the
+/// keyboard's menu; on Artifacts the full-size view, or the filter while it has the keys.
+fn open_surface(app: AppState) -> Option<Surface> {
+    if app.is_open(Overlay::Palette) {
+        Some(Surface::Palette)
+    } else if app.confirm.with(Option::is_some) {
+        Some(Surface::Confirm)
+    } else if app.refusal.with(Option::is_some) {
+        Some(Surface::Sheet)
+    } else if app.agents.with(|state| state.rewind.is_some()) {
+        Some(Surface::Menu)
+    } else if app.work.with(|state| state.composer.is_some()) {
+        Some(Surface::Form)
+    } else if app.work.with(|state| state.menu.is_some()) {
+        Some(Surface::Menu)
+    } else if app.destination() == Destination::Artifacts && !app.is_open(Overlay::Ask) {
+        app.artifacts.with(|state| {
+            if state.full.is_some() {
+                Some(Surface::FullSize)
+            } else {
+                state.typing.then_some(Surface::Filter)
+            }
+        })
+    } else {
+        None
+    }
+}
+
 /// The last row, a legend: each key as a cap and the name it goes to, the keys in focus first.
 /// When the grid is short of room the names give way one by one, then whole groups, as
 /// [`fits`] orders them; a key's cap is never cut.
@@ -623,6 +680,7 @@ fn key_line(app: AppState, typing: Memo<bool>, shown: Memo<Vec<Destination>>) ->
             projects::open_project(app).is_some(),
         )
     });
+    let surface = computed(move || open_surface(app));
     dynamic(move || {
         let room = term::columns();
         let (destination, live, data, off_board, project_page) = route.get();
@@ -633,7 +691,15 @@ fn key_line(app: AppState, typing: Memo<bool>, shown: Memo<Vec<Destination>>) ->
             && !project_page
             && shown.contains(&destination)
             && app.available(destination) == crate::model::Availability::Ready;
-        let line = line(destination, live, served, typing.get(), off_board, &shown);
+        let line = line(
+            destination,
+            live,
+            served,
+            typing.get(),
+            surface.get(),
+            off_board,
+            &shown,
+        );
         let (fit, count) = line.layout(room);
         let mut row = view()
             .h(term::rows(1.0))
@@ -689,6 +755,7 @@ mod tests {
                     live.clone(),
                     true,
                     typing,
+                    None,
                     false,
                     &Destination::ALL,
                 );
@@ -719,5 +786,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// With a menu, a sheet or a form open the key line listed the page's keys, which do
+    /// nothing then.
+    #[test]
+    fn an_open_surface_s_keys_replace_the_page_s() {
+        let line = line(
+            Destination::Now,
+            None,
+            true,
+            false,
+            Some(Surface::Menu),
+            false,
+            &Destination::ALL,
+        );
+        let keys: Vec<&str> = line.own.iter().map(|entry| entry.keys.as_str()).collect();
+        let menu: Vec<&str> = Surface::Menu.keys().iter().map(|(keys, _)| *keys).collect();
+        assert_eq!(keys, menu);
+        assert!(line.destinations.is_empty() && line.actions.is_empty());
     }
 }

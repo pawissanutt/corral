@@ -21,7 +21,7 @@ use crate::model::{Form, Id};
 use crate::screens::assistant;
 use crate::state::AppState;
 use crate::ui::icons::Icon;
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::term::{self, cells};
@@ -49,6 +49,10 @@ pub(super) enum Place {
     Over,
     Full,
 }
+
+/// The panel's Open session (its test id), which takes the keyboard focus when a pressed
+/// roster row goes out of sight under the panel it opened.
+pub(super) const OPEN_SESSION: &str = "btn-open-session";
 
 /// The panel of the selected session in its place, or nothing while none is selected. It is
 /// built anew for each session, so a draft, an open tool line or a stream belongs to one.
@@ -420,6 +424,8 @@ fn head_controls(
         })
         .collect();
     let open = head.open.clone();
+    let open_handle = element_ref();
+    app.focus_when_asked(OPEN_SESSION, open_handle);
     view()
         .flex_row()
         .flex_wrap()
@@ -427,11 +433,15 @@ fn head_controls(
         .gap(px(8.0))
         .when(!terminal, |row| row.mt(px(10.0)))
         .child(segs::track(app, options))
-        .child(button(
+        .child(button_with(
             app,
             head.open_label,
             ButtonKind::Quiet,
-            "btn-open-session",
+            ButtonOptions {
+                focus: Some(open_handle),
+                ..ButtonOptions::default()
+            },
+            OPEN_SESSION,
             move || run_roster(app, open.clone()),
         ))
         .children(head.menu.clone().map(|id| controls::session_menu(app, id)))

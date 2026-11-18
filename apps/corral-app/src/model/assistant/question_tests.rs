@@ -71,9 +71,10 @@ fn a_waiting_message_is_filed_as_an_idea_in_the_owners_words() {
     });
     assert!(offered, "the waiting message offers File as idea");
     let effects = state.act_live(Action::FileEntry("A-1/M1/text".into()), &feed);
-    let [Effect::Act(act)] = effects.as_slice() else {
-        panic!("one engine operation, got {effects:?}");
+    let [Effect::Act(act), Effect::Focus(field)] = effects.as_slice() else {
+        panic!("one engine operation, then the composer's focus, got {effects:?}");
     };
+    assert_eq!(*field, super::COMPOSER_FIELD);
     let Op::New { task } = &act.op else {
         panic!("filing creates a task, got {:?}", act.op);
     };

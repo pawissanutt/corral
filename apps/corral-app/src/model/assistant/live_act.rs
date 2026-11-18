@@ -334,8 +334,13 @@ impl State {
                 text,
             } => crate::model::agents::answer_prompt(&session, question, option, text)
                 .into_iter()
+                .chain([Effect::Focus(super::COMPOSER_FIELD)])
                 .collect(),
-            Action::FileEntry(entry) => self.file(entry, feed),
+            Action::FileEntry(entry) => {
+                let mut effects = self.file(entry, feed);
+                effects.push(Effect::Focus(super::COMPOSER_FIELD));
+                effects
+            }
             Action::RetryThread(scope) => vec![Effect::Thread { scope, open: true }],
             Action::Unattach(key) => vec![Effect::Unattach(Id::from(key))],
             Action::CancelSend(key) => vec![Effect::CancelSend(Id::from(key))],

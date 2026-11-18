@@ -57,7 +57,6 @@ pub fn key_legend_live(
             legend
         }
         (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member"), (".", "actions")],
-        (Destination::Artifacts, _) => crate::model::artifacts::KEYS.to_vec(),
         (Destination::Agents, _) => vec![("j k", "session"), (".", "session menu")],
         (Destination::Review, _) => vec![
             ("j k", "candidate"),
@@ -66,6 +65,50 @@ pub fn key_legend_live(
             (".", "actions"),
         ],
         _ => Vec::new(),
+    }
+}
+
+/// What stands over the page and takes the keys while it is open: the page's own keys do
+/// nothing then, so the terminal's key line gives the surface's instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Surface {
+    /// The command palette.
+    Palette,
+    /// A list of choices: the keyboard's Actions or Session menu, the rewind sheet's turns.
+    Menu,
+    /// An operation's form (a comment, a dispatch's profile and base).
+    Form,
+    /// The refusal sheet's next steps.
+    Sheet,
+    /// The question asked once before a destructive or forced step, answered by typing its word.
+    Confirm,
+    /// An artifact shown full size in the finder's place.
+    FullSize,
+    /// The artifact finder's filter, which keeps the keyboard: letters type into it.
+    Filter,
+}
+
+impl Surface {
+    /// The surface's keys, in the key line's order.
+    pub fn keys(self) -> Vec<(&'static str, &'static str)> {
+        match self {
+            Surface::Palette => vec![("↑ ↓", "move"), ("Enter", "run"), ("Esc", "close")],
+            Surface::Menu => vec![("↑ ↓", "move"), ("Enter", "choose"), ("Esc", "close")],
+            Surface::Form => vec![("Tab", "next"), ("Enter", "press"), ("Esc", "cancel")],
+            Surface::Sheet => vec![("Tab", "next"), ("Enter", "press"), ("Esc", "close")],
+            Surface::Confirm => vec![("Enter", "confirm"), ("Esc", "cancel")],
+            Surface::FullSize => vec![("↑ ↓", "scroll"), ("Esc", "back")],
+            Surface::Filter => {
+                let mut keys = crate::model::artifacts::KEYS.to_vec();
+                keys.push(("Esc", "clear"));
+                keys
+            }
+        }
+    }
+
+    /// Whether Go to (`^K`) still answers over it: only the filter leaves the global chords be.
+    pub fn reaches_past(self) -> bool {
+        self == Surface::Filter
     }
 }
 

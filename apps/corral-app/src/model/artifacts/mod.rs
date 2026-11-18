@@ -55,6 +55,9 @@ pub struct State {
     pub full: Option<String>,
     /// Grows each time the filter should take the keyboard focus again.
     pub focus: u32,
+    /// The filter has the keyboard focus: letters type into it, and the terminal's key line
+    /// gives the filter's keys rather than the destinations'.
+    pub typing: bool,
 }
 
 /// A move of the selection through the results.

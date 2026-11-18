@@ -99,6 +99,11 @@ pub(super) fn model_footer() -> Rich {
     ]
 }
 
+/// The composer's field (its test id), which takes the keyboard focus back (`Effect::Focus`)
+/// when a card button it pressed goes away with the press: an answered question, a message
+/// filed as an idea.
+pub const COMPOSER_FIELD: &str = "ask-input";
+
 /// A keyboard cap and its adjacent explanatory word or phrase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyHint {

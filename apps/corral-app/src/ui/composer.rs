@@ -382,9 +382,10 @@ fn entry_field(app: AppState, built: Memo<Composer>, entry: ElementRef, to: To) 
     let form = app.form;
     let placeholder = computed(move || built.with(|c| c.placeholder.clone()));
     let draft = to.draft;
+    app.focus_when_asked(assistant::COMPOSER_FIELD, entry);
     let field = input()
         .element_ref(&entry)
-        .test_id("ask-input")
+        .test_id(assistant::COMPOSER_FIELD)
         .label(move || SharedString::from(placeholder.get()))
         .multiline(true)
         .submit_behavior(SubmitBehavior::Submit)

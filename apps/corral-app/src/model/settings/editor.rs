@@ -124,8 +124,10 @@ pub struct Editor {
     pub raw: BTreeMap<Path, String>,
     /// Number fields whose text is not a whole number; the draft keeps their last value.
     pub invalid: BTreeSet<Path>,
-    /// The field the last edit added (a list's new line, a new entry's first key, a new rule's
-    /// first key), which takes the keyboard focus when it shows.
+    /// The field that takes the keyboard focus when it shows: the one the last edit added (a
+    /// list's new line, a new entry's first key, a new rule's first key), or the one that took
+    /// a removed one's place (the next line, rule or entry), so the focus stays where the owner
+    /// was working rather than leaving with the removed field's controls.
     pub added: Option<Path>,
 }
 
@@ -164,10 +166,15 @@ impl Editor {
             Edit::Switch(path, Some(on)) => document::set(&mut doc, path, Value::from(*on)),
             Edit::List(path, edit) => {
                 document::edit_list(&mut doc, path, edit);
-                if *edit == ListEdit::Add {
-                    let last = document::lines(document::get(&doc, path)).len();
+                let count = document::lines(document::get(&doc, path)).len();
+                let focused = match edit {
+                    ListEdit::Add => count.checked_sub(1),
+                    ListEdit::Remove(index) => (count > 0).then(|| (*index).min(count - 1)),
+                    _ => None,
+                };
+                if let Some(at) = focused {
                     let mut line = path.clone();
-                    line.0.push(Seg::Index(last.saturating_sub(1)));
+                    line.0.push(Seg::Index(at));
                     self.added = Some(line);
                 }
             }
@@ -181,24 +188,28 @@ impl Editor {
                 };
                 document::add_entry(&mut doc, root, name);
                 self.chosen.insert(*part, name.to_owned());
-                let first = match part {
-                    Part::Projects => "path",
-                    Part::Profiles => "harness",
-                    _ => "command",
-                };
-                self.added = Some(Path::entry(root, name, first));
+                self.added = Some(Path::entry(root, name, entry_first_key(*part)));
             }
             Edit::RemoveEntry(part, name) => {
                 if let Some(root) = part.root() {
                     document::remove_entry(&mut doc, root, name);
                     self.chosen.remove(part);
+                    if let Some(next) = document::names(&doc, root).into_iter().next() {
+                        self.added = Some(Path::entry(root, &next, entry_first_key(*part)));
+                        self.chosen.insert(*part, next);
+                    }
                 }
             }
             Edit::Rules(edit) => {
                 document::edit_rules(&mut doc, edit);
-                if matches!(edit, RuleEdit::Add(_)) {
-                    let last = document::rule_count(&doc).saturating_sub(1);
-                    self.added = Some(Path::rule(last, "kind"));
+                let count = document::rule_count(&doc);
+                let focused = match edit {
+                    RuleEdit::Add(_) => count.checked_sub(1),
+                    RuleEdit::Remove(index) => (count > 0).then(|| (*index).min(count - 1)),
+                    _ => None,
+                };
+                if let Some(at) = focused {
+                    self.added = Some(Path::rule(at, "kind"));
                 }
             }
             Edit::File(_) => {}
@@ -269,6 +280,15 @@ fn place(line: &str, anchors: &[Path]) -> Reason {
             at: None,
             line: line.to_owned(),
         },
+    }
+}
+
+/// An entry's first key, where the focus goes when the entry shows after an edit.
+fn entry_first_key(part: Part) -> &'static str {
+    match part {
+        Part::Projects => "path",
+        Part::Profiles => "harness",
+        _ => "command",
     }
 }
 
@@ -522,5 +542,18 @@ mod tests {
                 .iter()
                 .any(|reason| reason.at.is_none())
         );
+    }
+
+    /// Removing a line took the keyboard focus with its Remove button, so the next Tab started
+    /// at the top of the app.
+    #[test]
+    fn removing_a_line_hands_the_focus_to_the_line_in_its_place() {
+        let (mut state, _) = loaded();
+        let gate = Path::entry("projects", "app", "gate");
+        state.edit_config(Edit::List(gate.clone(), ListEdit::Add));
+        state.edit_config(Edit::List(gate.clone(), ListEdit::Remove(0)));
+        let mut first = gate;
+        first.0.push(Seg::Index(0));
+        assert_eq!(state.config.added, Some(first));
     }
 }

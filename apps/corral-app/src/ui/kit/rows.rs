@@ -9,7 +9,7 @@ use crate::model::hue::Hue;
 use crate::state::AppState;
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::hue_ink;
-use crate::ui::term::{cells, hrule};
+use crate::ui::term::{self, cells, hrule};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, row_height};
 
 const RING: f32 = 2.0;
@@ -354,17 +354,34 @@ fn shell(
                     .outline_color(color(Token::Focus))
                     .outline_offset(px(-RING))
             }),
-        // A column of its own, so the rows line up whether one is selected or not.
-        Form::Terminal => row.h(px(row_height(form))).gap(px(8.0)).child(
-            view()
-                .w(cells(1.0))
-                .flex_shrink_0()
-                .accessibility_elements_hidden(true)
+        // A column of its own, so the rows line up whether one is selected or not: the focus
+        // mark while the row has the keyboard focus, else the selection's bar.
+        Form::Terminal => {
+            let handle = element_ref();
+            let focused = term::focus_of(handle);
+            row.element_ref(&handle)
+                .h(px(row_height(form)))
+                .gap(px(8.0))
                 .child(
-                    text(move || if selected.get() { "▌" } else { " " })
-                        .text_color(color(Token::Ink)),
-                ),
-        ),
+                    view()
+                        .w(cells(1.0))
+                        .flex_shrink_0()
+                        .accessibility_elements_hidden(true)
+                        .child(
+                            text(move || {
+                                if focused.get() {
+                                    term::FOCUS_MARK
+                                } else if selected.get() {
+                                    "▌"
+                                } else {
+                                    " "
+                                }
+                            })
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(color(Token::Ink)),
+                        ),
+                )
+        }
     };
     row.children(content).into_element()
 }
