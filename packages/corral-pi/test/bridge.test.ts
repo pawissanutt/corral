@@ -4,16 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EventLog } from "../src/bridge/events.ts";
-import { FRAME_MAX_BYTES, type SubmitInput, type SubmitResult } from "../src/bridge/protocol.ts";
+import { FRAME_MAX_BYTES, type SessionInput, type SubmitResult } from "../src/bridge/protocol.ts";
 import { type BridgeHandlers, type BridgeServer, startBridge } from "../src/bridge/server.ts";
 import { LiveEvents } from "../src/host/live-events.ts";
 import type { ChildSnapshot, FleetSnapshot } from "../src/build/types.ts";
-import { type PeerLookup, loadPeerLookup } from "../src/host/peer.ts";
-import { connect, refusalOnConnect } from "./support/bridge-client.ts";
-import { nextEvent } from "./support/wait.ts";
+import { connect, testHandlers } from "./support/bridge-client.ts";
 
-const CAP = "c".repeat(64);
-const uid = process.getuid?.() ?? -1;
 const dirs: string[] = [];
 const servers: BridgeServer[] = [];
 afterAll(async () => {
@@ -24,34 +20,29 @@ afterAll(async () => {
 interface Harness {
   readonly path: string;
   readonly events: EventLog;
-  readonly submitted: SubmitInput[];
+  readonly submitted: SessionInput[];
 }
 
 interface HarnessOptions {
-  readonly peer?: PeerLookup;
   readonly capacity?: number;
-  readonly submit?: (input: SubmitInput) => Promise<SubmitResult>;
+  readonly submit?: (input: SessionInput) => Promise<SubmitResult>;
   readonly state?: () => Record<string, unknown>;
-  readonly submissionsMax?: number;
   readonly inputReplyMs?: number;
   readonly queueState?: BridgeHandlers["queueState"];
   readonly queueWithdraw?: BridgeHandlers["queueWithdraw"];
   readonly liveEvents?: LiveEvents;
 }
 
-async function bridge(peerOrOptions?: PeerLookup | HarnessOptions, capacity = 512): Promise<Harness> {
-  const options: HarnessOptions = typeof peerOrOptions === "function" ? { peer: peerOrOptions, capacity } : { capacity, ...peerOrOptions };
+async function bridge(options: HarnessOptions = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "corral-pi-bridge-"));
   dirs.push(dir);
   const events = new EventLog(3, options.capacity ?? 512);
-  const submitted: SubmitInput[] = [];
+  const submitted: SessionInput[] = [];
   const server = await startBridge({
-    path: join(dir, "host.sock"), ctlCap: CAP, generation: 3, uid, peer: options.peer ?? await loadPeerLookup(), events,
+    path: join(dir, "host.sock"), sessionId: "fixture", events,
     ...(options.liveEvents ? { liveEvents: options.liveEvents } : {}),
-    ...(options.submissionsMax ? { submissionsMax: options.submissionsMax } : {}),
     ...(options.inputReplyMs ? { inputReplyMs: options.inputReplyMs } : {}),
-    handlers: {
-      hello: () => ({ protocol: 1 }),
+    handlers: testHandlers({
       state: options.state ?? (() => ({ streaming: false })),
       ...(options.queueState ? { queueState: options.queueState } : {}),
       ...(options.queueWithdraw ? { queueWithdraw: options.queueWithdraw } : {}),
@@ -61,101 +52,77 @@ async function bridge(peerOrOptions?: PeerLookup | HarnessOptions, capacity = 51
       },
       cancel: async (turn) => ({ cancelled: false, reason: "idle", ...(turn ? { turn } : {}) }),
       shutdown: () => undefined,
-    },
+    }),
   });
   servers.push(server);
   return { path: server.path, events, submitted };
 }
 
-const frame = (command: string, args: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) =>
-  ({ version: 1, id: `rq-${command}-${Math.random().toString(36).slice(2, 10)}`, ctl_cap: CAP, generation: 3, command, args, ...extra });
+let nextId = 0;
+const frame = (command: string, args: Record<string, unknown> = {}) =>
+  ({ version: 2, id: `rq-${++nextId}`, command, args });
 
-test("the socket is owner-only and the real peer lookup reads this process's uid", async () => {
+test("a v2 request needs no secret and the socket and directory are private", async () => {
   const { path } = await bridge();
   expect(statSync(path).mode & 0o777).toBe(0o600);
+  expect(statSync(join(path, "..")).mode & 0o777).toBe(0o700);
   const client = await connect(path);
   const reply = await client.request(frame("get_state"));
   expect(reply.ok).toBeTrue();
-  expect(reply.generation).toBe(3);
+  expect(reply.version).toBe(2);
+  expect(reply.generation).toBeUndefined();
   expect(reply.result).toEqual({ streaming: false });
   client.close();
 });
 
-test("a missing or wrong ctl_cap is refused and the connection closed", async () => {
+test("retired commands and oversize frames are refused", async () => {
   const { path } = await bridge();
-  for (const auth of [{ ctl_cap: undefined }, { ctl_cap: "x".repeat(64) }, { ctl_cap: CAP.slice(1) }]) {
+  for (const command of ["questions", "handoff_drain", "owner_turn"]) {
     const client = await connect(path);
-    const reply = await client.request(frame("get_state", {}, auth));
-    expect(reply.ok).toBeFalse();
-    expect(reply.error?.code).toBe("auth_failed");
-    await client.closed();
+    expect((await client.request(frame(command))).error?.code).toBe("unknown_command");
+    client.close();
   }
-});
-
-test("a peer with a different uid, or unknown credentials, is refused before any request", async () => {
-  for (const peer of [() => ({ pid: 1, uid: uid + 1, gid: 0 }), () => undefined]) {
-    const { path } = await bridge(peer);
-    const { reply, closed } = await refusalOnConnect(path);
-    expect(reply.ok).toBeFalse();
-    expect(reply.error?.code).toBe("peer_refused");
-    await closed;
-  }
-});
-
-test("a stale generation, an unknown command and an oversize frame are refused", async () => {
-  const { path } = await bridge();
-  const client = await connect(path);
-  expect((await client.request(frame("get_state", {}, { generation: 2 }))).error?.code).toBe("stale_generation");
-  expect((await client.request(frame("queue_state"))).error?.code).toBe("capability_unavailable");
-  expect((await client.request(frame("handoff_drain", {}))).error?.code).toBe("source_boundary_unavailable");
-  expect((await client.request(frame("exec", {}))).error?.code).toBe("unknown_command");
   const big = await connect(path);
   const reply = await big.raw(JSON.stringify(frame("submit_input", { text: "x".repeat(70_000) })));
   expect(reply.error?.code).toBe("frame_too_large");
   await big.closed();
-  client.close();
 });
 
-test("queue commands validate bounded selectors before dispatch and retain bridge identity checks", async () => {
+test("queue commands validate selectors and need no operation key", async () => {
   const calls: unknown[] = [];
   const { path } = await bridge({
-    queueState: limit => { calls.push(limit); return { available: true, generation: 3, items: [], more: false }; },
-    queueWithdraw: (key, op_key) => { calls.push({ key, op_key }); return { op_key, outcome: "unknown_item", replayed: false }; },
+    queueState: limit => { calls.push(limit); return { available: true, items: [], more: false }; },
+    queueWithdraw: key => { calls.push(key); return { outcome: "unknown_item" }; },
   });
   const client = await connect(path);
   try {
     for (const limit of [0, 65, 1.5, null, "2"]) expect((await client.request(frame("queue_state", { limit }))).error?.code).toBe("bad_input");
-    for (const args of [{}, { key: "k", op_key: "x".repeat(129) }, { key: "bad/key", op_key: "op" }]) {
+    for (const args of [{}, { key: "x".repeat(129) }, { key: "bad/key" }]) {
       expect((await client.request(frame("queue_withdraw", args))).error?.code).toBe("bad_input");
     }
-    expect((await client.request(frame("queue_withdraw", { key: "k", op_key: "op" }, { generation: 2 }))).error?.code).toBe("stale_generation");
     expect(calls).toEqual([]);
-    expect((await client.request(frame("queue_state"))).result).toMatchObject({ available: true, generation: 3 });
-    expect((await client.request(frame("queue_withdraw", { key: "k", op_key: "op" }))).result).toEqual({ op_key: "op", outcome: "unknown_item", replayed: false });
-    expect(calls).toEqual([64, { key: "k", op_key: "op" }]);
+    expect((await client.request(frame("queue_state"))).result).toMatchObject({ available: true });
+    expect((await client.request(frame("queue_withdraw", { key: "k" }))).result).toEqual({ outcome: "unknown_item" });
+    expect(calls).toEqual([64, "k"]);
   } finally { client.close(); }
 });
 
-test("submit_input is idempotent by key: a replay returns the first disposition, a changed payload is rejected", async () => {
+test("submit_input accepts frame-sized text with either origin and does not replay by request ID", async () => {
   const { path, submitted } = await bridge();
   const client = await connect(path);
-  const args = { text: "hello", busy_policy: "follow_up", idempotency_key: "msg-1", origin: "inbox" };
+  const args = { text: "x".repeat(16_000), origin: "owner" };
   const request = frame("submit_input", args);
-  const first = await client.request(request);
-  expect(first.result).toEqual({ request_id: request.id, idempotency_key: "msg-1", disposition: "started", turn: 1 });
-  const replay = await client.request(frame("submit_input", args));
-  expect(replay.result?.disposition).toBe("started");
-  expect(replay.result?.replayed).toBeTrue();
-  const conflict = await client.request(frame("submit_input", { ...args, text: "changed" }));
-  expect(conflict.result?.disposition).toBe("rejected");
-  expect(conflict.result?.reason).toBe("idempotency_conflict");
+  expect((await client.request(request)).result).toEqual({ request_id: request.id, disposition: "started", turn: 1 });
+  expect((await client.request({ ...request, args: { ...args, origin: "auto" } })).result?.turn).toBe(2);
+  expect((await client.request(frame("submit_input", { ...args, origin: "test" }))).error?.code).toBe("bad_input");
   expect((await client.request(frame("submit_input", { ...args, busy_policy: "now" }))).error?.code).toBe("bad_input");
-  expect(submitted).toHaveLength(1);
+  expect(submitted.map(input => [input.origin, input.busyPolicy, input.text.length]))
+    .toEqual([["owner", "steer", 16_000], ["auto", "steer", 16_000]]);
   client.close();
 });
 
 test("events carry the generation and a monotonic sequence, and a cursor behind the ring gets a gap", async () => {
-  const { path, events } = await bridge(undefined, 4);
+  const { path, events } = await bridge({ capacity: 4 });
   for (let n = 0; n < 6; n++) events.emit("probe", { n });
   const client = await connect(path);
   const page = (await client.request(frame("events_since", { seq: 0 }))).result as {
@@ -171,55 +138,6 @@ test("events carry the generation and a monotonic sequence, and a cursor behind 
   client.close();
 });
 
-const input = (key: string, text = "go") => ({ text, busy_policy: "follow_up", idempotency_key: key, origin: "test" });
-
-test("an admitted key is never forgotten: at capacity new keys are refused while replays and conflicts still answer", async () => {
-  let release!: (result: SubmitResult) => void;
-  const held = new Promise<SubmitResult>((resolve) => { release = resolve; });
-  const { path, submitted, events } = await bridge({
-    submissionsMax: 3, inputReplyMs: 25,
-    submit: (submission) => (submission.text === "hold" ? held : Promise.resolve({ disposition: "handled" })),
-  });
-  const client = await connect(path);
-  expect((await client.request(frame("submit_input", input("k0")))).result?.disposition).toBe("handled");
-  expect((await client.request(frame("submit_input", input("k1")))).result?.disposition).toBe("handled");
-  expect((await client.request(frame("submit_input", input("k2", "hold")))).result?.disposition).toBe("pending");
-  expect((await client.request(frame("submit_input", input("k3")))).error?.code).toBe("input_limit");
-  const fresh = await connect(path);
-  for (const connection of [client, fresh]) {
-    const replay = (await connection.request(frame("submit_input", input("k0")))).result;
-    expect([replay?.idempotency_key, replay?.disposition, replay?.replayed]).toEqual(["k0", "handled", true]);
-    expect((await connection.request(frame("submit_input", input("k1", "changed")))).result?.reason).toBe("idempotency_conflict");
-    const outstanding = (await connection.request(frame("submit_input", input("k2", "hold")))).result;
-    expect([outstanding?.disposition, outstanding?.replayed]).toEqual(["pending", true]);
-    expect((await connection.request(frame("submit_input", input("k2", "other")))).result?.reason).toBe("idempotency_conflict");
-  }
-  const settled = nextEvent(events, (event) => event.kind === "input_settled" && event.idempotency_key === "k2");
-  release({ disposition: "started", turn: 1 });
-  expect([(await settled).disposition, (await settled).turn]).toEqual(["started", 1]);
-  const final = (await client.request(frame("submit_input", input("k2", "hold")))).result;
-  expect([final?.disposition, final?.turn, final?.replayed]).toEqual(["started", 1, true]);
-  expect((await fresh.request(frame("submit_input", input("k4")))).error?.code).toBe("input_limit");
-  expect(submitted.map((entry) => entry.idempotencyKey)).toEqual(["k0", "k1", "k2"]);
-  client.close();
-  fresh.close();
-});
-
-test("input upstream has not answered is pending, never rejected, and its outcome follows as input_settled", async () => {
-  let release!: (result: SubmitResult) => void;
-  const held = new Promise<SubmitResult>((resolve) => { release = resolve; });
-  const { path, events } = await bridge({ inputReplyMs: 25, submit: () => held });
-  const client = await connect(path);
-  const first = (await client.request(frame("submit_input", input("late")))).result;
-  expect([first?.disposition, first?.reason]).toEqual(["pending", "preflight_pending"]);
-  const settled = nextEvent(events, (event) => event.kind === "input_settled");
-  release({ disposition: "rejected", reason: "busy" });
-  const outcome = await settled;
-  expect([outcome.idempotency_key, outcome.disposition, outcome.reason]).toEqual(["late", "rejected", "busy"]);
-  const replay = (await client.request(frame("submit_input", input("late")))).result;
-  expect([replay?.disposition, replay?.reason, replay?.replayed]).toEqual(["rejected", "busy", true]);
-  client.close();
-});
 
 test("every reply fits a frame: events page by bytes with a cursor, oversize is explicit, the connection stays usable", async () => {
   const { path, events } = await bridge({ capacity: 1024, state: () => ({ blob: "x".repeat(100_000) }) });
@@ -251,24 +169,21 @@ test("every reply fits a frame: events page by bytes with a cursor, oversize is 
   const state = await client.request(frame("get_state"));
   expect(state.error?.code).toBe("response_too_large");
   expect(state.wireBytes).toBeLessThanOrEqual(FRAME_MAX_BYTES);
-  expect((await client.request(frame("hello"))).result).toEqual({ protocol: 1 });
+  expect((await client.request(frame("hello"))).result).toEqual({ protocol: 2 });
   client.close();
 });
 
-test("a request split inside a multibyte character arrives intact, and a replay chunked differently is the same input", async () => {
+test("a request split inside a multibyte character arrives intact", async () => {
   const { path, submitted } = await bridge();
   const client = await connect(path);
   const text = "A€B \u{1F600}";
-  const request = frame("submit_input", { text, busy_policy: "follow_up", idempotency_key: "utf8-1", origin: "test" });
+  const request = frame("submit_input", { text, busy_policy: "follow_up", origin: "owner" });
   const inside = (value: Record<string, unknown>, extra: number) =>
     Buffer.from(JSON.stringify(value)).indexOf(Buffer.from("€")) + extra;
   const [ready, first] = await client.pipelined(frame("hello"), request, inside(request, 1));
   expect(ready.ok).toBeTrue();
   expect(first.result?.disposition).toBe("started");
   expect(submitted[0]?.text).toBe(text);
-  const replayFrame = { ...request, id: "rq-utf8-replay" };
-  const [, replay] = await client.pipelined(frame("hello"), replayFrame, inside(replayFrame, 2));
-  expect([replay.result?.disposition, replay.result?.replayed]).toEqual(["started", true]);
   const pair = await client.batch([frame("get_state"), frame("hello")]);
   expect(pair.map((reply) => reply.ok)).toEqual([true, true]);
   expect(submitted).toHaveLength(1);

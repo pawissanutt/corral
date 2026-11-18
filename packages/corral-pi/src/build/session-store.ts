@@ -50,9 +50,17 @@ export function saveSession(dataRoot: string, record: BuildSessionRecord): void 
   const dir = sessionDir(dataRoot, record.id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
+  const path = join(dir, "session.json");
+  let socketState = {};
+  try {
+    const { role, pid, paused, held_input } = JSON.parse(readFileSync(path, "utf8"));
+    if (role === "build") socketState = { role, pid, paused, held_input };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   const temporary = join(dir, `.session-${randomBytes(12).toString("hex")}.tmp`);
   try {
-    writeFileSync(temporary, `${JSON.stringify(record)}\n`, { flag: "wx", mode: 0o600 });
-    renameSync(temporary, join(dir, "session.json"));
+    writeFileSync(temporary, `${JSON.stringify({ ...record, ...socketState })}\n`, { flag: "wx", mode: 0o600 });
+    renameSync(temporary, path);
   } finally { rmSync(temporary, { force: true }); }
 }

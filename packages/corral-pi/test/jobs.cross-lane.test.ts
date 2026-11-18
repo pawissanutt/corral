@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { EventLog } from "../src/bridge/events.ts";
 import { type BridgeServer, startBridge } from "../src/bridge/server.ts";
 import { loadModules } from "../src/host/modules.ts";
-import { loadPeerLookup } from "../src/host/peer.ts";
+import { testHandlers } from "./support/bridge-client.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession } from "../src/host/session.ts";
 import { startTimeOf } from "../src/extensions/jobs/runtime.ts";
@@ -121,17 +121,14 @@ beforeAll(async () => {
   writeFileSync(join(dir, "ctl.cap"), CTL, { mode: 0o600 });
   const session = host;
   bridge = await startBridge({
-    path: join(dir, "host.sock"), ctlCap: CTL, generation: lane.generation, uid: process.getuid?.() ?? -1,
-    peer: await loadPeerLookup(), events,
-    handlers: {
-      hello: () => ({ protocol: 1, generation: lane.generation, role: "worker", bound: session.bound,
-        session_id: session.sessionId(), last_seq: events.last,
-        commands: ["hello", "get_state", "submit_input", "cancel", "events_since", "shutdown"] }),
+    path: join(dir, "host.sock"), sessionId: `${lane.task}/${lane.run}`, events,
+    handlers: testHandlers({
+      hello: () => ({ protocol: 2, role: "worker", session_id: session.sessionId(),
+        session_file: session.session.sessionFile, pid: process.pid }),
       state: () => session.state(),
-      submit: (input, requestId) => session.submit(input, requestId),
-      cancel: (turn) => session.cancel(turn),
-      shutdown: () => undefined,
-    },
+      submit: input => session.submitLocal(input),
+      cancel: turn => session.cancel(turn),
+    }),
   });
   gate = join(workspace, "gate");
   expect(spawnSync("mkfifo", [gate]).status).toBe(0);

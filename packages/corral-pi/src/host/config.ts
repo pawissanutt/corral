@@ -1,8 +1,11 @@
-// The launch message `corral agent launch` writes to the inherited pipe: the bound identity,
-// paths and both generation secrets. It never reaches argv, the environment or a file.
+// Flag-based launches read ordinary workspace settings. The old Rust wire decoder below is
+// retained for its direct source entry point until the local corral tool migration.
 import { writeSettings } from "../roles/assistant/paths.ts";
 import { closeSync, readFileSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { createHash } from "node:crypto";
+import { basename, isAbsolute, join, resolve } from "node:path";
+import { parseArgs } from "node:util";
+import { TOML } from "bun";
 
 import type { AwsBinding } from "../auth/aws.ts";
 import type { CapabilityGuidance } from "../capabilities/guidance.ts";
@@ -18,7 +21,7 @@ import { type ConnectionBinding, parseBinding } from "./connections.ts";
 import type { SummaryProfile } from "./summary.ts";
 
 export const LAUNCH_VERSION = 1;
-/** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
+/** Catalog keys still accepted from legacy launchers. */
 export const HOST_CAPABILITIES: readonly string[] = [
   "budget", "todo", "ask_user", "write_permissions", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search", "codemode",
@@ -41,10 +44,12 @@ export interface HostSecrets {
 
 export interface HostConfig {
   readonly identity: HostIdentity;
-  readonly secrets: HostSecrets;
+  readonly secrets?: HostSecrets;
   readonly pane: string | null;
   /** Authenticated daemon-owned assistant; no terminal and no pane-derived authority. */
   readonly daemonHosted?: boolean;
+  /** Flag launches have a run directory and public local socket, not an inherited binding. */
+  readonly local?: { dir: string; id: string; socket: string; headless: boolean };
   readonly cwd: string;
   readonly root: string;
   readonly corral: string;
@@ -70,6 +75,10 @@ export interface HostConfig {
   readonly summary?: SummaryProfile;
   readonly memoryFile?: string;
   readonly ui?: UiMode;
+}
+
+interface LegacyHostConfig extends HostConfig {
+  readonly secrets: HostSecrets;
 }
 
 export class LaunchMessageInvalid extends Error {
@@ -137,7 +146,6 @@ export function capabilitySet(value: unknown): HostCapabilities | undefined {
   if (!Array.isArray(enabled) || enabled.some((key) => typeof key !== "string")) {
     throw new LaunchMessageInvalid("capabilities.enabled must be a list of names");
   }
-  // Corral resolves against compat.json, so an unknown enabled key is a mismatched install.
   const unknown = enabled.find((key) => !HOST_CAPABILITIES.includes(key as string));
   if (unknown !== undefined) throw new LaunchMessageInvalid(`capability ${unknown} is not implemented by this host`);
   const web = set.web === undefined ? undefined : WebSettingsSchema.safeParse(set.web);
@@ -167,7 +175,7 @@ export function capabilitySet(value: unknown): HostCapabilities | undefined {
 }
 
 // allow: SIZE_OK - One bounded launch-message parser, including its protocol types and allowlist.
-export function parseLaunchMessage(text: string): HostConfig {
+export function parseLaunchMessage(text: string): LegacyHostConfig {
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -315,7 +323,7 @@ export function parseLaunchMessage(text: string): HostConfig {
 }
 
 /** Reads the launch message from the inherited descriptor and closes it. */
-export function readLaunchMessage(fd: number): HostConfig {
+export function readLaunchMessage(fd: number): LegacyHostConfig {
   let bytes: Buffer;
   try {
     bytes = readFileSync(fd);
@@ -324,4 +332,103 @@ export function readLaunchMessage(fd: number): HostConfig {
   }
   if (bytes.length > LAUNCH_MAX_BYTES) throw new LaunchMessageInvalid("exceeds its bound");
   return parseLaunchMessage(bytes.toString("utf8"));
+}
+
+export const modelFlags = {
+  model: { type: "string" }, provider: { type: "string" }, effort: { type: "string" },
+  "aws-profile": { type: "string" }, "aws-region": { type: "string" },
+} as const;
+
+export function modelSettings(values: { model?: string; provider?: string; effort?: string; "aws-profile"?: string; "aws-region"?: string }) {
+  const prefix = values.model?.split("/", 1)[0];
+  const qualified = values.model?.includes("/") && isProviderId(prefix) ? prefix : undefined;
+  const provider = values.provider ?? qualified ?? "openai-codex";
+  if (!isProviderId(provider) || (qualified && qualified !== provider)) throw new Error("invalid --provider or conflicting --model provider");
+  const model = values.model ?? (provider === "openai-codex" ? "gpt-6.1-sol"
+    : provider === "anthropic" ? "claude-opus-4-8" : undefined);
+  if (!model || /\s|\0/.test(model) || model === `${provider}/`) throw new Error(`pass --model <${provider}/id>`);
+  const region = values["aws-region"];
+  const profile = values["aws-profile"];
+  const aws = profile !== undefined || region !== undefined ? awsBinding({ profile, region }) : undefined;
+  return { provider, model, ...(values.effort ? { effort: values.effort } : {}), ...(aws ? { aws } : {}) };
+}
+
+const COMMON_ABILITIES = ["ask_user", "todo", "queue_control", "context_files", "skills", "compaction", "tool_search"];
+const WORK_ABILITIES = ["codemode", "subagents", "oracle", "background_shell"];
+const ABILITIES: Readonly<Record<"worker" | "reviewer" | "assistant" | "build", readonly string[]>> = {
+  worker: [...COMMON_ABILITIES, ...WORK_ABILITIES, "fleet", "lsp"],
+  reviewer: COMMON_ABILITIES,
+  assistant: [...COMMON_ABILITIES, ...WORK_ABILITIES, "fleet", "lsp"],
+  build: [...COMMON_ABILITIES, ...WORK_ABILITIES, "lsp"],
+};
+
+export function workspaceSettings(root: string, role: keyof typeof ABILITIES, run?: string) {
+  const settingsPath = join(root, ".corral-next", "pi.toml");
+  let source: string | undefined;
+  try { source = readFileSync(settingsPath, "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const raw = source === undefined ? {} : TOML.parse(source) as Json;
+  const enabled = [...ABILITIES[role]];
+  if (role === "worker" && run) enabled.push("checkpoints");
+  if (raw.bash_rules !== undefined) enabled.push("bash_rules");
+  if (raw.hooks !== undefined && role === "worker") enabled.push("hooks");
+  if (raw.browser !== undefined && role !== "reviewer") enabled.push("browser");
+  const web = raw.web === undefined ? undefined : WebSettingsSchema.parse(raw.web);
+  if (web) enabled.push("web.enabled");
+  const mcp = raw.mcp === undefined ? undefined : McpSettingsSchema.parse(raw.mcp);
+  if (mcp) enabled.push("mcp.enabled");
+  const local = raw.llama_cpp === undefined ? undefined : LlamaCppSettingsSchema.parse(raw.llama_cpp);
+  if (local) enabled.push("llama_cpp.enabled");
+  const guidance: CapabilityGuidance = {
+    projectText: true,
+    settings: {
+      ...Object.fromEntries(["lsp", "browser", "hooks", "bash_rules"].flatMap(key =>
+        raw[key] && typeof raw[key] === "object" ? [[key, raw[key] as Json]] : [])),
+      ...(enabled.includes("subagents") ? { subagents: { model: null, max_parallel: 3, max_turns: 12, timeout_secs: 120 } } : {}),
+      ...(enabled.includes("oracle") ? { oracle: { model: null, timeout_secs: 120 } } : {}),
+      ...(enabled.includes("background_shell") ? { background_shell: JobSettingsSchema.parse(raw.background_shell ?? {
+        max_jobs: 4, max_output_bytes: 8 * 1024 * 1024, max_runtime_secs: 3600, wait_ms: 10_000,
+      }) } : {}),
+    },
+  };
+  const capabilities: HostCapabilities = {
+    catalog: 10, enabled, ...(web ? { web } : {}), ...(mcp ? { mcp } : {}), ...(local ? { llama_cpp: local } : {}),
+  };
+  return { capabilities, guidance, todo: enabled.includes("todo") };
+}
+
+export function sessionSocket(dir: string, env: NodeJS.ProcessEnv): string {
+  const runtime = env.XDG_RUNTIME_DIR;
+  const parent = runtime ? join(runtime, "corral-next") : join("/tmp", `corral-next-${process.getuid?.() ?? -1}`);
+  return join(parent, `${createHash("sha256").update(dir).digest("hex").slice(0, 16)}.sock`);
+}
+
+export function parseRunFlags(command: "run" | "chat", argv: readonly string[], assets: string,
+  env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): HostConfig {
+  const { values } = parseArgs({ args: [...argv], options: {
+    ...modelFlags, dir: { type: "string" }, socket: { type: "string" }, "prompt-file": { type: "string" },
+    corral: { type: "string" }, project: { type: "string" }, headless: { type: "boolean" },
+  } });
+  if (!values.dir) throw new Error(`corral-pi ${command} requires --dir <session-directory>`);
+  const dir = resolve(cwd, values.dir);
+  const root = resolve(cwd, env.CORRAL_NEXT_ROOT ?? ".");
+  const actor = env.CORRAL_ACTOR;
+  if (command === "run" && actor !== undefined && actor !== "agent" && actor !== "reviewer") {
+    throw new Error("CORRAL_ACTOR must be agent or reviewer for corral-pi run");
+  }
+  const role = command === "chat" ? "assistant" : actor === "reviewer" ? "reviewer" : "worker";
+  const task = env.CORRAL_TASK || undefined;
+  const run = env.CORRAL_RUN || undefined;
+  const id = role === "assistant" ? basename(dir) : task ? `${task}/${role === "reviewer" ? "reviewer" : run ?? basename(dir)}` : basename(dir);
+  return {
+    identity: { store: "local", project: values.project ?? "", role, task, run, generation: 1,
+      ...(role === "assistant" ? { assistant: id } : {}) },
+    cwd, root, corral: values.corral ? resolve(cwd, values.corral) : "", assets, pane: null,
+    local: { dir, id, socket: values.socket ? resolve(cwd, values.socket) : sessionSocket(dir, env),
+      headless: values.headless === true || !process.stdin.isTTY },
+    sessionDir: join(dir, "sessions"), runtimeDir: join(dir, "runtime"),
+    freshSession: env.CORRAL_FRESH === "1",
+    ...(values["prompt-file"] ? { promptFile: resolve(cwd, values["prompt-file"]) } : {}),
+    ...workspaceSettings(root, role, run), ...modelSettings(values),
+  };
 }

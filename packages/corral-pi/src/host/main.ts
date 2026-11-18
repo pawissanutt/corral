@@ -1,7 +1,4 @@
-// The Bun host entry point, exec'd by `corral agent launch` with `--launch-fd <n>`. It reads
-// the launch message from that inherited pipe, refuses an unpinned runtime or a missing module,
-// starts the bridge, binds the generation with hello and hands the pane to InteractiveMode, or,
-// when the generation enables headless, attaches without a terminal UI (`./headless.ts`).
+// Runs the same Pi runtime for flag launches and the old direct source entry.
 // A Bedrock host also adopts the AWS SDK's Node handlers into the guarded fetch, arms the socket
 // tripwire and reads its named AWS profile before the SDK loads.
 import { mkdirSync } from "node:fs";
@@ -9,18 +6,18 @@ import { ProcessTerminal } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { startBridge } from "../bridge/server.ts";
-import { attestSourceDrain } from "../bridge/source-drain.ts";
+import { startBridge, type BridgeHandlers, type BridgeServer } from "../bridge/server.ts";
 import { EventLog } from "../bridge/events.ts";
-import { COMMANDS } from "../bridge/protocol.ts";
+import { BRIDGE_VERSION } from "../bridge/protocol.ts";
 import { CorralClient, sha256Hex } from "../tools/corral.ts";
 import { readLaunchMessage, type HostConfig } from "./config.ts";
 import type { BuildContext } from "../build/types.ts";
+import { LocalControlPlane } from "../build/control-plane.ts";
+import { createTodoLedger } from "../build/todo-ledger.ts";
 import { saveSession } from "../build/session-store.ts";
 import type { HostIdentity } from "../roles/types.ts";
 import { openSession, withRecoveryContext } from "./lifecycle.ts";
 import { loadModules } from "./modules.ts";
-import { loadPeerLookup } from "./peer.ts";
 import { CredentialsUnavailable } from "../auth/paths.ts";
 import { type DestinationRule, PROVIDERS, hostRules } from "../auth/providers.ts";
 import { localInferenceRules } from "../auth/local.ts";
@@ -28,10 +25,10 @@ import { NetworkRefused, guardedFetch, restrictEnvironment } from "./restrict.ts
 import { compiledBundle } from "./bundle.ts";
 import { attachHeadless, headlessEnabled } from "./headless.ts";
 import { herdrLifecycle } from "./herdr.ts";
-import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
+import { checkRuntime } from "./runtime.ts";
 import { serverVisible } from "./mcp-settings.ts";
 import { exportAssistantSession } from "../roles/assistant/env.ts";
-import { type AwsRoute, HostSession, authContext, processStartTime } from "./session.ts";
+import { type AwsRoute, HostSession, authContext } from "./session.ts";
 import { subscriptionRoutes } from "./subscriptions.ts";
 import { guardTerminalStop } from "./terminal-stop.ts";
 import { NEW_ASSISTANT_EXIT, RELINK_ASSISTANT_EXIT } from "./assistant-relink.ts";
@@ -42,6 +39,7 @@ import { connectionRules, isApiConnection } from "../auth/connections.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
 import { errorPresenter } from "../ui/error-copy.ts";
 import { RemoteOwner } from "./remote-owner.ts";
+import { SessionRecord } from "./session-record.ts";
 import { summaryOptions } from "./summary.ts";
 import { bareProviders, requireBareProvider } from "./bare.ts";
 import { providerTransport } from "./capabilities.ts";
@@ -57,25 +55,47 @@ function launchFd(argv: readonly string[]): number {
 }
 
 export async function main(): Promise<void> {
+  if (!compiledBundle()) checkRuntime();
   await runHost(readLaunchMessage(launchFd(process.argv)));
 }
 
-export async function runHost(config: HostConfig, overrides: {
+interface HostOverrides {
   client?: (identity: HostIdentity, sessionId: () => string) => CorralClient;
   bridge?: false;
   build?: BuildContext;
-} = {}): Promise<void> {
+}
+
+export async function runHost(config: HostConfig, overrides: HostOverrides = {}): Promise<void> {
+  const events = new EventLog(config.identity.generation);
+  const id = config.local?.id ?? config.identity.assistant
+    ?? [config.identity.task, config.identity.run].filter(Boolean).join("/");
+  const bridge = overrides.bridge === false ? undefined : await startBridge({
+    path: config.local?.socket ?? join(config.runtimeDir, "host.sock"), sessionId: id || config.identity.role, events,
+  });
+  try {
+    const record = bridge ? new SessionRecord(config.local?.dir ?? config.runtimeDir, id, config.identity.role, config.cwd) : undefined;
+    await runSession(config, overrides, events, bridge, record);
+  } catch (error) {
+    await bridge?.close();
+    throw error;
+  }
+}
+
+async function runSession(config: HostConfig, overrides: HostOverrides, events: EventLog,
+  bridge: BridgeServer | undefined, record: SessionRecord | undefined): Promise<void> {
   const provider = config.provider ?? "openai-codex";
   if (overrides.build?.session.bare) requireBareProvider(provider);
   const connection = admitConnection(provider, config.binding, true);
   restrictEnvironment(process.env, provider);
   if (config.summary?.provider === "amazon-bedrock") restrictEnvironment(process.env, "amazon-bedrock");
   exportAssistantSession(process.env, config.identity);
-  const compat = readCompat(config.assets);
-  if (compiledBundle()) checkCompiledRuntime(compat);
-  else checkRuntime(config.assets, compat);
-  const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
-  const events = new EventLog(config.identity.generation);
+  const compiled = compiledBundle();
+  const assets = config.local && compiled?.writeAssets ? join(config.runtimeDir, "bundle") : config.assets;
+  if (config.local) compiled?.writeAssets?.(assets);
+  const agentDir = join(config.runtimeDir, "pi-agent");
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  if (config.local) process.env.PI_CODING_AGENT_DIR ??= agentDir;
+  const modules = withRecoveryContext(await loadModules(assets, config.identity.role, provider));
   const rawFetch = globalThis.fetch.bind(globalThis);
   const api = isApiConnection(connection);
   const bare = overrides.build?.session.bare ? await bareProviders(modules.auth, provider) : undefined;
@@ -121,8 +141,7 @@ export async function runHost(config: HostConfig, overrides: {
   const sdk = await import("@earendil-works/pi-coding-agent");
   process.chdir(config.cwd);
   mkdirSync(config.sessionDir, { recursive: true, mode: 0o700 });
-  const agentDir = join(config.runtimeDir, "pi-agent");
-  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  let remote: RemoteOwner | undefined;
   let host: HostSession | undefined;
   let physicalTerminal: ProcessTerminal | undefined;
   const restart = (code: number) => {
@@ -132,14 +151,21 @@ export async function runHost(config: HostConfig, overrides: {
       process.exit(2);
     }); });
   };
-  const client = overrides.client?.(config.identity, () => host?.sessionId() ?? "") ?? new CorralClient({
-    corral: config.corral, root: config.root, identity: config.identity, hostCap: config.secrets.hostCap,
-    sessionId: () => host?.sessionId() ?? "",
-  });
+  const sessionId = () => host?.sessionId() ?? "";
+  const client = overrides.client?.(config.identity, sessionId) ?? (config.secrets
+    ? new CorralClient({ corral: config.corral, root: config.root, identity: config.identity, hostCap: config.secrets.hostCap, sessionId })
+    : (() => {
+      // Reuse build's host-local adapter until the remaining tool calls move to engine argv.
+      const dir = config.local?.dir ?? config.runtimeDir;
+      const ledger = createTodoLedger(dir);
+      return new LocalControlPlane({ dir, root: config.root, identity: config.identity, sessionId,
+        handlers: { todo: ledger.handle }, todoSnapshot: () => ledger.snapshot() });
+    })());
   host = await HostSession.create({
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider, ...(aws ? { aws } : {}),
     ...(config.binding ? { binding: config.binding } : {}),
     ...(config.daemonHosted ? { daemonHosted: true, ui: "plain" as const } : {}),
+    ...(config.local ? { local: { paneInput: async (text, images) => await remote?.paneInput(text, images) ?? false } } : {}),
     ...(config.effort ? { effort: config.effort } : {}),
     quickSummary: config.quickSummary,
     ...(summary ? { summary } : {}),
@@ -162,51 +188,55 @@ export async function runHost(config: HostConfig, overrides: {
       } : {}),
     ...(config.pane !== null && !config.daemonHosted
       ? herdrLifecycle(process.env, config.pane, config.identity, events, headlessEnabled(config.capabilities)) : {}),
-    sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession,
-      config.resumeLeaf),
+    sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation,
+      config.resumeSession ?? (config.local ? record?.transcript : undefined), config.freshSession, config.resumeLeaf),
   });
   const session = host;
-  const remote = config.daemonHosted ? new RemoteOwner(session, events, config.identity.assistant ?? "", config.runtimeDir) : undefined;
   let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;
-  const bridge = overrides.bridge === false ? undefined : await startBridge({
-    path: join(config.runtimeDir, "host.sock"),
-    ctlCap: config.secrets.ctlCap,
-    generation: config.identity.generation,
-    uid: process.getuid?.() ?? -1,
-    peer: await loadPeerLookup(),
-    events,
-    liveEvents: session.liveEvents,
-    handlers: {
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= (async () => {
+    try { await session.close(); await session.drained(); }
+    finally { await bridge?.close(); }
+  })();
+  if (config.secrets) await session.hello(config.secrets.bindNonce, config.pane, sha256Hex(config.secrets.ctlCap));
+  else await session.startLocal();
+  const sessionFile = session.session.sessionFile;
+  if (!sessionFile) throw new Error("the Pi session has no transcript");
+  if (overrides.build) {
+    saveSession(dirname(dirname(overrides.build.dir)), { ...overrides.build.session, sessionFile, updated: new Date().toISOString() });
+  }
+  let handlers: BridgeHandlers | undefined;
+  if (record) {
+    record.save(sessionFile);
+    const owner = new RemoteOwner(session, events, record, sessionFile, config.runtimeDir);
+    remote = owner;
+    handlers = {
       hello: () => ({
-        protocol: 1, generation: config.identity.generation, role: config.identity.role,
-        bound: session.bound, session_id: session.sessionId(), last_seq: events.last,
-        commands: COMMANDS.filter(command => (command !== "handoff_drain" || config.identity.role === "assistant")
-          && (!["owner_turn", "set_model"].includes(command) || remote !== undefined)),
-        daemon_hosted: remote !== undefined, remote_ready: remote?.isReady ?? false, turn: session.state().turn,
+        protocol: BRIDGE_VERSION, role: config.identity.role, session_id: config.local?.id ?? session.sessionId(),
+        session_file: sessionFile, pid: process.pid,
       }),
-      state: () => session.state(),
-      queueState: limit => session.queue.snapshot(limit, false),
-      queueWithdraw: (key, op_key) => ({ ...session.queue.bridgeWithdraw(key, op_key) }),
-      handoffDrain: args => attestSourceDrain(session, config.identity,
-        { pid: process.pid, start_time: processStartTime() }, args),
-      submit: (input, requestId) => remote && input.origin === "daemon-owner"
-        ? Promise.resolve({ disposition: "rejected" as const, reason: "owner_turn_required" }) : session.submit(input, requestId),
-      ...(remote ? {
-        ownerTurn: async (args: Record<string, unknown>) => ({ ...await remote.submit(args) }),
-        setModel: (args: Record<string, unknown>) => remote.setModel(args),
-      } : {}),
-      cancel: (turn) => {
-        if (remote && turn === undefined) throw new Error("remote_stop_requires_turn");
-        return session.cancel(turn);
+      state: () => {
+        const { generation: _generation, identity: _identity, ...state } = session.state();
+        return { ...state, paused: owner.paused, owner_questions: session.pendingOwnerQuestions() };
       },
-      questions: (updates) => session.questionsChanged(updates),
-      shutdown: () => {
+      submit: input => owner.submit(input),
+      answer: input => owner.answer(input),
+      pause: () => owner.pause(),
+      resume: () => owner.resume(),
+      setModel: args => owner.setModel(args),
+      cancel: turn => session.cancel(turn),
+      queueState: limit => session.queue.snapshot(limit, "socket"),
+      queueWithdraw: key => session.queue.withdrawInput(key),
+      shutdown() {
         events.emit("shutdown");
         terminal?.stop();
-        void session.drained().then(() => session.close()).then(() => bridge?.close()).then(() => process.exit(0));
+        void close().then(() => process.exit(0), error => {
+          process.stderr.write(`corral-pi shutdown failed: ${String(error)}\n`);
+          process.exit(2);
+        });
       },
-    },
-  });
+    };
+  }
   async function restartAssistant(code: number): Promise<void> {
     await physicalTerminal?.drainInput(1000);
     terminal?.stop();
@@ -216,22 +246,12 @@ export async function runHost(config: HostConfig, overrides: {
     await bridge?.close();
     process.exit(code); // 75 /new, 76 relink, 77 /resume, 78 quota continuation, 79 profile selection.
   }
-  await session.hello(config.secrets.bindNonce, config.pane, sha256Hex(config.secrets.ctlCap));
-  if (overrides.build) {
-    const record = overrides.build.session;
-    const state = session.state().session;
-    if (!state || typeof state !== "object" || !("file" in state) || typeof state.file !== "string") {
-      throw new Error("Build session has no transcript");
+  if (config.local?.headless || config.daemonHosted || headlessEnabled(config.capabilities)) {
+    await attachHeadless(session, events, line => process.stdout.write(line));
+    if (handlers) {
+      bridge?.attach(handlers, session.liveEvents);
+      events.emit("ready");
     }
-    saveSession(dirname(dirname(overrides.build.dir)), { ...record, sessionFile: state.file, updated: new Date().toISOString() });
-  }
-  if (remote) {
-    try { await remote.attach(); }
-    catch (error) { await session.close(); await bridge?.close(); throw error; }
-    return;
-  }
-  if (headlessEnabled(config.capabilities)) {
-    await attachHeadless(session, events, (line) => process.stdout.write(line));
     return;
   }
   const panels = session.panels;
@@ -246,8 +266,9 @@ export async function runHost(config: HostConfig, overrides: {
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();
   session.markAttached("interactive");
+  if (handlers) bridge?.attach(handlers, session.liveEvents);
   try { await terminal.run(); }
-  finally { await session.close(); await bridge?.close(); }
+  finally { await close(); }
 }
 
 if (import.meta.main) main().catch((error: unknown) => {

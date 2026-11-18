@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import { OWNER_INPUT_TEXT_MAX } from "../roles/assistant/owner-action.ts";
 import { ASK_USER_GUIDELINES } from "../roles/common/ask-user.ts";
 import { AskDialog, type Choice, type DialogAnswer, type DialogOptions, type DialogQuestion, type DialogResult } from "./ask-user-dialog.ts";
-import type { ChoiceQuestion, PendingQuestions } from "./pending-questions.ts";
+import { Choice as PendingChoice, type ChoiceQuestion, type PendingQuestions } from "./pending-questions.ts";
 import { mirroredDialog, type QuestionMirror } from "./owner-ask-mirror.ts";
 
 const choice = Type.Union([
@@ -110,6 +110,25 @@ export async function sequential(ui: DialogUi, questions: DialogQuestion[], sign
 export type RemoteAsk = (id: string, params: unknown, signal?: AbortSignal) => Promise<{
   content: { type: "text"; text: string }[]; details: Record<string, unknown>;
 }>;
+
+export function localQuestionAsk(pending: PendingQuestions): RemoteAsk {
+  return async (id, value) => {
+    const params = value as { questions?: Question[]; withdraw?: string };
+    if (params.withdraw !== undefined) {
+      const status = pending.withdraw(params.withdraw);
+      return { content: [{ type: "text", text: `${params.withdraw}: ${status}` }], details: { status } };
+    }
+    if (!params.questions?.length || params.questions.length > 4) throw new Error("ask_user requires 1-4 questions");
+    const questions = params.questions.map(q => {
+      if (q.multiSelect) throw new Error("ask_user takes one selection per question; ask separate questions instead");
+      const normalized = normalize(q);
+      return PendingChoice.parse({ ...q, options: normalized.options.map(option => option.label) });
+    });
+    const opened = questions.map((question, index) => pending.ask(`${id}:${index}`, [question]));
+    return { content: [{ type: "text", text: `Waiting for the owner: ${opened.map(q => q.id).join(", ")}. Continue only independent work.` }],
+      details: { status: "pending", questions: opened.map(q => q.id) } };
+  };
+}
 
 /** Dialogs are local to the owner's interactive pane, never a worker question flow. A `mirror` (the
  * pane PM) also opens each question in the owner's Inbox, where the app can answer it first. */
