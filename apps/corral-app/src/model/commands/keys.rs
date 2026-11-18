@@ -32,7 +32,7 @@ pub fn with_focus(
     selected: Option<&str>,
 ) -> &'static [&'static str] {
     match focus {
-        Some(row) if row != selected && keys == LIVE_MOVE_OPEN => MOVE_MENU,
+        Some(row) if (row.is_none() || row != selected) && keys == LIVE_MOVE_OPEN => MOVE_MENU,
         _ => keys,
     }
 }
@@ -144,5 +144,7 @@ mod tests {
         assert!(!opens(Some(None)), "a button beside the list takes Enter");
         assert!(!opens(Some(Some("T-9"))), "another row takes Enter");
         assert!(with_focus(keys, Some(None), Some("T-8")).contains(&"j"));
+        // With nothing selected a focused toggle (Now's Waiting line) still takes Enter.
+        assert!(!with_focus(keys, Some(None), None).contains(&"enter"));
     }
 }

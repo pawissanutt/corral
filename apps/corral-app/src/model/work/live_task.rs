@@ -469,7 +469,7 @@ fn dependency_state(status: Status) -> (Mark, &'static str) {
 fn needs(feed: &Feed, task: &daemon::Task) -> Fact {
     let ids = &task.task().depends_on;
     if ids.is_empty() {
-        return Fact::Text(vec![span("nothing")]);
+        return Fact::Text(vec![span("no other task")]);
     }
     let served = task.row.dependencies.as_ref();
     Fact::Tasks(

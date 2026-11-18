@@ -98,6 +98,13 @@ class Walk:
                 TERM="xterm-256color", COLUMNS=str(self.cols), LINES=str(self.rows),
                 COLORTERM="truecolor", NSH_TUI_COLORS=args.colors,
             )
+            # A walk must never touch the owner's saved preferences, enrolment or drafts: unless
+            # the caller sets these itself, the app's data and state live under /tmp.
+            for name in ("XDG_DATA_HOME", "XDG_STATE_HOME"):
+                if not os.environ.get(name):
+                    scratch = os.path.join("/tmp/corral-tui-walk-home", name.lower())
+                    os.makedirs(scratch, exist_ok=True)
+                    os.environ[name] = scratch
             os.execvp("nsh", ["nsh", "run", "--target", "tui", "--port", str(args.port)])
         self.pid, self.fd = pid, fd
         self.background = args.background

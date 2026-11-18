@@ -384,13 +384,18 @@ pub fn daemon_env(feed: &Feed, form: Form) -> crate::model::effect::Env {
     Env { conn, form }
 }
 
+/// corrald answers on the socket, but this device has not enrolled, so no board is served.
+fn unenrolled(feed: &Feed) -> bool {
+    feed.transport_ready && feed.device == DeviceLink::Unenrolled
+}
+
 /// Projects the last daemon reading without borrowing session-owned strings.
 pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
     let down = !feed.ready();
     let refused = matches!(feed.device, DeviceLink::Failed(_));
     let (value, tone): (Cow<'static, str>, Tone) = if refused {
         ("not connected".into(), Tone::Fail)
-    } else if feed.transport_ready && feed.device == DeviceLink::Unenrolled {
+    } else if unenrolled(feed) {
         ("not enrolled".into(), Tone::Warn)
     } else if down {
         (
@@ -438,7 +443,7 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
             tone: if down { Tone::Warn } else { tone },
         });
     }
-    let reach = if refused {
+    let reach = if refused || unenrolled(feed) {
         None
     } else if down {
         Some(feed.synced.as_ref().map_or_else(
@@ -520,7 +525,18 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
 
 /// Live connection warnings never offer a simulated daemon restart.
 pub fn daemon_connection_banner(feed: &Feed, form: Form) -> Option<ConnectionBanner> {
-    let (tone, text, label) = if !feed.ready() {
+    let (tone, text, label) = if unenrolled(feed) {
+        (
+            Tone::Warn,
+            vec![
+                span("This device is not enrolled.").bold(),
+                span(
+                    " corrald is reachable; enrol this device in Settings › Connection to load the board.",
+                ),
+            ],
+            "Open Connection",
+        )
+    } else if !feed.ready() {
         let stale = if feed.board.complete {
             feed.synced.as_ref().map_or_else(
                 || " Showing the last received board, marked stale.".to_owned(),
@@ -571,7 +587,7 @@ pub fn daemon_connection_banner(feed: &Feed, form: Form) -> Option<ConnectionBan
             vec![BannerButton {
                 label,
                 effect: Effect::GoSettings(SettingsSection::Connection),
-                quiet: true,
+                quiet: !unenrolled(feed),
             }]
         },
     })
@@ -611,6 +627,24 @@ mod tests {
                 ) && !button.quiet
             }));
         }
+    }
+
+    #[test]
+    fn a_reachable_daemon_awaiting_enrolment_is_not_reported_unreachable_or_offline() {
+        let feed = Feed {
+            transport_ready: true,
+            device: DeviceLink::Unenrolled,
+            ..Feed::default()
+        };
+        let banner = daemon_connection_banner(&feed, Form::Terminal).expect("enrolment banner");
+        let words: String = banner.text.iter().map(|span| span.text.as_str()).collect();
+        assert!(!words.contains("not reachable"), "{words}");
+        assert!(
+            daemon_snapshot(&feed, Form::Terminal)
+                .health
+                .reach
+                .is_none()
+        );
     }
 
     #[test]

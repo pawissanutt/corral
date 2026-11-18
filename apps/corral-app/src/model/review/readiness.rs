@@ -40,27 +40,49 @@ fn title(kind: CheckKind, mark: Mark) -> &'static str {
         (CheckKind::Gate, Mark::Done) => "Gate passed",
         (CheckKind::Gate, Mark::Fail) => "Gate failed",
         (CheckKind::Gate, Mark::Active) => "Gate running",
+        (CheckKind::Gate, Mark::Na) => "No gate",
         (CheckKind::Gate, _) => "Gate pending",
         (CheckKind::Review, Mark::Done) => "Review approves",
         (CheckKind::Review, Mark::Fail) => "Review asks changes",
         (CheckKind::Review, Mark::Active) => "Review running",
+        (CheckKind::Review, Mark::Na) => "No review",
         (CheckKind::Review, _) => "Review pending",
     }
 }
 
-/// One check's link; a missing one is running while the task waits on it in Review.
-fn link(feed: &Feed, kind: CheckKind, check: Option<&Check>, waiting: bool) -> ReadyLink {
+/// One check's link; a missing one is running while the task waits on it in Review. Once
+/// corrald has marked the candidate ready, the pipeline is past every check it runs, so a
+/// missing one is a check this project does not configure.
+fn link(
+    feed: &Feed,
+    kind: CheckKind,
+    check: Option<&Check>,
+    waiting: bool,
+    ready: bool,
+) -> ReadyLink {
     let Some(check) = check else {
-        let mark = if waiting { Mark::Active } else { Mark::Next };
+        let mark = if ready {
+            Mark::Na
+        } else if waiting {
+            Mark::Active
+        } else {
+            Mark::Next
+        };
         return ReadyLink {
             mark,
             hue: hue(mark),
             title: title(kind, mark),
             sha7: None,
             quote: None,
-            hint: match kind {
-                CheckKind::Gate => "No gate result is recorded for the task's HEAD.",
-                CheckKind::Review => "No review result is recorded for this round.",
+            hint: match (kind, ready) {
+                (CheckKind::Gate, false) => "No gate result is recorded for the task's HEAD.",
+                (CheckKind::Review, false) => "No review result is recorded for this round.",
+                (CheckKind::Gate, true) => {
+                    "corrald marked this candidate ready without a gate: the project configures none."
+                }
+                (CheckKind::Review, true) => {
+                    "corrald marked this candidate ready without a review: the project names no reviewer."
+                }
             }
             .into(),
         };
@@ -119,12 +141,13 @@ pub(super) fn readiness_chain(feed: &Feed, shown: &Shown) -> Vec<ReadyLink> {
     let gate_passed = gate.is_some_and(|gate| gate.result == CheckResult::Pass);
     let ready = shown.task.row.ready;
     vec![
-        link(feed, CheckKind::Gate, gate, in_review),
+        link(feed, CheckKind::Gate, gate, in_review, ready),
         link(
             feed,
             CheckKind::Review,
             shown.check(CheckKind::Review),
             in_review && gate_passed,
+            ready,
         ),
         ReadyLink {
             mark: if ready { Mark::Active } else { Mark::Next },
