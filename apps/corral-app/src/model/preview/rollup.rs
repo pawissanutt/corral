@@ -12,8 +12,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{details, put, records, save, stamp};
-use crate::model::daemon::{self, ClientError, DetailCache, Feed, detail_key};
 use crate::model::Id;
+use crate::model::daemon::{self, ClientError, DetailCache, Feed, detail_key};
 
 /// Events a task record carries, newest last, as the daemon's task detail bounds them.
 const RECORD_EVENTS: usize = 50;
@@ -46,7 +46,11 @@ pub(super) fn rebuild(feed: &mut Feed) {
     feed.agents = agents(&records);
     for (id, agent) in feed.agents.clone() {
         let snapshot = terminal(feed, &records, &agent);
-        put(feed, DetailRef::Terminal { id: id.to_string() }, DetailBody::Terminal(snapshot));
+        put(
+            feed,
+            DetailRef::Terminal { id: id.to_string() },
+            DetailBody::Terminal(snapshot),
+        );
     }
     feed.usage = (!records.is_empty()).then(|| {
         let runs = all_runs(&records);
@@ -98,7 +102,11 @@ pub(super) fn row(record: &TaskDetail) -> TaskRow {
 }
 
 pub(super) fn last_worker(record: &TaskDetail) -> Option<&Run> {
-    record.runs.iter().rev().find(|run| run.role == Role::Worker)
+    record
+        .runs
+        .iter()
+        .rev()
+        .find(|run| run.role == Role::Worker)
 }
 
 fn plans(records: &[TaskDetail]) -> BTreeMap<Id, PlanRow> {
@@ -206,7 +214,10 @@ fn terminal(feed: &Feed, records: &[TaskDetail], agent: &AgentRow) -> TerminalSn
         .find(|record| record.task.id == run.task)
         .map_or("", |record| record.task.title.as_str());
     let mut lines = vec![
-        format!("Preview · {} {} · {} · no process is running", run.task, run.id, run.profile),
+        format!(
+            "Preview · {} {} · {} · no process is running",
+            run.task, run.id, run.profile
+        ),
         format!("$ {} · {}", run.harness, title),
         format!("  worktree {}", run.worktree.display()),
         format!("  branch {} from {}", run.branch, run.base),
@@ -214,7 +225,9 @@ fn terminal(feed: &Feed, records: &[TaskDetail], agent: &AgentRow) -> TerminalSn
     lines.push(match &agent.status {
         SessionStatus::Blocked { excerpt } => format!("? {excerpt}"),
         SessionStatus::Idle => "  idle · waiting for input".into(),
-        _ if run.role == Role::Reviewer => "  reading the diff against the acceptance criteria".into(),
+        _ if run.role == Role::Reviewer => {
+            "  reading the diff against the acceptance criteria".into()
+        }
         _ => "  editing · running focused tests".into(),
     });
     TerminalSnapshot {
@@ -226,7 +239,10 @@ fn terminal(feed: &Feed, records: &[TaskDetail], agent: &AgentRow) -> TerminalSn
 }
 
 pub(super) fn all_runs(records: &[TaskDetail]) -> Vec<Run> {
-    let mut runs: Vec<Run> = records.iter().flat_map(|record| record.runs.clone()).collect();
+    let mut runs: Vec<Run> = records
+        .iter()
+        .flat_map(|record| record.runs.clone())
+        .collect();
     runs.sort_by_key(|run| run.started);
     runs
 }
@@ -255,8 +271,7 @@ pub(super) fn usage_rows(feed: &Feed, runs: &[Run]) -> Vec<corral_types::Usage> 
                 output: 2_100 * scale,
                 cache_read: 64_000 * scale,
                 cache_write: 4_000 * scale,
-                usd: (request + 1 < 2 + spin % 3 || spin % 2 == 0)
-                    .then_some(0.04 * scale as f64),
+                usd: (request + 1 < 2 + spin % 3 || spin % 2 == 0).then_some(0.04 * scale as f64),
                 billing: Some("subscription".into()),
             });
         }

@@ -327,10 +327,11 @@ pub fn page(feed: &Feed, id: &Id) -> Option<ProjectPage> {
             .filter(|task| is_open(task) && task.project() == Some(id.as_str()))
     };
     let idle = row.map_or_else(|| mine().next().is_none(), |row| row.open == 0);
-    let running = feed
-        .board
-        .complete
-        .then(|| mine().filter(|task| task.status() == Status::Running).count() as u64);
+    let running = feed.board.complete.then(|| {
+        mine()
+            .filter(|task| task.status() == Status::Running)
+            .count() as u64
+    });
     let empty = idle.then_some(ProjectEmpty {
         heading: "Not managed yet",
         body: "Ask to file work for it. Tasks and plans filed for this project show here.",

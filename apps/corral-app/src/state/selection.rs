@@ -30,9 +30,7 @@ impl AppState {
                 });
                 true
             }
-            Destination::Now
-                if task && self.work.with_untracked(|state| !state.digest_only) =>
-            {
+            Destination::Now if task && self.work.with_untracked(|state| !state.digest_only) => {
                 self.reduce(self.work, |state, feed, _, env| {
                     state.press(work::Press::ClearSelection, feed, env)
                 });

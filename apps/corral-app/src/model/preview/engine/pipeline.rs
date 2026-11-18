@@ -1,7 +1,9 @@
 //! Submitting, checking, reviewing and landing: the engine's steps after a worker's `done`.
 
 use corral_protocol::detail::TaskDetail;
-use corral_types::{Actor, Blocked, CheckKind, CheckResult, EventKind, Next, Op, Outcome, Role, Status};
+use corral_types::{
+    Actor, Blocked, CheckKind, CheckResult, EventKind, Next, Op, Outcome, Role, Status,
+};
 use serde_json::{Value, json};
 
 use super::super::rollup::{closed, last_worker};
@@ -19,7 +21,10 @@ pub(super) fn done(feed: &mut Feed, mut rec: TaskDetail, summary: &str) -> Resul
         return Ok(());
     }
     if last_worker(&rec).is_none() {
-        return Err(refuse("task has not had a worker run", vec![dispatch_next(&rec.task)]));
+        return Err(refuse(
+            "task has not had a worker run",
+            vec![dispatch_next(&rec.task)],
+        ));
     }
     if !matches!(rec.task.status, Status::Running | Status::Blocked) {
         return Err(refuse(
@@ -27,7 +32,12 @@ pub(super) fn done(feed: &mut Feed, mut rec: TaskDetail, summary: &str) -> Resul
             vec![next_retry(&id), next_force_approve(&id)],
         ));
     }
-    let Some(worker) = rec.runs.iter_mut().rev().find(|run| run.role == Role::Worker) else {
+    let Some(worker) = rec
+        .runs
+        .iter_mut()
+        .rev()
+        .find(|run| run.role == Role::Worker)
+    else {
         return Ok(());
     };
     finish(feed, worker, 0, Outcome::Done);
@@ -38,13 +48,25 @@ pub(super) fn done(feed: &mut Feed, mut rec: TaskDetail, summary: &str) -> Resul
     let diff = artifact(feed, &rec, "diff", "diff", 0);
     rec.artifacts.push(diff);
     set_status(feed, &mut rec, Status::Review);
-    commit(feed, rec, EventKind::Done, Some(&run), json!({"sha": sha, "summary": summary}));
+    commit(
+        feed,
+        rec,
+        EventKind::Done,
+        Some(&run),
+        json!({"sha": sha, "summary": summary}),
+    );
     Ok(())
 }
 
 pub(super) fn run_gate(feed: &mut Feed, mut rec: TaskDetail) -> Result<(), Fail> {
-    let Some(run) = last_worker(&rec).filter(|_| !closed(rec.task.status)).map(|run| run.id.clone()) else {
-        return Err(refuse("task has no worktree", vec![next_retry(&rec.task.id)]));
+    let Some(run) = last_worker(&rec)
+        .filter(|_| !closed(rec.task.status))
+        .map(|run| run.id.clone())
+    else {
+        return Err(refuse(
+            "task has no worktree",
+            vec![next_retry(&rec.task.id)],
+        ));
     };
     let mut check = gate(feed, &rec, true, None, 0);
     let log = artifact(feed, &rec, "log", "gate log", 0);
@@ -69,11 +91,19 @@ pub(super) fn start_review(
             vec![next_done(&id), next_force_approve(&id)],
         ));
     }
-    let project = config(feed, &["projects", rec.task.project.as_deref().unwrap_or_default()]);
+    let project = config(
+        feed,
+        &["projects", rec.task.project.as_deref().unwrap_or_default()],
+    );
     let Some(profile) = profile.or(project["reviewer"].as_str()).map(str::to_owned) else {
         let next = profiles(feed)
             .into_iter()
-            .map(|profile| Next::run(Op::Review { id: id.clone(), profile: Some(profile) }))
+            .map(|profile| {
+                Next::run(Op::Review {
+                    id: id.clone(),
+                    profile: Some(profile),
+                })
+            })
             .collect();
         return Err(refuse("no reviewer profile resolves; set --profile", next));
     };
@@ -106,7 +136,11 @@ pub(super) fn verdict(
         .find(|run| run.role == Role::Reviewer)
         .map(|run| run.id.clone());
     if approve {
-        for run in rec.runs.iter_mut().filter(|run| run.role == Role::Reviewer && run.ended.is_none()) {
+        for run in rec
+            .runs
+            .iter_mut()
+            .filter(|run| run.role == Role::Reviewer && run.ended.is_none())
+        {
             finish(feed, run, 0, Outcome::Done);
         }
     }
@@ -119,9 +153,22 @@ pub(super) fn verdict(
             && Some(&check.key) == head.as_ref()
     });
     let detail = json!({"approve": approve, "notes": notes, "round": round});
-    commit(feed, rec.clone(), EventKind::Verdict, reviewer.as_deref(), detail);
+    commit(
+        feed,
+        rec.clone(),
+        EventKind::Verdict,
+        reviewer.as_deref(),
+        detail,
+    );
     if approve && green {
-        event(feed, Some(&id), None, EventKind::Ready, Actor::Auto, json!({"sha": head}));
+        event(
+            feed,
+            Some(&id),
+            None,
+            EventKind::Ready,
+            Actor::Auto,
+            json!({"sha": head}),
+        );
     } else if !approve {
         auto_send_back(feed, rec, notes.unwrap_or("changes requested"));
     }
@@ -131,7 +178,10 @@ pub(super) fn verdict(
 /// A reviewer's `changes`: one more round, or Blocked once the rounds are used.
 fn auto_send_back(feed: &mut Feed, mut rec: TaskDetail, notes: &str) {
     let id = rec.task.id.clone();
-    let project = config(feed, &["projects", rec.task.project.as_deref().unwrap_or_default()]);
+    let project = config(
+        feed,
+        &["projects", rec.task.project.as_deref().unwrap_or_default()],
+    );
     let max_rounds = project["max_rounds"]
         .as_u64()
         .or_else(|| config(feed, &["defaults", "max_rounds"]).as_u64())
@@ -141,7 +191,10 @@ fn auto_send_back(feed: &mut Feed, mut rec: TaskDetail, notes: &str) {
             reason: "automatic change rounds exhausted".into(),
             detail: Some(notes.into()),
             next: vec![
-                Next::run(Op::Changes { id: id.clone(), text: String::new() }),
+                Next::run(Op::Changes {
+                    id: id.clone(),
+                    text: String::new(),
+                }),
                 next_retry(&id),
                 next_force_approve(&id),
             ],
@@ -158,11 +211,14 @@ fn auto_send_back(feed: &mut Feed, mut rec: TaskDetail, notes: &str) {
 
 /// Work goes back to the worker: its live session, or a new run on the same branch.
 pub(super) fn send_back(feed: &mut Feed, mut rec: TaskDetail, notes: &str) {
-    let live = last_worker(&rec).filter(|run| run.ended.is_none()).map(|run| run.id.clone());
+    let live = last_worker(&rec)
+        .filter(|run| run.ended.is_none())
+        .map(|run| run.id.clone());
     let run = match live {
         Some(run) => run,
         None => {
-            let profile = last_worker(&rec).map_or_else(|| "omp-sol".to_owned(), |run| run.profile.clone());
+            let profile =
+                last_worker(&rec).map_or_else(|| "omp-sol".to_owned(), |run| run.profile.clone());
             start(feed, &mut rec, Role::Worker, &profile)
         }
     };
@@ -192,7 +248,10 @@ pub(super) fn approve(
             } else {
                 next_retry(&id)
             };
-            return Err(refuse("approve requires a task in Review", vec![next, land()]));
+            return Err(refuse(
+                "approve requires a task in Review",
+                vec![next, land()],
+            ));
         }
         skipped.push("status rule");
     }
@@ -202,9 +261,16 @@ pub(super) fn approve(
             vec![dispatch_next(&rec.task)],
         ));
     };
-    let gated = config(feed, &["projects", rec.task.project.as_deref().unwrap_or_default(), "gate"])
-        .as_array()
-        .is_some_and(|gate| !gate.is_empty());
+    let gated = config(
+        feed,
+        &[
+            "projects",
+            rec.task.project.as_deref().unwrap_or_default(),
+            "gate",
+        ],
+    )
+    .as_array()
+    .is_some_and(|gate| !gate.is_empty());
     let green = rec.checks.iter().any(|check| {
         check.kind == CheckKind::Gate
             && check.result == CheckResult::Pass
@@ -220,7 +286,10 @@ pub(super) fn approve(
         skipped.push("gate");
     }
     let now = ago(feed, 0);
-    let head = worker.head_sha.clone().unwrap_or_else(|| sha(&format!("{id}/{}", worker.id), 40));
+    let head = worker
+        .head_sha
+        .clone()
+        .unwrap_or_else(|| sha(&format!("{id}/{}", worker.id), 40));
     for run in &mut rec.runs {
         if run.id == worker.id {
             run.outcome = Some(Outcome::Landed);
@@ -232,10 +301,20 @@ pub(super) fn approve(
     }
     set_status(feed, &mut rec, Status::Done);
     let target = onto.map_or(worker.base.clone(), str::to_owned);
-    commit(feed, rec, EventKind::Landed, Some(&worker.id), json!({"sha": head, "base": target}));
+    commit(
+        feed,
+        rec,
+        EventKind::Landed,
+        Some(&worker.id),
+        json!({"sha": head, "base": target}),
+    );
     if force {
-        forced(feed, &id, Some(&worker.id), json!({"operation": "approve", "skipped": skipped}));
+        forced(
+            feed,
+            &id,
+            Some(&worker.id),
+            json!({"operation": "approve", "skipped": skipped}),
+        );
     }
     Ok(())
 }
-

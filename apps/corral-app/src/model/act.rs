@@ -120,7 +120,6 @@ impl RefusalSheet {
     }
 }
 
-
 /// The task an operation concerns.
 pub fn target(op: &Op) -> Option<&str> {
     match op {
@@ -200,8 +199,12 @@ const fn effect(op: &Op) -> Option<&'static str> {
     match op {
         Op::Drop { .. } => Some("Moves the task to Dropped and stops its sessions."),
         Op::Stop { .. } => Some("Kills the live session; the task becomes Blocked."),
-        Op::Approve { .. } => Some("Rebases, fast-forwards the base branch, removes the worktree and branch."),
-        Op::Retry { fresh: true, .. } => Some("Starts a new worker run from the base, not the task branch."),
+        Op::Approve { .. } => {
+            Some("Rebases, fast-forwards the base branch, removes the worktree and branch.")
+        }
+        Op::Retry { fresh: true, .. } => {
+            Some("Starts a new worker run from the base, not the task branch.")
+        }
         Op::Move {
             status: Status::Done | Status::Dropped,
             ..
@@ -254,12 +257,10 @@ pub fn status(feed: &Feed, key: &str) -> Option<ActStatus> {
     if operation.loading || operation.value.is_none() {
         return Some(ActStatus::Pending);
     }
-    Some(
-        match operation.decode::<corral_protocol::op::OpReply>() {
-            Some(corral_protocol::op::OpReply::Running { .. }) => ActStatus::Running,
-            _ => ActStatus::Done,
-        },
-    )
+    Some(match operation.decode::<corral_protocol::op::OpReply>() {
+        Some(corral_protocol::op::OpReply::Running { .. }) => ActStatus::Running,
+        _ => ActStatus::Done,
+    })
 }
 
 #[cfg(test)]

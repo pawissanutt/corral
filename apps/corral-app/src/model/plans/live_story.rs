@@ -87,7 +87,10 @@ pub(super) fn story(
         }
         needs.push(span(dep.as_str()).mono());
         if let Some(prior) = detail.children.iter().find(|other| other.id == *dep) {
-            needs.push(span(format!(" {}", Member::of(feed, prior).marks()[3].glyph())));
+            needs.push(span(format!(
+                " {}",
+                Member::of(feed, prior).marks()[3].glyph()
+            )));
         }
     }
     if needs.is_empty() {

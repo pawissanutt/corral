@@ -5,9 +5,9 @@
 
 use nsh_core::prelude::*;
 
+use crate::model::Form;
 use crate::model::review::{Button, ButtonStyle, DecideBar};
 use crate::model::text::flat;
-use crate::model::Form;
 use crate::ui::kit::page::bar;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};

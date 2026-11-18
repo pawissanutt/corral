@@ -403,11 +403,9 @@ impl State {
                 }]
             }
             Action::FileEntry(entry) => match idea_from(feed, &entry) {
-                Some(task) => {
-                    self.once(subject("file", &entry), feed, |ids| {
-                        Act::new(ids, Op::New { task }, false)
-                    })
-                }
+                Some(task) => self.once(subject("file", &entry), feed, |ids| {
+                    Act::new(ids, Op::New { task }, false)
+                }),
                 None => vec![Effect::Toast(
                     "This message is not loaded here; nothing was filed".into(),
                 )],

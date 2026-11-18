@@ -342,7 +342,10 @@ fn assistant_session(feed: &mut Feed, op: &AssistantSessionOp) -> Result<Value, 
             let next = feed
                 .assistants
                 .keys()
-                .filter_map(|id| id.strip_prefix("A-").and_then(|number| number.parse::<u64>().ok()))
+                .filter_map(|id| {
+                    id.strip_prefix("A-")
+                        .and_then(|number| number.parse::<u64>().ok())
+                })
                 .max()
                 .unwrap_or(17)
                 + 1;

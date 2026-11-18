@@ -45,7 +45,13 @@ pub fn feed_no_projects(
 ) -> Feed {
     let mut feed = base(now, date, clock, time_zone);
     workspace::populate(&mut feed, false);
-    sessions::assistant(&mut feed, "A-7", "Quick thread", None, Some("omp-sol".into()));
+    sessions::assistant(
+        &mut feed,
+        "A-7",
+        "Quick thread",
+        None,
+        Some("omp-sol".into()),
+    );
     let entry = sessions::entry(
         "preview-workspace",
         &stamp(now),

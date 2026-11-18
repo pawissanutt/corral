@@ -43,7 +43,9 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
         DetailRef::Review { task } => DetailBody::Review(review(feed, task)?),
         DetailRef::ReviewFile { task, path } => {
             let detail = review(feed, task)?;
-            let run = detail.run.ok_or_else(|| format!("not_found: {task} has no candidate"))?;
+            let run = detail
+                .run
+                .ok_or_else(|| format!("not_found: {task} has no candidate"))?;
             DetailBody::ReviewFile(PatchPage {
                 path: path.clone(),
                 patch: patch(task, path),
@@ -96,7 +98,10 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
                     .filter(|row| {
                         needle.as_deref().is_none_or(|needle| {
                             row.title.to_lowercase().contains(needle)
-                                || row.kind.as_deref().is_some_and(|kind| kind.contains(needle))
+                                || row
+                                    .kind
+                                    .as_deref()
+                                    .is_some_and(|kind| kind.contains(needle))
                                 || row.reference().to_lowercase().contains(needle)
                         })
                     })
@@ -191,16 +196,46 @@ type SampleFile = (&'static str, u32, u32, &'static str);
 fn files(task: &str) -> &'static [SampleFile] {
     match task {
         "T-9" => &[
-            ("src/client/web/identity.rs", 6, 2, "-    storage.remove(PAIRED)?;\n+    // Keep the marker until the stored credential has been read.\n+    let credential = keystore.read().await?;\n+    if credential.is_none() {\n+        storage.remove(PAIRED)?;\n+    }"),
-            ("src/client/web/lifecycle.rs", 3, 1, "-    reconnect(None)\n+    let credential = identity::restore().await?;\n+    reconnect(credential)"),
+            (
+                "src/client/web/identity.rs",
+                6,
+                2,
+                "-    storage.remove(PAIRED)?;\n+    // Keep the marker until the stored credential has been read.\n+    let credential = keystore.read().await?;\n+    if credential.is_none() {\n+        storage.remove(PAIRED)?;\n+    }",
+            ),
+            (
+                "src/client/web/lifecycle.rs",
+                3,
+                1,
+                "-    reconnect(None)\n+    let credential = identity::restore().await?;\n+    reconnect(credential)",
+            ),
         ],
         "T-10" => &[
-            ("src/model/usage/coverage.rs", 14, 3, "-    format!(\"{covered} runs\")\n+    format!(\"{covered} of {total} runs reported usage\")\n+    // Name the harnesses whose runs report nothing, so a missing row reads as known."),
-            ("src/screens/usage.rs", 8, 0, "+    if summary.covered_runs < summary.total_runs {\n+        notice(coverage_line(summary));\n+    }"),
+            (
+                "src/model/usage/coverage.rs",
+                14,
+                3,
+                "-    format!(\"{covered} runs\")\n+    format!(\"{covered} of {total} runs reported usage\")\n+    // Name the harnesses whose runs report nothing, so a missing row reads as known.",
+            ),
+            (
+                "src/screens/usage.rs",
+                8,
+                0,
+                "+    if summary.covered_runs < summary.total_runs {\n+        notice(coverage_line(summary));\n+    }",
+            ),
         ],
         "T-11" => &[
-            ("src/shell/desktop.rs", 9, 4, "-    let sidebar = sidebar(state);\n+    let folded = width < NARROW || state.sidebar.folded();\n+    let sidebar = sidebar(state, folded);"),
-            ("src/state/sidebar.rs", 5, 1, "-    pub fn folded(&self) -> bool { self.folded }\n+    /// Folded by the owner, or by a narrow window; never removed.\n+    pub fn folded(&self) -> bool { self.folded || self.narrow }"),
+            (
+                "src/shell/desktop.rs",
+                9,
+                4,
+                "-    let sidebar = sidebar(state);\n+    let folded = width < NARROW || state.sidebar.folded();\n+    let sidebar = sidebar(state, folded);",
+            ),
+            (
+                "src/state/sidebar.rs",
+                5,
+                1,
+                "-    pub fn folded(&self) -> bool { self.folded }\n+    /// Folded by the owner, or by a narrow window; never removed.\n+    pub fn folded(&self) -> bool { self.folded || self.narrow }",
+            ),
         ],
         "T-13" => &[(
             "src/model/work/changes.rs",

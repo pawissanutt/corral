@@ -97,22 +97,6 @@ pub fn frame(app: AppState, title: &'static str, gap: f32, parts: Vec<AnyElement
     }
 }
 
-/// A quiet paragraph at the body size (`p.dim`), wrapping.
-pub fn intro(app: AppState, words: &'static str) -> AnyElement {
-    let form = app.form;
-    let words = text(words).text_color(color(Token::Ink3));
-    if form == Form::Terminal {
-        return words.into_element();
-    }
-    let size = text_size(form);
-    let leading = if form == Form::Phone { 1.5 } else { 1.45 };
-    words
-        .font_family(FONT_TEXT)
-        .text_size(px(size))
-        .line_height(px((size * leading).round()))
-        .into_element()
-}
-
 /// The text size of a table cell (`.qtable`, `.devtable`: 12.5 pt); a step up on the phone,
 /// where 12.5 would read small at arm's length.
 pub fn cell_size(form: Form) -> f32 {

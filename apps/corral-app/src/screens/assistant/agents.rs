@@ -19,7 +19,8 @@ use super::parts::{act, model_button, ring, test_id, words};
 
 /// The blocks from the selected feed, tracked.
 fn blocks(app: AppState) -> Agents {
-    app.feed.with(|feed| app.assistant.with(|state| live_agents(state, feed)))
+    app.feed
+        .with(|feed| app.assistant.with(|state| live_agents(state, feed)))
 }
 
 /// The assistant sessions, under the agents. Desktop (padding 4 18 18): sessions as two-line

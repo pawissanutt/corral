@@ -262,10 +262,7 @@ pub(super) fn log(feed: &Feed, shown: &Shown) -> Body {
         CheckResult::Pass => "passed",
         CheckResult::Fail => "failed",
     };
-    let mut note = format!(
-        "Gate {result} on {} · log {reference}",
-        sha7(&gate.key)
-    );
+    let mut note = format!("Gate {result} on {} · log {reference}", sha7(&gate.key));
     if truncated {
         note.push_str(" · corrald serves the first part only");
     }

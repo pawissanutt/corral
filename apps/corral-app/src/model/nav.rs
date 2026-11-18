@@ -652,8 +652,10 @@ mod tests {
 
     #[test]
     fn explicitly_opening_hidden_plans_and_reviews_reveals_their_requested_records() {
+        use crate::model::daemon::{Task, bare_task, task_row};
         use crate::model::projects::{FilterScreen, Filters, ProjectFilter};
-        use corral_protocol::rows::{PlanRow, PlanState, ProjectRow};
+        use corral_protocol::rows::{PlanRow, ProjectRow};
+        use corral_types::Status;
 
         let mut feed = crate::model::daemon::Feed {
             store: Some("store".into()),
@@ -666,65 +668,25 @@ mod tests {
                 project.into(),
                 ProjectRow {
                     id: project.into(),
-                    path: project.into(),
-                    open: 0,
-                    running: 0,
-                    review: 0,
-                    needs_me: 0,
-                    in_pm_scope: false,
-                    autopilot: false,
-                    rev: 1,
+                    config: serde_json::Map::new(),
+                    open: 1,
                 },
             );
         }
-        for (id, project) in [("T-1", "A"), ("T-2", "B")] {
+        let mut rows = Vec::new();
+        for (id, project, status) in [("T-1", "A", Status::Backlog), ("T-2", "B", Status::Review)] {
+            let mut task = bare_task(id, id, status, jiff::Timestamp::UNIX_EPOCH);
+            task.project = Some(project.into());
             feed.plans.insert(
                 id.into(),
                 PlanRow {
-                    id: id.into(),
-                    title: id.into(),
-                    projects: vec![project.into()],
-                    role: None,
-                    linked: None,
-                    state: PlanState::Drafting,
-                    revision: None,
-                    delivery: None,
-                    members_total: 0,
-                    members_landed: 0,
-                    blockers: vec![],
-                    accepted_at: None,
-                    rev: 1,
+                    parent: task.clone(),
+                    child_counts: Vec::new(),
                 },
             );
+            rows.push(Task::new(task_row(task)));
         }
-        feed.board.apply_batch(
-            1,
-            vec![crate::model::daemon::Task {
-                id: "T-2".into(),
-                title: "Review B".into(),
-                project: Some("B".into()),
-                plan: None,
-                goal: None,
-                group: crate::model::daemon::Group::Other,
-                rail: std::array::from_fn(|_| crate::model::daemon::Step {
-                    mark: crate::model::board::Mark::Next,
-                    sha7: None,
-                    at: None,
-                }),
-                now: "review".into(),
-                now_code: "review".into(),
-                age_since: None,
-                since: None,
-                held_reason: None,
-                questions: 0,
-                attention: vec![],
-                agent: None,
-                cost: None,
-                cost_estimated: false,
-                rev: 1,
-            }],
-            &[],
-        );
+        feed.board.apply_batch(1, rows, &[]);
         for form in [Form::Desktop, Form::Terminal, Form::Phone] {
             let mut filters = Filters::default();
             filters.set(
@@ -773,13 +735,13 @@ mod tests {
             assert_eq!(nav.destination, Destination::Now);
             assert_eq!(nav.selection.task.as_deref(), Some("T-9"));
             assert_eq!(nav.live(), (form == Form::Phone).then_some(&task));
-            let question = Live::Question(Id::from("T-9/R1/Q1"));
-            nav.open_live(question.clone(), form);
-            nav.open_live(question.clone(), form);
-            assert_eq!(nav.live(), Some(&question));
+            let session = Live::Session(Id::from("T-9_R1"));
+            nav.open_live(session.clone(), form);
+            nav.open_live(session.clone(), form);
+            assert_eq!(nav.live(), Some(&session));
             assert_eq!(nav.pages.len(), if form == Form::Phone { 2 } else { 1 });
             assert!(nav.back());
-            assert_eq!(nav.selection.question.as_deref(), Some("T-9/R1/Q1"));
+            assert_eq!(nav.selection.session.as_deref(), Some("T-9_R1"));
         }
     }
 

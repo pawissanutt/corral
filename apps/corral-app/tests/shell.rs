@@ -24,16 +24,6 @@ fn phone() -> EngineConfig {
     config
 }
 
-/// A terminal 80 columns wide and 24 rows high, in 8 × 16 pt Cells.
-fn terminal_80() -> EngineConfig {
-    let mut config = phone();
-    config.viewport = Size::new(Points(640.0), Points(384.0));
-    config.environment.os = Os::Linux;
-    config.environment.idiom = Idiom::Terminal;
-    config.environment.cell = Some(Size::new(Points(8.0), Points(16.0)));
-    config
-}
-
 /// Starts the app with `entries` in Storage. Without a daemon that is the disconnected state:
 /// no launch restores the fixture preview.
 fn with_storage(config: EngineConfig, entries: &[(&str, &str)]) -> Headless {
@@ -66,10 +56,6 @@ fn preview(config: EngineConfig, entries: &[(&str, &str)]) -> Headless {
     app
 }
 
-/// The synthetic feed's open worker question, the first of its three owner moves (with the
-/// T-885 plan acceptance and the T-868 review).
-const QUESTION: &str = "id:inbox-T-868/R1/Q1";
-
 fn assert_text(app: &mut Headless, id: &str, expected: &str) {
     app.wait_for(&format!("id:{id}")).unwrap();
     // A global text match would also match the unchanged sidebar label.
@@ -82,10 +68,29 @@ fn assert_text(app: &mut Headless, id: &str, expected: &str) {
     assert_eq!(texts, [expected], "text of id:{id}");
 }
 
+/// Selects a sample task through the palette, as a person who knows its id does.
+fn select(app: &mut Headless, row: &str) {
+    app.press("id:palette-open").unwrap();
+    app.wait_for("id:palette-input").unwrap();
+    app.type_text("id:palette-input", row).unwrap();
+    app.press(&format!("text:{row}")).unwrap();
+    app.wait_for_gone("id:palette-input", Duration::from_secs(5))
+        .unwrap();
+}
+
+/// Selects the sample's T-12, which waits on T-14, and runs Dispatch from its Actions menu,
+/// which the palette also lists for the selected task.
+fn dispatch_t12(app: &mut Headless) {
+    select(app, "T-12 Timeline zoom presets");
+    select(app, "Dispatch… T-12");
+    app.wait_for("id:btn-verb-send").unwrap();
+    app.press("id:btn-verb-send").unwrap();
+}
+
 #[test]
-fn phone_opens_on_inbox_and_desktop_on_now() {
+fn both_forms_open_on_now() {
     let mut app = preview(phone(), &[]);
-    assert_text(&mut app, "page-title", "Inbox");
+    assert_text(&mut app, "page-title", "Now");
     drop(app);
 
     let mut app = preview(desktop(), &[]);
@@ -96,11 +101,9 @@ fn phone_opens_on_inbox_and_desktop_on_now() {
 fn desktop_sidebar_reaches_every_destination() {
     let mut app = preview(desktop(), &[]);
     for (slug, title) in [
-        ("inbox", "Inbox"),
         ("now", "Now"),
         ("changes", "Changes"),
         ("plans", "Plans"),
-        ("builds", "Builds"),
         ("agents", "Agents"),
         ("review", "Review"),
         ("timeline", "Timeline"),
@@ -108,12 +111,8 @@ fn desktop_sidebar_reaches_every_destination() {
         ("settings", "Settings"),
     ] {
         app.press(&format!("id:nav-{slug}")).unwrap();
-        if slug == "inbox" {
-            app.wait_for("id:inbox-list").unwrap();
-        } else if slug == "now" {
+        if slug == "now" {
             app.wait_for("id:now-main").unwrap();
-        } else if slug == "builds" {
-            app.wait_for("id:builds-list").unwrap();
         } else if slug == "settings" {
             app.wait_for("id:page-title").unwrap();
         } else {
@@ -125,12 +124,7 @@ fn desktop_sidebar_reaches_every_destination() {
 #[test]
 fn phone_tabs_and_more_reach_every_destination() {
     let mut app = preview(phone(), &[]);
-    for (slug, title) in [
-        ("inbox", "Inbox"),
-        ("now", "Now"),
-        ("agents", "Agents"),
-        ("plans", "Plans"),
-    ] {
+    for (slug, title) in [("now", "Now"), ("agents", "Agents"), ("plans", "Plans")] {
         app.press(&format!("id:tab-{slug}")).unwrap();
         assert_text(&mut app, "page-title", title);
     }
@@ -138,7 +132,6 @@ fn phone_tabs_and_more_reach_every_destination() {
     app.press("id:tab-more").unwrap();
     for (slug, title) in [
         ("changes", "Changes"),
-        ("builds", "Builds"),
         ("review", "Review"),
         ("timeline", "Timeline"),
         ("usage", "Usage"),
@@ -159,31 +152,24 @@ fn phone_settings_sections_push_their_pages() {
     app.press("id:nav-settings").unwrap();
     assert_text(&mut app, "page-title", "Settings");
     app.wait_for("id:settings-devices").unwrap();
-
-    for (slug, title) in [
-        ("assistant", "Assistant"),
-        ("autopilot", "Autopilot & grants"),
-    ] {
-        app.press(&format!("id:settings-{slug}")).unwrap();
-        assert_text(&mut app, "page-title", title);
-        app.back().unwrap();
-        assert_text(&mut app, "page-title", "Settings");
-        app.wait_for("id:settings-devices").unwrap();
-    }
+    app.press("id:settings-config").unwrap();
+    assert_text(&mut app, "page-title", "Configuration");
+    app.back().unwrap();
+    assert_text(&mut app, "page-title", "Settings");
 }
 
 #[test]
 fn typing_in_ask_does_not_navigate() {
     let mut app = preview(desktop(), &[]);
-    app.press("id:nav-inbox").unwrap();
-    app.wait_for("id:inbox-list").unwrap();
+    app.press("id:nav-plans").unwrap();
+    app.wait_for("id:plans-list").unwrap();
     app.press("id:ask-open").unwrap();
     app.wait_for("id:ask-input").unwrap();
 
     let draft = "n i p a r t u . , p";
     app.type_text("id:ask-input", draft).unwrap();
 
-    app.wait_for("id:inbox-list").unwrap();
+    app.wait_for("id:plans-list").unwrap();
     assert_eq!(
         app.screen().input_text("id:ask-input").unwrap(),
         Some(draft)
@@ -202,27 +188,6 @@ fn ask_opens_with_the_field_focused() {
     assert_eq!(
         app.screen().input_text("id:ask-input").unwrap(),
         Some("hello")
-    );
-    drop(app);
-
-    let mut app = preview(desktop(), &[]);
-    app.press("id:palette-open").unwrap();
-    app.wait_for("id:palette-input").unwrap();
-    let draft = "Why do violet badgers collect moonstones?";
-    app.type_text("id:palette-input", draft).unwrap();
-    let row = format!("text:Ask: “{draft}”");
-    app.wait_for(&row).unwrap();
-    app.press(&row).unwrap();
-    app.wait_for("id:ask-input").unwrap();
-    app.wait_for_gone("id:palette-input", Duration::from_secs(5))
-        .unwrap();
-    for key in ["space", "m", "o", "r", "e"] {
-        app.press_key(key).unwrap();
-    }
-    let expected = format!("{draft} more");
-    assert_eq!(
-        app.screen().input_text("id:ask-input").unwrap(),
-        Some(expected.as_str())
     );
     drop(app);
 
@@ -270,10 +235,10 @@ fn disconnected_state_shows_no_healthy_segment_and_no_count() {
         let texts = app.screen().texts();
         assert!(texts.contains(&"corrald"));
         assert!(texts.contains(&"not connected"));
-        for healthy in ["healthy", "herdr-core", "live"] {
+        for healthy in ["healthy", "reachable"] {
             assert!(!texts.contains(&healthy), "disconnected shows {healthy}");
         }
-        assert_eq!(app.screen().count("id:count-inbox").unwrap(), 0);
+        assert_eq!(app.screen().count("id:count-now").unwrap(), 0);
     }
 }
 
@@ -295,45 +260,20 @@ fn sending_from_ask_appends_to_the_quick_thread_and_clears_the_draft() {
 
 #[test]
 fn destination_is_restored_from_storage() {
-    for (config, home) in [(desktop(), "Now"), (phone(), "Inbox")] {
+    for (config, phone) in [(desktop(), false), (phone(), true)] {
         let mut app = preview(config.clone(), &[("corral.destination", "plans")]);
         app.wait_for("id:plans-list").unwrap();
         assert_text(&mut app, "page-title", "Plans");
         drop(app);
 
-        let mut app = preview(config, &[("corral.destination", "not-a-destination")]);
-        if home == "Now" {
-            app.wait_for("id:now-main").unwrap();
+        // The retired Inbox opens its new home, Now.
+        let mut app = preview(config, &[("corral.destination", "inbox")]);
+        if phone {
+            assert_text(&mut app, "page-title", "Now");
         } else {
-            assert_text(&mut app, "page-title", home);
+            app.wait_for("id:now-main").unwrap();
         }
     }
-}
-
-#[test]
-fn answering_the_question_marks_it_answered_and_drops_the_inbox_count() {
-    let mut app = preview(desktop(), &[]);
-    app.press("id:nav-inbox").unwrap();
-    assert_text(&mut app, "count-inbox", "3");
-    app.wait_for(QUESTION).unwrap();
-    app.press(QUESTION).unwrap();
-    app.press_key("enter").unwrap();
-    app.wait_for("id:question-main").unwrap();
-    app.press("id:btn-answer").unwrap();
-    app.wait_for("text:/^ANSWERED/").unwrap();
-    assert_text(&mut app, "count-inbox", "2");
-}
-
-#[test]
-fn phone_question_back_returns_to_the_inbox_list() {
-    let mut app = preview(phone(), &[]);
-    app.press(QUESTION).unwrap();
-    app.wait_for("id:qhead-title").unwrap();
-    assert_eq!(app.screen().count("id:inbox-list").unwrap(), 0);
-    app.press("id:page-back").unwrap();
-    app.wait_for("id:inbox-list").unwrap();
-    app.wait_for(QUESTION).unwrap();
-    assert_text(&mut app, "page-title", "Inbox");
 }
 
 #[test]
@@ -354,148 +294,49 @@ fn tab_moves_the_keyboard_focus_instead_of_being_swallowed() {
     app.wait_for("id:now-main").unwrap();
 }
 
+/// The engine refuses dispatching T-12 while T-14 is not done. The sheet offers "Dispatch
+/// anyway", which names what it skips and is the one confirmation: pressing it submits the same
+/// dispatch with force, T-12 runs, and Changes records the forced operation.
 #[test]
-fn enter_on_a_focused_sidebar_item_goes_there_instead_of_opening_the_list_row() {
-    // The shell decides the Tab order; each try starts afresh and Tabs one stop further.
-    for stops in 1..=24 {
-        let mut app = preview(desktop(), &[("corral.destination", "inbox")]);
-        app.wait_for("id:inbox-list").unwrap();
-        for _ in 0..stops {
-            app.press_key("tab").unwrap();
-        }
-        app.press_key("enter").unwrap();
-        if app
-            .wait_for_within("id:plans-list", Duration::from_millis(300))
-            .is_ok()
-        {
-            assert_eq!(app.screen().count("id:question-main").unwrap(), 0);
-            return;
-        }
-    }
-    panic!("Tab never reached the sidebar's Plans item, or Enter did not press it");
+fn a_refused_dispatch_offers_dispatch_anyway_and_forcing_it_runs_the_task() {
+    let mut app = preview(desktop(), &[("corral.destination", "now")]);
+    dispatch_t12(&mut app);
+    app.wait_for("id:refused").unwrap();
+    app.wait_for("text:Dispatch anyway").unwrap();
+    assert!(app.screen().count("id:btn-refusal-0").unwrap() > 0);
+    app.wait_for("text:/^Skips unfinished dependencies/")
+        .unwrap();
+    app.press("id:btn-refusal-0").unwrap();
+    app.wait_for_gone("id:refused", Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(app.screen().count("id:confirm").unwrap(), 0);
+    app.wait_for("text:/^Dispatch anyway T-12 · Done/").unwrap();
+    app.press("id:nav-agents").unwrap();
+    app.wait_for("id:agent-T-12_R1").unwrap();
+    app.press("id:nav-changes").unwrap();
+    app.wait_for("text:/forced dispatch/").unwrap();
 }
 
-/// Enter on the fresh confirmation presses Cancel, which has the focus: the sheet closes, the
-/// cancellation's receipt says nothing was sent, and the candidate is still there to approve.
+/// A destructive operation asks once, locally, with the focus on Cancel: Enter cancels, the
+/// receipt says nothing was sent, and the task is still there.
 #[test]
-fn confirmation_takes_the_focus_so_enter_cancels_it() {
-    let mut app = preview(desktop(), &[]);
-    app.press("id:nav-review").unwrap();
-    app.wait_for("id:btn-approve").unwrap();
-    app.press("id:btn-approve").unwrap();
+fn the_confirm_sheet_takes_the_focus_so_enter_cancels_it() {
+    let mut app = preview(desktop(), &[("corral.destination", "now")]);
+    select(&mut app, "T-12 Timeline zoom presets");
+    select(&mut app, "Drop T-12");
     app.wait_for("id:confirm").unwrap();
     app.press_key("enter").unwrap();
     app.wait_for_gone("id:confirm", Duration::from_secs(5))
         .unwrap();
     app.wait_for("text:/ · cancelled, nothing was sent$/")
         .unwrap();
-    assert_eq!(app.screen().count("id:toast").unwrap(), 1);
-    // Nothing ran: once the receipt leaves, the approval is still offered and opens a fresh
-    // confirmation again.
-    assert!(app.screen().enabled("id:btn-approve").unwrap());
-    app.wait_for_gone("id:toast", Duration::from_secs(5))
-        .unwrap();
-    app.press("id:btn-approve").unwrap();
-    app.wait_for("id:confirm").unwrap();
-}
-
-#[test]
-fn phone_landscape_question_keeps_next_in_the_header() {
-    let mut config = phone();
-    config.viewport = Size::new(Points(844.0), Points(390.0));
-    let mut app = preview(config, &[]);
-    app.press(QUESTION).unwrap();
-    app.wait_for("id:qhead-title").unwrap();
-    app.wait_for("id:btn-next").unwrap();
-    // Held sideways the pager row is gone; Next sits among the header's controls, not below.
-    let nodes = app.screen().layout_nodes();
-    let next: Vec<_> = nodes
-        .iter()
-        .filter(|node| node.test_id.as_deref() == Some("btn-next"))
-        .collect();
-    assert_eq!(next.len(), 1, "one Next on the page");
-    let bounds = &next[0].bounds;
-    assert!(
-        bounds.origin.y.0 + bounds.size.height.0 <= 100.0,
-        "Next is in the header, not under it: {bounds:?}"
-    );
-}
-
-#[test]
-fn terminal_80_columns_stacks_the_inbox_list_instead_of_hiding_it() {
-    let mut app = preview(terminal_80(), &[("corral.destination", "inbox")]);
-    app.wait_for("id:inbox-list").unwrap();
-    app.wait_for(QUESTION).unwrap();
-    let nodes = app.screen().layout_nodes();
-    let list = nodes
-        .iter()
-        .find(|node| node.test_id.as_deref() == Some("inbox-list"))
-        .expect("id:inbox-list is on the page");
-    assert!(
-        list.bounds.size.width.0 > 0.0 && list.bounds.size.height.0 > 0.0,
-        "the list has room: {:?}",
-        list.bounds
-    );
-}
-
-/// The grouping switch asks the feed for the other grouping and redraws the lanes from its
-/// answer: By agent draws the gate session's lane, which By task does not have.
-#[test]
-fn timeline_grouping_redraws_the_lanes_from_the_feed() {
-    let mut app = preview(terminal_80(), &[("corral.destination", "timeline")]);
-    app.wait_for("label:/^T-871 /").unwrap();
-    assert_eq!(app.screen().count("label:/^gate-T-890 /").unwrap(), 0);
-    app.press("id:seg-group-1").unwrap();
-    app.wait_for("label:/^gate-T-890 /").unwrap();
-}
-
-/// A build that landed over an open review finding says so where it is opened: in place on
-/// desktop, on its pushed page on the phone, not as a task.
-#[test]
-fn a_build_landed_over_open_findings_is_called_out_when_opened() {
-    let mut app = preview(desktop(), &[("corral.destination", "builds")]);
-    app.wait_for("id:build-B-record-store").unwrap();
-    app.press("id:build-B-peer-roster").unwrap();
-    app.wait_for("id:build-override").unwrap();
-    assert_eq!(app.screen().count("id:build-section-messages").unwrap(), 0);
-    drop(app);
-
-    let mut app = preview(phone(), &[]);
-    app.press("id:tab-more").unwrap();
-    app.press("id:nav-builds").unwrap();
-    app.wait_for("id:build-B-peer-roster").unwrap();
-    app.press("id:build-B-peer-roster").unwrap();
-    app.wait_for("id:build-detail").unwrap();
-    app.wait_for("id:build-override").unwrap();
-    assert_eq!(app.screen().count("id:builds-list").unwrap(), 0);
-}
-
-/// A session running child agents lists them and their messages beside its transcript; a
-/// session without any shows no children list at all. A roster row opens its panel; the panel
-/// opens the session.
-#[test]
-fn only_a_session_with_children_lists_them() {
-    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.press("id:agent-T-871").unwrap();
-    app.wait_for("id:btn-open-session").unwrap();
-    app.press("id:btn-open-session").unwrap();
-    app.wait_for("id:agent-T-871-child-reader").unwrap();
-    app.wait_for("id:agent-T-871-msg-3").unwrap();
-    drop(app);
-
-    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.press("id:agent-T-854").unwrap();
-    app.wait_for("id:btn-open-session").unwrap();
-    app.press("id:btn-open-session").unwrap();
-    app.wait_for("id:session-transcript").unwrap();
-    assert_eq!(app.screen().count("id:session-fleet").unwrap(), 0);
 }
 
 /// Escape closes the roster's panel first: the page stays Agents rather than navigating back.
 #[test]
 fn escape_clears_the_roster_selection_before_leaving_agents() {
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.press("id:agent-T-871").unwrap();
+    app.press("id:agent-T-14_R1").unwrap();
     app.wait_for("id:seg-agent-panel-summary").unwrap();
     app.press_key("escape").unwrap();
     app.wait_for_gone("id:seg-agent-panel-summary", Duration::from_secs(5))

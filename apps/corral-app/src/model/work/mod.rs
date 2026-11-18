@@ -20,9 +20,7 @@ mod views;
 mod when;
 
 pub use verb_forms::{STATUSES, VerbComposer};
-pub use verbs::{
-    Record, Verb, VerbAction, VerbField, palette_record, record_verbs, session_task,
-};
+pub use verbs::{Record, Verb, VerbAction, VerbField, palette_record, record_verbs, session_task};
 
 /// Shared loading caption for an inspector awaiting its task detail.
 pub const INSPECTOR_LOADING: &str = "Loading task…";

@@ -320,7 +320,12 @@ mod tests {
 
     #[test]
     fn review_with_ready_needs_the_owner_and_blocked_rows_fail_the_run() {
-        let mut row = task_row(bare_task("T-1", "t", Status::Review, jiff::Timestamp::UNIX_EPOCH));
+        let mut row = task_row(bare_task(
+            "T-1",
+            "t",
+            Status::Review,
+            jiff::Timestamp::UNIX_EPOCH,
+        ));
         assert_eq!(Task::new(row.clone()).group, Group::Verifying);
         row.ready = true;
         assert_eq!(Task::new(row.clone()).group, Group::NeedsYou);

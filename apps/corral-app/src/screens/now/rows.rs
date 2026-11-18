@@ -82,9 +82,8 @@ pub(crate) fn fit(form: Form, width: f32) -> Fit {
     let base = pad + size(DELTA) + size(ACTOR) + size(ID) + size(TITLE) + size(RAIL) + 4.0 * gap;
     let age = units >= base + size(AGE) + gap;
     let project = age && units >= base + size(AGE) + size(PROJECT) + 2.0 * gap;
-    let hint = terminal
-        && project
-        && units >= base + size(AGE) + size(PROJECT) + size(HINT) + 3.0 * gap;
+    let hint =
+        terminal && project && units >= base + size(AGE) + size(PROJECT) + size(HINT) + 3.0 * gap;
     Fit { hint, project, age }
 }
 

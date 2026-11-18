@@ -336,10 +336,7 @@ impl AppState {
                 } else {
                     let why = "Not sent: no live connection to corrald.";
                     self.assistant.update(|state| {
-                        state.settle(
-                            &key,
-                            crate::model::assistant::OpOutcome::Failed(why.into()),
-                        );
+                        state.settle(&key, crate::model::assistant::OpOutcome::Failed(why.into()));
                     });
                     self.toast(why);
                 }

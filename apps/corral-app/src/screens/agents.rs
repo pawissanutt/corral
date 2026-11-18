@@ -147,9 +147,8 @@ fn follow(app: AppState, id: Id) {
             }
         });
     }
-    let has_screen = computed(move || {
-        row.with(|row| row.as_ref().is_some_and(|row| row.run.session.is_some()))
-    });
+    let has_screen =
+        computed(move || row.with(|row| row.as_ref().is_some_and(|row| row.run.session.is_some())));
     let streamed = computed(move || app.feed.with(|feed| feed.capable(STREAM_TERMINAL_V1)));
     let shown = computed(move || {
         has_screen.get()

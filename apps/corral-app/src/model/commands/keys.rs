@@ -10,19 +10,13 @@ use crate::model::{Destination, Live};
 const MOVE: &[&str] = &["j", "k", "down", "up"];
 const LIVE_MOVE_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "."];
 const MENU: &[&str] = &["."];
-const LIVE_QUESTION: &[&str] = &["j", "k", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
-const LIVE_INBOX: &[&str] = &[
-    "j", "k", "down", "up", "enter", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-];
 
 /// The daemon's list keys on `destination` under the live page on top.
 pub fn list_keys_live(destination: Destination, top: Option<&Live>) -> &'static [&'static str] {
     match (destination, top) {
-        (Destination::Inbox, Some(Live::Question(_))) => LIVE_QUESTION,
-        (Destination::Inbox, None) => LIVE_INBOX,
         (Destination::Now, None | Some(Live::Task(_))) => LIVE_MOVE_OPEN,
         (Destination::Review, None | Some(Live::Review(_))) => MENU,
-        (Destination::Plans | Destination::Builds, _) => MOVE,
+        (Destination::Plans, _) => MOVE,
         (Destination::Agents, None) => MOVE,
         _ => &[],
     }
@@ -37,12 +31,8 @@ pub fn key_legend_live(
     off_board: bool,
 ) -> Vec<(&'static str, &'static str)> {
     match (destination, top) {
-        (_, Some(Live::Question(_))) => {
-            vec![("1-9", "choose"), ("j k", "move"), ("e", "evidence")]
-        }
         (_, Some(Live::Session(_))) => vec![("`", "transcript/terminal")],
         (_, Some(Live::Thread(_))) => Vec::new(),
-        (Destination::Inbox, _) => vec![("j k", "move"), ("Enter", "open"), ("1-9", "choose")],
         (Destination::Now, _) => {
             let mut legend = vec![("j k", "move")];
             if !off_board {
@@ -52,7 +42,6 @@ pub fn key_legend_live(
             legend
         }
         (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member")],
-        (Destination::Builds, _) => vec![("j k", "build")],
         (Destination::Agents, _) => vec![("j k", "session")],
         (Destination::Review, _) => vec![("s", "split"), (".", "actions")],
         _ => Vec::new(),
@@ -66,11 +55,6 @@ mod tests {
     #[test]
     fn tab_and_space_are_never_list_keys() {
         let lists = [
-            list_keys_live(Destination::Inbox, None),
-            list_keys_live(
-                Destination::Inbox,
-                Some(&Live::Question("T-1/R1/Q1".into())),
-            ),
             list_keys_live(Destination::Now, None),
             list_keys_live(Destination::Plans, None),
             list_keys_live(Destination::Agents, None),

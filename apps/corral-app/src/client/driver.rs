@@ -75,9 +75,7 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                 Ok((mut session, welcome, capable, saved)) => {
                     let store = welcome.daemon.store.clone();
                     state.welcomed(feed, &welcome);
-                    feed.update(|feed| {
-                        feed.welcome_received(welcome.daemon.store, welcome.health)
-                    });
+                    feed.update(|feed| feed.welcome_received(welcome.daemon.store, welcome.health));
                     let mut current = None;
                     let mut outgoing = Vec::new();
                     if !capable {

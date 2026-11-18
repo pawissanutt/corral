@@ -213,7 +213,9 @@ impl AppState {
         feed.update(|feed| {
             feed.board_received(
                 epoch,
-                rows.into_iter().map(Task::new).collect(),
+                rows.into_iter()
+                    .map(crate::model::daemon::Task::new)
+                    .collect(),
                 &left,
                 replacement,
             );

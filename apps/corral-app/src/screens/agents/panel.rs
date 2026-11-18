@@ -14,9 +14,9 @@ use corral_protocol::detail::{DetailRef, STREAM_TERMINAL_V1};
 use nsh_core::prelude::*;
 
 use crate::model::agents::{Action, RosterPanel, RosterPanelTab};
-use crate::model::{Form, Id};
 use crate::model::daemon::Link;
 use crate::model::hue::Hue;
+use crate::model::{Form, Id};
 use crate::screens::assistant;
 use crate::state::AppState;
 use crate::ui::icons::Icon;

@@ -89,7 +89,11 @@ fn grouped<'a>(
             let rank = ORDER
                 .iter()
                 .position(|(key, _)| *key == group_key(task.group));
-            (task.project().is_none(), task.project().map(str::to_owned), rank)
+            (
+                task.project().is_none(),
+                task.project().map(str::to_owned),
+                rank,
+            )
         });
         let mut groups: Vec<(GroupKey, String, Vec<&daemon::Task>)> = Vec::new();
         for task in ordered {

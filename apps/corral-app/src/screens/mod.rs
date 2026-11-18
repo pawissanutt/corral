@@ -6,9 +6,7 @@
 
 pub mod agents;
 pub mod assistant;
-pub mod builds;
 pub mod changes;
-pub mod inbox;
 pub mod landing;
 pub(crate) mod markdown;
 pub mod now;
@@ -121,7 +119,6 @@ pub fn content(app: AppState) -> AnyElement {
                 return frame(app, destination, false);
             }
             match top {
-                Some(Route::Live(Live::Question(key))) => inbox::live_question(app, key),
                 Some(Route::Live(Live::Session(id))) => agents::live_session(app, id),
                 Some(Route::Live(Live::Thread(id))) => assistant::live_thread(app, id),
                 Some(Route::Project(id)) => projects::page(app, id),
@@ -152,11 +149,9 @@ fn unavailable(app: AppState, destination: Destination) -> bool {
 /// Each destination's own screen.
 fn screen(app: AppState, destination: Destination) -> AnyElement {
     match destination {
-        Destination::Inbox => inbox::screen(app),
         Destination::Now => now::screen(app),
         Destination::Changes => changes::screen(app),
         Destination::Plans => plans::screen(app),
-        Destination::Builds => builds::screen(app),
         Destination::Agents => agents::screen(app),
         Destination::Review => review::screen(app),
         Destination::Timeline => timeline::screen(app),

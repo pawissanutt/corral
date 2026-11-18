@@ -14,7 +14,13 @@ use super::live::{Shown, file_ref};
 use super::view::{ButtonStyle, DiffView, FileBody, FileView, HunkView, button, hunk_content};
 use super::{Action, Layout, State};
 
-fn file_view(state: &State, feed: &Feed, shown: &Shown, file: &ReviewFile, layout: Layout) -> FileView {
+fn file_view(
+    state: &State,
+    feed: &Feed,
+    shown: &Shown,
+    file: &ReviewFile,
+    layout: Layout,
+) -> FileView {
     let id = shown.id();
     let heading = vec![
         span(file.path.clone()).mono(),

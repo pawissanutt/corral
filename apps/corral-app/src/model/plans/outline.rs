@@ -304,9 +304,7 @@ fn outline_row(
     } else {
         let segments: Vec<(Mark, Hue)> = BAR
             .iter()
-            .flat_map(|(status, mark, hue)| {
-                std::iter::repeat_n((*mark, *hue), count(row, *status))
-            })
+            .flat_map(|(status, mark, hue)| std::iter::repeat_n((*mark, *hue), count(row, *status)))
             .collect();
         OutlineSecond::Members {
             shares: shares(&segments),

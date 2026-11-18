@@ -141,7 +141,6 @@ impl AppState {
     pub fn scope(mut self) -> Self {
         self.feed.pinned = Some(self.feed.source());
         self.assistant.pinned = Some(self.feed.source());
-        self.inbox.pinned = Some(self.feed.source());
         self.work.pinned = Some(self.feed.source());
         self.plans.pinned = Some(self.feed.source());
         self.agents.pinned = Some(self.feed.source());

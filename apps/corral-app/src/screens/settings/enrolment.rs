@@ -228,27 +228,6 @@ fn field(
     )
 }
 
-/// A labelled one-line text field of literal text (ids, names, numbers) showing `value` and
-/// reporting each edit to `on_change`; `hint` says what it takes, under it.
-pub(super) fn bound_field(
-    app: AppState,
-    id: String,
-    label: &'static str,
-    hint: &'static str,
-    value: impl Fn() -> String + 'static,
-    on_change: impl Fn(String) + 'static,
-) -> AnyElement {
-    labelled_field(
-        app,
-        id,
-        label,
-        Some(hint).filter(|hint| !hint.is_empty()),
-        Entry::Text,
-        value,
-        on_change,
-    )
-}
-
 /// The field itself. NSH 0.5 names a text input by its placeholder on the web (the label sits
 /// on its wrapper), so the placeholder repeats the visible label and the hint is a caption
 /// under the field; nothing is spell-checked or capitalised, since corral reads it literally.

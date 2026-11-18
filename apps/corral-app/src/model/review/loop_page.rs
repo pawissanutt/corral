@@ -71,16 +71,16 @@ pub fn loop_page_filtered(
     let detail = shown.as_ref().map(|shown| {
         let content = match (shown.review, selected_tab(state, shown)) {
             (_, Tab::Brief) => LoopContent::Brief(brief(state, feed, shown, env, width)),
-            (Some(review), Tab::Diff) => LoopContent::Evidence(Body::Diff(
-                super::live_files::diff(
+            (Some(review), Tab::Diff) => {
+                LoopContent::Evidence(Body::Diff(super::live_files::diff(
                     state,
                     feed,
                     shown,
                     review,
                     effective_layout(state, env, width),
                     env,
-                ),
-            )),
+                )))
+            }
             (_, Tab::Log) => LoopContent::Evidence(log(feed, shown)),
             (_, Tab::Report) => LoopContent::Evidence(report(shown)),
             (_, Tab::Shot) => {

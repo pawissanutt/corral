@@ -127,13 +127,14 @@ fn figures(app: AppState, figures: &[Figure]) -> AnyElement {
     let form = app.form;
     let items = figures.iter().map(|figure| match form {
         Form::Terminal => text("")
-            .child(
-                text(format!("{:<TERM_LABEL$}", figure.label)).text_color(color(Token::Ink3)),
-            )
+            .child(text(format!("{:<TERM_LABEL$}", figure.label)).text_color(color(Token::Ink3)))
             .child(text(figure.value.clone()).text_color(color(Token::Ink)))
-            .children(figure.detail.clone().map(|detail| {
-                text(format!("  {detail}")).text_color(color(Token::Ink3))
-            }))
+            .children(
+                figure
+                    .detail
+                    .clone()
+                    .map(|detail| text(format!("  {detail}")).text_color(color(Token::Ink3))),
+            )
             .into_element(),
         Form::Desktop | Form::Phone => {
             let phone = form == Form::Phone;
@@ -272,13 +273,7 @@ fn phone(app: AppState, data: Memo<Page>) -> AnyElement {
                 view()
                     .children(status(app, &page))
                     .children((!page.figures.is_empty()).then(|| {
-                        section(
-                            app,
-                            None,
-                            None,
-                            Hue::Neutral,
-                            figures(app, &page.figures),
-                        )
+                        section(app, None, None, Hue::Neutral, figures(app, &page.figures))
                     }))
                     .child(section(
                         app,

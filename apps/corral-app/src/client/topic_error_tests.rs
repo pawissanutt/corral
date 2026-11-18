@@ -174,9 +174,9 @@ fn rc05_slow_reads_expire_as_correlated_replies_without_killing_the_session() {
         (wire::app::CHANGES_PAGE, json!({"limit":20}), 30_000),
         (wire::app::SEEN_ADVANCE, json!({"through":1}), 30_000),
         (
-            wire::app::ACT_RESULT,
-            json!({"cmd_id":"test","wait_ms":5_000}),
-            10_000,
+            wire::op::OP_SUBMIT,
+            json!({"op":"sync","force":false}),
+            30_000,
         ),
     ] {
         let mut core = Core::new();
@@ -250,7 +250,7 @@ mod tests {
                 ..
             })
         ));
-        core.open(Topic::Board, 12).unwrap();
+        core.open(Topic::Tasks, 12).unwrap();
         assert!(
             core.receive(
                 frame(json!({

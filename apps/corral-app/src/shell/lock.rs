@@ -1,8 +1,8 @@
 //! The lock-screen push demo the phone shows over everything while `AppState::lock` holds (the
 //! mock's `lockScreen()` and `.lock`): the device's real date and clock, the push of the first
-//! open question in the feed, and the note on how push text is made. Pressing the notification
-//! opens its question; pressing anywhere else puts the lock screen away. Once the question is
-//! answered no push shows, as on the phone.
+//! Blocked task in the feed, and the note on how push text is made. Pressing the notification
+//! opens its task; pressing anywhere else puts the lock screen away. Once nothing is Blocked no
+//! push shows, as on the phone.
 //!
 //! The lock screen is the phone's own surface, not the app's, so it looks the same in both
 //! appearances: the always-dark shell colours for the wallpaper, and the light values of the
@@ -12,8 +12,8 @@ use std::rc::Rc;
 
 use nsh_core::prelude::*;
 
+use crate::model::Live;
 use crate::model::daemon::Feed;
-use crate::model::{Live, inbox};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::tokens::{FONT_TEXT, Token, color};
@@ -37,9 +37,9 @@ const DEMO_LABEL: &str = "Lock-screen push demo";
 const DISMISS_LABEL: &str = "Lock-screen push demo, tap to dismiss";
 const FOOTNOTE: &str =
     "Push text is generated on this phone from an encrypted payload; the relay only sends a wake.";
-const NOTHING: &str = "Nothing needs you. A push shows here when a question does.";
+const NOTHING: &str = "Nothing needs you. A push shows here when a task is blocked.";
 
-/// The push of the first open question: its title line, the question, when it was asked and
+/// The push of the first Blocked task: its title line, why it is blocked, when it changed and
 /// the page it opens.
 #[derive(Debug, Clone, PartialEq)]
 struct Push {
@@ -49,23 +49,23 @@ struct Push {
     opens: Live,
 }
 
-/// The first open question in the feed's order, or none once every question is answered.
+/// The first Blocked task in id order, or none once nothing is blocked.
 fn push(feed: &Feed) -> Option<Push> {
-    inbox::ordered(feed)
-        .into_iter()
-        .find(|row| inbox::is_question(row))
-        .map(|row| Push {
-            title: match row.task.as_deref() {
-                Some(task) => format!("Needs you · {task}"),
-                None => "Needs you".to_owned(),
-            },
-            body: row.title.clone(),
-            when: row
-                .asked_at
-                .as_deref()
-                .map_or_else(String::new, |at| inbox::clock(at, feed.now)),
-            opens: Live::Question(crate::model::Id::new(&row.id)),
+    feed.board.tasks().iter().find_map(|task| {
+        let blocked = task.blocked()?;
+        let zone = feed.time_zone.clone().unwrap_or(jiff::tz::TimeZone::UTC);
+        Some(Push {
+            title: format!("Needs you · {}", task.id),
+            body: blocked.reason.clone(),
+            when: task
+                .task()
+                .updated
+                .to_zoned(zone)
+                .strftime("%H:%M")
+                .to_string(),
+            opens: Live::Task(task.id.clone()),
         })
+    })
 }
 
 /// The feed's local day as a lock screen prints it, "Sunday 15 November".
@@ -238,24 +238,27 @@ fn on_light(token: Token) -> AdaptiveColor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use corral_protocol::rows::InboxState;
 
-    /// PW-12: answering the question takes its push off the lock screen.
+    /// PW-12: once nothing is blocked, no push shows on the lock screen.
     #[test]
-    fn an_answered_question_leaves_no_push() {
-        let mut feed =
-            crate::model::preview::feed(1_700_000_000, "2026-11-15".into(), "09:41".into(), None);
-        let open = push(&feed).map(|push| push.opens);
-        let Some(Live::Question(key)) = open else {
-            panic!("the preview has an open question");
-        };
-        if let Some(row) = feed.inbox.get_mut(key.as_str()) {
-            row.state = InboxState::Answered {
-                by: "owner".into(),
-                via: "app".into(),
-                at: "2026-11-15T09:40:00Z".into(),
-            };
-        }
+    fn no_blocked_task_leaves_no_push() {
+        use crate::model::daemon::{Task, bare_task, task_row};
+        use corral_types::{Blocked, Status};
+        let at = jiff::Timestamp::UNIX_EPOCH;
+        let mut blocked = bare_task("T-8", "needs a reply", Status::Blocked, at);
+        blocked.blocked = Some(Blocked {
+            reason: "worker asks".into(),
+            detail: None,
+            next: Vec::new(),
+        });
+        let mut feed = Feed::default();
+        feed.board_received(1, vec![Task::new(task_row(blocked))], &[], true);
+        assert_eq!(
+            push(&feed).map(|push| push.opens),
+            Some(Live::Task("T-8".into()))
+        );
+        let ready = bare_task("T-8", "needs a reply", Status::Running, at);
+        feed.board_received(2, vec![Task::new(task_row(ready))], &[], true);
         assert_eq!(push(&feed), None);
     }
 

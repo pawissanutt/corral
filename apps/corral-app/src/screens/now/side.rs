@@ -16,7 +16,7 @@ use crate::ui::kit::hint::{hint_on, hinted};
 use crate::ui::kit::marks::mark;
 use crate::ui::kit::text::dim;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_TEXT, Token, color};
+use crate::ui::tokens::{Token, color};
 
 use super::inspector::content;
 use super::parts::{act, go_scoped, press};
@@ -112,23 +112,6 @@ fn close(app: AppState, label: &'static str, action: Press) -> AnyElement {
 
 fn spacer() -> View {
     view().flex_1().min_w(px(0.0))
-}
-
-/// A panel's title (`.phd h2`): 16 pt semibold, wrapping.
-fn title(form: Form, content: String) -> Text {
-    let title = text(content)
-        .role(AccessibilityRole::Header)
-        .font_weight(if form == Form::Terminal {
-            FontWeight::BOLD
-        } else {
-            FontWeight::SEMIBOLD
-        })
-        .text_color(color(Token::Ink));
-    if form == Form::Terminal {
-        title
-    } else {
-        title.font_family(FONT_TEXT).text_size(px(16.0))
-    }
 }
 
 /// What changed since the last visit, in Now's scope.

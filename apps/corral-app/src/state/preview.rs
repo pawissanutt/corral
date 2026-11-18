@@ -65,7 +65,8 @@ impl AppState {
         let mut outcome = Ok(());
         self.feed.update(|feed| outcome = preview::act(feed, act));
         if let Err(why) = outcome {
-            self.watching.update(|watching| _ = watching.remove(&act.key));
+            self.watching
+                .update(|watching| _ = watching.remove(&act.key));
             self.toast(format!("Preview · {} · {why}", act.title));
         }
     }

@@ -25,9 +25,7 @@ use corral_protocol::device::{
 };
 use corral_protocol::op::OP_SUBMIT;
 use corral_protocol::pane::{PANE_FOCUS, PANE_KEYS};
-use corral_protocol::{
-    self as wire, Refusal, app::*, assistant::*, detail::*, rows::TaskRow, subscription::*,
-};
+use corral_protocol::{self as wire, Refusal, app::*, assistant::*, detail::*, subscription::*};
 use nsh_core::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};

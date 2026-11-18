@@ -104,7 +104,12 @@ fn apply(feed: &mut Feed, op: &Op, force: bool) -> Applied {
         Op::Dispatch { profile, base, .. } => dispatch(feed, rec, op, profile, base, force)?,
         Op::Reply { text, .. } => reply(feed, rec, text)?,
         Op::Stop { .. } => stop(feed, rec)?,
-        Op::Retry { profile, fresh, note, .. } => retry(feed, rec, profile.as_deref(), *fresh, note)?,
+        Op::Retry {
+            profile,
+            fresh,
+            note,
+            ..
+        } => retry(feed, rec, profile.as_deref(), *fresh, note)?,
         Op::Done { summary, .. } => done(feed, rec, summary)?,
         Op::Gate { .. } => run_gate(feed, rec)?,
         Op::Review { profile, .. } => start_review(feed, rec, profile.as_deref())?,
@@ -218,16 +223,27 @@ fn edit(feed: &mut Feed, mut rec: TaskDetail, edit: &TaskEdit) {
         }
     }
     touch(feed, &mut rec);
-    commit(feed, rec, EventKind::Edited, None, json!({"fields": fields}));
+    commit(
+        feed,
+        rec,
+        EventKind::Edited,
+        None,
+        json!({"fields": fields}),
+    );
 }
 
 fn r#move(feed: &mut Feed, mut rec: TaskDetail, status: Status, force: bool) -> Result<(), Fail> {
     let from = rec.task.status;
     let planning = |status| matches!(status, Status::Idea | Status::Backlog | Status::Ready);
-    let allowed = (planning(from) && planning(status)) || (closed(from) && status == Status::Backlog);
+    let allowed =
+        (planning(from) && planning(status)) || (closed(from) && status == Status::Backlog);
     if !allowed && !force {
         return Err(refuse(
-            format!("cannot move {} to {} without force", from.as_str(), status.as_str()),
+            format!(
+                "cannot move {} to {} without force",
+                from.as_str(),
+                status.as_str()
+            ),
             vec![Next::force(Op::Move {
                 id: rec.task.id.clone(),
                 status,
@@ -243,10 +259,25 @@ fn r#move(feed: &mut Feed, mut rec: TaskDetail, status: Status, force: bool) -> 
         });
     }
     let id = rec.task.id.clone();
-    commit(feed, rec, EventKind::Moved, None, json!({"from": from, "to": status}));
+    commit(
+        feed,
+        rec,
+        EventKind::Moved,
+        None,
+        json!({"from": from, "to": status}),
+    );
     if force {
-        let skipped: Vec<&str> = if allowed { Vec::new() } else { vec!["status rule"] };
-        forced(feed, &id, None, json!({"operation": "move", "from": from, "to": status, "skipped": skipped}));
+        let skipped: Vec<&str> = if allowed {
+            Vec::new()
+        } else {
+            vec!["status rule"]
+        };
+        forced(
+            feed,
+            &id,
+            None,
+            json!({"operation": "move", "from": from, "to": status, "skipped": skipped}),
+        );
     }
     Ok(())
 }
@@ -324,7 +355,9 @@ fn dispatch(
     let occupied = |project: Option<&str>| {
         all.iter()
             .filter(|record| matches!(record.task.status, Status::Running | Status::Blocked))
-            .filter(|record| project.is_none_or(|project| record.task.project.as_deref() == Some(project)))
+            .filter(|record| {
+                project.is_none_or(|project| record.task.project.as_deref() == Some(project))
+            })
             .count() as u64
     };
     let limit = config(feed, &["limits", "running"]).as_u64().unwrap_or(4);
@@ -338,18 +371,25 @@ fn dispatch(
     }
     if !skipped.is_empty() && !force {
         next.insert(0, Next::force(op.clone()));
-        return Err(refuse(format!("dispatch blocked by {}", skipped.join(", ")), next));
+        return Err(refuse(
+            format!("dispatch blocked by {}", skipped.join(", ")),
+            next,
+        ));
     }
-    let profile = resolve_profile(feed, &rec, profile.as_deref(), &projects[&project], |profile| {
-        Next {
+    let profile = resolve_profile(
+        feed,
+        &rec,
+        profile.as_deref(),
+        &projects[&project],
+        |profile| Next {
             op: Op::Dispatch {
                 id: id.clone(),
                 profile: Some(profile),
                 base: base.clone(),
             },
             force,
-        }
-    })?;
+        },
+    )?;
     let run_id = start(feed, &mut rec, Role::Worker, &profile);
     let target = base
         .clone()
@@ -362,18 +402,34 @@ fn dispatch(
     set_status(feed, &mut rec, Status::Running);
     rec.task.round = 0;
     let started = last_worker(&rec).map(|run| json!({"profile": run.profile, "base": run.base}));
-    commit(feed, rec, EventKind::Dispatched, Some(&run_id), started.unwrap_or(Value::Null));
+    commit(
+        feed,
+        rec,
+        EventKind::Dispatched,
+        Some(&run_id),
+        started.unwrap_or(Value::Null),
+    );
     if force {
-        forced(feed, &id, Some(&run_id), json!({"operation": "dispatch", "skipped": skipped}));
+        forced(
+            feed,
+            &id,
+            Some(&run_id),
+            json!({"operation": "dispatch", "skipped": skipped}),
+        );
     }
     Ok(())
 }
 
 fn reply(feed: &mut Feed, mut rec: TaskDetail, text: &str) -> Result<(), Fail> {
     let id = rec.task.id.clone();
-    let live = last_worker(&rec).filter(|run| run.ended.is_none()).map(|run| run.id.clone());
+    let live = last_worker(&rec)
+        .filter(|run| run.ended.is_none())
+        .map(|run| run.id.clone());
     let Some(run) = live.filter(|_| !closed(rec.task.status)) else {
-        return Err(refuse("reply requires a live worker", vec![next_retry(&id)]));
+        return Err(refuse(
+            "reply requires a live worker",
+            vec![next_retry(&id)],
+        ));
     };
     if let Some(worker) = rec.runs.iter_mut().find(|worker| worker.id == run) {
         worker.quiet_since = None;
@@ -382,16 +438,35 @@ fn reply(feed: &mut Feed, mut rec: TaskDetail, text: &str) -> Result<(), Fail> {
     if resumed {
         set_status(feed, &mut rec, Status::Running);
     }
-    commit(feed, rec, EventKind::Replied, Some(&run), json!({"text": text}));
+    commit(
+        feed,
+        rec,
+        EventKind::Replied,
+        Some(&run),
+        json!({"text": text}),
+    );
     if resumed {
-        event(feed, Some(&id), Some(&run), EventKind::Resumed, Actor::Owner, json!({}));
+        event(
+            feed,
+            Some(&id),
+            Some(&run),
+            EventKind::Resumed,
+            Actor::Owner,
+            json!({}),
+        );
     }
     Ok(())
 }
 
 fn stop(feed: &mut Feed, mut rec: TaskDetail) -> Result<(), Fail> {
     let id = rec.task.id.clone();
-    let Some(run) = rec.runs.iter().rev().find(|run| run.ended.is_none()).map(|run| run.id.clone()) else {
+    let Some(run) = rec
+        .runs
+        .iter()
+        .rev()
+        .find(|run| run.ended.is_none())
+        .map(|run| run.id.clone())
+    else {
         let next = if last_worker(&rec).is_some() {
             next_retry(&id)
         } else {
@@ -410,10 +485,23 @@ fn stop(feed: &mut Feed, mut rec: TaskDetail) -> Result<(), Fail> {
         set_status(feed, &mut rec, Status::Blocked);
         rec.task.blocked = Some(blocked.clone());
     }
-    commit(feed, rec, EventKind::Stopped, Some(&run), json!({"reason": "stopped by owner"}));
+    commit(
+        feed,
+        rec,
+        EventKind::Stopped,
+        Some(&run),
+        json!({"reason": "stopped by owner"}),
+    );
     if block {
         let detail = serde_json::to_value(&blocked).unwrap_or(Value::Null);
-        event(feed, Some(&id), Some(&run), EventKind::Blocked, Actor::Owner, detail);
+        event(
+            feed,
+            Some(&id),
+            Some(&run),
+            EventKind::Blocked,
+            Actor::Owner,
+            detail,
+        );
     }
     Ok(())
 }
@@ -426,7 +514,10 @@ fn retry(
     note: &Option<String>,
 ) -> Result<(), Fail> {
     let Some(last) = last_worker(&rec).cloned() else {
-        return Err(refuse("task has not had a worker run", vec![dispatch_next(&rec.task)]));
+        return Err(refuse(
+            "task has not had a worker run",
+            vec![dispatch_next(&rec.task)],
+        ));
     };
     let profile = profile.map_or(last.profile, str::to_owned);
     let run_id = start(feed, &mut rec, Role::Worker, &profile);
@@ -500,7 +591,11 @@ fn resolve_profile(
         .map(str::to_owned)
         .or_else(|| rec.task.profile.clone())
         .or_else(|| project["profile"].as_str().map(str::to_owned))
-        .or_else(|| config(feed, &["defaults", "profile"]).as_str().map(str::to_owned));
+        .or_else(|| {
+            config(feed, &["defaults", "profile"])
+                .as_str()
+                .map(str::to_owned)
+        });
     let known = profiles(feed);
     match name {
         Some(name) if known.contains(&name) => Ok(name),
@@ -523,10 +618,9 @@ fn profiles(feed: &Feed) -> Vec<String> {
 
 /// A value of the parsed `corral.toml`, or null.
 fn config(feed: &Feed, path: &[&str]) -> Value {
-    let mut value = feed
-        .settings
-        .as_ref()
-        .map_or(Value::Null, |settings| Value::Object(settings.config.clone()));
+    let mut value = feed.settings.as_ref().map_or(Value::Null, |settings| {
+        Value::Object(settings.config.clone())
+    });
     for key in path {
         value = value.get(*key).cloned().unwrap_or(Value::Null);
     }
