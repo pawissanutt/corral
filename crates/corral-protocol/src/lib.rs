@@ -4,28 +4,29 @@ pub mod assistant;
 pub mod attachment;
 #[cfg(test)]
 mod attachment_tests;
-pub mod board;
-pub mod classic;
-pub mod cmd;
+pub mod config;
 pub mod detail;
 pub mod device;
 pub mod frame;
 pub mod health;
-pub mod read;
+pub mod op;
+pub mod pane;
 pub mod rows;
 pub mod rpc;
 #[cfg(test)]
 mod schema;
+mod schema_types;
 pub mod subscription;
 
 pub use app::{
-    ACT_V1, AGENTS_ACTIVITY_V1, AGENTS_V1, ASSISTANT_V1, BUILDS_V1, CHANGES_V1, CLOSED_V1,
-    FILINGS_V1, INBOX_V1, PLANS_V1, PROJECTS_V1, REVIEW_V1, SESSION_FLEET_V1, SETTINGS_V1,
-    TIMELINE_V1, USAGE_V1,
+    AGENTS_V1, ASSISTANT_V1, CHANGES_V1, CLOSED_V1, PLANS_V1, PROJECTS_V1, REVIEW_V1,
+    SESSION_FLEET_V1, SETTINGS_V1, TIMELINE_V1, USAGE_V1,
 };
-pub use classic::CLASSIC_V1;
-pub use health::{DaemonState, Health, LoopFacts, PmState, RuntimeHealth, RuntimeState};
-pub use read::{READ, READ_V1};
+pub use corral_types::{
+    Applied, Artifact, Blocked, Check, Event, Next, Op, Refusal, Run, SessionStatus, Status, Task,
+    Usage, UsageBy, UsageGroup, UsageSummary, UsageTotal,
+};
+pub use health::{DaemonState, Health};
 use serde::{Deserialize, Serialize};
 
 pub const PROTO_MAJOR: u32 = 1;
@@ -42,7 +43,7 @@ pub const SUB_DELTA: &str = "sub.delta";
 pub const SUB_RESET: &str = "sub.reset";
 pub const SUB_ACK: &str = "sub.ack";
 pub const SUB_CLOSE: &str = "sub.close";
-pub const BOARD_V1: &str = "board.v1";
+pub const TASKS_V1: &str = "tasks.v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Proto {

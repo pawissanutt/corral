@@ -1,12 +1,13 @@
 //! Bounded previews from the canonical artifact catalog, never arbitrary host paths.
+use corral_types::Artifact;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactPage {
-    /// Canonical task or assistant artifact owner.
+    /// Owner ID: the task for an artifact, or the message for an attachment.
     pub task: String,
-    /// Canonical catalog key within that owner, not a filesystem path.
+    /// Catalog key within that owner, not a filesystem path.
     pub key: String,
     pub media_type: Option<String>,
     pub encoding: ArtifactEncoding,
@@ -15,6 +16,12 @@ pub struct ArtifactPage {
     pub content: String,
     /// More source content exists; continue with DetailReply.next.
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ArtifactsPage {
+    #[schemars(with = "Vec<crate::schema_types::Artifact>")]
+    pub rows: Vec<Artifact>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
