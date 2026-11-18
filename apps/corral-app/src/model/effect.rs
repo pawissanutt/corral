@@ -9,7 +9,7 @@ use corral_protocol::session::SessionPromptAnswer;
 use crate::model::act::Act;
 use crate::model::id::Id;
 use crate::model::live::Live;
-use crate::model::nav::{AskTarget, Destination, Form, SettingsSection};
+use crate::model::nav::{Destination, Form, SettingsSection};
 
 /// Connection status, derived from the selected feed rather than persisted demo switches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -57,12 +57,10 @@ pub enum Effect {
     OpenLive(Live),
     /// Select a live record in place without navigating.
     Select(Live),
-    /// Open the one Ask composer with a real bounded context, an optional draft and, when
-    /// given, the recipient (otherwise the composer keeps its current one).
+    /// Open the one Ask composer with a real bounded context and an optional draft.
     AskAbout {
         context: Option<ContextRef>,
         text: Option<String>,
-        target: Option<AskTarget>,
     },
     /// Submit an engine operation; a destructive or forced one asks once, locally, first.
     Act(Act),

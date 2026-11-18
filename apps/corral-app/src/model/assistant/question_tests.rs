@@ -1,10 +1,8 @@
-use corral_protocol::assistant::{EntryKind, MessageState, ThreadEntry, TurnCompletion};
-use corral_protocol::rows::{CostBasis, WaitReason};
-use corral_types::{Op, Status};
+use corral_protocol::assistant::{EntryKind, ThreadEntry, TurnCompletion};
+use corral_protocol::rows::CostBasis;
 
-use super::{Action, AssistantMessage, State, ThreadItem, live_items};
+use super::{AssistantMessage, State, ThreadItem, live_items};
 use crate::model::daemon::{Feed, ThreadSnapshot};
-use crate::model::effect::Effect;
 use crate::model::hue::Hue;
 
 fn entry(id: &str, kind: EntryKind) -> ThreadEntry {
@@ -48,31 +46,6 @@ fn messages(state: &State, feed: &Feed) -> Vec<AssistantMessage> {
             _ => None,
         })
         .collect()
-}
-
-#[test]
-fn a_waiting_message_is_filed_as_an_idea_in_the_owners_words() {
-    let mut waiting = entry("A-1/M1/text", EntryKind::Message);
-    waiting.text = Some("Retry the flaky gate\nIt failed twice on main.".into());
-    waiting.state = Some(MessageState::Waiting {
-        reason: WaitReason {
-            code: "host_down".into(),
-            text: "The host is down.".into(),
-            retry_at: None,
-        },
-    });
-    let feed = feed_with(vec![waiting]);
-    let mut state = State::default();
-    let effects = state.act_live(Action::FileEntry("A-1/M1/text".into()), &feed);
-    let [Effect::Act(act)] = effects.as_slice() else {
-        panic!("one engine operation, got {effects:?}");
-    };
-    let Op::New { task } = &act.op else {
-        panic!("filing creates a task, got {:?}", act.op);
-    };
-    assert_eq!(task.title, "Retry the flaky gate");
-    assert_eq!(task.body, "Retry the flaky gate\nIt failed twice on main.");
-    assert_eq!(task.status, Status::Idea);
 }
 
 #[test]

@@ -9,7 +9,7 @@ use corral_protocol::session::SessionPromptAnswer;
 use corral_types::{Op, Refusal, Role, SessionRef};
 use serde_json::{Value, json};
 
-use super::pi;
+use super::{pi, pi_control};
 use crate::model::Id;
 use crate::model::act::Act;
 use crate::model::agents::Control;
@@ -56,7 +56,7 @@ pub fn answer(feed: &mut Feed, key: &Id, answer: &SessionPromptAnswer) {
         error: None,
         refusal: None,
     };
-    match pi::answer(feed, answer) {
+    match pi_control::answer(feed, answer) {
         Ok(value) => operation.value = Some(value),
         Err(reason) => {
             operation.refusal = Some(Refusal {
@@ -111,7 +111,7 @@ fn run(feed: &mut Feed, key: &Id, session: &str, control: Control) -> Result<Val
         Control::Pause if row.run.role == Role::Reviewer => Err(Fail::Refused(
             "reviewers support Cancel and Terminate, not Pause".into(),
         )),
-        _ => pi::control(feed, session, control).map_err(Fail::Refused),
+        _ => pi_control::control(feed, session, control).map_err(Fail::Refused),
     }
 }
 
@@ -152,6 +152,6 @@ fn chat(feed: &mut Feed, session: &str, control: Control) -> Result<Value, Fail>
         Control::Rewinds | Control::Rewind(_) => {
             Err(Fail::Refused("chat sessions are not rewound".into()))
         }
-        _ => pi::control(feed, &id, control).map_err(Fail::Refused),
+        _ => pi_control::control(feed, &id, control).map_err(Fail::Refused),
     }
 }

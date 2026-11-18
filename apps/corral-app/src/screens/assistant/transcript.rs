@@ -1,12 +1,12 @@
 //! The transcript: every `ThreadItem` of a thread in order, an assistant reply with its typed
-//! cards, the PM items with their folded outcome, the waiting and queued escape hatches. It is
+//! cards, the waiting and queued escape hatches. It is
 //! its own scroll view and opens at the newest message.
 
 use nsh_core::prelude::*;
 
 use crate::model::assistant::{
-    AssistantMessage, Body, LABELS, OwnerMessage, PmMessage, PmReply, QueueNote, RollDivider,
-    ThreadItem, ThreadRef, ToolRow, WaitingBlock, live_items,
+    AssistantMessage, Body, LABELS, OwnerMessage, QueueNote, RollDivider, ThreadItem, ThreadRef,
+    ToolRow, WaitingBlock, live_items,
 };
 use crate::model::board::Mark;
 use crate::model::{Form, Hue, Id, Rich};
@@ -125,11 +125,8 @@ fn item_view(
         ThreadItem::Roll(roll) => roll_view(app, roll, inset),
         ThreadItem::Owner(owner) => owner_view(app, owner, inset),
         ThreadItem::Assistant(message) => assistant_view(app, message, inset, tools),
-        ThreadItem::Pm(pm) => pm_view(app, pm, inset),
-        ThreadItem::PmReply { id, reply } => under_avatar(app, inset, pm_reply(app, id, reply)),
         ThreadItem::Waiting(block) => under_avatar(app, inset, waiting(app, block)),
         ThreadItem::Queued(note) => under_avatar(app, inset, queued(app, note)),
-        ThreadItem::Saved(card) => under_avatar(app, inset, cards::saved(app, card)),
         ThreadItem::Note(note) => under_avatar(
             app,
             inset,
@@ -214,17 +211,10 @@ fn head(app: AppState, runs: Vec<Text>, tail: Vec<AnyElement>) -> AnyElement {
 
 const DOT: &str = " · ";
 
-/// `you · app:pawis-desktop · 21:31 · typed 21:20 offline`, with the PM target and item id
-/// between the author and the device when it is a PM item.
-fn owner_runs(app: AppState, owner: &OwnerMessage, pm: Option<&str>) -> Vec<Text> {
+/// `you · app:pawis-desktop · 21:31 · typed 21:20 offline`.
+fn owner_runs(app: AppState, owner: &OwnerMessage) -> Vec<Text> {
     let size = meta_size(app.form);
     let mut runs = vec![strong_run(owner.author)];
-    if let Some(id) = pm {
-        runs.push(text(" → "));
-        runs.push(strong_run(LABELS.pm));
-        runs.push(text(DOT));
-        runs.push(mono_run(app, id.to_owned(), size));
-    }
     runs.push(text(DOT));
     runs.push(mono_run(app, owner.provenance.clone(), size));
     runs.push(text(format!("{DOT}{}", owner.at)));
@@ -244,91 +234,17 @@ fn owner_tail(app: AppState, owner: &OwnerMessage) -> Vec<AnyElement> {
     tail
 }
 
-/// The owner's message, with File as idea under it (or how the filing went).
+/// The owner's message, with its attachment readback when one is open.
 fn owner_view(app: AppState, owner: &OwnerMessage, inset: f32) -> AnyElement {
     let mut body = vec![plain(app, owner.text.clone()).into_element()];
     if let Some(opened) = &owner.opened {
         body.push(attachments::readback(app, opened));
     }
-    if owner.file.is_some() || owner.filed.is_some() {
-        let gap = if app.form == Form::Terminal { 0.0 } else { 8.0 };
-        let mut foot = Vec::new();
-        if let Some(filed) = &owner.filed {
-            foot.push(chip(app, filed.label.clone(), filed.hue));
-        }
-        if let Some(file) = &owner.file {
-            if app.form == Form::Terminal && !foot.is_empty() {
-                foot.push(term::space(2.0));
-            }
-            foot.push(model_button(app, file, ButtonKind::Quiet));
-        }
-        body.push(
-            view()
-                .flex_row()
-                .flex_wrap()
-                .items_center()
-                .gap(px(gap))
-                .children(foot)
-                .into_element(),
-        );
-    }
     message(
         app,
         inset,
         avatar(app, LABELS.owner_avatar, Hue::You),
-        head(app, owner_runs(app, owner, None), owner_tail(app, owner)),
-        body,
-    )
-}
-
-/// The PM's outcome on the corral ground (`.pmreply`): who, when, which item, what it said.
-fn pm_reply(app: AppState, id: &str, reply: &PmReply) -> AnyElement {
-    let form = app.form;
-    let hd = words(app, "", meta_size(form), Token::Ink3)
-        .child(strong_run(LABELS.pm))
-        .child(text(format!(
-            "{DOT}{}{DOT}{} {id}",
-            reply.at, LABELS.outcome_of
-        )));
-    let said_size = if form == Form::Phone { 15.0 } else { 13.0 };
-    let said = words(app, reply.text.clone(), said_size, Token::Ink);
-    let reply_box = view()
-        .gap(px(2.0))
-        .bg(color(Token::CorralBg))
-        .child(hd)
-        .child(said);
-    if form == Form::Terminal {
-        reply_box.px(term::cells(1.0)).into_element()
-    } else {
-        reply_box
-            .px(px(12.0))
-            .py(px(8.0))
-            .rounded(px(8.0))
-            .mt(px(2.0))
-            .into_element()
-    }
-}
-
-/// A PM item: the owner's words to the PM, then the PM's outcome folded under them, or the note
-/// of a queued item.
-fn pm_view(app: AppState, pm: &PmMessage, inset: f32) -> AnyElement {
-    let form = app.form;
-    let mut body = vec![plain(app, pm.owner.text.clone()).into_element()];
-    if let Some(reply) = &pm.reply {
-        body.push(pm_reply(app, &pm.id, reply));
-    }
-    if let Some(note) = pm.note {
-        body.push(words(app, note, note_size(form), Token::Ink3).into_element());
-    }
-    message(
-        app,
-        inset,
-        avatar(app, LABELS.owner_avatar, Hue::You),
-        head(
-            app,
-            owner_runs(app, &pm.owner, Some(pm.id.as_str())),
-            owner_tail(app, &pm.owner),
-        ),
+        head(app, owner_runs(app, owner), owner_tail(app, owner)),
         body,
     )
 }
@@ -381,9 +297,7 @@ fn body_view(app: AppState, block: &Body, streaming: bool) -> AnyElement {
     match block {
         Body::Markdown(words) => written(app, words, streaming),
         Body::Ordered(items) => ordered(app, items),
-        Body::Action(card) => cards::action(app, card),
         Body::AskUser(card) => cards::ask_user(app, card),
-        Body::Filed(card) => cards::filed(app, card),
         Body::Starting { state, text: said } => cards::starting(app, state, said),
     }
 }
@@ -687,7 +601,7 @@ fn roll_view(app: AppState, roll: &RollDivider, inset: f32) -> AnyElement {
 }
 
 /// The waiting block (`.waitbox`): the stale mark, the reason in bold, why and what happens to
-/// the message, the escape hatches at the trailing edge; the lifetime line under it.
+/// the message; the lifetime line under it.
 fn waiting(app: AppState, block: &WaitingBlock) -> AnyElement {
     let form = app.form;
     let size = if form == Form::Phone { 15.0 } else { 13.0 };
@@ -702,13 +616,6 @@ fn waiting(app: AppState, block: &WaitingBlock) -> AnyElement {
         .flex_1()
         .min_w(px(160.0))
         .children(runs);
-    let buttons = view().flex_row().flex_wrap().items_center().children(
-        block.buttons.iter().enumerate().flat_map(|(at, button)| {
-            let gap = (form == Form::Terminal && at > 0).then(|| term::space(2.0));
-            gap.into_iter()
-                .chain([model_button(app, button, ButtonKind::Quiet)])
-        }),
-    );
     let lifetime = words(app, block.lifetime, meta_size(form), Token::Ink3);
     let box_row = view()
         .flex_row()
@@ -717,14 +624,7 @@ fn waiting(app: AppState, block: &WaitingBlock) -> AnyElement {
         .bg(color(Token::HeldBg))
         .child(mark(app, Mark::Stale, Hue::Held))
         .when(form == Form::Terminal, |row| row.child(term::space(1.0)))
-        .child(sentence)
-        .child(buttons.when(form != Form::Terminal, |b| b.gap(px(6.0))))
-        .children(
-            block
-                .status
-                .as_ref()
-                .map(|status| chip(app, status.label.clone(), status.hue)),
-        );
+        .child(sentence);
     let box_row = if form == Form::Terminal {
         box_row
     } else {

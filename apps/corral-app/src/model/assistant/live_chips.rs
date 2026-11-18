@@ -60,14 +60,6 @@ pub(super) fn location(row: Option<&AssistantRow>) -> &'static str {
     }
 }
 
-/// The PM target's chip. corrald reports no PM state, so it stays unknown.
-pub(super) fn pm_chip(feed: &Feed) -> Chip {
-    if crate::model::WorkspaceMode::of(feed) == crate::model::WorkspaceMode::AssistantOnly {
-        return Chip::new("off — no projects", Hue::Neutral);
-    }
-    Chip::new("unknown", Hue::Neutral)
-}
-
 /// The context chip's words: its kind and id, with the task's title when the board has it.
 pub(super) fn context_label(feed: &Feed, context: &ContextRef) -> String {
     match feed.board.task(&context.id) {

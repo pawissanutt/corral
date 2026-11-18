@@ -1,15 +1,15 @@
 //! The sample's pi hosts, answering as corral-pi answers through corrald. A host keeps its
 //! session's transcript, streams the running turn on the live session stream one beat per clock
-//! tick, cancels and pauses it, holds automated input while paused and delivers it on Resume or
-//! before the owner's next message, asks the owner and takes the answer, and lists its turn
-//! checkpoints and rewinds to one after saving the work under a rescue ref. A session's
-//! transcript detail is read from its host on request, as corrald reads the file, so a recorded
-//! turn shows only once the app re-reads it.
+//! tick, holds automated input while paused and delivers it on Resume or before the owner's
+//! next message, and records its turn checkpoints. Its controls (cancel, pause, resume, the
+//! rewinds) and the answers to its questions are in `pi_control.rs`. A session's transcript
+//! detail is read from its host on request, as corrald reads the file, so a recorded turn
+//! shows only once the app re-reads it.
 
 use std::collections::VecDeque;
 
 use corral_protocol::detail::{SessionItem, SessionMessage, SessionToolState};
-use corral_protocol::session::{RewindCheckpoint, RewindReply, Rewound};
+use corral_protocol::session::{RewindCheckpoint, Rewound};
 use corral_protocol::subscription::{
     SessionLiveEvent, SessionLiveKind, SessionLiveToolState, SessionLiveTurnState,
 };
@@ -45,13 +45,13 @@ pub struct Host {
     pub(super) starts: Vec<usize>,
     /// The newest turn's number.
     pub(super) turn: u64,
-    open: Option<Turn>,
+    pub(super) open: Option<Turn>,
     pub(super) paused: bool,
     /// Automated input held while paused, in arrival order.
-    held: Vec<String>,
+    pub(super) held: Vec<String>,
     /// Owner input that arrived during a turn, read when it ends.
-    queued: Vec<Input>,
-    generation: u32,
+    pub(super) queued: Vec<Input>,
+    pub(super) generation: u32,
     seq: u64,
     pub(super) checkpoints: Vec<RewindCheckpoint>,
     pub(super) rewinds: Vec<Rewound>,
@@ -77,8 +77,8 @@ pub(super) struct Input {
 
 /// The running turn.
 #[derive(Debug, Clone, PartialEq)]
-struct Turn {
-    turn: u64,
+pub(super) struct Turn {
+    pub(super) turn: u64,
     beats: VecDeque<Beat>,
     /// Bytes of the front `Say` streamed so far.
     said: usize,
@@ -145,7 +145,7 @@ impl Host {
         });
     }
 
-    fn event(&mut self, at: &str, kind: SessionLiveKind) -> SessionLiveEvent {
+    pub(super) fn event(&mut self, at: &str, kind: SessionLiveKind) -> SessionLiveEvent {
         self.seq += 1;
         SessionLiveEvent {
             seq: self.seq,
@@ -246,7 +246,7 @@ fn scopes(feed: &Feed, id: &str) -> Vec<Id> {
 }
 
 /// Delivers `events` of host `id` to every watcher, as corrald's page for each scope does.
-fn publish(feed: &mut Feed, id: &str, events: Vec<SessionLiveEvent>, gap: bool) {
+pub(super) fn publish(feed: &mut Feed, id: &str, events: Vec<SessionLiveEvent>, gap: bool) {
     let Some(generation) = feed.hosts.get(id).map(|host| host.generation) else {
         return;
     };
@@ -472,7 +472,13 @@ pub(super) fn tool_item(
 
 /// Records the end of `turn`: its last words, a call it cancelled before its result, and how
 /// it stopped.
-fn finish(host: &mut Host, at: &str, turn: &Turn, question: Option<Question>, aborted: bool) {
+pub(super) fn finish(
+    host: &mut Host,
+    at: &str,
+    turn: &Turn,
+    question: Option<Question>,
+    aborted: bool,
+) {
     let mut items = words(&turn.text);
     if aborted {
         if let (Some(_), Some(Beat::Tool { tool, args, .. })) = (turn.shown, turn.beats.front()) {
@@ -499,7 +505,7 @@ fn finish(host: &mut Host, at: &str, turn: &Turn, question: Option<Question>, ab
 }
 
 /// Starts the next turn on `inputs`, recorded in order, saying what the script answers.
-fn start(feed: &mut Feed, id: &str, inputs: Vec<Input>) {
+pub(super) fn start(feed: &mut Feed, id: &str, inputs: Vec<Input>) {
     let reply = pi_script::reply(feed, id, &inputs);
     start_with(feed, id, inputs, reply);
 }
@@ -579,181 +585,10 @@ pub(super) fn deliver(
     "delivered"
 }
 
-/// A session control a pi host answers: Cancel, Pause, Resume and the rewinds. The reply is
-/// corrald's; `Err` is its refusal.
-pub(super) fn control(
-    feed: &mut Feed,
-    id: &str,
-    control: crate::model::agents::Control,
-) -> Result<Value, String> {
-    use crate::model::agents::Control;
-    let at = stamp(feed.now);
-    let host = feed
-        .hosts
-        .get(id)
-        .ok_or_else(|| "session has no running Pi host; relaunch it first".to_owned())?;
-    if host.gone {
-        return Err("session has ended; relaunch it before sending controls".into());
-    }
-    let list = RewindReply::List {
-        checkpoints: host.checkpoints.clone(),
-        rewinds: host.rewinds.clone(),
-    };
-    let reply = match control {
-        Control::Cancel => {
-            let turn = cancel(feed, id, &at);
-            match turn {
-                Some(turn) => json!({"cancelled": true, "turn": turn}),
-                None => json!({"cancelled": false, "reason": "no turn is running"}),
-            }
-        }
-        Control::Pause => {
-            let turn = cancel(feed, id, &at);
-            if let Some(host) = feed.hosts.get_mut(id) {
-                host.paused = true;
-            }
-            json!({"paused": true, "cancelled": turn.is_some(), "turn": turn})
-        }
-        Control::Resume => {
-            let held = feed
-                .hosts
-                .get_mut(id)
-                .map(|host| {
-                    host.paused = false;
-                    std::mem::take(&mut host.held)
-                })
-                .unwrap_or_default();
-            if !held.is_empty() {
-                let inputs = held
-                    .into_iter()
-                    .map(|text| Input {
-                        text,
-                        origin: Origin::Auto,
-                        entry: None,
-                    })
-                    .collect();
-                start(feed, id, inputs);
-            }
-            json!({"paused": false})
-        }
-        Control::Rewinds => serde_json::to_value(list).map_err(|error| error.to_string())?,
-        Control::Rewind(turn) => rewind(feed, id, turn, &at)?,
-        Control::Terminate | Control::Relaunch => {
-            return Err("terminate and relaunch go through corrald, not the host".into());
-        }
-    };
-    settle(feed, id);
-    thread(feed, id);
-    Ok(reply)
-}
-
-/// Cancels the running turn, keeping what it said; returns its number.
-fn cancel(feed: &mut Feed, id: &str, at: &str) -> Option<u64> {
-    let host = feed.hosts.get_mut(id)?;
-    let turn = host.open.take()?;
-    finish(host, at, &turn, None, true);
-    let ended = SessionLiveKind::LiveTurn {
-        turn: turn.turn,
-        state: SessionLiveTurnState::Ended {
-            aborted: true,
-            error: None,
-        },
-    };
-    let event = host.event(at, ended);
-    publish(feed, id, vec![event], false);
-    Some(turn.turn)
-}
-
-/// Saves the work under a rescue ref, then cuts the transcript back to the start of `turn`. The
-/// live stream starts a new generation, so every watcher re-reads the transcript.
-fn rewind(feed: &mut Feed, id: &str, turn: u64, at: &str) -> Result<Value, String> {
-    let point = feed
-        .hosts
-        .get(id)
-        .and_then(|host| host.checkpoints.iter().find(|point| point.turn == turn))
-        .cloned()
-        .ok_or_else(|| format!("no checkpoint at the start of turn {turn}"))?;
-    cancel(feed, id, at);
-    let host = feed
-        .hosts
-        .get_mut(id)
-        .ok_or_else(|| "session has no running Pi host".to_owned())?;
-    let cut = host
-        .starts
-        .get(
-            usize::try_from(turn)
-                .unwrap_or(usize::MAX)
-                .saturating_sub(1),
-        )
-        .copied()
-        .unwrap_or(host.transcript.len());
-    let number = host.rewinds.len() + 1;
-    let rewound = Rewound {
-        turn,
-        checkpoint: point.id.clone(),
-        rescue_ref: format!("refs/worktree/corral/rescue/{id}/{number}"),
-        from_head: sha(&format!("{id}/rescue/{number}"), 40),
-        head: point.head.clone().unwrap_or_default(),
-        at: Some(at.into()),
-    };
-    host.transcript.truncate(cut);
-    host.starts.truncate(cut_turns(turn));
-    host.checkpoints.retain(|point| point.turn < turn);
-    host.turn = turn.saturating_sub(1);
-    host.pending.clear();
-    host.queued.clear();
-    host.rewinds.push(rewound.clone());
-    host.generation += 1;
-    publish(feed, id, Vec::new(), true);
-    serde_json::to_value(RewindReply::Turn(rewound)).map_err(|error| error.to_string())
-}
-
-fn cut_turns(turn: u64) -> usize {
-    usize::try_from(turn.saturating_sub(1)).unwrap_or(usize::MAX)
-}
-
-/// Answers a question the host asked: the transcript records it answered, a pause lifts and
-/// the next turn starts on the answer.
-pub(super) fn answer(
-    feed: &mut Feed,
-    answer: &corral_protocol::session::SessionPromptAnswer,
-) -> Result<Value, String> {
-    let id = resolve(feed, &answer.session)
-        .ok_or_else(|| format!("{} has no Pi host", answer.session))?;
-    let at = stamp(feed.now);
-    let host = feed
-        .hosts
-        .get_mut(id.as_str())
-        .ok_or_else(|| format!("{} has no Pi host", answer.session))?;
-    let index = host
-        .pending
-        .iter()
-        .position(|question| question.id == answer.question)
-        .ok_or_else(|| format!("no pending question {}", answer.question))?;
-    let question = host.pending.remove(index);
-    let given = json!([{"option": answer.option, "text": answer.text}]);
-    host.transcript
-        .push(question_card(&at, &question, "answered", given));
-    let words = match (&answer.option, &answer.text) {
-        (Some(option), Some(text)) => format!("{option} — {text}"),
-        (Some(option), None) => option.clone(),
-        (None, Some(text)) => text.clone(),
-        (None, None) => String::new(),
-    };
-    deliver(
-        feed,
-        id.as_str(),
-        &format!("[ask_user answer {}] {words}", question.id),
-        Origin::Owner,
-        None,
-    );
-    Ok(json!({"status": "delivered"}))
-}
-
 /// The host of a run that ended stops; one whose run is replaced continues its transcript.
 pub(super) fn end(feed: &mut Feed, id: &str) {
     let at = stamp(feed.now);
-    cancel(feed, id, &at);
+    super::pi_control::cancel(feed, id, &at);
     if let Some(host) = feed.hosts.get_mut(id) {
         host.gone = true;
         host.paused = false;

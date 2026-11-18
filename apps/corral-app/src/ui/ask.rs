@@ -45,10 +45,9 @@ pub(crate) fn act(app: AppState, action: assistant::Action) {
     });
 }
 
-/// The composer docked under a thread page. The quick thread keeps the Assistant | PM switch
-/// and the model pill; a named session talks to that session only, so it has no switch, and a
-/// pane session has no pill (Pi's own picker). Its model list opens above the field on desktop
-/// and in a terminal, inline under the pill on a phone.
+/// The composer docked under a thread page. The quick thread and a daemon session keep the
+/// model pill; a pane session has no pill (Pi's own picker). Its model list opens above the
+/// field on desktop and in a terminal, inline under the pill on a phone.
 pub fn docked(app: AppState, thread: ThreadRef) -> AnyElement {
     let list = if app.form == Form::Phone {
         ListAt::Inline

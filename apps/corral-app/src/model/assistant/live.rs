@@ -1,27 +1,25 @@
 //! Daemon-mode content for Ask, the thread head and facts, and Agents' assistant blocks, built
 //! from `daemon::Feed` into the same records the fixture fills. Unknown facts stay unknown.
 
-use std::collections::BTreeMap;
-
-use corral_protocol::assistant::{ContextRef, EntryCard, MESSAGE_TEXT_MAX, PromptChoice};
+use corral_protocol::assistant::{ContextRef, MESSAGE_TEXT_MAX, PromptChoice};
 use corral_protocol::rows::{
     AssistantKind, AssistantLocation, AssistantRow, AssistantState, CostBasis, SettingsSnapshot,
     WaitReason,
 };
 
-use super::live_chips::{context_label, location, pm_chip, served_chip};
+use super::live_chips::{context_label, location, served_chip};
 use super::surfaces::drawer_buttons;
-use super::views::{LIFETIME_NOTE, button, context_chip, model_footer, targets};
+use super::views::{LIFETIME_NOTE, button, context_chip, model_footer};
 use super::{
-    Action, Agents, COMPOSER_KEYS, Chip, Composer, Drawer, Fact, FiledLine, ModelList, ModelOption,
-    QUICK, SessionRow, Staged, State, ThreadHeader, tray,
+    Action, Agents, COMPOSER_KEYS, Chip, Composer, Drawer, Fact, ModelList, ModelOption, QUICK,
+    SessionRow, Staged, State, ThreadHeader, tray,
 };
 use crate::model::daemon::{Feed, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::Live;
-use crate::model::nav::{AskTarget, Form};
+use crate::model::nav::Form;
 use crate::model::text::span;
 
 #[cfg(test)]
@@ -210,22 +208,6 @@ pub fn end_target(feed: &Feed, scope: &str) -> Option<String> {
     }
 }
 
-/// The filed Idea's current title: the board's when it is on the board, else the filing card's.
-pub fn idea_title(feed: &Feed, task: &str) -> Option<String> {
-    if let Some(row) = feed.board.task(task) {
-        return Some(row.title().to_owned());
-    }
-    feed.threads
-        .values()
-        .flat_map(|thread| thread.entries.values())
-        .find_map(|entry| match &entry.card {
-            Some(EntryCard::Idea {
-                task: id, title, ..
-            }) if id == task => Some(title.clone()),
-            _ => None,
-        })
-}
-
 /// A prompt choice as its button and receipt name it.
 pub const fn choice_label(choice: PromptChoice) -> &'static str {
     match choice {
@@ -330,8 +312,6 @@ fn model_list(feed: &Feed, scope: &str, current: Option<&str>) -> ModelList {
 pub struct Draft<'a> {
     /// Thread scope this composer sends to.
     pub scope: &'a str,
-    /// Ask's target (the quick thread only).
-    pub target: AskTarget,
     /// The app-owned draft.
     pub text: &'a str,
     /// Ask's bounded context.
@@ -344,20 +324,17 @@ pub struct Draft<'a> {
 pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> Composer {
     let Draft {
         scope,
-        target,
         text,
         context,
         staged,
     } = draft;
     let named = scope != QUICK;
-    let target = if named { AskTarget::Assistant } else { target };
     let row = row(feed, scope);
-    let to_assistant = target == AskTarget::Assistant;
     let current = profile(state, feed, scope);
     let pick = pick_state(state, feed, scope);
-    let pickable = to_assistant && pickable(feed, scope) && !models(feed).is_empty();
+    let pickable = pickable(feed, scope) && !models(feed).is_empty();
     let too_long = text.trim().len() > MESSAGE_TEXT_MAX;
-    let tray = tray(feed, staged, to_assistant, text.trim().is_empty());
+    let tray = tray(feed, staged, text.trim().is_empty());
     let ended = ended(feed, scope);
     let end = end_state(state, feed, scope);
     let closing = ended || end == Some(EndState::Pending);
@@ -398,8 +375,6 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
             span("model not changed").hue(Hue::Fail),
             span(format!(" {name}: {why}")),
         ])
-    } else if !to_assistant {
-        None
     } else {
         match row {
             // The quick thread's last generation ended: Send starts the next one, it does not
@@ -452,8 +427,6 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
         format!("Message {scope}…")
     } else if let Some(context) = context {
         format!("Ask about {} {}…", context.kind, context.id)
-    } else if target == AskTarget::Pm {
-        "Message the PM…".into()
     } else {
         "Ask a question, drop an idea, or give an instruction…".into()
     };
@@ -461,11 +434,6 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
     send.primary = true;
     send.enabled = !closing && !too_long && !text.trim().is_empty() && !tray.holds_send;
     Composer {
-        targets: if named {
-            Vec::new()
-        } else {
-            targets(target, pm_chip(feed))
-        },
         model_pill: pickable.then(|| button("Model for the next message", Action::ToggleModelMenu)),
         model_name: pickable.then(|| current.clone().unwrap_or_else(|| "default profile".into())),
         model_menu: (pickable && state.model_menu)
@@ -486,8 +454,6 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
                     .and_then(|row| row.profile.clone())
                     .map(|profile| format!("profile {profile}")),
             }
-        } else if !to_assistant {
-            Some("the PM runs its own profile".into())
         } else if !pickable {
             current.map(|profile| format!("profile {profile}"))
         } else {
@@ -525,63 +491,6 @@ pub fn live_drawer(feed: &Feed, env: Env) -> Drawer {
         keyboard_requested: phone,
         close_label: "Close (Esc)",
     }
-}
-
-/// The Ideas filed from one thread's loaded entries, newest first, for its page's facts. One
-/// row per filed task: an Idea card and the owner's "saved as written" state naming the same
-/// task are one filing (the Idea card's title wins); different tasks stay separate rows.
-pub fn live_filed(feed: &Feed, scope: &str) -> Vec<FiledLine> {
-    let Some(thread) = feed.threads.get(scope) else {
-        return Vec::new();
-    };
-    // Where the words came from, not who filed them.
-    let source = match row(feed, scope) {
-        Some(row) if scope == QUICK => format!("From {} · quick thread", row.id),
-        Some(row) => format!("From {} · {}", row.id, location(Some(row))),
-        None => format!("From {scope}"),
-    };
-    let mut filed: BTreeMap<String, (String, String, bool)> = BTreeMap::new();
-    for entry in thread.entries.values() {
-        let (task, title, idea) = match (&entry.card, &entry.state) {
-            (Some(EntryCard::Idea { task, title, .. }), _) => (task, title.clone(), true),
-            (_, Some(corral_protocol::assistant::MessageState::Saved { task })) => (
-                task,
-                entry
-                    .text
-                    .as_deref()
-                    .unwrap_or("")
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .to_owned(),
-                false,
-            ),
-            _ => continue,
-        };
-        let keep = filed
-            .get(task)
-            .is_none_or(|(_, _, had_idea)| idea && !had_idea);
-        if keep {
-            filed.insert(task.clone(), (entry.at.clone(), title, idea));
-        }
-    }
-    let mut rows: Vec<(String, FiledLine)> = filed
-        .into_iter()
-        .map(|(task, (at, title, _))| {
-            (
-                at.clone(),
-                FiledLine {
-                    action: Action::OpenLive(Live::Task(Id::from(task.as_str()))),
-                    id: task,
-                    title,
-                    at: clock(&at, feed),
-                    source: source.clone(),
-                },
-            )
-        })
-        .collect();
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
-    rows.into_iter().map(|(_, row)| row).collect()
 }
 
 /// The thread page's head and facts; an unknown thread shows only what is known.
@@ -665,7 +574,6 @@ pub fn live_thread_header(state: &State, feed: &Feed, scope: &str) -> ThreadHead
         },
         facts,
         lifetime_note: LIFETIME_NOTE,
-        filed: live_filed(feed, scope),
         // Ending the quick thread closes its current generation; the next message starts a
         // new one (corrald's `app_thread`), so the owner can start the quick thread afresh.
         end: row

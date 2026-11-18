@@ -2,7 +2,7 @@
 //! message goes to the thread's pi host, as corrald submits it; the thread shows it once the
 //! host recorded it.
 
-use super::{act, detail, fleet, pi, sessions, stamp};
+use super::{act, detail, fleet, pi, pi_control, sessions, stamp};
 use crate::model::{
     Id,
     daemon::*,
@@ -182,9 +182,6 @@ fn send_inner(feed: &mut Feed, request: &AssistantSend) -> Result<(), String> {
     if !request.attachments.is_empty() {
         return Err("Preview sends do not upload or deliver attachments; remove them first".into());
     }
-    if request.target != AskTarget::Assistant {
-        return Err("Unknown preview message recipient".into());
-    }
     let id = chat_for(feed, &request.thread)?;
     let entry = pi::input_entry(&id, &request.cmd_id);
     feed.drafts.remove(request.thread.as_str());
@@ -329,10 +326,10 @@ fn assistant_session(feed: &mut Feed, op: &AssistantSessionOp) -> Result<Value, 
             }
         }
         AssistantSessionOp::Pause { .. } => {
-            pi::control(feed, &id, crate::model::agents::Control::Pause)?;
+            pi_control::control(feed, &id, crate::model::agents::Control::Pause)?;
         }
         AssistantSessionOp::Resume { .. } => {
-            pi::control(feed, &id, crate::model::agents::Control::Resume)?;
+            pi_control::control(feed, &id, crate::model::agents::Control::Resume)?;
         }
         _ => {}
     }

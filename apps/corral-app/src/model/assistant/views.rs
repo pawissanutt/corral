@@ -2,7 +2,6 @@
 
 use super::{Action, StagedChip};
 use crate::model::hue::Hue;
-use crate::model::nav::AskTarget;
 use crate::model::text::{Rich, span};
 
 /// A state chip, with its content and state colour already resolved.
@@ -46,19 +45,6 @@ pub(super) fn button(label: &'static str, action: Action) -> Button {
         primary: false,
         danger: false,
     }
-}
-
-/// An entry in the Assistant | PM target switch, whose selected target the app owns.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TargetOption {
-    /// Target to assign on activation.
-    pub target: AskTarget,
-    /// Visible target name.
-    pub label: &'static str,
-    /// Pressed state.
-    pub selected: bool,
-    /// PM state, absent for Assistant.
-    pub state: Option<Chip>,
 }
 
 /// A removable bounded-context chip above the draft.
@@ -133,10 +119,6 @@ pub const COMPOSER_KEYS: &[KeyHint] = &[
         action: "new line",
     },
     KeyHint {
-        keys: "Ctrl ⇧ P",
-        action: "PM",
-    },
-    KeyHint {
         keys: "Ctrl ⇧ M",
         action: "model",
     },
@@ -145,8 +127,6 @@ pub const COMPOSER_KEYS: &[KeyHint] = &[
 /// One field and one Send, with every branch resolved for its target, host and connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Composer {
-    /// Target options; empty in a named session's own composer.
-    pub targets: Vec<TargetOption>,
     /// Model pill when this host uses the app picker.
     pub model_pill: Option<Button>,
     /// Text inside the model pill, without a disclosure glyph.
@@ -155,7 +135,7 @@ pub struct Composer {
     pub model_menu: Option<ModelList>,
     /// Whether the phone displays the model menu inline.
     pub menu_inline: bool,
-    /// PM profile note, named-session note or the host's own profile.
+    /// Named-session note or the host's own profile.
     pub profile_note: Option<String>,
     /// Changed-model line above the field, preserving the conversation.
     pub next_message: Option<Rich>,
@@ -170,7 +150,7 @@ pub struct Composer {
     /// Offline, waiting, refusal or failure status above the composer.
     pub status: Option<Rich>,
     /// Screenshot, Link and File. With the daemon they attach for real and are dimmed only for
-    /// a missing capability, the link (uploads), authority, the PM target or a full message.
+    /// a missing capability, the link (uploads), authority or a full message.
     pub attachments: Vec<Button>,
     /// What is staged for the next message, in the context chip's anatomy.
     pub staged: Vec<StagedChip>,
@@ -191,24 +171,6 @@ pub(super) fn context_chip(kind: String, label: String) -> ContextChip {
     }
 }
 
-/// The composer's target switch; the PM entry carries its state.
-pub(super) fn targets(target: AskTarget, pm: Chip) -> Vec<TargetOption> {
-    vec![
-        TargetOption {
-            target: AskTarget::Assistant,
-            label: "Assistant",
-            selected: target == AskTarget::Assistant,
-            state: None,
-        },
-        TargetOption {
-            target: AskTarget::Pm,
-            label: "PM",
-            selected: target == AskTarget::Pm,
-            state: Some(pm),
-        },
-    ]
-}
-
 /// A session row with both compact and desktop fact lines prebuilt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRow {
@@ -225,21 +187,6 @@ pub struct SessionRow {
     /// Fixed two-decimal session cost, or "cost unknown".
     pub cost: String,
     /// Opens this session.
-    pub action: Action,
-}
-
-/// One Filed from chat row, always naming its source session.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FiledLine {
-    /// Task to open.
-    pub id: String,
-    /// Filed title or merge outcome.
-    pub title: String,
-    /// Filing time.
-    pub at: String,
-    /// Session and host that supplied the words.
-    pub source: String,
-    /// Opens the task.
     pub action: Action,
 }
 
@@ -286,8 +233,6 @@ pub struct ThreadHeader {
     pub facts: Vec<Fact>,
     /// Session host lifetime explanation.
     pub lifetime_note: &'static str,
-    /// Filed from this thread rows.
-    pub filed: Vec<FiledLine>,
     /// End session, on a served named session corrald has not ended; it asks this device to
     /// confirm before the canonical `assistant.session` End goes out.
     pub end: Option<Button>,

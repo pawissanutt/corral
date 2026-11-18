@@ -14,10 +14,8 @@ fn part(entry: &ThreadEntry) -> Option<(&str, usize)> {
     let (base, index) = entry.id.rsplit_once('/')?;
     let index = index.parse().ok()?;
     match entry.kind {
-        EntryKind::Answer | EntryKind::PmReply if base.ends_with("/answer") => Some((base, index)),
-        EntryKind::Message | EntryKind::PmMessage if base.ends_with("/text") => {
-            Some((base.strip_suffix("/text")?, index))
-        }
+        EntryKind::Answer if base.ends_with("/answer") => Some((base, index)),
+        EntryKind::Message if base.ends_with("/text") => Some((base.strip_suffix("/text")?, index)),
         _ => None,
     }
 }

@@ -16,6 +16,7 @@ mod roster;
 mod roster_rows;
 mod segs;
 mod session;
+mod surface;
 mod transcript;
 
 pub(crate) use controls::session_menu;

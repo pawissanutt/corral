@@ -263,14 +263,10 @@ fn prune_settled(records: &mut durable::Records, active: &str) -> Result<(), Str
 }
 
 pub(super) fn valid_message(request: &AssistantSend) -> bool {
-    use corral_protocol::{
-        assistant::{AskTarget, SendAttachment},
-        attachment::*,
-    };
+    use corral_protocol::{assistant::SendAttachment, attachment::*};
     !request.text.trim().is_empty()
         && request.text.len() <= MESSAGE_TEXT_MAX
         && request.attachments.len() <= ATTACHMENTS_PER_MESSAGE
-        && (request.attachments.is_empty() || request.target != AskTarget::Pm)
         && request.attachments.iter().all(|item| match item {
             SendAttachment::Upload { upload, sha256 } => {
                 !upload.is_empty()

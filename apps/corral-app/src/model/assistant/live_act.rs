@@ -8,15 +8,13 @@ use corral_protocol::assistant::{
     self as wire, AssistantSend, AssistantSessionOp, AssistantWarm, ContextRef, MESSAGE_TEXT_MAX,
 };
 use corral_protocol::rows::AssistantRow;
-use corral_types::{NewTask, Op, Status, TaskEdit};
 
 use super::{Action, State, live};
-use crate::model::act::{self, Act, ActStatus};
 use crate::model::daemon::Feed;
 use crate::model::effect::{Effect, Env};
-use crate::model::id::{Id, IdSupply};
+use crate::model::id::Id;
 use crate::model::live::Live;
-use crate::model::nav::{AskTarget, Form};
+use crate::model::nav::Form;
 
 /// The shared quick thread's scope; named sessions are scoped by their A-n id.
 pub const QUICK: &str = wire::QUICK_THREAD;
@@ -65,10 +63,6 @@ pub struct LiveState {
     pub confirm_end: Option<String>,
     /// Ends sent, by session.
     pub ends: BTreeMap<String, Ending>,
-    /// Operations sent from thread cards, by subject (`file:<entry>`, `discard:<task>`, …).
-    pub acts: BTreeMap<String, Id>,
-    /// The filed Idea whose title is being edited.
-    pub editing: Option<String>,
     /// Open thread views by scope; the subscription closes with the last one.
     pub subs: BTreeMap<String, u32>,
     /// Threads already asked to warm their host in this app session.
@@ -105,11 +99,6 @@ pub struct Stamp {
     pub cmd_id: String,
     /// RFC 3339 time the owner pressed Send.
     pub typed_at: String,
-}
-
-/// The subject a card command is remembered under.
-pub fn subject(kind: &str, id: &str) -> String {
-    format!("{kind}:{id}")
 }
 
 impl State {
@@ -190,7 +179,6 @@ impl State {
     pub fn send_live(
         &mut self,
         scope: &str,
-        target: AskTarget,
         text: &str,
         context: Option<ContextRef>,
         attachments: Vec<wire::SendAttachment>,
@@ -208,23 +196,11 @@ impl State {
                 words.len()
             ))]);
         }
-        let quick = scope == QUICK;
-        let to_pm = quick && target == AskTarget::Pm;
-        if to_pm && !attachments.is_empty() {
-            return Err(vec![Effect::Toast(
-                "Not sent: PM messages carry no attachments. Remove them or switch to Assistant."
-                    .into(),
-            )]);
-        }
         self.model_menu = false;
         let message = AssistantSend {
             cmd_id: stamp.cmd_id,
             thread: scope.to_owned(),
-            target: if to_pm {
-                wire::AskTarget::Pm
-            } else {
-                wire::AskTarget::Assistant
-            },
+            target: wire::AskTarget::Assistant,
             text: words.to_owned(),
             typed_at: stamp.typed_at,
             context: context.into_iter().collect(),
@@ -347,14 +323,6 @@ impl State {
                     },
                 }]
             }
-            Action::FileEntry(entry) => match idea_from(feed, &entry) {
-                Some(task) => self.once(subject("file", &entry), feed, |ids| {
-                    Act::new(ids, Op::New { task }, false)
-                }),
-                None => vec![Effect::Toast(
-                    "This message is not loaded here; nothing was filed".into(),
-                )],
-            },
             Action::AnswerQuestion {
                 session,
                 question,
@@ -363,18 +331,6 @@ impl State {
             } => crate::model::agents::answer_prompt(&session, question, option, text)
                 .into_iter()
                 .collect(),
-            Action::EditIdea(Some(task)) => {
-                self.live.editing = Some(task);
-                Vec::new()
-            }
-            Action::EditIdea(None) => {
-                self.live.editing = None;
-                Vec::new()
-            }
-            Action::SaveIdea { task, title } => self.save_title(task, title, feed),
-            Action::DiscardIdea(task) => self.once(subject("discard", &task), feed, |ids| {
-                Act::new(ids, Op::Drop { id: task }, false)
-            }),
             Action::RetryThread(scope) => vec![Effect::Thread { scope, open: true }],
             Action::Unattach(key) => vec![Effect::Unattach(Id::from(key))],
             Action::CancelSend(key) => vec![Effect::CancelSend(Id::from(key))],
@@ -434,80 +390,4 @@ impl State {
             op: AssistantSessionOp::End { session },
         }]
     }
-
-    fn save_title(&mut self, task: String, title: String, feed: &Feed) -> Vec<Effect> {
-        if self.live.editing.as_deref() != Some(task.as_str()) {
-            return Vec::new();
-        }
-        let title = title.trim().to_owned();
-        if title.is_empty() {
-            return vec![Effect::Toast(
-                "A title cannot be empty; nothing was sent".into(),
-            )];
-        }
-        let effects = self.once(subject("edit", &task), feed, |ids| {
-            Act::new(
-                ids,
-                Op::Edit {
-                    id: task,
-                    edit: TaskEdit {
-                        title: Some(title),
-                        ..TaskEdit::default()
-                    },
-                },
-                false,
-            )
-        });
-        if effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::Act(_)))
-        {
-            self.live.editing = None;
-        }
-        effects
-    }
-
-    /// Sends a card operation once: a settled failure may be sent again under a new identity, an
-    /// in-flight or done one is left alone.
-    pub(super) fn once(
-        &mut self,
-        remembered: String,
-        feed: &Feed,
-        make: impl FnOnce(&mut IdSupply) -> Act,
-    ) -> Vec<Effect> {
-        if let Some(effects) = self.held(&remembered, feed) {
-            return effects;
-        }
-        let act = make(&mut self.ids);
-        self.live.acts.insert(remembered, act.key.clone());
-        vec![Effect::Act(act)]
-    }
-
-    fn held(&self, remembered: &str, feed: &Feed) -> Option<Vec<Effect>> {
-        let key = self.live.acts.get(remembered)?;
-        match act::status(feed, key.as_str()) {
-            // Never submitted (a confirmation the owner cancelled) or settled without running.
-            None | Some(ActStatus::Failed(_) | ActStatus::Refused(_)) => None,
-            // In flight or done.
-            Some(ActStatus::Pending | ActStatus::Running | ActStatus::Done) => Some(Vec::new()),
-        }
-    }
-}
-
-/// A waiting message filed as an Idea in its owner's words: the first line, cut at 120
-/// characters, as the title, and the whole message as the body.
-fn idea_from(feed: &Feed, entry: &str) -> Option<NewTask> {
-    let words = feed
-        .threads
-        .values()
-        .find_map(|thread| thread.entries.get(entry))?
-        .text
-        .clone()?;
-    let title = super::saved_as_written(entry, &words).title;
-    Some(NewTask {
-        title,
-        body: words,
-        status: Status::Idea,
-        ..NewTask::default()
-    })
 }
