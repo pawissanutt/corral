@@ -1,18 +1,16 @@
-// The real reviewer role (T-252 reviewer-role) in a host session: the read-only loadout, the
-// contract from the installed assets only, corral_verdict as one envelope, and the kickoff turn.
+// Production review loadout and its verdict command with the offline provider.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EventLog } from "../../bridge/events.ts";
-import type { SubmitInput } from "../../bridge/protocol.ts";
 import { loadModules } from "../../host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../../host/restrict.ts";
-import { HostSession, authContext } from "../../host/session.ts";
-import { CorralClient, sha256Hex, toolRequestId } from "../../tools/corral.ts";
-import { fixtureTransport } from "../../../test/fixtures/auth/index.ts";
-import { type FakeCorral, writeFakeCorral } from "../../../test/support/fake-corral.ts";
+import { HostSession } from "../../host/session.ts";
+import { CorralClient } from "../../tools/corral.ts";
+import { fakeCodexTransport } from "../../../test/fixtures/auth/fake-transport.ts";
+import { writeFakeEngine } from "../../../test/support/fake-engine.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../../test/support/fixture-install.ts";
 import { expectReplacementsRefused } from "../../../test/support/replacement.ts";
 import { nextEvent } from "../../../test/support/wait.ts";
@@ -23,22 +21,16 @@ import reviewer, { CONTRACT_ASSET, kickoff, reviewerRole } from "./index.ts";
 
 const identity = {
   store: "st-0123456789abcdef", project: "demo", role: "reviewer" as const, task: "T-007", run: "R2",
-  review: "R2-review1", callback: "g1:c1", generation: 1,
+  review: "R2-review1",
 };
 const UPSTREAM = ["read", "grep", "find", "ls", "bash"];
-const CORRAL_TOOLS = ["corral_receipt_lookup", "corral_content_read", "corral_ask", "corral_withdraw", "corral_evidence", "corral_artifact", "corral_verdict"];
+const CORRAL_TOOLS = ["corral_artifact", "corral_verdict"];
 const originalFetch = globalThis.fetch;
 
 let assets: FixtureInstall;
 let work: string;
-let cwd: string;
-let corral: FakeCorral;
-let events: EventLog;
-let host: HostSession;
 
-const input = (text: string, key: string): SubmitInput => ({ text, busyPolicy: "prompt", idempotencyKey: key, origin: "test" });
-
-/** A fixture installation (synthetic auth, fixture delivery) with the real reviewer role and assets. */
+/** A fixture installation with the offline provider and production reviewer and assets. */
 function realReviewerInstall(): FixtureInstall {
   const built = buildFixtureInstall();
   rmSync(join(built.dir, "src/roles/reviewer"), { recursive: true, force: true });
@@ -51,26 +43,31 @@ function realReviewerInstall(): FixtureInstall {
 beforeAll(async () => {
   assets = realReviewerInstall();
   work = mkdtempSync(join(tmpdir(), "corral-pi-reviewer-"));
-  cwd = join(work, "worktree");
-  mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(work, "worktree"));
   restrictEnvironment(process.env);
+}, 60_000);
+
+async function startReviewer() {
+  const dir = mkdtempSync(join(work, "run-"));
+  const cwd = join(work, "worktree");
   const modules = await loadModules(assets.dir, "reviewer");
-  events = new EventLog(identity.generation);
-  const transport = modules.auth.transport?.(authContext());
-  if (!transport) throw new Error("the fixture auth module supplies a transport");
-  const network = guardedFetch(transport);
+  const events = new EventLog();
+  const transport = fakeCodexTransport();
+  const network = guardedFetch(transport.send);
   globalThis.fetch = network.fetch as typeof globalThis.fetch;
   const sdk = await import("@earendil-works/pi-coding-agent");
-  corral = writeFakeCorral(work);
-  const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host.sessionId() });
-  host = await HostSession.create({
-    sdk, identity, cwd, agentDir: join(work, "pi-agent"), model: "gpt-6.1-sol", modules, client, events, network,
-    sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
+  const corral = writeFakeEngine(dir);
+  const client = new CorralClient({ corral: corral.path, root: dir, cwd, identity });
+  const host = await HostSession.create({
+    sdk, identity, cwd, agentDir: join(dir, "pi-agent"), model: "gpt-6.1-sol", modules, client, events, network,
+    sessionManager: sdk.SessionManager.create(cwd, join(dir, "sessions")),
+    capabilities: { catalog: 5, enabled: ["ask_user"] },
   });
   expect(corral.calls()).toEqual([]);
+  await host.startLocal();
   await host.session.bindExtensions({});
-  await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
-}, 60_000);
+  return { host, events, cwd, corral, dir, transport };
+}
 
 afterAll(() => {
   globalThis.fetch = originalFetch;
@@ -78,16 +75,13 @@ afterAll(() => {
   rmSync(work, { recursive: true, force: true });
 });
 
-test("the package's reviewer role is read-only and allows only the reviewer's corral ops", () => {
+test("the reviewer has read-only file tools plus task artifact and verdict", () => {
   expect([...reviewer.upstreamTools]).toEqual(UPSTREAM);
   expect(reviewer.upstreamTools).not.toContain("edit");
   expect(reviewer.upstreamTools).not.toContain("write");
   const tools = reviewer.tools({ identity, cwd: "/tmp", model: "m" });
   expect(tools.map((tool) => tool.name)).toEqual(CORRAL_TOOLS);
-  expect([...reviewer.corralOps].sort()).toEqual(
-    ["hello", "event", "receipt_lookup", "read_content", "ask", "withdraw", "evidence", "artifact", "verdict"].sort(),
-  );
-  expect(tools.every((tool) => reviewer.corralOps.includes(tool.op))).toBeTrue();
+  expect(tools.map((tool) => tool.op)).toEqual(["artifact", "verdict"]);
 });
 
 test("the contract is the installed reviewer-contract.md with the bound identity filled in", () => {
@@ -103,49 +97,60 @@ test("the contract is the installed reviewer-contract.md with the bound identity
 });
 
 test("a host session activates exactly the loadout and denies a write the model attempts", async () => {
-  expect([...host.loadout]).toEqual([...UPSTREAM, ...CORRAL_TOOLS, "agent_message", "agent_roster"]);
-  expect([...(host.state().active_tools as string[])].sort()).toEqual([...UPSTREAM, ...CORRAL_TOOLS, "agent_message", "agent_roster"].sort());
-  expect(host.session.systemPrompt).toContain("# corral reviewer contract (corral-pi)");
-  const target = join(cwd, "edited.txt");
-  fixtureTransport().script([
-    { toolCalls: [{ callId: "call-write", name: "write", arguments: { path: target, content: "x" } }] },
-    { text: "DONE" },
-  ]);
-  const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 1);
-  expect(await host.submit(input("Write a file.", "k-write"), "rq-write")).toEqual({ disposition: "started", turn: 1 });
-  await ended;
-  await host.drained();
-  expect(existsSync(target)).toBeFalse();
+  const { host, events, cwd, transport } = await startReviewer();
+  try {
+    const expected = [...UPSTREAM, ...CORRAL_TOOLS, "ask_user", "agent_message", "agent_roster"];
+    expect([...host.loadout]).toEqual(expected);
+    expect([...(host.state().active_tools as string[])].sort()).toEqual(expected.sort());
+    expect(host.session.systemPrompt).toContain("# corral reviewer contract (corral-pi)");
+    const target = join(cwd, "edited.txt");
+    transport.script([
+      { toolCalls: [{ callId: "call-write", name: "write", arguments: { path: target, content: "x" } }] },
+      { text: "DONE" },
+    ]);
+    const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 1);
+    expect(await host.submitLocal({ text: "Write a file.", busyPolicy: "prompt", origin: "owner" }))
+      .toEqual({ disposition: "started", turn: 1 });
+    await ended;
+    await host.drained();
+    expect(host.session.messages.find((message) => message.role === "toolResult" && message.toolName === "write"))
+      .toMatchObject({ isError: true });
+    expect(existsSync(target)).toBeFalse();
+  } finally {
+    await host.close();
+  }
 });
 
-test("corral_verdict is one verdict envelope whose request ID derives from the session and tool call", async () => {
-  const notes = "Changes needed:\n- add the regression test";
-  fixtureTransport().script([
-    { toolCalls: [{ callId: "call-verdict", name: "corral_verdict", arguments: { verdict: "changes", notes } }] },
-  ]);
-  const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 2);
-  expect(await host.submit(input("Record changes.", "k-verdict"), "rq-verdict")).toEqual({ disposition: "started", turn: 2 });
-  await ended;
-  await host.drained();
-  const callIds = host.session.messages.flatMap((message) =>
-    message.role === "assistant" ? message.content.filter((part) => part.type === "toolCall") : [])
-    .filter((part) => part.name === "corral_verdict").map((part) => part.id);
-  expect(callIds.length).toBe(1);
-  const verdicts = corral.calls().map((call) => call.envelope).filter((envelope) => envelope.op === "verdict");
-  expect(verdicts.map((envelope) => [envelope.request_id, envelope.identity.turn, envelope.identity.review, envelope.identity.callback]))
-    .toEqual([[toolRequestId(host.sessionId(), callIds[0] ?? ""), 2, "R2-review1", "g1:c1"]]);
-  expect(verdicts[0]?.payload).toEqual({ verdict: "changes", notes });
-  expect(corral.calls().filter(call => ["peer_send", "peer_roster"].includes(call.envelope.op))).toEqual([]);
+test("corral_verdict sends the bound task, verdict and notes as engine argv", async () => {
+  const { host, events, corral, dir, transport } = await startReviewer();
+  try {
+    const notes = "Changes needed:\n- add the regression test";
+    transport.script([
+      { toolCalls: [{ callId: "call-verdict", name: "corral_verdict", arguments: { verdict: "changes", notes } }] },
+    ]);
+    const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 1);
+    expect(await host.submitLocal({ text: "Record changes.", busyPolicy: "prompt", origin: "owner" }))
+      .toEqual({ disposition: "started", turn: 1 });
+    await ended;
+    await host.drained();
+    expect(corral.calls().filter((argv) => argv[3] === "verdict")).toEqual([
+      ["--root", dir, "--json", "verdict", identity.task, "changes", "--notes", notes],
+    ]);
+  } finally {
+    await host.close();
+  }
 });
 
-test("review kickoff is attempt-scoped and recovery retries only unobserved requests", () => {
+test("review kickoff is keyed by round and prompt content and retries only unobserved requests", () => {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   const sent: string[] = [];
   const pi = {
     on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, handler),
     sendUserMessage: (text: string) => sent.push(text),
   } as unknown as ExtensionAPI;
-  const context = { identity, cwd: "/tmp", model: "m", promptFile: "/store/prompts/T-007-R2-review.md" };
+  const promptFile = join(work, "T-007-R2-review.md");
+  writeFileSync(promptFile, "First candidate");
+  const context = { identity, cwd: "/tmp", model: "m", promptFile };
   const install = (bound: RoleContext) => {
     reviewer.extend?.(pi, bound);
     const start = handlers.get("session_start");
@@ -167,39 +172,47 @@ test("review kickoff is attempt-scoped and recovery retries only unobserved requ
   expect(sent.length).toBe(1);
   const observed = sent[0];
   if (!observed) throw new Error("review request not emitted");
-  expect(observed).toContain(JSON.stringify([
-    identity.store, identity.task, identity.run, identity.review, identity.callback,
-  ]));
+  expect(observed.startsWith(`${kickoff(context)}\n\n[corral review request `)).toBeTrue();
   // Rebinding the same host cannot enqueue another request before its first one is persisted.
   start({ type: "session_start", reason: "startup" }, session([]));
   expect(sent.length).toBe(1);
 
-  const recovered = { ...context, identity: { ...identity, generation: 2 } };
   sent.length = 0;
-  install(recovered)({ type: "session_start", reason: "startup" }, session([[{ type: "text", text: observed }]]));
+  install(context)({ type: "session_start", reason: "startup" }, session([[{ type: "text", text: observed }]]));
+  expect(sent).toEqual([]);
+  const copiedPrompt = join(work, "copied-review.md");
+  writeFileSync(copiedPrompt, "First candidate");
+  install({ ...context, promptFile: copiedPrompt })({ type: "session_start", reason: "startup" }, session([observed]));
   expect(sent).toEqual([]);
   // Recovery after a crash before observation still needs to deliver the current attempt.
-  install(recovered)({ type: "session_start", reason: "startup" }, session(["a previous review request"]));
+  install(context)({ type: "session_start", reason: "startup" }, session(["a previous review request"]));
   expect(sent.length).toBe(1);
 
   sent.length = 0;
-  const legacy = kickoff(context);
-  if (!legacy) throw new Error("review request missing");
-  install(recovered)({ type: "session_start", reason: "startup" }, session([legacy]));
-  expect(sent).toEqual([]);
-  const next = { ...context, identity: { ...identity, review: "R2-review2", callback: "g2:c2" } };
+  const next = { ...context, identity: { ...identity, review: "R2-review2" } };
   install(next)({ type: "session_start", reason: "startup" }, session([observed]));
   expect(sent.length).toBe(1);
 
   sent.length = 0;
-  install(context)({ type: "session_start", reason: "startup" }, session([]));
+  writeFileSync(promptFile, "Rewritten candidate");
+  install(context)({ type: "session_start", reason: "startup" }, session([observed]));
   expect(sent.length).toBe(1);
   sent.length = 0;
-  install({ identity, cwd: "/tmp", model: "m" })({ type: "session_start", reason: "startup" }, session([]));
-  expect(sent).toEqual([]);
+  install(context)({ type: "session_start", reason: "startup" }, session([]));
+  expect(sent.length).toBe(1);
   expect(kickoff({ identity, cwd: "/tmp", model: "m" })).toBeUndefined();
 });
 
 test("while bound, the reviewer refuses /new, /resume, /fork and import before the session changes", async () => {
-  await expectReplacementsRefused(host, events);
+  const { host, events, transport } = await startReviewer();
+  try {
+    transport.script([{ text: "Ready." }]);
+    const ended = nextEvent(events, (event) => event.kind === "turn_ended");
+    expect((await host.submitLocal({ text: "Confirm ready.", busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
+    await ended;
+    await host.drained();
+    await expectReplacementsRefused(host, events);
+  } finally {
+    await host.close();
+  }
 });

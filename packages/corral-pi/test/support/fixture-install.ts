@@ -1,6 +1,6 @@
 // Builds a bounded temp asset directory from the package: src/, package.json and bun.lock,
 // the package's installed node_modules linked in, and (with overlays) fixture.json
-// plus the fixture role, auth and delivery modules copied to their fixed module paths. Fixture
+// plus the fixture role and auth modules copied to their fixed module paths. Fixture
 // modules exist only inside that temp directory, never in the package's own src/.
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,8 +17,8 @@ const BYTES_MAX = 16 * 1024 * 1024;
 export interface FixtureOptions {
   /** Copy the fixture modules and fixture.json (default true). */
   readonly overlays?: boolean;
-  /** Fixture modules to leave out, for single-module refusal tests. */
-  readonly omit?: readonly ("role" | "delivery" | "auth")[];
+  /** Omit the role overlay to keep shipped roles, or omit auth to test a missing module. */
+  readonly omit?: readonly ("role" | "auth")[];
   readonly parent?: string;
   /** Give the fixture host a private upstream Pi state directory, including crashes.json. */
   readonly isolatePiState?: boolean;
@@ -102,10 +102,6 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
       modules.push("src/auth/index.ts");
     } else {
       rmSync(join(dir, "src/auth/index.ts"), { force: true });
-    }
-    if (!omit.has("delivery")) {
-      copy(join(fixtures, "delivery/index.ts"), join(dir, "src/delivery/index.ts"));
-      modules.push("src/delivery/index.ts");
     }
     writeFileSync(join(dir, "fixture.json"), `${JSON.stringify({
       version: 1, fixture: true, built_by: "packages/corral-pi/test/support/fixture-install.ts", modules,

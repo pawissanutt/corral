@@ -1,4 +1,4 @@
-// Host events: one monotonic sequence per generation in a bounded ring. A reader whose cursor
+// Host events: one monotonic sequence per process in a bounded ring. A reader whose cursor
 // fell behind the ring gets an explicit gap, which it must reconcile from canonical records.
 // Pages are bounded in bytes so a reply always fits a bridge frame; `next` continues a page.
 
@@ -6,7 +6,6 @@ export const EVENT_MAX_BYTES = 8 * 1024;
 
 export interface BridgeEvent {
   readonly seq: number;
-  readonly generation: number;
   readonly at: string;
   readonly kind: string;
   readonly [key: string]: unknown;
@@ -20,7 +19,6 @@ export interface EventGap {
 }
 
 export interface EventPage {
-  readonly generation: number;
   readonly events: readonly BridgeEvent[];
   readonly last: number;
   readonly next: number;
@@ -35,17 +33,17 @@ export class EventLog {
   private readonly listeners = new Set<(event: BridgeEvent) => void>();
   private seq = 0;
 
-  constructor(readonly generation: number, private readonly capacity = 512) {}
+  constructor(private readonly capacity = 512) {}
 
   get last(): number {
     return this.seq;
   }
 
   emit(kind: string, data: Record<string, unknown> = {}): BridgeEvent {
-    const head = { seq: ++this.seq, generation: this.generation, at: new Date().toISOString(), kind };
+    const head = { seq: ++this.seq, at: new Date().toISOString(), kind };
     let event: BridgeEvent = { ...data, ...head };
     const size = bytes(event);
-    if (size > EVENT_MAX_BYTES) event = { ...head, omitted: "event_too_large", bytes: size };
+    if (size > (kind === "owner_prompt" ? 56 * 1024 : EVENT_MAX_BYTES)) event = { ...head, omitted: "event_too_large", bytes: size };
     this.ring.push(event);
     if (this.ring.length > this.capacity) this.ring.shift();
     for (const listener of this.listeners) listener(event);
@@ -58,7 +56,7 @@ export class EventLog {
   }
 
   /** Events after `seq` whose JSON fits `maxBytes`; at least one when any is pending. */
-  since(seq: number, maxBytes: number, limit = 256): EventPage {
+  since(seq: number, maxBytes = 60 * 1024, limit = 256): EventPage {
     const after = this.ring.filter((event) => event.seq > seq);
     const events: BridgeEvent[] = [];
     let used = 2;
@@ -73,7 +71,7 @@ export class EventLog {
       ? { after: seq, resumed: oldest, missing: oldest - seq - 1, reconcile: true as const }
       : undefined;
     return {
-      generation: this.generation, events, last: this.seq, next: events.at(-1)?.seq ?? seq,
+      events, last: this.seq, next: events.at(-1)?.seq ?? seq,
       more: after.length > events.length, ...(gap ? { gap } : {}),
     };
   }

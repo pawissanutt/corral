@@ -18,7 +18,7 @@ function fixture(execute: (call: ResearchCall, signal: AbortSignal) => Promise<R
   const runtime = new FleetRuntime({ sdk: {} as typeof Sdk, models: {} as ModelRuntime,
     approved: [provider], parent: { provider, model: "normal" }, agentDir: "/unused", localTools: [],
     context: { dir: "/private", session: { worktree: "/repo", name: "parent" }, settings: { maxParallel: explore.max_parallel, profiles: [] } },
-    allowedKinds: ["explore"], research: { settings: explore, generation: 7, sessionId: () => "parent" },
+    allowedKinds: ["explore"], research: { settings: explore },
     changed() {}, deliverToParent() { throw new Error("Blocking research must not be redelivered"); },
     async record(payload) {
       records.push(payload);
@@ -40,7 +40,7 @@ function cancelled(signal: AbortSignal): Promise<ResearchResult> {
 }
 afterEach(() => { jest.useRealTimers(); });
 
-test("four explore requests queue at three, preserve attribution, deduplicate and fence children", async () => {
+test("four explore requests queue at three, preserve attribution, deduplicate and close children", async () => {
   const three = Promise.withResolvers<void>(), four = Promise.withResolvers<void>(), first = Promise.withResolvers<ResearchResult>();
   const fx = fixture((call, signal) => {
     if (fx.calls.length === 3) three.resolve();
@@ -55,7 +55,7 @@ test("four explore requests queue at three, preserve attribution, deduplicate an
     expect(fx.runtime.snapshot().children.map(child => child.state)).toEqual(["running", "running", "running", "queued"]);
     first.resolve({ report: "0", researchReport: { status: "completed", stopReason: "completed" } });
     await four.promise;
-    expect((await requests[0])?.generation).toBe(7);
+    expect((await requests[0])?.request).toBe(fx.records[0]?.request);
     expect(fx.runtime.snapshot().children.filter(child => child.state === "running")).toHaveLength(3);
     await fx.runtime.close();
     const results = await Promise.all(requests);
@@ -70,6 +70,28 @@ test("four explore requests queue at three, preserve attribution, deduplicate an
     }
     await expect(fx.runtime.explore("new", "no")).rejects.toThrow("closed");
   } finally { first.resolve({ report: "0" }); await fx.runtime.close(); }
+});
+
+test("fresh fleets allocate distinct transcripts even when tool and child IDs are reused", async () => {
+  const answer = async (): Promise<ResearchResult> => ({ report: "answer", researchReport: { status: "completed", stopReason: "completed" } });
+  const launch = async () => {
+    const fx = fixture(answer);
+    try {
+      const research = await fx.runtime.explore("research", "question");
+      await fx.runtime.start("task", [{ id: "named", kind: "explore", title: "Question", brief: "question", owns: [] }]);
+      const [named] = await fx.runtime.wait(["named"]);
+      return { research, named };
+    } finally { await fx.runtime.close(); }
+  };
+  const first = await launch();
+  const second = await launch();
+  expect(second.research.request).not.toBe(first.research.request);
+  expect(second.research.sessionFile).toBe(`/private/${second.research.request}.jsonl`);
+  expect(first.named).toMatchObject({ id: "named", state: "done" });
+  expect(second.named).toMatchObject({ id: "named", state: "done" });
+  expect(typeof first.named?.sessionFile).toBe("string");
+  expect(typeof second.named?.sessionFile).toBe("string");
+  expect(second.named?.sessionFile).not.toBe(first.named?.sessionFile);
 });
 
 test("queued explore cancellation and close never launch and settle canonical not-started records", async () => {
@@ -90,9 +112,9 @@ test("queued explore cancellation and close never launch and settle canonical no
       ["prepare", undefined], ["finish", "not_started"],
     ]);
     await fx.runtime.close();
-    const fenced = await requests[4]!;
-    expect(fenced.report).toMatchObject({ status: "failed", stopReason: "cancelled" });
-    expect(fx.records.filter(record => record.request === fenced.request).map(record => [record.action, record.outcome])).toEqual([
+    const closed = await requests[4]!;
+    expect(closed.report).toMatchObject({ status: "failed", stopReason: "cancelled" });
+    expect(fx.records.filter(record => record.request === closed.request).map(record => [record.action, record.outcome])).toEqual([
       ["prepare", undefined], ["finish", "not_started"],
     ]);
     expect(fx.calls).toHaveLength(3);
@@ -108,7 +130,7 @@ test("explore timeout cancels the runner and records uncertain spend exactly onc
     await started.promise;
     jest.advanceTimersByTime(1000);
     const result = await request;
-    expect(result).toMatchObject({ outcome: "uncertain", generation: 7, report: { status: "failed", stopReason: "timeout" } });
+    expect(result).toMatchObject({ outcome: "uncertain", report: { status: "failed", stopReason: "timeout" } });
     expect(fx.records.map(record => record.action)).toEqual(["prepare", "started", "finish"]);
     expect(fx.records.at(-1)?.outcome).toBe("uncertain");
   } finally { await fx.runtime.close(); }
@@ -148,7 +170,7 @@ test("research presets and exploreTool preserve ceilings, context, partial statu
     expect(fx.calls[0]?.model).toMatchObject({ model: "normal", provider: "openai-codex" });
     expect(fx.calls[0]?.hooks.execution).toMatchObject({ maxTurns: 4,
       research: { profile: "docs", effort: "quick", starting_points: "https://example.com/docs", constraints: "Version 2 only" } });
-    expect(result.details).toMatchObject({ generation: 7, truncated: true, report: { status: "partial" } });
+    expect(result.details).toMatchObject({ request: fx.records[0]?.request, truncated: true, report: { status: "partial" } });
     const text = result.content.filter(block => block.type === "text").map(block => block.text).join("\n");
     const identity = fx.records[0]?.request;
     expect(typeof identity).toBe("string");

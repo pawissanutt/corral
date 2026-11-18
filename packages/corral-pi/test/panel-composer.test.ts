@@ -113,7 +113,7 @@ test("busy Enter steers and Alt+Enter follows once; the queue lists both, notice
     expect(h.host.session.model).toEqual(model);
     expect(h.host.session.sessionManager.getLeafId()).toBe(leaf);
     // Structured wakes queue behind the owner's input; only their count and source reach the screen.
-    for (let i = 0; i < 12; i++) await h.host.submit({ text: `STRUCTURED_WAKE_${i}`, busyPolicy: "follow_up", idempotencyKey: `wake-${i}`, origin: "corral-inbox" }, `request-${i}`);
+    for (let i = 0; i < 12; i++) await h.host.submitLocal({ text: `STRUCTURED_WAKE_${i}`, busyPolicy: "follow_up", origin: "auto" });
     await frame(h, "12 inbox deliveries");
     expect(h.host.session.getFollowUpMessages()).toHaveLength(13);
     expect(h.screen().text()).not.toContain("STRUCTURED_WAKE_");

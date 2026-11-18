@@ -1,4 +1,4 @@
-// Read once when the host starts. Reload/compaction reuse this generation's immutable
+// Read once when the host starts. Reload/compaction reuse this session's immutable
 // block through the shared system prompt (including Claude); no session journal append.
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { resolve } from "node:path";
@@ -8,7 +8,7 @@ export function memoryContext(role: Role, file?: string, runtimeDir?: string): s
   if (!file) return ""; // Legacy/test bootstraps; new Rust launchers require capable assets.
   if (!["pm", "assistant", "worker"].includes(role)) throw new Error("memory unavailable for role");
   if (!runtimeDir || resolve(file) !== resolve(runtimeDir, "memory-context.md")) {
-    throw new Error("memory file is outside its generation");
+    throw new Error("memory file is outside its session");
   }
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {

@@ -20,17 +20,14 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
-function fixture(options: { worker?: boolean; schedule?: Schedule; waitMs?: number; started?: () => Promise<void> } = {}) {
+function fixture(options: { schedule?: Schedule; waitMs?: number; onPrepared?: (job: string) => void } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "corral-commands-"));
   const facts: CommandFact[] = [], monitors: MonitorFact[] = [], notices: string[] = [];
   const tracked = deferred<string>();
-  const jobs = new JobRuntime({ cwd: dir, runtimeDir: join(dir, "runtime"), generation: 3,
+  const jobs = new JobRuntime({ cwd: dir, runtimeDir: join(dir, "runtime"),
     settings: { max_jobs: 2, max_output_bytes: 1024, max_runtime_secs: 60 },
-    call: async (_op, _key, payload) => {
-      if (payload.action === "started") await options.started?.();
-      return { state: "committed", result: {} };
-    }, ...(options.schedule ? { schedule: options.schedule } : {}) });
-  const commands = new Commands({ jobs, generation: 3, worker: options.worker ?? false,
+    onPrepared: options.onPrepared, ...(options.schedule ? { schedule: options.schedule } : {}) });
+  const commands = new Commands({ jobs,
     waitMs: options.waitMs ?? 10000, journal: fact => { facts.push(fact); tracked.resolve(fact.job); },
     monitorJournal: fact => monitors.push(fact), notify: async (_key, text) => { notices.push(text); return "queued"; } });
   const fifo = (name: string) => {
@@ -52,7 +49,7 @@ test("background promotion releases one Bash observer without relaunching or res
   const fx = fixture({ schedule: (run, ms) => { schedules.push({ run, ms }); return () => {}; } });
   fx.commands.bound();
   const gate = fx.fifo("release"), before = fx.line("before");
-  const foreground = fx.commands.run(`echo before; cat ${gate} >/dev/null; echo after`, "call", { timeout: 20 });
+  const foreground = fx.commands.run(`echo before; cat ${gate} >/dev/null; echo after`, { timeout: 20 });
   const job = await fx.tracked;
   await before;
   const pid = fx.jobs.inspection()[0]?.pid;
@@ -78,7 +75,7 @@ test("foreground and nested Bash return real completion; Code Mode sequencing is
   fx.commands.bound();
   const gate = fx.fifo("nested"), ready = fx.line("ready");
   let advanced = false;
-  const cell = fx.commands.run(`echo ready; cat ${gate} >/dev/null; echo done`, "nested", { nested: true })
+  const cell = fx.commands.run(`echo ready; cat ${gate} >/dev/null; echo done`, { nested: true })
     .then(result => { advanced = true; return result; });
   await ready;
   const job = await fx.tracked;
@@ -96,13 +93,15 @@ test("foreground and nested Bash return real completion; Code Mode sequencing is
   expect(raw.content).toEqual([{ type: "text", text: Array.from({ length: 60 }, (_, i) => `${i + 1}\n`).join("") }]);
   const output = jobTools(fx.jobs, true, fx.commands).find(tool => tool.name === "job_output");
   if (!output) throw new Error("job_output missing");
-  const peek = await output.execute("peek", { job: "j3-3" }, undefined, undefined, {} as never);
+  const rawJob = fx.jobs.inspection().find(job => job.command === "seq 1 60");
+  if (!rawJob) throw new Error("completed Bash job missing");
+  const peek = await output.execute("peek", { job: rawJob.job }, undefined, undefined, {} as never);
   const visible = peek.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
   expect(visible).toContain("59\n60\n");
   expect(peek.details).toMatchObject({ state: "exited", exit_code: 0 });
   const nested = await runChild({ tool: "job_output", key: "parent/cell-1.1",
     parent: { tool_call_id: "parent", cell: "cell-1", call: "cell-1.1" } },
-  () => output.execute("parent/1", { job: "j3-3" }, undefined, undefined, {} as never));
+  () => output.execute("parent/1", { job: rawJob.job }, undefined, undefined, {} as never));
   const nestedText = nested.content[0];
   if (nestedText?.type !== "text") throw new Error("nested output missing");
   expect(JSON.parse(nestedText.text)).toEqual(peek.details);
@@ -112,7 +111,7 @@ test("foreground and nested Bash return real completion; Code Mode sequencing is
 test("wait-next claims exactly one completion, while cancellation releases waiting without killing the command", async () => {
   const fx = fixture();
   const gate = fx.fifo("wait"), ready = fx.line("waiting");
-  const started = await fx.commands.run(`echo waiting; cat ${gate} >/dev/null; echo done`, "bg", { wait_ms: 0 });
+  const started = await fx.commands.run(`echo waiting; cat ${gate} >/dev/null; echo done`, { wait_ms: 0 });
   const job = String(started.job);
   await ready;
   const abort = new AbortController();
@@ -127,13 +126,13 @@ test("wait-next claims exactly one completion, while cancellation releases waiti
   await fx.commands.notified();
   expect(fx.notices).toEqual([]);
   expect(await fx.commands.wait(undefined, 0)).toMatchObject({ state: "none" });
-  expect(() => fx.jobs.peek("j999-1")).toThrow("unknown job");
+  expect(() => fx.jobs.peek("foreign")).toThrow("unknown job");
 });
 
 test("Background releases wait-next across its snapshot without consuming or stopping either job", async () => {
   const fx = fixture();
   const gates = [fx.fifo("next-a"), fx.fifo("next-b")] as const;
-  const starts = await Promise.all(gates.map((gate, i) => fx.commands.run(`cat ${gate} >/dev/null; echo ${i}`, `next-${i}`, { wait_ms: 0 })));
+  const starts = await Promise.all(gates.map((gate, i) => fx.commands.run(`cat ${gate} >/dev/null; echo ${i}`, { wait_ms: 0 })));
   const waiting = fx.commands.wait();
   expect(fx.commands.state().every(job => job.observation === "attached")).toBeTrue();
   fx.commands.background(String(starts[1]?.job));
@@ -148,20 +147,14 @@ test("Background releases wait-next across its snapshot without consuming or sto
   expect(await fx.commands.wait()).toMatchObject({ job: starts[1]?.job, state: "exited" });
 });
 
-test("runtime deadline starts at executable release, not during ownership acknowledgement", async () => {
-  const entered = deferred<void>(), acknowledgement = deferred<void>();
+test("runtime deadline is not scheduled before local preparation", async () => {
+  let before: number | undefined;
   const schedules: { ms: number; run: () => void }[] = [];
-  const fx = fixture({ started: async () => { entered.resolve(); await acknowledgement.promise; },
+  const fx = fixture({ onPrepared: () => { before = schedules.length; },
     schedule: (run, ms) => { schedules.push({ run, ms }); return () => {}; } });
   const gate = fx.fifo("deadline"), executed = fx.line("EXECUTED");
-  const launch = fx.commands.run(`echo EXECUTED; cat ${gate} >/dev/null`, "delayed", { timeout: 10, wait_ms: 0 });
-  await entered.promise;
-  const before = schedules.length;
-  const startedAt = fx.jobs.inspection()[0]?.startedAt;
-  acknowledgement.resolve();
-  const { job } = await launch;
+  const { job } = await fx.commands.run(`echo EXECUTED; cat ${gate} >/dev/null`, { timeout: 10, wait_ms: 0 });
   await executed;
-  expect(startedAt).toBeUndefined();
   expect(before).toBe(0);
   expect(schedules.map(timer => timer.ms)).toEqual([10000]);
   schedules[0]?.run();
@@ -172,7 +165,7 @@ test("runtime deadline starts at executable release, not during ownership acknow
 test("peeks page independent UTF-8 cursors, expose gaps, and show the rolling tail beyond the file cap", () => {
   const fx = fixture(), file = join(fx.dir, "output");
   writeFileSync(file, "prefix");
-  const source = { id: "j3-1", file, bytes: 100000, stored: 6, tail: Buffer.from("A\n€\nZ\n") };
+  const source = { id: "job", file, bytes: 100000, stored: 6, tail: Buffer.from("A\n€\nZ\n") };
   expect(readOutput(source, {}).text).toBe("A\n€\nZ\n");
   const first = readOutput(source, { offset: 0, max_bytes: 4 });
   expect(first.text).toBe("pref");
@@ -184,17 +177,21 @@ test("peeks page independent UTF-8 cursors, expose gaps, and show the rolling ta
   expect(gap.text).toBe("A\n€\nZ\n");
   expect(readOutput(source, { offset: source.bytes - source.tail.length + 2, max_bytes: 4 }).text).toBe("€\n");
   expect(readOutput(source, { tail_lines: 1 }).text).toBe("Z\n");
-  expect(() => readOutput(source, { cursor: "j2-1:0" })).toThrow("foreign output cursor");
-  expect(() => readOutput(source, { cursor: "j3-1:0", tail_lines: 1 })).toThrow("cannot be combined");
+  expect(() => readOutput(source, { cursor: "foreign:0" })).toThrow("foreign output cursor");
+  expect(() => readOutput(source, { cursor: "job:0", tail_lines: 1 })).toThrow("cannot be combined");
 });
 
 test("session monitors wake once for a line and exit; an explicit exit watch suppresses the automatic duplicate", async () => {
   const fx = fixture();
   fx.commands.bound();
   const gate = fx.fifo("monitor");
-  const { job } = await fx.commands.run(`cat ${gate} >/dev/null; echo READY; echo READY`, "bg", { wait_ms: 0 });
-  await fx.commands.monitor(String(job), "line", "^READY", 60, "line");
-  await fx.commands.monitor(String(job), "exit", undefined, 60, "exit");
+  const { job } = await fx.commands.run(`cat ${gate} >/dev/null; echo READY; echo READY`, { wait_ms: 0 });
+  const line = fx.commands.monitor(String(job), "line", "^READY", 60);
+  const exit = fx.commands.monitor(String(job), "exit", undefined, 60);
+  expect(line).toMatchObject({ state: "armed", job, on: "line" });
+  expect(exit).toMatchObject({ state: "armed", job, on: "exit" });
+  expect(line.wait).not.toBe(exit.wait);
+  expect(fx.monitors.map(fact => [fact.key, fact.deadline])).toEqual([[line.wait, line.deadline], [exit.wait, exit.deadline]]);
   await writeFile(gate, "go");
   await fx.jobs.settled(String(job));
   // Notify stubs settle on the next microtask; no real timers are involved.
@@ -208,7 +205,7 @@ test("session monitors wake once for a line and exit; an explicit exit watch sup
 test("already-ready completions coalesce without delaying another command or consuming peek output", async () => {
   const fx = fixture();
   const gates = [fx.fifo("a"), fx.fifo("b")];
-  const starts = await Promise.all(gates.map((gate, index) => fx.commands.run(`cat ${gate} >/dev/null; echo result-${index}`, `batch-${index}`, { wait_ms: 0 })));
+  const starts = await Promise.all(gates.map((gate, index) => fx.commands.run(`cat ${gate} >/dev/null; echo result-${index}`, { wait_ms: 0 })));
   await Promise.all(gates.map(gate => writeFile(gate, "go")));
   await Promise.all(starts.map(start => fx.jobs.settled(String(start.job))));
   fx.commands.bound();
@@ -223,31 +220,31 @@ test("already-ready completions coalesce without delaying another command or con
 test("recovery reports a lost process and pending monitor without replay; queued completion remains retryable", async () => {
   const fx = fixture();
   fx.commands.bound([
-    { job: "j2-1", generation: 2, consumed: false },
-    { job: "j2-2", generation: 2, consumed: true, delivery: "notice", result: { job: "j2-2", state: "exited", text: "done" } },
-    { job: "j2-3", generation: 2, consumed: true, delivery: "result" },
-  ], [{ key: "old-line", job: "j2-1", pattern: "READY", deadline: new Date(0).toISOString(), delivered: false }]);
+    { job: "lost-job", consumed: false },
+    { job: "unread-notice", consumed: true, delivery: "notice", result: { job: "unread-notice", state: "exited", text: "done" } },
+    { job: "consumed-result", consumed: true, delivery: "result" },
+  ], [{ key: "old-line", job: "lost-job", pattern: "READY", deadline: new Date(0).toISOString(), delivered: false }]);
   await fx.commands.notified();
   expect(fx.jobs.state()).toEqual([]);
   expect(fx.notices.filter(text => text.includes("not replayed"))).toHaveLength(2);
-  expect(fx.notices.filter(text => text.includes("j2-2"))).toHaveLength(1);
-  expect(fx.notices.some(text => text.includes("j2-3"))).toBeFalse();
+  expect(fx.notices.filter(text => text.includes("unread-notice"))).toHaveLength(1);
+  expect(fx.notices.some(text => text.includes("consumed-result"))).toBeFalse();
   expect(fx.monitors.at(-1)?.delivered).toBeTrue();
 });
 
 test("inspector refuses stale/foreign/disabled selections; stop runs the shared guard once and uncertainty is never retried", async () => {
   const fx = fixture();
   const gate = fx.fifo("control"), ready = fx.line("alive");
-  const { job } = await fx.commands.run(`echo alive; cat ${gate} >/dev/null`, "control", { wait_ms: 0 });
+  const { job } = await fx.commands.run(`echo alive; cat ${gate} >/dev/null`, { wait_ms: 0 });
   await ready;
   let allowed = true, before = 0;
   const records: unknown[] = [];
-  const control = jobControl({ jobs: fx.jobs, commands: fx.commands, generation: 3, session: () => "session",
+  const control = jobControl({ jobs: fx.jobs, commands: fx.commands, session: () => "session",
     allowed: () => allowed, record: entry => records.push(entry),
     before: async () => { before++; return "denied by pre-tool hook"; } });
-  const target = { job: String(job), session: "session", generation: 3 };
-  expect(await control({ ...target, generation: 2 }, "stop")).toMatchObject({ state: "denied" });
-  expect(await control({ ...target, job: "j3-foreign" }, "stop")).toMatchObject({ state: "denied" });
+  const target = { job: String(job), session: "session" };
+  expect(await control({ ...target, session: "stale-session" }, "stop")).toMatchObject({ state: "denied" });
+  expect(await control({ ...target, job: "foreign" }, "stop")).toMatchObject({ state: "denied" });
   allowed = false;
   expect(await control(target, "stop")).toMatchObject({ state: "denied" });
   allowed = true;
@@ -255,11 +252,11 @@ test("inspector refuses stale/foreign/disabled selections; stop runs the shared 
   expect(await control(target, "stop")).toMatchObject({ state: "denied" });
   expect(before).toBe(1);
   expect(fx.jobs.peek(String(job)).state).toBe("running");
-  const uncertain = jobControl({ jobs: fx.jobs, commands: fx.commands, generation: 3, session: () => "session",
+  const uncertain = jobControl({ jobs: fx.jobs, commands: fx.commands, session: () => "session",
     allowed: () => true, record: entry => records.push(entry), before: async () => { throw new Error("hook acknowledgement lost"); } });
   expect(await uncertain(target, "stop")).toMatchObject({ state: "outcome_unknown" });
   expect(fx.jobs.peek(String(job)).state).toBe("running");
-  const authorized = jobControl({ jobs: fx.jobs, commands: fx.commands, generation: 3, session: () => "session",
+  const authorized = jobControl({ jobs: fx.jobs, commands: fx.commands, session: () => "session",
     allowed: () => true, record: entry => records.push(entry) });
   expect(await authorized(target, "background")).toMatchObject({ state: "running", background: true });
   expect(fx.jobs.peek(String(job)).state).toBe("running");

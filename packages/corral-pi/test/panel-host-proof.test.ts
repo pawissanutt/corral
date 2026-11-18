@@ -7,11 +7,10 @@ import { type BridgeEvent, EventLog } from "../src/bridge/events.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
+import { CorralClient } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { forbiddenRuns } from "./fixtures/roles/fixture-role.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
 import { RecordingTerminal } from "./support/panel-terminal.ts";
 import { nextEvent, within } from "./support/wait.ts";
 
@@ -27,32 +26,30 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
   try {
     restrictEnvironment(process.env); process.env.PI_CODING_AGENT_DIR = join(work, "pi-state");
     const sdk = await import("@earendil-works/pi-coding-agent");
-    const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
+    const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
     const modules = await loadModules(assets.dir, "worker");
     const send = modules.auth.transport?.(authContext());
     if (!send) throw new Error("fixture transport unavailable");
-    const events = new EventLog(1), network = guardedFetch(send);
+    const events = new EventLog(), network = guardedFetch(send);
     globalThis.fetch = network.fetch as typeof globalThis.fetch;
-    const corral = writeFakeCorral(work);
-    const client = new CorralClient({ corral: corral.path, root: work, identity,
-      hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
+    const client = new CorralClient({ corral: "", root: work, cwd: work, identity });
     host = await HostSession.create({ sdk, identity, cwd: work, agentDir: join(work, "agent"),
       model: "gpt-6.1-sol", modules, client, events, network,
       sessionManager: sdk.SessionManager.create(work, join(work, "sessions")),
     });
-    await host.hello("n".repeat(64), "fixture-pane", sha256Hex("c".repeat(64)));
+    await host.startLocal();
     const session = host, bound = host.sessionId(), panels = host.panels;
     if (!panels) throw new Error("rich host did not install native panels");
     const seen: BridgeEvent[] = [];
     events.on(event => { seen.push(event); });
     const count = (kind: string) => seen.filter(event => event.kind === kind).length;
     const binding = () => {
-      const state = session.state() as { generation: number; bound: boolean; session: { bound_id: string; current_id: string; created: number };
+      const state = session.state() as { bound: boolean; session: { bound_id: string; current_id: string; created: number };
         turn: { current: number; open: boolean } };
-      return { generation: state.generation, bound: state.bound, boundId: state.session.bound_id, currentId: state.session.current_id,
+      return { bound: state.bound, boundId: state.session.bound_id, currentId: state.session.current_id,
         created: state.session.created, turn: state.turn };
     };
-    const owner = () => corral.calls().filter(call => call.envelope.payload.kind === "turn_started");
+    const owner = () => seen.filter(event => event.kind === "turn_started");
     const type = (text: string) => { for (const char of text) physical.send(char); };
 
     const physical = new RecordingTerminal(), terminal = panels.wrap(physical);
@@ -63,7 +60,7 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     physical.send("\x1b[20~"); // F9: Chat, where every session starts; the transcript stays in front
     expect(terminal.mainColumns).toBe(105);
     const initial = binding();
-    expect(initial).toMatchObject({ generation: 1, bound: true, boundId: bound, currentId: bound, turn: { current: 0, open: false } });
+    expect(initial).toMatchObject({ bound: true, boundId: bound, currentId: bound, turn: { current: 0, open: false } });
 
     // One provider turn: a real read tool call, then a reply held after its first streamed delta.
     writeFileSync(join(work, "tool-output.txt"), "TOOL_OUTPUT_SENTINEL\n");
@@ -125,7 +122,7 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     // The submission reached the existing host path exactly once: one user message, one turn, one owner report.
     expect(host.session.messages.filter(message => message.role === "user")).toHaveLength(1);
     expect(count("turn_started")).toBe(1);
-    expect(owner().map(call => call.envelope.payload.origin)).toEqual([{ kind: "owner_terminal" }]);
+    expect(owner().map(event => event.origin)).toEqual([{ kind: "owner_terminal" }]);
     expect(binding()).toEqual({ ...initial, turn: { current: 1, open: false } });
 
     // The composer cannot bypass the role's execution guard or the bound-session replacement fence.
@@ -143,8 +140,7 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     type("/fixture-new-session"); physical.send("\r");
     await refused;
     expect(binding()).toEqual({ ...initial, turn: { current: 2, open: false } });
-    expect(owner().map(call => call.envelope.payload.origin)).toEqual([{ kind: "owner_terminal" }, { kind: "owner_terminal" }]);
-    expect(corral.calls().every(call => call.envelope.identity.generation === 1)).toBeTrue();
+    expect(owner().map(event => event.origin)).toEqual([{ kind: "owner_terminal" }, { kind: "owner_terminal" }]);
   } finally {
     release();
     mode?.stop(); await host?.close(); assets.cleanup(); rmSync(work, { recursive: true, force: true });

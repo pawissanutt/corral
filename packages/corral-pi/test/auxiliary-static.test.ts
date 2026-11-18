@@ -24,14 +24,13 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
       if (!transport) throw new Error("fixture transport missing");
       const network = guardedFetch(transport);
       globalThis.fetch = network.fetch;
-      const identity = { store: "st-demo", project: "demo", role, generation: 1, task: "T-571", run: "R1" };
+      const identity = { store: "st-demo", project: "demo", role, task: "T-571", run: "R1" };
       async function profile(enabled: string[], expertSettings = true) {
         const host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", modules,
-          network, events: new EventLog(1), capabilities: { catalog: 6, digest: "a".repeat(64), preset: "full", enabled },
+          network, events: new EventLog(), capabilities: { catalog: 6, digest: "a".repeat(64), preset: "full", enabled },
           guidance: { projectText: false, settings: { subagents: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 120 }, oracle: { model: null, timeout_secs: 120 },
-            shadow: { model: "gpt-6-luna", timeout_secs: 60, max_per_hour: 30 },
             ...(expertSettings ? { expert: { model: "gpt-6.1-sol", max_turns: 24, timeout_secs: 600, max_parallel: 1 } } : {}) } },
-          client: new CorralClient({ corral: "/unused", root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => "" }),
+          client: new CorralClient({ corral: "/unused", root: cwd, cwd, identity }),
           sessionManager: sdk.SessionManager.inMemory(cwd),
         });
         try {
@@ -59,9 +58,6 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
         const expert = await profile(["expert"]);
         expect(expert.tools.filter(tool => tool.name === "corral_expert")).toHaveLength(1);
         expect(expert.tools.filter(tool => tool.name !== "corral_expert")).toEqual(base.tools);
-        const shadow = await profile(["shadow"]);
-        expect(shadow.prompt).toBe(base.prompt);
-        expect(shadow.tools).toEqual(base.tools);
       }
       for (const preset of ["strict", "standard", "full"]) {
         const explore = role !== "pm" && (preset === "full" || (preset === "standard" && role !== "reviewer"));

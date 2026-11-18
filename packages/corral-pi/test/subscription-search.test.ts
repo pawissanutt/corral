@@ -16,16 +16,16 @@ import { EventLog } from "../src/bridge/events.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
 import type { RoleContext } from "../src/roles/types.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
+import { CorralClient } from "../src/tools/corral.ts";
 import { Type } from "typebox";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 import { nextEvent } from "./support/wait.ts";
 import { AuxiliaryRuntime } from "../src/extensions/subagent/runtime.ts";
 import { boundedSearchResult, runSubscriptionSearch } from "../src/extensions/web/subscription.ts";
 import { SearchEvidence, record } from "../src/extensions/web/evidence.ts";
 import { WebSettingsSchema } from "../src/extensions/web/settings.ts";
-import fixtureAuth, { fixtureTransport } from "./fixtures/auth/index.ts";
+import fixtureAuth from "./fixtures/auth/index.ts";
 import { fakeCodexTransport } from "./fixtures/auth/fake-transport.ts";
 
 const settings = { hosts: ["*"], max_bytes: 1024, timeout_ms: 5000, max_redirects: 3, search_provider: "subscription" as const };
@@ -83,7 +83,7 @@ async function fixture(provider: "openai-codex" | "anthropic", send: Fetch, limi
   models.registerNativeProvider({ ...restricted, streamSimple: budget.wrap(restricted.streamSimple.bind(restricted), true) });
   const refs: Record<string, unknown>[] = [];
   let binding = { provider, model: provider === "openai-codex" ? "gpt-6.1-sol" : "claude-sonnet-5-5" };
-  const runtime = new AuxiliaryRuntime({ generation: 4, provider, model: binding.model,
+  const runtime = new AuxiliaryRuntime({ provider, model: binding.model,
     settings: { web_search: { model: null, timeout_secs: 5 } }, sessionId: () => "parent",
     searchModel: () => binding,
     async record(payload) { refs.push(payload); return { session_id: payload.request, session_file: join(cwd, `${payload.request}.jsonl`) }; },
@@ -251,7 +251,7 @@ test("bound host search stays subscription-backed for direct and nested calls ac
   try {
     const modules = await loadModules(assets.dir, "worker");
     let searches = 0;
-    const wire = fixtureTransport();
+    const wire = fakeCodexTransport();
     const webSettings = { ...settings, searxng_url: "https://must-not-be-used.example/" };
     const network = guardedFetch(async (url, init) => {
       const tools = body(init).tools;
@@ -266,18 +266,18 @@ test("bound host search stays subscription-backed for direct and nested calls ac
       parameters: Type.Object({}), async execute(_id, _params, signal, _update, context) {
         return (await context.executeTool("web_search", { query: "nested" }, { signal })).result;
       } };
-    const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-123", run: "R1" };
-    const events = new EventLog(1);
-    const corral = writeFakeCorral(cwd);
-    const client = new CorralClient({ corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const, task: "T-123", run: "R1" };
+    const events = new EventLog();
+    const corral = writeFakeEngine(cwd);
+    const client = new CorralClient({ corral: corral.path, root: cwd, cwd, identity });
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", client, events, network,
-      capabilities: { catalog: 7, digest: "a".repeat(64), preset: "standard", enabled: ["web.enabled", "budget"], web: webSettings },
+      capabilities: { catalog: 7, digest: "a".repeat(64), preset: "standard", enabled: ["web.enabled"], web: webSettings },
       modules: { ...modules, role: { ...role, localToolNames: [...role.localToolNames ?? [], nested.name],
         localTools: (context: RoleContext) => [...role.localTools?.(context) ?? [], nested] } },
       sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")),
     });
     await host.session.bindExtensions({});
-    await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+    await host.startLocal();
     for (const stage of ["startup", "reload"]) {
       if (stage === "reload") await host.session.reload();
       wire.script([
@@ -286,7 +286,7 @@ test("bound host search stays subscription-backed for direct and nested calls ac
         { text: "Done" },
       ]);
       const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-      await host.submit({ text: stage, busyPolicy: "prompt", idempotencyKey: stage, origin: "test" }, `rq-${stage}`);
+      expect((await host.submitLocal({ text: stage, busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
       await ended; await host.drained();
       const result = host.session.messages.find((message) => message.role === "toolResult" && message.toolCallId.startsWith(`${stage}-search`));
       expect(result).toBeDefined();
@@ -297,9 +297,11 @@ test("bound host search stays subscription-backed for direct and nested calls ac
         web_search: { running: 0, queued: 0 }, stopped: false });
     }
     expect(searches).toBe(4);
-    const records = corral.calls().map((call) => call.envelope.payload);
-    expect(records.filter((p) => p.kind === "auxiliary" && p.action === "finish" && p.outcome === "completed")).toHaveLength(4);
-    expect(records.filter((p) => p.kind === "budget" && p.action === "reserve" && p.unbounded === true)).toHaveLength(4);
+    const records = events.since(0, 64 * 1024).events.filter(event => event.kind === "auxiliary" && event.usage_kind === "web_search");
+    expect(records.filter(event => event.action === "finish").map(event => event.outcome))
+      .toEqual(["completed", "completed", "completed", "completed"]);
+    expect(corral.calls().filter(argv => argv[3] === "usage" && argv[4] === "add" && argv[argv.indexOf("--cache-read") + 1] === "2"))
+      .toHaveLength(4);
   } finally { host?.session.dispose(); assets.cleanup(); }
 }, 30000);
 

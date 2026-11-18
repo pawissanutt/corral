@@ -1,5 +1,4 @@
-// Fixture roles (host-bridge tests only): upstream read plus the corral hello, event and
-// receipt_lookup operations. The control commands drive the fake transport from the bridge.
+// Fixture roles for host tests: upstream read and commands that exercise session lifecycle.
 import { Type } from "typebox";
 
 import type { Role, RoleModule } from "../../../src/roles/types.ts";
@@ -54,17 +53,7 @@ export function fixtureRole(role: Role): RoleModule {
   return {
     role,
     upstreamTools: ["read"],
-    corralOps: ["hello", "event", "receipt_lookup"],
-    tools() {
-      return [{
-        name: "corral_receipt_lookup",
-        label: "Look up a corral receipt",
-        description: "Read the stored receipt of an earlier request of this container",
-        op: "receipt_lookup",
-        parameters: Type.Object({ request_id: Type.String() }),
-        payload: (params: Record<string, unknown>) => ({ request_id: params.request_id }),
-      }];
-    },
+    tools() { return []; },
     contract() {
       return `Fixture ${role} contract for host-bridge tests. Use only the tools you are given.`;
     },

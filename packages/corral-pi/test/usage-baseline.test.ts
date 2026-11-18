@@ -42,15 +42,15 @@ test("early strict/standard static profiles retain raw prompts and schemas for e
         const enabled = preset === "strict" ? [] : [...early,
           ...(role === "worker" ? ["todo", "background_shell", "codemode"] :
             role === "reviewer" ? ["codemode"] : ["todo"])];
-        const identity = { store: "st-baseline", project: "baseline", role, generation: 1 };
+        const identity = { store: "st-baseline", project: "baseline", role };
         const host = await HostSession.create({
           sdk, identity, cwd, root: cwd, home, agentDir: join(dir, "agent"), model: "gpt-6.1-sol",
           capabilities: { catalog: 4, digest: sha256Hex(JSON.stringify(enabled)), preset, enabled },
           runtimeDir: join(dir, "runtime"),
           guidance: { projectText: true, settings: { skills: { user_dirs: ["~/.agents/skills"] },
             background_shell: { max_jobs: 2, max_output_bytes: 4096, max_runtime_secs: 60 } } },
-          modules, network, events: new EventLog(1),
-          client: new CorralClient({ corral: "/unused", root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => "" }),
+          modules, network, events: new EventLog(),
+          client: new CorralClient({ corral: "", root: cwd, cwd, identity }),
           sessionManager: sdk.SessionManager.inMemory(cwd),
         });
         try {

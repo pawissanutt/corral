@@ -12,7 +12,6 @@ import { HostSession } from "../src/host/session.ts";
 import { CorralClient } from "../src/tools/corral.ts";
 import fixtureAuth from "./fixtures/auth/index.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
 
 for (const provider of ["openai-codex", "anthropic"] as const) test(`${provider}: native quota evidence reaches the bound host event without raw errors`, async () => {
   const assets = buildFixtureInstall();
@@ -48,19 +47,18 @@ for (const provider of ["openai-codex", "anthropic"] as const) test(`${provider}
     });
     const modules = { ...await loadModules(assets.dir, "worker"), auth };
     const sdk = await import("@earendil-works/pi-coding-agent");
-    const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
-    const corral = writeFakeCorral(work);
-    const events = new EventLog(1);
+    const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
+    const events = new EventLog();
     const cwd = join(work, "work"); mkdirSync(cwd);
     host = await HostSession.create({ sdk, identity, provider, cwd, agentDir: join(work, "agent"),
       model: provider === "anthropic" ? "claude-sonnet-5-5" : "gpt-6.1-sol", modules,
-      client: new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host!.sessionId() }),
+      client: new CorralClient({ corral: "", root: work, cwd, identity }),
       events, network, sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
     });
-    await host.hello("n".repeat(64), "pane-1", "c".repeat(64));
+    await host.startLocal();
     await host.session.prompt("Offline failure fixture");
     await host.drained();
-    const failures = corral.calls().map(c => c.envelope.payload).filter(p => p.kind === "provider_error");
+    const failures = events.since(0, 64 * 1024).events.filter(event => event.kind === "provider_error");
     expect(failures).toHaveLength(1);
     expect(failures[0]).toMatchObject({ class: "quota", failure: { version: 1,
       connection: provider === "anthropic" ? "anthropic-subscription" : "openai-subscription",

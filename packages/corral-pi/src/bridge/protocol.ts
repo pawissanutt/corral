@@ -1,6 +1,6 @@
 // Session socket v2: one JSON request and reply per line, with the Unix socket as the boundary.
 import { parseOwnerAttachments, type OwnerAttachment } from "../host/owner-attachments.ts";
-import type { BusyPolicy } from "../delivery/types.ts";
+export type BusyPolicy = "prompt" | "steer" | "follow_up";
 
 export const BRIDGE_VERSION = 2;
 export const FRAME_MAX_BYTES = 64 * 1024;
@@ -38,23 +38,6 @@ export interface SessionInput {
   readonly busyPolicy: BusyPolicy;
   readonly origin: "owner" | "auto";
   readonly attachments?: OwnerAttachment[];
-}
-
-/** Internal legacy delivery adapter; no key comes from the session socket. */
-export interface SubmitInput {
-  readonly text: string;
-  readonly busyPolicy: BusyPolicy;
-  readonly idempotencyKey: string;
-  readonly origin: string;
-}
-
-/** One question of the container as corral holds it, for the host's herdr projection. */
-export interface QuestionUpdate {
-  readonly key: string;
-  readonly revision: number;
-  readonly kind: string;
-  readonly blocking: boolean;
-  readonly state: string;
 }
 
 export interface SubmitResult {

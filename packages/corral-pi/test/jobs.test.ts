@@ -1,8 +1,7 @@
-// Background jobs (T-565) against a fake corral: the reports a job sends, in order, with real
-// processes. Barriers are FIFOs the test opens, so no step depends on timing.
+// Local process-supervisor regressions with FIFO barriers instead of timing sleeps.
 import { afterEach, expect, test } from "bun:test";
-import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,163 +9,82 @@ import { fileURLToPath } from "node:url";
 import { PassThrough } from "node:stream";
 
 import {
-  type JobCall, type JobReceipt, JobRuntime, type Schedule, processGroup, startTimeOf,
+  JobRuntime, type JobRuntimeOptions, type Schedule, processGroup, startTimeOf,
 } from "../src/extensions/jobs/runtime.ts";
 
 const dirs: string[] = [];
+const runtimes: JobRuntime[] = [];
 
 function fields(value: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
   return Object.fromEntries(keys.map((key) => [key, value[key]]));
 }
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(runtimes.splice(0).map(runtime => runtime.shutdown()));
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-interface Sent {
-  readonly op: string;
-  readonly key: string;
-  readonly payload: Record<string, unknown>;
-}
 
 function fixture(options: {
-  maxOutput?: number; maxJobs?: number; schedule?: Schedule; answer?: (sent: Sent) => Promise<JobReceipt>;
-  registerCapability?: (pid: number) => () => void;
+  maxOutput?: number; maxJobs?: number; schedule?: Schedule;
+  registerCapability?: JobRuntimeOptions["registerCapability"];
+  onPrepared?: JobRuntimeOptions["onPrepared"];
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "corral-jobs-"));
   dirs.push(dir);
-  const sent: Sent[] = [];
-  const committed = (result: unknown = {}): JobReceipt => ({ state: "committed", result });
-  const call: JobCall = async (op, key, payload) => {
-    const item = { op, key, payload };
-    sent.push(item);
-    return options.answer ? options.answer(item) : committed();
-  };
+  const events: { kind: string; data: Record<string, unknown> }[] = [];
+  const prepared: string[] = [];
   const runtime = new JobRuntime({
-    cwd: dir, runtimeDir: join(dir, "runtime"), generation: 3, call, ...(options.schedule ? { schedule: options.schedule } : {}),
-    ...(options.registerCapability ? { registerCapability: options.registerCapability } : {}),
+    cwd: dir, runtimeDir: join(dir, "runtime"), ...(options.schedule ? { schedule: options.schedule } : {}),
+    registerCapability: options.registerCapability,
+    onPrepared(job) { prepared.push(job); options.onPrepared?.(job); },
+    onEvent: (kind, data) => events.push({ kind, data }),
     settings: { max_jobs: options.maxJobs ?? 4, max_output_bytes: options.maxOutput ?? 1024, max_runtime_secs: 60 },
   });
+  runtimes.push(runtime);
   const fifo = (name: string) => {
     const path = join(dir, name);
     expect(spawnSync("mkfifo", [path]).status).toBe(0);
     return path;
   };
-  const actions = () => sent.filter((s) => s.op === "job").map((s) => s.payload.action);
-  const identity = (job: string) => {
-    const started = sent.find((s) => s.payload.action === "started" && s.payload.job === job)?.payload;
-    return { pid: Number(started?.pid), start: String(started?.start_time) };
-  };
-  return { dir, sent, runtime, fifo, actions, identity };
+  return { dir, events, prepared, runtime, fifo };
 }
 
 test("the supervisor is registered until exit, not the command it launches", async () => {
   const pids = new Set<number>();
   const fx = fixture({ registerCapability: (pid) => { pids.add(pid); return () => { pids.delete(pid); }; } });
   const gate = fx.fifo("registered-gate");
-  const started = await fx.runtime.start(`cat ${gate} >/dev/null`, "registered");
+  const started = await fx.runtime.start(`cat ${gate} >/dev/null`);
   expect([...pids]).toEqual([started.pid]);
   await writeFile(gate, "go\n");
   await fx.runtime.settled(started.job as string);
   expect([...pids]).toEqual([]);
 });
 
-test("a job is recorded before it spawns, with its pid and kernel start time, and output is bounded", async () => {
-  // Given a job that prints more than the retained output bound.
+test("a locally prepared job reports start and exit and bounds retained output", async () => {
   const fx = fixture({ maxOutput: 1024 });
   const gate = fx.fifo("gate");
-  // When it is released after its identity was recorded and runs to completion.
-  const started = await fx.runtime.start(`cat ${gate} >/dev/null; head -c 3000 /dev/zero | tr '\\0' x`, "call-1");
+  const started = await fx.runtime.start(`cat ${gate} >/dev/null; head -c 3000 /dev/zero | tr '\\0' x`);
+  const { job } = started;
+  if (typeof job !== "string") throw new Error("job missing");
+  expect(fx.prepared).toEqual([job]);
+  expect(fx.events).toEqual([{ kind: "job_started", data: { job, pid: started.pid } }]);
   await writeFile(gate, "go\n");
-  await fx.runtime.settled(started.job as string);
-  // Then corral saw prepare, started and exited in order, and output was capped and pageable.
-  expect(fx.actions()).toEqual(["prepare", "started", "exited"]);
-  expect(fx.sent[0]?.key).toBe("call-1/prepare");
-  const identity = fx.sent[1]?.payload;
-  expect(identity?.pid).toBe(started.pid);
-  expect(String(identity?.start_time)).toMatch(/^\d+$/);
-  expect(fx.sent[2]?.payload).toEqual({ action: "exited", job: "j3-1", exit_code: 0, group_clear: true });
-  const output = fx.runtime.output("j3-1", 1000, 100);
+  await fx.runtime.settled(job);
+  expect(fx.events[1]).toEqual({ kind: "job_exited", data: { job, exit_code: 0, signal: null, group_clear: true } });
+  const output = fx.runtime.output(job, 1000, 100);
   expect(fields(output, ["bytes_total", "bytes_stored", "truncated", "offset", "next_offset"]))
     .toEqual({ bytes_total: 3000, bytes_stored: 1024, truncated: true, offset: 1000, next_offset: 1024 });
   expect(output.text).toBe("x".repeat(24));
-  expect(fx.runtime.inspection()[0]).toMatchObject({ job: "j3-1", state: "exited", exitCode: 0, groupClear: true, bytes: 3000, truncated: true });
+  expect(fx.runtime.inspection()[0]).toMatchObject({ job, state: "exited", exitCode: 0, groupClear: true, bytes: 3000, truncated: true });
 });
 
-test("a line monitor armed before its line reports one match, before the exit", async () => {
-  // Given a job blocked on a barrier and a committed line monitor.
-  const fx = fixture();
-  const gate = fx.fifo("gate");
-  const { job } = await fx.runtime.start(`cat ${gate} >/dev/null; echo READY; echo READY again`, "c1");
-  const receipt = await fx.runtime.monitor(job as string, "line", "^READY", 60, "c2");
-  expect(receipt.state).toBe("committed");
-  const registered = fx.sent.find((s) => s.op === "job_monitor");
-  expect(registered?.key).toBe("c2");
-  expect(fields(registered?.payload ?? {}, ["wait", "job", "on", "pattern"]))
-    .toEqual({ wait: "j3-1.m1", job: "j3-1", on: "line", pattern: "^READY" });
-  // When the barrier is released and the job exits.
-  await writeFile(gate, "go\n");
-  await fx.runtime.settled(job as string);
-  // Then exactly one match was reported, and only then the exit.
-  expect(fx.actions()).toEqual(["prepare", "started", "line", "exited"]);
-  expect(fx.runtime.inspection()[0]?.watches[0]).toMatchObject({ armed: true, matched: "READY", reportQueued: true });
-  expect(fx.sent.find((s) => s.payload.action === "line")?.payload).toEqual({
-    action: "line", job: "j3-1", wait: "j3-1.m1", line: "READY",
-  });
-});
-
-test("a line printed while the monitor commits still matches, and the exit report waits for it", async () => {
-  // Given a monitor whose corral commit is held open.
-  let release!: (receipt: JobReceipt) => void;
-  const held = new Promise<JobReceipt>((resolve) => { release = resolve; });
-  const fx = fixture({
-    answer: async (sent) => (sent.op === "job_monitor" ? held : { state: "committed", result: {} }),
-  });
-  const gate = fx.fifo("gate");
-  const { job } = await fx.runtime.start(`cat ${gate} >/dev/null; echo READY`, "c1");
-  const monitoring = fx.runtime.monitor(job as string, "line", "READY", 60, "c2");
-  // When the line prints and the process exits before the commit answers.
-  await writeFile(gate, "go\n");
-  await fx.runtime.closed(job as string);
-  // Then nothing is reported until the monitor commits; afterwards the match precedes the exit.
-  expect(fx.actions()).toEqual(["prepare", "started"]);
-  release({ state: "committed", result: {} });
-  await monitoring;
-  await fx.runtime.settled(job as string);
-  expect(fx.actions()).toEqual(["prepare", "started", "line", "exited"]);
-});
-
-test("a refused monitor reports no match; a refused prepare never spawns", async () => {
-  // Given corral refusing the first job's monitor and the second job's prepare.
-  let refusePrepare = false;
-  const fx = fixture({
-    answer: async (sent) => (sent.op === "job_monitor" || (refusePrepare && sent.payload.action === "prepare")
-      ? { state: "rejected", result: { code: "op_not_allowed" } } : { state: "committed", result: {} }),
-  });
-  const gate = fx.fifo("gate");
-  const { job } = await fx.runtime.start(`cat ${gate} >/dev/null; echo READY`, "c1");
-  expect((await fx.runtime.monitor(job as string, "line", "READY", 60, "c2")).state).toBe("rejected");
-  await writeFile(gate, "go\n");
-  await fx.runtime.settled(job as string);
-  refusePrepare = true;
-  const refused = await fx.runtime.start("echo never", "c3");
-  // Then no line report was sent and the refused job has no process.
-  expect(fx.actions()).toEqual(["prepare", "started", "exited", "prepare"]);
-  expect(refused.state).toBe("refused");
-});
-
-test("shutdown waits for all jobs, including a SIGTERM-ignoring process", async () => {
-  const fx = fixture();
-  const ready = fx.fifo("ready");
-  const normal = await fx.runtime.start("sleep 30", "normal");
-  const stubborn = await fx.runtime.start(`trap '' TERM; echo ready > ${ready}; exec sleep 30`, "stubborn");
-  await readFile(ready, "utf8");
-  expect(startTimeOf(normal.pid as number)).toBeDefined();
-  expect(startTimeOf(stubborn.pid as number)).toBeDefined();
-  await fx.runtime.shutdown();
-  for (const item of [normal, stubborn]) {
-    expect(startTimeOf(item.pid as number)).toBeUndefined();
-    expect(processGroup(item.pid as number, fx.identity(item.job as string).start).members).toBe(0);
-  }
+test("failed local preparation never spawns the command", async () => {
+  const fx = fixture({ onPrepared: () => { throw new Error("transcript unavailable"); } });
+  const marker = join(fx.dir, "ran");
+  await expect(fx.runtime.start(`touch "${marker}"`)).rejects.toThrow("transcript unavailable");
+  expect(fx.runtime.state()).toEqual([]);
+  expect(fx.events).toEqual([]);
+  expect(existsSync(marker)).toBeFalse();
 });
 
 test("job_kill stops the whole process group and its exit carries the signal", async () => {
@@ -174,35 +92,34 @@ test("job_kill stops the whole process group and its exit carries the signal", a
   const fx = fixture();
   const ready = fx.fifo("kill-ready");
   const up = readFile(ready, "utf8");
-  const { job, pid } = await fx.runtime.start(`sleep 30 & echo ready > ${ready}; wait`, "c1");
+  const { job, pid } = await fx.runtime.start(`sleep 30 & echo ready > ${ready}; wait`);
   // The command shell must have launched its child before the group is signalled.
   expect(await up).toBe("ready\n");
   // When it is killed.
   const killed = await fx.runtime.kill(job as string);
-  // Then the group is gone and corral was told how it ended.
+  // The group is gone and the local exit event carries its signal.
   expect(fields(killed, ["state", "signal"])).toEqual({ state: "exited", signal: "SIGTERM" });
   expect(startTimeOf(pid as number)).toBeUndefined();
-  expect(fx.sent.at(-1)?.payload).toEqual({ action: "exited", job: "j3-1", signal: "SIGTERM", group_clear: true });
+  expect(fx.events.at(-1)).toEqual({ kind: "job_exited", data: { job, exit_code: null, signal: "SIGTERM", group_clear: true } });
 }, 30_000); // Includes the runtime's 5s sweep, grace, startup and report handling.
 
 test("job_kill waits for a TERM-ignoring command and reports the forced exit", async () => {
   const fx = fixture();
   const ready = fx.fifo("slow-kill-ready");
   const up = readFile(ready, "utf8");
-  const { job, pid } = await fx.runtime.start(`trap '' TERM; echo ready > ${ready}; exec sleep 300`, "slow-kill");
+  const { job, pid } = await fx.runtime.start(`trap '' TERM; echo ready > ${ready}; exec sleep 300`);
   expect(await up).toBe("ready\n");
   const killed = await fx.runtime.kill(job as string);
   expect(fields(killed, ["state", "signal", "group_clear"])).toEqual({
     state: "exited", signal: "SIGKILL", group_clear: true,
   });
   expect(startTimeOf(pid as number)).toBeUndefined();
-  expect(fx.sent.at(-1)?.payload).toEqual({ action: "exited", job: "j3-1", signal: "SIGKILL", group_clear: true });
 }, 30_000);
 
 test("losing the runtime output file falls back to the in-memory tail", async () => {
   // Given a finished job.
   const fx = fixture();
-  const { job } = await fx.runtime.start("echo hello from the job", "c1");
+  const { job } = await fx.runtime.start("echo hello from the job");
   await fx.runtime.settled(job as string);
   // When its runtime directory disappears.
   rmSync(join(fx.dir, "runtime"), { recursive: true, force: true });
@@ -215,11 +132,10 @@ test("losing the runtime output file falls back to the in-memory tail", async ()
 test("the host refuses jobs beyond max_jobs and unknown job IDs", async () => {
   // Given a one-job limit with a job running.
   const fx = fixture({ maxJobs: 1 });
-  const { job } = await fx.runtime.start("sleep 30", "c1");
-  // When another job starts and an unknown job is read, then both refuse without a corral call.
-  await expect(fx.runtime.start("true", "c2")).rejects.toThrow("job_limit");
-  expect(() => fx.runtime.output("j3-9")).toThrow("unknown job");
-  expect(fx.actions()).toEqual(["prepare", "started"]);
+  const { job } = await fx.runtime.start("sleep 30");
+  await expect(fx.runtime.start("true")).rejects.toThrow("job_limit");
+  expect(() => fx.runtime.output("foreign")).toThrow("unknown job");
+  expect(fx.prepared).toEqual([job]);
   await fx.runtime.kill(job as string);
 });
 
@@ -234,6 +150,7 @@ for (const path of ["job_kill", "runtime limit", "leader exit", "shutdown"] as c
     const deadlines: (() => void)[] = [];
     const schedule: Schedule = (run, ms) => {
       if (ms === 60_000) deadlines.push(run);
+      else queueMicrotask(run); // Deliver the forced-stop timer without waiting through the grace period.
       return () => undefined;
     };
     const fx = fixture({ schedule });
@@ -241,46 +158,22 @@ for (const path of ["job_kill", "runtime limit", "leader exit", "shutdown"] as c
     const gate = fx.fifo("gate");
     const up = readFile(ready, "utf8");
     const leader = path === "leader exit" ? `cat ${gate} >/dev/null` : "wait";
-    const { job } = await fx.runtime.start(stubborn(ready, leader), "c1");
+    const { job, pid } = await fx.runtime.start(stubborn(ready, leader));
     expect(await up).toBe("up\n");
-    const { pid, start } = fx.identity(job as string);
+    if (typeof job !== "string" || typeof pid !== "number") throw new Error("job identity missing");
+    const start = startTimeOf(pid);
     expect(processGroup(pid, start).owned).toBeTrue();
     // When the job is ended through this path.
-    if (path === "job_kill") await fx.runtime.kill(job as string);
+    if (path === "job_kill") await fx.runtime.kill(job);
     if (path === "runtime limit") deadlines.splice(0).forEach((run) => run());
     if (path === "leader exit") await writeFile(gate, "go\n");
-    if (path === "shutdown") fx.runtime.shutdown();
-    await fx.runtime.settled(job as string);
+    if (path === "shutdown") await fx.runtime.shutdown();
+    await fx.runtime.settled(job);
     // Then the whole group is gone and the exit report says so.
     expect(processGroup(pid, start).members).toBe(0);
-    expect(fx.sent.at(-1)?.payload.group_clear).toBeTrue();
+    expect(fx.events.at(-1)?.data.group_clear).toBeTrue();
   });
 }
-
-test("shutdown awaits process-group closure without waiting on remote exit receipts", async () => {
-  // Given a ready descendant and an exit-report call held at the remote boundary.
-  let release!: (receipt: JobReceipt) => void;
-  const held = new Promise<JobReceipt>((resolve) => { release = resolve; });
-  const fx = fixture({ answer: async (sent) => sent.payload.action === "exited"
-    ? held : { state: "committed", result: {} } });
-  const ready = fx.fifo("ready");
-  const up = readFile(ready, "utf8");
-  const { job } = await fx.runtime.start(stubborn(ready, "wait"), "shutdown-boundary");
-  expect(await up).toBe("up\n");
-  const { pid, start } = fx.identity(job as string);
-  // When shutdown is awaited, it must be a process-completion boundary, not just a signal.
-  const shutdown = fx.runtime.shutdown();
-  try {
-    expect(shutdown instanceof Promise).toBeTrue();
-    await shutdown;
-    // Then cleanup has completed independently of the deliberately blocked remote receipt.
-    expect(startTimeOf(pid)).toBeUndefined();
-    expect(processGroup(pid, start).members).toBe(0);
-  } finally {
-    release({ state: "committed", result: {} });
-    await fx.runtime.settled(job as string);
-  }
-});
 
 const PIDFD_WAIT = "import os, select, sys\nfd = os.pidfd_open(int(sys.argv[1]))\nprint('ARMED', flush=True)\n"
   + "ready, _, _ = select.select([fd], [], [], 30)\nprint('EXITED' if ready else 'TIMEOUT', flush=True)\n";
@@ -340,8 +233,8 @@ test("crash handshakes reject a truncated identity or a failed peer instead of h
   await expect(armed).rejects.toThrow("peer failed");
 });
 
-test("a host killed between spawn and the identity commit leaves no command running", async () => {
-  // Given a host stalled inside the started commit of a job whose command would leave a marker.
+test("a host killed between supervisor spawn and command release leaves no command running", async () => {
+  // The fixture stops at capability registration, before writing to the supervisor's stdin.
   const dir = mkdtempSync(join(tmpdir(), "corral-jobs-crash-"));
   dirs.push(dir);
   const marker = join(dir, "ran");
@@ -350,7 +243,7 @@ test("a host killed between spawn and the identity commit leaves no command runn
   const host = spawn(process.execPath, [fixturePath, runtimeDir, marker], { stdio: ["ignore", "pipe", "inherit"] });
   // Arm exit observations at spawn, before waiting on either peer's handshake.
   const gone = new Promise((resolve) => host.once("close", resolve));
-  let waiter: ReturnType<typeof spawn> | undefined;
+  let waiter: ChildProcess | undefined;
   let waiterGone: Promise<unknown> | undefined;
   let pid: number | undefined;
   let start: string | undefined;
@@ -411,9 +304,9 @@ test("only the recorded leader anchors a group; a leaderless or stale identity i
 test("a command's own output never stands in for the launcher's status line", async () => {
   // Given a command that prints a status-shaped line and exits with another code.
   const fx = fixture();
-  const { job } = await fx.runtime.start('echo "exit 7"; exit 3', "c1");
+  const { job } = await fx.runtime.start('echo "exit 7"; exit 3');
   await fx.runtime.settled(job as string);
   // Then the launcher's status wins and the line is ordinary job output.
-  expect(fx.sent.at(-1)?.payload).toEqual({ action: "exited", job: "j3-1", exit_code: 3, group_clear: true });
+  expect(fx.events.at(-1)).toEqual({ kind: "job_exited", data: { job, exit_code: 3, signal: null, group_clear: true } });
   expect(fx.runtime.output(job as string).text).toBe("exit 7\n");
 });

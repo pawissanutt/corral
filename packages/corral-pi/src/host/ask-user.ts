@@ -1,10 +1,8 @@
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { OWNER_INPUT_TEXT_MAX } from "../roles/assistant/owner-action.ts";
 import { ASK_USER_GUIDELINES } from "../roles/common/ask-user.ts";
 import { AskDialog, type Choice, type DialogAnswer, type DialogOptions, type DialogQuestion, type DialogResult } from "./ask-user-dialog.ts";
-import { Choice as PendingChoice, type ChoiceQuestion, type PendingQuestions } from "./pending-questions.ts";
-import { mirroredDialog, type QuestionMirror } from "./owner-ask-mirror.ts";
+import { ANSWER_MAX_BYTES, Choice as PendingChoice, type ChoiceQuestion, type PendingQuestions } from "./pending-questions.ts";
 
 const choice = Type.Union([
   Type.String({ minLength: 1, maxLength: 300 }),
@@ -32,10 +30,6 @@ type Question = { question: string; header?: string; options: (string | Choice)[
 type Answer = { question: string; option?: string; options?: string[]; text?: string };
 
 const TIMEOUT_MS = 300_000;
-
-export function askUserEnabled(role: string, enabled: readonly string[]): boolean {
-  return enabled.includes("ask_user") && (role === "assistant" || role === "build" || role === "pm");
-}
 
 function normalize(q: Question): DialogQuestion {
   const options = q.options.map((o) => (typeof o === "string" ? { label: o } : o));
@@ -106,89 +100,89 @@ export async function sequential(ui: DialogUi, questions: DialogQuestion[], sign
   }
   return answers;
 }
-/** Remote hosts replace only the owner interaction, retaining the existing tool schema. */
-export type RemoteAsk = (id: string, params: unknown, signal?: AbortSignal) => Promise<{
+type AskParams = { questions: Question[]; nonBlocking?: false }
+  | { questions: ChoiceQuestion[]; nonBlocking: true } | { withdraw: string };
+type DeferredAsk = (id: string, params: AskParams, signal?: AbortSignal) => Promise<{
   content: { type: "text"; text: string }[]; details: Record<string, unknown>;
 }>;
 
-export function localQuestionAsk(pending: PendingQuestions): RemoteAsk {
-  return async (id, value) => {
-    const params = value as { questions?: Question[]; withdraw?: string };
-    if (params.withdraw !== undefined) {
+/** Deferred parameters cannot include features only the pane dialog understands. */
+function validateDeferredQuestions(questions: readonly ChoiceQuestion[]): void {
+  for (const q of questions) {
+    if ("multiSelect" in q || "header" in q || q.options.some(option => typeof option !== "string")) {
+      throw new Error("deferred_questions_require_plain_single_selection; use the synchronous dialog for rich questions");
+    }
+    if (new Set(q.options).size !== q.options.length) throw new Error("Options must be distinct");
+  }
+}
+
+export function localQuestionAsk(pending: PendingQuestions): DeferredAsk {
+  return async (id, params, signal) => {
+    signal?.throwIfAborted();
+    if ("withdraw" in params) {
       const status = pending.withdraw(params.withdraw);
       return { content: [{ type: "text", text: `${params.withdraw}: ${status}` }], details: { status } };
     }
     if (!params.questions?.length || params.questions.length > 4) throw new Error("ask_user requires 1-4 questions");
-    const questions = params.questions.map(q => {
-      if (q.multiSelect) throw new Error("ask_user takes one selection per question; ask separate questions instead");
+    if (params.nonBlocking) validateDeferredQuestions(params.questions);
+    const questions = params.nonBlocking ? params.questions.map(q => PendingChoice.parse(q)) : params.questions.map(q => {
+      if ("multiSelect" in q && q.multiSelect) {
+        throw new Error("ask_user takes one selection per question; ask separate questions instead");
+      }
       const normalized = normalize(q);
       return PendingChoice.parse({ ...q, options: normalized.options.map(option => option.label) });
     });
-    const opened = questions.map((question, index) => pending.ask(`${id}:${index}`, [question]));
-    return { content: [{ type: "text", text: `Waiting for the owner: ${opened.map(q => q.id).join(", ")}. Continue only independent work.` }],
-      details: { status: "pending", questions: opened.map(q => q.id) } };
+    const ids = questions.map((question, index) => pending.ask(`${id}:${index}`, [question]).id);
+    return { content: [{ type: "text", text: `Waiting for the owner: ${ids.join(", ")}. Continue only independent work.` }],
+      details: { status: "pending", questions: ids, ...(ids.length === 1 ? { id: ids[0] } : {}) } };
   };
 }
 
-/** Dialogs are local to the owner's interactive pane, never a worker question flow. A `mirror` (the
- * pane PM) also opens each question in the owner's Inbox, where the app can answer it first. */
+/** Interactive panes keep synchronous dialogs; deferred and headless asks use the pending store. */
 export function askUserTool(record: (answer: string) => Promise<string>, pending?: Pick<PendingQuestions, "ask" | "withdraw">,
-  dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource, remote?: RemoteAsk,
-  mirror?: QuestionMirror): ToolDefinition {
+  dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource, deferred?: DeferredAsk): ToolDefinition {
   return {
     name: "ask_user", label: "Ask the owner", exposure: "model-only", executionMode: "sequential",
-    description: "Ask the owner 1-4 focused choice questions together in one dialog instead of asking only in chat; "
-      + "batch related questions in one call. Synchronous questions support short headers, string or {label, description} options, "
+    description: "Ask the owner 1-4 focused choice questions instead of asking only in chat. "
+      + "In a pane, synchronous questions use a dialog and support short headers, string or {label, description} options, "
       + "multiSelect and freeText, including partial answers. Set nonBlocking:true for plain-string, single-selection questions "
-      + "with optional freeText: it returns a stable pending ID immediately; the owner answers via /questions while you continue "
-      + "independent work. key deduplicates retries; supersedes withdraws a pending question; withdraw closes an unneeded ID. "
-      + "Cancellation, timeout or no answer is never consent.",
+      + "with optional freeText. Deferred (or headless) questions return pending IDs for the owner to answer in the app or via /questions. "
+      + "Continue only independent work. Withdraw closes an unneeded ID. Cancellation, timeout or no answer is never consent.",
     promptSnippet: "Present owner questions and clarifications as choices",
     promptGuidelines: [...ASK_USER_GUIDELINES],
     // Legacy provider adapters publish root properties; a root union becomes an empty tool.
     parameters: Type.Object({
       questions: Type.Optional(Type.Array(question, { minItems: 1, maxItems: 4 })),
       nonBlocking: Type.Optional(Type.Boolean()),
-      key: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
-      supersedes: Type.Optional(Type.String()), withdraw: Type.Optional(Type.String({ minLength: 1 })),
+      withdraw: Type.Optional(Type.String({ minLength: 1 })),
     }, { additionalProperties: false, anyOf: [
       Type.Object({ questions: Type.Array(question, { minItems: 1, maxItems: 4 }),
-        nonBlocking: Type.Optional(Type.Literal(false)), key: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
-        supersedes: Type.Optional(Type.String()) }, { additionalProperties: false }),
+        nonBlocking: Type.Optional(Type.Literal(false)) }, { additionalProperties: false }),
       Type.Object({ questions: Type.Array(deferredQuestion, { minItems: 1, maxItems: 4 }),
-        nonBlocking: Type.Literal(true), key: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
-        supersedes: Type.Optional(Type.String()) }, { additionalProperties: false }),
+        nonBlocking: Type.Literal(true) }, { additionalProperties: false }),
       Type.Object({ withdraw: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
     ] }),
-    async execute(_id, params: { questions: Question[]; nonBlocking?: false; key?: string; supersedes?: string } | { questions: ChoiceQuestion[]; nonBlocking: true; key?: string; supersedes?: string } | { withdraw: string }, signal, _update, ctx) {
-      if (remote) return remote(_id, params, signal);
+    async execute(id, params: AskParams, signal, _update, ctx) {
       const noAnswer = () => ({ content: [{ type: "text" as const, text: "no answer" }], details: { status: "no answer" } });
       if ("withdraw" in params) {
         if (!pending) throw new Error("pending_questions_unavailable");
         const status = pending.withdraw(params.withdraw);
         return { content: [{ type: "text", text: `${params.withdraw}: ${status}; no owner answer` }], details: { id: params.withdraw, status } };
       }
-      if (!ctx.hasUI || signal?.aborted) return noAnswer();
+      if (signal?.aborted) return noAnswer();
+      if (deferred && (!ctx.hasUI || params.nonBlocking)) return deferred(id, params, signal);
+      if (!ctx.hasUI) return noAnswer();
       if (params.nonBlocking) {
         if (ctx.mode !== "tui" || !pending) return { ...noAnswer(), details: { status: "no answer", reason: "pending UI unavailable" } };
-        for (const q of params.questions) {
-          if ("multiSelect" in q || "header" in q || q.options.some(option => typeof option !== "string")) {
-            throw new Error("deferred_questions_require_plain_single_selection; use the synchronous dialog for rich questions");
-          }
-          if (new Set(q.options).size !== q.options.length) throw new Error("Options must be distinct");
-        }
-        const q = pending.ask(_id, params.questions, params.key, params.supersedes);
-        return { content: [{ type: "text", text: `${q.id}: ${q.status}. Owner UI: /questions${mirror ? " and the app Inbox" : ""}. Continue only independent work; no answer authorizes anything.` }],
+        validateDeferredQuestions(params.questions);
+        const q = pending.ask(id, params.questions);
+        return { content: [{ type: "text", text: `${q.id}: ${q.status}. Owner UI: /questions. Continue only independent work; no answer authorizes anything.` }],
           details: { id: q.id, status: q.status, expires: q.expires } };
       }
-      if (dialogBusy()) return { ...noAnswer(), details: { status: "no answer", reason: "another owner/permission dialog is open" } };
+      if (dialogBusy()) return { ...noAnswer(), details: { status: "no answer", reason: "another owner dialog is open" } };
       const questions = params.questions.map(normalize);
-      const show = async (shownSignal?: AbortSignal): Promise<(DialogAnswer | undefined)[]> => {
-        const shown = (await askDialog(ctx.ui, questions, shownSignal, presentation?.()))?.answers;
-        if (shown !== undefined) return shown;
-        return shownSignal?.aborted ? questions.map(() => undefined) : sequential(ctx.ui, questions, shownSignal);
-      };
-      const raw = mirror ? await mirroredDialog(mirror, _id, questions, signal, show) : await show(signal);
+      const shown = (await askDialog(ctx.ui, questions, signal, presentation?.()))?.answers;
+      const raw = shown ?? (signal?.aborted ? [] : await sequential(ctx.ui, questions, signal));
       const answers: Answer[] = [];
       const unanswered: string[] = [];
       raw.forEach((a, i) => {
@@ -206,8 +200,7 @@ export function askUserTool(record: (answer: string) => Promise<string>, pending
         : `${a.question}: ${a.option}${a.text ? `\n${a.text}` : ""}`);
       if (unanswered.length) lines.push(`Unanswered (no consent): ${unanswered.join(" | ")}`);
       const answer = lines.join("\n");
-      // The cited owner instruction must be stored in full, not as a truncated prefix.
-      if (Buffer.byteLength(answer) > OWNER_INPUT_TEXT_MAX) return noAnswer();
+      if (Buffer.byteLength(answer) > ANSWER_MAX_BYTES) return noAnswer();
       const recorded = await record(answer);
       const status = unanswered.length ? "partial" : "answered";
       return { content: [{ type: "text", text: recorded }], details: { status, answers, ...(unanswered.length ? { unanswered } : {}) } };

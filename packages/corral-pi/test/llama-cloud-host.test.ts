@@ -11,10 +11,10 @@ import type { HostCapabilities } from "../src/host/config.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
+import { CorralClient } from "../src/tools/corral.ts";
 import { fakeCodexTransport } from "./fixtures/auth/fake-transport.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 import { nextEvent } from "./support/wait.ts";
 
 const capabilities: HostCapabilities = {
@@ -57,11 +57,10 @@ for (const role of ["worker", "reviewer", "pm"] as const) {
             delete: async () => { throw new Error("fixture credentials are read-only"); },
           };
         const credentialContexts: string[] = [];
-        const identity = { store: "st-demo", project: "demo", role, generation: 1, task: "T-578", run: "R1" };
-        const events = new EventLog(1);
-        const corral = writeFakeCorral(work);
+        const identity = { store: "st-demo", project: "demo", role, task: "T-578", run: "R1" };
+        const events = new EventLog();
         const client = new CorralClient({
-          corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
+          corral: provider === "openai-codex" ? writeFakeEngine(work).path : "", root: work, cwd: work, identity,
         });
         const keys = { accessKeyId: "AKIAFIXTURE", secretAccessKey: "fixture" };
         // When session creation and reload select the explicitly bound cloud provider.
@@ -92,11 +91,11 @@ for (const role of ["worker", "reviewer", "pm"] as const) {
         expect(transport.requests).toBe(0);
         await expect(network.fetch("http://127.0.0.1:8080/v1/models")).rejects.toThrow(/network_refused/);
         if (provider === "openai-codex") {
-          await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+          await host.startLocal();
           const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-          expect((await host.submit({
-            text: "Reply only CLOUD.", busyPolicy: "prompt", idempotencyKey: role, origin: "test",
-          }, role)).disposition).toBe("started");
+          expect((await host.submitLocal({
+            text: "Reply only CLOUD.", busyPolicy: "prompt", origin: "owner",
+          })).disposition).toBe("started");
           await ended;
           await host.drained();
           const answer = host.session.messages.find((message) => message.role === "assistant");
@@ -121,7 +120,7 @@ test("session creation still refuses a local provider without explicit permissio
   try {
     const sdk = await import("@earendil-works/pi-coding-agent");
     const modules = await loadModules(assets.dir, "worker");
-    const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1 };
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const };
     const { llama_cpp: _settings, ...withoutSettings } = capabilities;
     const network = guardedFetch(async () => { throw new Error("unconfigured local inference must not send a request"); });
     for (const local of [undefined, withoutSettings, { ...capabilities, enabled: [] }]) {
@@ -132,10 +131,8 @@ test("session creation still refuses a local provider without explicit permissio
         modules: { ...modules, auth: {
           ...modules.auth, credentials() { throw new Error("unconfigured local inference must not read credentials"); },
         } },
-        network, events: new EventLog(1),
-        client: new CorralClient({
-          corral: "/not-executed", root: work, identity, hostCap: "h".repeat(64), sessionId: () => "",
-        }),
+        network, events: new EventLog(),
+        client: new CorralClient({ corral: "", root: work, cwd: work, identity }),
         sessionManager: sdk.SessionManager.create(work, join(work, "sessions")),
       })).rejects.toThrow(/module_invalid/);
     }

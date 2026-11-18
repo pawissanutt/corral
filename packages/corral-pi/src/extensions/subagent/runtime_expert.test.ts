@@ -27,7 +27,7 @@ test("expert uses its configured model and limits, attributes usage and flags Ex
   const invocations: Invocation[] = [];
   const records: Record<string, unknown>[] = [];
   const runtime = new AuxiliaryRuntime({ settings: auxiliarySettings("pm", ["expert"], { expert }),
-    generation: 3, provider: "fixture", model: "weaker-parent", sessionId: () => "parent",
+    provider: "fixture", model: "weaker-parent", sessionId: () => "parent",
     async record(payload) { records.push(payload); return { session_id: payload.request, session_file: "/unused" }; },
     async execute(invocation) { invocations.push(invocation); return { text: "x".repeat(32769), outcome: "completed", turns: 2 }; },
   });

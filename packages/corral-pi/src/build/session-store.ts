@@ -13,7 +13,7 @@ export function createSession(launch: BuildLaunch, worktree: Pick<BuildSessionRe
   const now = new Date();
   const suffix = now.getTime().toString(36) + randomInt(36 * 36).toString(36).padStart(2, "0");
   const name = launch.name?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || suffix;
-  return { version: 1, id: launch.paid?.session ?? `B-${suffix}`, name, created: now.toISOString(), updated: now.toISOString(),
+  return { version: 1, id: `B-${suffix}`, name, created: now.toISOString(), updated: now.toISOString(),
     repoRoot: launch.repoRoot, ...worktree, here: launch.here, ...(launch.bare ? { bare: true } : {}),
     ...(launch.route ? { route: launch.route } : {}),
     ...(launch.project ? { project: launch.project } : {}), ...(launch.workspaceRoot ? { workspaceRoot: launch.workspaceRoot } : {}) };

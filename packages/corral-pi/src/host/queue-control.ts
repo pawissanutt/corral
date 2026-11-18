@@ -3,8 +3,8 @@ export interface QueuedItem {
   readonly text: string;
   readonly policy: "steer" | "follow_up";
   readonly editable: boolean;
-  /** Who queued it: the owner's pane, a corral inbox delivery or an extension; presentation only. */
-  readonly origin?: "pane" | "corral-inbox" | "extension";
+  /** Who queued it; presentation only. */
+  readonly origin?: "pane" | "extension" | "owner" | "auto";
 }
 
 export interface QueueControl {

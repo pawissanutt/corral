@@ -1,11 +1,9 @@
 // What a Code Mode cell shows the model (T-683): the cell's own status and explicit output, kept
 // apart from its nested calls, whose failures are always summarized (bounded) with tool, child
-// identity, error and recorded effect, whatever the script did with them.
+// identity, error and whether execution may have started, whatever the script did with them.
 import type { AgentToolCallOutcome } from "@earendil-works/pi-agent-core";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
-import { nestedCorralRead } from "../../roles/common/execution.ts";
-import type { CorralOp } from "../../roles/types.ts";
 import type { CodeChild } from "./child.ts";
 import type { CellStatus, KernelOutput, WireError } from "./kernel.ts";
 import { clipUtf8 } from "./kernel-protocol.ts";
@@ -29,17 +27,15 @@ export interface ChildOutcome {
   /** Full text size, not the bounded preview; absent for structured-only results. */
   resultLines?: number;
   resultBytes?: number;
-  /** Receipt state and bounded scalar result fields, never the full receipt. */
+  /** Bounded preview of the structured tool result. */
   structured?: unknown;
   late?: boolean;
   /** Undefined while the call runs. */
   ok?: boolean;
   code?: string;
   message?: string;
-  /** A receipt's state (`read` for a receipt-free read or lookup), or a failure's `not_started`/`unknown`. */
-  effect?: string;
-  request_id?: string;
-  lookup?: unknown;
+  /** Whether a failed call could have changed state. */
+  effect?: "not_started" | "unknown";
 }
 
 export type ReportStatus = CellStatus | "running" | "detached" | "not_found";
@@ -47,49 +43,28 @@ export type ReportStatus = CellStatus | "running" | "detached" | "not_found";
 export interface CellReport {
   readonly cell: string;
   readonly status: ReportStatus;
-  readonly generation?: number;
   readonly stateLost: boolean;
   readonly truncated: boolean;
   readonly value?: string;
   readonly error?: WireError;
   readonly outputs: readonly KernelOutput[];
-  readonly calls: { readonly total: number; readonly ok: number; readonly failed: number; readonly running: number;
-    readonly committed: number };
+  readonly calls: { readonly total: number; readonly ok: number; readonly failed: number; readonly running: number };
   readonly failures: readonly ChildOutcome[];
   readonly children: readonly ChildOutcome[];
   readonly childrenOmitted?: Readonly<Record<string, number>>;
   readonly startedAt: number;
   readonly durationMs?: number;
   readonly waitMs?: number;
-  /** A nested call committed an operation that ends the run or review. */
+  /** A nested tool requested that the run or review end. */
   readonly terminate?: boolean;
 }
 
-type Fields = Record<string, unknown>;
-const text = (value: unknown) => typeof value === "string" && value.length > 0 ? value : undefined;
-
-export function classify(child: CodeChild, outcome: AgentToolCallOutcome): Omit<ChildOutcome, "tool" | "call" | "key" | "startedAt"> {
+export function classify(child: CodeChild, outcome: AgentToolCallOutcome, resultText: string): Pick<ChildOutcome, "ok" | "code" | "message" | "effect"> {
   if (child.denied !== undefined) return { ok: false, code: "denied", message: child.denied, effect: "not_started" };
-  const structured = outcome.result.structuredContent as Fields | undefined;
-  const error = structured?.error as Fields | undefined;
-  const request = text(structured?.request_id);
-  if (error && typeof error === "object") {
-    return { ok: false, code: text(error.code) ?? "tool_error", message: text(error.reason) ?? "", effect: text(error.effect) ?? "unknown",
-      ...(request ? { request_id: request } : {}), ...(error.lookup ? { lookup: error.lookup } : {}) };
-  }
-  if (typeof structured?.state === "string") {
-    const result = (structured.result ?? {}) as Fields;
-    // A lookup or board read answers with a receipt-shaped acknowledgement; it applied nothing.
-    const op = String(structured.lookup ? "receipt_lookup" : structured.op);
-    const read = op === "receipt_lookup" || nestedCorralRead(op as CorralOp);
-    const effect = read && structured.state === "committed" ? "read" : structured.state;
-    return { ok: !outcome.isError, effect, ...(request ? { request_id: request } : {}),
-      ...(outcome.isError ? { code: text(result.code) ?? structured.state, message: text(result.reason) ?? "" } : {}) };
-  }
   if (!outcome.isError) return { ok: true };
   // Pi leaves durationMs unset when execute() never ran: an unknown tool, invalid arguments or a block.
   const ran = outcome.durationMs !== undefined;
-  return { ok: false, code: ran ? "tool_error" : "not_run", message: contentText(outcome.result.content),
+  return { ok: false, code: ran ? "tool_error" : "not_run", message: resultText,
     effect: ran ? "unknown" : "not_started" };
 }
 
@@ -97,34 +72,23 @@ export function contentText(content: readonly (TextContent | ImageContent)[] | u
   return (content ?? []).flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
 }
 
-export function counts(children: readonly ChildOutcome[]): CellReport["calls"] {
-  return {
-    total: children.length, ok: children.filter((c) => c.ok === true).length,
-    failed: children.filter((c) => c.ok === false).length, running: children.filter((c) => c.ok === undefined).length,
-    committed: children.filter((c) => c.effect === "committed").length,
-  };
-}
-
 function failureLine(failure: ChildOutcome): string {
-  const request = failure.request_id ? ` ${failure.request_id}` : "";
   const message = clipUtf8(failure.message ?? "", FAILURE_MESSAGE_BYTES);
-  const reconcile = failure.lookup ? "; reconcile with corral_receipt_lookup before any retry" : "";
-  return `- ${failure.tool} ${failure.key}${request}: ${failure.code ?? "failed"}${message ? `: ${message}` : ""} `
-    + `[effect: ${failure.effect ?? "unknown"}${reconcile}]`;
+  return `- ${failure.tool} ${failure.key}: ${failure.code ?? "failed"}${message ? `: ${message}` : ""} `
+    + `[effect: ${failure.effect ?? "unknown"}]`;
 }
 
 const bytes = (text: string) => Buffer.byteLength(text);
 
 function statusLines(report: CellReport): string[] {
-  const where = report.generation === undefined ? "" : ` (kernel generation ${report.generation})`;
   if (report.status === "not_found") return [`Cell ${report.cell}: no live cell has this id; it already settled and was reported.`];
   if (report.status === "detached") {
-    return [`Cell ${report.cell}: still running after ${report.waitMs ?? 0} ms${where}; it continues in the background.`,
+    return [`Cell ${report.cell}: still running after ${report.waitMs ?? 0} ms; it continues in the background.`,
       "Its result arrives once as a message when it settles; do not poll. Continue independent work now. If a plan "
         + `step needs this result, record that step as waiting on event "code cell ${report.cell}" so no continuation `
         + `wakes you meanwhile. Stop it with {"cancel":"${report.cell}"}.`];
   }
-  return [`Cell ${report.cell}: ${report.status}${where}${report.stateLost
+  return [`Cell ${report.cell}: ${report.status}${report.stateLost
     ? "; the kernel was replaced and every variable defined before is gone" : ""}.`];
 }
 
@@ -133,10 +97,9 @@ function summaryLines(report: CellReport): string[] {
   const lines: string[] = [];
   if (report.error) lines.push(`Error: ${report.error.name}${report.error.code ? ` (${report.error.code})` : ""}: ${report.error.message}`);
   if (report.truncated) lines.push("(Output was truncated at the cell's limits.)");
-  const { total, ok, failed, running, committed } = report.calls;
+  const { total, ok, failed, running } = report.calls;
   if (total > 0) {
-    lines.push(`Nested calls: ${total} (${ok} ok, ${failed} failed${running ? `, ${running} still running` : ""}`
-      + `${committed ? `; ${committed} committed receipts stand` : ""}).`);
+    lines.push(`Nested calls: ${total} (${ok} ok, ${failed} failed${running ? `, ${running} still running` : ""}).`);
   }
   if (report.failures.length > 0) {
     lines.push(`Nested failures (${report.failures.length}):`);
@@ -150,7 +113,7 @@ function summaryLines(report: CellReport): string[] {
     }
   }
   if (report.status !== "ok" && report.status !== "detached" && report.status !== "not_found" && total > 0) {
-    lines.push("The cell is not re-run automatically; nested effects already committed stand.");
+    lines.push("The cell is not re-run automatically; earlier tool effects are not rolled back.");
   }
   return lines;
 }

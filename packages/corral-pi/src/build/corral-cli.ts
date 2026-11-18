@@ -43,6 +43,7 @@ function runner(executable: string, owner: boolean): Run {
 }
 
 export function ownerRun(corral: string): Run { return runner(corral, true); }
+export function engineRun(corral: string): Run { return runner(corral, false); }
 export function gitRun(): Run { return runner("git", false); }
 
 export async function checked(run: Run, argv: readonly string[], cwd: string): Promise<string> {

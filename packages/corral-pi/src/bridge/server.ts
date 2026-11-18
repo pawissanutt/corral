@@ -72,14 +72,17 @@ function canConnect(path: string): Promise<boolean> {
   return promise;
 }
 
-async function prepareSocket(path: string, liveError: Error): Promise<void> {
-  const parent = dirname(path);
-  mkdirSync(parent, { recursive: true, mode: 0o700 });
-  const directory = lstatSync(parent);
-  const uid = process.getuid?.();
-  if (!directory.isDirectory() || directory.uid !== uid || (directory.mode & 0o777) !== 0o700) {
-    throw new Error(`session socket directory must be owned by this user and have mode 0700: ${parent}`);
+export function preparePrivateDirectory(path: string): void {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  const directory = lstatSync(path);
+  if (!directory.isDirectory() || directory.uid !== process.getuid?.() || (directory.mode & 0o777) !== 0o700) {
+    throw new Error(`session socket directory must be owned by this user and have mode 0700: ${path}`);
   }
+}
+
+async function prepareSocket(path: string, liveError: Error): Promise<void> {
+  preparePrivateDirectory(dirname(path));
+  const uid = process.getuid?.();
   const old = socketStat(path);
   if (!old) return;
   if (!old.isSocket() || old.uid !== uid) throw new Error(`not an owned Unix socket: ${path}`);

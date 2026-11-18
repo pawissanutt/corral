@@ -63,7 +63,7 @@ function fixture() {
     execution: { sessionFile: join(dir, "transcripts", "research.jsonl"), sessionId: "canonical-child", maxTurns: 10 },
     onEvent() {}, onToolStart(name) { starts.push(name); }, onTurn() {},
     async ask() { return "answer"; }, openingPrompt() { return "Peer messages may arrive."; }, reviewVerdict() {},
-    async message() { throw new Error("not used"); }, async roster() { return "parent"; },
+    async message() { throw new Error("not used"); }, roster() { return "parent"; },
   };
   const options: SdkRunnerOptions = { sdk, models: { getModel: () => ({}) } as unknown as ModelRuntime,
     context: { dir, session: { worktree: dir, name: "fixture" }, settings: { maxParallel: 1, profiles: [] } },

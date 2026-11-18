@@ -29,9 +29,15 @@ export async function main(argv = process.argv.slice(2), compiled = fileURLToPat
   if (compiled) await (await import("./host/compiled.ts")).prepareCompiled(command);
   switch (command) {
   // Defer SDK entry points until offline settings and compiled OAuth registration are installed.
+    case "--check-code-kernel": await (await import("./host/code-kernel-check.ts")).checkCodeKernel(); return;
+    case "--write-install": {
+      if (!compiled || !args[0]) throw new Error("--write-install needs a compiled executable and a directory");
+      (await import("./host/compiled.ts")).writeInstall(args[0]);
+      return;
+    }
     case "login": (await import("./auth/login.ts")).runLogin(args); return;
     case "models": (await import("./auth/models.ts")).runModels(args); return;
-    case "build": await (await import("./host/build.ts")).buildCommand(args, assets, true); return;
+    case "build": await (await import("./host/build.ts")).buildCommand(args, assets); return;
     case "run": case "chat": {
       const { parseRunFlags } = await import("./host/config.ts");
       await (await import("./host/main.ts")).runHost(parseRunFlags(command, args, assets));

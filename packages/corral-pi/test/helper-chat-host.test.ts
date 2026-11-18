@@ -21,7 +21,7 @@ test("the real InteractiveMode supplies the same TUI, Markdown/Mermaid pipeline 
     if (!read) throw new Error("native read renderer unavailable");
     expect("execute" in read).toBe(false);
     const text = "## Native diagram\n\n```mermaid\ngraph TD\n  A[Research] --> B[Answer]\n```";
-    const helper: HelperInspection = { request: "display-fixture", generation: 1, kind: "explore", model: "fixture/model", createdAt: 0,
+    const helper: HelperInspection = { request: "display-fixture", kind: "explore", model: "fixture/model", createdAt: 0,
       prompt: "Show the flow", phase: "completed", truncated: false, result: text,
       messages: [{ id: "assistant", kind: "assistant", text, stopReason: "stop" }] };
     const chat = new HelperChat(() => h.chatPresentation().tui, h.work, h.chatPresentation);

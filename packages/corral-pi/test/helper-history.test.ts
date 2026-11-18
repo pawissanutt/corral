@@ -19,7 +19,7 @@ const assistant: AssistantMessage = { role: "assistant", api: "openai-responses"
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
 
 test("SDK projection includes visible text and tool output, never thinking, signatures, image bytes or tool details", () => {
-  const history = new AuxiliaryHistory(); history.begin("r", "explore", "fixture/model", 1, "Research this");
+  const history = new AuxiliaryHistory(); history.begin("r", "explore", "fixture/model", "Research this");
   const emit = (event: Parameters<AuxiliaryHistory["observe"]>[1]) => history.observe("r", event);
   observeHelperEvent({ type: "message_start", message: assistant }, emit);
   observeHelperEvent({ type: "message_update", message: assistant,
@@ -39,7 +39,7 @@ test("SDK projection includes visible text and tool output, never thinking, sign
 });
 
 test("native text boundaries and response errors are projected safely, bounded, and replaced by final content", () => {
-  const history = new AuxiliaryHistory(); history.begin("r", "explore", "fixture/model", 1, "Question");
+  const history = new AuxiliaryHistory(); history.begin("r", "explore", "fixture/model", "Question");
   const emit = (event: Parameters<AuxiliaryHistory["observe"]>[1]) => history.observe("r", event);
   const partial: AssistantMessage = { ...assistant, stopReason: "pending", content: [...assistant.content, { type: "text", text: "Second block" }] };
   observeHelperEvent({ type: "message_start", message: partial }, emit);
@@ -51,7 +51,7 @@ test("native text boundaries and response errors are projected safely, bounded, 
   expect(final?.textBlocks).toBeUndefined(); expect(final?.text).toBe("Visible answer");
   expect(final?.stopReason).toBe("error"); expect(final?.errorMessage).toBe("Provider interrupted");
   expect(before[0]?.messages[0]?.textBlocks).toEqual(["Visible answer", "Second block"]);
-  history.begin("cap", "oracle", "fixture/model", 1, "Question");
+  history.begin("cap", "oracle", "fixture/model", "Question");
   observeHelperEvent({ type: "message_end", message: { ...assistant, content: [...assistant.content,
     ...Array.from({ length: 20 }, () => ({ type: "text" as const, text: "x".repeat(5000) }))] } }, event => history.observe("cap", event));
   const capped = history.snapshot()[0];
@@ -64,7 +64,7 @@ test("native text boundaries and response errors are projected safely, bounded, 
 test("broken UI observers cannot abort projection, change canonical accounting, or retain a slot", async () => {
   expect(() => observeHelperEvent({ type: "message_end", message: assistant }, () => { throw new Error("observer failed"); })).not.toThrow();
   const terminal: unknown[] = [];
-  const runtime = new AuxiliaryRuntime({ settings: { oracle: { model: "model", timeout_secs: 30 } }, generation: 1, provider: "fixture", model: "parent", sessionId: () => "parent",
+  const runtime = new AuxiliaryRuntime({ settings: { oracle: { model: "model", timeout_secs: 30 } }, provider: "fixture", model: "parent", sessionId: () => "parent",
     changed: () => { throw new Error("renderer failed"); },
     record: async value => { if (value.action === "finish") terminal.push(value.outcome); return { session_id: value.request, session_file: "/unused/reference" }; },
     execute: async invocation => { invocation.observe?.({ type: "assistant_delta", text: "Live text" }); return { outcome: "completed", text: "Final answer" }; },
@@ -78,7 +78,7 @@ test("broken UI observers cannot abort projection, change canonical accounting, 
 
 test("history is bounded and completed entries ignore late callbacks without resurrecting evicted records", () => {
   const history = new AuxiliaryHistory();
-  history.begin("r", "oracle", "fixture/model", 1, "p".repeat(10000));
+  history.begin("r", "oracle", "fixture/model", "p".repeat(10000));
   for (let index = 0; index < 100; index++) history.observe("r", { type: "tool", id: String(index), name: "read", phase: "completed", text: "x".repeat(10000) });
   history.finish("r", "completed", "answer".repeat(10000));
   const entry = history.snapshot()[0];
@@ -87,7 +87,7 @@ test("history is bounded and completed entries ignore late callbacks without res
   expect(entry?.messages.reduce((sum, message) => sum + message.text.length, 0)).toBeLessThanOrEqual(32768);
   history.observe("r", { type: "assistant_delta", text: "late" });
   expect(history.snapshot()[0]).toEqual(entry);
-  for (let index = 0; index < HELPER_HISTORY_LIMIT; index++) history.begin(String(index), "oracle", "fixture/model", 1, "next");
+  for (let index = 0; index < HELPER_HISTORY_LIMIT; index++) history.begin(String(index), "oracle", "fixture/model", "next");
   history.observe("r", { type: "assistant_delta", text: "must not resurrect" });
   expect(history.snapshot()).toHaveLength(HELPER_HISTORY_LIMIT);
   expect(history.snapshot().some(value => value.request === "r")).toBeFalse();
@@ -101,7 +101,7 @@ test("live runtime inspection retains prompt, partials and result; queued cancel
     parent: { provider: "fixture", model: "model" }, agentDir: "/unused", localTools: [],
     context: { dir: "/unused", session: { worktree: "/repo", name: "parent" }, settings: { maxParallel: 1, profiles: [] } },
     allowedKinds: ["explore"],
-    research: { settings: { model: null, max_parallel: 1, max_turns: 2, timeout_secs: 30 }, generation: 4, sessionId: () => "parent" },
+    research: { settings: { model: null, max_parallel: 1, max_turns: 2, timeout_secs: 30 } },
     changed: () => { if (runtime.snapshot().children.some(entry => entry.brief === "Second prompt" && entry.state === "queued")) queuedReady.resolve(); },
     deliverToParent() { throw new Error("Blocking research must not be redelivered"); },
     record: async value => { records.push(value); return { session_id: value.request, session_file: "/unused/owned-reference" }; },
@@ -139,7 +139,7 @@ test("live runtime inspection retains prompt, partials and result; queued cancel
 });
 
 test("a failed terminal record remains uncertain, not a successful helper or task", async () => {
-  const runtime = new AuxiliaryRuntime({ settings: { oracle: { model: "model", timeout_secs: 30 } }, generation: 1, provider: "fixture", model: "parent", sessionId: () => "parent",
+  const runtime = new AuxiliaryRuntime({ settings: { oracle: { model: "model", timeout_secs: 30 } }, provider: "fixture", model: "parent", sessionId: () => "parent",
     record: async value => { if (value.action === "finish") throw new Error("record unavailable"); return { session_id: value.request, session_file: "/unused/reference" }; },
     execute: async () => ({ outcome: "completed", text: "Returned response" }),
   });
