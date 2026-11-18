@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
     match effect {
         Effect::Act(command) => act(feed, command),
-        Effect::Detail(request) => detail(feed, &request.target),
+        Effect::Detail(request) => detail(feed, &request.target, request.page.as_deref()),
         Effect::Draft { thread, text } => {
             require_thread(feed, thread)?;
             if text.is_empty() {

@@ -41,9 +41,14 @@ impl AppState {
         });
     }
 
-    pub(super) fn preview_detail(&self, target: corral_protocol::detail::DetailRef) {
+    /// Serves `target` from the sample, a walked list up to the page `page` asks for.
+    pub(super) fn preview_detail(
+        &self,
+        target: corral_protocol::detail::DetailRef,
+        page: Option<&str>,
+    ) {
         self.feed.update(|feed| {
-            if let Err(message) = preview::detail(feed, &target) {
+            if let Err(message) = preview::detail(feed, &target, page) {
                 feed.details.insert(
                     crate::model::daemon::detail_key(&target),
                     crate::model::daemon::DetailCache {
@@ -77,7 +82,7 @@ impl AppState {
         match effect {
             Effect::Act(act) => self.dispatch(act),
             Effect::Detail(get) => {
-                self.preview_detail(get.target);
+                self.preview_detail(get.target, get.page.as_deref());
             }
             other => {
                 if let Effect::Session { key, .. } = &other {

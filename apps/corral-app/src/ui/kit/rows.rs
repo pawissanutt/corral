@@ -18,10 +18,14 @@ const PHONE_ROW: f32 = 60.0;
 /// The desktop two-line row's least height (`.row` of a two-line list).
 const DESK_TALL_ROW: f32 = 40.0;
 
-/// How a row stands on desktop: one line, or tall enough for two or three lines.
+/// How a row stands on desktop: one line, or tall enough for two or three lines; and whether
+/// Tab stops on it.
 enum Height {
     Line,
     Tall,
+    /// One line that Tab passes over: a row of a list walked from a field that keeps the
+    /// keyboard focus.
+    Walked,
 }
 
 /// The terminal title's least room beside a project chip: the chip shows only while it leaves
@@ -262,7 +266,29 @@ pub fn list_row_tall(
     )
 }
 
-/// The body of [`list_row`] and [`list_row_tall`].
+/// [`list_row`] that Tab passes over, for a list the arrow keys walk from a field that keeps
+/// the keyboard focus (the artifact finder's filter): Tab goes from the field to the actions
+/// on the selected row instead of through every row. A press still selects it.
+pub fn walked_row(
+    app: AppState,
+    label: impl Into<SharedString>,
+    test_id: impl Into<String>,
+    selected: impl Fn() -> bool + 'static,
+    on_press: impl Fn() + 'static,
+    content: Vec<AnyElement>,
+) -> AnyElement {
+    shell(
+        app,
+        label.into(),
+        test_id.into(),
+        selected,
+        on_press,
+        content,
+        Height::Walked,
+    )
+}
+
+/// The body of [`list_row`], [`list_row_tall`] and [`walked_row`].
 fn shell(
     app: AppState,
     label: SharedString,
@@ -288,6 +314,7 @@ fn shell(
             ..AccessibilityState::default()
         })
         .test_id(&test_id)
+        .when(matches!(height, Height::Walked), |row| row.focusable(false))
         .on_press(move || on_press());
     let row = match form {
         Form::Desktop => row

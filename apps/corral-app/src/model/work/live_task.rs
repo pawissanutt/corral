@@ -177,6 +177,8 @@ pub struct LiveEvidence {
     pub rows: Vec<(String, String)>,
     pub empty: Option<&'static str>,
     pub note: Option<DetailNote>,
+    /// The finder over every task's artifacts, narrowed to this one.
+    pub find: Button,
 }
 
 /// The selected daemon task's run, session hand-off and terminal capture.
@@ -628,6 +630,11 @@ pub fn live_evidence(feed: &Feed, id: &str) -> LiveEvidence {
         empty: (detail.is_some() && rows.is_empty()).then_some(NO_ARTIFACTS),
         rows,
         note: detail_note(feed, id),
+        find: Button::new(
+            crate::model::artifacts::FIND_IN_ALL,
+            Press::FindArtifacts(Id::from(id)),
+            ButtonKind::Ghost,
+        ),
     }
 }
 

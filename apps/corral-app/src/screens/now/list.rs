@@ -309,7 +309,7 @@ pub(crate) fn waiting(
 
 /// A row scrolled into view whenever it becomes the selected one, so a selection the keyboard
 /// moves never leaves the viewport. A row already in view stays where it is.
-pub(super) fn revealing(selected: Memo<bool>, row: AnyElement) -> AnyElement {
+pub(crate) fn revealing(selected: Memo<bool>, row: AnyElement) -> AnyElement {
     let handle = element_ref();
     effect(move || {
         if selected.get() {

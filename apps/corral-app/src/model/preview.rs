@@ -4,6 +4,7 @@
 //! change, as the daemon projects its own store. Its pi sessions (two workers and the chats) are
 //! hosts in `Feed.hosts` that stream on the clock's ticks. The caller supplies the clock; nothing
 //! here contacts a daemon or persists anything.
+mod artifacts;
 mod config;
 mod controls;
 mod details;

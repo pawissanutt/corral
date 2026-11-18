@@ -7,7 +7,8 @@ use super::AppState;
 
 impl AppState {
     /// Clears the Agents roster's selection or the Now page's while that page is in view (no
-    /// page pushed over it); whether there was one to clear.
+    /// page pushed over it), or backs the finder out of full size or its filter; whether there
+    /// was one to clear.
     pub(super) fn clear_page_selection(&self) -> bool {
         let (destination, bare, task) = self.nav.with_untracked(|nav| {
             (
@@ -36,6 +37,7 @@ impl AppState {
                 });
                 true
             }
+            Destination::Artifacts => self.escape_artifacts(),
             _ => false,
         }
     }

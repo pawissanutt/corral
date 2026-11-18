@@ -638,6 +638,7 @@ fn symbol(target: &NavigationTarget) -> &'static str {
         NavigationTarget::Tab(PhoneTab::Plans) => "list.bullet.rectangle",
         NavigationTarget::Tab(PhoneTab::More) => "ellipsis",
         NavigationTarget::Destination(Destination::Usage) => "chart.bar",
+        NavigationTarget::Destination(Destination::Artifacts) => "doc.text.magnifyingglass",
         NavigationTarget::Destination(Destination::Settings) => "gearshape",
         NavigationTarget::Destination(_) => "circle",
         NavigationTarget::Ask => "bubble.left",

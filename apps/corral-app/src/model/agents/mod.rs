@@ -53,6 +53,7 @@ pub use menu::{SESSION_MENU_LABEL, session_verbs};
 pub use pane::{KEYS, PaneAsk, PaneInput, PaneKey, PaneSent, focus, focus_refusal};
 pub use prompt::{Prompt, QUESTION_CARD, answer as answer_prompt, prompt};
 pub use replay::fetches;
+pub(crate) use replay::size;
 pub use roster::{RoleTab, Roster, RosterRole, RosterRow, roster};
 pub use roster_panel::{
     Recent, RecentEntry, RecentState, RosterPanel, RosterPanelTab, RosterPanelTabItem, RosterWait,

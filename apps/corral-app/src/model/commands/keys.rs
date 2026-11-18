@@ -57,6 +57,7 @@ pub fn key_legend_live(
             legend
         }
         (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member"), (".", "actions")],
+        (Destination::Artifacts, _) => crate::model::artifacts::KEYS.to_vec(),
         (Destination::Agents, _) => vec![("j k", "session"), (".", "session menu")],
         (Destination::Review, _) => vec![
             ("j k", "candidate"),

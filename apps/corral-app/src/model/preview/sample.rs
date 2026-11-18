@@ -318,7 +318,46 @@ fn record(feed: &Feed, seed: &Seed) -> TaskDetail {
         events: Vec::new(),
     };
     work(feed, &mut record);
+    papers(feed, &mut record);
     record
+}
+
+/// Summaries, reports, a plan, evidence and screenshots beside the diffs and gate logs, so the
+/// artifact finder has every kind to show and pages to walk.
+fn papers(feed: &Feed, record: &mut TaskDetail) {
+    let papers: &[(&str, &str, u64)] = match record.task.id.as_str() {
+        "T-1" => &[("plan", "plan.md", 8 * DAY - 30 * MINUTE)],
+        "T-2" => &[
+            ("summary", "worker-summary.md", 2 * HOUR + 20 * MINUTE),
+            ("report", "actions-menu-report.md", 2 * HOUR + 10 * MINUTE),
+        ],
+        "T-4" => &[(
+            "evidence",
+            "refusal-sheet-trace.txt",
+            26 * HOUR + 30 * MINUTE,
+        )],
+        "T-6" => &[
+            ("screenshot", "landing-hero-mobile.png", 3 * DAY - HOUR),
+            ("report", "landing-copy-report.md", 3 * DAY - 2 * HOUR),
+        ],
+        "T-9" => &[
+            ("evidence", "reload-trace.txt", 19 * HOUR),
+            (
+                "screenshot",
+                "paired-after-reload.png",
+                18 * HOUR + 30 * MINUTE,
+            ),
+        ],
+        "T-10" => &[("report", "usage-coverage-report.md", 35 * MINUTE)],
+        "T-11" => &[("screenshot", "sidebar-80x24.png", 2 * HOUR + 40 * MINUTE)],
+        "T-13" => &[("summary", "worker-summary.md", 55 * MINUTE)],
+        "T-15" => &[("evidence", "lighthouse-scores.txt", HOUR)],
+        _ => &[],
+    };
+    for (kind, title, at) in papers {
+        let paper = artifact(feed, record, kind, title, *at);
+        record.artifacts.push(paper);
+    }
 }
 
 /// Runs, checks, artifacts and blocks for the tasks that have been worked on.

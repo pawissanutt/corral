@@ -139,7 +139,7 @@ pub(super) fn resolve<'a>(
 }
 
 /// A byte count in words: `820 B`, `1.2 KB`, `34 KB`, `1.2 MB`.
-pub(super) fn size(bytes: u64) -> String {
+pub(crate) fn size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     let value = bytes as f64;
     if value < KB {

@@ -10,7 +10,7 @@ impl AppState {
         id: String,
         request: DetailGet,
     ) -> Vec<Outgoing> {
-        let request = match request {
+        let mut request = match request {
             DetailGet {
                 target: DetailRef::SessionItem { id, token },
                 ..
@@ -20,8 +20,21 @@ impl AppState {
             request => request,
         };
         let key = detail_key(&request.target);
+        // The finder's list is walked: each page is asked for as the owner reaches it and adds
+        // to those before, rather than all of them being fetched and merged up front.
+        let walked = walked(&request.target);
+        if walked && request.page.is_none() && request.etag.is_none() {
+            // Revalidated against its first page, an unchanged list keeps every page walked.
+            request.etag = feed.with_untracked(|feed| {
+                feed.details
+                    .get(&key)
+                    .filter(|cache| cache.merged.is_some() && cache.error.is_none())
+                    .and_then(|cache| cache.pages.first())
+                    .map(|page| page.etag.clone())
+            });
+        }
         // One page of a paged list is shown at a time, so a new page retires its siblings.
-        let paged = matches!(&request.target, DetailRef::Closed { .. });
+        let paged = walked || matches!(&request.target, DetailRef::Closed { .. });
         let mut retired = if paged {
             let list = std::mem::discriminant(&request.target);
             feed.with_untracked(|feed| {
@@ -71,7 +84,12 @@ impl AppState {
             cache.stale = true;
             cache.error = (!self.ready).then(offline);
         });
-        self.retained.select(&request, &id);
+        // A walked list is revalidated from its first page, never from a page walked to.
+        let remembered = DetailGet {
+            page: request.page.clone().filter(|_| !walked),
+            ..request.clone()
+        };
+        self.retained.select(&remembered, &id);
         if !self.ready {
             self.touch_detail(feed, &request.target);
             self.trim_retained(feed);
@@ -202,7 +220,7 @@ impl AppState {
             );
             return Ok(vec![]);
         }
-        if let Some(next) = next {
+        if let Some(next) = next.filter(|_| !walked(&request.target)) {
             self.touch_detail(feed, &request.target);
             self.trim_retained(feed);
             if self.detail_inflight.get(&key) != Some(&id) {
@@ -219,6 +237,15 @@ impl AppState {
             )]);
         }
         let mut pages = self.detail_pages.remove(&key).unwrap_or_default();
+        if walked(&request.target) && request.page.is_some() {
+            let walked_to = feed.with_untracked(|feed| {
+                feed.details
+                    .get(&key)
+                    .map(|cache| cache.pages.clone())
+                    .unwrap_or_default()
+            });
+            pages.splice(0..0, walked_to);
+        }
         let seq = pages.iter().map(|page| page.seq).max().unwrap_or(0);
         let as_of = pages.last().map(|page| page.as_of.clone());
         if let Some(first) = pages.first_mut() {
@@ -424,6 +451,11 @@ fn append(current: &mut Value, next: Value, field: &str) {
 
 fn item_key(item: &Value) -> Option<&str> {
     item.get("id").or_else(|| item.get("day"))?.as_str()
+}
+
+/// Whether the detail is a list the owner walks a page at a time: the artifact finder's.
+fn walked(target: &DetailRef) -> bool {
+    matches!(target, DetailRef::Artifacts { .. })
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@
 mod attach;
 mod config;
 mod devices;
+mod finder;
 mod keys;
 mod live;
 mod ops;
@@ -26,8 +27,8 @@ use crate::model::act::RefusalSheet;
 use crate::model::commands::Action;
 use crate::model::{
     Act, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay, SettingsSection,
-    SidebarPref, Snapshot, ThemeChoice, agents, assistant, daemon, plans, review, settings,
-    timeline, usage, work,
+    SidebarPref, Snapshot, ThemeChoice, agents, artifacts, assistant, daemon, plans, review,
+    settings, timeline, usage, work,
 };
 
 const DESTINATION_KEY: &str = "corral.destination";
@@ -57,6 +58,7 @@ pub struct AppState {
     pub plans: source::StateSource<plans::State>,
     pub timeline: Signal<timeline::State>,
     pub usage: Signal<usage::State>,
+    pub artifacts: Signal<artifacts::State>,
     pub agents: source::StateSource<agents::State>,
     pub review: source::StateSource<review::State>,
     pub settings: source::StateSource<settings::State>,
@@ -178,6 +180,7 @@ impl AppState {
             ),
             timeline: signal(timeline::State::default()),
             usage: signal(usage::State::default()),
+            artifacts: signal(artifacts::State::default()),
             agents: source::StateSource::new(
                 data,
                 agents::State {
@@ -539,6 +542,7 @@ impl AppState {
                 Effect::GoSettings(section) => self.go_settings(section),
                 Effect::Back => self.back(),
                 Effect::CloseAsk => self.close(Overlay::Ask),
+                Effect::FindArtifacts(task) => self.find_artifacts(task),
                 Effect::Focus(id) => {
                     let focus_to = self.focus_to;
                     focus_to.set(Some(id));
