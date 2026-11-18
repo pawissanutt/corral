@@ -1,14 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { ProviderId } from "../auth/providers.ts";
 import { parseBuildFlags, type LocalBuildOptions } from "../build/launch.ts";
 import { createSession, loadSession, saveSession, sessionDir } from "../build/session-store.ts";
 import { prepareWorktree } from "../build/worktree.ts";
 import type { BuildContext, BuildLaunch, BuildSessionRecord } from "../build/types.ts";
 import { sessionSocket, workspaceSettings, type HostConfig } from "./config.ts";
 import { runHost } from "./main.ts";
-import { requireBareProvider } from "./bare.ts";
 
 /** A refused launch or resume: the error's message keeps the code and detail; `what` and `fix` are what the owner reads. */
 class LaunchRefused extends Error {
@@ -79,10 +77,10 @@ export function buildHostConfig(launch: BuildLaunch, record: BuildSessionRecord,
     sessionDir: join(dir, "sessions"), runtimeDir: join(dir, "runtime"), ui: "rich",
     ...workspaceSettings(record.workspaceRoot ?? record.repoRoot, "build"),
     local: { dir, id: record.id, socket: local.socket ?? sessionSocket(dir, process.env), headless: local.headless },
-    provider: (record.route?.provider ?? launch.provider) as ProviderId, model: record.route?.model ?? launch.model,
-    ...((record.route?.effort ?? launch.effort) ? { effort: record.route?.effort ?? launch.effort } : {}),
-    ...((record.route?.binding ?? launch.binding) ? { binding: record.route?.binding ?? launch.binding } : {}),
-    ...(launch.aws ? { aws: launch.aws } : {}),
+    provider: (record.route ?? launch).provider, model: (record.route ?? launch).model,
+    effort: (record.route ?? launch).effort, connection: (record.route ?? launch).connection,
+    aws: (record.route ?? launch).aws,
+    maxUsd: launch.maxUsd, paidRoute: launch.paidRoute,
   };
 }
 
@@ -113,8 +111,6 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
   try {
     const { launch, local } = parseBuildFlags(argv, assets);
     resume = launch.resume;
-    if (launch.provider === "openai") throw new Error("Metered builds are unavailable until the local spending cap is supported");
-    if (launch.bare) requireBareProvider(launch.provider as ProviderId);
     if (launch.provider === "llama.cpp") {
       throw new LaunchRefused("Local inference is unavailable in a build session", "Local inference (llama.cpp) is unavailable in a build session.",
         `Choose another provider with \`${startCommand} --provider <provider>\`.`);
@@ -134,7 +130,6 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
         throw new LaunchRefused("The build session has no recorded transcript to resume", `Build ${id} has no recorded conversation to resume.`,
           `Start a new build with \`${startCommand}\`.`);
       }
-      if (record.route?.paid) throw new Error("Metered builds are unavailable until the local spending cap is supported");
     } else {
       const draft = createSession(launch, { worktree: launch.repoRoot, branch: null, base: null });
       try {

@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { TOML } from "bun";
 import { engineRun, type Run } from "../build/corral-cli.ts";
@@ -28,6 +28,7 @@ export interface CorralClientOptions {
   readonly corral: string;
   readonly root: string;
   readonly cwd: string;
+  readonly sessionDir?: string;
   readonly identity: HostIdentity;
 }
 
@@ -116,9 +117,24 @@ export class CorralClient {
     return this.command(["artifact", "list", ...(task ? [task] : [])]);
   }
 
-  async artifactViewer(reference: string): Promise<string> {
+  async artifactFile(reference: string): Promise<string> {
     if (!artifactReference(reference)) throw new CorralCommandError("Invalid artifact reference; use corral artifact list");
-    return this.execute(["artifact", "show", reference], false);
+    if (!this.configured || !this.options.sessionDir) throw new CorralCommandError("Artifact preview needs a local session and --corral <path>");
+    const dir = join(this.options.sessionDir, "artifact-previews");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const path = join(dir, reference);
+    const temp = join(dir, randomUUID());
+    const fd = openSync(temp, "wx", 0o600);
+    try {
+      const { code, stderr } = await this.run(["--root", this.options.root, "artifact", "show", reference],
+        { cwd: this.options.cwd, stdoutFd: fd });
+      if (code !== 0) throw new CorralCommandError(stderr || `artifact show exited ${code}`);
+      renameSync(temp, path);
+      return path;
+    } finally {
+      closeSync(fd);
+      rmSync(temp, { force: true });
+    }
   }
 
   async history(request: HistoryRequest): Promise<unknown> {

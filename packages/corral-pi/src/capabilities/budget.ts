@@ -1,185 +1,84 @@
-// All provider streams (including retries, compaction and auxiliary sessions) pass here after
-// credential restrictions. The authoritative balance lives in Corral, outside every transcript.
-import { randomUUID, createHash } from "node:crypto";
-import { calculateCost, type Api, type Model, type StreamFunction, type StreamOptions, type Usage } from "@earendil-works/pi-ai";
-import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
-import { getServiceTierCostMultiplier } from "@earendil-works/pi-ai/api/openai-codex-responses";
-import type { ApiAdmission } from "../host/api-connections.ts";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Api, Model } from "@earendil-works/pi-ai";
 
-export interface BudgetReply extends Record<string, unknown> {
-  admitted?: boolean;
-  exhausted?: boolean;
-  reason?: string;
-}
-export interface BudgetOptions {
-  /** A subprocess lane can perform hidden additional requests; it has no finite hard bound. */
-  readonly unbounded?: boolean;
-  /** Canonical session lineage; auxiliary agent loops must not affect its cache streak. */
-  sessionId?(): string;
-  record(payload: Record<string, unknown>): Promise<BudgetReply>;
-  cancel(): void;
-  onStop?(): void;
-}
-function integer(value: number): number {
-  if (!Number.isSafeInteger(value) || value < 0) throw new Error("budget_unbounded: model/usage has no finite safe bound");
-  return value;
-}
-function nanos(value: number): number { return integer(Math.ceil(value * 1e9)); }
+export const SPENDING_CAP_REACHED = "spending cap reached; use corral retry --profile <p> to start a new run";
 
-// Reserve the entire model context plus a bounded output, not a tokenizer estimate. This covers
-// image inputs and provider serialization overhead. Admission may conservatively refuse a request
-// that would actually cost less. Pricing tiers and 1h cache writes are bounded at the highest rate.
-export function reservation(model: Model<Api>, output: number, multiplier = 1) {
-  if (!Number.isFinite(multiplier) || multiplier < 1) throw new Error("budget_unpriced: invalid request pricing multiplier");
-  const input = integer(model.contextWindow);
-  output = integer(output);
-  if (!input || !output) throw new Error("budget_unbounded: missing context/output bound");
-  const rates = [model.cost, ...model.cost.tiers ?? []];
-  const prices = rates.flatMap((r) => [r.input, r.output, r.cacheRead, r.cacheWrite]);
-  if (prices.some((v) => !Number.isFinite(v) || v < 0)) throw new Error("budget_unpriced: invalid model prices");
-  const priced = model.provider === "llama.cpp" || prices.some((v) => v > 0);
-  const inputRate = Math.max(...rates.flatMap((r) => [r.input, r.cacheRead, r.cacheWrite * 2]));
-  const outputRate = Math.max(...rates.map((r) => r.output));
-  return { tokens: integer(input + output), usd_nanos: nanos((input * inputRate + output * outputRate) / 1e6 * multiplier), priced };
+export interface SpendingOptions {
+  readonly maxUsd?: number;
+  readonly paidRoute?: string;
 }
-function actual(model: Model<Api>, usage: Usage, multiplier: number) {
-  const tokens = integer(integer(usage.input) + integer(usage.output) + integer(usage.cacheRead) + integer(usage.cacheWrite));
-  // Freeze this request's model and tier pricing, rather than trusting mutable usage.cost or repricing history on resume.
-  return { tokens, usd_nanos: nanos(calculateCost(model, structuredClone(usage)).total * multiplier),
-    usage: { input: integer(usage.input), cache_read: integer(usage.cacheRead),
-      cache_write: integer(usage.cacheWrite), output: integer(usage.output) },
-    provider: model.provider, model: model.id };
+
+export interface SpendingState {
+  readonly maxUsd: number;
+  readonly spentUsd: number;
+  readonly paidRoute?: string;
 }
-export class RunBudget {
-  private readonly active = new Set<AbortController>();
-  private stopped = false;
-  private last: BudgetReply | undefined;
-  constructor(private readonly options: BudgetOptions) {}
-  private purpose(options: StreamOptions | undefined): "conversation" | "summary" | "other" {
-    // Pi's agent loop forwards its convertToLlm callback; completeSummarization
-    // instead explicitly disables cache retention and omits all agent-loop config.
-    const agentLoop = options && "convertToLlm" in options && typeof options.convertToLlm === "function";
-    if (agentLoop && options?.sessionId === this.options.sessionId?.()) return "conversation";
-    if (!agentLoop && options?.cacheRetention === "none") return "summary";
-    // Older embedding callers do not supply the canonical lineage callback.
-    return this.options.sessionId === undefined ? "conversation" : "other";
-  }
-  private limited(): boolean {
-    const limits = this.last?.limits as { max_tokens?: number | null; max_usd_nanos?: number | null } | undefined;
-    return limits === undefined || limits.max_tokens != null || limits.max_usd_nanos != null;
-  }
-  private stop() {
-    if (this.stopped) return;
-    this.stopped = true;
-    this.options.onStop?.();
-    for (const controller of this.active) controller.abort(new Error("budget_exhausted"));
-    this.options.cancel();
-  }
-  /** Trusted catalog adapter, called at EVERY physical paid POST, not once per logical
-   * stream. No episode/billing identity is sent: Rust resolves those from the host binding. */
-  readonly physical: ApiAdmission = async ({ binding, model, options }) => {
-    if (this.stopped) throw new Error("budget_exhausted: paid episode is stopped");
-    options?.signal?.throwIfAborted();
-    const request = randomUUID();
-    const tier = options && "serviceTier" in options ? options.serviceTier : undefined;
-    if (tier !== undefined && tier !== "default") throw new Error("budget_unpriced: paid service tier has no conservative bound");
-    const output = Math.min(options?.maxTokens ?? model.maxTokens, model.maxTokens);
-    const bound = reservation(model, output);
-    if (!bound.priced) throw new Error("budget_unpriced: paid attempt has no conservative price");
-    this.last = await this.options.record({ kind: "budget", action: "reserve", request, ...bound,
-      unbounded: false, provider: model.provider, model: binding.model });
-    const paid = this.last.paid;
-    if (this.last.admitted !== true || typeof paid !== "object" || paid === null
-        || !("episode" in paid) || typeof paid.episode !== "string" || paid.episode.length === 0
-        || !("epoch" in paid) || typeof paid.epoch !== "number" || !Number.isSafeInteger(paid.epoch) || paid.epoch <= 0
-        || this.last.connection !== binding.connection || this.last.binding_digest !== binding.digest) {
-      this.stop();
-      throw new Error("budget_exhausted: canonical paid admission refused");
-    }
-    // An admitted request may exactly fill the allowance. Do not abort that request merely
-    // because no further attempt can fit; a retry must obtain another physical permit.
-    options?.signal?.throwIfAborted();
-    let settled = false;
-    return { settle: async message => {
-      if (settled) throw new Error("budget_accounting_refused: physical attempt already settled");
-      const usage = actual(model, message.usage, 1);
-      if (!usage.tokens) return; // incomplete usage is still uncertain
-      const response = createHash("sha256").update(JSON.stringify([binding.connection, message.responseId ?? request])).digest("hex");
-      this.last = await this.options.record({ kind: "budget", action: "settle", request, response,
-        purpose: this.purpose(options), cache_lineage: options?.sessionId, ...usage, model: binding.model });
-      settled = true;
-      if (this.last.exhausted) this.stop();
-    } };
-  };
-  async refresh(): Promise<void> {
-    this.last = await this.options.record({ kind: "budget", action: "state", request: randomUUID() });
-    if (this.last.exhausted) this.stop();
-  }
-  wrap(stream: StreamFunction, unbounded = this.options.unbounded === true): StreamFunction {
-    return (model, context, options) => lazyStream(model, async () => {
-      if (this.stopped) throw new Error("budget_exhausted: explicit resume with increased configured limits is required");
-      options?.signal?.throwIfAborted();
-      const request = randomUUID();
-      const purpose = this.purpose(options);
-      const cache_lineage = options?.sessionId;
-      const output = Math.min(options?.maxTokens ?? model.maxTokens, model.maxTokens);
-      const tier = options && "serviceTier" in options ? options.serviceTier : undefined;
-      const multiplier = model.api === "openai-codex-responses" && tier === "priority"
-        ? getServiceTierCostMultiplier(model, tier) : 1;
-      const bound = reservation(model, output, multiplier);
-      const controller = new AbortController();
-      this.active.add(controller);
-      let admitted = false;
-      try {
-        this.last = await this.options.record({ kind: "budget", action: "reserve", request, ...bound, unbounded });
-        if (this.last.admitted !== true) {
-          if (this.limited()) {
-            this.stop();
-            throw new Error("budget_exhausted: reservation refused (remaining balance, uncertainty, unbounded transport or pricing gap); inspect budget state");
-          }
-          throw new Error("budget_accounting_refused: unlimited reservation could not be recorded");
-        }
-        admitted = true;
-        if (this.last.exhausted) this.stop();
-        if (this.stopped) controller.abort(new Error("budget_exhausted"));
-        const signal = AbortSignal.any([controller.signal, ...(options?.signal ? [options.signal] : [])]);
-        signal.throwIfAborted();
-        const source = stream(model, context, { ...options, maxTokens: output, signal });
-        const self = this;
-        return (async function* () {
-          try {
-            for await (const event of source) {
-              // Only successful terminal usage is known complete. Cancellation/error/deferred work
-              // retains its reservation even if the provider emitted partial usage or a zero bill.
-              if (event.type === "done" && event.reason !== "deferred") {
-                const message = event.message;
-                const response = createHash("sha256").update(JSON.stringify([
-                  model.provider, model.id, message.responseId ?? request,
-                ])).digest("hex");
-                const usage = actual(model, message.usage, multiplier);
-                if (usage.tokens > 0) {
-                  self.last = await self.options.record({ kind: "budget", action: "settle", request, response, purpose, cache_lineage, ...usage });
-                  if (self.last.exhausted) self.stop();
-                }
-              }
-              // result() resolves as soon as lazyStream publishes the terminal event,
-              // before this iterator's finally runs. Retire the finished request first.
-              if (event.type === "done" || event.type === "error") self.active.delete(controller);
-              yield event;
-            }
-          } finally { self.active.delete(controller); }
-        })();
-      } catch (error) {
-        this.active.delete(controller);
-        // Once admission has committed, even a local setup failure is conservatively uncertain.
-        if (admitted) this.last = { ...this.last, uncertain: true };
-        throw error;
+
+interface SavedSpending extends SpendingState {
+  readonly continuation?: string;
+}
+
+/** One durable counter shared by every API stream in a host, independent of its transcript. */
+export class Spending {
+  private constructor(private readonly path: string, private saved: SavedSpending) {}
+
+  static open(dir: string, flags: SpendingOptions): Spending | undefined {
+    const path = join(dir, "spend.json");
+    let saved: SavedSpending | undefined;
+    try { saved = JSON.parse(readFileSync(path, "utf8")); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (saved !== undefined) {
+      if (!saved || !Number.isFinite(saved.maxUsd) || saved.maxUsd <= 0 || !Number.isFinite(saved.spentUsd) || saved.spentUsd < 0
+        || (saved.continuation !== undefined && typeof saved.continuation !== "string")
+        || (saved.paidRoute !== undefined && (typeof saved.paidRoute !== "string" || saved.paidRoute !== saved.continuation))) {
+        throw new Error(`Invalid spending state: ${path}`);
       }
-    });
+      if (flags.maxUsd !== undefined && flags.maxUsd !== saved.maxUsd) throw new Error("Cannot change --max-usd of an existing session");
+      if (flags.paidRoute !== undefined && flags.paidRoute !== saved.continuation) throw new Error("Cannot change --paid-route of an existing session");
+      return new Spending(path, saved);
+    }
+    if (flags.maxUsd === undefined) {
+      if (flags.paidRoute) throw new Error("--paid-route requires --max-usd");
+      return undefined;
+    }
+    if (!Number.isFinite(flags.maxUsd) || flags.maxUsd <= 0) throw new Error("--max-usd must be a positive dollar amount");
+    const spending = new Spending(path, { maxUsd: flags.maxUsd, spentUsd: 0,
+      ...(flags.paidRoute ? { continuation: flags.paidRoute } : {}) });
+    spending.save(spending.saved);
+    return spending;
   }
-  state() {
-    return { ...this.last, stopped: this.stopped, active: this.active.size,
-      unbounded_transport: this.options.unbounded === true,
-      reservation_policy: "full-model-context-plus-output", cancellation: "best-effort; provider billing may lag" };
+
+  get continuation(): string | undefined { return this.saved.continuation; }
+  get activeRoute(): string | undefined { return this.saved.paidRoute; }
+  get snapshot(): SpendingState {
+    const { maxUsd, spentUsd, paidRoute } = this.saved;
+    return { maxUsd, spentUsd, ...(paidRoute ? { paidRoute } : {}) };
+  }
+
+  beforeRequest(model: Model<Api>): void {
+    if (this.saved.spentUsd >= this.saved.maxUsd) throw new Error(SPENDING_CAP_REACHED);
+    const rates = [model.cost, ...model.cost.tiers ?? []];
+    if (!rates.some(rate => rate.input > 0 || rate.output > 0 || rate.cacheRead > 0 || rate.cacheWrite > 0)) {
+      throw new Error(`Cannot meter unpriced API model ${model.provider}/${model.id}`);
+    }
+  }
+
+  charge(usd: number): void {
+    // Avoid binary addition leaving an exact dollar bound just below the threshold.
+    if (usd > 0) this.save({ ...this.saved, spentUsd: Number((this.saved.spentUsd + usd).toFixed(12)) });
+  }
+
+  continueOn(route: string): boolean {
+    if (this.saved.paidRoute === route) return false;
+    this.save({ ...this.saved, paidRoute: route });
+    return true;
+  }
+
+  private save(state: SavedSpending): void {
+    const temp = `${this.path}.tmp`;
+    writeFileSync(temp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temp, this.path);
+    this.saved = state;
   }
 }

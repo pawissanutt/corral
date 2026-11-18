@@ -45,7 +45,7 @@ export function normalizeFailure(connection: ConnectionId, input: FailureInput, 
   let category: ProviderFailure["category"] = "unknown";
   let scope: ProviderFailure["scope"] = "unknown";
   let resetAt: string | undefined;
-  if (input.message?.startsWith("budget_exhausted:")) category = "local_budget";
+  if (input.message?.startsWith("spending cap reached;") || input.message?.startsWith("budget_exhausted:")) category = "local_budget";
   else if (input.message?.startsWith("network_refused:")) category = "network_policy";
   else if (input.message?.startsWith("credentials_unavailable:") || input.status === 401 || input.status === 403
       || has("authentication_failed", "authentication_error", "invalid_api_key", "oauth_org_not_allowed", "cloud_credential_error", "account_on_hold", "verification_required")) {
@@ -128,7 +128,7 @@ async function errorBody(response: Response): Promise<unknown> {
 }
 
 /** Per-stream evidence, before pinned Codex collapses *every* 429 into quota-looking prose.
- * No recovery loop here; retries remain owned by Pi/provider_stall and paid admission. */
+ * Continuation is decided by the session, never by this provider adapter. */
 export function withProviderFailures(connection: ConnectionId, stream: StreamFunction): StreamFunction {
   return (model, context, options) => lazyStream(model, async () => {
     let http: FailureInput | undefined;

@@ -37,6 +37,7 @@ export const doneTool: CorralToolSpec = {
 export function workerDoneTool(tool: ToolDefinition, host: SessionRecordOptions & {
   readonly recordDir: string;
   fleet(): FleetSnapshot;
+  readonly usageArtifact?: () => string;
   attachArtifact(payload: { path: string; kind: string; title: string }): Promise<void>;
 }): ToolDefinition {
   return { ...tool, async execute(id, params, signal, update, context) {
@@ -60,6 +61,12 @@ export function workerDoneTool(tool: ToolDefinition, host: SessionRecordOptions 
         await host.attachArtifact({ path, kind: "report", title: "Session record" });
       } catch (error) {
         warning = `Session record attachment failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    if (host.usageArtifact) {
+      try { await host.attachArtifact({ path: host.usageArtifact(), kind: "usage", title: "Model usage" }); }
+      catch (error) {
+        warning = [warning, `Usage attachment failed: ${error instanceof Error ? error.message : String(error)}`].filter(Boolean).join("\n");
       }
     }
     const result = await tool.execute(id, params, signal, update, context);

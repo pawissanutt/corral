@@ -4,6 +4,7 @@ import { join } from "node:path";
 interface EngineReply {
   readonly result?: unknown;
   readonly stdout?: string;
+  readonly bytes?: readonly number[];
   readonly stderr?: string;
   readonly code?: number;
 }
@@ -34,7 +35,8 @@ const replies = ${JSON.stringify(replies)};
 const reply = Object.hasOwn(replies, subcommand) ? replies[subcommand]
   : Object.hasOwn(replies, command) ? replies[command] : {};
 if (reply.stderr !== undefined) process.stderr.write(reply.stderr);
-if (reply.stdout !== undefined) process.stdout.write(reply.stdout);
+if (reply.bytes !== undefined) process.stdout.write(Buffer.from(reply.bytes));
+else if (reply.stdout !== undefined) process.stdout.write(reply.stdout);
 else if ((reply.code ?? 0) === 0) {
   process.stdout.write(JSON.stringify(reply.result ?? (command === "list" || subcommand === "artifact list" ? [] : {})) + "\\n");
 }

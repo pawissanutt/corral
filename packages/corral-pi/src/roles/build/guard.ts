@@ -10,8 +10,6 @@ import type { RoleContext } from "../types.ts";
 const GIT = /(?:^|[\s/;&|()`'"])git\s+(?:(?:-C|-c|--git-dir|--work-tree|--namespace)\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s+|--(?:git-dir|work-tree|namespace)=[^\s;&|]+\s+|--(?:no-pager|paginate|bare)\s+)*/g;
 
 const READ_ONLY_ENGINE: readonly string[] = ["show", "list", "log", "help", "--help", "-h", "--version", "-V"];
-// In the old CLI review reads an existing review; in the engine it starts one.
-const READ_ONLY_CORRAL: readonly string[] = [...READ_ONLY_ENGINE, "stats", "review", "pins", "build-identity"];
 const CORRAL_REFUSAL = "build rule: model shell calls may only read corral state; nothing ran. "
   + "Use build_verify for gates, /board for the owner's confirmed board plan, or /finish for the owner's exit choice and landing.";
 const SHELLS: readonly string[] = ["sh", "bash", "zsh", "dash", "ksh"];
@@ -165,8 +163,7 @@ function corralShellRefusal(command: string, bare = false): string | undefined {
     if (!commands) return CORRAL_REFUSAL;
     for (const words of commands) {
       const { name, args } = shellInvocation(words);
-      const engine = name === "corral-next" || name === "$CORRAL" || name === "${CORRAL}";
-      if (name === "corral" || engine) {
+      if (["corral", "corral-next", "$CORRAL", "${CORRAL}"].includes(name)) {
         if (bare) return "bare session rule: do not invoke corral; no workspace, gate or board is bound. Run local checks with the shell and let the owner choose /finish.";
         let index = 0;
         while (index < args.length) {
@@ -176,13 +173,8 @@ function corralShellRefusal(command: string, bare = false): string | undefined {
         }
         const command = args[index] ?? "";
         const subcommand = args[index + 1] ?? "";
-        if (engine) {
-          if (command === "artifact" && (subcommand === "list" || subcommand === "show")) continue;
-          if (!READ_ONLY_ENGINE.includes(command)) return CORRAL_REFUSAL;
-        } else {
-          if (command === "build" && (subcommand === "list" || subcommand === "show")) continue;
-          if (!READ_ONLY_CORRAL.includes(command)) return CORRAL_REFUSAL;
-        }
+        if (command === "artifact" && (subcommand === "list" || subcommand === "show")) continue;
+        if (!READ_ONLY_ENGINE.includes(command)) return CORRAL_REFUSAL;
       } else if (SHELLS.includes(name)) {
         const flag = args.findIndex((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg) || arg === "--command");
         if (flag >= 0 && args[flag + 1] !== undefined) pending.push({ source: args[flag + 1]!, depth: depth + 1 });
