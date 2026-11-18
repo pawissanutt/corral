@@ -131,6 +131,7 @@ fn confirm_modal(app: AppState) -> Modal {
         test_id: String::from("confirm"),
         sub: Some(sub.to_owned()),
         body,
+        foot: None,
         done: None,
         confirm: Some(Confirm {
             label: act_confirm_label(&title, app.form),
@@ -216,6 +217,7 @@ fn refusal_modal(app: AppState) -> Modal {
         title,
         sub: Some(REFUSED_SUB.to_owned()),
         body,
+        foot: None,
         done: Some("Close".to_owned()),
         confirm: None,
     }

@@ -44,6 +44,7 @@ fn text(label: &'static str, placeholder: &'static str, value: impl Into<String>
         placeholder,
         required: false,
         value: value.into(),
+        multiline: false,
         choices: Vec::new(),
         suggestions: Vec::new(),
     }
@@ -54,6 +55,26 @@ fn required(label: &'static str, placeholder: &'static str, value: impl Into<Str
     VerbField {
         required: true,
         ..text(label, placeholder, value)
+    }
+}
+
+/// A field of several lines: Markdown or prose, kept with its line breaks.
+fn prose(label: &'static str, placeholder: &'static str, value: impl Into<String>) -> VerbField {
+    VerbField {
+        multiline: true,
+        ..text(label, placeholder, value)
+    }
+}
+
+/// A field of several lines that must not be left empty.
+fn required_prose(
+    label: &'static str,
+    placeholder: &'static str,
+    value: impl Into<String>,
+) -> VerbField {
+    VerbField {
+        required: true,
+        ..prose(label, placeholder, value)
     }
 }
 
@@ -140,7 +161,7 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
                 "Task title",
                 task.map(|task| task.title.clone()).unwrap_or_default(),
             ),
-            text(
+            prose(
                 "Body",
                 "Markdown: Goal, Acceptance, Notes",
                 task.map(|task| task.body.clone()).unwrap_or_default(),
@@ -179,7 +200,7 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
                     .unwrap_or_default(),
             ),
         ],
-        Verb::Comment => vec![required("Comment", "Your comment", "")],
+        Verb::Comment => vec![required_prose("Comment", "Your comment", "")],
         Verb::Move => vec![pick(
             "Status",
             &STATUSES,
@@ -193,8 +214,8 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
                 ctx.base.clone().unwrap_or_default(),
             ),
         ],
-        Verb::Reply => vec![required("Reply", "What the worker should hear", "")],
-        Verb::Done => vec![required("Summary", "What changed", "")],
+        Verb::Reply => vec![required_prose("Reply", "What the worker should hear", "")],
+        Verb::Done => vec![required_prose("Summary", "What changed", "")],
         Verb::Review => vec![text(
             "Reviewer profile",
             "Empty uses the project's reviewer",
@@ -202,9 +223,9 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
         )],
         Verb::Verdict => vec![
             pick("Verdict", &VERDICTS, "approve"),
-            text("Notes", "Reviewer notes", ""),
+            prose("Notes", "Reviewer notes", ""),
         ],
-        Verb::Changes => vec![required("Notes", "What to change", "")],
+        Verb::Changes => vec![required_prose("Notes", "What to change", "")],
         // The run's base, which the engine lands onto unless another existing branch is named;
         // the project's local branches are offered beside it.
         Verb::Approve => vec![VerbField {
@@ -218,11 +239,11 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
         Verb::Retry => vec![
             text("Profile", "Worker profile; empty keeps the default", ""),
             pick("From base", &YES_NO, "no"),
-            text("Note", "Sent to the new run", ""),
+            prose("Note", "Sent to the new run", ""),
         ],
         Verb::NewTask => vec![
             required("Title", "Task title", ""),
-            text("Body", "Markdown: Goal, Acceptance, Notes", ""),
+            prose("Body", "Markdown: Goal, Acceptance, Notes", ""),
             pick("Status", &NEW_STATUSES, "backlog"),
             project(ctx, None),
             pick("Priority", &PRIORITIES, "P2"),

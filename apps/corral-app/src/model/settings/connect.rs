@@ -90,9 +90,9 @@ fn step(progress: Progress, title: &'static str, detail: &'static str) -> Step {
 /// A native app without a socket: start corrald, start the app with its socket, then enrol.
 pub fn native_guide(feed: &Feed, terminal: bool) -> Guide {
     let start = if terminal {
-        "CORRAL_SOCKET=\"$(corral daemon socket)\" nsh run --target tui"
+        "CORRAL_SOCKET=<workspace>/.corral-next/daemon.sock nsh run --target tui"
     } else {
-        "export CORRAL_SOCKET=\"$(corral daemon socket)\""
+        "export CORRAL_SOCKET=<workspace>/.corral-next/daemon.sock"
     };
     let mut details = vec![
         (
@@ -138,8 +138,8 @@ pub fn native_guide(feed: &Feed, terminal: bool) -> Guide {
             ),
         ],
         commands: vec![
-            ("Health", "corral daemon status".into()),
-            ("Run in a terminal", "corral daemon run".into()),
+            ("Health", "corrald-next status".into()),
+            ("Run in a terminal", "corrald-next run".into()),
             ("Start the app", start.into()),
         ],
         failures: Vec::new(),
@@ -147,8 +147,8 @@ pub fn native_guide(feed: &Feed, terminal: bool) -> Guide {
     }
 }
 
-/// A browser that is not paired: turn on the listener, get a code, pair and compare codes.
-/// `origin` is this page's origin, which corrald must list in `web_origins`.
+/// A browser that is not paired: turn on the listener, get a pairing link, pair and compare
+/// codes. `origin` is this page's origin, which corrald must list as a `web_origin`.
 pub fn web_guide(feed: &Feed, origin: Option<&str>) -> Guide {
     use Progress::{Current, Done, Later};
     let state = pair_browser(feed);
@@ -209,30 +209,42 @@ pub fn web_guide(feed: &Feed, origin: Option<&str>) -> Guide {
             step(
                 progress[0],
                 "Turn on the browser listener",
-                "On the daemon host, add the listener below to .corral/corral.toml, with this page's origin in web_origins, then restart corrald. It is off by default.",
+                "It is off by default. On the daemon host, add the [daemon] table below to .corral-next/corral.toml with the address corrald should listen on and this page's origin, then restart corrald-next. Or start it with the run command below.",
             ),
             step(
                 progress[1],
-                "Get a pairing code",
-                "Run the pairing command below on the daemon host, or press Pair a device in Settings › Devices on a device already paired. A code works once, for two minutes.",
+                "Get a pairing link",
+                "Run corrald-next pair on the daemon host. It prints a link to open here and the code in it. A device that is already paired can also make one: Settings › Devices › Pair a device. A code works once, for two minutes.",
             ),
             step(
                 progress[2],
                 "Pair and compare codes",
-                "Press Pair here. This browser and the trusted device each show a six-digit code; confirm on the trusted device only if they match.",
+                "Press Pair here, and this browser shows a six-digit code. Confirm on a paired device only if it shows the same code. With no paired device yet, see the code with corrald-next pair status and confirm with corrald-next pair confirm, both on the daemon host.",
             ),
         ],
         commands: vec![
             (
-                ".corral/corral.toml",
-                format!("[daemon]\nlisten = \"127.0.0.1:7841\"\nweb_origins = [\"{origin}\"]"),
+                ".corral-next/corral.toml",
+                format!("[daemon]\nlisten = \"<address:port>\"\nweb_origin = [\"{origin}\"]"),
             ),
-            ("Pairing code", "corral device pair".into()),
+            (
+                "Or start corrald with",
+                format!("corrald-next run --listen <address:port> --web-origin {origin}"),
+            ),
+            ("Pairing link", "corrald-next pair".into()),
+            (
+                "Code to compare",
+                "corrald-next pair status <pair id>".into(),
+            ),
+            (
+                "Confirm the first device",
+                "corrald-next pair confirm <pair id>".into(),
+            ),
         ],
         failures: vec![
             (
                 "Can't reach corrald",
-                "The listener is off, corrald wasn't restarted after the change, or this page's origin isn't in web_origins.",
+                "The listener is off, corrald-next wasn't restarted after the change, or this page's origin isn't its web_origin.",
             ),
             (
                 "Code expired or already used",

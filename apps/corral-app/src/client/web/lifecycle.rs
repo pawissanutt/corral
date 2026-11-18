@@ -18,6 +18,9 @@ impl Driver {
                 }
             }
             Ok(keystore::Stored::Credential(credential)) => {
+                // A credential without its marker (cleared site storage) opened on the pairing
+                // form; the next launch resumes at once.
+                let _ = Storage::set_item(PAIRED_KEY, "1");
                 let device = credential.device.clone();
                 self.credential = Some(credential);
                 match self.app.boot(self.feed, Some(&device)).await {

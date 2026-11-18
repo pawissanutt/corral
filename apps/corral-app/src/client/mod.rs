@@ -47,7 +47,7 @@ pub fn pairing_link() -> Result<Option<String>, &'static str> {
     }
 }
 
-/// Whether a native endpoint exists, or browser credential probing is supported.
+/// Whether there is something to connect to: a native socket, or a browser's saved pairing.
 pub fn configured() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -55,8 +55,17 @@ pub fn configured() -> bool {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        true
+        saved_pairing(nsh_core::storage::Storage::get_item(PAIRED_KEY).as_deref())
     }
+}
+
+/// A browser has a pairing to resume when NSH Storage holds the paired marker, which a
+/// confirmed pairing writes and Forget, revocation or a missing credential remove. Without it
+/// the browser opens on the pairing form at once rather than dialing nothing. The credential in
+/// IndexedDB stays the authority: one found without the marker is still resumed, and the marker
+/// is written again.
+pub fn saved_pairing(marker: Option<&str>) -> bool {
+    marker.is_some_and(|marker| !marker.is_empty())
 }
 
 /// Start once under the app owner; load authenticated cached data before dialing.

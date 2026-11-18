@@ -167,6 +167,39 @@ mod tests {
         );
     }
 
+    /// The Edit form showed a Markdown body on one line: its Body is a multi-line field, an
+    /// edit of the title leaves the body alone, and an edited body goes out with its line breaks
+    /// byte for byte.
+    #[test]
+    fn a_multi_line_body_survives_an_edit_of_another_field() {
+        let body = "## Goal\nHour, day and week presets.\n\n## Acceptance\n- The behaviour\r\n";
+        let task = corral_types::Task {
+            title: "Timeline zoom presets".into(),
+            body: body.into(),
+            ..corral_types::Task::default()
+        };
+        let fields = super::super::verb_forms::fields(
+            Verb::Edit,
+            Some(&task),
+            &super::super::verb_context::FormContext::default(),
+        );
+        assert!(fields[1].multiline);
+        let initial: Vec<String> = fields.into_iter().map(|field| field.value).collect();
+        assert_eq!(initial[1], body);
+        let record = Record::Task(Id::new("T-12"));
+        let mut values = initial.clone();
+        values[0] = "Timeline zoom presets, hour to week".into();
+        let Ok(Op::Edit { edit, .. }) = op(&record, Verb::Edit, &values, &initial) else {
+            panic!("an edit");
+        };
+        assert_eq!(edit.body, None);
+        values[1] = format!("{body}- Keeps the scroll position\n");
+        let Ok(Op::Edit { edit, .. }) = op(&record, Verb::Edit, &values, &initial) else {
+            panic!("an edit");
+        };
+        assert_eq!(edit.body.as_deref(), Some(values[1].as_str()));
+    }
+
     #[test]
     fn a_capture_carries_every_field_and_a_dispatch_leaves_untouched_defaults_to_the_engine() {
         let values: Vec<String> = [
