@@ -208,8 +208,7 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                             Event::Health(_)
                             | Event::Rows { .. }
                             | Event::Reset { .. }
-                            | Event::TopicError { .. }
-                            | Event::Live { .. } => {
+                            | Event::TopicError { .. } => {
                                 feed.update(|feed| {
                                     feed.link_lost("unhandled daemon application event".into())
                                 });

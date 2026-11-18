@@ -142,6 +142,7 @@ fn content(app: AppState, focus: Focus) -> AnyElement {
                     .child(composer::ask_surface(app)),
             )
             .child(palette::palette(app))
+            .child(screens::agents::rewind_sheet(app))
             .child(confirmation(app))
             .child(refusal(app))
             .child(screens::now::verb_composer(app)),

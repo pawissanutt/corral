@@ -1,13 +1,11 @@
 //! The sample fleet of one previewed assistant session: what corrald's live page carries for a
-//! watched session that runs child agents, applied through the live model as the client applies
-//! a daemon's page. Other previewed sessions have none, and show none.
+//! watched session that runs child agents, held beside the host's live turn as the client holds
+//! a daemon page's fleet. Other previewed sessions have none, and show none.
 
 use corral_protocol::subscription::{
-    SessionAgentMessage, SessionChild, SessionChildVerdict, SessionFleet, SessionLiveEvent,
-    SessionLiveKind,
+    SessionAgentMessage, SessionChild, SessionChildVerdict, SessionFleet,
 };
 
-use super::stamp;
 use crate::model::daemon::Feed;
 
 /// The previewed session that runs children.
@@ -110,13 +108,8 @@ pub(super) fn watch(feed: &mut Feed, session: &str) {
         messages_total: 3,
         max_parallel: 3,
     };
-    let event = SessionLiveEvent {
-        seq: 1,
-        generation: 1,
-        at: stamp(now),
-        kind: SessionLiveKind::LiveFleet {},
-    };
-    let live = feed.live.entry(SESSION.into()).or_default();
-    live.apply_page(Some(1), vec![event], false);
-    live.replace_fleet(Some(fleet));
+    feed.live
+        .entry(SESSION.into())
+        .or_default()
+        .replace_fleet(Some(fleet));
 }

@@ -2,7 +2,7 @@
 
 use corral_protocol::detail::TaskDetail;
 use corral_types::{
-    Actor, Blocked, CheckKind, CheckResult, EventKind, Next, Op, Outcome, Role, Status,
+    Actor, Blocked, CheckKind, CheckResult, EventKind, Next, Op, Origin, Outcome, Role, Status,
 };
 use serde_json::{Value, json};
 
@@ -219,7 +219,8 @@ fn auto_send_back(feed: &mut Feed, mut rec: TaskDetail, notes: &str) {
     send_back(feed, rec, notes);
 }
 
-/// Work goes back to the worker: its live session, or a new run on the same branch.
+/// Work goes back to the worker: its live session, or a new run on the same branch. The notes
+/// are automated input, which a paused pi session holds until it resumes.
 pub(super) fn send_back(feed: &mut Feed, mut rec: TaskDetail, notes: &str) {
     let live = last_worker(&rec)
         .filter(|run| run.ended.is_none())
@@ -229,12 +230,17 @@ pub(super) fn send_back(feed: &mut Feed, mut rec: TaskDetail, notes: &str) {
         None => {
             let profile =
                 last_worker(&rec).map_or_else(|| "omp-sol".to_owned(), |run| run.profile.clone());
-            start(feed, &mut rec, Role::Worker, &profile)
+            let run = start(feed, &mut rec, Role::Worker, &profile);
+            super::super::pi_script::follow(feed, &mut rec, &run, false);
+            run
         }
     };
     set_status(feed, &mut rec, Status::Running);
+    let session = format!("{}_{run}", rec.task.id);
     let detail = json!({"notes": notes, "round": rec.task.round});
     commit(feed, rec, EventKind::SentBack, Some(&run), detail);
+    let notes = format!("[corral] Sent back: {notes}");
+    super::super::pi::deliver(feed, &session, &notes, Origin::Auto, None);
 }
 
 pub(super) fn approve(

@@ -284,44 +284,4 @@ mod tests {
             .unwrap();
         assert_eq!(core.expired(5_100), None);
     }
-
-    #[test]
-    fn live_frames_never_finish_or_replace_a_scoped_history_snapshot() {
-        let mut core = Core::new();
-        for (more, live) in [
-            (true, Value::Null),
-            (
-                false,
-                json!({
-                    "entry":"reply-1","turn":1,"offset":0,"text":"answer","done":false
-                }),
-            ),
-        ] {
-            core.receive(
-                frame(json!({"jsonrpc":"2.0","method":"sub.delta","params":{
-                    "topic":"thread","scope":"quick","epoch":1,"rows":[],"left":[],
-                    "cursor":{"rev":1,"after":null},"more":more,"live":live
-                }})),
-                0,
-            )
-            .unwrap();
-        }
-        assert!(matches!(core.next_event(), Some(Event::Live { scope, .. }) if scope == "quick"));
-        assert!(core.next_event().is_none());
-        core.receive(
-            frame(json!({"jsonrpc":"2.0","method":"sub.delta","params":{
-                "topic":"thread","scope":"quick","epoch":1,"rows":[],"left":[],
-                "cursor":{"rev":1,"after":null},"more":false,"live":null
-            }})),
-            1,
-        )
-        .unwrap();
-        assert!(matches!(
-            core.next_event(),
-            Some(Event::Rows {
-                replacement: true,
-                ..
-            })
-        ));
-    }
 }

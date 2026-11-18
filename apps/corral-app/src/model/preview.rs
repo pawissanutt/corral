@@ -1,14 +1,18 @@
 //! Explicit, ephemeral sample preview over the same `Feed` corrald fills. The sample keeps one
 //! `TaskDetail` per task as its store, plus the event log in `Feed.changes`; the open board,
 //! plans, projects, live runs, closed page and usage totals are projected from those after every
-//! change, as the daemon projects its own store. The caller supplies the clock; nothing here
-//! contacts a daemon or persists anything.
+//! change, as the daemon projects its own store. Its pi sessions (two workers and the chats) are
+//! hosts in `Feed.hosts` that stream on the clock's ticks. The caller supplies the clock; nothing
+//! here contacts a daemon or persists anything.
 mod controls;
 mod details;
 mod effects;
 mod engine;
 mod fleet;
 mod pane;
+mod pi;
+mod pi_rows;
+mod pi_script;
 mod rollup;
 mod sample;
 mod sessions;
@@ -31,12 +35,15 @@ pub use details::detail;
 pub use effects::{effect, operation};
 pub use engine::act;
 pub use pane::pane;
+pub use pi::{Host, tick};
 
 pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZone>) -> Feed {
     let mut feed = base(now, date, clock, time_zone);
     workspace::populate(&mut feed, true);
     sessions::populate(&mut feed);
+    pi_script::populate(&mut feed);
     rollup::rebuild(&mut feed);
+    pi_rows::settle_all(&mut feed);
     feed
 }
 
@@ -55,21 +62,17 @@ pub fn feed_no_projects(
         "Quick thread",
         None,
         Some("omp-sol".into()),
+        true,
     );
-    let entry = sessions::entry(
-        "preview-workspace",
+    pi_script::chat(
+        &mut feed,
+        "A-7",
         &stamp(now),
-        corral_protocol::assistant::EntryKind::Answer,
+        "What can I do here without projects?",
         "Preview · This workspace has no configured projects. Use the assistant to ask questions or discuss ideas; no project work is running.",
     );
-    for scope in ["quick", "A-7"] {
-        if let Some(thread) = feed.threads.get_mut(scope) {
-            thread
-                .entries
-                .insert(entry.id.clone().into(), entry.clone());
-        }
-    }
     rollup::rebuild(&mut feed);
+    pi_rows::settle_all(&mut feed);
     feed
 }
 
@@ -108,13 +111,13 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         version: "preview".into(),
         slots: None,
     });
-    // As corrald in phase 2: no `session.v1`, so run pages read no transcripts.
     for capability in [
         corral_protocol::TASKS_V1,
         CHANGES_V1,
         PLANS_V1,
         PROJECTS_V1,
         AGENTS_V1,
+        SESSION_V1,
         SESSION_FLEET_V1,
         REVIEW_V1,
         TIMELINE_V1,

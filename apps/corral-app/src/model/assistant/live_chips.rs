@@ -5,13 +5,9 @@ use super::{Chip, needs_you, row, wait_label};
 use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 
-/// The thread's state chip from its row, its stream and its open prompts, as served.
+/// The thread's state chip from its row, its session stream and its open prompts, as served.
 pub(super) fn served_chip(feed: &Feed, scope: &str) -> Chip {
-    let streaming = feed
-        .threads
-        .get(scope)
-        .and_then(|thread| thread.live.as_ref())
-        .is_some_and(|live| !live.done);
+    let streaming = feed.live.get(scope).is_some_and(|live| live.open);
     let Some(row) = row(feed, scope) else {
         let loading = feed
             .topics
@@ -27,14 +23,14 @@ pub(super) fn served_chip(feed: &Feed, scope: &str) -> Chip {
     if streaming {
         return Chip::new("answering", Hue::Corral);
     }
+    if needs_you(feed, scope) {
+        return Chip::new("waiting on you", Hue::You);
+    }
     if let Some(wait) = &row.wait {
         return Chip::new(
             format!("waiting for assistant · {}", wait_label(wait)),
             Hue::Held,
         );
-    }
-    if needs_you(feed, scope) {
-        return Chip::new("waiting on you", Hue::You);
     }
     let (label, hue) = match row.state {
         AssistantState::Cold if super::live_parts::has_history(feed, scope, row) => {

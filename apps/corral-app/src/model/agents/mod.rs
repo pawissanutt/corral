@@ -51,7 +51,7 @@ pub(crate) use live::placement;
 pub use live_session::session as live_session;
 pub use menu::{SESSION_MENU_LABEL, session_verbs};
 pub use pane::{KEYS, PaneAsk, PaneInput, PaneKey, PaneSent, focus, focus_refusal};
-pub use prompt::{Prompt, answer as answer_prompt, asks, prompts};
+pub use prompt::{Prompt, QUESTION_CARD, answer as answer_prompt, asks, prompts};
 pub use replay::fetches;
 pub use roster::{RoleTab, Roster, RosterRole, RosterRow, roster};
 pub use roster_panel::{

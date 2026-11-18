@@ -1,13 +1,15 @@
 //! Session controls and question answers against the sample, answered under their request id
-//! as corrald answers them: a run without a pi host refuses Cancel, Pause and Rewind with
-//! corrald's reason, a reviewer refuses Pause, Terminate stops a run and Relaunch retries it;
-//! a sample chat changes its row's state.
+//! as corrald answers them: a pi host (a sample chat, or one of the two pi workers) cancels,
+//! pauses, resumes and rewinds; a run without a pi host refuses those with corrald's reason, a
+//! reviewer refuses Pause, and Terminate and Relaunch of a run are the engine's `stop` and
+//! `retry`.
 
-use corral_protocol::rows::{AssistantLocation, AssistantState};
+use corral_protocol::rows::AssistantState;
 use corral_protocol::session::SessionPromptAnswer;
-use corral_types::{Op, Refusal, Role, SessionRef, SessionStatus};
+use corral_types::{Op, Refusal, Role, SessionRef};
 use serde_json::{Value, json};
 
+use super::pi;
 use crate::model::Id;
 use crate::model::act::Act;
 use crate::model::agents::Control;
@@ -45,24 +47,25 @@ pub fn control(feed: &mut Feed, key: &Id, session: &str, control: Control) {
     feed.operations.insert(key.clone(), operation);
 }
 
-/// Records the outcome of an answer under `key`: the sample holds no pending question.
+/// Records the outcome of an answer under `key`, as the host takes it or corrald refuses it.
 pub fn answer(feed: &mut Feed, key: &Id, answer: &SessionPromptAnswer) {
-    feed.operations.insert(
-        key.clone(),
-        Operation {
-            method: corral_protocol::assistant::PROMPT_ANSWER.into(),
-            loading: false,
-            value: Some(json!({"status": "missing"})),
-            error: None,
-            refusal: Some(Refusal {
-                reason: format!(
-                    "Preview · {} has no pending question {}",
-                    answer.session, answer.question
-                ),
+    let mut operation = Operation {
+        method: corral_protocol::assistant::PROMPT_ANSWER.into(),
+        loading: false,
+        value: None,
+        error: None,
+        refusal: None,
+    };
+    match pi::answer(feed, answer) {
+        Ok(value) => operation.value = Some(value),
+        Err(reason) => {
+            operation.refusal = Some(Refusal {
+                reason,
                 next: Vec::new(),
-            }),
-        },
-    );
+            })
+        }
+    }
+    feed.operations.insert(key.clone(), operation);
 }
 
 enum Fail {
@@ -108,18 +111,7 @@ fn run(feed: &mut Feed, key: &Id, session: &str, control: Control) -> Result<Val
         Control::Pause if row.run.role == Role::Reviewer => Err(Fail::Refused(
             "reviewers support Cancel and Terminate, not Pause".into(),
         )),
-        Control::Cancel => {
-            if let Some(row) = feed.agents.get_mut(session) {
-                row.status = SessionStatus::Idle;
-            }
-            Ok(json!({"cancelled": true}))
-        }
-        Control::Pause => Ok(json!({"paused": true, "cancelled": true})),
-        Control::Resume => Ok(json!({"paused": false})),
-        Control::Rewinds => Ok(json!({"kind": "list", "checkpoints": [], "rewinds": []})),
-        Control::Rewind(_) => Err(Fail::Refused(
-            "Preview · the sample host recorded no checkpoint to rewind to".into(),
-        )),
+        _ => pi::control(feed, session, control).map_err(Fail::Refused),
     }
 }
 
@@ -134,48 +126,32 @@ fn engine(feed: &mut Feed, key: &Id, op: Op) -> Result<(), Fail> {
     }
 }
 
+/// A chat's controls: its host answers them; Terminate stops the host and keeps the
+/// transcript, and Relaunch starts it again on the same session.
 fn chat(feed: &mut Feed, session: &str, control: Control) -> Result<Value, Fail> {
-    let id = if session == crate::model::assistant::QUICK {
-        crate::model::assistant::quick_id(feed)
-            .ok_or_else(|| Fail::Missing("chat session not found".into()))?
-    } else {
-        session.to_owned()
-    };
-    let row = feed
+    let id =
+        pi::resolve(feed, session).ok_or_else(|| Fail::Missing("chat session not found".into()))?;
+    let ended = feed
         .assistants
-        .get_mut(id.as_str())
-        .ok_or_else(|| Fail::Missing("chat session not found".into()))?;
-    if row.state == AssistantState::Ended {
+        .get(id.as_str())
+        .is_none_or(|row| row.state == AssistantState::Ended);
+    if ended {
         return Err(Fail::Refused(
             "chat thread ended; send a message to start a new session".into(),
         ));
     }
-    row.rev += 1;
-    Ok(match control {
-        Control::Cancel => {
-            row.state = AssistantState::Ready;
-            json!({"cancelled": true, "turn": row.turn})
-        }
-        Control::Pause => {
-            row.state = AssistantState::Paused;
-            json!({"paused": true, "cancelled": false})
-        }
-        Control::Resume => {
-            row.state = AssistantState::Ready;
-            json!({"paused": false})
-        }
+    match control {
         Control::Terminate => {
-            row.state = AssistantState::Cold;
-            row.live_in = AssistantLocation::None;
-            Value::Null
+            pi::end(feed, &id);
+            Ok(Value::Null)
         }
         Control::Relaunch => {
-            row.state = AssistantState::Ready;
-            row.live_in = AssistantLocation::Daemon;
-            json!({"id": id})
+            pi::revive(feed, &id);
+            Ok(json!({"id": id.as_str()}))
         }
         Control::Rewinds | Control::Rewind(_) => {
-            return Err(Fail::Refused("chat sessions are not rewound".into()));
+            Err(Fail::Refused("chat sessions are not rewound".into()))
         }
-    })
+        _ => pi::control(feed, &id, control).map_err(Fail::Refused),
+    }
 }

@@ -43,10 +43,6 @@ pub(super) enum Event {
         code: ErrorCode,
         message: String,
     },
-    Live {
-        scope: String,
-        live: corral_protocol::subscription::LiveText,
-    },
     Notice {
         method: String,
         params: Value,
@@ -575,32 +571,6 @@ impl Core {
         let topic: Topic = serde_json::from_value(value["topic"].clone()).map_err(decode)?;
         let scope = value["scope"].as_str().map(str::to_owned);
         let key = topic_key(topic, scope.as_deref());
-        if topic == Topic::Thread {
-            if let Some(live) = value
-                .get_mut("live")
-                .map(Value::take)
-                .filter(|live| !live.is_null())
-            {
-                self.events.push_back(Event::Live {
-                    scope: scope.clone().ok_or("thread delta has no scope")?,
-                    live: serde_json::from_value(live).map_err(decode)?,
-                });
-                let empty = |field: &str| value[field].as_array().is_none_or(Vec::is_empty);
-                if empty("rows") && empty("left") {
-                    let cursor = serde_json::from_value(value["cursor"].clone()).map_err(decode)?;
-                    return self.request(
-                        wire::SUB_ACK,
-                        serde_json::to_value(SubAck {
-                            topic,
-                            cursor,
-                            scope,
-                        })
-                        .map_err(decode)?,
-                        now_ms,
-                    );
-                }
-            }
-        }
         let epoch = value["epoch"].as_u64().ok_or("missing topic epoch")?;
         let batch = self.pages.entry(key).or_insert_with(|| PageBatch {
             replacement: true,

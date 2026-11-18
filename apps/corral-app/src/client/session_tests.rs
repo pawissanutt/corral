@@ -152,7 +152,6 @@ fn tasks(session: &mut Session) -> TasksPage {
             | Event::Rows { .. }
             | Event::Reset { .. }
             | Event::TopicError { .. }
-            | Event::Live { .. }
             | Event::Notice { .. } => {}
             Event::Idle => assert!(
                 std::time::Instant::now() < deadline,
@@ -359,7 +358,6 @@ fn reopened_thread_does_not_ack_or_publish_the_retired_live_page() {
                 break;
             }
             Event::Idle => assert!(std::time::Instant::now() < deadline),
-            Event::Live { .. } => panic!("retired live text reached the reopened thread"),
             Event::Closed(reason) => panic!("session closed: {reason}"),
             _ => {}
         }

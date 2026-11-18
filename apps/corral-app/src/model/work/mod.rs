@@ -402,15 +402,20 @@ impl State {
                 self.menu = Some(record);
                 Vec::new()
             }
+            // A chosen menu entry closes its menu, as a verb's does.
             Press::Focus(session) => {
+                self.menu = None;
                 vec![crate::model::agents::focus(&mut self.ids, feed, session)]
             }
-            Press::Control { session, control } => vec![Effect::Control {
-                session,
-                key: self.ids.next_id(),
-                control,
-                confirmed: false,
-            }],
+            Press::Control { session, control } => {
+                self.menu = None;
+                vec![Effect::Control {
+                    session,
+                    key: self.ids.next_id(),
+                    control,
+                    confirmed: false,
+                }]
+            }
             Press::Next { task, index } => match served_next(feed, &task, index) {
                 Some(next) => self.next(&next, false),
                 None => vec![no_longer_blocked(&task)],

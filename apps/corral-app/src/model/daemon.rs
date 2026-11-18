@@ -1,9 +1,7 @@
 //! Owned daemon snapshots, independent of the transport and the UI runtime. Rows hold the
 //! `corral_types` values the daemon serves; the app derives groups and rails from them.
 use crate::model::Id;
-use corral_protocol::{
-    Health, app::*, assistant::ThreadEntry, detail::*, rows::*, subscription::LiveText,
-};
+use corral_protocol::{Health, app::*, assistant::ThreadEntry, detail::*, rows::*};
 use corral_types::{Event, Refusal, UsageSummary};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -56,7 +54,6 @@ pub struct TopicState {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ThreadSnapshot {
     pub entries: BTreeMap<Id, ThreadEntry>,
-    pub live: Option<LiveText>,
     pub stale: bool,
     pub loading: bool,
 }
@@ -157,6 +154,9 @@ pub struct Feed {
     pub projects: BTreeMap<Id, ProjectRow>,
     /// Live runs by `<task>_<run>`, the same id as their terminal scope.
     pub agents: BTreeMap<Id, AgentRow>,
+    /// Whether a run's pi session is paused, by Agents row id, where it was reported. corrald's
+    /// rows do not carry it yet, so only the sample preview fills it; absent means unknown.
+    pub paused: BTreeMap<Id, bool>,
     pub assistants: BTreeMap<Id, AssistantRow>,
     /// The engine's usage totals and their run coverage.
     pub usage: Option<UsageSummary>,
@@ -204,6 +204,9 @@ pub struct Feed {
     /// This device's hostname, captured once when the client starts.
     pub host: Option<String>,
     pub endpoint: Option<String>,
+    /// The sample preview's pi hosts by session id (`model::preview`); corrald's hosts run
+    /// behind corrald, so its feed never holds any.
+    pub hosts: BTreeMap<Id, crate::model::preview::Host>,
 }
 
 impl Feed {
@@ -348,6 +351,7 @@ impl Feed {
         self.session = None;
         self.plans.clear();
         self.agents.clear();
+        self.paused.clear();
         self.assistants.clear();
         self.usage = None;
         self.settings = None;

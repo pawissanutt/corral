@@ -1,5 +1,6 @@
 //! The synthetic feed is a local driver, never a transport fallback. The real connection keeps
 //! its own signal, so replies arriving after a source change cannot overwrite sample records.
+//! Each tick of the real clock also moves the sample's running pi turns on by one beat.
 
 use nsh_core::prelude::*;
 
@@ -32,6 +33,7 @@ impl AppState {
                             feed.date = date;
                             feed.clock = clock;
                             feed.time_zone = zone;
+                            preview::tick(feed);
                         })
                     });
                 }

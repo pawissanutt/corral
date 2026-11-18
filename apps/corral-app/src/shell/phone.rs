@@ -101,6 +101,7 @@ pub fn shell(app: AppState) -> AnyElement {
         .child(composer::ask_surface(app))
         .child(ask::share(app))
         .child(palette::palette(app))
+        .child(crate::screens::agents::rewind_sheet(app))
         .child(confirmation(app))
         .child(refusal(app))
         .child(crate::screens::now::verb_composer(app))

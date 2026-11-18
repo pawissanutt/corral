@@ -140,21 +140,22 @@ pub fn kind(feed: &Feed, session: &str) -> Option<Kind> {
 
 /// The controls that apply to the session now, in menu order. Pause is not a reviewer's:
 /// a reviewer is cancelled by its task's hold already. Rewind is a worker's. Relaunch is for a
-/// host that is lost, Cancel for one working or waiting. The rows do not say whether a worker
-/// is paused, so a worker offers both Pause and Resume; a chat's row says, so it offers one.
+/// host that is lost, Cancel for one working or waiting. A worker shows Pause or Resume as
+/// `Feed.paused` says; where nothing says (corrald's rows do not carry it yet) it offers both.
+/// A chat's row says, so it offers one.
 pub fn controls(feed: &Feed, session: &str) -> Vec<Control> {
     match kind(feed, session) {
         Some(Kind::Chat) => chat_controls(feed, session),
         Some(kind) => feed
             .agents
             .get(session)
-            .map(|row| run_controls(row, kind))
+            .map(|row| run_controls(row, kind, feed.paused.get(session).copied()))
             .unwrap_or_default(),
         None => Vec::new(),
     }
 }
 
-fn run_controls(row: &AgentRow, kind: Kind) -> Vec<Control> {
+fn run_controls(row: &AgentRow, kind: Kind, paused: Option<bool>) -> Vec<Control> {
     let lost = matches!(row.status, SessionStatus::Gone);
     let busy = matches!(
         row.status,
@@ -165,7 +166,12 @@ fn run_controls(row: &AgentRow, kind: Kind) -> Vec<Control> {
         controls.push(Control::Cancel);
     }
     if kind == Kind::Worker && !lost {
-        controls.extend([Control::Pause, Control::Resume, Control::Rewinds]);
+        match paused {
+            Some(true) => controls.push(Control::Resume),
+            Some(false) => controls.push(Control::Pause),
+            None => controls.extend([Control::Pause, Control::Resume]),
+        }
+        controls.push(Control::Rewinds);
     }
     controls.push(if lost {
         Control::Relaunch
@@ -412,6 +418,8 @@ impl State {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RewindPoint {
     pub turn: u64,
+    /// `Turn 4`.
+    pub label: String,
     /// `start a1b2c3d`, or why the checkpoint cannot be restored.
     pub detail: String,
     pub usable: bool,
@@ -426,9 +434,13 @@ pub struct RewindSheet {
     pub note: &'static str,
     /// Loading, refused or empty, in words; none once points are listed.
     pub status: Option<String>,
+    /// The heading over the points.
+    pub turns: &'static str,
     /// Newest turn first.
     pub points: Vec<RewindPoint>,
-    /// Rewinds already done, newest first.
+    /// The heading over the rewinds already done.
+    pub done: &'static str,
+    /// Rewinds already done, newest first, each with the rescue ref its work was saved under.
     pub earlier: Vec<String>,
 }
 
@@ -442,7 +454,9 @@ pub fn rewind_sheet(state: &State, feed: &Feed) -> Option<RewindSheet> {
         title: format!("Rewind {}", rewinding.session),
         note: REWIND_NOTE,
         status: None,
+        turns: "Go back to the start of",
         points: Vec::new(),
+        done: "Earlier rewinds",
         earlier: Vec::new(),
     };
     match outcome(
@@ -474,6 +488,7 @@ pub fn rewind_sheet(state: &State, feed: &Feed) -> Option<RewindSheet> {
                         };
                         turns.push(RewindPoint {
                             turn: point.turn,
+                            label: format!("Turn {}", point.turn),
                             detail,
                             usable,
                         });

@@ -14,7 +14,36 @@ pub fn detail(feed: &mut Feed, target: &DetailRef) -> Result<(), String> {
         DetailRef::Task { id } => record(feed, id)
             .map(|_| ())
             .ok_or_else(|| format!("not_found: task {id}")),
-        DetailRef::Session { id } | DetailRef::Terminal { id } => feed
+        DetailRef::Session { id } => {
+            if super::pi_rows::page(feed, id) {
+                return Ok(());
+            }
+            let row = feed
+                .agents
+                .get(id.as_str())
+                .ok_or_else(|| format!("Preview has no session {id}"))?;
+            // A run without a pi host has no transcript; corrald says why the page is empty.
+            let page = SessionPage {
+                id: id.clone(),
+                role: match row.run.role {
+                    corral_types::Role::Worker => "worker",
+                    corral_types::Role::Reviewer => "reviewer",
+                }
+                .into(),
+                task: Some(row.run.task.clone()),
+                run: Some(row.run.id.clone()),
+                machine: None,
+                messages: Vec::new(),
+                older: None,
+                replyable: false,
+                reply_refusal: Some(
+                    "session has no Pi socket; use Terminate to stop its host".into(),
+                ),
+            };
+            put(feed, target.clone(), DetailBody::Session(page));
+            Ok(())
+        }
+        DetailRef::Terminal { id } => feed
             .detail(target)
             .and_then(|cache| cache.body())
             .map(|_| ())

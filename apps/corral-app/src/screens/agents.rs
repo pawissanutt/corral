@@ -11,6 +11,7 @@ mod keys;
 mod panel;
 mod panel_summary;
 mod reply;
+mod rewind;
 mod roster;
 mod roster_rows;
 mod segs;
@@ -18,6 +19,7 @@ mod session;
 mod transcript;
 
 pub(crate) use controls::session_menu;
+pub(crate) use rewind::sheet as rewind_sheet;
 pub(crate) use transcript::watch as watch_session;
 
 use corral_protocol::app::SESSION_V1;

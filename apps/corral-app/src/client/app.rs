@@ -56,11 +56,7 @@ pub(super) const CAPS: &[&str] = &[
 pub(super) fn handles(event: &Event) -> bool {
     matches!(
         event,
-        Event::Health(_)
-            | Event::Rows { .. }
-            | Event::Reset { .. }
-            | Event::TopicError { .. }
-            | Event::Live { .. }
+        Event::Health(_) | Event::Rows { .. } | Event::Reset { .. } | Event::TopicError { .. }
     ) || matches!(event, Event::Reply { method, .. } if matches!(*method,
             APP_SESSION | OP_SUBMIT | CONFIG_GET | CONFIG_PUT | PANE_FOCUS | PANE_KEYS |
             DETAIL_GET | CHANGES_PAGE | SEEN_ADVANCE | DEVICE_REVOKE |
@@ -135,9 +131,6 @@ impl AppState {
         feed.update(|feed| {
             feed.mark_stale();
             feed.link = Link::Connecting;
-            for thread in feed.threads.values_mut() {
-                thread.live = None;
-            }
             feed.capabilities = welcome.caps.iter().cloned().collect();
         });
     }
@@ -186,6 +179,7 @@ impl AppState {
                 feed.plans.clear();
                 feed.projects.clear();
                 feed.agents.clear();
+                feed.paused.clear();
                 feed.assistants.clear();
                 feed.usage = None;
                 feed.settings = None;
