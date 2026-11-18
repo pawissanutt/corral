@@ -172,6 +172,62 @@ impl Store {
         )
     }
 
+    /// Fetch status alone for a set of task IDs, including finished tasks.
+    pub fn task_statuses(
+        &self,
+        ids: &std::collections::BTreeSet<&str>,
+    ) -> Result<std::collections::BTreeMap<String, Status>> {
+        if ids.is_empty() {
+            return Ok(std::collections::BTreeMap::new());
+        }
+        let mut statement = self.connection.prepare_cached(
+            "SELECT tasks.id,tasks.status FROM json_each(?1) JOIN tasks ON tasks.id=json_each.value",
+        ).context("prepare task statuses")?;
+        let rows = statement
+            .query_map([encode(ids)?], |row| {
+                Ok((row.get(0)?, row.get::<_, String>(1)?))
+            })
+            .context("query task statuses")?;
+        rows.map(|row| {
+            let (id, status) = row.context("read task status row")?;
+            Ok((
+                id,
+                Status::parse(&status).context("parse stored task status")?,
+            ))
+        })
+        .collect()
+    }
+
+    /// Per-project open counts grouped by status. Closed tasks are not counted.
+    pub fn open_project_status_counts(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, Vec<(Status, u64)>>> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT project,status,count(*) FROM tasks
+             WHERE project IS NOT NULL AND status NOT IN ('done','dropped')
+             GROUP BY project,status",
+            )
+            .context("prepare project counts by status")?;
+        let mut rows = statement
+            .query([])
+            .context("query project counts by status")?;
+        let mut counts = std::collections::BTreeMap::<_, Vec<_>>::new();
+        while let Some(row) = rows.next().context("read project status count row")? {
+            let project = row.get(0).context("read project key")?;
+            let status: String = row.get(1).context("read project task status")?;
+            let count: i64 = row.get(2).context("read project task count")?;
+            counts.entry(project).or_default().push((
+                Status::parse(&status).context("parse stored task status")?,
+                count
+                    .try_into()
+                    .context("project task count must not be negative")?,
+            ));
+        }
+        Ok(counts)
+    }
+
     /// Count open tasks by assigned project without reading task bodies.
     pub fn open_project_counts(&self) -> Result<std::collections::BTreeMap<String, u64>> {
         let mut statement = self
@@ -300,7 +356,8 @@ impl Store {
         documents(&mut statement, [task])
     }
 
-    pub(crate) fn occupied_slots(&self, project: Option<&str>) -> Result<usize> {
+    /// Count task slots according to the same rule used by dispatch.
+    pub fn occupied_slots(&self, project: Option<&str>) -> Result<usize> {
         let count: i64 = self.connection.query_row("SELECT count(*) FROM tasks WHERE status IN ('running','blocked') AND (?1 IS NULL OR project=?1)", [project], |row| row.get(0)).context("count tasks holding a dispatch slot")?;
         count.try_into().context("slot count exceeds platform size")
     }

@@ -239,6 +239,26 @@ fn socket_dispatch_done_and_approve_land_a_git_change() {
 }
 
 #[test]
+fn socket_review_before_done_is_not_found() {
+    use wire::detail::{DetailGet, DetailRef};
+
+    let fixture = Fixture::new();
+    let mut client = Client::connect(&fixture.unix_server());
+    let id = client.new_task("not submitted for review", Vec::new());
+    let error = client
+        .call(
+            wire::app::DETAIL_GET,
+            DetailGet {
+                target: DetailRef::Review { task: id },
+                page: None,
+                etag: None,
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.code, rpc::ErrorCode::NotFound);
+}
+
+#[test]
 fn socket_refusal_offers_the_force_that_records_what_it_skipped() {
     let fixture = Fixture::with_repository();
     let mut client = Client::connect(&fixture.unix_server());

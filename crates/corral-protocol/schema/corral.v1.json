@@ -2952,7 +2952,7 @@
       "ReviewDetail": {
         "properties": {
           "checks": {
-            "description": "The gate check for HEAD and the review check for the current round.",
+            "description": "Recorded gate and review checks in insertion order; may span detail pages.",
             "items": {
               "$ref": "#/components/schemas/Check"
             },

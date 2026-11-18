@@ -13,7 +13,7 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         Engine::init(temp.path(), None).unwrap();
         let runner = FakeRunner::new();
         let shared = Shared::new(
@@ -79,7 +79,7 @@ impl Fixture {
     }
 }
 
-fn git(dir: &Path, args: &[&str]) {
+pub(super) fn git(dir: &Path, args: &[&str]) {
     let output = Command::new("git")
         .current_dir(dir)
         .args(args)
@@ -174,7 +174,7 @@ fn artifact_chunks_preserve_utf8_boundaries_and_are_selector_bound() {
 }
 
 #[test]
-fn review_uses_immutable_submitted_patch_and_current_checks() {
+fn review_uses_immutable_submitted_patch_and_includes_all_checks() {
     let fixture = Fixture::new();
     fixture.project();
     let id = fixture.named_task("review me", Some("demo"));
@@ -186,6 +186,19 @@ fn review_uses_immutable_submitted_patch_and_current_checks() {
         summary: "summary".into(),
     });
     fixture.apply(Op::Gate { id: id.clone() });
+    let engine = fixture.shared.engine().unwrap();
+    let mut checks = engine.store.list_checks(&id).unwrap();
+    for round in [0, 1] {
+        let check = corral_engine::Check {
+            kind: corral_engine::CheckKind::Review,
+            key: round.to_string(),
+            notes: Some(format!("review round {round}")),
+            log: None,
+            ..checks[0].clone()
+        };
+        engine.store.insert_check(&check).unwrap();
+        checks.push(check);
+    }
     fs::write(&file, "not submitted\n").unwrap();
     let get = |target| {
         detail(
@@ -204,7 +217,7 @@ fn review_uses_immutable_submitted_patch_and_current_checks() {
         panic!("expected review");
     };
     assert_eq!(review.run.unwrap().summary.as_deref(), Some("summary"));
-    assert_eq!(review.checks[0].kind, corral_engine::CheckKind::Gate);
+    assert_eq!(review.checks, checks);
     assert_eq!(review.files[0].path, "with space.txt");
     assert_eq!(review.files[0].added, 1);
     let DetailBody::ReviewFile(file) = get(DetailRef::ReviewFile {

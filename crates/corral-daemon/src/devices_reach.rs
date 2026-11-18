@@ -6,7 +6,8 @@ use corral_protocol::rows::ListenerInfo;
 use super::*;
 
 pub(super) struct AppListener {
-    info: ListenerInfo,
+    address: SocketAddr,
+    origins: Vec<String>,
     origin: Option<String>,
     endpoint: Option<String>,
     reach: DeviceReach,
@@ -23,6 +24,16 @@ pub(crate) fn classify(ip: IpAddr) -> DeviceReach {
     } else {
         DeviceReach::Lan
     }
+}
+
+#[cfg(test)]
+pub(crate) fn hostname() -> Option<String> {
+    rustix::system::uname()
+        .nodename()
+        .to_str()
+        .ok()
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
 }
 
 impl Devices {
@@ -50,10 +61,8 @@ impl Devices {
             origins.first().cloned()
         };
         *lock(&self.listener) = Some(AppListener {
-            info: ListenerInfo {
-                port: addr.port(),
-                origins: origins.to_vec(),
-            },
+            address: addr,
+            origins: origins.to_vec(),
             origin,
             endpoint,
             reach: classify(addr.ip()),
@@ -61,9 +70,17 @@ impl Devices {
     }
 
     pub(crate) fn listener(&self) -> Option<ListenerInfo> {
+        lock(&self.listener).as_ref().map(|listener| ListenerInfo {
+            port: listener.address.port(),
+            origins: listener.origins.clone(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn listener_address(&self) -> Option<SocketAddr> {
         lock(&self.listener)
             .as_ref()
-            .map(|listener| listener.info.clone())
+            .map(|listener| listener.address)
     }
 
     pub(crate) fn touch(&self, device: &str, reach: DeviceReach) -> Result<(), DeviceError> {
@@ -109,13 +126,14 @@ impl Devices {
         let mut pair_id = [0; 8];
         getrandom::fill(&mut token).context("generating pairing token")?;
         getrandom::fill(&mut pair_id).context("generating pairing id")?;
+        let port = listener.address.port();
         let legacy = endpoint
             .strip_prefix("ws://127.0.0.1:")
-            .is_some_and(|port| port.parse::<u16>().ok() == Some(listener.info.port));
+            .is_some_and(|value| value.parse::<u16>().ok() == Some(port));
         let code = PairCode {
             daemon_public: identity.public,
             token,
-            port: listener.info.port,
+            port,
             pair_id,
             endpoint: (!legacy).then(|| endpoint.clone()),
         };
