@@ -184,8 +184,12 @@ pub(super) fn digest(feed: &Feed, filter: &ProjectFilter) -> NowDigest {
     }
 }
 
+/// Lower comes first. A failure must survive a later routine update, but a landing or a drop ends
+/// the task: a task's earlier "ready to land" or failure must not stand for it once it is closed.
 fn priority(event: &Event) -> u8 {
-    if super::live_context::failed(event) {
+    if super::live_context::failed(event)
+        || matches!(event.kind, EventKind::Landed | EventKind::Dropped)
+    {
         0
     } else if matches!(event.kind, EventKind::Blocked | EventKind::Ready) {
         1
@@ -247,5 +251,37 @@ fn summary(event: &Event) -> (&'static str, Mark, Hue) {
         EventKind::Artifact => ("artifact added", Mark::Na, Hue::Neutral),
         EventKind::Edited => ("edited", Mark::Na, Hue::Neutral),
         EventKind::Error => ("failed", Mark::Fail, Hue::Fail),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use corral_types::Actor;
+
+    /// A landed task kept reading "ready to land" (and a forced landing "gate failed"): an
+    /// earlier prompt outranked the landing that closed it.
+    #[test]
+    fn a_landed_task_reads_landed_not_its_earlier_prompt_or_failure() {
+        let event = |seq: u64, kind: EventKind, detail: serde_json::Value| Event {
+            seq,
+            ts: jiff::Timestamp::UNIX_EPOCH,
+            task: Some("T-1".into()),
+            run: None,
+            kind,
+            actor: Actor::Auto,
+            detail,
+        };
+        let mut feed = Feed::default();
+        for (seq, kind, detail) in [
+            (1, EventKind::Gate, serde_json::json!({"result": "fail"})),
+            (2, EventKind::Ready, serde_json::json!({})),
+            (3, EventKind::Landed, serde_json::json!({})),
+        ] {
+            feed.changes.insert(seq, event(seq, kind, detail));
+        }
+        let rows = digest(&feed, &ProjectFilter::All).rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].phrase, "landed");
     }
 }

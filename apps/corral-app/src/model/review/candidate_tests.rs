@@ -109,6 +109,27 @@ fn land_anyway_appears_only_while_the_gate_is_red() {
     assert!(labels(&feed(Some(gate(CheckResult::Fail)), false)).contains(&Action::LandAnyway));
 }
 
+/// corrald marks a candidate ready only once the pipeline is past every check it runs, so a
+/// ready candidate without a review check has no reviewer; it must not read "Review running".
+#[test]
+fn a_ready_candidate_without_a_review_check_does_not_claim_a_review_is_running() {
+    let detail = page(
+        &State::default(),
+        &feed(Some(gate(CheckResult::Pass)), true),
+    )
+    .detail;
+    let Some(LoopCandidate {
+        content: LoopContent::Brief(brief),
+        ..
+    }) = detail
+    else {
+        panic!("the ready candidate opens on its brief");
+    };
+    let review = &brief.readiness[1];
+    assert_eq!(review.mark, crate::model::board::Mark::Na);
+    assert_ne!(review.title, "Review running");
+}
+
 #[test]
 fn deciding_submits_the_engine_operation_without_predicting_a_refusal() {
     let feed = feed(Some(gate(CheckResult::Fail)), false);

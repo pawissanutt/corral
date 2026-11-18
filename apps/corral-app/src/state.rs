@@ -394,8 +394,9 @@ impl AppState {
         }
     }
 
-    /// Escape priority: confirm sheet, refusal sheet, model list, newest overlay, the selection
-    /// on the Agents or Now page in view, the narrow sidebar's labels, then top page.
+    /// Escape priority: confirm sheet, refusal sheet, model list, the operation composer, newest
+    /// overlay, the selection on the Agents or Now page in view, the narrow sidebar's labels,
+    /// then top page.
     pub fn close_newest(&self) {
         if self.confirm.get_untracked().is_some() {
             self.confirm_no();
@@ -407,6 +408,10 @@ impl AppState {
         }
         if self.work.with_untracked(|state| state.menu.is_some()) {
             self.work.update(|state| state.menu = None);
+            return;
+        }
+        if self.work.with_untracked(|state| state.composer.is_some()) {
+            self.work.update(|state| state.composer = None);
             return;
         }
         if self.agents.with_untracked(|state| state.rewind.is_some()) {

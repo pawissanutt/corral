@@ -635,6 +635,12 @@ pub fn live_agents(state: &State, feed: &Feed) -> Agents {
         Some(format!("New session not started: {why}"))
     } else if let Some(error) = topic.and_then(|topic| topic.error.as_ref()) {
         Some(format!("Sessions unavailable: {}", error.message))
+    } else if let crate::model::health::Availability::Missing(capability) =
+        crate::model::health::capability_availability(feed, corral_protocol::app::ASSISTANT_V1)
+    {
+        Some(format!(
+            "This corrald serves no assistant sessions ({capability} is not advertised)."
+        ))
     } else if topic.is_none_or(|topic| topic.loading) && feed.assistants.is_empty() {
         Some("Loading sessions…".into())
     } else if topic.is_some_and(|topic| topic.stale) {
