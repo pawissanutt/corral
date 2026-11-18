@@ -326,12 +326,12 @@ fn command(
             command
         }
     };
-    let recorded = args
+    let (recorded, recorded_mixed) = args
         .resume
         .as_deref()
         .map(|id| profiles::recorded(data_root, id))
         .transpose()?
-        .flatten();
+        .unwrap_or_default();
     let recorded_paid = recorded.as_ref().is_some_and(|route| route.paid.is_some());
     let route = if let Some(name) = &args.profile {
         profiles::resolve(profile_config, name, args, bare)?
@@ -357,7 +357,8 @@ fn command(
             paid: None,
         }
     };
-    profiles::require_host(&assets, args.profile.is_some(), route.paid.is_some())?;
+
+    profiles::require_host(&assets, args.profile.is_some(), route.paid.is_some(), false)?;
     let provider = route.provider.clone();
     let model = route.model.clone();
     let effort = route.effort.clone();
@@ -393,13 +394,65 @@ fn command(
             .map(|(_, project, _)| project.build_exit.unwrap_or(BuildExit::Review))
             .unwrap_or(BuildExit::None)
     };
+    let retained_mixed = match (&workspace, &args.resume) {
+        (Some(root), Some(id)) => Store::open(root)?
+            .build_paid_ledger(id)?
+            .is_some_and(|ledger| ledger.mixed.is_some()),
+        _ => false,
+    };
+    let mixed = config
+        .build
+        .api
+        .as_ref()
+        .filter(|_| workspace.is_some() && !bare && (args.resume.is_none() || retained_mixed));
+    anyhow::ensure!(
+        !recorded_mixed || retained_mixed,
+        "mixed Build allowance is missing; resume cannot create a new balance"
+    );
+    profiles::require_host(&assets, false, false, mixed.is_some())?;
+    anyhow::ensure!(
+        !retained_mixed || mixed.is_some(),
+        "mixed Build approval was revoked"
+    );
+    let mut child_routes = std::collections::BTreeMap::new();
+    let mut paid_routes = std::collections::BTreeMap::new();
+    if let Some(api) = mixed {
+        for (preset, name) in &api.profiles {
+            let child = profiles::resolve(profile_config, name, &BuildArgs::default(), false)?;
+            let binding = child
+                .binding
+                .filter(|binding| binding.connection.api_key())
+                .context("mixed Build child profile must use an explicitly approved API route")?;
+            super::connections::compatible(&assets, &binding)?;
+            super::hooks::preflight::connection_credential(data_root, binding.connection)?;
+            paid_routes.insert(name.clone(), binding.clone());
+            child_routes.insert(preset, binding);
+        }
+        if let Some(binding) = route
+            .binding
+            .as_ref()
+            .filter(|binding| binding.connection.api_key())
+        {
+            paid_routes.insert(route.name.clone(), binding.clone());
+        }
+    }
     let profiles: Vec<_> = config
         .build
         .profiles
         .iter()
         .map(|(name, profile)| {
             let mut value = json!({"name": name, "model": profile.model});
-            if let Some(effort) = &profile.effort {
+            if let Some(binding) = child_routes.get(&name) {
+                value["model"] = json!(format!(
+                    "{}/{}",
+                    binding.connection.provider(),
+                    binding.model
+                ));
+                if let Some(effort) = &binding.effort {
+                    value["effort"] = json!(effort);
+                }
+                value["binding"] = json!(binding);
+            } else if let Some(effort) = &profile.effort {
                 value["effort"] = json!(effort);
             }
             if let Some(description) = &profile.description {
@@ -454,19 +507,20 @@ fn command(
     if let Some(aws) = aws {
         message["aws"] = json!(aws);
     }
-    if route.paid.is_some() {
+    if route.paid.is_some() && mixed.is_none() {
         message["settings"]["profiles"] = json!([]);
     }
     let mut bytes = serde_json::to_vec(&message)?;
-    // The fixed-shape capability adds at most 160 bytes; refuse before creating/fencing its ledger.
-    if bytes.len() + usize::from(route.paid.is_some()) * 160 > MESSAGE_MAX_BYTES {
+    // Leave room for the fixed-shape paid capability before creating/fencing its ledger.
+    if bytes.len() + usize::from(route.paid.is_some() || mixed.is_some()) * 192 > MESSAGE_MAX_BYTES
+    {
         return Err(refuse(
             "launch_too_large",
             format!("the launch message exceeds {MESSAGE_MAX_BYTES} bytes"),
         ));
     }
     if let Some(root) = &workspace
-        && (route.paid.is_some() || args.resume.is_some())
+        && (route.paid.is_some() || mixed.is_some() || args.resume.is_some())
     {
         let store = Store::open(root)?;
         if recorded_paid
@@ -480,20 +534,33 @@ fn command(
         }
         if let Some(resume) = &args.resume
             && let Some(sticky) = crate::build_session::paid::sticky(&store, resume)?
-            && (sticky != route.name || route.paid.is_none())
+            && (sticky != route.name || (route.paid.is_none() && mixed.is_none()))
         {
             return Err(refuse(
                 "paid_admission_required",
                 "paid Build route is sticky; selecting another profile cannot refresh its allowance",
             ));
         }
-        if let Some(binding) = route.binding.as_ref().filter(|b| b.connection.api_key()) {
-            let paid = crate::build_session::paid::open(
+        let paid = if let Some(api) = mixed {
+            Some(crate::build_session::paid::open_mixed(
+                &store,
+                &route.name,
+                route.binding.as_ref(),
+                &api.profiles,
+                &paid_routes,
+                args.resume.as_deref(),
+            )?)
+        } else if let Some(binding) = route.binding.as_ref().filter(|b| b.connection.api_key()) {
+            Some(crate::build_session::paid::open(
                 &store,
                 &route.name,
                 binding,
                 args.resume.as_deref(),
-            )?;
+            )?)
+        } else {
+            None
+        };
+        if let Some(paid) = paid {
             bytes.pop();
             bytes.extend_from_slice(b",\"paid\":");
             serde_json::to_writer(&mut bytes, &paid)?;

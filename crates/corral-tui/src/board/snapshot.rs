@@ -24,6 +24,7 @@ pub struct BoardSnapshot {
     stages: HashMap<String, String>,
     automation_blocks: HashMap<String, String>,
     plan_review_waits: HashMap<String, String>,
+    handoffs: HashMap<String, corral_ops::assistant::workflow::handoff::status::Responsibility>,
     unreviewed: HashMap<String, usize>,
     plan_progress: HashMap<String, crate::plan::tracker::Progress>,
 }
@@ -82,6 +83,7 @@ impl BoardSnapshot {
             stages,
             automation_blocks,
             plan_review_waits,
+            handoffs,
             ..
         } = frame;
         let pins: Vec<shelf::Entry> = pins
@@ -120,6 +122,7 @@ impl BoardSnapshot {
             stages: stages.into_iter().collect(),
             automation_blocks: automation_blocks.into_iter().collect(),
             plan_review_waits: plan_review_waits.into_iter().collect(),
+            handoffs: handoffs.into_iter().collect(),
             unreviewed: unreviewed.into_iter().collect(),
             plan_progress: plan_progress.into_iter().collect(),
         })
@@ -153,6 +156,7 @@ impl BoardView {
         self.stages = snapshot.stages;
         self.automation_blocks = snapshot.automation_blocks;
         self.plan_review_waits = snapshot.plan_review_waits;
+        self.handoffs = snapshot.handoffs;
         self.unreviewed = snapshot.unreviewed;
         self.plan_progress = snapshot.plan_progress;
         self.index =

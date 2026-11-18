@@ -24,5 +24,8 @@ export function resolveModel(choice: string | undefined, profiles: readonly Buil
   if (slash < 1 || slash === value.length - 1) throw new Error(`Invalid child model ${value}; expected <provider>/<id>`);
   const provider = value.slice(0, slash);
   if (!approved.includes(provider)) throw new Error(`Child model provider is not approved: ${provider}`);
-  return { profile: profile?.name ?? value, provider, model: value.slice(slash + 1), effort: profile?.effort };
+  const id = value.slice(slash + 1);
+  // Profile model IDs may already carry the provider prefix.
+  const model = profile && id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id;
+  return { profile: profile?.name ?? value, provider, model, effort: profile?.effort };
 }

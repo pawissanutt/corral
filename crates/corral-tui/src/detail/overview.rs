@@ -75,6 +75,7 @@ impl DetailView {
         } else if self.task.status.holds_slot() {
             hints.push(("a", "open agent"));
         }
+        hints.extend(self.handoff_hints());
         if self.plan.enabled {
             hints.push(("8", "plan / children"));
         }
@@ -126,6 +127,19 @@ impl DetailView {
                 "Ad-hoc scheduling lane (uses reserve, not extra permission).",
                 theme::dim(),
             ));
+        }
+        if let Some(h) = &self.handoff {
+            // Text-labelled responsibility and its real wait; Open assistant stays inspection.
+            lines.push(Line::styled(h.label.clone(), theme::bold()));
+            if let Some(waiting) = &h.waiting {
+                lines.extend(ui::text_lines(waiting));
+            }
+            if h.plan_only {
+                lines.push(Line::styled(
+                    "Plan only: no implementation runs under this goal.",
+                    theme::dim(),
+                ));
+            }
         }
         if task.tracker {
             lines.push(Line::from(format!(
@@ -335,6 +349,9 @@ impl DetailView {
                 self.set_tab(0, ctx);
                 self.show_live = true;
                 Action::None
+            }
+            KeyCode::Char(c @ ('W' | 'K')) if self.handoff.is_some() => {
+                self.transfer_key(ctx, c == 'W')
             }
             KeyCode::Char('*') => crate::shelf::toggle(ctx, &self.task.id),
             KeyCode::Char(c @ '1'..='8') => {

@@ -22,6 +22,19 @@ pub struct BuildPaidLedger {
     pub ledger: BudgetLedger,
     /// Original (tokens, nanos), aligned with requests; settlement never rewrites a bound.
     pub bounds: Vec<(u64, u64)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mixed: Option<MixedBuildApproval>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reservation_routes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MixedBuildApproval {
+    pub approval: String,
+    pub allowance_nanos: u64,
+    pub routes: std::collections::BTreeMap<String, PaidApproval>,
+    pub presets: std::collections::BTreeMap<String, String>,
 }
 impl BuildPaidLedger {
     pub fn route(&self) -> Result<&ConnectionBinding> {
@@ -34,9 +47,59 @@ impl BuildPaidLedger {
             .first()
             .context("Build route missing")
     }
+    pub fn allowance_nanos(&self) -> u64 {
+        self.mixed
+            .as_ref()
+            .map_or(self.approval.allowance_nanos, |mixed| mixed.allowance_nanos)
+    }
+
+    pub fn request_route(&self, digest: Option<&str>) -> Result<&ConnectionBinding> {
+        if let Some(mixed) = &self.mixed {
+            let digest = digest.context("mixed Build request needs an exact route")?;
+            return mixed
+                .routes
+                .values()
+                .flat_map(|p| &p.candidates)
+                .find(|binding| binding.digest == digest)
+                .context("Build request route was not admitted");
+        }
+        let route = self.route()?;
+        ensure!(
+            digest.is_none_or(|digest| digest == route.digest),
+            "Build request changed approved route"
+        );
+        Ok(route)
+    }
+
     pub fn validate(&self) -> Result<()> {
         self.approval.validate()?;
-        let route = self.route()?;
+        self.route()?;
+        if let Some(mixed) = &self.mixed {
+            ensure!(
+                !mixed.approval.trim().is_empty()
+                    && mixed.routes.len() <= 17
+                    && !mixed.routes.is_empty()
+                    && (1..=9_007_199_254_740_991).contains(&mixed.allowance_nanos)
+                    && mixed
+                        .routes
+                        .values()
+                        .any(|approval| approval == &self.approval)
+                    && self.reservation_routes.len() == self.bounds.len(),
+                "invalid mixed Build approval or history"
+            );
+            for approval in mixed.routes.values() {
+                approval.validate()?;
+                ensure!(
+                    approval.candidates.len() == 1,
+                    "Build profile needs one exact route"
+                );
+            }
+        } else {
+            ensure!(
+                self.reservation_routes.is_empty(),
+                "legacy Build cannot retain mixed routes"
+            );
+        }
         ensure!(
             self.version == 1
                 && self
@@ -52,7 +115,7 @@ impl BuildPaidLedger {
             "invalid Build paid identity"
         );
         ensure!(
-            self.ledger.totals().1 <= self.approval.allowance_nanos,
+            self.ledger.totals().1 <= self.allowance_nanos(),
             "Build allowance exceeded"
         );
         ensure!(
@@ -60,7 +123,10 @@ impl BuildPaidLedger {
             "Build original reservation bounds missing"
         );
         let mut ids = std::collections::BTreeSet::new();
-        for (request, &(tokens, nanos)) in self.ledger.requests.iter().zip(&self.bounds) {
+        for (i, (request, &(tokens, nanos))) in
+            self.ledger.requests.iter().zip(&self.bounds).enumerate()
+        {
+            let route = self.request_route(self.reservation_routes.get(i).map(String::as_str))?;
             ensure!(
                 request.connection == Some(route.connection)
                     && request.priced
@@ -77,9 +143,15 @@ impl BuildPaidLedger {
         Ok(())
     }
     pub fn reserve(&mut self, request: BudgetRequest) -> Result<bool> {
+        self.reserve_for(request, None)
+    }
+
+    pub fn reserve_for(&mut self, request: BudgetRequest, digest: Option<&str>) -> Result<bool> {
+        let route = self.request_route(digest)?;
+        let pinned = self.mixed.as_ref().map(|_| route.digest.clone());
         ensure!(
             request.generation == self.generation
-                && request.connection == Some(self.route()?.connection)
+                && request.connection == Some(route.connection)
                 && request.priced
                 && !request.unbounded
                 && request.response.is_none()
@@ -96,21 +168,24 @@ impl BuildPaidLedger {
         {
             ensure!(
                 before.generation == request.generation
-                    && self.bounds.get(i) == Some(&(request.tokens, request.usd_nanos)),
+                    && self.bounds.get(i) == Some(&(request.tokens, request.usd_nanos))
+                    && self.reservation_routes.get(i) == pinned.as_ref(),
                 "Build reservation replay changed its bound"
             );
             return Ok(true);
         }
         let bound = (request.tokens, request.usd_nanos);
+        let allowance = self.allowance_nanos();
         let admitted = self.ledger.reserve(
             request,
             BudgetLimits {
                 max_tokens: None,
-                max_usd_nanos: Some(self.approval.allowance_nanos),
+                max_usd_nanos: Some(allowance),
             },
         );
         if admitted {
             self.bounds.push(bound);
+            self.reservation_routes.extend(pinned);
         }
         Ok(admitted)
     }
@@ -121,6 +196,18 @@ impl BuildPaidLedger {
         tokens: u64,
         nanos: u64,
     ) -> Result<()> {
+        self.settle_for(request, response, tokens, nanos, None)
+    }
+
+    pub fn settle_for(
+        &mut self,
+        request: &str,
+        response: String,
+        tokens: u64,
+        nanos: u64,
+        digest: Option<&str>,
+    ) -> Result<()> {
+        self.request_route(digest)?;
         let (i, bound) = self
             .ledger
             .requests
@@ -136,6 +223,24 @@ impl BuildPaidLedger {
             tokens <= max_tokens && nanos <= max_nanos,
             "Build completion exceeds conservative reservation"
         );
+        if self.mixed.is_some() {
+            ensure!(
+                self.reservation_routes.get(i).map(String::as_str) == digest,
+                "Build settlement changed reserved route"
+            );
+            if let Some(previous) = &bound.response {
+                ensure!(
+                    previous == &response && bound.tokens == tokens && bound.usd_nanos == nanos,
+                    "Build settlement replay changed completion"
+                );
+                return Ok(());
+            }
+            let entry = &mut self.ledger.requests[i];
+            entry.response = Some(response);
+            entry.tokens = tokens;
+            entry.usd_nanos = nanos;
+            return Ok(());
+        }
         if bound.response.as_ref() == Some(&response) {
             return Ok(());
         }
@@ -149,7 +254,8 @@ impl BuildPaidLedger {
             self.store == before.store
                 && self.session == before.session
                 && self.profile == before.profile
-                && self.approval == before.approval,
+                && self.approval == before.approval
+                && self.mixed == before.mixed,
             "Build allowance and route are immutable"
         );
         ensure!(
@@ -170,7 +276,10 @@ impl BuildPaidLedger {
         }
         ensure!(
             self.ledger.requests.len() >= before.ledger.requests.len()
-                && self.bounds.starts_with(&before.bounds),
+                && self.bounds.starts_with(&before.bounds)
+                && self
+                    .reservation_routes
+                    .starts_with(&before.reservation_routes),
             "Build reservation history removed or bounds rewritten"
         );
         // Same monotone request invariant as PaidEpisode; Build has no container/owner transitions.

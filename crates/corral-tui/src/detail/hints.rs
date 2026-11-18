@@ -55,6 +55,7 @@ impl DetailView {
             PLAN => h.extend(self.plan.hints(true).unwrap_or_default()),
             _ => h.push(("j/k", "scroll")),
         }
+        h.extend(self.handoff_hints());
         if self.recover_available() {
             h.push(("F", "recover…"));
         }

@@ -1,7 +1,7 @@
 //! Owner-authenticated service entry. Native choice UI must authenticate an actual
 //! selection before invoking these services; an input ID or model assertion is not consent.
 use super::{
-    lifecycle::{self, Disposition, Instruction},
+    lifecycle::{self, Instruction},
     transfer::Choice,
 };
 use crate::{
@@ -225,41 +225,7 @@ pub fn read(ctx: &Ctx, id: &str) -> Result<Value> {
         );
     };
     let task = ctx.store.get(&transfer.task)?;
-    let waiting = match transfer.disposition {
-        Disposition::Saving => Some("Stopping scoped writers; board remains held".to_string()),
-        Disposition::Saved => Some("Saved for later; explicit continuation required".to_string()),
-        Disposition::Starting => {
-            Some("Reconciling the selected current-revision continuation".to_string())
-        }
-        Disposition::CheckpointingPlan => {
-            Some("Preserving prior planning context before dispatch".to_string())
-        }
-        Disposition::TakingBack => Some("Waiting for current operation to settle".to_string()),
-        Disposition::Returned => {
-            Some("Assistant prepare-only; separate Check/Ship required".to_string())
-        }
-        Disposition::Continuing if !transfer.ownership_committed || !transfer.adoption_proven => {
-            Some("Reconciling held publication/adoption".to_string())
-        }
-        Disposition::Continuing if transfer.candidate_pending => Some(
-            if task.plans.last().is_some_and(|p| p.approval.is_none()) {
-                "Waiting for required plan review/acceptance; preserved candidate is not executing"
-            } else {
-                "Preserved candidate awaiting normal adoption (or an explicit member-scope choice)"
-            }
-            .into(),
-        ),
-        Disposition::Continuing
-            if matches!(
-                task.status,
-                corral_core::Status::Ready | corral_core::Status::Backlog
-            ) =>
-        {
-            crate::queue::capacity_reason(ctx, &ctx.store, &task, false)?
-                .or_else(|| Some("Queued for normal admission".into()))
-        }
-        Disposition::Continuing => None,
-    };
+    let waiting = super::status::waiting(ctx, &task, transfer)?;
     let container = ctx.store.get_assistant_container(&journal.assistant)?;
     Ok(
         json!({"transfer":journal.id,"task":task.id,"contract_revision":task.contract_revision()?,
