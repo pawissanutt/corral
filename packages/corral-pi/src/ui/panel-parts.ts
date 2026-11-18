@@ -1,4 +1,4 @@
-// Shared drawing vocabulary for the read-only inspection views (Proof, Inbox, Graph, Timeline, Usage): chips, the chip
+// Shared drawing vocabulary for the read-only inspection views (Task, Proof, Events, Artifacts, Usage): chips, the chip
 // row with its freshness note, section rules with a right label, list rows with the selection bar, aligned list
 // columns, label/value fields, short times and the read-state words (one wording per state, used by every view).
 // Key hints live in the footer.
@@ -99,7 +99,7 @@ export function headerRow(columns: readonly Column[], width: number): string {
   return listRow(PANEL_MUTED + cells(columns, columns.map(c => c.label)) + PANEL_TEXT, "", false, width);
 }
 /** Facts about a source that are not read phases. */
-export interface StateFlags { /** The data comes from a host that is not bound. */ readonly unbound?: boolean }
+export interface StateFlags { /** The data comes from a host whose session has closed. */ readonly unbound?: boolean }
 /**
  * The chip rows of a view: the state's own chips (`stateChip`) first, then the caller's source, count and gap chips,
  * with the freshness note right-aligned on the last row. The note is the longest `stateNote` form that fits the
@@ -165,16 +165,16 @@ function notes(state: ReadState, now: number, chipped: boolean): readonly string
     }
   }
 }
-/** The chips that name a state, then the host-unbound chip when flagged; empty when nothing needs saying. */
+/** The chips that name a state, then the host-closed chip when flagged; empty when nothing needs saying. */
 function stateChips(state: ReadState, flags?: StateFlags): string[] {
   const own = state.phase === "failed" ? chip("! read failed", "warn")
     : state.phase === "retained" ? chip(`! stale${state.readAt === undefined ? "" : ` · ${clock(state.readAt)}`}`, "warn")
       : state.phase === "loading" ? chip("reading…")
         : state.phase === "current" && state.refreshing ? chip("reading… rows kept") : undefined;
-  return [...(own === undefined ? [] : [own]), ...(flags?.unbound ? [chip("! host unbound", "warn")] : [])];
+  return [...(own === undefined ? [] : [own]), ...(flags?.unbound ? [chip("! host closed", "warn")] : [])];
 }
 /**
- * The state chip of a source on a chip row, followed by `! host unbound` when flagged (a separate fact, never in place
+ * The state chip of a source on a chip row, followed by `! host closed` when flagged (a separate fact, never in place
  * of the state); undefined when nothing needs saying (current, not applicable, never read).
  */
 export function stateChip(state: ReadState, flags?: StateFlags): string | undefined {

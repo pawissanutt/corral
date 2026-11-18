@@ -122,7 +122,7 @@ const NOTICE_LOG = 50;
 /** One logged notice: the sentence shown, its tone and time, and the exact raw detail it carried, if any. */
 export interface NoticeEntry {
   readonly at: number; readonly text: string; readonly tone: Notice["tone"];
-  /** The unsanitised record (stack, exit text, receipt), kept whole for the Recent notices pager. */
+  /** The unsanitised record (stack, exit text, a host answer), kept whole for the Recent notices pager. */
   readonly detail?: string;
 }
 
@@ -163,7 +163,8 @@ export interface WorkbenchOptions {
   readonly jobControl?: JobControl;
   readonly identity: HostIdentity;
   readonly artifacts?: () => Promise<unknown>;
-  readonly artifactViewer?: (reference: string) => Promise<string>;
+  /** `corral artifact show` into a private file: the artifact's exact bytes, for the Artifacts view's text and image preview. */
+  readonly artifactFile?: (reference: string) => Promise<string>;
   readonly exportSession?: () => Promise<string>;
   readonly readTranscript?: (id: string) => Promise<string>;
   readonly readTask?: () => Promise<unknown>;
@@ -173,6 +174,8 @@ export interface WorkbenchOptions {
   readonly onFocusMain?: () => void;
   readonly cwd: string; readonly snapshot: () => PanelSnapshot | null;
   readonly changed: () => void; readonly canInteract: () => boolean;
+  /** A dialog or overlay holds the keys: transcripts keep a paused reader's position under it. */
+  readonly modal?: () => boolean;
   readonly readHistory?: HistoryRead;
   readonly projectDir?: string;
   readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
@@ -276,9 +279,9 @@ export class NativeWorkbench {
     const focused = () => this.focused;
     this.lifecycle = new LifecycleView(options.identity, () => options.snapshot()?.bound ?? false, options.changed,
       options.canInteract, () => options.snapshot()?.inspector, { legend: () => this.legend, rows: () => this.lifecycleScroll?.viewportHeight ?? 0, focused });
-    this.artifacts = new ArtifactView({ identity: options.identity, load: options.artifacts, viewer: options.artifactViewer, exportSession: options.exportSession,
-      bound: () => options.snapshot()?.bound ?? false, changed: options.changed, canInteract: options.canInteract,
-      legend: () => this.legend, focused });
+    this.artifacts = new ArtifactView({ identity: options.identity, load: options.artifacts, file: options.artifactFile, exportSession: options.exportSession,
+      openImage: source => this.images.activate(source), bound: () => options.snapshot()?.bound ?? false, changed: options.changed,
+      canInteract: options.canInteract, legend: () => this.legend, focused });
     this.task = new TaskStore(options.identity, options.readTask, () => options.changed());
     // Every role starts on Chat with the keys in the composer, so the first typed word is never a view key; a
     // dispatched role's empty Chat says it waits for corral's first instruction. F5 or Alt+1 opens Task.
@@ -601,11 +604,18 @@ export class NativeWorkbench {
         }
       }
     };
-    const unread = this.view !== "conversation" && (this.watch?.unread() ?? false), place = PLACE[this.view];
+    const unread = this.view !== "conversation" && (this.watch?.unread() ?? false), place = this.placeOf(this.view), open = this.tabOf(this.view);
     return this.tabs().map(id => {
       const spec = tabSpec(id, badge(id), id === "conversation" && unread);
-      return place && id === TAB_OF[this.view] ? { ...spec, label: place, short: spec.label } : spec;
+      return place && id === open ? { ...spec, label: place, short: spec.label } : spec;
     });
+  }
+  /** The tab a view highlights; Events belongs to Task in a task-bound session and to Chat otherwise. */
+  private tabOf(view: MainView): TabId {
+    return view === "timeline" && !this.options.identity.task ? "conversation" : TAB_OF[view];
+  }
+  private placeOf(view: MainView): string | undefined {
+    return view === "timeline" && !this.options.identity.task ? "Chat › Events" : PLACE[view];
   }
   /** The main tabs of this role; a build session without a board (bare) has no Board tab. */
   private tabs(): readonly TabId[] {
@@ -642,7 +652,7 @@ export class NativeWorkbench {
     const tabs: Component = {
       render: width => {
         // The open tab's key cap is accent only while its view has the keys (Chat: while the composer has them).
-        const row = tabRow(this.tabSpecs(), TAB_OF[this.view], width, this.view === "conversation" || this.focused);
+        const row = tabRow(this.tabSpecs(), this.tabOf(this.view), width, this.view === "conversation" || this.focused);
         hits = row.hits;
         return [row.line];
       },
@@ -685,7 +695,7 @@ export class NativeWorkbench {
   }
   mount(transcript: Component, presentation?: () => InteractiveChatPresentation): Component {
     this.chatPresentation = presentation;
-    if (transcript instanceof ScrollView) { this.transcript = transcript; this.watch = new TranscriptWatch(transcript); }
+    if (transcript instanceof ScrollView) { this.transcript = transcript; this.watch = new TranscriptWatch(transcript, this.options.modal); }
     const terminal = this.options.terminal;
     this.changes = new ChangesView({ model: () => this.changesModel(), click: event => this.options.canInteract() && plainClick(event),
       focus: () => { this.focusMain(); this.options.changed(); }, step: delta => void this.selectRelative(delta),
@@ -700,7 +710,7 @@ export class NativeWorkbench {
       click: event => this.options.canInteract() && plainClick(event), focus: () => { this.focusMain(); this.options.changed(); },
       back: () => this.openAgents(), answer: (key: string) => this.agentAction("answer", key) });
     if (this.agentKey !== undefined) this.conversation.restore(this.agentKey);
-    this.childWatch = new TranscriptWatch(this.conversation.scroll);
+    this.childWatch = new TranscriptWatch(this.conversation.scroll, this.options.modal);
     // Task, Proof, lifecycle, Usage and Artifacts draw from their first column: `inset` puts them one cell in, as the frame is.
     this.evidenceScroll = new ScrollView(inset({ render: width => this.renderEvidence(width), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
@@ -912,10 +922,10 @@ export class NativeWorkbench {
     const draft = ui.getEditorText(); ui.setEditorText(draft + (draft ? "\n\n" : "") + reference + "\n");
     this.focused = false; this.options.changed(); // Never submit or overwrite the existing draft.
   }
-  /** The view one step back: an agent's conversation returns to Agents, Timeline to Task, Artifacts to Proof, the rest to Chat. */
+  /** The view one step back: an agent's conversation returns to Agents, Events to Task (Chat without a task), Artifacts to Proof, the rest to Chat. */
   private back(): void {
     if (this.view === "agent") this.openAgents();
-    else if (this.view === "timeline") this.setView("task");
+    else if (this.view === "timeline" && this.options.identity.task) this.setView("task");
     else if (this.view === "artifacts") this.setView("evidence");
     else this.setView("conversation");
   }
@@ -923,9 +933,9 @@ export class NativeWorkbench {
   mainContext(): KeyContext { return this.images.isOpen ? "image" : CONTEXT_OF[this.view]; }
   /** Where the open view is, as the footer's lead and the tab label name it: `Changes`, `Task › Events`, `Agents › alpha`. */
   private place(): string {
-    const tab = tabSpec(TAB_OF[this.view]).label;
+    const tab = tabSpec(this.tabOf(this.view)).label;
     if (this.view === "agent") { const row = this.agentRow(this.agentKey); return row ? `${tab} › ${row.name}` : tab; }
-    return PLACE[this.view] ?? tab;
+    return this.placeOf(this.view) ?? tab;
   }
   /**
    * What the footer hints for `context`; the panels own the focus, the queue and the owner-question dock

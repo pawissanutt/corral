@@ -69,7 +69,7 @@ test("every caveat stays behind the legend; an unbound host is flagged and a hos
   legend = true; bound = false;
   const shown = plain(view.render(140)).join(" ");
   for (const caveat of ["No queue, move or dispatch controls", "never timestamp-sorted", "GAP: 10 host events missing; resumed #11",
-    "this host process only", "host unbound", "these observations may be stale"]) expect(shown).toContain(caveat);
+    "this host process only", "host closed", "these observations may be stale"]) expect(shown).toContain(caveat);
   host = undefined;
   expect(plain(view.render(140)).join(" ")).toContain("Does not apply: this host does not expose its session event log.");
   expect(selectedRow(view.render(140))).toBe("");

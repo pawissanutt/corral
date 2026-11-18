@@ -1,7 +1,7 @@
-// The one read-only pager: job output, peek, host receipts, board task details, agent details, the transcript reader,
-// recorded history and the Inbox detail sheet. A rounded accent box with the title and the position `a–b / n` set
+// The one read-only pager: job output, peek, board task details, agent details, the transcript reader, recorded
+// history, recent notices and the plan. A rounded accent box with the title and the position `a–b / n` set
 // into its top border; ↑↓, PgUp/PgDn, Home/End and the wheel scroll it, q or Esc closes it. Lines are clipped with
-// `…`, never wrapped, so numbered output stays aligned; `wrap` is for prose (the transcript, the Inbox sheet) and
+// `…`, never wrapped, so numbered output stays aligned; `wrap` is for prose (the transcript, the plan) and
 // counts wrapped rows. Heading lines draw bold in the head colour. `actions` are keys that close the pager and are
 // returned; with `raw`, `d` switches in place between the readable lines and the exact records, each keeping its own
 // place. Both draw as key caps in the bottom border, and a click on a cap presses its key.

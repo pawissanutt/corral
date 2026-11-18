@@ -1,11 +1,11 @@
-// Usage (F2 or `/panels usage`): what this session used, live, under its own section rule. Presentation only: no
-// reads here, no repricing, a cost is never a bill, and an unknown is never drawn as zero.
+// Usage (F2 or `/panels usage`): what this session used, live, and what it spent against its limit, each under its own
+// section rule. Presentation only: no reads here, no repricing, a cost is never a bill, and an unknown is never drawn as zero.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Role } from "../roles/types.ts";
 import { agentColor } from "./agent-hues.ts";
 import { backLine, bold, glyphRows, sectionRule, wrap } from "./panel-parts.ts";
 import { splitRow } from "./panels-chrome.ts";
-import { pad, plainLabel, PANEL_MUTED, PANEL_TEXT, type PanelLine } from "./panels-view.ts";
+import { pad, plainLabel, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING, type PanelLine, type SpendingSnapshot } from "./panels-view.ts";
 import { dollars, fieldRows, grouped, muted, NARROW, plural } from "./usage-format.ts";
 import type { SessionUsage, UsageIdentity, UsageModel } from "./usage-model.ts";
 
@@ -23,6 +23,8 @@ const COLUMN_GAP = 2;
 const LEGEND = [
   "Session tokens and API-equivalent USD are counted by this pane and priced from the model catalog; they are not a bill and not a provider quota. A + marks a total with an unknown member.",
 ];
+/** The spending rule, shown with `?` only in a session that has a limit. */
+const SPENDING_LEGEND = "Spent is what this session's priced responses added to spend.json, which a restart keeps; at the limit the host refuses the next request. A paid route continues on an API key after subscription quota runs out and counts against the same limit.";
 
 export interface UsageViewOptions {
   /** `?`: the reading rules after the sections. */
@@ -32,15 +34,17 @@ export interface UsageViewOptions {
 }
 
 /**
- * The Usage page, each row at most `width` cells: the back line, the digest on short views, then SESSION and READING
- * RULES (with `?`). Pure: renders `model` only.
+ * The Usage page, each row at most `width` cells: the back line, the digest on short views, then SESSION, SPENDING
+ * (only with a limit) and READING RULES (with `?`). Pure: renders `model` only.
  */
 export function usageLines(model: UsageModel, width: number, options: UsageViewOptions): PanelLine[] {
+  const legend = [...LEGEND, ...(model.spending ? [SPENDING_LEGEND] : [])];
   const lines = [
     backLine("Chat", "Usage", identityLabel(model.identity), width).line,
     ...(options.bodyRows > 0 && options.bodyRows < DIGEST_BELOW ? digest(model.session, width) : []),
     ...sessionSection(model.session, width),
-    ...(options.legend ? [sectionRule("Reading rules", width), ...LEGEND.flatMap(line => wrap(muted(line), width))] : []),
+    ...spendingSection(model.spending, width),
+    ...(options.legend ? [sectionRule("Reading rules", width), ...legend.flatMap(line => wrap(muted(line), width))] : []),
   ];
   return lines.map(text => ({ text: truncateToWidth(text, Math.max(1, width), "…") }));
 }
@@ -80,6 +84,24 @@ function sessionSection(session: SessionUsage | undefined, width: number): strin
   const rule = sectionRule("Session", width, right);
   if (!session) return [rule, ...glyphRows("○ This pane has not reported usage yet · unknown, not zero", width)];
   return [rule, ...(agents ? sessionTable(session, width) : sessionFields(session, width))];
+}
+
+/**
+ * SPENDING: what `spend.json` holds against `--max-usd`, what is left, and the paid route when one is in use. From 80%
+ * the share reads in warning with `!`; at the limit in error with `✗` and the word that the next request is refused.
+ */
+function spendingSection(spending: SpendingSnapshot | undefined, width: number): string[] {
+  if (!spending) return [];
+  const labels = width >= NARROW ? 13 : 10, { maxUsd, spentUsd, paidRoute } = spending;
+  const share = maxUsd > 0 ? spentUsd / maxUsd : 1, percent = Math.min(999, Math.floor(share * 100));
+  const state = share >= 1 ? `${PANEL_ERROR}✗ limit reached · the next request is refused${PANEL_TEXT}`
+    : share >= 0.8 ? `${PANEL_WARNING}! ${percent}% of the limit${PANEL_TEXT}` : `${percent}% of the limit`;
+  return [
+    sectionRule("Spending", width, width >= 90 ? ["this session · spend.json", "spend.json"] : ["spend.json"]),
+    ...fieldRows("spent", `${dollars(spentUsd)} of ${dollars(maxUsd)} · ${state}`, labels, width),
+    ...fieldRows("left", share >= 1 ? muted("nothing") : dollars(maxUsd - spentUsd), labels, width),
+    ...(paidRoute ? fieldRows("paid route", `${plainLabel(paidRoute)} ${muted("· in use after subscription quota ran out")}`, labels, width) : []),
+  ];
 }
 /** This pane alone: tokens with its API-equivalent estimate, the context window and the model. */
 function sessionFields(session: SessionUsage, width: number): string[] {

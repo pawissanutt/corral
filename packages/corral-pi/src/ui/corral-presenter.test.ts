@@ -7,7 +7,7 @@ import { artifactTool } from "../roles/common/tools.ts";
 import { sessionTodoTool, todoTool } from "../roles/common/todo.ts";
 import { verdictTool } from "../roles/reviewer/tools.ts";
 import { checkpointTool, doneTool } from "../roles/worker/tools.ts";
-import { CORRAL_TOOL_OPS, corralPresenter, corralSummary } from "./corral-presenter.ts";
+import { CORRAL_TOOL_OPS, corralPresenter } from "./corral-presenter.ts";
 import { rowBlock, type CallInput, type RowModel } from "./tool-row.ts";
 
 beforeAll(() => initTheme("dark", false));
@@ -63,7 +63,6 @@ test("an engine refusal reads refused with its reason, and its next commands ope
     const expanded = drawn(model, width, true).split("\n");
     for (const next of failure.next) expect(expanded.filter(line => line.trim() === `next: ${next}`)).toHaveLength(1);
   }
-  expect(corralSummary("corral_done", { summary: "x" }, refused, true)).toBe("✗ Finish · refused: T-1 is not running");
 });
 
 test("a schema refusal is not sent, names the field and never reads meaning into the arguments", () => {

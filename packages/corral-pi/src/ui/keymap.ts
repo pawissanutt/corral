@@ -129,7 +129,7 @@ export function viewKey(index: number): KeyId | undefined {
   const key = VIEW_KEYS[index];
   return key === undefined ? undefined : freeKey(key);
 }
-/** The key that filters or searches the focused view (Changes paths, a job's output, the Inbox): `/` stays the composer's. */
+/** The key that filters or searches the focused view (Changes paths, a job's output): `/` stays the composer's. */
 export const FILTER_KEY: KeyId = "f3";
 
 function hint(id: string, binding: string, label: string, short?: string): Hint {
@@ -235,7 +235,7 @@ function viewHints(state: HintState): Hint[] {
     case "task":
       return pick(UP_DOWN("scroll", "scroll"), letter("r", "refresh"), state.mode.lifecycle && letter("l", "events"), legend, ESC("chat"));
     case "lifecycle":
-      return pick(J_K("select", "select"), ESC("task"), legend);
+      return pick(J_K("select", "select"), ESC(state.mode.taskBound ? "task" : "chat"), legend);
     case "proof":
       return pick(J_K("section", "section"), ENTER("expand"), letter("a", "artifacts"), legend, letter("r", "refresh"), ESC("chat"));
     case "artifacts":

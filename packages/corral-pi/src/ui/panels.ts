@@ -26,7 +26,7 @@ import { KeysList } from "./keys-list.ts";
 import { rule, setMotion } from "./frame.ts";
 import { QueueDock } from "./queue-dock.ts";
 import { Sidebar, type SideHit, type SideTarget } from "./sidebar.ts";
-import { receiptLines } from "./inspector.ts";
+import { runRewind, type RewindCall, type TranscriptBranch } from "./rewind-picker.ts";
 import { openPager, type PagerLine } from "./pager.ts";
 import { ownerDialogPresentation, type OwnerDialogHost } from "./owner-dialog.ts";
 import { statusPresenter } from "./notice-route.ts";
@@ -56,7 +56,10 @@ export interface NativePanelsOptions {
   readonly identity: HostIdentity;
   readonly cwd: string;
   readonly artifacts?: () => Promise<unknown>;
-  readonly artifactViewer?: (reference: string) => Promise<string>;
+  /** `corral artifact show` into a private file, for the Artifacts view's byte-exact text and image preview. */
+  readonly artifactFile?: (reference: string) => Promise<string>;
+  /** The host's in-process rewind (workers with turn checkpoints); F2 offers the rewind picker while it is given. */
+  readonly rewind?: RewindCall;
   readonly exportSession?: () => Promise<string>;
   readonly readTranscript?: (id: string) => Promise<string>;
   readonly jobControl?: JobControl;
@@ -79,14 +82,14 @@ export interface NativePanelsOptions {
 }
 /** Views a tool row's clickable label can open by name; `plan` is the sidebar's Plan tab. */
 export type PanelView = "chat" | "agents" | "changes" | "task" | "proof" | "artifacts" | "usage" | "board" | "plan";
-/** `/panels <target>` names for main views; history, operations, project, refresh and toggle are actions. */
+/** `/panels <target>` names for main views; history, project, refresh and toggle are actions. */
 const PANEL_VIEWS: Readonly<Record<string, MainView>> = {
   chat: "conversation", files: "changes", changes: "changes", agents: "agents", activity: "agents", jobs: "agents", helpers: "agents",
-  usage: "usage", evidence: "evidence", proof: "evidence", task: "task", timeline: "timeline", board: "board",
+  usage: "usage", evidence: "evidence", proof: "evidence", task: "task", timeline: "timeline", events: "timeline", board: "board",
 };
 /** Views that read the bound task; sessions without one do not offer them. */
-const TASK_VIEWS: Readonly<Partial<Record<MainView, true>>> = { task: true, evidence: true, timeline: true };
-const PANEL_TARGETS = "chat, agents, changes, task, proof, usage, timeline, history, operations, project, refresh or toggle";
+const TASK_VIEWS: Readonly<Partial<Record<MainView, true>>> = { task: true, evidence: true };
+const PANEL_TARGETS = "chat, agents, changes, task, proof, usage, events, history, project, refresh or toggle";
 
 /** Where keys go when no Pi dialog or overlay is open: Pi's editor, the main view, the sidebar, the queue, the owner questions or a docked build dialog. */
 export type PanelFocus = "composer" | "main" | "sidebar" | "queue" | "questions" | "choice";
@@ -178,6 +181,8 @@ export class NativePanels implements PanelSurface {
   readonly build: BuildController | undefined;
   private readonly unsubscribeBuild: readonly (() => void)[] = [];
   private pi: ExtensionAPI | undefined;
+  /** The session's transcript, read for the words that started each turn in the rewind picker. */
+  private sessionManager: TranscriptBranch | undefined;
   /** Entries the controller posted before Pi was installed. */
   private readonly posts: BuildEntry<unknown>[] = [];
   /** `/todo`'s hold on the sidebar's Plan tab; see `planSurface`. */
@@ -221,6 +226,7 @@ export class NativePanels implements PanelSurface {
       terminal: () => this.terminal ? { columns: this.terminal.physical.columns, rows: this.terminal.rows } : undefined,
       onFocusMain: () => { this.sidebar.focused = false; this.queue.focused = false; this.blurDocks(); this.closeKeyDrawer(); },
       canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => this.refresh(),
+      modal: () => !this.disposed && (this.prompts > 0 || this.hasOverlay?.() === true),
       rail: {
         width: () => this.wide && this.terminal ? this.terminal.railWidth : undefined,
         render: (width, height) => this.renderSidebar(width, height),
@@ -382,7 +388,7 @@ export class NativePanels implements PanelSurface {
     this.unsubscribeQuestions?.(); this.unsubscribeQuestions = undefined; this.questions = undefined; this.attention = undefined;
     this.build?.dispose();
     this.workbench.dispose();
-    this.ui = undefined; this.pi = undefined;
+    this.ui = undefined; this.pi = undefined; this.sessionManager = undefined;
     this.requestRender = undefined;
     this.editorFocused = undefined;
     this.hasOverlay = undefined; this.activeSelection = undefined;
@@ -792,7 +798,7 @@ export class NativePanels implements PanelSurface {
     });
     pi.on("session_start", (_event, ctx) => {
       if (ctx.mode !== "tui" || !this.terminal) return;
-      this.ui = ctx.ui;
+      this.ui = ctx.ui; this.sessionManager = ctx.sessionManager;
       this.attention = new AttentionSignal({ title: text => ctx.ui.setTitle(text), bell: () => this.terminal?.bell() },
         titleText(this.options.identity), () => this.bell === "on");
       this.workbench.bind(ctx.ui);
@@ -1025,7 +1031,6 @@ export class NativePanels implements PanelSurface {
   private async panelCommand(args: string): Promise<void> {
     const value = args.trim().toLowerCase();
     if (value === "history") { await this.workbench.openHistory(); return; }
-    if (value === "operations") { await this.showOperations(); return; }
     if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
     if (value === "refresh") { await this.workbench.task.refresh(true); await this.loadFiles(); return; }
     if (value === "toggle") { this.toggleSidebar(); return; }
@@ -1038,24 +1043,11 @@ export class NativePanels implements PanelSurface {
     this.workbench.notice(`/panels ${plainLabel(value) || "(empty)"}: choose ${PANEL_TARGETS}`, "warning");
   }
   /**
-   * The bounded host event and corral operation observations, read-only: time, event and outcome in words, with `d`
-   * switching to the exact records (sequence, ISO time, raw kind). Both wrap, so no record is clipped.
-   */
-  private async showOperations(): Promise<void> {
-    const ui = this.ui, info = this.snapshot()?.inspector;
-    if (!ui) return;
-    if (!info) { this.workbench.notice("Host events and operations unavailable from this host", "warning"); return; }
-    const { lines, raw } = receiptLines(info, Date.now());
-    this.overlay = "pager"; this.refresh();
-    try { await openPager(ui, { title: "Host events and operations", lines, raw, wrap: true }); }
-    finally { this.overlay = undefined; this.refresh(); }
-  }
-  /**
    * F2's actions in UID §13's group order (Views, Inspect, Message, Model, Workspace, Display, Help); each keeps the
    * reason it cannot run right now, shortened to the cause. A Display row marks its current value.
    */
   actions(): HostAction[] {
-    const identity = this.options.identity, taskBound = !!identity.task;
+    const identity = this.options.identity, taskBound = !!identity.task, rewind = identity.role === "worker" ? this.options.rewind : undefined;
     const scope = `${identity.role} · ${identity.project}`;
     const ready = (): string | undefined => !this.ui || !this.nativeAction ? "interactive editor unavailable" : undefined;
     const queued = (): string | undefined => ready() ?? (this.editableQueue() ? undefined : "no queued input");
@@ -1077,13 +1069,15 @@ export class NativePanels implements PanelSurface {
         return !row ? "no agent selected" : row.meta.length ? undefined : "no details for this agent";
       }),
       panel("inspect", "history", "Browse history"),
-      ...(taskBound ? [panel("inspect", "timeline", "Host events timeline")] : []),
-      panel("inspect", "operations", "Host events and operations"),
+      panel("inspect", "events", "Host events"),
       action("inspect", "notices", "Recent notices", "", () => this.showNotices(),
         () => ready() ?? (this.workbench.recentNotices().length ? undefined : "no notices yet")),
       action("message", "queue.edit", "Edit the last queued input", dequeue ? keyLabel(dequeue) : "", () => { void this.queue.editLast(); }, queued),
       action("message", "queue.focus", "Focus the queue", focus ? keyLabel(focus) : "", () => { this.focusQueue(); }, queued),
       ...(build?.message ?? []),
+      ...(rewind ? [action("message", "rewind", "Rewind to an earlier turn…", "", async () => {
+        if (this.ui) await runRewind(this.ui, rewind, this.sessionManager, (text, tone, detail) => this.workbench.notice(text, tone, detail));
+      })] : []),
       action("model", "app.model.select", "Select model", this.nativeKeys?.("app.model.select") ?? "", () => this.nativeAction?.("app.model.select")),
       action("model", "app.thinking.cycle", "Cycle effort", this.nativeKeys?.("app.thinking.cycle") ?? "", () => this.nativeAction?.("app.thinking.cycle"),
         () => !this.snapshot()?.effortAvailable ? "this model has no effort levels" : ready()),

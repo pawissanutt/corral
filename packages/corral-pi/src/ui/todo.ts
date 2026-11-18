@@ -5,7 +5,7 @@ import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding
 import { z } from "zod";
 
 import type { HostIdentity } from "../roles/types.ts";
-import { observedCorralResult } from "./receipt-source.ts";
+import { observedCorralResult } from "./nested-result.ts";
 
 const Status = z.discriminatedUnion("state", [
   z.object({ state: z.literal("pending") }),
@@ -30,7 +30,7 @@ export const ProgressSchema = z.object({
       criteria: z.array(z.string()).default([]),
     })),
   })),
-  /** PM and assistant plans only: the plan identity the model's request summary names. */
+  /** Assistant plans only: the plan identity the model's request summary names. */
   plan: z.string().optional(),
   waits: z.array(Wait).optional(),
 });
@@ -103,7 +103,7 @@ export class TodoLedger {
     this.continuedState = continued;
   }
 
-  /** Re-reads the canonical ledger; false when a newer receipt superseded the read. */
+  /** Re-reads the host's ledger; false when a newer result superseded the read. */
   async restore(): Promise<boolean> {
     const started = ++this.version;
     try {
@@ -156,7 +156,7 @@ function staleNotice(ledger: TodoLedger, failure: string): string {
 }
 
 /**
- * `/todo` shows the Plan tab, `/todo up|down` turn its page and `/todo refresh` rereads the canonical ledger.
+ * `/todo` shows the Plan tab, `/todo up|down` turn its page and `/todo refresh` rereads the host's ledger.
  * `restoreOnStart` rereads the ledger when the terminal UI opens. A failed or unconfirmed read is a warning
  * notice on the surface; the last confirmed revision stays shown, marked stale.
  */

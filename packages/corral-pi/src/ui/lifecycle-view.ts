@@ -1,7 +1,8 @@
-// Timeline (`l` from Task): the house list-plus-detail layout over this host's session event log, observed live.
-// Row 0 is the back line `‹ Task · Events`, then one chip row with source, position, last sequence and gaps, one muted
-// caveat line and, behind the shared `?` legend, every other caveat. From SPLIT_MIN main-view columns the list sits left
-// of the selected event's detail; below, the detail stacks under the list. The list fills the rows the view is given.
+// Events (`l` from Task, or F2 › Host events in any session): the house list-plus-detail layout over this host's
+// session event log, observed live. Row 0 is the back line (`‹ Task · Events`, `‹ Chat · Events` without a task), then
+// one chip row with source, position, last sequence and gaps, one muted caveat line and, behind the shared `?` legend,
+// every other caveat. From SPLIT_MIN main-view columns the list sits left of the selected event's detail; below, the
+// detail stacks under the list. The list fills the rows the view is given.
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import type { BridgeEvent } from "../bridge/events.ts";
@@ -37,7 +38,7 @@ interface Frame {
 const VALUE_CAP = 2048, PAIR_CAP = 60, DEPTH_CAP = 6, WINDOW = 80;
 /** Host events are observed live in this process, never read: no read phase, no freshness note, no reread. */
 const OBSERVED: ReadState = { phase: "not_applicable", readAt: undefined, refreshing: false };
-const LINE = "Host observations · NOT canonical task settlement";
+const LINE = "Host observations · NOT canonical task state";
 
 const muted = (text: string) => PANEL_MUTED + text + PANEL_TEXT;
 const clip = (text: string, width: number) => truncateToWidth(text, Math.max(0, width), "…");
@@ -102,7 +103,7 @@ export class LifecycleView implements Component {
   constructor(private readonly identity: HostIdentity, private readonly bound: () => boolean,
     private readonly changed: () => void, private readonly canInteract: () => boolean,
     private readonly host: () => InspectorSnapshot | undefined, private readonly options: LifecycleViewOptions = {}) {}
-  /** The `‹ Task` back link: view-local columns `[from, to)` on content row `row`. The view itself ignores clicks there. */
+  /** The back link (`‹ Task`, `‹ Chat`): view-local columns `[from, to)` on content row `row`. The view itself ignores clicks there. */
   get back(): { readonly row: number; readonly from: number; readonly to: number } {
     return { row: 0, from: 0, to: this.backTo };
   }
@@ -131,8 +132,8 @@ export class LifecycleView implements Component {
   render(width: number): string[] {
     const w = Math.max(1, width);
     this.hits.clear();
-    const right = `${this.identity.task ?? "no task"} / ${this.identity.run ?? "no run"} · read-only`;
-    const back = backLine("Task", "Events", right, w);
+    const right = this.identity.task ? `${this.identity.task} / ${this.identity.run ?? "no run"} · read-only` : "read-only";
+    const back = backLine(this.identity.task ? "Task" : "Chat", "Events", right, w);
     this.backTo = back.to;
     return this.layout(this.frame(), back.line, w);
   }
@@ -144,10 +145,11 @@ export class LifecycleView implements Component {
 
   private frame(): Frame {
     const host = this.host(), page = host?.events, bound = this.bound();
-    const legend = [`Read-only · ${this.identity.task ?? "no task"} / ${this.identity.run ?? "no run"} · No queue, move or dispatch controls.`,
+    const scope = this.identity.task ? `${this.identity.task} / ${this.identity.run ?? "no run"}` : "this session";
+    const legend = [`Read-only · ${scope} · No queue, move or dispatch controls.`,
       "Scoped host/session events · in append order, never timestamp-sorted.",
-      bound ? "Bound host observations · NOT canonical task settlement." : "Host unbound · these observations may be stale · NOT canonical task settlement.",
-      ...(host && page ? [`Session ${host.session} · bound session ${host.boundSession ?? "unavailable"} · last #${page.last}.`] : []),
+      bound ? "Host observations · NOT canonical task state." : "Host closed · these observations may be stale · NOT canonical task state.",
+      ...(host && page ? [`Session ${host.session} · last #${page.last}.`] : []),
       ...(page?.gap ? [`GAP: ${page.gap.missing} host events missing; resumed #${page.gap.resumed}.`] : []),
       ...(page && (page.more || page.events.length > WINDOW) ? ["GAP: host event window capped / incomplete; older or additional events unavailable."] : []),
       "Append sequence within this host process only; earlier sessions unavailable. No success inferred."];
@@ -180,8 +182,7 @@ export class LifecycleView implements Component {
     const L = 8, payload = Object.fromEntries(Object.entries(event).filter(([key]) => !["seq", "at", "kind"].includes(key)));
     const out = [clip(`${PANEL_TEXT}${bold(plainLabel(event.kind))}${PANEL_MUTED} · #${event.seq}${PANEL_TEXT}`, width),
       ...field("Time", stampOf(event.at), width, L),
-      ...field("Session", `${host.session} / #${event.seq}`, width, L),
-      ...field("Bound", host.boundSession ?? "unavailable", width, L)];
+      ...field("Session", `${host.session} / #${event.seq}`, width, L)];
     if (Object.keys(payload).length) out.push(sectionRule("Payload", width), ...pairRows(payload, width));
     return out;
   }

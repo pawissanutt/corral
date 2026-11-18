@@ -15,7 +15,7 @@ type Json = Readonly<Record<string, unknown>>;
 export const LOCAL_TOOL_NAMES = [
   "lsp_diagnostics", "lsp_definition", "lsp_references", "web_fetch", "web_read", "web_search", "browser_navigate",
   "browser_screenshot", "ask_user", "ask_owner", "explore", "oracle", "tool_search", "mcp_connect", "mcp_resources",
-  "mcp_read_resource", "mcp_activate", "read_review_snapshot",
+  "mcp_read_resource", "mcp_activate",
 ] as const;
 
 function jsonOf(text: string): unknown {
@@ -384,19 +384,6 @@ function mcpToolPresenter(name: string, label: string | undefined): Presenter {
     });
   };
 }
-function snapshotPresenter(): Presenter {
-  return call => {
-    const document = stringArg(call.args, "document"), offset = numberArg(call.args, "offset");
-    const base: Base = { verb: "read snapshot", ...(document ? { target: `${document}${offset ? ` from byte ${offset}` : ""}` } : {}) };
-    return settle(call, base, output => {
-      const value = recordOf(jsonOf(output)), body = text(value, "text") ?? output, from = count(value, "offset") ?? 0;
-      const more = value?.["next_offset"] !== null && value?.["next_offset"] !== undefined;
-      return { ...base, state: "ok", outcome: `bytes ${from}-${from + Buffer.byteLength(body)} · ${more ? "more to read" : "end"}`,
-        hiddenHint: "text", expanded: () => textLines(body, "text") };
-    });
-  };
-}
-
 const PRESENTERS: Readonly<Record<string, (deps: ToolRenderDeps) => Presenter>> = {
   lsp_diagnostics: () => diagnosticsPresenter(),
   lsp_definition: () => locationsPresenter("definition"),
@@ -415,7 +402,6 @@ const PRESENTERS: Readonly<Record<string, (deps: ToolRenderDeps) => Presenter>> 
   mcp_resources: () => mcpControlPresenter("mcp_resources"),
   mcp_read_resource: () => mcpControlPresenter("mcp_read_resource"),
   mcp_activate: () => mcpControlPresenter("mcp_activate"),
-  read_review_snapshot: () => snapshotPresenter(),
 };
 
 /** Presenters for the local tools above, and for any MCP server tool (`mcp_*`). */

@@ -20,8 +20,8 @@ const options: ExitOption[] = [
 ];
 type Gates = BuildRecord["verification"];
 const GATES: Gates = [
-  { attempt: "G1", tier: "quick", head: "aaa", result: "fail", failed_command: "just check-unit", started: "2026-01-01T00:00:00Z", ended: "2026-01-01T00:01:30Z" },
-  { attempt: "G2", tier: "full", head: "bbb", result: "pass", started: "2026-01-01T00:02:00Z", ended: "2026-01-01T00:12:00Z" },
+  { attempt: "G1", head: "aaa", result: "fail", failed_command: "just check-unit", started: "2026-01-01T00:00:00Z", ended: "2026-01-01T00:01:30Z" },
+  { attempt: "G2", head: "bbb", result: "pass", started: "2026-01-01T00:02:00Z", ended: "2026-01-01T00:12:00Z" },
 ];
 const REVIEWS: BuildRecord["reviews"] = [{
   round: 1, reviewer: "review-1", model: "anthropic/claude-opus-5.5", head: "bbb", verdict: "changes", at: "2026-01-01T00:13:00Z",
