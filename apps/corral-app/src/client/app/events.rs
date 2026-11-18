@@ -180,8 +180,9 @@ impl AppState {
                 if walk_failed && !params["after"].is_null() {
                     self.device_walk = None;
                 }
-                // The engine's refusal travels in the error's data, with the steps past it.
-                let refusal = (method == OP_SUBMIT
+                // The engine's refusal, or corrald's refusal of a session control or answer,
+                // travels in the error's data, with the steps past it.
+                let refusal = (refusable(method)
                     && code == corral_protocol::rpc::ErrorCode::Refused)
                     .then(|| {
                         error_data
@@ -266,18 +267,6 @@ impl AppState {
         }
         match method {
             APP_SESSION => self.session(feed, decode(result)?).await,
-            PROMPT_ANSWER => {
-                if let Some(id) = &id {
-                    feed.update(|feed| {
-                        if let Some(state) = feed.commands.get_mut(id.as_str()) {
-                            state.status = CommandStatus::Done;
-                            state.error = None;
-                        }
-                    });
-                    self.settled(feed, id).await;
-                }
-                Ok(vec![])
-            }
             OP_SUBMIT => Ok(self.refresh_details(feed)),
             ASSISTANT_SEND => {
                 let ack: SendAck = decode(result)?;

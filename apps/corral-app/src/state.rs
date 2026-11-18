@@ -58,8 +58,9 @@ pub struct AppState {
     pub review: source::StateSource<review::State>,
     pub settings: source::StateSource<settings::State>,
     pub assistant: source::StateSource<assistant::State>,
-    /// The destructive or forced operation waiting for its one local confirmation.
-    pub confirm: Signal<Option<Act>>,
+    /// The destructive or forced operation, or the session control, waiting for its one local
+    /// confirmation.
+    pub confirm: Signal<Option<crate::model::act::Confirming>>,
     /// The engine's last refusal and its next steps, until one is pressed or it is closed.
     pub refusal: Signal<Option<RefusalSheet>>,
     /// The real context "Ask about this" attached to the composer; cleared when Ask closes.
@@ -250,7 +251,7 @@ impl AppState {
         app.watch_receipts();
         app.follow_sidebar();
         app.follow_projects();
-        app.settle_assistant_stops();
+        app.settle_controls();
         app.follow_cached_feed();
         app.watch_device_receipts();
         if form != Form::Phone {
@@ -391,6 +392,10 @@ impl AppState {
         }
         if self.work.with_untracked(|state| state.menu.is_some()) {
             self.work.update(|state| state.menu = None);
+            return;
+        }
+        if self.agents.with_untracked(|state| state.rewind.is_some()) {
+            self.agents.update(|state| state.rewind = None);
             return;
         }
         if self.ask_field.with_untracked(Option::is_some) {
@@ -620,7 +625,10 @@ impl AppState {
         let Some(session) = selected else {
             return;
         };
-        self.agents.update(|state| state.toggle_live_view());
+        self.feed.with_untracked(|feed| {
+            self.agents
+                .update(|state| state.toggle_view(feed, session.as_str()))
+        });
         let live = crate::model::Live::Session(session);
         if self.nav.with_untracked(|nav| nav.live() != Some(&live)) {
             self.open_live(live);

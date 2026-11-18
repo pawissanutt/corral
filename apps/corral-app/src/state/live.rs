@@ -10,7 +10,7 @@ use nsh_core::prelude::*;
 
 use super::AppState;
 use crate::client::requests;
-use crate::model::agents::PaneAsk;
+use crate::model::agents::{Control, PaneAsk};
 use crate::model::daemon::{DetailCache, Feed, Operation};
 use crate::model::effect::PaneRequest;
 use crate::model::health::{self, Availability};
@@ -242,6 +242,9 @@ impl AppState {
                     | Effect::Device(_)
                     | Effect::Send(_)
                     | Effect::Pane { .. }
+                    | Effect::Control { .. }
+                    | Effect::Answer { .. }
+                    | Effect::Refused(_)
             )
         {
             self.run_preview(effect);
@@ -287,36 +290,26 @@ impl AppState {
                     self.toast("Not withdrawn: the app's connection to corrald is not running. Nothing changed.");
                 }
             }
-            Effect::Prompt { answer, .. } => {
-                if let Some(refusal) = self.link_refusal() {
-                    self.toast(refusal);
-                } else {
-                    _ = requests::prompt_answer(answer);
-                }
-            }
+            Effect::Answer { key, answer } => self.answer(key, answer),
             Effect::Thread { scope, open } => _ = requests::thread(scope, open),
-            Effect::Stop(stop) => {
-                let session = stop.session.clone();
-                let turn = stop.turn;
-                let correlation = requests::new_id();
-                if self.link_refusal().is_none()
-                    && requests::send(requests::ClientRequest::AssistantStop {
-                        request_id: correlation.clone(),
-                        request: stop,
-                    })
-                {
-                    self.assistant.update(|state| {
-                        state
-                            .live
-                            .stop_ops
-                            .insert(Id::from(correlation), (session, turn));
+            Effect::Control {
+                session,
+                key,
+                control,
+                confirmed,
+            } => {
+                if control.asks() && !confirmed {
+                    let ask = self.feed.with_untracked(|feed| {
+                        crate::model::agents::ask(feed, session, key, control)
                     });
+                    self.refusal.set(None);
+                    self.confirm
+                        .set(Some(crate::model::act::Confirming::Control(ask)));
                 } else {
-                    self.assistant
-                        .update(|state| state.stop_failed(&session, turn));
-                    self.toast("Stop was not sent: no live connection to corrald.");
+                    self.send_control(session, key, control);
                 }
             }
+            Effect::Refused(sheet) => self.refusal.set(Some(sheet)),
             Effect::Warm(warm) => {
                 if let Some(refusal) = self.link_refusal() {
                     self.toast(refusal);
@@ -381,29 +374,74 @@ impl AppState {
             .update(|state| state.pane_sent(session, key, what, unsent));
     }
 
+    /// Sends a session control under its key and remembers it as the session's latest, so the
+    /// session shows how it ended; one that cannot leave says why there instead.
+    pub(super) fn send_control(&self, session: Id, key: Id, control: Control) {
+        let unsent = if self.fixture() {
+            self.feed.update(|feed| {
+                crate::model::preview::control(feed, &key, session.as_str(), control)
+            });
+            None
+        } else if let Some(refusal) = self.link_refusal() {
+            Some(refusal.to_owned())
+        } else {
+            let sent = requests::send(requests::ClientRequest::Session {
+                request_id: key.to_string(),
+                method: control.method(),
+                params: control.params(session.as_str()),
+            });
+            (!sent).then(|| "the app's connection task is not running".to_owned())
+        };
+        self.agents
+            .update(|state| state.control_sent(session, key, control, unsent));
+    }
+
+    /// Sends an answer to an agent's question under its key; the card shows how it ended.
+    fn answer(&self, key: Id, answer: corral_protocol::session::SessionPromptAnswer) {
+        if self.fixture() {
+            self.feed
+                .update(|feed| crate::model::preview::answer(feed, &key, &answer));
+        } else if let Some(refusal) = self.link_refusal() {
+            self.toast(refusal);
+        } else if !requests::send(requests::ClientRequest::PromptAnswer {
+            request_id: key.to_string(),
+            request: answer,
+        }) {
+            self.toast("Not sent: the app's connection task is not running.");
+        }
+    }
+
     /// Why a call that needs the connection cannot leave now.
     fn link_refusal(&self) -> Option<&'static str> {
         self.feed
             .with_untracked(|feed| (!feed.ready()).then_some(NO_LINK))
     }
 
-    /// Settles each assistant stop once the client's reply to it arrives.
-    pub(super) fn settle_assistant_stops(self) {
+    /// Tells each session control's outcome once its reply arrives.
+    pub(super) fn settle_controls(self) {
         effect(move || {
-            let stops = self
-                .assistant
-                .with(|state| state.live.stop_ops.keys().cloned().collect::<Vec<_>>());
-            for key in stops {
-                let operation = self
-                    .feed
-                    .with(|feed| feed.operations.get(&key).filter(|op| !op.loading).cloned());
-                if let Some(operation) = operation {
-                    untracked(|| {
-                        self.act(self.assistant, |state, _| {
-                            state.settle_stop(&key, &operation)
-                        })
-                    });
-                }
+            let waiting = self.agents.with(|state| {
+                state
+                    .controls
+                    .values()
+                    .filter(|sent| !sent.told && sent.unsent.is_none())
+                    .map(|sent| sent.key.clone())
+                    .collect::<Vec<_>>()
+            });
+            if waiting.is_empty() {
+                return;
+            }
+            let settled = self.feed.with(|feed| {
+                waiting.iter().any(|key| {
+                    feed.operations
+                        .get(key.as_str())
+                        .is_some_and(|operation| !operation.loading)
+                })
+            });
+            if settled {
+                untracked(|| {
+                    self.reduce(self.agents, |state, feed, _, _| state.settle_controls(feed))
+                });
             }
         });
     }

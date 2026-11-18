@@ -29,13 +29,13 @@ pub fn pane(feed: &mut Feed, key: &Id, request: &PaneRequest) {
                 message: "live_session_not_found".into(),
             });
         }
-        (Some(SessionRef::Process { .. }), PaneRequest::Focus(_)) => {
+        (Some(SessionRef::Process { .. } | SessionRef::Pi { .. }), PaneRequest::Focus(_)) => {
             operation.refusal = Some(refusal(format!(
                 "headless process sessions have no pane to focus; use `corral show {}`",
                 target.task
             )));
         }
-        (Some(SessionRef::Process { .. }), PaneRequest::Keys(_)) => {
+        (Some(SessionRef::Process { .. } | SessionRef::Pi { .. }), PaneRequest::Keys(_)) => {
             operation.refusal = Some(refusal(
                 "headless process sessions have no pane to send keys to".into(),
             ));
@@ -53,10 +53,12 @@ pub fn pane(feed: &mut Feed, key: &Id, request: &PaneRequest) {
     feed.operations.insert(key.clone(), operation);
 }
 
+/// The run's placement: a pi session's pane or process.
 fn session(feed: &Feed, target: &PaneFocus) -> Option<SessionRef> {
     feed.agents
         .get(format!("{}_{}", target.task, target.run).as_str())
-        .and_then(|row| row.run.session.clone())
+        .and_then(|row| row.run.session.as_ref())
+        .map(|session| crate::model::agents::placement(session).clone())
 }
 
 fn refusal(reason: String) -> Refusal {

@@ -7,18 +7,18 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::assistant::{
-    Action, ActionCard, ActionOutcome, AskUserCard, Button, Chip, DiffLine, Editing, FILED_LABELS,
-    FiledCard, LABELS, PermissionCard, SavedCard,
+    Action, ActionCard, ActionOutcome, AskUserCard, Button, Chip, Editing, FILED_LABELS, FiledCard,
+    LABELS, SavedCard, WordsAnswer,
 };
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
-use crate::ui::kit::chip::{chip, illus, stamp_small};
+use crate::ui::kit::chip::{chip, stamp_small};
 use crate::ui::kit::marks::{dot, hue_fill, mark};
 use crate::ui::kit::text::{label_value, rich, rich_small};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
+use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
 use super::parts::{
     Edge, act, button_row, frame, meta_size, model_button, mono_line, mono_run, note_size, quote,
@@ -241,10 +241,72 @@ pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
     if !card.options.is_empty() {
         parts.push(options.into_element());
     }
+    if let Some(words) = &card.words {
+        parts.push(words_answer(app, words));
+    }
     if let Some(answer) = &card.answer {
         parts.push(rich_small(app, answer));
     }
     frame(app, Edge::Asks, true, parts)
+}
+
+/// The owner's own words as the answer: a field and Answer, Enter sending too. Blank words
+/// send nothing. test_id `field-answer` and `btn-answer`.
+fn words_answer(app: AppState, words: &WordsAnswer) -> AnyElement {
+    let form = app.form;
+    let typed = signal(String::new());
+    let send = {
+        let session = words.session.clone();
+        let question = words.question.clone();
+        move || {
+            act(
+                app,
+                Action::AnswerQuestion {
+                    session: session.clone(),
+                    question: question.clone(),
+                    option: None,
+                    text: Some(typed.get_untracked()),
+                },
+            )
+        }
+    };
+    let entry = input()
+        .test_id("field-answer")
+        .label(words.placeholder.clone())
+        .placeholder(words.placeholder.clone())
+        .placeholder_color(move || for_appearance(color(Token::Ink4)))
+        .text_color(color(Token::Ink))
+        .caret_color(move || for_appearance(color(Token::Ink)))
+        .selection_color(move || for_appearance(color(Token::Sel)))
+        .flex_1()
+        .min_w(px(0.0))
+        .on_change(move |text: &str| typed.set(text.to_owned()))
+        .on_submit({
+            let send = send.clone();
+            move |_: &str| send()
+        });
+    let entry = match form {
+        Form::Terminal => entry.bg(AdaptiveColor::TRANSPARENT).into_element(),
+        Form::Desktop | Form::Phone => entry
+            .font_family(FONT_TEXT)
+            .text_size(px(if form == Form::Phone { 15.0 } else { 13.0 }))
+            .bg(color(Token::BgSunk))
+            .border_1()
+            .border_color(color(Token::Rule2))
+            .rounded(px(6.0))
+            .px(px(8.0))
+            .py(px(5.0))
+            .into_element(),
+    };
+    let answer = button_with(
+        app,
+        "Answer",
+        ButtonKind::Primary,
+        ButtonOptions::default(),
+        "btn-answer",
+        send,
+    );
+    row(app, vec![entry, answer], 8.0).into_element()
 }
 
 /// The head of a card that asks (`.askuser .hd`): the needs-you dot, the heading, a chip at the
@@ -261,123 +323,6 @@ fn asks_head(app: AppState, heading: &str, state: Option<&Chip>) -> AnyElement {
         parts.push(chip(app, state.label.clone(), state.hue));
     }
     row(app, parts, 6.0).into_element()
-}
-
-/// The write permission (`.permcard`): who asks, its state, the file, the preview lines, the
-/// three grants and Deny and the disclosure; the prompt's timer note under it.
-pub fn permission(app: AppState, card: &PermissionCard) -> AnyElement {
-    let form = app.form;
-    let size = meta_size(form);
-    let choices = card
-        .choices
-        .iter()
-        .map(|choice| choice.button.clone())
-        .collect::<Vec<_>>();
-    let mut parts = vec![
-        asks_head(app, &card.heading, Some(&card.state)),
-        mono_line(
-            app,
-            card.path.clone(),
-            if form == Form::Phone { 13.0 } else { 12.0 },
-        )
-        .into_element(),
-    ];
-    if !card.lines.is_empty() {
-        parts.push(diff(app, &card.lines));
-    }
-    if !choices.is_empty() {
-        parts.push(button_row(app, &choices, ButtonKind::Ghost, 6.0).into_element());
-    }
-    if let Some(label) = card.illustrative {
-        parts.push(illus(app, label));
-    }
-    view()
-        .gap(px(6.0))
-        .child(frame(app, Edge::Asks, true, parts))
-        .children(
-            card.timer_note
-                .clone()
-                .map(|note| words(app, note, size, Token::Ink3)),
-        )
-        .into_element()
-}
-
-/// The preview lines (`.diff .ln`): line number when known, the marker in its colour, the code
-/// cut to fit, on the added or removed ground.
-fn diff(app: AppState, lines: &[DiffLine]) -> AnyElement {
-    let form = app.form;
-    let rows = lines.iter().map(|line| {
-        let hue = match line.marker {
-            "+" => Some(Hue::Ok),
-            "-" => Some(Hue::Fail),
-            _ => None,
-        };
-        let number = diff_mono(
-            form,
-            line.line.map_or_else(String::new, |at| at.to_string()),
-            Token::Ink4,
-        );
-        let marker = diff_mono(
-            form,
-            line.marker,
-            if hue == Some(Hue::Fail) {
-                Token::Fail
-            } else {
-                Token::Ok
-            },
-        );
-        let code = diff_mono(form, line.text.clone(), Token::Ink)
-            .flex_1()
-            .min_w(px(0.0))
-            .truncate();
-        if form == Form::Terminal {
-            return view()
-                .flex_row()
-                .child(view().w(term::cells(4.0)).flex_shrink_0().child(number))
-                .child(view().w(term::cells(2.0)).flex_shrink_0().child(marker))
-                .child(code)
-                .into_element();
-        }
-        let number_column = if form == Form::Phone { 30.0 } else { 38.0 };
-        view()
-            .flex_row()
-            .items_center()
-            .when_some(hue, |line, hue| line.bg(hue_fill(hue)))
-            .child(
-                view()
-                    .w(px(number_column))
-                    .flex_shrink_0()
-                    .items_end()
-                    .pr(px(8.0))
-                    .child(number),
-            )
-            .child(view().w(px(14.0)).flex_shrink_0().child(marker))
-            .child(code)
-            .into_element()
-    });
-    let block = view().children(rows.collect::<Vec<_>>());
-    if form == Form::Terminal {
-        return block.into_element();
-    }
-    block
-        .rounded(px(6.0))
-        .border_1()
-        .border_color(color(Token::Rule))
-        .overflow_hidden()
-        .into_element()
-}
-
-fn diff_mono(form: Form, content: impl Into<SharedString>, ink: Token) -> Text {
-    let t = text(content.into())
-        .number_of_lines(1u32)
-        .text_color(color(ink));
-    if form == Form::Terminal {
-        t
-    } else {
-        t.font_family(FONT_MONO)
-            .text_size(px(11.0))
-            .line_height(px(17.6))
-    }
 }
 
 /// The filed Idea (`.filed`): the result chip and provenance, who filed it, the owner's words

@@ -1,7 +1,7 @@
 //! Shared Ask drawer and disconnected-state content.
 
 use super::views::button;
-use super::{Action, ActionCard, Button, Chip, PermissionCard};
+use super::{Action, Button, Chip};
 
 /// The head of the desktop Ask drawer or the phone composer sheet; the transcript and composer
 /// beneath it are rendered from `thread`/`live_items` and `composer`/`live_composer`.
@@ -63,22 +63,4 @@ pub fn unconnected_drawer() -> Drawer {
         keyboard_requested: false,
         close_label: "Close (Esc)",
     }
-}
-
-/// The canonical permission or confirmation card shown in an Inbox prompt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PromptCard {
-    Permission(PermissionCard),
-    Confirmation(ActionCard),
-}
-
-/// Shared prompt-pane content built from the thread's recorded prompt and answer state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PromptPane {
-    pub state: Chip,
-    pub origin: String,
-    pub title: String,
-    pub card: PromptCard,
-    pub note: &'static str,
-    pub open: Button,
 }

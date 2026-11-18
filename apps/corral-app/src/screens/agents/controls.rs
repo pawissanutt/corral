@@ -27,7 +27,7 @@ pub fn bar(app: AppState, session: Memo<Session>) -> AnyElement {
 
 /// The Session menu of run session `session` (test id `btn-session-menu`; its items
 /// `btn-<slug>`, the task's Actions under `btn-task-actions`).
-pub(super) fn session_menu(app: AppState, session: Id) -> AnyElement {
+pub(crate) fn session_menu(app: AppState, session: Id) -> AnyElement {
     let spoken = format!("{SESSION_MENU_LABEL} menu for {session}");
     verb_menu(
         app,

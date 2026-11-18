@@ -10,7 +10,7 @@ use corral_protocol::assistant::{
 };
 
 use super::cards::{WAIT_LIFETIME, WAIT_NOTE};
-use super::live_cards::{IdeaEntry, act_chip, action_card, idea_card, prompt_body, question_card};
+use super::live_cards::{IdeaEntry, act_chip, action_card, idea_card, question_card};
 use super::views::button;
 use super::{
     Action, AssistantMessage, Body, Chip, OwnerMessage, PmMessage, PmReply, QUICK, QueueNote,
@@ -22,7 +22,7 @@ use crate::model::daemon::{CommandStatus, Feed, Link};
 use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::Live;
-
+use crate::model::session_feed::LiveSession;
 /// An owner message's outlined tag from its served state.
 fn tag(state: Option<&WireState>) -> Chip {
     let (label, hue) = match state {
@@ -74,6 +74,8 @@ fn owner(state: &State, feed: &Feed, entry: &ThreadEntry) -> OwnerMessage {
         attachment: attachment(&entry.links),
         files,
         opened,
+        file: None,
+        filed: None,
     }
 }
 
@@ -134,17 +136,6 @@ impl Thread<'_> {
         let (tool_summary, tools) = tools(&entry.tools);
         AssistantMessage {
             key: entry.id.clone(),
-            anchored: self.state.anchor.as_ref().is_some_and(|(scope, key)| {
-                let matches_scope = match scope {
-                    super::ThreadRef::Live(scope) => scope.as_str() == self.scope,
-                };
-                matches_scope
-                    && entry.card.as_ref().is_some_and(|card| match card {
-                        EntryCard::Prompt { key: entry_key, .. }
-                        | EntryCard::Question { key: entry_key, .. } => entry_key == key,
-                        _ => false,
-                    })
-            }),
             // Each reply names the session that wrote it, never whichever is current now.
             id: entry_session(&entry.id).map_or_else(|| self.author.clone(), str::to_owned),
             at: clock(&entry.at, self.feed),
@@ -214,127 +205,124 @@ impl Thread<'_> {
                 outcome.as_ref(),
                 input.as_ref(),
             )),
-            EntryCard::Question {
-                key,
-                options,
-                answer,
-                ..
-            } => Body::AskUser(question_card(
-                self.feed,
-                entry,
-                key,
-                options,
-                answer.as_ref(),
-            )),
-            EntryCard::Prompt {
-                key,
-                rev,
-                tool,
-                path,
-                preview,
-                choices,
-                ..
-            } => prompt_body(
-                self.state,
-                self.feed,
-                entry,
-                key,
-                *rev,
-                tool.as_ref(),
-                path.as_ref(),
-                preview,
-                choices,
-            ),
-            EntryCard::PmItem { .. } | EntryCard::Other => return None,
+            EntryCard::Question { .. }
+            | EntryCard::Prompt { .. }
+            | EntryCard::PmItem { .. }
+            | EntryCard::Other => return None,
         })
     }
 
-    /// An assistant reply or card entry, with the streamed text while its turn runs.
-    fn reply(&self, entry: &ThreadEntry, live: Option<(&str, u64, bool)>) -> AssistantMessage {
-        let text = match live {
-            Some((text, _, _)) => text,
-            None if entry.kind == EntryKind::Answer => entry.text.as_deref().unwrap_or(""),
-            None if entry.card.is_none() => entry.text.as_deref().unwrap_or(""),
-            None => "",
+    /// An assistant reply or card entry, as recorded.
+    fn reply(&self, entry: &ThreadEntry) -> AssistantMessage {
+        let text = if entry.kind == EntryKind::Answer || entry.card.is_none() {
+            entry.text.as_deref().unwrap_or("")
+        } else {
+            ""
         };
         let mut body = markdown(text);
         let card = entry.card.as_ref().and_then(|card| self.card(entry, card));
         let filed = matches!(card, Some(Body::Filed(_)));
-        let asks = match &entry.card {
-            Some(EntryCard::Question { answer, .. }) => answer.is_none() && entry.state.is_none(),
-            Some(EntryCard::Prompt { choices, .. }) => !choices.is_empty() && entry.state.is_none(),
-            _ => false,
-        };
         body.extend(card);
         let mut message = self.message(entry, body);
-        self.turn(&mut message, live);
-        // corrald's settlement of the turn outranks the stream: a canonical completion ends
-        // the caret and Stop whatever the last streamed step said.
-        if let Some(completion) = entry.completion {
-            message.streaming = false;
-            message.stop = None;
-            message.state = None;
-            match completion {
-                TurnCompletion::Completed => {}
-                TurnCompletion::Aborted => {
-                    message.state = Some(Chip::new("stopped", Hue::Neutral));
-                    message.stopped_note = Some("This turn was stopped · partial answer kept.");
-                }
-                TurnCompletion::Failed => {
-                    message.state = Some(Chip::new("turn failed", Hue::Fail));
-                    message.stopped_note = Some("This turn failed · what arrived is kept.");
-                }
-                TurnCompletion::Other => {
-                    message.state = Some(Chip::new("turn ended · outcome unknown", Hue::Neutral));
+        match entry.completion {
+            Some(TurnCompletion::Aborted) => {
+                message.state = Some(Chip::new("cancelled", Hue::Neutral));
+                message.stopped_note = Some("This turn was cancelled · partial answer kept.");
+            }
+            Some(TurnCompletion::Failed) => {
+                message.state = Some(Chip::new("turn failed", Hue::Fail));
+                message.stopped_note = Some("This turn failed · what arrived is kept.");
+            }
+            Some(TurnCompletion::Other) => {
+                message.state = Some(Chip::new("turn ended · outcome unknown", Hue::Neutral));
+            }
+            Some(TurnCompletion::Completed) | None => {
+                if filed && entry.kind == EntryKind::Answer {
+                    message.state = Some(Chip::new("answered and filed", Hue::Neutral));
                 }
             }
-        }
-        if message.state.is_none() {
-            message.state = if asks {
-                Some(Chip::new("waiting on you", Hue::You))
-            } else if filed && entry.kind == EntryKind::Answer {
-                Some(Chip::new("answered and filed", Hue::Neutral))
-            } else {
-                None
-            };
-        }
-        // Records an answer rests on are cited once the turn completes.
-        if message.streaming {
-            message.sources.clear();
         }
         message
     }
 
-    /// The streaming caret, Stop and the stopped note of a running or stopped turn.
-    fn turn(&self, message: &mut AssistantMessage, live: Option<(&str, u64, bool)>) {
-        let Some((_, turn, done)) = live else {
-            return;
-        };
-        let stopping = self
-            .session
-            .as_ref()
-            .and_then(|session| self.state.live.stopping.get(session))
-            == Some(&turn);
-        if !done {
-            // A turn still answering has no amount of its own yet.
-            message.cost = None;
+    /// The answer still streaming in from the running turn, with its caret and Cancel; it
+    /// stays until the thread records the turn's answer.
+    fn streaming(&self, live: &LiveSession) -> Option<AssistantMessage> {
+        let text = live
+            .messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if text.is_empty() && !live.open {
+            return None;
+        }
+        let session = self.session.clone()?;
+        let mut message = self.message(
+            &self.placeholder(format!("{session}/live")),
+            markdown(&text),
+        );
+        message.at = "now".into();
+        // A turn still answering has no amount of its own yet, and cites its records once done.
+        message.cost = None;
+        message.sources.clear();
+        if live.open {
             message.streaming = true;
-            message.state = Some(if stopping {
-                Chip::new("stopping", Hue::Neutral)
-            } else {
-                Chip::new("answering", Hue::Corral)
-            });
-            if let Some(session) = &self.session {
-                let mut stop = button(
-                    "Stop",
-                    Action::Stop {
-                        session: session.clone(),
-                        turn,
-                    },
-                );
-                stop.enabled = !stopping;
-                message.stop = Some(stop);
-            }
+            message.state = Some(Chip::new("answering", Hue::Corral));
+            message.stop = Some(button(
+                "Cancel",
+                Action::Control {
+                    session,
+                    control: crate::model::agents::Control::Cancel,
+                },
+            ));
+        } else if live.ended.as_ref().is_some_and(|end| end.aborted) {
+            message.state = Some(Chip::new("cancelled", Hue::Neutral));
+            message.stopped_note = Some("This turn was cancelled · partial answer kept.");
+        }
+        Some(message)
+    }
+    /// File as idea on an owner message: files its words as an Idea task, with no model. Once
+    /// sent, the chip says how the filing went instead.
+    fn file(&self, entry: &ThreadEntry) -> (Option<super::Button>, Option<Chip>) {
+        let status = act_chip(
+            self.state,
+            self.feed,
+            &subject("file", &entry.id),
+            "File as idea",
+        );
+        if status.as_ref().is_some_and(|chip| chip.hue != Hue::Fail) {
+            return (None, status);
+        }
+        (
+            Some(button("File as idea", Action::FileEntry(entry.id.clone()))),
+            status,
+        )
+    }
+
+    /// An entry standing for content the thread has not recorded: the running turn's answer,
+    /// a question waiting for the owner.
+    fn placeholder(&self, id: String) -> ThreadEntry {
+        ThreadEntry {
+            id,
+            rev: 0,
+            at: String::new(),
+            kind: EntryKind::Answer,
+            device: None,
+            via: None,
+            text: None,
+            state: None,
+            model: row(self.feed, self.scope).and_then(|row| row.profile.clone()),
+            cost_usd: None,
+            tools: Vec::new(),
+            links: Vec::new(),
+            card: None,
+            attachments: Vec::new(),
+            typed_at: None,
+            part: None,
+            completion: None,
+            cost_basis: None,
         }
     }
 
@@ -382,7 +370,6 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
             },
         )];
     };
-    let row = row(feed, scope);
     // The thread's current session: the quick thread's newest generation by rows or entries,
     // whichever arrived first; a named thread is its own session.
     let current = if scope == QUICK {
@@ -441,7 +428,6 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
     // notice recording that same failure right after it is the same event, shown once. Any
     // other notice, including a later repeat of the same failure, is its own event.
     let mut explained: Option<String> = None;
-    let live = snapshot.live.as_ref();
     let last_waiting = entries
         .iter()
         .rev()
@@ -454,7 +440,9 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
         }
         match entry.kind {
             EntryKind::Message => {
-                items.push(ThreadItem::Owner(owner(state, feed, entry)));
+                let mut message = owner(state, feed, entry);
+                (message.file, message.filed) = thread.file(entry);
+                items.push(ThreadItem::Owner(message));
                 match &entry.state {
                     Some(WireState::Waiting { reason }) => {
                         // Only the full block (the latest waiting message) shows the reason.
@@ -515,56 +503,24 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
             | EntryKind::Idea
             | EntryKind::Action
             | EntryKind::Question
-            | EntryKind::Prompt => {
-                let streamed = live
-                    .filter(|live| live.entry == entry.id)
-                    .filter(|live| !super::live_parts::covers(entry, &live.text))
-                    .map(|live| (live.text.as_str(), live.turn, live.done));
-                items.push(ThreadItem::Assistant(thread.reply(entry, streamed)));
-            }
+            | EntryKind::Prompt => items.push(ThreadItem::Assistant(thread.reply(entry))),
             EntryKind::Other => items.push(ThreadItem::Note(
                 "An entry this version of the app cannot show.".into(),
             )),
         }
     }
-    // A turn still streaming with no entry yet, of this thread's current session only: a quick
-    // thread that rolled to a new generation never shows the previous one's reply as its own,
-    // and a finished turn waits for its entry.
-    if let Some(live) = live.filter(|live| {
-        !live.done
-            && !snapshot.entries.contains_key(live.entry.as_str())
-            && current
-                .as_deref()
-                .is_some_and(|session| entry_session(&live.entry) == Some(session))
-    }) {
+    // The running turn's answer as it streams in, then what the agent asks the owner.
+    if let Some(message) = feed.live.get(scope).and_then(|live| thread.streaming(live)) {
+        items.push(ThreadItem::Assistant(message));
+    }
+    for prompt in crate::model::agents::prompts(feed, scope) {
         let mut message = thread.message(
-            &ThreadEntry {
-                id: live.entry.clone(),
-                rev: 0,
-                at: String::new(),
-                kind: EntryKind::Answer,
-                device: None,
-                via: None,
-                text: None,
-                state: None,
-                model: row.and_then(|row| row.profile.clone()),
-                cost_usd: None,
-                tools: Vec::new(),
-                links: Vec::new(),
-                card: None,
-                attachments: Vec::new(),
-                typed_at: None,
-                part: None,
-                completion: None,
-                cost_basis: None,
-            },
-            markdown(&live.text),
+            &thread.placeholder(format!("{scope}/ask/{}", prompt.question)),
+            vec![Body::AskUser(question_card(&prompt))],
         );
         message.at = "now".into();
-        thread.turn(
-            &mut message,
-            Some((live.text.as_str(), live.turn, live.done)),
-        );
+        message.cost = None;
+        message.state = Some(Chip::new("waiting on you", Hue::You));
         items.push(ThreadItem::Assistant(message));
     }
     outbox(&mut items, feed, scope, &snapshot.entries);
@@ -731,6 +687,8 @@ fn outbox(
             attachment: attachment(&send.context),
             files: send_chips(feed, &send.attachments),
             opened: None,
+            file: None,
+            filed: None,
         };
         if send.target == corral_protocol::assistant::AskTarget::Pm {
             items.push(ThreadItem::Pm(PmMessage {

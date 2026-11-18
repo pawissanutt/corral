@@ -1,21 +1,17 @@
 //! Served `EntryCard`s as the typed cards the transcript draws: filed Ideas with their engine
-//! Edit and Drop operations, owner-action receipts as the thread recorded them, ask_user
-//! questions and permission or confirmation prompts, each showing the true state of any answer
-//! this device sent.
+//! Edit and Drop operations and owner-action receipts as the thread recorded them; and the
+//! questions an agent asks in its session, answered in place.
 
-use corral_protocol::assistant::{
-    ContextRef, EntryCard, MessageState as WireState, PromptChoice, ThreadEntry,
-};
-use corral_protocol::detail::question::{QuestionAnswer, QuestionOption};
+use corral_protocol::assistant::{ContextRef, MessageState as WireState, ThreadEntry};
 use serde_json::Value;
 
 use super::views::button;
 use super::{
-    Action, ActionCard, ActionClass, ActionOutcome, AskOption, AskUserCard, Body, Chip, DiffLine,
-    Editing, FiledCard, IdeaFields, PermissionCard, PermissionChoice, PromptCard, PromptPane,
-    State, choice_label, clock, subject,
+    Action, ActionCard, ActionClass, ActionOutcome, AskOption, AskUserCard, Chip, Editing,
+    FiledCard, IdeaFields, State, subject,
 };
 use crate::model::act::{self, ActStatus};
+use crate::model::agents::Prompt;
 use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 use crate::model::id::Id;
@@ -125,172 +121,43 @@ pub(super) fn action_card(
     }
 }
 
-/// The assistant's ask_user question with its options and how it was answered. Read-only:
-/// answering an assistant's question returns with the chat host.
-pub(super) fn question_card(
-    feed: &Feed,
-    entry: &ThreadEntry,
-    key: &str,
-    options: &[QuestionOption],
-    answer: Option<&QuestionAnswer>,
-) -> AskUserCard {
-    let options = options
-        .iter()
-        .map(|option| {
-            let mut consequence = option.next.clone().unwrap_or_default();
-            if option.recommended {
-                if !consequence.is_empty() {
-                    consequence.push_str(" · ");
-                }
-                consequence.push_str("recommended");
-            }
-            AskOption {
-                label: option.label.clone(),
-                consequence,
-                selected: answer.and_then(|answer| answer.option.as_deref())
-                    == Some(option.label.as_str()),
-                enabled: false,
-                action: None,
-            }
-        })
-        .collect();
-    let answered = answer.map(|answer| {
-        vec![
-            span(format!("Answered by {} · ", answer.by)),
-            span(answer.via.clone()).mono(),
-            span(format!(" · {}", clock(&answer.at, feed))),
-        ]
-    });
+/// A question the agent asked in its session, answered here: each option answers at once, and
+/// a question that takes the owner's own words has a field for them.
+pub fn question_card(prompt: &Prompt) -> AskUserCard {
+    let open = !prompt.sending;
     AskUserCard {
-        heading: format!("assistant asks · ask_user · {}", clock(&entry.at, feed)),
-        question: vec![span(entry.text.clone().unwrap_or_else(|| key.to_owned()))],
-        options,
-        answer: answered,
-    }
-}
-
-/// A permission or confirmation prompt. Confirm/Decline prompts draw as an owner action
-/// waiting on this device; grant prompts as the permission card. A press answers at once.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn prompt_body(
-    state: &State,
-    feed: &Feed,
-    entry: &ThreadEntry,
-    key: &str,
-    rev: u32,
-    tool: Option<&String>,
-    path: Option<&String>,
-    preview: &str,
-    choices: &[PromptChoice],
-) -> Body {
-    let remembered = subject("prompt", key);
-    let status = act_chip(state, feed, &remembered, "Your answer");
-    let settled = choices.is_empty() || entry.state.is_some();
-    let open = !settled && !busy(state, feed, &remembered);
-    let choice = |choice: PromptChoice| {
-        let mut control = button(
-            choice_label(choice),
-            Action::Answer {
-                key: key.to_owned(),
-                rev,
-                choice,
-            },
-        );
-        control.enabled = open;
-        control
-    };
-    if choices.contains(&PromptChoice::Confirm) {
-        let mut buttons = Vec::new();
-        if open {
-            let mut confirm = choice(PromptChoice::Confirm);
-            confirm.primary = true;
-            buttons.push(confirm);
-            if choices.contains(&PromptChoice::Decline) {
-                buttons.push(choice(PromptChoice::Decline));
-            }
-        }
-        let outcome = if open {
-            ActionOutcome::Waiting {
-                explanation: vec![
-                    span("Nothing runs until you confirm here; Decline records a "),
-                    span("declined").bold(),
-                    span(" receipt."),
-                ],
-                buttons,
-            }
-        } else if let Some(chip) = status.filter(|_| !settled) {
-            ActionOutcome::Pending(chip.label)
-        } else {
-            ActionOutcome::Executed(entry.text.clone().unwrap_or_else(|| "answered".into()))
-        };
-        return Body::Action(ActionCard {
-            heading: "Owner action",
-            command: preview.to_owned(),
-            class: ActionClass::Confirm,
-            why: tool.cloned(),
-            input: None,
-            confirmed: None,
-            outcome,
-        });
-    }
-    let grants = [
-        PromptChoice::Once,
-        PromptChoice::Hour,
-        PromptChoice::Session,
-        PromptChoice::Deny,
-    ];
-    let choices = if open {
-        grants
-            .into_iter()
-            .filter(|grant| choices.contains(grant))
-            .map(|grant| {
-                let mut control = choice(grant);
-                control.primary = grant == PromptChoice::Once;
-                control.danger = grant == PromptChoice::Deny;
-                PermissionChoice { button: control }
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let state_chip = if settled {
-        Chip::new(
-            entry.text.clone().unwrap_or_else(|| "answered".into()),
-            Hue::Neutral,
-        )
-    } else if let Some(chip) = status {
-        chip
-    } else {
-        Chip::new("waiting on you", Hue::You)
-    };
-    Body::Permission(PermissionCard {
-        heading: format!(
-            "assistant wants to {} · {}",
-            tool.map_or("act", String::as_str),
-            clock(&entry.at, feed)
-        ),
-        state: state_chip,
-        path: path.cloned().unwrap_or_else(|| "path not stated".into()),
-        lines: preview
-            .lines()
-            .map(|line| {
-                let (marker, text) = match line.chars().next() {
-                    Some('+') => ("+", &line[1..]),
-                    Some('-') => ("-", &line[1..]),
-                    _ => ("", line),
-                };
-                DiffLine {
-                    line: None,
-                    marker,
-                    text: text.to_owned(),
-                }
+        heading: format!("{} asks · waiting on you", prompt.session),
+        question: vec![span(prompt.text.clone())],
+        options: prompt
+            .options
+            .iter()
+            .map(|option| AskOption {
+                label: option.clone(),
+                consequence: String::new(),
+                selected: false,
+                enabled: open,
+                action: open.then(|| Action::AnswerQuestion {
+                    session: prompt.session.to_string(),
+                    question: prompt.question.clone(),
+                    option: Some(option.clone()),
+                    text: None,
+                }),
             })
             .collect(),
-        choices,
-        timer_note: (!settled)
-            .then(|| "This prompt stays answerable here on every device; one answer wins.".into()),
-        illustrative: None,
-    })
+        words: (prompt.free_text && open).then(|| super::WordsAnswer {
+            session: prompt.session.to_string(),
+            question: prompt.question.clone(),
+            placeholder: if prompt.options.is_empty() {
+                "Your answer…".into()
+            } else {
+                "Or answer in your own words…".into()
+            },
+        }),
+        answer: prompt
+            .status
+            .as_ref()
+            .map(|(_, line)| vec![span(line.clone())]),
+    }
 }
 
 /// What a filed Idea's card needs from its entry.
@@ -420,98 +287,4 @@ pub(super) fn idea_card(state: &State, feed: &Feed, idea: IdeaEntry<'_>) -> File
         status,
         attached: false,
     }
-}
-
-/// An assistant prompt as a detail pane shows it, from the thread that carries it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LivePrompt {
-    /// The thread is not loaded yet.
-    Loading,
-    /// The thread is loaded and has no such prompt, or cannot be loaded.
-    Missing(String),
-    Pane(PromptPane),
-}
-
-/// Builds the pane of prompt `key` in thread `scope` with its real answer controls.
-pub fn live_prompt_pane(state: &State, feed: &Feed, scope: &str, key: &str) -> LivePrompt {
-    let Some(thread) = feed.threads.get(scope) else {
-        return match feed
-            .topics
-            .get(&format!("thread:{scope}"))
-            .and_then(|topic| topic.error.as_ref())
-        {
-            Some(error) => {
-                LivePrompt::Missing(format!("Its thread is unavailable: {}", error.message))
-            }
-            None => LivePrompt::Loading,
-        };
-    };
-    let found = thread.entries.values().find_map(|entry| match &entry.card {
-        Some(EntryCard::Prompt {
-            key: id,
-            rev,
-            tool,
-            path,
-            preview,
-            choices,
-            ..
-        }) if id == key => Some((
-            entry,
-            prompt_body(
-                state,
-                feed,
-                entry,
-                key,
-                *rev,
-                tool.as_ref(),
-                path.as_ref(),
-                preview,
-                choices,
-            ),
-            choices.is_empty() || entry.state.is_some(),
-        )),
-        _ => None,
-    });
-    let Some((entry, body, settled)) = found else {
-        return if thread.loading {
-            LivePrompt::Loading
-        } else {
-            LivePrompt::Missing("This prompt is no longer in its thread.".into())
-        };
-    };
-    let (title, card) = match body {
-        Body::Permission(card) => (
-            "Assistant asks permission".to_owned(),
-            PromptCard::Permission(card),
-        ),
-        Body::Action(card) => (
-            format!("Confirm {}", card.command),
-            PromptCard::Confirmation(card),
-        ),
-        _ => return LivePrompt::Missing("This prompt is no longer in its thread.".into()),
-    };
-    let author = super::row(feed, scope).map_or_else(|| scope.to_owned(), |row| row.id.clone());
-    let place = if scope == super::QUICK {
-        format!("from the quick thread · {author}")
-    } else {
-        format!("from assistant session {author}")
-    };
-    LivePrompt::Pane(PromptPane {
-        state: if settled {
-            Chip::new("answered", Hue::Neutral)
-        } else {
-            Chip::new("needs you", Hue::You)
-        },
-        origin: format!("{place} · {}", clock(&entry.at, feed)),
-        title,
-        card,
-        note: "One answer wins: answering here also settles it in the thread on every device.",
-        open: button(
-            "Open the thread",
-            Action::OpenPrompt {
-                thread: super::ThreadRef::Live(Id::from(scope)),
-                key: key.to_owned(),
-            },
-        ),
-    })
 }

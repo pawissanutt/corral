@@ -351,7 +351,7 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str)
     let switch = transcripts && terminal.is_some();
     let view = match &terminal {
         Some(_) if !transcripts => View::Terminal,
-        Some(_) => state.live_view,
+        Some(_) => state.view_for(feed, id.as_str()),
         None => View::Transcript,
     };
     Session {

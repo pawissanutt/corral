@@ -102,6 +102,7 @@ pub(crate) fn press_id(press: &Press) -> String {
         Press::CloseMenu => "btn-verbs-close".into(),
         Press::Menu(_) => "btn-task-actions".into(),
         Press::Focus(_) => "btn-focus-pane".into(),
+        Press::Control { control, .. } => format!("btn-{}", control.slug()),
         Press::Next { index, .. } | Press::Answer { index, .. } => format!("btn-next-{index}"),
         Press::Seen(_) => "btn-mark-seen".into(),
         Press::Older(_) => "btn-older".into(),

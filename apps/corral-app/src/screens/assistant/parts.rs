@@ -301,8 +301,7 @@ pub fn test_id(button: &Button) -> String {
         | Action::SaveIdea { task: id, .. }
         | Action::DiscardIdea(id)
         | Action::FileEntry(id)
-        | Action::CancelSend(id)
-        | Action::Answer { key: id, .. } => Some(id.as_str()),
+        | Action::CancelSend(id) => Some(id.as_str()),
         _ => None,
     };
     let mut slug = String::with_capacity(button.label.len() + 8);

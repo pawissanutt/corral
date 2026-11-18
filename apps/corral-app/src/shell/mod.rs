@@ -106,7 +106,11 @@ fn confirm_modal(app: AppState) -> Modal {
     let simulated = untracked(|| app.data.get()) == DataState::Fixture;
     let (title, rows) = app
         .confirm
-        .with_untracked(|act| act.as_ref().map(|act| (act.title.clone(), act.rows())))
+        .with_untracked(|asked| {
+            asked
+                .as_ref()
+                .map(|asked| (asked.title().to_owned(), asked.rows()))
+        })
         .unwrap_or_default();
     let body = view()
         .child(h3(app, CONFIRM_EFFECT_HEADING, None))

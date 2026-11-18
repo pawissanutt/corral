@@ -1,35 +1,35 @@
-//! A run's Session menu, on its roster row, its panel and its page head: Reply, Stop and Retry
-//! (its task's engine operations, run as the Actions menu runs them, Stop asking once), Focus
-//! pane where it can work and why not where it cannot, then its task's whole Actions menu.
+//! A session's Session menu, on its roster row, its panel and its page head: the session
+//! controls that apply to it (Cancel turn, Pause, Resume, Rewind…, Terminate or Relaunch),
+//! then for a run Reply (its task's engine operation), Focus pane where it can work and why not
+//! where it cannot, and its task's whole Actions menu. A chat's menu holds its controls.
 
 use crate::model::Id;
 use crate::model::daemon;
 use crate::model::work::{Press, Record, Verb, VerbAction, session_task};
 
+use super::control::control_verbs;
 use super::pane::focus_refusal;
 
 /// The Session menu trigger's words.
 pub const SESSION_MENU_LABEL: &str = "Session";
 
-/// The Session menu of run session `session` (`T-42_R1`); none for an id without a task.
+/// The Session menu of session `session` (`T-42_R1`, `A-3`).
 pub fn session_verbs(feed: &daemon::Feed, session: &Id) -> Vec<VerbAction> {
+    let mut verbs = control_verbs(feed, session);
     let Some(task) = session_task(session).map(Id::new) else {
-        return Vec::new();
+        return verbs;
     };
     let record = Record::Task(task.clone());
-    let mut verbs: Vec<VerbAction> = [Verb::Reply, Verb::Stop, Verb::Retry]
-        .into_iter()
-        .map(|verb| VerbAction {
-            slug: verb.slug(),
-            label: verb.label().into(),
-            enabled: true,
-            reason: None,
-            press: Press::Verb {
-                record: record.clone(),
-                verb,
-            },
-        })
-        .collect();
+    verbs.push(VerbAction {
+        slug: Verb::Reply.slug(),
+        label: Verb::Reply.label().into(),
+        enabled: true,
+        reason: None,
+        press: Press::Verb {
+            record: record.clone(),
+            verb: Verb::Reply,
+        },
+    });
     let reason = focus_refusal(feed, feed.agents.get(session.as_str()));
     verbs.push(VerbAction {
         slug: "focus-pane",
@@ -52,16 +52,53 @@ pub fn session_verbs(feed: &daemon::Feed, session: &Id) -> Vec<VerbAction> {
 mod tests {
     use corral_protocol::app::AppSession;
     use corral_protocol::device::{DeviceInfo, DevicePlatform, DeviceReach};
-    use corral_types::{Role, SessionRef};
+    use corral_types::{Role, SessionRef, SessionStatus};
 
     use super::super::roster_tests::agent;
     use super::session_verbs;
     use crate::model::Id;
     use crate::model::daemon::Feed;
 
+    fn slugs(feed: &Feed, id: &str) -> Vec<&'static str> {
+        session_verbs(feed, &Id::from(id))
+            .iter()
+            .map(|verb| verb.slug)
+            .collect()
+    }
+
+    /// A working worker offers every control; a reviewer is never paused or rewound; a lost
+    /// host is relaunched rather than terminated.
+    #[test]
+    fn each_role_offers_only_the_controls_that_apply() {
+        let mut feed = Feed::default();
+        let mut worker = agent("T-1", "R1", Role::Worker);
+        worker.status = SessionStatus::Working;
+        feed.agents.insert(Id::from("T-1_R1"), worker);
+        let mut reviewer = agent("T-2", "R2", Role::Reviewer);
+        reviewer.status = SessionStatus::Working;
+        feed.agents.insert(Id::from("T-2_R2"), reviewer);
+        let mut lost = agent("T-3", "R1", Role::Worker);
+        lost.status = SessionStatus::Gone;
+        feed.agents.insert(Id::from("T-3_R1"), lost);
+        assert_eq!(
+            slugs(&feed, "T-1_R1"),
+            [
+                "cancel-turn",
+                "pause",
+                "resume",
+                "rewind",
+                "terminate",
+                "reply",
+                "focus-pane",
+                "task-actions"
+            ]
+        );
+        assert_eq!(slugs(&feed, "T-2_R2")[..2], ["cancel-turn", "terminate"]);
+        assert_eq!(slugs(&feed, "T-3_R1")[0], "relaunch");
+    }
+
     /// Focus pane is offered for a herdr pane reached from corrald's own machine, and says why
-    /// it cannot work for a headless session or from a remote device; the menu always ends
-    /// with the task's Actions menu.
+    /// it cannot work for a headless session or from a remote device.
     #[test]
     fn focus_pane_works_only_for_a_local_pane_and_says_why_otherwise() {
         let device = DeviceInfo {
@@ -93,11 +130,11 @@ mod tests {
         feed.agents.insert(Id::from("T-2_R1"), headless);
         let focus = |feed: &Feed, id: &str| {
             let verbs = session_verbs(feed, &Id::from(id));
-            assert_eq!(
-                verbs.iter().map(|verb| verb.slug).collect::<Vec<_>>(),
-                ["reply", "stop", "retry", "focus-pane", "task-actions"]
-            );
-            (verbs[3].enabled, verbs[3].reason.is_some())
+            let focus = verbs
+                .iter()
+                .find(|verb| verb.slug == "focus-pane")
+                .map(|verb| (verb.enabled, verb.reason.is_some()));
+            focus.unwrap_or((false, false))
         };
         assert_eq!(focus(&feed, "T-1_R1"), (true, false));
         assert_eq!(focus(&feed, "T-2_R1"), (false, true));

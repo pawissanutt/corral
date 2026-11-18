@@ -20,6 +20,7 @@ use crate::model::nav::Destination;
 use crate::model::text::{Rich, span};
 use crate::model::{ActStatus, Id, Live, Selection, act};
 
+mod control;
 mod fleet;
 mod items;
 mod live;
@@ -27,6 +28,7 @@ mod live_reply;
 mod live_session;
 mod menu;
 mod pane;
+mod prompt;
 mod replay;
 mod replay_marks;
 mod replay_pairs;
@@ -39,11 +41,17 @@ mod roster_panel;
 mod roster_tests;
 pub mod screen;
 
+pub use control::{
+    Control, ControlAsk, Kind, RewindPoint, RewindSheet, ask, control_verbs, controls, kind,
+    rewind_sheet, status as control_status,
+};
 pub use fleet::{Fleet, FleetEntry, FleetLine, FleetSection};
 pub use items::{Card, Divider, Footer, Marker, More, Picture, Prose, Section, Thinking};
+pub(crate) use live::placement;
 pub use live_session::session as live_session;
 pub use menu::{SESSION_MENU_LABEL, session_verbs};
 pub use pane::{KEYS, PaneAsk, PaneInput, PaneKey, PaneSent, focus, focus_refusal};
+pub use prompt::{Prompt, answer as answer_prompt, asks, prompts};
 pub use replay::fetches;
 pub use roster::{RoleTab, Roster, RosterRole, RosterRow, roster};
 pub use roster_panel::{
@@ -104,8 +112,9 @@ pub enum View {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct State {
     pub ids: crate::model::id::IdSupply,
-    /// The selected session's transcript or terminal view.
-    pub live_view: View,
+    /// The transcript or terminal view the owner chose; until then a pi session opens on its
+    /// transcript and any other run on its terminal.
+    pub live_view: Option<View>,
     /// Roster selection belongs to this screen, not the full-session route.
     pub roster_session: Option<Id>,
     pub roster_role: RosterRole,
@@ -121,11 +130,26 @@ pub struct State {
     pub earlier: BTreeSet<Id>,
     /// The latest pane request per run session (keys or Focus pane), whose outcome it shows.
     pub pane: BTreeMap<Id, PaneSent>,
+    /// The latest session control per session, whose outcome it shows.
+    pub controls: BTreeMap<Id, control::ControlSent>,
+    /// The open rewind sheet.
+    pub rewind: Option<control::Rewinding>,
 }
 impl State {
-    /// Toggle a daemon session's transcript and terminal.
-    pub fn toggle_live_view(&mut self) {
-        self.live_view = flip(self.live_view);
+    /// Shows the other view of `session` than the one it shows now.
+    pub fn toggle_view(&mut self, feed: &daemon::Feed, session: &str) {
+        self.live_view = Some(flip(self.view_for(feed, session)));
+    }
+    /// The view a session page opens on: the owner's choice, else the transcript for a pi
+    /// session and the terminal for any other.
+    pub fn view_for(&self, feed: &daemon::Feed, session: &str) -> View {
+        self.live_view.unwrap_or_else(|| {
+            if feed.agents.get(session).is_some_and(live::is_pi) {
+                View::Transcript
+            } else {
+                View::Terminal
+            }
+        })
     }
     /// Handle an action on daemon data. Every operation goes through the root's typed `Act`
     /// path; nothing is simulated locally.
@@ -203,7 +227,7 @@ impl State {
                 None => vec![],
             },
             Action::SetView(view) => {
-                self.live_view = view;
+                self.live_view = Some(view);
                 vec![]
             }
             Action::Pane {
@@ -212,9 +236,32 @@ impl State {
                 keys,
             } => self.type_into(session, text, keys, feed),
             Action::ToggleView => {
-                self.toggle_live_view();
+                let shown = selection
+                    .session
+                    .as_ref()
+                    .map_or(View::Terminal, |session| self.view_for(feed, session));
+                self.live_view = Some(flip(shown));
                 vec![]
             }
+            Action::Control { session, control } => vec![Effect::Control {
+                session,
+                key: self.ids.next_id(),
+                control,
+                confirmed: false,
+            }],
+            Action::RewindTo(turn) => self.rewind_to(turn),
+            Action::CloseRewind => {
+                self.rewind = None;
+                vec![]
+            }
+            Action::Answer {
+                session,
+                question,
+                option,
+                text,
+            } => prompt::answer(&session, question, option, text)
+                .into_iter()
+                .collect(),
             Action::Back => vec![Effect::Go(Destination::Agents)],
         }
     }
@@ -319,6 +366,21 @@ pub enum Action {
         session: Id,
         text: String,
         keys: Vec<String>,
+    },
+    /// Send a session control (the confirm sheet first for one that asks).
+    Control {
+        session: Id,
+        control: Control,
+    },
+    /// Rewind the open rewind sheet's session to the start of this turn, after one confirm.
+    RewindTo(u64),
+    CloseRewind,
+    /// Answer the agent's question with an option, words, or both.
+    Answer {
+        session: Id,
+        question: String,
+        option: Option<String>,
+        text: Option<String>,
     },
 }
 
@@ -568,15 +630,41 @@ pub struct Session {
 
 #[cfg(test)]
 mod tests {
-    use super::State;
+    use corral_types::{Role, SessionRef};
 
+    use super::roster_tests::agent;
+    use super::{Action, State, View};
+    use crate::model::health::daemon_env;
+    use crate::model::{Form, Id, Selection, daemon};
+
+    /// A pi session opens on its transcript, any other run on its terminal; the switch then
+    /// flips from what was shown.
     #[test]
-    fn toggling_twice_returns_to_the_opening_view() {
+    fn a_pi_session_opens_on_its_transcript_and_the_switch_flips_what_shows() {
+        let mut feed = daemon::Feed::default();
+        let mut pi = agent("T-1", "R1", Role::Worker);
+        pi.run.session = Some(SessionRef::Pi {
+            socket: "/run/s.sock".into(),
+            inner: Box::new(SessionRef::Process {
+                pid: 7,
+                dir: "/runs/T-1/R1".into(),
+            }),
+            dir: "/runs/T-1/R1".into(),
+        });
+        feed.agents.insert(Id::from("T-1_R1"), pi);
+        feed.agents
+            .insert(Id::from("T-2_R1"), agent("T-2", "R1", Role::Worker));
         let mut state = State::default();
-        let opening = state.live_view;
-        state.toggle_live_view();
-        assert_ne!(state.live_view, opening);
-        state.toggle_live_view();
-        assert_eq!(state.live_view, opening);
+        assert_eq!(state.view_for(&feed, "T-1_R1"), View::Transcript);
+        assert_eq!(state.view_for(&feed, "T-2_R1"), View::Terminal);
+        let mut selection = Selection::default();
+        selection.session = Some(Id::from("T-1_R1"));
+        state.act_live(
+            Action::ToggleView,
+            &feed,
+            &selection,
+            daemon_env(&feed, Form::Desktop),
+        );
+        assert_eq!(state.view_for(&feed, "T-1_R1"), View::Terminal);
     }
 }

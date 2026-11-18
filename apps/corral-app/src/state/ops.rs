@@ -7,7 +7,7 @@ use nsh_core::prelude::*;
 
 use super::AppState;
 use crate::client::requests;
-use crate::model::act::{self, RefusalSheet};
+use crate::model::act::{self, Confirming, RefusalSheet};
 use crate::model::{Act, ActStatus, Id};
 
 const NO_SOURCE: &str = "Not connected. Choose Preview explicitly to use sample data.";
@@ -22,7 +22,7 @@ impl AppState {
         }
         if act.asks() && !act.confirmed {
             self.refusal.set(None);
-            self.confirm.set(Some(act));
+            self.confirm.set(Some(Confirming::Op(act)));
             return;
         }
         self.submit(act);
@@ -52,20 +52,27 @@ impl AppState {
         }
     }
 
-    /// Runs the operation the confirm sheet shows.
+    /// Runs what the confirm sheet shows.
     pub fn confirm_yes(&self) {
-        if let Some(mut act) = self.confirm.get_untracked() {
-            self.confirm.set(None);
-            act.confirmed = true;
-            self.submit(act);
+        match self.confirm.get_untracked() {
+            Some(Confirming::Op(mut act)) => {
+                self.confirm.set(None);
+                act.confirmed = true;
+                self.submit(act);
+            }
+            Some(Confirming::Control(ask)) => {
+                self.confirm.set(None);
+                self.send_control(ask.session, ask.key, ask.control);
+            }
+            None => {}
         }
     }
 
     /// Closes the confirm sheet; nothing was sent.
     pub fn confirm_no(&self) {
-        if let Some(act) = self.confirm.get_untracked() {
+        if let Some(asked) = self.confirm.get_untracked() {
             self.confirm.set(None);
-            self.toast(format!("{} · cancelled, nothing was sent", act.title));
+            self.toast(format!("{} · cancelled, nothing was sent", asked.title()));
         }
     }
 

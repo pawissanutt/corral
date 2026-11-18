@@ -1,8 +1,6 @@
 //! The transcript: every `ThreadItem` of a thread in order, an assistant reply with its typed
 //! cards, the PM items with their folded outcome, the waiting and queued escape hatches. It is
-//! its own scroll view and opens at the newest message, or at the prompt opened from Inbox.
-
-use std::time::Duration;
+//! its own scroll view and opens at the newest message.
 
 use nsh_core::prelude::*;
 
@@ -34,18 +32,15 @@ const BLINK_MS: f32 = 1000.0;
 const MEASURE: f32 = 640.0;
 /// The avatar column and its gap, which the waiting and queued blocks line up under.
 const AVATAR_COLUMN: f32 = 36.0;
-/// How long the prompt opened from Inbox stays marked: held, then faded over its last third.
-const HIGHLIGHT: Duration = Duration::from_millis(2400);
 
 /// The transcript of `source`: a scroll view filling its container, rows `inset` points in on
 /// either side (desktop page 24, drawer 16; phone 14). It opens at its end and follows each new
-/// message and each streamed step; opened from an Inbox prompt, it opens at that prompt instead
-/// and marks it. It is the served thread, its streamed turn and this device's unsent messages.
+/// message and each streamed step. It is the served thread, its streamed turn, the agent's
+/// open questions and this device's unsent messages.
 pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
     let form = app.form;
     provide_styles(app);
     let scroller = element_ref();
-    let anchor = element_ref();
     let tools_open = signal(None::<String>);
     let ThreadRef::Live(scope) = source;
     let region = format!("thread-{}-items", scope.as_str());
@@ -60,14 +55,7 @@ pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
         });
         items.into_iter().enumerate().collect::<Vec<_>>()
     });
-    let anchored = computed(move || {
-        items.with(|rows| {
-            rows.iter()
-                .any(|(_, item)| matches!(item, ThreadItem::Assistant(m) if m.anchored))
-        })
-    });
-    follow(app, followed, scroller, anchored);
-    reveal(app.scope(), anchor, anchored);
+    follow(app, followed, scroller);
     let content = each(
         move || items.get(),
         |(at, item): &(usize, ThreadItem)| (*at, std::mem::discriminant(item)),
@@ -75,12 +63,6 @@ pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
             dynamic(move || {
                 row.with(|(at, item)| {
                     let body = item_view(app, item, inset, tools_open);
-                    let body = match item {
-                        ThreadItem::Assistant(message) if message.anchored => {
-                            marked(app, anchor, body)
-                        }
-                        _ => body,
-                    };
                     if form == Form::Terminal && *at > 0 {
                         view().child(term::blank()).child(body).into_element()
                     } else {
@@ -107,88 +89,30 @@ pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
 }
 
 /// Scrolls to the end once mounted (after the commit that mounts it), then again, animated, when
-/// the thread gains a message or the streamed answer grows; not while a prompt opened from Inbox
-/// is marked, which `reveal` brings into view instead.
-fn follow(app: AppState, scope: Id, scroller: ElementRef, anchored: Memo<bool>) {
+/// the thread gains a message, the streamed answer grows or the agent asks.
+fn follow(app: AppState, scope: Id, scroller: ElementRef) {
     let seen = stored(None::<(usize, usize)>);
     effect(move || {
         let now = app.feed.with(|feed| {
-            let thread = feed.threads.get(scope.as_str());
-            let entries = thread.map_or(0, |thread| thread.entries.len());
-            let streamed = thread
-                .and_then(|thread| thread.live.as_ref())
-                .map_or(0, |live| live.text.len());
-            (entries + feed.commands.len(), streamed)
+            let entries = feed
+                .threads
+                .get(scope.as_str())
+                .map_or(0, |thread| thread.entries.len());
+            let streamed = feed.live.get(scope.as_str()).map_or(0, |live| {
+                live.messages
+                    .iter()
+                    .map(|message| message.text.len())
+                    .sum::<usize>()
+            });
+            let asks = crate::model::agents::prompts(feed, scope.as_str()).len();
+            (entries + feed.commands.len() + asks, streamed)
         });
         let before = seen.replace(Some(now));
-        if before != Some(now) && !anchored.get_untracked() {
+        if before != Some(now) {
             let animated = before.is_some();
             after_answer(move || scroller.scroll_to_end(animated));
         }
     });
-}
-
-/// Brings the prompt the owner opened from Inbox to the top of the transcript once it is in the
-/// thread (a served thread may load after the page opens), then has the model drop the anchor
-/// once its mark has played, so the next visit opens at the newest message again. `scoped` is
-/// the mount-pinned app, so the delayed clear reaches the source whose anchor was shown.
-fn reveal(scoped: AppState, anchor: ElementRef, anchored: Memo<bool>) {
-    let shown = stored(false);
-    effect(move || {
-        if !anchored.get() {
-            shown.replace(false);
-            return;
-        }
-        if shown.replace(true) {
-            return;
-        }
-        after_answer(move || {
-            anchor.reveal(
-                RevealOptions::default()
-                    .vertical(ScrollAlignment::Start)
-                    .animated(false),
-            );
-        });
-        set_timeout(HIGHLIGHT, move || {
-            scoped.reduce(scoped.assistant, |state, _, _, _| {
-                state.clear_anchor();
-                Vec::new()
-            });
-        });
-    });
-}
-
-/// The opened prompt's reply on the needs-you tint: a band across the transcript that holds,
-/// then fades out; with less motion asked for, or in a terminal, it stays until the anchor goes.
-fn marked(app: AppState, anchor: ElementRef, body: AnyElement) -> AnyElement {
-    if app.form == Form::Terminal {
-        return view()
-            .element_ref(&anchor)
-            .bg(color(Token::YouBg))
-            .child(body)
-            .into_element();
-    }
-    let tint = view()
-        .absolute()
-        .inset(px(0.0))
-        .bg(color(Token::YouBg))
-        .pointer_events(PointerEvents::None)
-        .accessibility_elements_hidden(true);
-    let tint = if reduce_motion() {
-        tint
-    } else {
-        let fade = motion().entering(
-            MotionSpec::new(KeyframeTiming::new(HIGHLIGHT.as_secs_f32() * 1000.0))
-                .values(MotionChannel::Opacity, [1.0, 1.0, 1.0, 0.0]),
-        );
-        tint.bind_motion(&fade)
-    };
-    view()
-        .relative()
-        .element_ref(&anchor)
-        .child(tint)
-        .child(body)
-        .into_element()
 }
 
 fn item_view(
@@ -320,10 +244,33 @@ fn owner_tail(app: AppState, owner: &OwnerMessage) -> Vec<AnyElement> {
     tail
 }
 
+/// The owner's message, with File as idea under it (or how the filing went).
 fn owner_view(app: AppState, owner: &OwnerMessage, inset: f32) -> AnyElement {
     let mut body = vec![plain(app, owner.text.clone()).into_element()];
     if let Some(opened) = &owner.opened {
         body.push(attachments::readback(app, opened));
+    }
+    if owner.file.is_some() || owner.filed.is_some() {
+        let gap = if app.form == Form::Terminal { 0.0 } else { 8.0 };
+        let mut foot = Vec::new();
+        if let Some(filed) = &owner.filed {
+            foot.push(chip(app, filed.label.clone(), filed.hue));
+        }
+        if let Some(file) = &owner.file {
+            if app.form == Form::Terminal && !foot.is_empty() {
+                foot.push(term::space(2.0));
+            }
+            foot.push(model_button(app, file, ButtonKind::Quiet));
+        }
+        body.push(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(px(gap))
+                .children(foot)
+                .into_element(),
+        );
     }
     message(
         app,
@@ -436,7 +383,6 @@ fn body_view(app: AppState, block: &Body, streaming: bool) -> AnyElement {
         Body::Ordered(items) => ordered(app, items),
         Body::Action(card) => cards::action(app, card),
         Body::AskUser(card) => cards::ask_user(app, card),
-        Body::Permission(card) => cards::permission(app, card),
         Body::Filed(card) => cards::filed(app, card),
         Body::Starting { state, text: said } => cards::starting(app, state, said),
     }

@@ -77,22 +77,6 @@ impl AppState {
             Effect::Detail(get) => {
                 self.preview_detail(get.target);
             }
-            Effect::Stop(stop) => {
-                let key = crate::model::Id::from(crate::client::requests::new_id());
-                self.assistant.update(|state| {
-                    state
-                        .live
-                        .stop_ops
-                        .insert(key.clone(), (stop.session.clone(), stop.turn));
-                });
-                let mut outcome = Ok(());
-                self.feed.update(|feed| {
-                    outcome = preview::operation(feed, &key, &Effect::Stop(stop));
-                });
-                if let Err(why) = outcome {
-                    self.toast(format!("Preview · {why}"));
-                }
-            }
             other => {
                 if let Effect::Session { key, .. } = &other {
                     self.sessions.update(|sessions| {

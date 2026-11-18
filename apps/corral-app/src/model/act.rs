@@ -8,6 +8,31 @@ use crate::model::daemon::Feed;
 use crate::model::id::{Id, IdSupply};
 use crate::model::live::Live;
 
+/// What the one local confirm sheet asks about: an engine operation, or a session control
+/// that cannot be taken back by pressing again (Terminate, a rewind).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Confirming {
+    Op(Act),
+    Control(crate::model::agents::ControlAsk),
+}
+
+impl Confirming {
+    pub fn title(&self) -> &str {
+        match self {
+            Self::Op(act) => &act.title,
+            Self::Control(ask) => &ask.title,
+        }
+    }
+
+    /// The label-value rows the sheet lists.
+    pub fn rows(&self) -> Vec<(String, String)> {
+        match self {
+            Self::Op(act) => act.rows(),
+            Self::Control(ask) => ask.rows.clone(),
+        }
+    }
+}
+
 /// One intended engine operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Act {
