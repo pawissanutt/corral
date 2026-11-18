@@ -94,6 +94,13 @@ impl Store {
             seq: self.connection.last_insert_rowid() as u64,
             ts,
             task: event.task.clone(),
+            project: event
+                .task
+                .as_deref()
+                .map(|id| self.get_task(id))
+                .transpose()?
+                .flatten()
+                .and_then(|task| task.project),
             run: event.run.clone(),
             kind: event.kind,
             actor: event.actor,
@@ -130,11 +137,11 @@ impl Store {
         let order = if newest_first { "DESC" } else { "ASC" };
         let sql = if task.is_some() {
             format!(
-                "SELECT seq,ts,task,run,kind,actor,detail FROM events WHERE seq BETWEEN ?1 AND ?2 AND task=?4 ORDER BY seq {order} LIMIT ?3"
+                "SELECT events.seq,events.ts,events.task,events.run,events.kind,events.actor,events.detail,tasks.project FROM events LEFT JOIN tasks ON tasks.id=events.task WHERE events.seq BETWEEN ?1 AND ?2 AND events.task=?4 ORDER BY events.seq {order} LIMIT ?3"
             )
         } else {
             format!(
-                "SELECT seq,ts,task,run,kind,actor,detail FROM events WHERE seq BETWEEN ?1 AND ?2 ORDER BY seq {order} LIMIT ?3"
+                "SELECT events.seq,events.ts,events.task,events.run,events.kind,events.actor,events.detail,tasks.project FROM events LEFT JOIN tasks ON tasks.id=events.task WHERE events.seq BETWEEN ?1 AND ?2 ORDER BY events.seq {order} LIMIT ?3"
             )
         };
         let mut statement = self
@@ -184,8 +191,8 @@ impl Store {
         let mut statement = self
             .connection
             .prepare_cached(
-                "SELECT seq,ts,task,run,kind,actor,detail FROM events
-             WHERE rtrim(ts,'Z')>=?1 AND rtrim(ts,'Z')<?2 ORDER BY seq",
+                "SELECT events.seq,events.ts,events.task,events.run,events.kind,events.actor,events.detail,tasks.project FROM events LEFT JOIN tasks ON tasks.id=events.task
+             WHERE rtrim(events.ts,'Z')>=?1 AND rtrim(events.ts,'Z')<?2 ORDER BY events.seq",
             )
             .context("prepare timeline events")?;
         read_events(
@@ -207,7 +214,7 @@ impl Store {
             return Ok(Vec::new());
         };
         let kinds = encode(&filter.kinds)?;
-        let mut statement = self.connection.prepare("SELECT events.seq,events.ts,events.task,events.run,events.kind,events.actor,events.detail FROM events LEFT JOIN tasks ON tasks.id=events.task WHERE events.seq>?1 AND (?2 IS NULL OR events.task=?2) AND (?3 IS NULL OR tasks.project=?3) AND (?4='[]' OR events.kind IN (SELECT value FROM json_each(?4))) ORDER BY events.seq LIMIT ?5").context("prepare event listing")?;
+        let mut statement = self.connection.prepare("SELECT events.seq,events.ts,events.task,events.run,events.kind,events.actor,events.detail,tasks.project FROM events LEFT JOIN tasks ON tasks.id=events.task WHERE events.seq>?1 AND (?2 IS NULL OR events.task=?2) AND (?3 IS NULL OR tasks.project=?3) AND (?4='[]' OR events.kind IN (SELECT value FROM json_each(?4))) ORDER BY events.seq LIMIT ?5").context("prepare event listing")?;
         let rows = statement
             .query(params![
                 after_seq,
@@ -258,6 +265,7 @@ fn read_events(mut rows: rusqlite::Rows<'_>) -> Result<Vec<Event>> {
                 .context("event sequence must not be negative")?,
             ts: ts.parse().context("parse event timestamp")?,
             task: row.get(2).context("read event task")?,
+            project: row.get(7).context("read event project")?,
             run: row.get(3).context("read event run")?,
             kind,
             actor: serde_json::from_str(&actor).context("decode event actor")?,
