@@ -169,19 +169,49 @@ pub fn event_text(event: &Event) -> String {
     }
 }
 
-/// `forced move · skipped status rule`: the operation and what force skipped, as recorded.
+/// What a rule the engine names in a `forced` event's `skipped` list means, in the words the
+/// refusal sheet uses for what force skips; a rule this app does not know stays as recorded.
+fn skipped_rule(operation: &str, rule: &str, event: &Event) -> String {
+    match (operation, rule) {
+        (_, "dependencies") => "unfinished dependencies".into(),
+        (_, "limits.running") => "the running-slot limit".into(),
+        (_, "project.running") => "the project's running-slot limit".into(),
+        (_, "gate") => "the gate check".into(),
+        ("approve", "status rule") => "the Review status rule".into(),
+        ("move", "status rule") => {
+            let status = |key| field(event, key).map(|status| status.replace('_', " "));
+            match (status("from"), status("to")) {
+                (Some(from), Some(to)) => format!("the status rule ({from} → {to})"),
+                _ => "the status rule".into(),
+            }
+        }
+        (_, rule) => rule.to_owned(),
+    }
+}
+
+/// `forced dispatch · skipped unfinished dependencies and the running-slot limit`: the operation
+/// and every rule force skipped, as recorded.
 fn forced_text(event: &Event) -> String {
     let operation = field(event, "operation").unwrap_or("operation");
-    let skipped: Vec<&str> = event
+    let skipped: Vec<String> = event
         .detail
         .get("skipped")
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(Value::as_str).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|rule| skipped_rule(operation, rule, event))
+                .collect()
+        })
         .unwrap_or_default();
-    if skipped.is_empty() {
-        format!("forced {operation} · skipped nothing")
-    } else {
-        format!("forced {operation} · skipped {}", skipped.join(", "))
+    match skipped.as_slice() {
+        [] => format!("forced {operation} · no rule recorded as skipped"),
+        [only] => format!("forced {operation} · skipped {only}"),
+        [rest @ .., last] => format!(
+            "forced {operation} · skipped {} and {last}",
+            rest.join(", ")
+        ),
     }
 }
 

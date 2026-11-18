@@ -89,7 +89,7 @@ pub struct Roster {
     pub stats: Vec<Stat>,
     pub roles: Vec<RoleTab>,
     pub rows: Vec<RosterRow>,
-    pub columns: [&'static str; 8],
+    pub columns: [&'static str; 9],
     pub fill: super::Fill,
     pub stale: Option<String>,
 }
@@ -457,6 +457,7 @@ pub fn roster(state: &State, feed: &daemon::Feed, _env: Env, filter: &ProjectFil
         columns: [
             "State",
             "ID",
+            "Role",
             "Project",
             "Session",
             "Doing now",

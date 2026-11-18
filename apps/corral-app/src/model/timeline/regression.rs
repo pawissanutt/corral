@@ -144,6 +144,81 @@ fn runs_and_events_draw_spans_waits_and_idle_on_the_task_lane() {
     assert_eq!(gaps[0].kind, Kind::Idle);
 }
 
+/// A drop and a reopen are drawn on their task's lane; a task lane opens its task, a live run's
+/// lane its session terminal, and an ended run's lane its task.
+#[test]
+fn drops_and_reopens_are_drawn_and_each_lane_opens_its_task_or_live_session() {
+    let mut feed = Feed {
+        now: second("2026-11-15T12:00:00Z"),
+        time_zone: Some(TimeZone::UTC),
+        ..Feed::default()
+    };
+    let window = window(Range::Today, feed.now, &TimeZone::UTC).unwrap();
+    let run = |task: &str| Run {
+        id: "R1".into(),
+        task: task.into(),
+        role: Role::Worker,
+        profile: "pi".into(),
+        harness: "pi".into(),
+        model: None,
+        effort: None,
+        worktree: PathBuf::new(),
+        branch: String::new(),
+        base: String::new(),
+        base_sha: String::new(),
+        session: None,
+        started: at("2026-11-15T09:00:00Z"),
+        ended: None,
+        outcome: None,
+        summary: None,
+        head_sha: None,
+        quiet_since: None,
+    };
+    feed.agents.insert(
+        "T-1_R1".into(),
+        corral_protocol::rows::AgentRow {
+            run: run("T-1"),
+            status: corral_types::SessionStatus::Working,
+        },
+    );
+    let page = TimelinePage {
+        runs: vec![run("T-1"), run("T-2")],
+        events: vec![
+            event(
+                1,
+                "2026-11-15T10:00:00Z",
+                "T-2",
+                EventKind::Dropped,
+                Actor::Owner,
+            ),
+            event(
+                2,
+                "2026-11-15T11:00:00Z",
+                "T-2",
+                EventKind::Reopened,
+                Actor::Owner,
+            ),
+        ],
+    };
+    let by_task = plot(&page, &window, Grouping::ByTask, &feed);
+    let dropped = by_task.lanes.iter().find(|lane| lane.id == "T-2").unwrap();
+    let instants: Vec<(Kind, i64)> = dropped
+        .segments
+        .iter()
+        .filter(|s| s.start == s.end)
+        .map(|s| (s.kind, s.start))
+        .collect();
+    assert_eq!(instants, [(Kind::Drop, 10 * 60), (Kind::Reopen, 11 * 60)]);
+    assert_eq!(dropped.opens.live, Live::Task("T-2".into()));
+    let by_run = plot(&page, &window, Grouping::ByAgent, &feed);
+    let opens = |id: &str| {
+        let lane = by_run.lanes.iter().find(|lane| lane.id == id).unwrap();
+        lane.opens.live.clone()
+    };
+    assert_eq!(opens("T-1/R1"), Live::Session("T-1_R1".into()));
+    assert_eq!(opens("T-2/R1"), Live::Task("T-2".into()));
+}
+
 #[test]
 fn burnup_counts_created_and_landed_tasks_once() {
     let feed = Feed {

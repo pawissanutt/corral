@@ -12,6 +12,7 @@ pub use scope::{BurnupScope, ScopeOption, burnup_request, scope_options};
 
 pub const BURNUP_SCOPE_LABEL: &str = "Burn-up scope";
 
+use crate::model::Live;
 use crate::model::effect::{Effect, Env};
 use crate::model::hue::Hue;
 
@@ -59,6 +60,10 @@ impl State {
         self.burnup_scope = scope;
         Vec::new()
     }
+    /// Open a lane's task or its run's session page.
+    pub fn open(&mut self, opens: Live) -> Vec<Effect> {
+        vec![Effect::OpenLive(opens)]
+    }
 }
 
 /// A timeline segment's semantic state, including the hatched variants.
@@ -72,6 +77,10 @@ pub enum Kind {
     Review,
     /// Landed, an instant.
     Land,
+    /// Dropped, an instant.
+    Drop,
+    /// Reopened after Done or Dropped, an instant.
+    Reopen,
     /// An open run whose output has gone quiet.
     Idle,
     /// Blocked, waiting for the owner's next move.
@@ -87,18 +96,20 @@ impl Kind {
             Self::Gate => "gate",
             Self::Review => "review",
             Self::Land => "land",
+            Self::Drop => "dropped",
+            Self::Reopen => "reopened",
             Self::Idle => "idle",
             Self::Ask => "blocked",
             Self::Held => "awaiting acceptance",
         }
     }
-    /// State colour; the kind also tells the renderer which hatch or mixed fill to use.
+    /// State colour; the kind also tells the renderer which hatch, mixed fill or mark to use.
     pub fn hue(self) -> Hue {
         match self {
-            Self::Run => Hue::Worker,
+            Self::Run | Self::Reopen => Hue::Worker,
             Self::Gate | Self::Review => Hue::Corral,
             Self::Land => Hue::Ok,
-            Self::Idle => Hue::Neutral,
+            Self::Idle | Self::Drop => Hue::Neutral,
             Self::Ask => Hue::You,
             Self::Held => Hue::Held,
         }
@@ -127,6 +138,13 @@ pub struct PlotSegment {
     /// Hover and screen-reader description.
     pub label: String,
 }
+/// What pressing a lane opens: its task, or a live run's session terminal; and the words that
+/// name the press.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Opens {
+    pub live: Live,
+    pub label: String,
+}
 /// One lane: a task's runs, waits and instants, or one run's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlotLane {
@@ -135,6 +153,7 @@ pub struct PlotLane {
     pub segments: Vec<PlotSegment>,
     /// Wait summary anchored to this row rather than floating between bars.
     pub wait: Option<String>,
+    pub opens: Opens,
 }
 /// Everything the chart draws, before geometry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,6 +199,7 @@ pub struct PlacedLane {
     pub y: f32,
     pub segments: Vec<PlacedSegment>,
     pub wait: Option<String>,
+    pub opens: Opens,
 }
 /// An action mark with its accessibility text.
 #[derive(Debug, Clone, PartialEq)]
@@ -258,6 +278,7 @@ pub fn layout(plot: &Plot, width: f32, phone: bool) -> Layout {
                 })
                 .collect(),
             wait: lane.wait.clone(),
+            opens: lane.opens.clone(),
         })
         .collect();
     Layout {
@@ -349,6 +370,8 @@ pub fn legend() -> Vec<LegendItem> {
         ("gate", Kind::Gate),
         ("review", Kind::Review),
         ("land", Kind::Land),
+        ("dropped", Kind::Drop),
+        ("reopened", Kind::Reopen),
         ("blocked", Kind::Ask),
         ("awaiting acceptance", Kind::Held),
         ("idle", Kind::Idle),
@@ -378,6 +401,12 @@ pub fn gaps_title(range: Range) -> &'static str {
         Range::SevenDays => "Gaps worth a look · 7 days",
     }
 }
+/// What the burn-up counts, said under it. corrald's burn-up serves only `created` and `landed`
+/// events, so a drop or a reopen moves neither line.
+pub const BURNUP_COUNTS: &str = "Scope counts the tasks created in this scope; landed counts \
+                                 the tasks landed, each from its recorded event. Only creations \
+                                 and landings are served here, so a dropped task stays in scope \
+                                 and a reopened one stays landed.";
 /// Burn-up input: points at fractions of the period with their scope and landed counts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BurnupSeries {
@@ -387,6 +416,8 @@ pub struct BurnupSeries {
     pub points: Vec<(f32, u32, u32)>,
     pub first: String,
     pub last: String,
+    /// What the two lines count.
+    pub counts: &'static str,
 }
 /// A plotted chart point.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -469,7 +500,7 @@ pub fn burnup(series: &BurnupSeries, width: f32, height: f32) -> Burnup {
     Burnup {
         title: series.title.clone(),
         period: series.period.clone(),
-        accessible_label: format!("Burn-up: {landed_total} of {scope_total} landed"),
+        accessible_label: format!("Burn-up: {landed_total} of {scope_total} tasks landed"),
         size: (width, height),
         scope,
         landed,
@@ -498,6 +529,7 @@ mod tests {
             points: vec![(0.0, 9, 0), (1.0, 9, 0)],
             first: "11-14".into(),
             last: "today".into(),
+            counts: BURNUP_COUNTS,
         };
         let chart = burnup(&series, 404.0, 150.0);
         let [scope, landed] = &chart.series_labels;

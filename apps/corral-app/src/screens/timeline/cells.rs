@@ -1,13 +1,15 @@
 //! The timeline in a terminal: the lanes as rows of Cells, a glyph per kind of segment so the
 //! chart reads without colour, measured to the Cells the pane has; and the burn-up as two rows of
-//! block heights. The geometry is the model's desktop layout scaled onto the Cells.
+//! block heights. The geometry is the model's desktop layout scaled onto the Cells. Each lane row
+//! is a button that opens its task, or a live run's session terminal.
 
 use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
 
 use super::shown::Shown;
 use crate::model::Hue;
-use crate::model::timeline::{self, BurnupSeries, Kind, Layout};
+use crate::model::timeline::{self, BurnupSeries, Kind, Layout, PlacedLane};
+use crate::state::AppState;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
@@ -30,14 +32,16 @@ const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█
 const ACTION_GLYPH: char = '●';
 
 /// The glyph a kind of segment fills its Cells with: a heavy line for run, double for gate, a
-/// dashed heavy line for review, squares for land, a faint dash for idle, `╱` for blocked and a
-/// shade for awaiting acceptance.
+/// dashed heavy line for review, squares for land, a cross for dropped, a turning arrow for
+/// reopened, a faint dash for idle, `╱` for blocked and a shade for awaiting acceptance.
 pub fn glyph(kind: Kind) -> char {
     match kind {
         Kind::Run => '━',
         Kind::Gate => '═',
         Kind::Review => '╍',
         Kind::Land => '■',
+        Kind::Drop => '✕',
+        Kind::Reopen => '↺',
         Kind::Idle => '╌',
         Kind::Ask => '╱',
         Kind::Held => '▒',
@@ -223,9 +227,9 @@ fn spoken<'a>((name, title): (&str, &str), parts: impl Iterator<Item = &'a str>)
 /// The lanes as rows of Cells across the pane: the hour labels, the owner's moves (`●`), the
 /// pipeline's and assistants' moves (`●`, quiet), then one row per task or run with its
 /// segments as glyphs, its long waits on a row above, and the now caption at the foot. Narrow
-/// grids drop the titles to keep the track. Each lane row tells a screen reader the lane and
-/// every segment's label.
-pub fn lanes(data: Memo<Shown>) -> AnyElement {
+/// grids drop the titles to keep the track. Each lane row is a button named by what it opens,
+/// the lane and every segment's label.
+pub fn lanes(app: AppState, data: Memo<Shown>) -> AnyElement {
     let width = signal(0.0_f32);
     let plot = computed(move || data.with(|shown| shown.plot.clone()));
     view()
@@ -235,12 +239,38 @@ pub fn lanes(data: Memo<Shown>) -> AnyElement {
         .child(dynamic(move || {
             let columns = (width.get() / term::cells(1.0).0).floor() as usize;
             let plot = plot.get()?;
-            (columns > 0).then(|| grid(timeline::layout(&plot, MODEL_WIDTH, false), columns))
+            (columns > 0).then(|| grid(app, timeline::layout(&plot, MODEL_WIDTH, false), columns))
         }))
         .into_element()
 }
 
-fn grid(layout: Layout, columns: usize) -> AnyElement {
+/// A lane's row as its button (`lane-<id>`): pressing it, or Enter on it, opens what the lane
+/// opens; the focus bands it.
+fn lane_button(app: AppState, lane: &PlacedLane, row: AnyElement) -> AnyElement {
+    let live = lane.opens.live.clone();
+    let spoken = spoken(
+        (lane.opens.label.as_str(), lane.title.as_str()),
+        lane.segments
+            .iter()
+            .map(|s| s.accessible_label.as_str())
+            .chain(lane.wait.as_deref()),
+    );
+    view()
+        .test_id(&format!("lane-{}", lane.id))
+        .cursor_pointer()
+        .role(AccessibilityRole::Button)
+        .label(spoken)
+        .on_press(move || {
+            let live = live.clone();
+            app.act(app.timeline, move |state, _| state.open(live));
+        })
+        .focus_visible(|s| s.bg(color(Token::Sel)))
+        .hover(|s| s.bg(color(Token::Hover)))
+        .child(row)
+        .into_element()
+}
+
+fn grid(app: AppState, layout: Layout, columns: usize) -> AnyElement {
     // The id column holds the longest id with a blank after it (session lanes such as
     // `T-001/R1` are longer than task ids), within bounds that leave the title and track room.
     let longest = layout
@@ -310,17 +340,12 @@ fn grid(layout: Layout, columns: usize) -> AnyElement {
             notes.text(layout.label_width, words, Ink::Hue(Hue::Held));
             rows.push(line(blank(), &notes.cells, Voice::Text));
         }
-        rows.push(line(
+        let row = line(
             lead(&lane.id, &lane.title, label),
             &bars.cells,
-            Voice::Label(spoken(
-                (lane.id.as_str(), lane.title.as_str()),
-                lane.segments
-                    .iter()
-                    .map(|s| s.accessible_label.as_str())
-                    .chain(lane.wait.as_deref()),
-            )),
-        ));
+            Voice::Hidden,
+        );
+        rows.push(lane_button(app, lane, row));
     }
 
     let mut foot = Track::new(track, &layout);

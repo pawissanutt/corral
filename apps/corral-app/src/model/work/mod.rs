@@ -84,7 +84,8 @@ impl NowTab {
     }
 }
 
-/// Which events the Changes feed shows.
+/// Which kind of change the Changes feed shows. Every event kind belongs to exactly one filter
+/// besides All, so the filters split the feed rather than overlap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChangeFilter {
     #[default]
@@ -93,13 +94,24 @@ pub enum ChangeFilter {
     NeedsYou,
     /// Gate results, reviews, verdicts and landings.
     Verdicts,
-    /// Worker runs and moves.
+    /// Worker runs: dispatched, resumed, replied to, done, stopped.
     Runs,
+    /// The tasks themselves: created, edited, commented, moved, dropped, reopened, artifacts.
+    Tasks,
+    /// Operations forced past a rule, each naming what it skipped.
+    Forced,
 }
 
 impl ChangeFilter {
-    /// Every filter in display order; Runs is desktop and terminal only, as in the mockup.
-    pub const ALL: [Self; 4] = [Self::All, Self::NeedsYou, Self::Verdicts, Self::Runs];
+    /// Every filter in display order, the same on every form.
+    pub const ALL: [Self; 6] = [
+        Self::All,
+        Self::NeedsYou,
+        Self::Verdicts,
+        Self::Runs,
+        Self::Tasks,
+        Self::Forced,
+    ];
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -107,6 +119,8 @@ impl ChangeFilter {
             Self::NeedsYou => "Needs you",
             Self::Verdicts => "Verdicts",
             Self::Runs => "Runs",
+            Self::Tasks => "Tasks",
+            Self::Forced => "Forced",
         }
     }
 
@@ -122,13 +136,19 @@ impl ChangeFilter {
             ),
             Self::Runs => matches!(
                 kind,
-                Kind::Dispatched
-                    | Kind::Resumed
-                    | Kind::Replied
-                    | Kind::Done
-                    | Kind::Stopped
-                    | Kind::Moved
+                Kind::Dispatched | Kind::Resumed | Kind::Replied | Kind::Done | Kind::Stopped
             ),
+            Self::Tasks => matches!(
+                kind,
+                Kind::Created
+                    | Kind::Edited
+                    | Kind::Commented
+                    | Kind::Moved
+                    | Kind::Dropped
+                    | Kind::Reopened
+                    | Kind::Artifact
+            ),
+            Self::Forced => kind == Kind::Forced,
         }
     }
 }

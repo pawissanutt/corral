@@ -143,7 +143,7 @@ pub fn live_changes_filtered(
     Changes {
         title: "Changes",
         subtitle,
-        filters: feed_filters(state, form),
+        filters: feed_filters(state),
         recent,
         seen_line,
         history,
@@ -204,6 +204,8 @@ mod tests {
         }
     }
 
+    /// The seen cursor splits new from seen; a forced line names every rule it skipped in plain
+    /// words, and Forced narrows the feed to the forced lines, each opening its task.
     #[test]
     fn the_seen_cursor_splits_new_from_seen_and_a_forced_line_names_what_it_skipped() {
         let mut feed = Feed::default();
@@ -219,7 +221,7 @@ mod tests {
                 event(
                     3,
                     EventKind::Forced,
-                    json!({"operation": "dispatch", "skipped": ["dependencies"]}),
+                    json!({"operation": "dispatch", "skipped": ["dependencies", "limits.running"]}),
                 ),
             ),
             (
@@ -241,7 +243,13 @@ mod tests {
         let ids = |rows: &[FeedRow]| rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&changes.recent), ["T-4", "T-3"]);
         assert_eq!(ids(&changes.history), ["T-2", "T-1"]);
-        assert!(changes.recent[1].text.contains("dependencies"));
+        assert!(
+            changes.recent[1]
+                .text
+                .ends_with("skipped unfinished dependencies and the running-slot limit"),
+            "{}",
+            changes.recent[1].text
+        );
         assert_eq!(changes.history[1].kind, ChangeKind::Mark(Mark::Fail));
         assert_eq!(changes.recent[0].at, "Nov 14");
         assert_eq!(
@@ -252,5 +260,13 @@ mod tests {
         let changes = live_changes_filtered(&state, &feed, None, Form::Desktop, &all);
         assert_eq!(ids(&changes.recent), ["T-4"]);
         assert_eq!(ids(&changes.history), ["T-1"]);
+        state.filter = ChangeFilter::Forced;
+        let changes = live_changes_filtered(&state, &feed, None, Form::Desktop, &all);
+        assert_eq!(ids(&changes.recent), ["T-3"]);
+        assert!(changes.history.is_empty());
+        assert_eq!(
+            changes.recent[0].action,
+            Some(Press::Open(crate::model::Live::Task("T-3".into())))
+        );
     }
 }

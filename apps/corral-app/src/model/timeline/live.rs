@@ -13,10 +13,12 @@ use jiff::tz::TimeZone;
 use jiff::{Timestamp, ToSpan, Zoned};
 
 use super::{
-    BurnupSeries, Gap, Grouping, Kind, Marker, Plot, PlotLane, PlotSegment, PlotTick, Range, State,
+    BURNUP_COUNTS, BurnupSeries, Gap, Grouping, Kind, Marker, Opens, Plot, PlotLane, PlotSegment,
+    PlotTick, Range, State,
 };
 use crate::model::daemon::Feed;
 use crate::model::work::{age, stamp, when};
+use crate::model::{Id, Live};
 
 /// Waits and idle stretches at least this long become gaps worth a look.
 const GAP_MINUTES: i64 = 60;
@@ -141,6 +143,7 @@ struct Lane {
     first: i64,
     segments: Vec<PlotSegment>,
     waits: Vec<String>,
+    opens: Opens,
 }
 
 /// Lays recorded instants and spans on the window's clock, clipped to the window up to now.
@@ -151,14 +154,44 @@ struct Clock<'a> {
     lanes: BTreeMap<String, Lane>,
 }
 
+/// A task's lane opens the task.
+fn opens_task(task: &str) -> Opens {
+    Opens {
+        live: Live::Task(Id::new(task)),
+        label: format!("Open {task}"),
+    }
+}
+
+/// A run's lane opens its session terminal while the run is live; an ended run has no session
+/// to show, so its lane opens the task.
+fn opens_run(run: &Run, feed: &Feed) -> Opens {
+    let session = format!("{}_{}", run.task, run.id);
+    if feed.agents.contains_key(session.as_str()) {
+        Opens {
+            label: format!("Open the terminal of {} {}", run.task, run.id),
+            live: Live::Session(Id::from(session.as_str())),
+        }
+    } else {
+        Opens {
+            label: format!("Open {} (run {} has ended)", run.task, run.id),
+            live: Live::Task(Id::new(&run.task)),
+        }
+    }
+}
+
 impl Clock<'_> {
-    fn lane(&mut self, id: &str, title: impl FnOnce() -> String) -> &mut Lane {
-        self.lanes.entry(id.to_owned()).or_insert_with(|| Lane {
-            title: title(),
-            first: i64::MAX,
-            segments: Vec::new(),
-            waits: Vec::new(),
-        })
+    /// Lane `id`, made with its title and what it opens the first time it is named.
+    fn lane(&mut self, id: &str, make: impl FnOnce() -> (String, Opens)) {
+        self.lanes.entry(id.to_owned()).or_insert_with(|| {
+            let (title, opens) = make();
+            Lane {
+                title,
+                first: i64::MAX,
+                segments: Vec::new(),
+                waits: Vec::new(),
+                opens,
+            }
+        });
     }
 
     /// Puts `kind` from `from` to `to` (None: still open, to now) on lane `id`, with `what` in
@@ -191,7 +224,9 @@ impl Clock<'_> {
             };
             format!("{from_words} · {state} · {}", duration(end - start))
         });
-        let lane = self.lane(id, String::new);
+        let Some(lane) = self.lanes.get_mut(id) else {
+            return;
+        };
         lane.first = lane.first.min(start);
         lane.waits.extend(wait);
         lane.segments.push(PlotSegment {
@@ -231,8 +266,8 @@ impl Clock<'_> {
         }
     }
 
-    /// A task's events on lane `id`: gates and landings as instants, blocks and acceptance
-    /// holds as waits until the next move.
+    /// A task's events on lane `id`: gates, landings, drops and reopens as instants, blocks and
+    /// acceptance holds as waits until the next move.
     fn events(&mut self, id: &str, events: &[&Event]) {
         let mut open: Option<(Kind, Timestamp)> = None;
         for event in events {
@@ -241,12 +276,28 @@ impl Clock<'_> {
             {
                 self.span(id, kind, from, Some(event.ts), kind.label());
             }
-            match event.kind {
-                EventKind::Blocked => open = Some((Kind::Ask, event.ts)),
-                EventKind::Ready => open = Some((Kind::Held, event.ts)),
-                EventKind::Gate => self.span(id, Kind::Gate, event.ts, Some(event.ts), "gate"),
-                EventKind::Landed => self.span(id, Kind::Land, event.ts, Some(event.ts), "landed"),
-                _ => {}
+            let instant = match event.kind {
+                EventKind::Blocked => {
+                    open = Some((Kind::Ask, event.ts));
+                    None
+                }
+                EventKind::Ready => {
+                    open = Some((Kind::Held, event.ts));
+                    None
+                }
+                EventKind::Gate => Some(Kind::Gate),
+                EventKind::Landed => Some(Kind::Land),
+                EventKind::Dropped => Some(Kind::Drop),
+                EventKind::Reopened => Some(Kind::Reopen),
+                _ => None,
+            };
+            if let Some(kind) = instant {
+                let what = if kind == Kind::Land {
+                    "landed"
+                } else {
+                    kind.label()
+                };
+                self.span(id, kind, event.ts, Some(event.ts), what);
             }
         }
         if let Some((kind, from)) = open {
@@ -287,7 +338,9 @@ pub fn plot(page: &TimelinePage, window: &Window, grouping: Grouping, feed: &Fee
     match grouping {
         Grouping::ByTask => {
             for run in &page.runs {
-                clock.lane(&run.task, || task_title(&run.task, feed));
+                clock.lane(&run.task, || {
+                    (task_title(&run.task, feed), opens_task(&run.task))
+                });
                 clock.run(&run.task, run);
             }
             let mut by_task: BTreeMap<&str, Vec<&Event>> = BTreeMap::new();
@@ -297,14 +350,19 @@ pub fn plot(page: &TimelinePage, window: &Window, grouping: Grouping, feed: &Fee
                 }
             }
             for (task, events) in by_task {
-                clock.lane(task, || task_title(task, feed));
+                clock.lane(task, || (task_title(task, feed), opens_task(task)));
                 clock.events(task, &events);
             }
         }
         Grouping::ByAgent => {
             for run in &page.runs {
                 let id = format!("{}/{}", run.task, run.id);
-                clock.lane(&id, || format!("{} · {}", run.role.as_str(), run.profile));
+                clock.lane(&id, || {
+                    (
+                        format!("{} · {}", run.role.as_str(), run.profile),
+                        opens_run(run, feed),
+                    )
+                });
                 clock.run(&id, run);
                 for event in events.iter().filter(|event| {
                     event.task.as_deref() == Some(run.task.as_str())
@@ -370,6 +428,7 @@ pub fn plot(page: &TimelinePage, window: &Window, grouping: Grouping, feed: &Fee
                 title: lane.title,
                 segments: lane.segments,
                 wait: (!lane.waits.is_empty()).then(|| lane.waits.join(" · ")),
+                opens: lane.opens,
             })
             .collect(),
         now: Marker {
@@ -533,6 +592,7 @@ pub fn burnup_series(burnup: &WireBurnup, now: u64, feed: &Feed) -> Option<Burnu
         points: series,
         first: day,
         last: "today".into(),
+        counts: BURNUP_COUNTS,
     })
 }
 

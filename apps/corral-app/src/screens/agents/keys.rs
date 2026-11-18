@@ -32,8 +32,13 @@ pub(super) fn region(app: AppState, session: Memo<Session>) -> AnyElement {
     });
     let delivered =
         computed(move || shown.with(|pane| pane.as_ref().and_then(|pane| pane.delivered.clone())));
-    let draft = signal(String::new());
-    // Delivered words leave the field once; refused or failed ones stay to be sent again.
+    let field = Field {
+        draft: signal(String::new()),
+        handle: element_ref(),
+    };
+    // Delivered words leave the field once, and the focus goes back to it, so the next words
+    // can be typed at once even when a send button was pressed; refused or failed words stay
+    // to be sent again.
     let seen = stored(None::<Option<String>>);
     effect(move || {
         let now = delivered.get();
@@ -41,7 +46,8 @@ pub(super) fn region(app: AppState, session: Memo<Session>) -> AnyElement {
             && before != now
             && now.is_some()
         {
-            draft.set(String::new());
+            field.draft.set(String::new());
+            after_answer(move || field.handle.focus());
         }
     });
     let status =
@@ -50,7 +56,7 @@ pub(super) fn region(app: AppState, session: Memo<Session>) -> AnyElement {
         shape.with(|shape| {
             shape.as_ref().map(|_| {
                 untracked(|| match shown.get_untracked() {
-                    Some(pane) => body(app, &pane, draft, status),
+                    Some(pane) => body(app, &pane, field, status),
                     None => view().into_element(),
                 })
             })
@@ -58,10 +64,17 @@ pub(super) fn region(app: AppState, session: Memo<Session>) -> AnyElement {
     })
 }
 
+/// The type field's draft and the field itself, kept across the region's redraws.
+#[derive(Clone, Copy)]
+struct Field {
+    draft: Signal<String>,
+    handle: ElementRef,
+}
+
 fn body(
     app: AppState,
     pane: &PaneInput,
-    draft: Signal<String>,
+    field: Field,
     status: Memo<Option<(Hue, String)>>,
 ) -> AnyElement {
     let form = app.form;
@@ -70,7 +83,7 @@ fn body(
         Some(why) => vec![closed(app, why.clone()), outcome],
         None => vec![
             keys(app, pane),
-            field_row(app, pane, draft),
+            field_row(app, pane, field),
             outcome,
             hint(app, pane.hint.clone(), status),
         ],
@@ -142,7 +155,8 @@ fn keys(app: AppState, pane: &PaneInput) -> AnyElement {
 }
 
 /// The field and its two sends: Type, and Type + Enter (also Return in the field).
-fn field_row(app: AppState, pane: &PaneInput, draft: Signal<String>) -> AnyElement {
+fn field_row(app: AppState, pane: &PaneInput, field: Field) -> AnyElement {
+    let Field { draft, handle } = field;
     let form = app.form;
     let session = pane.session.clone();
     let send = move |enter: bool| {
@@ -171,6 +185,7 @@ fn field_row(app: AppState, pane: &PaneInput, draft: Signal<String>) -> AnyEleme
         Form::Desktop | Form::Terminal => text_size(form),
     };
     let entry = input()
+        .element_ref(&handle)
         .test_id("field-pane-text")
         .label(pane.accessibility_label)
         .placeholder(pane.placeholder.clone())

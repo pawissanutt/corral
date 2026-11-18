@@ -3,7 +3,7 @@
 use super::{Action, Button, ChangeFilter, Press, State};
 use crate::model::board::ChangeKind;
 use crate::model::hue::Hue;
-use crate::model::nav::{Destination, Form};
+use crate::model::nav::Destination;
 use crate::model::text::Rich;
 
 /// A connection banner with its entire inline emphasis and handled controls.
@@ -77,7 +77,6 @@ impl FeedRow {
 /// A Changes filter control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeedFilter {
-    /// Filter label, including desktop-only Runs.
     pub label: &'static str,
     /// Whether the feed shows this filter's events now.
     pub selected: bool,
@@ -85,11 +84,10 @@ pub struct FeedFilter {
     pub filter: ChangeFilter,
 }
 
-/// The filter controls of a form: the phone has no Runs, as in the mockup.
-pub fn feed_filters(state: &State, form: Form) -> Vec<FeedFilter> {
+/// The filter controls, the same on every form.
+pub fn feed_filters(state: &State) -> Vec<FeedFilter> {
     ChangeFilter::ALL
         .into_iter()
-        .filter(|filter| form != Form::Phone || *filter != ChangeFilter::Runs)
         .map(|filter| FeedFilter {
             label: filter.label(),
             selected: state.filter == filter,

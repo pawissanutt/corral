@@ -153,7 +153,9 @@ fn inline_cells(title: &str, changes: &Changes) -> f32 {
     1.0 + count(title) + 2.0 + SUBTITLE_CELLS + 2.0 + filters + mark + 1.0
 }
 
-/// The model's filters as a segmented control: picking one narrows the feed.
+/// The model's filters as a segmented control: picking one narrows the feed. The phone has no
+/// room for six options on one row, so it sets them as two rows of three, one choice across
+/// both (`seg-changes-<n>`, then `seg-changes-more-<n>`).
 fn filters(app: AppState, changes: Memo<Changes>) -> AnyElement {
     let options: Vec<(ChangeFilter, &'static str)> = changes.with_untracked(|changes| {
         changes
@@ -162,13 +164,24 @@ fn filters(app: AppState, changes: Memo<Changes>) -> AnyElement {
             .map(|filter| (filter.filter, filter.label))
             .collect()
     });
-    seg(
-        app,
-        &options,
-        move || app.work.with(|state| state.filter),
-        move |filter| act(app, Action::Filter(filter)),
-        "seg-changes",
-    )
+    let row = |options: &[(ChangeFilter, &'static str)], test_id: &str| {
+        seg(
+            app,
+            options,
+            move || app.work.with(|state| state.filter),
+            move |filter| act(app, Action::Filter(filter)),
+            test_id,
+        )
+    };
+    if app.form != Form::Phone {
+        return row(&options, "seg-changes");
+    }
+    let (first, rest) = options.split_at(options.len().div_ceil(2));
+    view()
+        .gap(px(6.0))
+        .child(row(first, "seg-changes"))
+        .child(row(rest, "seg-changes-more"))
+        .into_element()
 }
 
 /// The recent events, the seen line, the dimmed history, the older-page control and the notes.
