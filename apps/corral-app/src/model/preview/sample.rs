@@ -256,7 +256,33 @@ const SEEDS: &[Seed] = &[
     ),
 ];
 
-const PLAN_BODY: &str = "## Goal\nThe app runs on the simple engine: one task list, one Actions menu, typed refusals.\n\n## Steps\n1. Shared Actions menu (T-2)\n2. Restore paused sessions (T-8)\n3. Narrow sidebar (T-11)\n4. Real timeline dates (T-14), then zoom presets (T-12)\n\n## Notes\nBuilds merge into Agents; the Builds destination was dropped (T-3).";
+/// The sample repository's local branches besides the task branches: where a landing can go.
+pub(super) const BRANCHES: &[&str] = &["main", "release/0.9"];
+
+const PLAN_BODY: &str = concat!(
+    "## Goal\n",
+    "The app runs on the simple engine: one task list, one Actions menu, typed refusals.\n",
+    "\n",
+    "## Steps\n",
+    "1. Shared Actions menu (T-2)\n",
+    "2. Restore paused sessions (T-8)\n",
+    "3. Narrow sidebar (T-11)\n",
+    "4. Real timeline dates (T-14), then zoom presets (T-12)\n",
+    "\n",
+    "## Acceptance\n",
+    "- Every engine operation is on every task row, enabled; the engine decides.\n",
+    "- A refusal shows its reason and one button per next step, the forced one last.\n",
+    "- A destructive or forced operation asks once, on this device.\n",
+    "- Review lands onto the run's base unless another existing branch is named.\n",
+    "\n",
+    "## Order\n",
+    "T-12 waits on T-14: zoom presets need the real dates first. The rest can run side by\n",
+    "side; each lands on its own once its gate and review pass.\n",
+    "\n",
+    "## Notes\n",
+    "Builds merge into Agents; the Builds destination was dropped (T-3).\n",
+    "The plan is done when every member is done and the owner marks T-1 done.",
+);
 
 fn record(feed: &Feed, seed: &Seed) -> TaskDetail {
     let body = if seed.id == "T-1" {
@@ -459,17 +485,39 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
         "T-16" => {
             record.task.depends_on = vec!["T-2".into(), "T-3".into(), "T-41".into()];
         }
+        // Sent back once: the reviewer asked for changes on the first submission, the second
+        // passed its gate, and the same reviewer session now judges round 1.
         "T-13" => {
-            let mut worker = run(feed, record, Role::Worker, "omp-sol", 5 * HOUR);
-            finish(feed, &mut worker, HOUR, Outcome::Done);
-            record.runs.push(worker);
+            let mut first = run(feed, record, Role::Worker, "omp-sol", 5 * HOUR);
+            finish(feed, &mut first, 3 * HOUR, Outcome::Done);
+            record.runs.push(first);
+            record
+                .checks
+                .push(gate(feed, record, true, None, 2 * HOUR + 55 * MINUTE));
             record.runs.push(run(
                 feed,
                 record,
                 Role::Reviewer,
                 "omp-sol-review",
-                8 * MINUTE,
+                2 * HOUR + 50 * MINUTE,
             ));
+            record.checks.push(review(
+                feed,
+                record,
+                false,
+                Some("A forced line names the operation but not what it skipped; list the skipped checks after it."),
+                2 * HOUR + 20 * MINUTE,
+            ));
+            let mut second = run(
+                feed,
+                record,
+                Role::Worker,
+                "omp-sol",
+                2 * HOUR + 15 * MINUTE,
+            );
+            finish(feed, &mut second, HOUR, Outcome::Done);
+            record.runs.push(second);
+            record.task.round = 1;
             record
                 .checks
                 .push(gate(feed, record, true, None, 30 * MINUTE));

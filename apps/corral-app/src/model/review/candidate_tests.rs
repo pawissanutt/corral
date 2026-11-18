@@ -137,6 +137,14 @@ fn deciding_submits_the_engine_operation_without_predicting_a_refusal() {
         sent(submit(Action::Gate)),
         Some((Op::Gate { id: "T-1".into() }, false))
     );
+    // A branch typed into the Onto field is where Approve and Land anyway land.
+    assert!(submit(Action::Onto("release/0.9".into())).is_empty());
+    let onto = Op::Approve {
+        id: "T-1".into(),
+        onto: Some("release/0.9".into()),
+    };
+    assert_eq!(sent(submit(Action::Approve)), Some((onto.clone(), false)));
+    assert_eq!(sent(submit(Action::LandAnyway)), Some((onto, true)));
 }
 
 #[test]

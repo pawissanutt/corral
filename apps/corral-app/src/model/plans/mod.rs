@@ -29,8 +29,11 @@ pub use outline::plan_outline;
 pub use path::path_to_done;
 pub use story::{Story, StoryField, StoryStage};
 pub use view::{
-    Button, ButtonKind, Chip, Detail, Header, ListNotice, NoticeView, PhonePage, PlanView,
+    Button, ButtonKind, Chip, Detail, DocumentFold, Header, ListNotice, NoticeView, PhonePage,
+    PlanView,
 };
+
+use std::collections::BTreeSet;
 
 use corral_protocol::detail::{DetailGet, DetailRef};
 
@@ -38,6 +41,7 @@ use crate::model::act::Act;
 use crate::model::daemon::Feed;
 use crate::model::effect::{Effect, Env};
 use crate::model::nav::Form;
+use crate::model::work::Record;
 use crate::model::{Id, Live, Selection};
 
 /// Captions shared by all form-specific loading notices.
@@ -51,6 +55,8 @@ pub struct State {
     /// Selected graph member, with its plan, so a selection changed elsewhere never shows
     /// another plan's member.
     pub member: Option<(Id, Id)>,
+    /// Plans whose long document the phone shows whole rather than its opening.
+    pub documents: BTreeSet<Id>,
 }
 
 impl State {
@@ -88,6 +94,8 @@ pub enum LiveAction {
     Next { task: Id, index: usize },
     /// Request the plan's detail again after an error.
     Retry(Id),
+    /// Show a long document whole on the phone, or its opening again.
+    Document(Id),
 }
 
 /// Member cycling keys; list movement is bound only while the list has focus.
@@ -136,6 +144,12 @@ impl State {
                 etag: None,
                 page: None,
             })],
+            LiveAction::Document(id) => {
+                if !self.documents.remove(&id) {
+                    self.documents.insert(id);
+                }
+                vec![]
+            }
         }
     }
 
@@ -187,6 +201,12 @@ impl State {
                     self.member = Some((plan, next));
                 }
                 Some(vec![])
+            }
+            // The Actions menu of the selected member, else of the plan itself.
+            "." => {
+                let plan = current?;
+                let record = self.member_of(&plan).cloned().unwrap_or(plan);
+                Some(vec![Effect::VerbMenu(Record::Task(record))])
             }
             _ => None,
         }

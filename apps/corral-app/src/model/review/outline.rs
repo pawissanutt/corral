@@ -217,9 +217,15 @@ pub fn candidate_header(feed: &Feed, task: &Task, filter: &ProjectFilter) -> Can
         state: chip(status, hue),
         task: task.id.to_string(),
         title: one_line(task.title()),
-        round: (round > 0).then(|| match shown.review {
-            Some(review) => format!("round {round} of {}", review.max_rounds),
-            None => format!("round {round}"),
+        round: (round > 0).then(|| {
+            let max = task
+                .row
+                .max_rounds
+                .or_else(|| shown.review.map(|review| review.max_rounds));
+            match max {
+                Some(max) => format!("round {round} of {max}"),
+                None => format!("round {round}"),
+            }
         }),
         sha7: shown.head().map(sha7),
         project_chip: project_chip(feed, filter, task.project()),
@@ -293,6 +299,18 @@ pub(super) fn navigation(action: &Action, shown: &Shown) -> Option<Vec<Effect>> 
             shown
                 .session()
                 .map(|session| vec![Effect::OpenLive(Live::Session(Id::new(&session)))])
+                .unwrap_or_default(),
+        ),
+        Action::OpenReviewer => Some(
+            shown
+                .task
+                .row
+                .reviewer
+                .as_ref()
+                .map(|run| {
+                    let session = format!("{}_{}", shown.id(), run.id);
+                    vec![Effect::OpenLive(Live::Session(Id::new(&session)))]
+                })
                 .unwrap_or_default(),
         ),
         _ => None,

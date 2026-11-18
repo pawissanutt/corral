@@ -27,10 +27,8 @@ pub(super) fn next_step(task: &Id, blocked: &Blocked) -> Option<BriefAction> {
 }
 
 pub fn path_to_done(feed: &Feed, plan: &Id, detail: &PlanDetail) -> PathToDone {
-    let members: Vec<Member> = detail
-        .children
-        .iter()
-        .map(|child| Member::of(feed, child))
+    let members: Vec<Member> = Member::all(feed, detail)
+        .into_iter()
         .filter(|member| !member.dropped())
         .collect();
     let total = members.len();
@@ -71,8 +69,15 @@ pub fn path_to_done(feed: &Feed, plan: &Id, detail: &PlanDetail) -> PathToDone {
         PathStep {
             mark: if members_done { Mark::Done } else { Mark::Next },
             hue: if members_done { Hue::Ok } else { Hue::Neutral },
-            title: format!("Members · {done} of {total}"),
-            hint: format!("{done} of {total} members are done; dropped members do not count."),
+            title: match total - done {
+                _ if total == 0 => "Members · none yet".to_owned(),
+                0 => format!("Members · all {total} done"),
+                left => format!("Members · {left} of {total} not yet done"),
+            },
+            hint: format!(
+                "{} of {total} children are not yet Done; dropped children do not count.",
+                total - done
+            ),
             items: capped(open),
             warning: None,
         },

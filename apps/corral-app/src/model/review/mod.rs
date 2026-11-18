@@ -20,6 +20,7 @@ mod live_files;
 mod loop_page;
 mod outline;
 mod readiness;
+mod rounds;
 mod view;
 
 #[cfg(test)]
@@ -35,13 +36,14 @@ pub use live::{candidates_filtered, selected_filtered};
 pub use loop_page::{LoopCandidate, LoopContent, LoopPage, loop_page_filtered};
 pub use outline::{CandidateHeader, OutlineGroup, OutlineRow, candidate_header, outline_filtered};
 pub use readiness::{ReadyLink, ReviewQuote};
+pub use rounds::{ReviewerLine, Round, Rounds};
 pub use view::{
     ArtifactContent, ArtifactView, ArtifactsView, Body, Button, ButtonStyle, Chip, DecideBar,
     DiffContent, DiffView, FileBody, FileView, HunkView, LayoutChoice, LogView, Notice, ReportView,
-    StatusLine, TabView, effective_layout,
+    StatusLine, TabView, Target, effective_layout,
 };
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::daemon::Feed;
 use crate::model::effect::{Effect, Env};
@@ -106,6 +108,8 @@ pub struct State {
     pub opened: BTreeSet<(Id, String)>,
     /// Operations sent from this page, oldest first.
     pub sent: Vec<Sent>,
+    /// The branch typed into a candidate's Onto field, by candidate; absent means its base.
+    pub onto: BTreeMap<Id, String>,
 }
 
 /// Candidate interaction intents.
@@ -115,10 +119,12 @@ pub enum Action {
     Tab(Tab),
     /// Set the preferred diff presentation (`rlayout`).
     Layout(Layout),
-    /// `approve`: land the candidate.
+    /// `approve`: land the candidate onto the Onto field's branch.
     Approve,
-    /// `approve --force`: land past a red gate.
+    /// `approve --force`: land past a red gate, onto the same branch.
     LandAnyway,
+    /// The Onto field's words changed.
+    Onto(String),
     /// `gate`: run the gate on the task's HEAD.
     Gate,
     /// `review`: start the reviewer.
@@ -140,6 +146,8 @@ pub enum Action {
     AskCandidate,
     /// Open the candidate run's agent session.
     OpenSession,
+    /// Open the task's live reviewer session.
+    OpenReviewer,
     /// Forget an operation's status line.
     Dismiss(Id),
     /// Show an artifact's contents from corrald's catalog, fetching them once.

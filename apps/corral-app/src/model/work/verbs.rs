@@ -144,7 +144,7 @@ impl Verb {
             Self::Review => "Start review…",
             Self::Verdict => "Record verdict…",
             Self::Changes => "Request changes…",
-            Self::Approve => "Approve and land",
+            Self::Approve => "Approve and land…",
             Self::Retry => "Retry…",
             Self::Stop => "Stop",
             Self::Drop => "Drop",

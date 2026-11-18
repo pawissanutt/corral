@@ -19,10 +19,8 @@ pub fn plan_brief(feed: &Feed, plan: &Id, detail: &PlanDetail) -> PlanBrief {
 
 /// The lead sentence in its hue, then how many members are done.
 fn headline(feed: &Feed, plan: &Id, detail: &PlanDetail) -> Rich {
-    let members: Vec<Member> = detail
-        .children
-        .iter()
-        .map(|child| Member::of(feed, child))
+    let members: Vec<Member> = Member::all(feed, detail)
+        .into_iter()
         .filter(|member| !member.dropped())
         .collect();
     let total = members.len();

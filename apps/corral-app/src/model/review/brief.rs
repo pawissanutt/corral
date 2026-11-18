@@ -6,6 +6,7 @@ use crate::model::effect::Env;
 use super::brief_side::{BriefSide, side};
 use super::live::Shown;
 use super::readiness::{ReadyLink, readiness_chain};
+use super::rounds::{Rounds, rounds};
 use super::view::effective_layout;
 use super::{Action, FileView, State};
 
@@ -27,6 +28,9 @@ pub struct ChangedFile {
 pub struct Brief {
     pub readiness_heading: &'static str,
     pub readiness: Vec<ReadyLink>,
+    /// Earlier rounds and the reviewer that stays across them; absent in a first round without
+    /// a live reviewer.
+    pub rounds: Option<Rounds>,
     pub changes_heading: &'static str,
     pub files: Vec<ChangedFile>,
     pub files_empty: Option<String>,
@@ -80,6 +84,7 @@ pub(super) fn brief(state: &State, feed: &Feed, shown: &Shown, env: Env, width: 
     Brief {
         readiness_heading: "Ready to land?",
         readiness: readiness_chain(feed, shown),
+        rounds: rounds(feed, shown),
         changes_heading: "What changed",
         files,
         files_empty,

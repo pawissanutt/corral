@@ -6,7 +6,7 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::Id;
-use crate::model::plans::{Detail, GraphInput, PathToDone, Story};
+use crate::model::plans::{Detail, DocumentFold, GraphInput, PathToDone, Story};
 use crate::model::text::Rich;
 use crate::state::AppState;
 use crate::ui::kit::hint::hinted;
@@ -48,8 +48,10 @@ pub(super) fn pane(app: AppState, detail: Memo<Detail>, side: Side) -> AnyElemen
     }
 }
 
-/// The pushed phone page's body: the head with its headline, the path to done first, then the
-/// members stacked (a member press opens its task), then the document.
+/// The pushed phone page's body, in the order a plan is opened for on the go: the head with its
+/// headline and the plan's Actions, what still stands between it and done (each blocker with its
+/// step), the members by dependency (a press opens the task, a held press its Actions), then
+/// the document, whose opening shows with a press for the rest when it is long.
 pub(super) fn phone_body(app: AppState, detail: Memo<Detail>) -> AnyElement {
     view()
         .min_w(px(0.0))
@@ -99,12 +101,36 @@ fn aside(app: AppState, detail: Memo<Detail>) -> AnyElement {
         .into_element()
 }
 
-/// The plan's document, ruled off from the members.
+/// The plan's document, ruled off from the members. A long one on the phone shows its opening
+/// and the toggle for the rest, tracked, so the toggle redraws the document alone.
 fn document_part(app: AppState, detail: Memo<Detail>) -> Option<AnyElement> {
     let Detail::Plan(plan) = detail.get_untracked() else {
         return None;
     };
-    Some(document(app, &plan.document))
+    if plan.document_fold.is_none() {
+        return Some(document(app, &plan.document, None));
+    }
+    let fold = computed(move || {
+        detail.with(|detail| match detail {
+            Detail::Plan(plan) => plan.document_fold.clone(),
+            _ => None,
+        })
+    });
+    let whole = plan.document;
+    Some(
+        dynamic(move || {
+            let shown: Option<DocumentFold> = fold.get();
+            untracked(|| match shown {
+                Some(fold) => {
+                    let toggle = super::command(app, &fold.toggle, false);
+                    let source = if fold.open { &whole } else { &fold.preview };
+                    document(app, source, Some(toggle))
+                }
+                None => document(app, &whole, None),
+            })
+        })
+        .into_element(),
+    )
 }
 
 /// What holds the plan up, in its hue, then how far it has come (`.dhead p`); tracked, so a

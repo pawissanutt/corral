@@ -12,8 +12,8 @@ use corral_types::Status;
 
 use super::member::Member;
 use super::{
-    Action, Button, Chip, Detail, GraphInput, GraphMember, Header, LiveAction, NoticeView,
-    PhonePage, PlanView, State, live_story, plan_brief,
+    Action, Button, Chip, Detail, DocumentFold, GraphInput, GraphMember, Header, LiveAction,
+    NoticeView, PhonePage, PlanView, State, live_story, plan_brief,
 };
 use crate::model::daemon::{DetailCache, Feed, Group, Link};
 use crate::model::effect::Env;
@@ -140,7 +140,7 @@ pub fn graph_input(feed: &Feed, plan: &Id, detail: &PlanDetail) -> GraphInput {
         .iter()
         .zip(layers(&detail.children))
         .map(|(child, layer)| {
-            let member = Member::of(feed, child);
+            let member = Member::of(feed, detail, child);
             let id = Id::new(member.id());
             GraphMember {
                 title: member.title().to_owned(),
@@ -331,6 +331,9 @@ fn plan_view(
             stale,
         },
         brief: plan_brief(feed, id, detail),
+        document_fold: phone
+            .then(|| fold(id, parent.body.trim(), state.documents.contains(id)))
+            .flatten(),
         document: parent.body.trim().to_owned(),
         members_heading: "Members",
         members_hint: "Laid out by dependency: a member starts once the members it depends on are done.",
@@ -338,6 +341,47 @@ fn plan_view(
         selected,
         story,
     }
+}
+
+/// The lines a phone shows of a long document before its toggle, and the length past which a
+/// document folds at all: a few lines left over read better in place than behind a press.
+const FOLD_AT: usize = 14;
+const FOLD_PAST: usize = 20;
+
+/// The opening of a long document: up to `FOLD_AT` lines, cut at the last paragraph break in
+/// them, and before a code fence that would be left open.
+fn fold(plan: &Id, document: &str, open: bool) -> Option<DocumentFold> {
+    let lines: Vec<&str> = document.lines().collect();
+    if lines.len() <= FOLD_PAST {
+        return None;
+    }
+    let mut cut = lines[..FOLD_AT]
+        .iter()
+        .rposition(|line| line.trim().is_empty())
+        .filter(|at| *at > 0)
+        .unwrap_or(FOLD_AT);
+    let fences: Vec<usize> = (0..cut)
+        .filter(|at| lines[*at].trim_start().starts_with("```"))
+        .collect();
+    if fences.len() % 2 == 1
+        && let Some(open_fence) = fences.last()
+    {
+        cut = (*open_fence).max(1);
+    }
+    let rest = lines.len() - cut;
+    Some(DocumentFold {
+        preview: lines[..cut].join("\n"),
+        open,
+        toggle: Button::new(
+            if open {
+                "Show the opening only".to_owned()
+            } else {
+                format!("Read the whole document · {rest} more lines")
+            },
+            Action::Live(LiveAction::Document(plan.clone())),
+        )
+        .quiet(),
+    })
 }
 
 /// The pushed phone page of one served plan.

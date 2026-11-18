@@ -242,6 +242,7 @@ fn target_id(action: &Action) -> String {
         LiveAction::Ask { record } => format!("btn-ask-{}", record.id()),
         LiveAction::Next { task, index } => format!("btn-next-{task}-{index}"),
         LiveAction::Retry(_) => "btn-retry".into(),
+        LiveAction::Document(_) => "btn-plan-document".into(),
     }
 }
 

@@ -23,8 +23,9 @@ fn element_view() -> View {
 }
 
 /// The document block: ruled off from what is above it, its caption, then the Markdown at
-/// reading measure, or a quiet line when the task has no body. test id "plan-document".
-pub(super) fn document(app: AppState, source: &str) -> AnyElement {
+/// reading measure, or a quiet line when the task has no body; `after` (the phone's fold
+/// toggle) under it. test id "plan-document".
+pub(super) fn document(app: AppState, source: &str, after: Option<AnyElement>) -> AnyElement {
     let form = app.form;
     let caption = text(DOCUMENT)
         .role(AccessibilityRole::Header)
@@ -77,7 +78,13 @@ pub(super) fn document(app: AppState, source: &str) -> AnyElement {
             element_view()
                 .when(form == Form::Desktop, |doc| doc.max_w(px(MEASURE)))
                 .child(body),
-        );
+        )
+        .children(after.map(|after| {
+            element_view()
+                .flex_row()
+                .when(form != Form::Terminal, |row| row.mt(px(10.0)))
+                .child(after)
+        }));
     // A terminal joins its rule across the whole column, outside the Cell of inset.
     let block = if form == Form::Terminal {
         element_view().child(term::hrule()).child(block)

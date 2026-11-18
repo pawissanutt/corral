@@ -47,6 +47,12 @@ pub(super) fn brief(cx: &Ctx, brief: &Brief, side_below: bool) -> AnyElement {
                 .child(chain(app, &brief.readiness))
                 .into_element(),
         ))
+        .children(
+            brief
+                .rounds
+                .as_ref()
+                .map(|rounds| block(app, false, super::rounds::rounds(cx, rounds))),
+        )
         .child(block(app, false, changes(cx, brief)))
         .when(side_below, |page| {
             // A terminal draws the edge of a box this tall as a line of its own, so it takes
@@ -90,7 +96,7 @@ fn block(app: AppState, first: bool, content: AnyElement) -> AnyElement {
 
 /// A block's or a side section's heading (`.blk > h3`, `.sec > h3`): the label semibold in
 /// ink-3, its count after it, at the trailing edge in a side section; bold in a terminal.
-fn caption(
+pub(super) fn caption(
     app: AppState,
     label: &'static str,
     count: Option<String>,
@@ -142,7 +148,7 @@ fn caption(
 
 /// `.ready`: each link's mark in its hue on a rule-2 line down to the next, the title (its
 /// hint the receipt), the candidate's SHA, a count of older results, the quoted note.
-fn chain(app: AppState, links: &[ReadyLink]) -> AnyElement {
+pub(super) fn chain(app: AppState, links: &[ReadyLink]) -> AnyElement {
     view()
         .role(AccessibilityRole::List)
         .children(

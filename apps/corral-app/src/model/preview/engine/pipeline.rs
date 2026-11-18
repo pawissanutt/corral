@@ -7,7 +7,7 @@ use corral_types::{
 use serde_json::{Value, json};
 
 use super::super::rollup::{closed, last_worker};
-use super::super::sample::{artifact, finish, gate, review, sha};
+use super::super::sample::{BRANCHES, artifact, finish, gate, review, sha};
 use super::super::{ago, event};
 use super::{
     Fail, commit, config, dispatch_next, forced, next_done, next_force_approve, next_retry,
@@ -107,7 +107,17 @@ pub(super) fn start_review(
             .collect();
         return Err(refuse("no reviewer profile resolves; set --profile", next));
     };
-    let run_id = start(feed, &mut rec, Role::Reviewer, &profile);
+    // A reviewer session lasts for the task: a live one gets the next round's request.
+    let live = rec
+        .runs
+        .iter()
+        .rev()
+        .find(|run| run.role == Role::Reviewer && run.ended.is_none())
+        .map(|run| run.id.clone());
+    let run_id = match live {
+        Some(run) => run,
+        None => start(feed, &mut rec, Role::Reviewer, &profile),
+    };
     touch(feed, &mut rec);
     let detail = json!({"profile": profile, "round": rec.task.round});
     commit(feed, rec, EventKind::ReviewStarted, Some(&run_id), detail);
@@ -240,6 +250,33 @@ pub(super) fn approve(
             onto: onto.map(str::to_owned),
         })
     };
+    // As the engine does first: a target that is the task's own branch, or that the repository
+    // does not have, is refused by name with one step per existing branch, forced as asked.
+    if let Some(worker) = last_worker(&rec) {
+        let target = onto.unwrap_or(&worker.base);
+        let reason = if target == worker.branch {
+            Some(format!(
+                "cannot land a task branch onto itself ({target:?})"
+            ))
+        } else if !BRANCHES.contains(&target) {
+            Some(format!("landing target branch {target:?} does not exist"))
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            let next = BRANCHES
+                .iter()
+                .map(|branch| Next {
+                    op: Op::Approve {
+                        id: id.clone(),
+                        onto: Some((*branch).to_owned()),
+                    },
+                    force,
+                })
+                .collect();
+            return Err(refuse(reason, next));
+        }
+    }
     let mut skipped = Vec::new();
     if rec.task.status != Status::Review {
         if !force {

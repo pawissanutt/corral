@@ -112,15 +112,32 @@ impl<'a> Shown<'a> {
             .and_then(|run| run.head_sha.as_deref())
     }
 
-    /// The check of `kind` the detail carries, else the board row's.
+    /// The branch the run started from, which approving lands onto unless told otherwise.
+    pub fn base(&self) -> Option<&'a str> {
+        self.run()
+            .or(self.task.row.run.as_ref())
+            .map(|run| run.base.as_str())
+    }
+
+    /// The check of `kind` that decides now: the board row's (the newest gate for HEAD, the
+    /// review of the round), else the newest the detail's history holds for the same key.
     pub fn check(&self, kind: CheckKind) -> Option<&'a Check> {
-        match self.review {
-            Some(review) => review.checks.iter().find(|check| check.kind == kind),
-            None => match kind {
-                CheckKind::Gate => self.task.row.gate.as_ref(),
-                CheckKind::Review => self.task.row.review.as_ref(),
-            },
-        }
+        let row = match kind {
+            CheckKind::Gate => self.task.row.gate.as_ref(),
+            CheckKind::Review => self.task.row.review.as_ref(),
+        };
+        let round = self.task.task().round.to_string();
+        let key = match kind {
+            CheckKind::Gate => self.head(),
+            CheckKind::Review => Some(round.as_str()),
+        };
+        row.or_else(|| {
+            self.review?
+                .checks
+                .iter()
+                .rev()
+                .find(|check| check.kind == kind && Some(check.key.as_str()) == key)
+        })
     }
 
     /// The gate check failed for the task's HEAD.

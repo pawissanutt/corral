@@ -167,26 +167,6 @@ fn review(feed: &Feed, task: &str) -> Result<ReviewDetail, String> {
         .filter(|run| matches!(run.outcome, Some(Outcome::Done | Outcome::Landed)))
         .cloned()
         .ok_or_else(|| format!("not_found: {task} has no completed worker run"))?;
-    let round = record.task.round.to_string();
-    let head = run.head_sha.clone();
-    let newest = |kind: CheckKind, key: Option<&str>| {
-        record
-            .checks
-            .iter()
-            .filter(|check| check.kind == kind && key.is_none_or(|key| check.key == key))
-            .max_by_key(|check| check.at)
-            .cloned()
-    };
-    let max_rounds = feed
-        .settings
-        .as_ref()
-        .and_then(|settings| {
-            let project = record.task.project.as_deref()?;
-            settings.config["projects"][project]["max_rounds"]
-                .as_u64()
-                .or_else(|| settings.config["defaults"]["max_rounds"].as_u64())
-        })
-        .unwrap_or(2);
     Ok(ReviewDetail {
         task: task.into(),
         diff: record
@@ -195,14 +175,9 @@ fn review(feed: &Feed, task: &str) -> Result<ReviewDetail, String> {
             .rev()
             .find(|artifact| artifact.kind.as_deref() == Some("diff"))
             .cloned(),
-        checks: [
-            newest(CheckKind::Gate, head.as_deref()),
-            newest(CheckKind::Review, Some(&round)),
-        ]
-        .into_iter()
-        .flatten()
-        .collect(),
-        max_rounds: u32::try_from(max_rounds).unwrap_or(2),
+        // Every stored check, earlier rounds included, in the order they were recorded.
+        checks: record.checks.clone(),
+        max_rounds: super::workspace::max_rounds(feed, record.task.project.as_deref()),
         files: files(task)
             .iter()
             .map(|(path, added, deleted, _)| ReviewFile {
