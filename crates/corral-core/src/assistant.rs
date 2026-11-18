@@ -184,6 +184,10 @@ pub enum OwnerInputSource {
     /// The owner's write-permission answer, journaled only by `write_permission` decide. It is
     /// never citable: owner actions never accept permission inputs.
     Permission,
+    /// The owner's keyboard/pointer selection of one stable option in a host-rendered native
+    /// choice, bound to the exact action payload digest. Journaled only by the host's native
+    /// choice consumer; never citable by `owner_action`. Old readers refuse this variant.
+    Choice,
 }
 
 /// OwnerInput journal entry v1. Only the assistant host's `event` op writes one, before the
@@ -211,6 +215,9 @@ pub struct OwnerInput {
     pub answers: Option<String>,
     /// The host's `event` request that journaled it.
     pub request: String,
+    /// Choice entries only: the `DecisionBinding` digest the selection was made against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
     pub at: Timestamp,
     /// Permission entries only: the structured decision record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -229,6 +236,7 @@ pub struct NewOwnerInput {
     pub command: Option<String>,
     pub answers: Option<String>,
     pub request: String,
+    pub binding: Option<String>,
 }
 
 impl AssistantContainer {
@@ -300,6 +308,7 @@ impl AssistantContainer {
             command: input.command,
             answers: input.answers,
             request: input.request,
+            binding: input.binding,
             at: Timestamp::now(),
             permission,
         };

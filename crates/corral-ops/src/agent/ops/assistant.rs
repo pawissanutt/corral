@@ -799,3 +799,7 @@ mod owner_live_tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "assistant_cowork_live_tests.rs"]
 mod cowork_live_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "assistant_handoff_live_tests.rs"]
+mod handoff_live_tests;

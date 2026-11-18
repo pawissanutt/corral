@@ -584,7 +584,8 @@ export class FleetRuntime implements FleetControl {
     const entry = this.entries.get(id);
     if (!entry || !live(entry)) return;
     const choice = resolveModel(model, this.choices, this.options.approved);
-    if (!entry.handle) { this.adopt(entry, choice); this.touch(entry); return; }
+    if (!entry.handle && entry.value.state === "queued") { this.adopt(entry, choice); this.touch(entry); return; }
+    if (!entry.handle) return;
     const version = ++entry.modelVersion;
     entry.pending = choice; entry.value.pendingModel = `${choice.provider}/${choice.model}`; this.touch(entry);
     void entry.handle.setModel(choice.provider, choice.model, choice.effort).then(result => {

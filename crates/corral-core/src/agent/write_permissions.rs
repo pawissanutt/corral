@@ -568,6 +568,7 @@ impl AssistantContainer {
             command: None,
             answers: None,
             request: new.request.clone(),
+            binding: None,
         };
         let entry = self.journal_permission(session, input, decision.clone());
         let grant = match (grant_id, lifetime) {

@@ -28,6 +28,8 @@ pub(super) struct Compact<'a> {
     pub wait: Option<&'a str>,
     /// A submitted plan no automation will review: the warning keeps its own columns and outranks the admission state.
     pub plan_wait: bool,
+    /// The responsibility label renders on its own line; drop the bare `asst` marker.
+    pub handoff: bool,
 }
 
 const PLAN_WAIT_LABELS: [&str; 4] = ["⚠ awaiting plan review", "⚠ plan review", "⚠ plan", "⚠"];
@@ -119,7 +121,7 @@ impl Compact<'_> {
                 Span::styled(progress, Style::new().fg(theme::CYAN)),
             ]);
         }
-        let star = match (self.pinned, t.cowork.is_some()) {
+        let star = match (self.pinned, t.cowork.is_some() && !self.handoff) {
             (true, true) => "★ asst ",
             (false, true) => "asst ",
             (true, false) => "★ ",
