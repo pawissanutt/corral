@@ -1,7 +1,7 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::de::DeserializeOwned;
 
 use crate::{
@@ -31,17 +31,7 @@ impl Store {
         connection
             .busy_timeout(Duration::from_secs(5))
             .context("configure SQLite busy timeout")?;
-        let version: u32 = connection
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .context("read schema version")?;
-        if version > SCHEMA_VERSION {
-            return Err(refuse(
-                format!(
-                    "store schema {version} is newer than supported {SCHEMA_VERSION}; update corral"
-                ),
-                vec![],
-            ));
-        }
+        let version = check_schema_version(&connection)?;
         connection
             .pragma_update(None, "journal_mode", "WAL")
             .context("enable SQLite WAL")?;
@@ -59,6 +49,20 @@ impl Store {
         let store = Self { connection };
         crate::artifacts::prepare_catalog(&store)?;
         Ok(store)
+    }
+
+    /// Open an existing database without running schema setup or allowing writes.
+    pub fn open_read_only(path: &Path) -> Result<Self> {
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .with_context(|| format!("open read-only store {}", path.display()))?;
+        connection
+            .busy_timeout(Duration::from_secs(5))
+            .context("configure SQLite busy timeout")?;
+        check_schema_version(&connection)?;
+        Ok(Self { connection })
     }
 
     /// Compare successive results from the same connection to observe commits
@@ -108,6 +112,30 @@ impl Store {
                 [first_id.to_string()],
             )
             .context("set first task id")?;
+        Ok(())
+    }
+
+    /// Read the ID sequence without consuming an ID.
+    pub fn next_task_number(&self) -> Result<u64> {
+        self.connection
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM meta WHERE key='next_task'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .context("read next task number")?
+            .try_into()
+            .context("next task number must not be negative")
+    }
+
+    /// Reserve the exported ID range without rewinding a more advanced sequence.
+    pub fn reserve_task_ids_through(&self, last: u32) -> Result<()> {
+        self.connection
+            .execute(
+                "UPDATE meta SET value=?1 WHERE key='next_task' AND CAST(value AS INTEGER) < ?1",
+                [i64::from(last) + 1],
+            )
+            .context("reserve exported task IDs")?;
         Ok(())
     }
 
@@ -445,6 +473,21 @@ impl Store {
             .map(|text| serde_json::from_str(&text).context("decode stored document"))
             .transpose()
     }
+}
+
+fn check_schema_version(connection: &Connection) -> Result<u32> {
+    let version = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .context("read schema version")?;
+    if version > SCHEMA_VERSION {
+        return Err(refuse(
+            format!(
+                "store schema {version} is newer than supported {SCHEMA_VERSION}; update corral"
+            ),
+            vec![],
+        ));
+    }
+    Ok(version)
 }
 
 pub(crate) fn encode(value: &impl serde::Serialize) -> Result<String> {
