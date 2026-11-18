@@ -1,11 +1,12 @@
 //! The roster's lines. Desktop (`.rh`, `.ar`): the column heads, then one 40 pt line per
-//! session: state chip, task id, project, name, what it does, its profile and model, how long it
-//! has been quiet and when it started, the last two and the project only while the roster has the
-//! room and no panel is open. Phone (the mock's `.ar` at 640 pt and under): chip, name and id;
-//! what it does; profile, model and quiet time. Terminal: the desktop's columns as Cells, one row
-//! each, giving way one at a time as the grid narrows; words too long for their column are cut
-//! at the character. A run's line carries its Session menu (secondary press, Shift+F10 or the
-//! Menu key; a held finger on the phone; `.` while the roster has the focus).
+//! session: state chip, task id, role (worker, reviewer or assistant), project, name, what it
+//! does, its profile and model, how long it has been quiet and when it started, the last two and
+//! the project only while the roster has the room and no panel is open. Phone (the mock's `.ar`
+//! at 640 pt and under): chip, name and id; what it does; role, profile, model and quiet time.
+//! Terminal: the desktop's columns as Cells, one row each, giving way one at a time as the grid
+//! narrows; words too long for their column are cut at the character. A run's line carries its
+//! Session menu (secondary press, Shift+F10 or the Menu key; a held finger on the phone; `.`
+//! while the roster has the focus).
 //!
 //! Rows are kept by session while the roster changes, each part following its own fact, so a
 //! row the keyboard is on keeps the focus as its times and counts tick. Every word and number is
@@ -37,6 +38,8 @@ const GAP: f32 = 12.0;
 const RING: f32 = 2.0;
 /// Terminal column widths in Cells; the name and doing columns' least widths.
 const ID_CELLS: f32 = 8.0;
+/// "reviewer", "assistant" and a Cell after.
+const ROLE_CELLS: f32 = 10.0;
 const PROJECT_CELLS: f32 = 11.0;
 const AGENT_CELLS: f32 = 18.0;
 const QUIET_CELLS: f32 = 11.0;
@@ -50,6 +53,8 @@ const GAP_CELLS: f32 = 1.0;
 /// Which optional columns show (tracked by the page from its measured room).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Columns {
+    /// Worker, reviewer or assistant.
+    pub(super) role: bool,
     pub(super) project: bool,
     pub(super) doing: bool,
     pub(super) agent: bool,
@@ -62,10 +67,11 @@ pub(super) struct Columns {
 }
 
 impl Columns {
-    /// Desktop and phone: what the session does and its agent always; the project, quiet time
-    /// and start together while `wide`.
+    /// Desktop and phone: the role, what the session does and its agent always; the project,
+    /// quiet time and start together while `wide`.
     pub(super) fn points(wide: bool, open: bool) -> Self {
         Self {
+            role: true,
             project: wide,
             doing: true,
             agent: true,
@@ -77,8 +83,8 @@ impl Columns {
     }
 
     /// Terminal: the columns `room` Cells hold. State, id and name always; then, as long as
-    /// they fit, what the session does, its agent, the project, quiet time and start, so a
-    /// narrowing grid gives up the start first and what the session does last.
+    /// they fit, the role, what the session does, its agent, the project, quiet time and start,
+    /// so a narrowing grid gives up the start first and the role last.
     pub(super) fn cells(room: f32, state: u16, open: bool) -> Self {
         let name = if open { NAME_CELLS.0 } else { NAME_CELLS.1 };
         let mut used = BAR_CELLS + f32::from(state) + ID_CELLS + name + 3.0 * GAP_CELLS;
@@ -89,12 +95,14 @@ impl Columns {
             }
             fits
         };
-        let doing = fits(DOING_CELLS);
+        let role = fits(ROLE_CELLS);
+        let doing = role && fits(DOING_CELLS);
         let agent = doing && fits(AGENT_CELLS);
         let project = agent && fits(PROJECT_CELLS);
         let quiet = project && fits(QUIET_CELLS);
         let since = quiet && fits(SINCE_CELLS);
         Self {
+            role,
             project,
             doing,
             agent,
@@ -111,6 +119,7 @@ impl Columns {
 enum Column {
     State,
     Id,
+    Role,
     Project,
     Name,
     Doing,
@@ -119,9 +128,10 @@ enum Column {
     Since,
 }
 
-const ORDER: [Column; 8] = [
+const ORDER: [Column; 9] = [
     Column::State,
     Column::Id,
+    Column::Role,
     Column::Project,
     Column::Name,
     Column::Doing,
@@ -174,6 +184,7 @@ fn slot(form: Form, column: Column, columns: Memo<Columns>) -> View {
         }
         Column::State => fixed(92.0, 0.0),
         Column::Id => fixed(52.0, ID_CELLS),
+        Column::Role => optional(fixed(68.0, ROLE_CELLS), |c| c.role),
         Column::Project => optional(fixed(64.0, PROJECT_CELLS), |c| c.project),
         Column::Name => growing((1.0, 2.0), (110.0, NAME_CELLS.0), (150.0, NAME_CELLS.1)),
         Column::Doing => optional(
@@ -351,12 +362,12 @@ fn state_chip(app: AppState, row: ReadSignal<RosterRow>) -> AnyElement {
     dynamic(move || face.with(|(label, hue)| untracked(|| chip(app, label.clone(), *hue))))
 }
 
-/// The run's profile and model, then how long it has been quiet: the phone's third line.
+/// The run's role, profile and model, then how long it has been quiet: the phone's third line.
 fn agent_line(row: &RosterRow) -> String {
     if row.quiet == "—" {
-        row.agent.clone()
+        format!("{} · {}", row.role, row.agent)
     } else {
-        format!("{} · {}", row.agent, row.quiet)
+        format!("{} · {} · {}", row.role, row.agent, row.quiet)
     }
 }
 
@@ -374,7 +385,7 @@ fn pin(app: AppState, row: ReadSignal<RosterRow>, size: f32) -> AnyElement {
     })
 }
 
-/// A desktop or terminal line: the eight columns, those `columns` leaves out hidden.
+/// A desktop or terminal line: the nine columns, those `columns` leaves out hidden.
 fn line(app: AppState, row: ReadSignal<RosterRow>, columns: Memo<Columns>) -> AnyElement {
     let form = app.form;
     let terminal = form == Form::Terminal;
@@ -409,6 +420,9 @@ fn line(app: AppState, row: ReadSignal<RosterRow>, columns: Memo<Columns>) -> An
         at(Column::State).child(state_chip(app, row)).into_element(),
         at(Column::Id)
             .child(quiet(form, fact(row, |r| r.shown_id.as_str()), true))
+            .into_element(),
+        at(Column::Role)
+            .child(quiet(form, fact(row, |r| r.role.as_str()), false))
             .into_element(),
         at(Column::Project)
             .child(quiet(form, fact(row, |r| r.project.as_str()), false))

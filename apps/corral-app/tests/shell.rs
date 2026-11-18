@@ -475,3 +475,17 @@ fn the_reviewer_session_opens_from_review() {
     app.wait_for("id:btn-session-menu").unwrap();
     app.wait_for("text:/T-13-R2/").unwrap();
 }
+
+/// The grouping switch asks the feed for the other grouping and redraws the lanes from its
+/// answer: By run draws one lane per run, which By task does not have, and a live run's lane
+/// opens its session terminal.
+#[test]
+fn timeline_grouping_redraws_the_lanes_from_the_feed() {
+    let mut app = preview(terminal_80(), &[("corral.destination", "timeline")]);
+    app.wait_for("id:lane-T-14").unwrap();
+    assert_eq!(app.screen().count("id:lane-T-14/R1").unwrap(), 0);
+    app.press("id:seg-group-1").unwrap();
+    app.wait_for("id:lane-T-14/R1").unwrap();
+    app.press("id:lane-T-14/R1").unwrap();
+    app.wait_for("id:session-terminal").unwrap();
+}

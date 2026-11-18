@@ -146,7 +146,7 @@ fn terminal(app: AppState, data: Memo<Shown>) -> AnyElement {
         .child(legend_row(app))
         .child(status(app, data))
         .child(term::blank())
-        .child(cells::lanes(data))
+        .child(cells::lanes(app, data))
         .child(term::blank())
         .child(gaps(app, data))
         .child(term::blank())
@@ -517,6 +517,7 @@ fn burnup_body(
     };
     let title = series.title.clone();
     let period = series.period.clone();
+    let counts = series.counts;
     let drawn = if form == Form::Terminal {
         cells::burnup(&series)
     } else {
@@ -527,5 +528,11 @@ fn burnup_body(
         .child(h3(app, title, Some(period)))
         .children(scope)
         .child(drawn)
+        .child(
+            view()
+                .pt(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
+                .test_id("burnup-counts")
+                .child(disclosure(form, counts)),
+        )
         .into_element()
 }

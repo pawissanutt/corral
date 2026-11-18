@@ -13,6 +13,7 @@ use nsh_core::canvas::CanvasTextAlign;
 use nsh_core::prelude::*;
 
 use super::shown::Shown;
+use crate::model::Live;
 use crate::model::timeline::{self, Burnup, BurnupSeries, Kind, Layout};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
@@ -24,6 +25,10 @@ const BAR: f32 = 12.0;
 /// An action dot: the box the mockup centres it in, and its radius.
 const DOT: f32 = 10.0;
 const DOT_RADIUS: f32 = 4.5;
+/// A dropped or reopened instant's mark, at most this far from its centre.
+const MARK_RADIUS: f32 = 4.0;
+/// A lane button's focus ring.
+const RING: f32 = 2.0;
 /// Where a desktop lane's title starts, after the mono id.
 const TITLE_X: f32 = 52.0;
 /// The phone puts the title after the id at the mockup's 7 points a character.
@@ -68,16 +73,16 @@ pub fn lanes(app: AppState, data: Memo<Shown>) -> AnyElement {
         .child(dynamic(move || {
             let room = width.get();
             let plot = plot.get()?;
-            (room > 0.0).then(|| drawn_lanes(timeline::layout(&plot, room, phone), form))
+            (room > 0.0).then(|| drawn_lanes(app, timeline::layout(&plot, room, phone)))
         }))
         .into_element()
 }
 
-fn drawn_lanes(layout: Layout, form: Form) -> AnyElement {
-    let phone = form == Form::Phone;
+fn drawn_lanes(app: AppState, layout: Layout) -> AnyElement {
+    let phone = app.form == Form::Phone;
     let (width, height) = (layout.width, layout.height);
     let spoken = layout.accessible_label.clone();
-    let boxes = hit_boxes(&layout, form);
+    let boxes = hit_boxes(app, &layout);
     view()
         .relative()
         .w(px(width))
@@ -205,11 +210,29 @@ fn segment_rect(top: f32, segment: &timeline::PlacedSegment) -> Rect {
 
 /// One bar in the look of its kind: solid for run, gate, review (the mixed corral) and land;
 /// hatched for idle (faint lines, no ground) and blocked (lines in the state colour on its quiet
-/// ground, leaning the other way); outlined on its quiet ground for awaiting acceptance.
+/// ground, leaning the other way); outlined on its quiet ground for awaiting acceptance; a cross
+/// for dropped and a ring for reopened, centred on the instant.
 fn bar(p: Painter, kind: Kind, area: Rect, radius: f32) -> Painter {
     let hue = kind.hue();
+    let (cx, cy) = (area.x + area.w / 2.0, area.y + area.h / 2.0);
+    let r = (area.h / 2.0).min(MARK_RADIUS);
     match kind {
         Kind::Run | Kind::Gate | Kind::Land => solid(p, area, radius, now(hue_ink(hue))),
+        Kind::Drop => p
+            .stroke_color(now(hue_ink(hue)))
+            .line_width(1.6)
+            .begin_path()
+            .move_to(cx - r, cy - r)
+            .line_to(cx + r, cy + r)
+            .move_to(cx + r, cy - r)
+            .line_to(cx - r, cy + r)
+            .stroke(),
+        Kind::Reopen => p
+            .stroke_color(now(hue_ink(hue)))
+            .line_width(1.6)
+            .begin_path()
+            .arc(cx, cy, r, 0.0, TAU)
+            .stroke(),
         Kind::Review => solid(p, area, radius, now(hue_ink(hue)))
             .global_alpha(REVIEW_MIX)
             .fill_color(ink(Token::Ink3))
@@ -499,8 +522,18 @@ fn dots(
     })
 }
 
-/// The transparent boxes over the action dots and every segment.
-fn hit_boxes(layout: &Layout, form: Form) -> Vec<AnyElement> {
+/// Opens what a lane opens: its task, or a live run's session terminal.
+fn open(app: AppState, live: &Live) {
+    let live = live.clone();
+    app.act(app.timeline, move |state, _| state.open(live));
+}
+
+/// The transparent boxes over the action dots, each lane's row and every segment. A lane's row
+/// box (over its label on desktop, the whole lane on the phone) is the lane's button and stop of
+/// the keyboard focus; its segments and wait take the pointer's press to the same place without
+/// being stops of their own.
+fn hit_boxes(app: AppState, layout: &Layout) -> Vec<AnyElement> {
+    let form = app.form;
     let phone = form == Form::Phone;
     let mut boxes = Vec::new();
     for (lane_y, markers) in [(layout.top, &layout.owner), (auto_y(layout), &layout.auto)] {
@@ -510,6 +543,7 @@ fn hit_boxes(layout: &Layout, form: Form) -> Vec<AnyElement> {
                 form,
                 Rect::new(marker.x - DOT / 2.0, dot_top, DOT, DOT),
                 &marker.accessible_label,
+                None,
             ));
         }
     }
@@ -517,24 +551,28 @@ fn hit_boxes(layout: &Layout, form: Form) -> Vec<AnyElement> {
         let top = bar_top(layout, phone, lane.y, BAR);
         let words = (lane.id.as_str(), lane.title.as_str());
         let reserve = wait_reserve(layout, phone, lane);
-        if form == Form::Desktop && label_cut(layout, phone, words, reserve) {
-            boxes.push(hit(
-                form,
-                Rect::new(
-                    0.0,
-                    lane.y,
-                    layout.label_width - LABEL_GAP,
-                    layout.lane_height,
-                ),
-                &format!("{} {}", lane.id, lane.title),
-            ));
-        }
+        let row = if phone {
+            Rect::new(0.0, lane.y, layout.width, layout.lane_height)
+        } else {
+            Rect::new(
+                0.0,
+                lane.y,
+                layout.label_width - LABEL_GAP,
+                layout.lane_height,
+            )
+        };
+        let cut = form == Form::Desktop && label_cut(layout, phone, words, reserve);
+        boxes.push(row_button(app, row, lane, cut));
+        let press = Some((app, &lane.opens.live));
         for segment in &lane.segments {
-            boxes.push(hit(
-                form,
-                segment_rect(top, segment),
-                &segment.accessible_label,
-            ));
+            let area = segment_rect(top, segment);
+            // An instant is a 2 pt mark; its box is a fingertip wide around it.
+            let area = if area.w <= 2.0 {
+                Rect::new(area.x + area.w / 2.0 - DOT / 2.0, area.y, DOT, area.h)
+            } else {
+                area
+            };
+            boxes.push(hit(form, area, &segment.accessible_label, press));
         }
         // The row's wait in full, wherever it was cut to fit.
         if let Some(wait) = &lane.wait {
@@ -544,14 +582,49 @@ fn hit_boxes(layout: &Layout, form: Form) -> Vec<AnyElement> {
                 let (x, room) = trail_start(layout, lane);
                 Rect::new(x, top, room, BAR)
             };
-            boxes.push(hit(form, area, &format!("{} {wait}", lane.id)));
+            boxes.push(hit(form, area, &format!("{} {wait}", lane.id), press));
         }
     }
     boxes
 }
 
-fn hit(form: Form, area: Rect, spoken: &str) -> AnyElement {
+/// A lane's button (`lane-<id>`): named by what it opens and the lane, the full label as its
+/// hover hint where the canvas cut it, the focus ring while the keyboard is on it.
+fn row_button(app: AppState, area: Rect, lane: &timeline::PlacedLane, cut: bool) -> AnyElement {
+    let form = app.form;
+    let live = lane.opens.live.clone();
+    let hint = if cut {
+        format!("{} {} · {}", lane.id, lane.title, lane.opens.label)
+    } else {
+        lane.opens.label.clone()
+    };
+    let spoken = format!("{}: {} {}", lane.opens.label, lane.id, lane.title);
+    view()
+        .absolute()
+        .left(px(area.x))
+        .top(px(area.y))
+        .w(px(area.w))
+        .h(px(area.h))
+        .test_id(&format!("lane-{}", lane.id))
+        .cursor_pointer()
+        .rounded(px(4.0))
+        .role(AccessibilityRole::Button)
+        .label(spoken)
+        .on_press(move || open(app, &live))
+        .focus_visible(|s| {
+            s.outline(px(RING))
+                .outline_color(color(Token::Focus))
+                .outline_offset(px(-RING))
+        })
+        .when(form == Form::Desktop, |v| v.tooltip(tip(hint.into())))
+        .into_element()
+}
+
+/// A box over a mark that a screen reader names and the desktop hints; with `press`, the
+/// pointer's press opens what its lane opens.
+fn hit(form: Form, area: Rect, spoken: &str, press: Option<(AppState, &Live)>) -> AnyElement {
     let spoken = SharedString::from(spoken.to_owned());
+    let press = press.map(|(app, live)| (app, live.clone()));
     view()
         .absolute()
         .left(px(area.x))
@@ -562,6 +635,11 @@ fn hit(form: Form, area: Rect, spoken: &str) -> AnyElement {
         .role(AccessibilityRole::Image)
         .label(spoken.clone())
         .when(form == Form::Desktop, |v| v.tooltip(tip(spoken)))
+        .when_some(press, |v, (app, live)| {
+            v.cursor_pointer()
+                .focusable(false)
+                .on_press(move || open(app, &live))
+        })
         .into_element()
 }
 
