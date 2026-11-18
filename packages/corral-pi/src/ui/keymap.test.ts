@@ -6,11 +6,11 @@ import { contextHints, footerBase, footerRow, keyGroups, viewKey, type HintState
 import { PANEL_BLUE, PANEL_KEY } from "./panels-view.ts";
 
 const CONTEXTS: readonly KeyContext[] = ["composer", "agents", "agent", "changes", "task", "lifecycle", "proof", "artifacts",
-  "inbox", "usage", "image", "sidebar", "queue", "dialog", "palette", "keys", "pager", "board", "choice", "questions"];
+  "usage", "image", "sidebar", "queue", "dialog", "palette", "keys", "pager", "board", "choice", "questions"];
 const state = (context: KeyContext, overrides: Partial<HintState> = {}): HintState => ({
-  context, mode: { taskBound: true, answer: true, lifecycle: true }, streaming: true,
+  context, mode: { taskBound: true, lifecycle: true }, streaming: true,
   queue: { items: 3, editable: 2, control: true },
-  selection: ["open", "transcript", "steer", "cancel", "model"], authors: true, timelineSource: "task", ...overrides,
+  selection: ["open", "transcript", "steer", "cancel", "model"], authors: true, ...overrides,
 });
 
 test("the footer ends with F1 and never overflows from 10 to 200 columns in every context", () => {
@@ -50,7 +50,7 @@ test("the follow-up and tool hints follow a changed user binding", () => {
     const tools = row.hits.find(hit => hit.hint.id === "tools")!;
     expect(tools.hint).toMatchObject({ key: "Alt+O", label: "tools" });
     expect(sliceByColumn(stripTerminalSequences(row.line), tools.from, tools.to - tools.from).trim().split(/\s+/)).toEqual(["Alt+O", "tools"]);
-    const message = keyGroups({ taskBound: false, answer: false, jobs: true, queueControl: true, lifecycle: false })
+    const message = keyGroups({ taskBound: false, jobs: true, queueControl: true, lifecycle: false })
       .find(group => group.title === "Message")!.rows.map(row => row.key);
     expect(message).toContain("Alt+O"); expect(message).toContain("Ctrl+J"); expect(message).not.toContain("Ctrl+O");
   } finally { setKeybindings(previous); }
@@ -104,7 +104,7 @@ test("in Chat the composer footer names the tool-output key last, before F2 and 
   const hint = contextHints(state("composer", { chat: true })).find(item => item.id === "tools");
   expect(hint).toMatchObject({ key: "Ctrl+O", label: "expand" });
   expect(contextHints(state("composer")).some(item => item.id === "tools")).toBeFalse();
-  const message = keyGroups({ taskBound: false, answer: false, jobs: true, queueControl: true, lifecycle: false }).find(group => group.title === "Message")!;
+  const message = keyGroups({ taskBound: false, jobs: true, queueControl: true, lifecycle: false }).find(group => group.title === "Message")!;
   expect(message.rows.some(row => row.label === "Expand or collapse tool output")).toBeTrue();
 });
 
@@ -179,7 +179,7 @@ test("the board offers review, plan and task hints only when the view offers the
 
 test("binding alt+t to an editor action removes Alt+T from the hints and the keys list", () => {
   const target = () => contextHints(state("composer", { build: BUILD, streaming: false })).some(hint => hint.id === "target");
-  const listed = () => keyGroups({ taskBound: false, answer: false, jobs: false, queueControl: true, lifecycle: false, build: true })
+  const listed = () => keyGroups({ taskBound: false, jobs: false, queueControl: true, lifecycle: false, build: true })
     .flatMap(group => group.rows).some(row => row.key === "Alt+T");
   expect(target()).toBeTrue(); expect(listed()).toBeTrue();
   const previous = getKeybindings();
@@ -189,12 +189,12 @@ test("binding alt+t to an editor action removes Alt+T from the hints and the key
   } finally { setKeybindings(previous); }
 });
 
-test("the build keys list has Board and no Task, Proof or Inbox; other modes keep theirs", () => {
+test("the build keys list has Board and no Task or Proof; other modes keep theirs", () => {
   const titles = (build: boolean, taskBound: boolean) =>
-    keyGroups({ taskBound, answer: true, jobs: true, queueControl: true, lifecycle: true, build }).map(group => group.title);
+    keyGroups({ taskBound, jobs: true, queueControl: true, lifecycle: true, build }).map(group => group.title);
   expect(titles(true, false)).toContain("Board");
   for (const title of ["Task", "Proof", "Inbox"]) expect(titles(true, false)).not.toContain(title);
-  expect(titles(false, true)).toContain("Inbox"); expect(titles(false, true)).toContain("Proof");
+  expect(titles(false, true)).toContain("Task"); expect(titles(false, true)).toContain("Proof"); expect(titles(false, true)).not.toContain("Inbox");
   expect(titles(false, true)).not.toContain("Board");
 });
 
@@ -230,20 +230,10 @@ test("in the choice, agent, board, lifecycle and artifacts footers Esc comes rig
   expect(contextHints(state("choice", { build: BUILD })).some(hint => hint.id === "f7")).toBeFalse();
 });
 
-test("Usage advertises reread and token bars only when the view can act on them, never from the task binding alone", () => {
-  const bound = { taskBound: true, answer: false, lifecycle: true };
-  const keys = (usage: HintState["usage"]) => contextHints(state("usage", { mode: bound, ...(usage ? { usage } : {}) })).map(hint => hint.key);
-  // A task-bound session without a collector reader, or one whose flags were never supplied, offers neither.
-  for (const usage of [undefined, { reread: false, chart: false }]) {
-    expect(keys(usage)).not.toContain("r"); expect(keys(usage)).not.toContain("c");
-  }
-  // A readable collector with an empty usage facet can be reread but has no token bars to draw.
-  expect(keys({ reread: true, chart: false })).toContain("r"); expect(keys({ reread: true, chart: false })).not.toContain("c");
-  expect(keys({ reread: true, chart: true })).toContain("c");
-  for (const usage of [undefined, { reread: true, chart: false }, { reread: true, chart: true }]) {
-    const hints = contextHints(state("usage", { mode: bound, ...(usage ? { usage } : {}) }));
-    for (const width of FOOTER_WIDTHS) expect(footerRow(hints, chromeTier(width), width, true).hits.map(hit => hit.hint.id)).toContain("escape");
-  }
+test("Usage offers scrolling, the legend and Esc only", () => {
+  const hints = contextHints(state("usage"));
+  expect(hints.map(hint => hint.key)).not.toContain("r"); expect(hints.map(hint => hint.key)).not.toContain("c");
+  for (const width of FOOTER_WIDTHS) expect(footerRow(hints, chromeTier(width), width, true).hits.map(hit => hit.hint.id)).toContain("escape");
 });
 
 test("a focused view's footer leads with who has the keys; a click on the lead replays Tab", () => {
@@ -259,18 +249,18 @@ test("`/` is never a view key: filters and job search take F3", () => {
   for (const context of CONTEXTS) for (const selection of [undefined, ["output", "stop", "peek", "follow", "search", "background"]]) {
     expect(contextHints(state(context, { selection })).some(hint => hint.key === "/")).toBeFalse();
   }
-  for (const context of ["changes", "inbox"] as const) expect(contextHints(state(context)).find(hint => hint.id === "filter")?.key).toBe("F3");
+  expect(contextHints(state("changes")).find(hint => hint.id === "filter")?.key).toBe("F3");
   expect(contextHints(state("agents", { selection: ["output", "search"] })).find(hint => hint.id === "search")?.key).toBe("F3");
-  const keys = keyGroups({ taskBound: true, answer: true, jobs: true, queueControl: true, lifecycle: true }).flatMap(group => group.rows).map(row => row.key);
+  const keys = keyGroups({ taskBound: true, jobs: true, queueControl: true, lifecycle: true }).flatMap(group => group.rows).map(row => row.key);
   expect(keys).not.toContain("/"); expect(keys).toContain("F3");
 });
 
 test("F1 lists each view's F-key with its Alt+digit, and the Scroll and Exit groups", () => {
-  const groups = keyGroups({ taskBound: false, answer: true, jobs: false, queueControl: false, lifecycle: false });
+  const groups = keyGroups({ taskBound: false, jobs: false, queueControl: false, lifecycle: false });
   const views = groups.find(group => group.title === "Views")!.rows.map(row => row.key);
-  expect(views).toEqual(["F9/Alt+1", "F8/Alt+2", "F7/Alt+3", "F11/Alt+4"]);
+  expect(views).toEqual(["F9/Alt+1", "F8/Alt+2", "F7/Alt+3"]);
   for (const title of ["Scroll", "Exit"]) expect(groups.some(group => group.title === title)).toBeTrue();
-  const exit = (build: boolean) => keyGroups({ taskBound: false, answer: false, jobs: false, queueControl: false, lifecycle: false, build })
+  const exit = (build: boolean) => keyGroups({ taskBound: false, jobs: false, queueControl: false, lifecycle: false, build })
     .find(group => group.title === "Exit")!.rows.map(row => row.key);
   expect(exit(true)).toContain("/finish"); expect(exit(false)).not.toContain("/finish");
   expect(exit(false)).toContain("Ctrl+D");

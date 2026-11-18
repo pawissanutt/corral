@@ -1,11 +1,11 @@
-// One host-side copy of the canonical ledger, read by the sidebar's Plan tab and, for PM and
-// assistant sessions, by the model's request summary, so both name the same plan and revision.
-// The Rust ledger owns every status; this module only reads, holds and re-reads it.
+// One pane-side copy of the session's todo ledger, read by the sidebar's Plan tab and, for assistant
+// sessions, by the model's request summary, so both name the same plan and revision.
+// The host's local ledger owns every status; this module only reads, holds and re-reads it.
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 
 import type { HostIdentity } from "../roles/types.ts";
-import { observedCorralResult } from "./receipt-source.ts";
+import { observedCorralResult } from "./nested-result.ts";
 
 const Status = z.discriminatedUnion("state", [
   z.object({ state: z.literal("pending") }),
@@ -30,16 +30,13 @@ export const ProgressSchema = z.object({
       criteria: z.array(z.string()).default([]),
     })),
   })),
-  /** PM and assistant plans only: the plan identity the model's request summary names. */
+  /** Assistant plans only: the plan identity the model's request summary names. */
   plan: z.string().optional(),
   waits: z.array(Wait).optional(),
 });
 export type TodoProgress = z.infer<typeof ProgressSchema>;
 
-const Receipt = z.object({
-  state: z.literal("committed"),
-  result: z.object({ progress: ProgressSchema }),
-});
+const Result = z.object({ progress: ProgressSchema });
 const Continued = z.object({
   key: z.string(), plan: z.string(), revision: z.number(), attempt: z.number(),
   stopped: z.enum(["no_progress", "limit"]).optional(),
@@ -49,8 +46,7 @@ const Requests = z.object({ continued: Continued.nullable().optional() }).nullab
 const WorkerSnapshot = z.object({
   runs: z.array(z.object({ id: z.string(), progress: ProgressSchema.nullable().optional() })),
 });
-const PmSnapshot = z.object({ container: z.object({ todo: ProgressSchema.nullable(), todo_requests: Requests }) });
-const AssistantSnapshot = z.object({
+const SessionSnapshot = z.object({
   container: z.object({ state: z.object({ todo: ProgressSchema.nullable().optional(), todo_requests: Requests }) }),
 });
 
@@ -60,12 +56,8 @@ export interface LedgerSnapshot {
 }
 
 export function snapshotLedger(value: unknown, identity: HostIdentity): LedgerSnapshot {
-  if (identity.role === "pm") {
-    const { todo, todo_requests } = PmSnapshot.parse(value).container;
-    return { progress: todo, continued: todo_requests?.continued ?? null };
-  }
-  if (identity.role === "assistant" || identity.role === "build") {
-    const { todo, todo_requests } = AssistantSnapshot.parse(value).container.state;
+  if (identity.role !== "worker") {
+    const { todo, todo_requests } = SessionSnapshot.parse(value).container.state;
     return { progress: todo ?? null, continued: todo_requests?.continued ?? null };
   }
   const run = WorkerSnapshot.parse(value).runs.find((run) => run.id === identity.run);
@@ -81,7 +73,7 @@ export class TodoLedger {
   private progress: TodoProgress | null = null;
   private continuedState: ContinuedState | null = null;
   private stale = true;
-  // A receipt arriving during a read is newer than that read's snapshot.
+  // A result arriving during a read is newer than that read's snapshot.
   private version = 0;
   private readonly listeners = new Set<(failure?: string) => void>();
 
@@ -111,7 +103,7 @@ export class TodoLedger {
     this.continuedState = continued;
   }
 
-  /** Re-reads the canonical ledger; false when a newer receipt superseded the read. */
+  /** Re-reads the host's ledger; false when a newer result superseded the read. */
   async restore(): Promise<boolean> {
     const started = ++this.version;
     try {
@@ -130,24 +122,18 @@ export class TodoLedger {
     }
   }
 
-  /** A committed corral_todo or corral_progress tool result; one without progress re-reads. */
-  async receipt(details: unknown): Promise<void> {
-    const receipt = Receipt.safeParse(details);
-    if (receipt.success) this.apply(receipt.data.result.progress);
-    else if (z.object({ state: z.literal("committed") }).safeParse(details).success) await this.restore().catch(() => false);
-    else if (z.object({ state: z.enum(["uncertain", "reserved", "queued"]) }).safeParse(details).success
-      || z.object({ error: z.object({ effect: z.literal("unknown") }) }).safeParse(details).success) {
-      // A read started before this outcome cannot establish post-mutation freshness.
-      this.version++;
-      this.stale = true;
-      for (const listener of this.listeners) listener("Todo outcome unconfirmed; refresh canonical ledger");
-    }
+  /** A corral_todo result: the ledger it returns replaces the held copy; one without progress re-reads; a failure changed nothing. */
+  async result(details: unknown, isError: boolean): Promise<void> {
+    if (isError) return;
+    const result = Result.safeParse(details);
+    if (result.success) this.apply(result.data.progress);
+    else await this.restore().catch(() => false);
   }
 
   extend(pi: ExtensionAPI): void {
     pi.on("tool_result", async (event) => {
-      if (!["corral_todo", "corral_progress"].includes(event.toolName) || !observedCorralResult(event)) return;
-      await this.receipt(event.details);
+      if (event.toolName !== "corral_todo" || !observedCorralResult(event)) return;
+      await this.result(event.details, event.isError);
     });
   }
 }
@@ -170,7 +156,7 @@ function staleNotice(ledger: TodoLedger, failure: string): string {
 }
 
 /**
- * `/todo` shows the Plan tab, `/todo up|down` turn its page and `/todo refresh` rereads the canonical ledger.
+ * `/todo` shows the Plan tab, `/todo up|down` turn its page and `/todo refresh` rereads the host's ledger.
  * `restoreOnStart` rereads the ledger when the terminal UI opens. A failed or unconfirmed read is a warning
  * notice on the surface; the last confirmed revision stays shown, marked stale.
  */

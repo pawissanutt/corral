@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::{
-    Actor, CheckKind, CheckResult, Engine, Next, Op, Outcome, Run, Status, Store, Task,
+    Actor, CheckKind, CheckResult, Engine, Next, Op, Outcome, Run, Runner, Status, Store, Task,
     checkout::Checkout,
     events::EventKind,
     pipeline::OperationFailure,
@@ -258,7 +258,7 @@ impl Engine {
             let stop = self.live_session(&run)?.is_some();
             if landing == run.id {
                 if stop && let Some(session) = &run.session {
-                    self.runner
+                    self.session_runner()
                         .stop(session)
                         .context("stop landed worker session")?;
                 }

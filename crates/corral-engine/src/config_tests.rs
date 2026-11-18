@@ -83,7 +83,7 @@ profile = "sol"
     assert_eq!(config.runner.herdr_session.as_deref(), Some("isolated"));
     assert_eq!(config.sync.quiet_after_secs, 60);
     assert_eq!(config.artifacts.max_bytes, 1234);
-    assert_eq!(config.harnesses.len(), 5);
+    assert_eq!(config.harnesses.len(), 6);
     assert!(config.harnesses["omp"].command.starts_with("custom "));
     assert!(config.profiles.contains_key("generic"));
     assert_eq!(config.resolve_profile(&task(), None).unwrap(), "sol");
@@ -116,8 +116,8 @@ gate = "just check"
     assert_eq!(config.defaults.branch_prefix, "corral/");
     assert_eq!(config.defaults.max_rounds, 2);
     assert_eq!(config.defaults.profile.as_deref(), Some("omp-sol"));
-    assert_eq!(config.harnesses.len(), 4);
-    assert_eq!(config.profiles.len(), 5);
+    assert_eq!(config.harnesses.len(), 5);
+    assert_eq!(config.profiles.len(), 6);
     assert_eq!(config.effective_project("app").unwrap().base, None);
     config.defaults.base = Some("trunk".into());
     config.defaults.profile = Some("omp".into());
@@ -385,12 +385,20 @@ fn rendering_builtins_and_embedded_quotes_does_not_double_quote_values() {
         worktree: Path::new("."),
         corral: Path::new("corral-next"),
     };
-    for name in ["omo", "omp", "claude", "generic"] {
+    for name in ["omo", "omp", "claude", "pi", "generic"] {
         let builtin = &config.harnesses[name];
         let rendered = render_command(builtin, &config.profiles[name], &context).unwrap();
         assert!(!rendered.contains("{prompt_"));
         assert!(!rendered.contains("{model_args}"));
-        assert!(rendered.starts_with(name) || (name == "generic" && rendered.starts_with("cat ")));
+        match name {
+            "pi" => {
+                assert!(rendered.starts_with("corral-pi run "));
+                assert!(rendered.contains(" --prompt-file "));
+                assert!(rendered.contains(" --corral "));
+            }
+            "generic" => assert!(rendered.starts_with("cat ")),
+            _ => assert!(rendered.starts_with(name)),
+        }
     }
     let harness = Harness {
         command: "printf '%s\\0' prefix'{name}'suffix \"prefix{corral}suffix\"".into(),

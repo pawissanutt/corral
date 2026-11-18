@@ -70,6 +70,21 @@ enum HandoffAction {
         question_revision: u32,
     },
     Read {},
+    /// Host-only, read-only: the exact current-revision continuation of this session's
+    /// board-owned scope for one goal. Grants nothing; Start consumes it only once bound.
+    ContinuePreview {
+        goal: workflow::handoff::Goal,
+    },
+    /// Host-only, read-only: the exact context/scope a local choice would package.
+    LocalPreview {
+        local: Box<workflow::handoff::native_local::LocalChoice>,
+    },
+    /// Host-only, read-only: the binding a native selection must be journaled against.
+    Binding {
+        native: Box<workflow::handoff::native::NativeAction>,
+        /// The `shown` digest of the read the sheet displayed.
+        shown: String,
+    },
     Reconcile {
         expected: Expected,
     },
@@ -181,8 +196,10 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
         AgentOp::AssistantPlan => plan(ctx, envelope),
         AgentOp::AssistantPlanReview => review(ctx, envelope),
         AgentOp::AssistantHandoff => {
-            let action: HandoffAction =
-                super::payload(envelope, "action, expected?, question?, question_revision?")?;
+            let action: HandoffAction = super::payload(
+                envelope,
+                "action, expected?, question?, question_revision?, native?, shown?, goal?, local?",
+            )?;
             match action {
                 HandoffAction::Commit {
                     expected,
@@ -202,7 +219,31 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
                 | HandoffAction::ReturnPreview { expected } => {
                     let _ = expected;
                 }
-                HandoffAction::Read {} => {}
+                HandoffAction::Read {} => return handoff_read(ctx, envelope),
+                HandoffAction::ContinuePreview { goal } => {
+                    return handoff_continue_preview(ctx, envelope, goal);
+                }
+                HandoffAction::LocalPreview { local } => {
+                    let origin = lookup(ctx, envelope)?;
+                    let session = envelope
+                        .identity
+                        .assistant
+                        .as_deref()
+                        .context("assistant identity missing")?;
+                    ctx.store
+                        .inspect_assistant_container(session, |container, ended| {
+                            admission::recheck_assistant(
+                                container,
+                                ended,
+                                envelope.identity.generation,
+                            )
+                        })?;
+                    let preview = workflow::handoff::native_local::preview(ctx, session, &local)?;
+                    return Ok(unstored(&origin, preview));
+                }
+                HandoffAction::Binding { native, shown } => {
+                    return handoff_binding(ctx, envelope, &native, &shown);
+                }
             }
             unavailable(ctx, envelope, "assistant-handoff-package-and-ownership")
         }
@@ -212,6 +253,72 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
         )
         .into()),
     }
+}
+
+/// Read-only shared responsibility projection; grants no transfer or execution consent.
+fn handoff_read(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
+    let origin = lookup(ctx, envelope)?;
+    let session = envelope
+        .identity
+        .assistant
+        .as_deref()
+        .context("assistant identity missing")?;
+    // The local route's project: the session's own, else its single scratch project.
+    let record = ctx.store.get_assistant(session)?;
+    let mut projects: Vec<_> = record.scratch.iter().map(|s| s.project.clone()).collect();
+    projects.dedup();
+    let project = record
+        .project
+        .clone()
+        .or_else(|| (projects.len() == 1).then(|| projects[0].clone()));
+    let shown = |ctx: &Ctx| -> Result<String> {
+        let c = ctx.store.get_assistant_container(session)?;
+        Ok(workflow::handoff::native_view::view(ctx, session, &c)?.digest)
+    };
+    let before = shown(ctx)?;
+    let state = ctx
+        .store
+        .inspect_assistant_container(session, |container, ended| {
+            admission::recheck_assistant(container, ended, envelope.identity.generation)?;
+            let local =
+                workflow::handoff::native_local::offer(&ctx.store, container, project.clone())
+                    .unwrap_or_else(|e| serde_json::json!({"unavailable": format!("{e:#}")}));
+            // Implement here: only a ready local plan with a declared scope, while planning.
+            let implement = workflow::handoff::native_implement::offer(&ctx.store, container)
+                .unwrap_or_else(|e| serde_json::json!({"unavailable": format!("{e:#}")}));
+            // Retained planning/local-review facts from the same canonical reads the
+            // review tool uses: exact reviewed vs current revision, never inferred.
+            let planning = match &container.workflow {
+                Some(w) => serde_json::json!({
+                    "plan_revision": w.current.current_plan.as_ref().map(|p| p.revision),
+                    "plan_stage": w.current.current_plan.as_ref().map(|p| p.stage),
+                    "reviews": workflow::review::read(&ctx.store, session, container, None, 0, 0)
+                        .map(|r| r["reviews"].clone())
+                        .unwrap_or_else(|e| serde_json::json!({"unavailable": format!("{e:#}")})),
+                }),
+                None => serde_json::Value::Null,
+            };
+            Ok((
+                container
+                    .workflow
+                    .as_ref()
+                    .map(|w| (w.current.owner.clone(), w.current.phase)),
+                planning,
+                local,
+                implement,
+            ))
+        })?;
+    let mut result = workflow::handoff::status::for_assistant(ctx, state.0)?;
+    result["planning"] = state.1;
+    result["local"] = state.2;
+    result["implement"] = state.3;
+    // Every native selection binds this digest; a change during the read is retried, not shown.
+    anyhow::ensure!(
+        shown(ctx)? == before,
+        "handoff_changed_while_reading: retry /handoff"
+    );
+    result["shown"] = serde_json::json!(before);
+    Ok(unstored(&origin, result))
 }
 
 fn review(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
@@ -261,6 +368,118 @@ fn review(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             }
             ReviewAction::Read { .. } => unreachable!("closed read dispatch"),
         };
+        Ok(Commit {
+            result,
+            effect: None,
+            post_pending: Vec::new(),
+        })
+    })
+}
+
+/// Read-only continuation preview for this session's own board-owned scope only.
+fn handoff_continue_preview(
+    ctx: &Ctx,
+    envelope: &Envelope,
+    goal: workflow::handoff::Goal,
+) -> Result<CallResponse> {
+    let origin = lookup(ctx, envelope)?;
+    let session = envelope
+        .identity
+        .assistant
+        .as_deref()
+        .context("assistant identity missing")?;
+    let task = ctx
+        .store
+        .inspect_assistant_container(session, |container, ended| {
+            admission::recheck_assistant(container, ended, envelope.identity.generation)?;
+            match &workflow::current(container)?.owner {
+                corral_core::assistant_workflow::ScopeOwner::Board { task } => Ok(task.clone()),
+                _ => anyhow::bail!("handoff_owner: this scope is not board-owned"),
+            }
+        })?;
+    let choice = workflow::handoff::continuation::preview(ctx, &task, goal)?;
+    Ok(unstored(&origin, serde_json::json!({"choice": choice})))
+}
+
+/// Read-only binding for the host's native sheet; journaling and consumption are separate.
+fn handoff_binding(
+    ctx: &Ctx,
+    envelope: &Envelope,
+    native: &workflow::handoff::native::NativeAction,
+    shown: &str,
+) -> Result<CallResponse> {
+    let origin = lookup(ctx, envelope)?;
+    let session = envelope
+        .identity
+        .assistant
+        .as_deref()
+        .context("assistant identity missing")?;
+    let container = ctx.store.get_assistant_container(session)?;
+    anyhow::ensure!(
+        workflow::handoff::native_view::view(ctx, session, &container)?.digest == shown,
+        workflow::handoff::native_view::STALE
+    );
+    let result = ctx
+        .store
+        .inspect_assistant_container(session, |container, ended| {
+            admission::recheck_assistant(container, ended, envelope.identity.generation)?;
+            let (binding, digest) = workflow::handoff::native::binding(container, session, native, shown)?;
+            Ok(serde_json::json!({"binding": binding, "digest": digest, "option": native.option()?}))
+        })?;
+    Ok(unstored(&origin, result))
+}
+
+/// Host-only native handoff consumer. The cited input must be a host-journaled Choice
+/// bound to this exact action; it is consumed once before the shared C3 service runs.
+/// A lost acknowledgement replays the stored receipt; a retry after an unrecorded effect
+/// refuses as already consumed rather than repeating it.
+pub(crate) fn handoff_choice(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Payload {
+        kind: String,
+        input: String,
+        native: workflow::handoff::native::NativeAction,
+        shown: String,
+    }
+    let payload: Payload = super::payload(envelope, "kind, input, native, shown")?;
+    if payload.kind != "handoff_choice"
+        || crate::agent::envelope::event_id_parts(&envelope.request_id).is_none()
+        || envelope.identity.assistant.is_none()
+    {
+        return Err(Rejection::new(
+            RejectCode::BadRequest,
+            "native handoff choice requires a host event",
+        )
+        .into());
+    }
+    let reference = admission::container_of(&envelope.identity);
+    let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
+        Admission::Replay(stored) => return receipts::respond(ctx, &reference, *stored, true),
+        Admission::New(admitted) => admitted,
+    };
+    let session = envelope
+        .identity
+        .assistant
+        .as_deref()
+        .context("assistant identity missing")?;
+    let evidence = ctx
+        .store
+        .inspect_assistant_container(session, |container, ended| {
+            admission::recheck_assistant(container, ended, envelope.identity.generation)?;
+            workflow::handoff::native::authenticate(
+                container,
+                session,
+                envelope.identity.generation,
+                &payload.input,
+                &payload.native,
+                &payload.shown,
+            )
+        })
+        .map_err(|e| Rejection::new(RejectCode::BadRequest, format!("{e:#}")))?;
+    let result = workflow::handoff::native::consume(ctx, evidence, payload.native, &payload.shown)
+        .map_err(|e| Rejection::new(RejectCode::BadRequest, format!("{e:#}")))?;
+    receipts::commit_assistant(ctx, &admitted, |_| {
         Ok(Commit {
             result,
             effect: None,

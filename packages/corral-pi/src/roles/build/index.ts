@@ -2,14 +2,11 @@ import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import { askUserContract } from "../common/ask-user.ts";
 import { calibrationReader } from "../common/family.ts";
 import { requestContract, sessionTodoTool } from "../common/todo.ts";
-import { receiptLookupTool } from "../common/tools.ts";
-import type { CorralOp, RoleContext, RoleModule, UpstreamTool } from "../types.ts";
+import type { RoleContext, RoleModule, UpstreamTool } from "../types.ts";
 import { buildShellRefusal, installBuildGuard } from "./guard.ts";
 
 export const CONTRACT_ASSET = "assets/build-contract.md";
 export const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "grep", "find", "ls", "bash"];
-const LOOKUP = receiptLookupTool();
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo"];
 
 function sessionFacts(context: RoleContext): string {
   if (!context.build) return "## This build session\n\nNo build session is bound. Writes are refused until the host binds a build worktree.";
@@ -44,8 +41,7 @@ export function buildRole(root: string): RoleModule {
   return {
     role: "build",
     upstreamTools: UPSTREAM,
-    corralOps: OPS,
-    tools: (context) => context.todo === true ? [LOOKUP, sessionTodoTool] : [LOOKUP],
+    tools: (context) => context.todo === true ? [sessionTodoTool] : [],
     contract: (context) => `${renderContract(readAsset(root, CONTRACT_ASSET).replace(
       /<!-- (bare|corral)-only -->([\s\S]*?)<!-- \/\1-only -->/g,
       (_match, kind: string, text: string) => (kind === "bare") === (context.build?.session.bare === true) ? text : ""), context.identity)}\n\n`

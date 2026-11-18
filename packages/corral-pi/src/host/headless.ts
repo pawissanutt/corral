@@ -1,8 +1,5 @@
-// Headless host mode (T-577; plan T-460 menu 24). When the generation's snapshot enables
-// `headless`, the host binds the role's extensions itself instead of starting InteractiveMode, so
-// no terminal UI exists and nothing reads the terminal. The kickoff still starts when extensions
-// bind; answers, wakes and nudges arrive only through the authenticated bridge (`submit_input`)
-// from corral's durable inbox, as they do for an interactive host. The pane shows a plain log.
+// Headless sessions bind the role extensions without creating a terminal UI. Owner and engine
+// input both arrive on the session socket; the process log shows turn boundaries.
 import type { BridgeEvent, EventLog } from "../bridge/events.ts";
 import type { CapabilitySet } from "../roles/types.ts";
 import type { HostSession } from "./session.ts";
@@ -18,7 +15,9 @@ export function headlessLine(event: BridgeEvent): string | undefined {
   const at = event.at.slice(11, 19);
   switch (event.kind) {
     case "headless":
-      return `${at} headless: no terminal input; corral delivers prompts, answers and wakes through the inbox`;
+      return `${at} headless: input arrives on the session socket`;
+    case "ready":
+      return `${at} session socket ready`;
     case "turn_started":
       return `${at} turn ${event.turn} started`;
     case "turn_ended":

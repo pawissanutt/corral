@@ -15,11 +15,17 @@ test("build writes stay inside the session worktree and outside protected direct
     for (const path of [join(base, "outside.ts"), join(`${worktree}-other`, "file.ts"), "../outside.ts"]) {
       expect(classifyBuildWrite(path, worktree).allowed).toBe(false);
     }
-    for (const directory of [".git", ".corral", ".worktrees"]) {
+    for (const directory of [".git", ".corral", ".corral-next", ".worktrees"]) {
       expect(classifyBuildWrite(join(worktree, directory), worktree).allowed).toBe(false);
       expect(classifyBuildWrite(join(worktree, directory, "new"), worktree).allowed).toBe(false);
       expect(classifyBuildWrite(join(worktree, "nested", directory, "new"), worktree).allowed).toBe(false);
     }
+    const memory = join(base, ".corral-next", "memory");
+    mkdirSync(memory, { recursive: true });
+    symlinkSync(worktree, join(memory, "escape"));
+    expect(classifyBuildWrite(join(memory, "notes.md"), worktree, base)).toEqual({ allowed: true });
+    expect(classifyBuildWrite(join(memory, "notes.md"), worktree).allowed).toBeFalse();
+    expect(classifyBuildWrite(join(memory, "escape", "notes.md"), worktree, base).allowed).toBeFalse();
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -66,11 +72,11 @@ test("model shells cannot file board work or choose an exit through any corral i
   for (const command of [
     "corral --root /workspace import plan.md --origin owner --json",
     "corral --root='/workspace with spaces' new 'Unconfirmed work'",
-    "corral list && corral queue add T-1",
+    "corral list && corral move T-1 ready",
     "corral show T-1 || /usr/bin/corral approve T-1",
     "corral log T-1; ./target/debug/corral move T-1 ready",
     "printf plan | corral import plan.md --origin owner",
-    "corral list\ncorral build land --session B-one",
+    "corral list\ncorral approve T-1",
     "printf '%s' \"$(corral --root /workspace import plan.md --origin owner)\"",
     "printf '%s' \"$(printf '%s' \"$(corral new nested)\")\"",
     "env -u AI_AGENT CORRAL_PM=0 /usr/bin/corral import plan.md --origin owner",
@@ -81,11 +87,11 @@ test("model shells cannot file board work or choose an exit through any corral i
     "corral search --reindex example",
     "corral route T-1 --clear-reviewer",
     "corral attention park T-1",
-    "corral build gate --session B-one --tier full",
-    "corral build land --session B-one",
-    "corral build record --file record.json",
     "corral unknown-extension",
     "corral",
+    '"$CORRAL" --json review T-1',
+    "env -u CORRAL_ACTOR /opt/bin/corral-next --root=/workspace new 'Unconfirmed work'",
+    "corral-next artifact add T-1 /tmp/evidence.log",
   ]) {
     const refusal = buildShellRefusal(command);
     expect([command, typeof refusal]).toEqual([command, "string"]);
@@ -97,14 +103,14 @@ test("model shells cannot file board work or choose an exit through any corral i
     "env -u AI_AGENT command corral --root=/workspace list --json",
     "corral log T-1 | cat",
     "printf '%s' \"$(/usr/bin/corral show T-1 --json)\"",
-    "corral list && corral review T-1 --diff",
-    "corral stats; corral pins; corral build-identity",
-    "corral build list --json; corral build show B-one --json",
     "corral help import; corral --help; corral --version",
     "printf '%s' 'corral import plan.md --origin owner'",
     "echo '$(corral new example)'",
     "# corral import plan.md\ncorral list",
+    '"${CORRAL}" --root /workspace --json show T-1',
+    "corral-next artifact list T-1; corral-next artifact show T-1:1",
   ]) {
     expect([command, buildShellRefusal(command)]).toEqual([command, undefined]);
   }
+  expect(buildShellRefusal("corral-next list", true)).toContain("bare session rule");
 });

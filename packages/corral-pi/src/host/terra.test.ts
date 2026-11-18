@@ -9,8 +9,7 @@ import { join } from "node:path";
 import { calculateCost } from "@earendil-works/pi-ai";
 
 import { EventLog } from "../bridge/events.ts";
-import { CorralClient, sha256Hex } from "../tools/corral.ts";
-import { writeFakeCorral } from "../../test/support/fake-corral.ts";
+import { CorralClient } from "../tools/corral.ts";
 import { type FixtureInstall, buildFixtureInstall } from "../../test/support/fixture-install.ts";
 import { loadModules } from "./modules.ts";
 import { guardedFetch, restrictEnvironment } from "./restrict.ts";
@@ -20,14 +19,14 @@ import { NO_CATALOG_CREDENTIALS, createModelCatalog } from "./catalog.ts";
 const originalFetch = globalThis.fetch;
 const previousXdg = process.env.XDG_DATA_HOME;
 const identity = {
-  store: "st-0123456789abcdef", project: "demo", role: "worker", generation: 1, task: "T-001", run: "R1",
+  store: "st-0123456789abcdef", project: "demo", role: "worker", task: "T-001", run: "R1",
 } as ConstructorParameters<typeof CorralClient>[0]["identity"];
 
 let assets: FixtureInstall;
 let work: string;
 
 beforeAll(() => {
-  assets = buildFixtureInstall({ omit: ["delivery"] });
+  assets = buildFixtureInstall();
   work = mkdtempSync(join(tmpdir(), "corral-pi-terra-"));
   process.env.XDG_DATA_HOME = join(work, "xdg");
   restrictEnvironment(process.env);
@@ -50,23 +49,25 @@ async function start(model: string, effort?: string): Promise<HostSession> {
   const network = guardedFetch(transport, () => undefined);
   globalThis.fetch = network.fetch as typeof globalThis.fetch;
   const sdk = await import("@earendil-works/pi-coding-agent");
-  const corral = writeFakeCorral(dir);
-  let host: HostSession | undefined;
-  const client = new CorralClient({ corral: corral.path, root: dir, identity, hostCap: "h".repeat(64), sessionId: () => host!.sessionId() });
-  host = await HostSession.create({
+  const client = new CorralClient({ corral: "", root: dir, cwd: join(dir, "worktree"), identity });
+  const host = await HostSession.create({
     sdk, identity, cwd: join(dir, "worktree"), agentDir: join(dir, "pi-agent"), model, ...(effort ? { effort } : {}),
-    modules, client, events: new EventLog(1), network,
+    modules, client, events: new EventLog(), network,
     sessionManager: sdk.SessionManager.create(join(dir, "worktree"), join(dir, "sessions")),
   });
-  await host.hello("n".repeat(64), "pane-worker", sha256Hex("c".repeat(64)));
+  await host.startLocal();
   return host;
 }
 
 test("a host session starts on openai-codex/gpt-6.1-terra at medium effort without an owner models.json", async () => {
   const host = await start("openai-codex/gpt-6.1-terra", "medium");
-  expect(host.state().model).toBe("openai-codex/gpt-6.1-terra");
-  expect(host.session.model?.id).toBe("gpt-6.1-terra");
-  expect(host.session.thinkingLevel).toBe("medium");
+  try {
+    expect(host.state().model).toBe("openai-codex/gpt-6.1-terra");
+    expect(host.session.model?.id).toBe("gpt-6.1-terra");
+    expect(host.session.thinkingLevel).toBe("medium");
+  } finally {
+    await host.close();
+  }
 }, 60_000);
 
 test("a model absent from every catalog is refused with model_unavailable", async () => {

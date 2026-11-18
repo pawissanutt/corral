@@ -25,6 +25,12 @@ pub fn read_state(
         return Ok(result);
     };
     let w = &index.current;
+    // The host opens an executing scope only on a validated grant with its scratch recorded.
+    result["execution_open"] = json!(
+        w.phase == corral_core::assistant_workflow::WorkflowPhase::Executing
+            && super::handoff::native_implement::granted(store, session, container)
+                .unwrap_or(false)
+    );
     // Missing/corrupt canonical bytes are recovery-required, never ordinary mode.
     load_artifact(store, &w.original_request)?;
     if let Some(plan) = &w.current_plan {

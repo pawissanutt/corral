@@ -11,7 +11,7 @@ import { createChatViewport } from "../../node_modules/@earendil-works/pi-coding
 import { NativeWorkbench, plainClick } from "./workbench.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
 test("public SDK body seam switches main views while retaining the actual transcript instance and editor dock", () => {
-  const wb = new NativeWorkbench({ cwd: tmpdir(), identity: { store: "s", project: "p", role: "assistant", assistant: "A-test", generation: 1 }, snapshot: () => null, changed() {}, canInteract: () => true });
+  const wb = new NativeWorkbench({ cwd: tmpdir(), identity: { store: "s", project: "p", role: "assistant", assistant: "A-test" }, snapshot: () => null, changed() {}, canInteract: () => true });
   let supplied: Component | undefined;
   const viewport = createChatViewport({ document: new Text("REAL_TRANSCRIPT", 0, 0), pendingMessages: new Text("", 0, 0), status: new Text("", 0, 0),
     editor: new Text("REAL_EDITOR_DRAFT", 0, 0), footer: new Text("REAL_FOOTER", 0, 0), mainView: transcript => { supplied = transcript; return wb.mount(transcript); } });

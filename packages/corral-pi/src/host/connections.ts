@@ -1,6 +1,6 @@
 // Versioned Rust -> Pi binding. A model/provider override cannot change its billing route.
 import { createHash } from "node:crypto";
-import { CONNECTIONS, type ConnectionId, isConnectionId, requirePaidAdmission, resolveConnection } from "../auth/connections.ts";
+import { CONNECTIONS, type ConnectionId, isConnectionId, resolveConnection } from "../auth/connections.ts";
 import type { ProviderId } from "../auth/providers.ts";
 
 export interface ConnectionBinding {
@@ -45,13 +45,6 @@ export function parseBinding(value: unknown, provider: ProviderId, model: string
   }
   resolveConnection(provider, binding.connection);
   return binding;
-}
-
-/** API routes require the caller to install the physical-request metered adapter. */
-export function admitConnection(provider: ProviderId, binding?: ConnectionBinding, meteredAdapter = false): ConnectionId {
-  const connection = resolveConnection(provider, binding?.connection);
-  if (!meteredAdapter) requirePaidAdmission(connection);
-  return connection;
 }
 
 export function bindingProvider(binding: ConnectionBinding): ProviderId {

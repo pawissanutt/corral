@@ -10,17 +10,16 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { EventLog } from "../src/bridge/events.ts";
-import { PERMISSION_REF, commandDigest } from "../src/capabilities/bash-rules.ts";
 import { HOOK_ENTRY } from "../src/capabilities/hooks.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
 import type { CapabilitySet, RoleContext } from "../src/roles/types.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
+import { CorralClient } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 import { nextEvent } from "./support/wait.ts";
 
 const record = (tool: string) => ({ name: "mark", argv: ["sh", "-c", `printf '%s\\n' "\${CORRAL_HOOK_TOOL:-${tool}}" >> hooks.log`] });
@@ -49,12 +48,9 @@ test("bash rules and hooks run around worker tools with durable hook attribution
     if (!transport) throw new Error("fixture transport missing");
     const network = guardedFetch(transport);
     globalThis.fetch = network.fetch;
-    const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-572", run: "R1" };
-    const events = new EventLog(1);
-    const corral = writeFakeCorral(work);
-    const client = new CorralClient({
-      corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
-    });
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const, task: "T-572", run: "R1" };
+    const events = new EventLog();
+    const client = new CorralClient({ corral: writeFakeEngine(work).path, root: work, cwd, identity });
     const nest: ToolDefinition = {
       name: "fixture_nest", label: "Nest", description: "Runs nested calls",
       parameters: Type.Object({}),
@@ -77,16 +73,8 @@ test("bash rules and hooks run around worker tools with durable hook attribution
       sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
     });
     await host.session.bindExtensions({});
-    await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+    await host.startLocal();
     const live = host;
-    const turn = async (stage: string, origin: string, text: string, script: Parameters<ReturnType<typeof fixtureTransport>["script"]>[0]) => {
-      fixtureTransport().script(script);
-      const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-      expect((await live.submit({ text, busyPolicy: "prompt", idempotencyKey: stage, origin }, `rq-${stage}`)).disposition)
-        .toBe("started");
-      await ended;
-      await live.drained();
-    };
     const result = (callId: string) => {
       const message = live.session.messages.find((m) => m.role === "toolResult" && m.toolCallId.split("|")[0] === callId);
       if (message?.role !== "toolResult") throw new Error(`no result for ${callId}`);
@@ -96,7 +84,8 @@ test("bash rules and hooks run around worker tools with durable hook attribution
     const kinds = () => events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events.map((e) => e.kind);
 
     // When one turn reads, runs denied, ask and allowed commands, calls corral and nests calls.
-    await turn("t1", "test", "work", [
+    const firstEnded = nextEvent(events, event => event.kind === "turn_ended");
+    fixtureTransport().script([
       { toolCalls: [{ callId: "t1-read", name: "read", arguments: { path: join(cwd, "notes.txt") } }] },
       { toolCalls: [{ callId: "t1-deny", name: "bash", arguments: { command: "echo hi && rm notes.txt" } }] },
       { toolCalls: [{ callId: "t1-ask", name: "bash", arguments: { command: "touch asked.txt" } }] },
@@ -107,16 +96,22 @@ test("bash rules and hooks run around worker tools with durable hook attribution
       { toolCalls: [{ callId: "t1-nest", name: "fixture_nest", arguments: {} }] },
       { text: "Finished" },
     ]);
+    expect((await live.submitLocal({ text: "work", busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
+    await firstEnded;
+    await live.drained();
     // Then deny wins (also nested), ask runs nothing yet, and the allowed command works.
     expect(result("t1-deny")).toEqual({ isError: true, text: "bash rule \"rm *\" denies \"rm notes.txt\"; nothing ran" });
     expect(result("t1-nest").text).toBe("[true,true,true,false]");
     expect(result("t1-deny-flags")).toEqual({ isError: true, text: "bash rule \"rm *\" denies \"rm notes.txt\"; nothing ran" });
     expect(result("t1-ask-flags").isError).toBeTrue();
-    expect(result("t1-ask-flags").text).toContain(`${PERMISSION_REF}${commandDigest("bash -lc 'touch asked.txt'")}`);
+    const pending = live.pendingOwnerQuestions();
+    const wrapped = pending.find(question => question.question === "Run this command?\nbash -lc 'touch asked.txt'");
+    const plain = pending.find(question => question.question === "Run this command?\ntouch asked.txt");
+    if (!plain || !wrapped) throw new Error("expected both command-specific owner questions");
+    expect(result("t1-ask-flags").text).toContain(wrapped.id);
     expect(existsSync(join(cwd, "notes.txt"))).toBeTrue();
-    const ref = `${PERMISSION_REF}${commandDigest("touch asked.txt")}`;
     expect(result("t1-ask").isError).toBeTrue();
-    expect(result("t1-ask").text).toContain(ref);
+    expect(result("t1-ask").text).toContain(plain.id);
     expect(existsSync(join(cwd, "asked.txt"))).toBeFalse();
     expect(readFileSync(join(cwd, "allowed.txt"), "utf8")).toBe("ok\n");
     // And hooks ran only around top-level local calls that passed the checks, plus the turn end.
@@ -132,28 +127,29 @@ test("bash rules and hooks run around worker tools with durable hook attribution
     expect(kinds().filter((kind) => kind === "bash_rule_denied")).toHaveLength(4);
     expect(kinds().filter((kind) => kind === "bash_permission_required")).toHaveLength(3);
 
-    // When the model asks the bound permission question and the owner's answer is delivered.
-    await turn("t2", "test", "ask", [
-      { toolCalls: [{ callId: "t2-ask", name: "corral_ask", arguments: {
-        kind: "permission", text: "May I run touch asked.txt?", options: ["allow", "deny"], context_refs: [ref] } }] },
-      { text: "Asked" },
-    ]);
-    expect(kinds()).toContain("bash_permission_asked");
-    await turn("t3", "corral-inbox", "Answer to T-572/R1/Q1 (revision 2) by Owner:\nyes\nChosen option: allow", [
+    // The local answer starts a turn. Let that turn retry the exact command twice.
+    const answered = nextEvent(events, event => event.kind === "owner_question" && event.id === plain.id && event.status === "answered");
+    const ended = nextEvent(events, event => event.kind === "turn_ended");
+    fixtureTransport().script([
       { toolCalls: [{ callId: "t3-run", name: "bash", arguments: { command: "touch asked.txt" } }] },
       { toolCalls: [{ callId: "t3-again", name: "bash", arguments: { command: "touch asked.txt" } }] },
       { text: "Done" },
     ]);
+    await live.answerQuestion({ question: plain.id, option: "allow" }, async () => undefined);
+    await answered;
+    await ended;
+    await live.drained();
     // Then the identical command runs once after the answer and the next run asks again.
     expect(result("t3-run").isError).toBeFalse();
     expect(existsSync(join(cwd, "asked.txt"))).toBeTrue();
     expect(result("t3-again").isError).toBeTrue();
-    expect(kinds().filter((kind) => kind === "bash_permission_used")).toHaveLength(1);
-    // And corral received the ask and todo but never saw a hook.
-    expect(corral.calls().map(({ envelope }) => envelope.op).filter((op) => op !== "event" && op !== "hello"))
-      .toEqual(["todo", "ask"]);
+    const repeat = live.pendingOwnerQuestions().find(question => question.question === plain.question);
+    expect(repeat).toBeDefined();
+    expect(repeat?.id).not.toBe(plain.id);
+    expect(kinds().filter(kind => kind === "bash_permission_required")).toHaveLength(4);
   } finally {
-    host?.session.dispose();
+    await host?.close();
+    await host?.drained();
     globalThis.fetch = originalFetch;
     assets.cleanup();
     rmSync(work, { recursive: true, force: true });

@@ -1,34 +1,12 @@
-import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import type { ProviderId } from "../auth/providers.ts";
-import type { CapabilityGuidance } from "../capabilities/guidance.ts";
-import { LocalControlPlane } from "../build/control-plane.ts";
-import { readBuildLaunch } from "../build/launch.ts";
+import { parseBuildFlags, type LocalBuildOptions } from "../build/launch.ts";
 import { createSession, loadSession, saveSession, sessionDir } from "../build/session-store.ts";
-import { createTodoLedger } from "../build/todo-ledger.ts";
 import { prepareWorktree } from "../build/worktree.ts";
 import type { BuildContext, BuildLaunch, BuildSessionRecord } from "../build/types.ts";
-import { LaunchMessageInvalid, type HostCapabilities, type HostConfig } from "./config.ts";
+import { sessionSocket, workspaceSettings, type HostConfig } from "./config.ts";
 import { runHost } from "./main.ts";
-import { requireBareProvider } from "./bare.ts";
-import { createBuildBudgetRecord } from "../build/paid.ts";
-
-// Everything here runs in the host, its own managed processes, or the local receipt plane.
-// write_permissions needs assistant scratch ownership; checkpoints needs a worker run;
-// hooks is a worker-only control;
-// session_export needs corral artifacts; headless needs a bound launcher lifecycle;
-// shadow and expert need PM state; role_enabled is planning-role admission;
-// llama_cpp.enabled needs a generation-bound local inference route. budget is not an
-// optional build capability: local accounting is unlimited and handled for every request.
-// context_files and prompt_templates are excluded to avoid opting a standalone build
-// into the bound project's context-file and prompt-template discovery policy.
-export const BUILD_CAPABILITY_KEYS: readonly string[] = [
-  "todo", "queue_control", "web.enabled", "mcp.enabled", "compaction", "browser", "subagents", "oracle",
-  "ask_user", "codemode", "tool_search", "lsp", "skills", "bash_rules", "background_shell",
-];
 
 /** A refused launch or resume: the error's message keeps the code and detail; `what` and `fix` are what the owner reads. */
 class LaunchRefused extends Error {
@@ -42,7 +20,8 @@ class BuildResumeRefused extends LaunchRefused {
   }
 }
 
-const resumeCommand = (id: string) => `\`corral pi --resume ${id}\``;
+const startCommand = "corral-pi build";
+const resumeCommand = (id: string) => `\`corral-pi build --resume ${id}\``;
 
 /** Verify the recorded checkout before opening its transcript or binding any tools. */
 export function validateBuildResume(record: BuildSessionRecord): void {
@@ -71,7 +50,7 @@ export function validateBuildResume(record: BuildSessionRecord): void {
   if (observed !== expected) {
     throw new BuildResumeRefused(record, `Git common directory differs: expected ${expected}, found ${observed}`,
       `${record.worktree} now belongs to a different Git repository than ${record.repoRoot}.`,
-      "Put the build's worktree back at that path, or start a new build with `corral pi --build`.");
+      `Put the build's worktree back at that path, or start a new build with \`${startCommand}\`.`);
   }
   if (record.here) return;
   const result = spawnSync("git", ["-C", record.worktree, "symbolic-ref", "--quiet", "--short", "HEAD"], { encoding: "utf8" });
@@ -85,35 +64,23 @@ export function validateBuildResume(record: BuildSessionRecord): void {
     const found = branch ? `branch ${branch}` : "a detached HEAD";
     throw new BuildResumeRefused(record, `branch differs: expected ${record.branch ?? "a recorded build branch"}, found ${branch ?? "detached HEAD"}`,
       record.branch ? `${record.worktree} has ${found} checked out, not ${record.branch}.` : `${record.worktree} has no recorded build branch.`,
-      record.branch ? `Run \`git -C ${record.worktree} switch ${record.branch}\`, then ${resume}.` : "Start a new build with `corral pi --build`.");
+      record.branch ? `Run \`git -C ${record.worktree} switch ${record.branch}\`, then ${resume}.` : `Start a new build with \`${startCommand}\`.`);
   }
 }
 
 /** Build the same rich-host configuration for a new build and an explicitly resumed one. */
-export function buildHostConfig(launch: BuildLaunch, record: BuildSessionRecord, assets: string): HostConfig {
+export function buildHostConfig(launch: BuildLaunch, record: BuildSessionRecord, assets: string, local: LocalBuildOptions): HostConfig {
   const dir = sessionDir(launch.dataRoot, record.id);
-  // readBuildLaunch has validated these snapshots with the rich-launch parsers.
-  const snapshot = launch.capabilities as HostCapabilities | undefined;
-  const guidanceSnapshot = launch.guidance as CapabilityGuidance | undefined;
-  const capabilities: HostCapabilities = {
-    catalog: snapshot?.catalog ?? 10, digest: snapshot?.digest ?? "0".repeat(64), preset: snapshot?.preset ?? "default",
-    enabled: snapshot?.enabled.filter(key => BUILD_CAPABILITY_KEYS.includes(key)) ?? [],
-    ...(snapshot?.web ? { web: snapshot.web } : {}), ...(snapshot?.mcp ? { mcp: snapshot.mcp } : {}),
-  };
-  const guidance = guidanceSnapshot ? { ...guidanceSnapshot, settings: Object.fromEntries(
-    Object.entries(guidanceSnapshot.settings).filter(([key]) => BUILD_CAPABILITY_KEYS.includes(key)
-      || key === "web" && capabilities.enabled.includes("web.enabled") || key === "mcp" && capabilities.enabled.includes("mcp.enabled"))) } : undefined;
   return {
-    identity: { store: "build", project: record.project ?? "", role: "build", generation: 1 },
-    secrets: { hostCap: randomBytes(32).toString("base64url"), ctlCap: randomBytes(32).toString("base64url"), bindNonce: randomBytes(32).toString("base64url") },
+    identity: { store: "build", project: record.project ?? "", role: "build" },
     pane: "", cwd: record.worktree, root: record.workspaceRoot ?? record.repoRoot, corral: launch.corral ?? "", assets,
     sessionDir: join(dir, "sessions"), runtimeDir: join(dir, "runtime"), ui: "rich",
-    ...(record.sessionFile ? { resumeSession: record.sessionFile } : {}), capabilities,
-    ...(guidance ? { guidance } : {}), todo: capabilities.enabled.includes("todo"),
-    provider: (record.route?.provider ?? launch.provider) as ProviderId, model: record.route?.model ?? launch.model,
-    ...((record.route?.effort ?? launch.effort) ? { effort: record.route?.effort ?? launch.effort } : {}),
-    ...((record.route?.binding ?? launch.binding) ? { binding: record.route?.binding ?? launch.binding } : {}),
-    ...(launch.aws ? { aws: launch.aws } : {}),
+    ...workspaceSettings(record.workspaceRoot ?? record.repoRoot, "build"),
+    local: { dir, id: record.id, socket: local.socket ?? sessionSocket(dir, process.env), headless: local.headless },
+    provider: (record.route ?? launch).provider, model: (record.route ?? launch).model,
+    effort: (record.route ?? launch).effort, connection: (record.route ?? launch).connection,
+    aws: (record.route ?? launch).aws,
+    maxUsd: launch.maxUsd, paidRoute: launch.paidRoute,
   };
 }
 
@@ -121,10 +88,9 @@ export function buildHostConfig(launch: BuildLaunch, record: BuildSessionRecord,
 function refusalLines(error: unknown, resume: string | undefined): readonly [string, string] {
   if (error instanceof LaunchRefused) return [error.what, error.fix];
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof LaunchMessageInvalid) {
-    return [`The build host received no valid launch message (${message}).`, "Start a build with `corral pi --build`; the host is not run on its own."];
-  }
-  return [`corral pi --build stopped: ${message}`, resume ? `Run ${resumeCommand(resume)} to try again.` : "Run `corral pi --build` to try again."];
+  const command = startCommand;
+  return [`${command} stopped: ${message}`, resume ? `Run ${resumeCommand(resume)} to try again.`
+    : "See `corral-pi build --help`."];
 }
 
 /** What an ordinary quit leaves behind when no exit took the work elsewhere: where it is and how to come back to it. */
@@ -143,17 +109,11 @@ function quitLines(dataRoot: string, fallback: BuildSessionRecord): readonly str
 export async function buildCommand(argv: readonly string[], assets: string): Promise<void> {
   let resume: string | undefined;
   try {
-    if (argv.length !== 2 || argv[0] !== "--launch-fd" || !/^[0-9]+$/.test(argv[1] ?? "")) {
-      throw new LaunchMessageInvalid("run with --launch-fd <n>");
-    }
-    const fd = Number(argv[1]);
-    if (!Number.isSafeInteger(fd) || fd < 3) throw new LaunchMessageInvalid("invalid launch descriptor");
-    const launch = readBuildLaunch(fd);
+    const { launch, local } = parseBuildFlags(argv, assets);
     resume = launch.resume;
-    if (launch.bare) requireBareProvider(launch.provider as ProviderId);
     if (launch.provider === "llama.cpp") {
       throw new LaunchRefused("Local inference is unavailable in a build session", "Local inference (llama.cpp) is unavailable in a build session.",
-        "Choose another provider with `corral pi --build --provider <provider>`.");
+        `Choose another provider with \`${startCommand} --provider <provider>\`.`);
     }
     let record: BuildSessionRecord;
     if (launch.resume) {
@@ -162,21 +122,14 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
       catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         throw new LaunchRefused(detail, `Build ${id} cannot resume: its session record is missing or unreadable (${detail}).`,
-          "Pick a recent build in the `corral pi` launcher, or start a new one with `corral pi --build`.");
+          `Use a recorded session id with ${resumeCommand("<id>")}, or start a new one with \`${startCommand}\`.`);
       }
-      if ((record.bare === true) !== (launch.bare === true)) throw new LaunchMessageInvalid("resume bare marker differs from the saved session");
+      if ((record.bare === true) !== (launch.bare === true)) throw new Error("Resume must use the same workspace association as the saved build session");
       validateBuildResume(record);
       if (!record.sessionFile) {
         throw new LaunchRefused("The build session has no recorded transcript to resume", `Build ${id} has no recorded conversation to resume.`,
-          "Start a new build with `corral pi --build`.");
+          `Start a new build with \`${startCommand}\`.`);
       }
-      if (launch.paid && launch.paid.session !== record.id) throw new LaunchMessageInvalid("paid Build session differs from saved lineage");
-      if (record.route?.paid && (!launch.route?.paid || record.route.binding?.digest !== launch.route.binding?.digest
-          || JSON.stringify(record.route.paid) !== JSON.stringify(launch.route.paid))) {
-        throw new LaunchMessageInvalid("paid Build route cannot change or refresh its allowance");
-      }
-      record = { ...record, ...(launch.route ? { route: launch.route } : {}) };
-      saveSession(launch.dataRoot, record);
     } else {
       const draft = createSession(launch, { worktree: launch.repoRoot, branch: null, base: null });
       try {
@@ -197,19 +150,14 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
         const detail = error instanceof Error ? error.message : String(error);
         const taken = /^Build (worktree|branch) already exists: (.*)$/.exec(detail);
         throw new LaunchRefused(detail, taken ? `A build ${taken[1]} already exists: ${taken[2]}.` : `The build worktree could not be created: ${detail}.`,
-          taken ? "Choose another name with `corral pi --build --name <name>`, or resume that build from the `corral pi` launcher."
-            : "Fix that Git error, or work in the checkout itself with `corral pi --build --here`.");
+          taken ? `Choose another name with \`${startCommand} --name <name>\`, or resume the existing build.`
+            : `Fix that Git error, or work in the checkout itself with \`${startCommand} --here\`.`);
       }
       saveSession(launch.dataRoot, record);
     }
     const dir = sessionDir(launch.dataRoot, record.id);
-    const paidRecord = createBuildBudgetRecord(launch);
-    const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral ?? "",
-      ...(paidRecord ? { paidRecord } : {}),
-      ...(launch.profileCatalog ? { profileCatalog: launch.profileCatalog } : {}),
-      ...(launch.profileRequestPath ? { profileRequestPath: launch.profileRequestPath } : {}) };
-    const config = buildHostConfig(launch, record, assets);
-    const ledger = createTodoLedger(dir);
+    const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral ?? "" };
+    const config = buildHostConfig(launch, record, assets, local);
     // Pi ends an ordinary quit with process.exit(0); this prints after the terminal is restored.
     const session = record;
     process.on("exit", code => {
@@ -217,13 +165,10 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
       const lines = quitLines(launch.dataRoot, session);
       if (lines.length) process.stdout.write(`${lines.join("\n")}\n`);
     });
-    await runHost(config, { bridge: false, build, client: (identity, sessionId) => new LocalControlPlane({
-      dir, root: config.root, identity, sessionId, handlers: { todo: ledger.handle }, todoSnapshot: () => ledger.snapshot(),
-    }) });
+    await runHost(config, { build });
   } catch (error) {
     process.stderr.write(`${refusalLines(error, resume).join("\n")}\n`);
     process.exit(2);
   }
 }
 
-if (import.meta.main) await buildCommand(process.argv.slice(2), fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, ""));

@@ -26,7 +26,7 @@ export interface HelperMessage {
   readonly at?: number;
 }
 export interface HelperInspection {
-  readonly request: string; readonly kind: AuxiliaryKind; readonly model: string; readonly generation: number;
+  readonly request: string; readonly kind: AuxiliaryKind; readonly model: string;
   readonly serviceTier?: "priority";
   readonly prompt: string; readonly phase: "preparing" | "queued" | "running" | Outcome;
   readonly createdAt: number; readonly startedAt?: number; readonly endedAt?: number;
@@ -86,8 +86,8 @@ export class AuxiliaryHistory {
     if (text.length > HELPER_TEXT_LIMIT) entry.truncated = true;
     return text.slice(0, HELPER_TEXT_LIMIT);
   }
-  begin(request: string, kind: AuxiliaryKind, model: string, generation: number, prompt: string, serviceTier?: "priority"): void {
-    const entry: Retained = { request, kind, model, generation, ...(serviceTier ? { serviceTier } : {}), prompt: "", phase: "preparing", createdAt: this.now(), messages: [], sequence: 0, size: 0, truncated: false };
+  begin(request: string, kind: AuxiliaryKind, model: string, prompt: string, serviceTier?: "priority"): void {
+    const entry: Retained = { request, kind, model, ...(serviceTier ? { serviceTier } : {}), prompt: "", phase: "preparing", createdAt: this.now(), messages: [], sequence: 0, size: 0, truncated: false };
     entry.prompt = this.clip(entry, prompt);
     this.entries.set(request, entry);
     while (this.entries.size > HELPER_HISTORY_LIMIT) {

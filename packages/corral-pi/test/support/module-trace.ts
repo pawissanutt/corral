@@ -14,7 +14,7 @@ const bun = Reflect.get(globalThis, "Bun") as BunPlugins;
 bun.plugin({
   name: "corral-module-trace",
   setup(build) {
-    build.onLoad({ filter: /\/src\/(roles\/(worker|reviewer|pm)|delivery)\/index\.ts$/ }, (args) => {
+    build.onLoad({ filter: /\/src\/roles\/(worker|reviewer|assistant|build)\/index\.ts$/ }, (args) => {
       if (trace) appendFileSync(trace, `${args.path}\n`);
       return { contents: readFileSync(args.path, "utf8"), loader: "ts" };
     });

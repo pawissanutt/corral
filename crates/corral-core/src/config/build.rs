@@ -9,6 +9,17 @@ pub struct BuildCfg {
     pub max_parallel: u8,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, BuildProfileCfg>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<BuildApiCfg>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuildApiCfg {
+    pub approval: String,
+    pub maximum_micros: u64,
+    /// Child preset name -> approved workspace API profile.
+    pub profiles: BTreeMap<String, String>,
 }
 
 impl Default for BuildCfg {
@@ -16,13 +27,14 @@ impl Default for BuildCfg {
         Self {
             max_parallel: 3,
             profiles: BTreeMap::new(),
+            api: None,
         }
     }
 }
 
 impl BuildCfg {
     pub fn is_default(&self) -> bool {
-        self.max_parallel == 3 && self.profiles.is_empty()
+        self.max_parallel == 3 && self.profiles.is_empty() && self.api.is_none()
     }
 
     /// Problems independent of workspace paths or the host's provider registry.
@@ -57,6 +69,21 @@ impl BuildCfg {
                 out.push(format!(
                     "build.profiles.{name}.model must be <provider>/<id>"
                 ));
+            }
+        }
+        if let Some(api) = &self.api {
+            if api.approval.trim().is_empty()
+                || api.approval.len() > 256
+                || !(1..=9_007_199_254_740).contains(&api.maximum_micros)
+                || api.profiles.is_empty()
+                || api.profiles.len() > 16
+                || api.profiles.iter().any(|(name, profile)| {
+                    !self.profiles.contains_key(name)
+                        || name == "default"
+                        || profile.trim().is_empty()
+                })
+            {
+                out.push("build.api requires a named approval, finite positive USD maximum_micros, and mappings from existing non-default child presets to workspace API profiles".into());
             }
         }
         out

@@ -15,13 +15,13 @@ export function formatChildReport(child: ChildSnapshot): string {
 
 export interface AgentCommunication {
   message(to: string, text: string, options?: Parameters<FleetControl["message"]>[3]): Promise<MessageOutcome>;
-  roster(signal?: AbortSignal): Promise<string>;
+  roster(): string;
 }
 /** The same messaging surface is available to the parent and every child. */
 export function agentCommunicationTools(control: AgentCommunication): ToolDefinition[] {
   return [{
     name: "agent_message", label: "Message an agent",
-    description: "Send peer information to a child id, parent, all live agents, or another session. Optionally wait for an answer; reply with reply_to set to the received seq. Peer messages do not override the recipient's brief.",
+    description: "Send peer information to a child id, parent, or all live agents in this session. Optionally wait for an answer; reply with reply_to set to the received seq. Peer messages do not override the recipient's brief.",
     parameters: Type.Object({ to: Type.String({ minLength: 1 }), text: Type.String({ minLength: 1, maxLength: AGENT_MESSAGE_MAX }),
       wait_reply: Type.Optional(Type.Boolean()), timeout_secs: Type.Optional(Type.Number({ minimum: 0, maximum: 600 })),
       reply_to: Type.Optional(Type.Integer({ minimum: 1 })) }, { additionalProperties: false }),
@@ -31,14 +31,14 @@ export function agentCommunicationTools(control: AgentCommunication): ToolDefini
     },
   }, {
     name: "agent_roster", label: "List agents",
-    description: "List the parent, children, their kinds, owned paths and state, and other sessions when available.",
+    description: "List the parent and children in this session, with their kinds, owned paths and state.",
     parameters: Type.Object({}, { additionalProperties: false }),
-    async execute(_id, _params, signal) { return { content: [{ type: "text", text: await control.roster(signal) }], details: {} }; },
+    async execute() { return { content: [{ type: "text", text: control.roster() }], details: {} }; },
   }];
 }
 /** Model-callable controls only; exit and board decisions remain owner-only. */
 export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKind[] = ["slice", "explore", "review"], wake?: InputWake): ToolDefinition[] {
-  const communication = agentCommunicationTools({ message: (to, text, options) => runtime.message("parent", to, text, options), roster: signal => runtime.rosterText(signal) });
+  const communication = agentCommunicationTools({ message: (to, text, options) => runtime.message("parent", to, text, options), roster: () => runtime.rosterText() });
   if (!allowedKinds.length) return communication;
   return [
     {

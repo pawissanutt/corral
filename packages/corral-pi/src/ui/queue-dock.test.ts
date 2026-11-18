@@ -288,11 +288,11 @@ test("each row names its receiver in accent, joined to the text below 84 columns
 });
 
 test("items that are not the owner's collapse into one read-only row that names where they came from", () => {
-  const items: QueuedItem[] = [item("a", "alpha"), { ...item("i1", "wake", false), origin: "corral-inbox" }, { ...item("i2", "wake", false), origin: "corral-inbox" },
+  const items: QueuedItem[] = [item("a", "alpha"), { ...item("i1", "wake", false), origin: "auto" }, { ...item("i2", "wake", false), origin: "auto" },
     { ...item("e1", "note", false), origin: "extension" }];
   const { dock } = harness(items);
   const last = screen(dock.render(120)).at(-1)!;
-  expect(last).toContain("2 inbox deliveries"); expect(last).toContain("1 extension notice"); expect(last).toContain("read-only");
+  expect(last).toContain("2 automatic messages"); expect(last).toContain("1 extension notice"); expect(last).toContain("read-only");
 });
 
 test("controls are a key cap and words from 84 columns, glyphs below; impossible moves are dim, remove in error", () => {

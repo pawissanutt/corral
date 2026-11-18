@@ -1,8 +1,7 @@
-import { TOML } from "bun";
-import { checked, json, type Run } from "./corral-cli.ts";
+import { checked, type Run } from "./corral-cli.ts";
+import { buildProject, verifyBuild } from "./gate.ts";
 import { patchDigest, summarize } from "./git.ts";
 import type { BuildJournal } from "./record.ts";
-import type { GateReceipt, LandResult } from "./record-types.ts";
 import { LIVE_CHILD_STATES, type BuildContext, type BuildSummary, type ExitChoice, type ExitControl, type ExitOption, type ExitRecord, type ExitState, type FleetSnapshot } from "./types.ts";
 
 /** Recovery metadata stays local to session.json, not the tracked build record. */
@@ -10,11 +9,10 @@ export interface ExitProgressRecord extends ExitRecord {
   readonly progress?: { readonly phase: ExitState["phase"]; readonly detail?: string };
 }
 export function createExit(options: {
-  context: BuildContext; run: Run; git: Run; fleet: () => FleetSnapshot; journal: BuildJournal;
+  context: BuildContext; git: Run; fleet: () => FleetSnapshot; journal: BuildJournal;
   save: (record: ExitRecord) => void; changed: () => void; now?: () => number;
-  integrationBranch?: () => Promise<string | undefined>;
 }): ExitControl & { open(): void; close(): void } {
-  const { context, run, git, journal } = options;
+  const { context, git, journal } = options;
   const session = context.session;
   const now = options.now ?? Date.now;
   const listeners = new Set<() => void>();
@@ -44,10 +42,14 @@ export function createExit(options: {
       if (session.repository !== false && !integration) integrationError = "The session started without a base branch.";
     } else if (session.workspaceRoot && session.project) {
       try {
-        if (options.integrationBranch) integration = await options.integrationBranch();
-        else {
-          const projects = TOML.parse(await checked(run, ["--root", session.workspaceRoot, "config", "get", "projects"], session.workspaceRoot)) as Record<string, { base?: string }>;
-          integration = projects[session.project]?.base ?? "main";
+        integration = buildProject(context).base;
+        if (!integration) {
+          const remote = await git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], { cwd: session.repoRoot });
+          integration = remote.code === 0 ? remote.stdout.trim().replace(/^origin\//, "") : undefined;
+        }
+        if (!integration) {
+          const current = await git(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: session.repoRoot });
+          if (current.code === 0) integration = current.stdout.trim();
         }
         if (!integration) integrationError = "The project's base branch is not configured.";
       } catch (error) { integrationError = `Cannot read the project's base branch: ${error instanceof Error ? error.message : String(error)}`; }
@@ -74,7 +76,7 @@ export function createExit(options: {
     return [
       { choice: "keep", label: "Keep", detail: "Keep this worktree and branch and record the result." },
       ...(session.bare && session.repository === false ? [] : [
-        { choice: "land" as const, label: "Land", detail: session.bare ? "Rebase and locally fast-forward the starting branch (no gate)." : "Rebase, run the full gate and fast-forward the project's base branch.", unavailable, ...(needsReason ? { needsReason } : {}) },
+        { choice: "land" as const, label: "Land", detail: session.bare ? "Rebase and locally fast-forward the starting branch (no gate)." : "Rebase, verify the project's gate and locally fast-forward its base branch.", unavailable, ...(needsReason ? { needsReason } : {}) },
       ]),
       { choice: "iterate", label: "Iterate", detail: "Return to the session and continue working." },
     ];
@@ -102,7 +104,6 @@ export function createExit(options: {
     throw new Error(`Rebase failed${conflicts.stdout.trim() ? `; conflicted paths: ${conflicts.stdout.trim().split("\n").join(", ")}` : `: ${result.stderr.trim() || result.stdout.trim()}`}.${abort.code ? ` Rebase abort failed: ${abort.stderr.trim()}` : " The rebase was aborted; the branch is unchanged."}`);
   }
   async function execute(choice: ExitChoice, overrideReason?: string): Promise<void> {
-    const warnings: string[] = [];
     journal.decision("exit", choice);
     journal.timeline("exit", choice);
     try {
@@ -122,67 +123,51 @@ export function createExit(options: {
         update("kept", "The worktree and branch are kept.", record);
         return;
       }
-      if (session.bare) {
-        const primary = await primaryCheckout();
-        await checkPrimary(primary);
-        update("rebasing", `Rebasing onto ${integration}.`);
-        journal.timeline("land", `Rebasing onto ${integration}.`);
-        await rebase();
-        const head = (await checked(git, ["rev-parse", "HEAD"], session.worktree)).trim();
-        await checkPrimary(primary);
-        update("landing", `Locally fast-forwarding ${integration} to ${head}.`);
-        await checked(git, ["merge", "--ff-only", head], primary);
-        journal.outcome({ state: "landed", at: new Date(now()).toISOString(), head, landed: head, base_branch: integration });
-        journal.timeline("land", `${integration}: ${head}`);
-        update("landed", `Landed at ${head} on ${integration}.`, { ...record, landed: head, baseBranch: integration });
-        return;
-      }
       if (record.overrideReason) journal.decision("override", record.overrideReason);
-      for (let attempt = 0; attempt < 3; attempt++) {
-        update("rebasing", `Rebasing onto ${integration}.`);
-        journal.timeline("land", `Rebasing onto ${integration}.`);
-        const tip = (await checked(git, ["rev-parse", integration!], session.worktree)).trim();
-        const patchBase = (await checked(git, ["merge-base", tip, "HEAD"], session.worktree)).trim();
-        const before = await patchDigest(git, patchBase, session.worktree);
-        await rebase();
-        const after = await patchDigest(git, tip, session.worktree);
-        if (context.settings.exitPolicy === "review" && before !== after && !record.overrideReason) throw new Error("The rebase changed the patch. Review the rebased head again with build_review, then choose Land.");
-        const head = (await checked(git, ["rev-parse", "HEAD"], session.worktree)).trim();
-        update("verifying", "Running the full gate on the rebased head.");
-        journal.timeline("verify", `Full gate on ${head}.`);
-        const receipt = await json<GateReceipt>(run, ["build", "gate", "--session", session.id, "--worktree", session.worktree,
-          "--project", session.project!, "--tier", "full", "--base", session.base!, "--json"], session.workspaceRoot!, 2 * 60 * 60 * 1000);
-        journal.gate(receipt);
-        try { await journal.refresh(); } catch (error) { warnings.push(`Build record Git snapshot failed: ${String(error)}`); }
-        const publication = await journal.publish();
-        if (publication) warnings.push(publication);
-        if (receipt.result === "fail") throw new Error(`Full gate failed${receipt.failed_command ? `: ${receipt.failed_command}` : ""}${receipt.log ? `; log: ${receipt.log}` : ""}`);
-        update("landing", `Landing ${head} with gate ${receipt.attempt}.`);
-        journal.timeline("land", `Landing ${head} with gate ${receipt.attempt}.`);
-        const landed = await run(["build", "land", "--session", session.id, "--worktree", session.worktree, "--project", session.project!,
-          "--expected-head", head, "--gate-attempt", receipt.attempt, "--json"], { cwd: session.workspaceRoot! });
-        if (landed.code !== 0) {
-          const refusal = landed.stderr.trim() || landed.stdout.trim();
-          if (refusal.startsWith("landing_stale:") && attempt < 2) continue;
-          throw new Error(refusal || `Landing exited ${landed.code}`);
-        }
-        let result: LandResult;
-        try { result = JSON.parse(landed.stdout) as LandResult; } catch { throw new Error("Landing returned invalid JSON; inspect the base branch before retrying."); }
-        const final = { ...record, landed: result.landed, baseBranch: result.base_branch, gateAttempt: receipt.attempt };
-        journal.outcome({ state: "landed", at: new Date(now()).toISOString(), head, landed: result.landed, base_branch: result.base_branch, override_reason: record.overrideReason });
-        journal.timeline("land", `${result.base_branch}: ${result.landed}`);
-        update("landed", `Landed at ${result.landed} on ${result.base_branch}.`, final);
-        return;
+      const primary = session.bare ? await primaryCheckout() : undefined;
+      if (primary) await checkPrimary(primary);
+      update("rebasing", `Rebasing onto ${integration}.`);
+      journal.timeline("land", `Rebasing onto ${integration}.`);
+      const ref = `refs/heads/${integration}`;
+      const tip = (await checked(git, ["rev-parse", "--verify", ref], session.worktree)).trim();
+      const checkPatch = !session.bare && context.settings.exitPolicy === "review" && !record.overrideReason;
+      const before = checkPatch ? await patchDigest(git, (await checked(git, ["merge-base", tip, "HEAD"], session.worktree)).trim(), session.worktree) : undefined;
+      await rebase();
+      if (before !== undefined && before !== await patchDigest(git, tip, session.worktree)) {
+        throw new Error("The rebase changed the patch. Review the rebased head again with build_review, then choose Land.");
       }
+      const head = (await checked(git, ["rev-parse", "HEAD"], session.worktree)).trim();
+      let gateAttempt: string | undefined;
+      if (!session.bare) {
+        update("verifying", "Running the project's gate on the rebased head.");
+        const gate = await verifyBuild(context, git, journal);
+        gateAttempt = gate.attempt;
+        if (gate.result === "fail") throw new Error(`Gate failed: ${gate.failed_command}; log: ${gate.log}`);
+        if (gate.head !== head || (await checked(git, ["rev-parse", "HEAD"], session.worktree)).trim() !== head) {
+          throw new Error("Build HEAD changed during verification. Choose Land again to verify the new head.");
+        }
+      }
+      if ((await checked(git, ["rev-parse", "--verify", ref], session.worktree)).trim() !== tip) {
+        throw new Error(`The base ${integration} moved. Choose Land again to rebase onto its new tip.`);
+      }
+      if (primary) await checkPrimary(primary);
+      const baseCheckout = primary ?? (await checked(git, ["worktree", "list", "--porcelain", "-z"], session.worktree))
+        .split("\0\0").map(entry => entry.split("\0")).find(entry => entry.includes(`branch ${ref}`))?.[0]?.slice("worktree ".length);
+      update("landing", `Locally fast-forwarding ${integration} to ${head}.`);
+      if (baseCheckout) await checked(git, ["merge", "--ff-only", head], baseCheckout);
+      else await checked(git, ["fetch", ".", `${head}:${ref}`], session.worktree);
+      journal.outcome({ state: "landed", at: new Date(now()).toISOString(), head, landed: head, base_branch: integration, override_reason: record.overrideReason });
+      journal.timeline("land", `${integration}: ${head}`);
+      update("landed", `Landed at ${head} on ${integration}.`, { ...record, landed: head, baseBranch: integration, gateAttempt });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       journal.timeline("exit", `failed: ${detail}`);
       update("failed", detail);
     } finally {
-      try { await journal.refresh(); } catch (error) { warnings.push(`Build record Git snapshot failed: ${error instanceof Error ? error.message : String(error)}`); }
-      const publication = await journal.publish();
-      if (publication) warnings.push(publication);
-      if (warnings.length) update(state.phase, `${state.detail ?? ""}\n${[...new Set(warnings)].join("\n")}`);
+      try { await journal.refresh(); }
+      catch (error) {
+        update(state.phase, `${state.detail ?? ""}\nBuild record Git snapshot failed: ${String(error)}`);
+      }
     }
   }
   return {

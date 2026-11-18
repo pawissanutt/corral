@@ -474,6 +474,10 @@ fn builtin_harnesses() -> BTreeMap<String, Harness> {
         ("omo", "omo -n {name} {model_args} {prompt_ref}"),
         ("omp", "omp {model_args} {prompt_ref}"),
         ("claude", "claude {model_args} {prompt_ref}"),
+        (
+            "pi",
+            "corral-pi run {model_args} --prompt-file {prompt_file} --corral {corral}",
+        ),
         ("generic", "cat {prompt_file}"),
     ]
     .into_iter()
@@ -492,7 +496,7 @@ fn builtin_harnesses() -> BTreeMap<String, Harness> {
 }
 
 fn builtin_profiles() -> BTreeMap<String, Profile> {
-    let mut profiles: BTreeMap<_, _> = ["omo", "omp", "claude", "generic"]
+    let mut profiles: BTreeMap<_, _> = ["omo", "omp", "claude", "pi", "generic"]
         .into_iter()
         .map(|name| {
             (

@@ -7,42 +7,43 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeF
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fixtureAuth, { fixtureTransport } from "./auth/index.ts";
-import delivery from "./delivery/index.ts";
 import { EventLog } from "../../src/bridge/events.ts";
+import { compiledBundle } from "../../src/host/bundle.ts";
+import { prepareCompiled } from "../../src/host/compiled.ts";
 import { guardedFetch } from "../../src/host/restrict.ts";
 import { HostSession } from "../../src/host/session.ts";
 import { workerRole } from "../../src/roles/worker/index.ts";
-import { CorralClient, sha256Hex } from "../../src/tools/corral.ts";
-import { writeFakeCorral } from "../support/fake-corral.ts";
+import { CorralClient } from "../../src/tools/corral.ts";
 import { nextEvent } from "../support/wait.ts";
 
 const root = mkdtempSync(join(tmpdir(), "corral-compiled-codemode-"));
 let host: HostSession | undefined;
 let outputWatcher: FSWatcher | undefined;
 try {
-  process.argv = [process.execPath, process.execPath, "--write-install", root];
-  await import("../../src/host/compiled.ts");
+  await prepareCompiled("run");
+  const writeAssets = compiledBundle()?.writeAssets;
+  if (!writeAssets) throw new Error("compiled host did not install embedded assets");
+  writeAssets(root);
   const cwd = join(root, "cwd");
   mkdirSync(cwd);
   writeFileSync(join(cwd, "notes.txt"), "discard\nkeep\n");
   const network = guardedFetch(fixtureTransport().send);
   globalThis.fetch = network.fetch;
   const sdk = await import("@earendil-works/pi-coding-agent");
-  const identity = { store: "st-fixture", project: "fixture", role: "worker" as const, generation: 1, task: "T-566", run: "R1" };
-  const events = new EventLog(1);
+  const identity = { store: "st-fixture", project: "fixture", role: "worker" as const, task: "T-566", run: "R1" };
+  const events = new EventLog();
   const modules: string[] = [];
   events.on((event) => { if (event.kind === "code_kernel_started") modules.push(String(event.module)); });
-  const corral = writeFakeCorral(root);
   host = await HostSession.create({
     sdk, identity, cwd, agentDir: join(root, "agent"), runtimeDir: join(root, "runtime"), model: "gpt-6.1-sol",
     capabilities: { catalog: 4, digest: "a".repeat(64), preset: "standard", enabled: ["codemode", "background_shell"] },
     guidance: { settings: { background_shell: { max_jobs: 2, max_output_bytes: 4096, max_runtime_secs: 60 } }, projectText: false },
-    modules: { role: workerRole(root), auth: fixtureAuth, delivery }, network, events,
-    client: new CorralClient({ corral: corral.path, root, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" }),
+    modules: { role: workerRole(root), auth: fixtureAuth }, network, events,
+    client: new CorralClient({ corral: "", root, cwd, identity }),
     sessionManager: sdk.SessionManager.create(cwd, join(root, "sessions")),
   });
   await host.session.bindExtensions({});
-  await host.hello("n".repeat(64), "fixture-pane", sha256Hex("c".repeat(64)));
+  await host.startLocal();
   const text = (id: string) => {
     const result = host?.session.messages.find(m => m.role === "toolResult" && m.toolCallId.startsWith(`${id}|`));
     if (result?.role !== "toolResult" || result.isError) throw new Error(`compiled codemode failed: ${JSON.stringify(result)}`);
@@ -72,23 +73,25 @@ try {
   // Shell readiness is not host capture readiness: its FIFO can be read before the pipe's
   // data callback runs. Watch the host-written spool before launch instead. capture() writes
   // this file and updates the peek buffer synchronously, before our watch callback can run.
-  const logs = join(root, "runtime", "jobs"), log = join(logs, "j1-1.log");
+  const logs = join(root, "runtime", "jobs");
   mkdirSync(logs, { recursive: true });
-  const beforeCaptured = new Promise<void>((resolve, reject) => {
-    outputWatcher = watch(logs, () => {
-      if (existsSync(log) && readFileSync(log, "utf8").includes("BEFORE\n")) resolve();
-    });
-    outputWatcher.on("error", reject);
+  const captured = Promise.withResolvers<string>();
+  outputWatcher = watch(logs, (_event, name) => {
+    if (!name?.endsWith(".log")) return;
+    const log = join(logs, name);
+    if (existsSync(log) && readFileSync(log, "utf8").includes("BEFORE\n")) captured.resolve(name.slice(0, -4));
   });
+  outputWatcher.on("error", captured.reject);
   fixtureTransport().script([
     { toolCalls: [{ callId: "managed-start", name: "bash", arguments: {
       command: `echo BEFORE; cat ${gate} >/dev/null; echo AFTER`, wait_ms: 0,
     } }] }, { text: "Backgrounded" },
   ]);
   const ended = nextEvent(events, event => event.kind === "turn_ended");
-  await host.submit({ text: "start managed", busyPolicy: "prompt", origin: "fixture", idempotencyKey: "managed-start" }, "managed-start");
+  const started = await host.submitLocal({ text: "start managed", busyPolicy: "prompt", origin: "owner" });
+  if (started.disposition !== "started") throw new Error(`managed Bash input was ${started.disposition}`);
   await ended;
-  await beforeCaptured;
+  const job = await captured.promise;
   outputWatcher?.close();
   if (!text("managed-start").includes("background")) throw new Error("managed Bash did not yield");
   let waiting!: () => void;
@@ -97,11 +100,12 @@ try {
     if (event.type === "tool_execution_start" && event.toolName === "job_wait") waiting();
   });
   fixtureTransport().script([
-    { toolCalls: [{ callId: "managed-peek", name: "job_output", arguments: { job: "j1-1", tail_lines: 1 } }] },
-    { toolCalls: [{ callId: "managed-wait", name: "job_wait", arguments: { job: "j1-1" } }] }, { text: "Completed" },
+    { toolCalls: [{ callId: "managed-peek", name: "job_output", arguments: { job, tail_lines: 1 } }] },
+    { toolCalls: [{ callId: "managed-wait", name: "job_wait", arguments: { job } }] }, { text: "Completed" },
   ]);
   const final = nextEvent(events, event => event.kind === "turn_ended");
-  await host.submit({ text: "peek and wait", busyPolicy: "prompt", origin: "fixture", idempotencyKey: "managed-wait" }, "managed-wait");
+  const observed = await host.submitLocal({ text: "peek and wait", busyPolicy: "prompt", origin: "owner" });
+  if (observed.disposition !== "started") throw new Error(`peek and wait input was ${observed.disposition}`);
   await waitStarted;
   await writeFile(gate, "go");
   await final;

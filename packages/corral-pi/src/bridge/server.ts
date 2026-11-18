@@ -1,257 +1,191 @@
-// The host's bridge server: a Unix socket in the generation's 0700 runtime directory. Every
-// connection's peer uid must be the host's; every request must carry the generation's ctl_cap
-// and name the current generation. Refused connections are closed.
-import { timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, unlinkSync } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
+import { chmodSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
+import { createConnection, createServer, type Socket } from "node:net";
+import { dirname } from "node:path";
 
-import type { PeerLookup } from "../host/peer.ts";
-import { canonicalJson, sha256Hex } from "../tools/corral.ts";
 import type { EventLog } from "./events.ts";
 import { FrameInvalid, FrameTooLarge, LineReader } from "./framing.ts";
 import {
-  BRIDGE_VERSION, BridgeRefusal, EVENT_PAGE_BYTES, FRAME_MAX_BYTES, INPUT_REPLY_MS, MAX_IN_FLIGHT, type QuestionUpdate,
-  type RequestFrame, SUBMISSIONS_MAX, type SubmitInput, type SubmitResult, frameId, parseFrame, parseQuestions, parseSeq,
-  parseSubmitInput, parseTurn, parseQueueLimit, parseQueueWithdraw,
+  BRIDGE_VERSION, BridgeRefusal, EVENT_PAGE_BYTES, FRAME_MAX_BYTES, INPUT_REPLY_MS, MAX_IN_FLIGHT,
+  type AnswerInput, type RequestFrame, type RewindInput, type SessionInput, type SubmitResult,
+  frameId, parseAnswer, parseFrame, parseQueueLimit, parseQueueWithdraw, parseRewind, parseSeq, parseSubmitInput, parseTurn,
 } from "./protocol.ts";
 
 export interface BridgeHandlers {
   hello(): Record<string, unknown>;
   state(): Record<string, unknown>;
-  /** Resolves with upstream's own disposition, however long upstream takes to give it. */
-  submit(input: SubmitInput, requestId: string): Promise<SubmitResult>;
+  submit(input: SessionInput, requestId: string): Promise<SubmitResult>;
+  answer(input: AnswerInput): Promise<Record<string, unknown>>;
+  pause(): Promise<Record<string, unknown>>;
+  resume(): Promise<Record<string, unknown>>;
   cancel(turn: number | undefined): Promise<Record<string, unknown>>;
+  rewind(input: RewindInput): Promise<Record<string, unknown>>;
   shutdown(): void;
-  /** Corral's current states of the container's questions; absent, the host keeps no projection. */
-  questions?(updates: readonly QuestionUpdate[]): Record<string, unknown>;
-  queueState?(limit: number): Record<string, unknown>;
-  queueWithdraw?(key: string, op_key: string): Record<string, unknown>;
-  /** Internal C3 proof only; absent handlers/legacy hosts fail closed. */
-  handoffDrain?(args: Record<string, unknown>): Promise<Record<string, unknown>>;
-  ownerTurn?(args: Record<string, unknown>): Promise<Record<string, unknown>>;
-  setModel?(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  queueState(limit: number): Record<string, unknown>;
+  queueWithdraw(key: string): Record<string, unknown>;
+  setModel(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+}
+
+interface EventRing {
+  since(seq: number, byteLimit: number): object;
 }
 
 export interface BridgeServerOptions {
   readonly path: string;
-  readonly ctlCap: string;
-  readonly generation: number;
-  readonly uid: number;
-  readonly peer: PeerLookup;
+  readonly sessionId: string;
   readonly events: EventLog;
-  /** Separate ephemeral live source, optionally carrying its bounded fleet replacement. */
-  readonly liveEvents?: Pick<EventLog, "since">;
-  readonly handlers: BridgeHandlers;
-  readonly submissionsMax?: number;
+  readonly handlers?: BridgeHandlers;
+  readonly liveEvents?: EventRing;
   readonly inputReplyMs?: number;
-}
-
-/** One admitted input key. It is never forgotten while the generation lives. */
-interface Submission {
-  readonly digest: string;
-  readonly requestId: string;
-  readonly outcome: Promise<SubmitResult>;
-  settled?: SubmitResult;
-  failed?: BridgeRefusal;
-  reportedPending: boolean;
 }
 
 export interface BridgeServer {
   readonly path: string;
+  /** Reserve the socket before opening the transcript, then answer requests once ready. */
+  attach(handlers: BridgeHandlers, liveEvents: EventRing): void;
   close(): Promise<void>;
 }
 
-const PENDING: unique symbol = Symbol("pending");
+function refusal(error: unknown): BridgeRefusal {
+  return error instanceof BridgeRefusal ? error
+    : new BridgeRefusal("host_error", error instanceof Error ? error.message.slice(0, 512) : "failed");
+}
 
-function capMatches(expected: Buffer, presented: string): boolean {
-  const actual = Buffer.from(presented, "utf8");
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
+function safeParse(line: string): unknown {
+  try { return JSON.parse(line); } catch { return undefined; }
+}
+
+function socketStat(path: string) {
+  try { return lstatSync(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return undefined;
+  }
+}
+
+function canConnect(path: string): Promise<boolean> {
+  const { promise, resolve, reject } = Promise.withResolvers<boolean>();
+  const socket = createConnection(path);
+  socket.once("connect", () => { socket.destroy(); resolve(true); });
+  socket.once("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "ECONNREFUSED" || error.code === "ENOENT") resolve(false);
+    else reject(error);
+  });
+  return promise;
+}
+
+export function preparePrivateDirectory(path: string): void {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  const directory = lstatSync(path);
+  if (!directory.isDirectory() || directory.uid !== process.getuid?.() || (directory.mode & 0o777) !== 0o700) {
+    throw new Error(`session socket directory must be owned by this user and have mode 0700: ${path}`);
+  }
+}
+
+async function prepareSocket(path: string, liveError: Error): Promise<void> {
+  preparePrivateDirectory(dirname(path));
+  const uid = process.getuid?.();
+  const old = socketStat(path);
+  if (!old) return;
+  if (!old.isSocket() || old.uid !== uid) throw new Error(`not an owned Unix socket: ${path}`);
+  // A live listener may still be starting up; connection alone is enough to leave it intact.
+  if (await canConnect(path)) throw liveError;
+  const current = socketStat(path);
+  if (!current) return;
+  if (current.ino !== old.ino || current.dev !== old.dev) throw liveError;
+  unlinkSync(path);
 }
 
 export async function startBridge(options: BridgeServerOptions): Promise<BridgeServer> {
-  const expected = Buffer.from(options.ctlCap, "utf8");
-  const capacity = options.submissionsMax ?? SUBMISSIONS_MAX;
-  const replyMs = options.inputReplyMs ?? INPUT_REPLY_MS;
-  const submissions = new Map<string, Submission>();
-  let inputs: Promise<unknown> = Promise.resolve();
+  const liveError = new Error(`session already live; corral stop ${options.sessionId}`);
+  await prepareSocket(options.path, liveError);
+  let handlers = options.handlers;
+  let liveEvents = options.liveEvents;
   const sockets = new Set<Socket>();
 
   const reply = (socket: Socket, id: string | null, body: Record<string, unknown>) => {
     if (socket.destroyed) return;
-    const head = { version: BRIDGE_VERSION, id, generation: options.generation };
+    const head = { version: BRIDGE_VERSION, id };
     let text = JSON.stringify({ ...head, ...body });
-    const size = Buffer.byteLength(text) + 1;
-    if (size > FRAME_MAX_BYTES) {
+    if (Buffer.byteLength(text) + 1 > FRAME_MAX_BYTES) {
       text = JSON.stringify({ ...head, ok: false, error: { code: "response_too_large",
-        reason: `the reply would be ${size} bytes; frames are at most ${FRAME_MAX_BYTES}` } });
+        reason: `frames are at most ${FRAME_MAX_BYTES} bytes` } });
     }
     socket.write(`${text}\n`);
   };
-  const refuse = (socket: Socket, id: string | null, refusal: BridgeRefusal, close: boolean) => {
-    reply(socket, id, { ok: false, error: { code: refusal.code, reason: refusal.reason } });
+  const refuse = (socket: Socket, id: string | null, { code, reason }: BridgeRefusal, close = false) => {
+    reply(socket, id, { ok: false, error: { code, reason } });
     if (close) socket.end();
   };
 
-  const answer = async (entry: Submission, replayed: boolean): Promise<SubmitResult & { replayed?: true }> => {
-    const mark = replayed ? { replayed: true as const } : {};
-    if (entry.failed) throw entry.failed;
-    if (entry.settled) return { ...entry.settled, ...mark };
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const outcome = await Promise.race([
-      entry.outcome,
-      new Promise<typeof PENDING>((resolve) => { timer = setTimeout(() => resolve(PENDING), replyMs); }),
-    ]).finally(() => clearTimeout(timer));
-    if (outcome !== PENDING) return { ...outcome, ...mark };
-    entry.reportedPending = true;
-    return { disposition: "pending", reason: "preflight_pending", ...mark };
-  };
-
-  const admit = (input: SubmitInput, requestId: string, digest: string): Submission => {
-    const outcome = inputs.then(() => options.handlers.submit(input, requestId));
-    const entry: Submission = { digest, requestId, outcome, reportedPending: false };
-    outcome.then(
-      (result) => {
-        entry.settled = result;
-        if (entry.reportedPending) {
-          options.events.emit("input_settled", {
-            request_id: requestId, idempotency_key: input.idempotencyKey, ...result,
-          });
-        }
-      },
-      (error: unknown) => {
-        entry.failed = new BridgeRefusal("host_error", error instanceof Error ? error.message.slice(0, 512) : "failed");
-        if (entry.reportedPending) {
-          options.events.emit("input_settled", {
-            request_id: requestId, idempotency_key: input.idempotencyKey, error: entry.failed.code,
-          });
-        }
-      },
-    );
-    submissions.set(input.idempotencyKey, entry);
-    return entry;
-  };
-
-  const submit = async (input: SubmitInput, requestId: string): Promise<SubmitResult & { replayed?: true }> => {
-    const digest = sha256Hex(canonicalJson({ text: input.text, busy_policy: input.busyPolicy, origin: input.origin }));
-    const prior = submissions.get(input.idempotencyKey);
-    if (prior) {
-      if (prior.digest !== digest) return { disposition: "rejected", reason: "idempotency_conflict" };
-      return answer(prior, true);
+  const submit = async (host: BridgeHandlers, frame: RequestFrame): Promise<Record<string, unknown>> => {
+    const input = parseSubmitInput(frame.args);
+    const request = { request_id: frame.id, origin: input.origin, busy_policy: input.busyPolicy };
+    const outcome = host.submit(input, frame.id);
+    const pending = Symbol("pending");
+    const deadline = Promise.withResolvers<typeof pending>();
+    const timer = setTimeout(() => deadline.resolve(pending), options.inputReplyMs ?? INPUT_REPLY_MS);
+    const result = await Promise.race([outcome, deadline.promise]).finally(() => clearTimeout(timer));
+    if (result === pending) {
+      options.events.emit("input", { ...request, disposition: "pending" });
+      void outcome.then(
+        settled => options.events.emit("input_settled", { ...request, ...settled }),
+        error => {
+          const { code, reason } = refusal(error);
+          options.events.emit("input_settled", { ...request, error: { code, reason } });
+        },
+      );
+      return { request_id: frame.id, disposition: "pending", reason: "preflight_pending" };
     }
-    if (submissions.size >= capacity) {
-      throw new BridgeRefusal("input_limit",
-        `generation ${options.generation} admitted ${capacity} input keys; replays still answer, new keys need a new generation`);
-    }
-    const entry = admit(input, requestId, digest);
-    const first = answer(entry, false);
-    inputs = first.then(() => undefined, () => undefined);
-    return first;
+    options.events.emit("input", { ...request, ...result });
+    return { request_id: frame.id, ...result };
   };
 
   const run = async (frame: RequestFrame): Promise<Record<string, unknown>> => {
+    const host = handlers;
+    if (!host) throw new BridgeRefusal("starting", "the session is starting");
     switch (frame.command) {
-      case "hello":
-        return options.handlers.hello();
-      case "get_state":
-        return options.handlers.state();
-      case "handoff_drain":
-        if (!options.handlers.handoffDrain) throw new BridgeRefusal("source_boundary_unavailable", "this host cannot attest source drain");
-        return options.handlers.handoffDrain(frame.args);
-      case "owner_turn":
-        if (!options.handlers.ownerTurn) throw new BridgeRefusal("capability_unavailable", "remote owner mode is unavailable");
-        return options.handlers.ownerTurn(frame.args);
-      case "set_model":
-        if (!options.handlers.setModel) throw new BridgeRefusal("capability_unavailable", "remote model selection is unavailable");
-        return options.handlers.setModel(frame.args);
-      case "submit_input": {
-        const input = parseSubmitInput(frame.args);
-        const result = await submit(input, frame.id);
-        options.events.emit("input", {
-          request_id: frame.id, idempotency_key: input.idempotencyKey, origin: input.origin,
-          busy_policy: input.busyPolicy, disposition: result.disposition, ...(result.turn ? { turn: result.turn } : {}),
-        });
-        return { request_id: frame.id, idempotency_key: input.idempotencyKey, ...result };
-      }
-      case "queue_state": {
-        const limit = parseQueueLimit(frame.args);
-        if (!options.handlers.queueState) throw new BridgeRefusal("capability_unavailable", "queue_control is unavailable");
-        return options.handlers.queueState(limit);
-      }
-      case "queue_withdraw": {
-        const { key, op_key } = parseQueueWithdraw(frame.args);
-        if (!options.handlers.queueWithdraw) throw new BridgeRefusal("capability_unavailable", "queue_control is unavailable");
-        return options.handlers.queueWithdraw(key, op_key);
-      }
-      case "cancel":
-        return { request_id: frame.id, ...(await options.handlers.cancel(parseTurn(frame.args))) };
-      case "events_since":
-        return { ...options.events.since(parseSeq(frame.args), EVENT_PAGE_BYTES) };
+      case "hello": return host.hello();
+      case "get_state": return host.state();
+      case "submit_input": return submit(host, frame);
+      case "answer": return host.answer(parseAnswer(frame.args));
+      case "pause": return host.pause();
+      case "resume": return host.resume();
+      case "cancel": return { request_id: frame.id, ...(await host.cancel(parseTurn(frame.args))) };
+      case "rewind": return host.rewind(parseRewind(frame.args));
+      case "queue_state": return host.queueState(parseQueueLimit(frame.args));
+      case "queue_withdraw": return host.queueWithdraw(parseQueueWithdraw(frame.args));
+      case "set_model": return host.setModel(frame.args);
+      case "events_since": return { ...options.events.since(parseSeq(frame.args), EVENT_PAGE_BYTES) };
       case "live_since": {
         const seq = parseSeq(frame.args);
-        if (!options.liveEvents) throw new BridgeRefusal("capability_unavailable", "live events are unavailable");
-        return { ...options.liveEvents.since(seq, EVENT_PAGE_BYTES) };
+        if (!liveEvents) throw new BridgeRefusal("live_unavailable", "the session has no live event stream");
+        return { ...liveEvents.since(seq, EVENT_PAGE_BYTES) };
       }
       case "shutdown":
-        setImmediate(() => options.handlers.shutdown());
+        setImmediate(() => host.shutdown());
         return { shutting_down: true };
-      case "questions": {
-        const updates = parseQuestions(frame.args);
-        return options.handlers.questions?.(updates) ?? { applied: false };
-      }
     }
   };
 
   const handle = async (socket: Socket, line: string) => {
-    let value: unknown;
-    try {
-      value = JSON.parse(line);
-    } catch {
-      refuse(socket, null, new BridgeRefusal("bad_frame", "a request is one JSON object"), true);
-      return;
-    }
-    const id = frameId(value);
+    const value = safeParse(line);
     let frame: RequestFrame;
-    try {
-      frame = parseFrame(value);
-    } catch (error) {
-      refuse(socket, id, error instanceof BridgeRefusal ? error : new BridgeRefusal("bad_frame", "unreadable"), true);
-      return;
-    }
-    if (!capMatches(expected, frame.ctlCap)) {
-      refuse(socket, frame.id, new BridgeRefusal("auth_failed", "ctl_cap does not match this generation"), true);
-      return;
-    }
-    if (frame.generation !== options.generation) {
-      refuse(socket, frame.id, new BridgeRefusal("stale_generation",
-        `this host serves generation ${options.generation}`), false);
-      return;
-    }
-    try {
-      reply(socket, frame.id, { ok: true, result: await run(frame) });
-    } catch (error) {
-      const refusal = error instanceof BridgeRefusal ? error
-        : new BridgeRefusal("host_error", error instanceof Error ? error.message.slice(0, 512) : "failed");
-      refuse(socket, frame.id, refusal, false);
-    }
+    try { frame = parseFrame(value); }
+    catch (error) { refuse(socket, frameId(value), refusal(error), true); return; }
+    try { reply(socket, frame.id, { ok: true, result: await run(frame) }); }
+    catch (error) { refuse(socket, frame.id, refusal(error)); }
   };
 
-  const server: Server = createServer((socket) => {
+  const server = createServer(socket => {
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
     socket.on("error", () => socket.destroy());
-    const peer = options.peer(socket);
-    if (!peer || peer.uid !== options.uid) {
-      refuse(socket, null, new BridgeRefusal("peer_refused",
-        peer ? `peer uid ${peer.uid} is not the host's uid` : "peer credentials are unavailable"), true);
-      return;
-    }
     const reader = new LineReader(FRAME_MAX_BYTES);
     let inFlight = 0;
     socket.on("data", (chunk: Buffer) => {
       let lines: string[];
-      try {
-        lines = reader.push(chunk);
-      } catch (error) {
+      try { lines = reader.push(chunk); }
+      catch (error) {
         const code = error instanceof FrameTooLarge || error instanceof FrameInvalid ? error.code : "bad_frame";
         refuse(socket, null, new BridgeRefusal(code, error instanceof Error ? error.message : "unreadable"), true);
         socket.removeAllListeners("data");
@@ -259,7 +193,7 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
       }
       for (const line of lines) {
         if (inFlight >= MAX_IN_FLIGHT) {
-          refuse(socket, frameId(safeParse(line)), new BridgeRefusal("busy", `at most ${MAX_IN_FLIGHT} requests in flight`), false);
+          refuse(socket, frameId(safeParse(line)), new BridgeRefusal("busy", `at most ${MAX_IN_FLIGHT} requests in flight`));
           continue;
         }
         inFlight++;
@@ -268,28 +202,25 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
     });
   });
 
-  if (existsSync(options.path)) unlinkSync(options.path);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.path, () => {
-      chmodSync(options.path, 0o600);
-      resolve();
-    });
+  const listening = Promise.withResolvers<void>();
+  server.once("error", (error: NodeJS.ErrnoException) => listening.reject(error.code === "EADDRINUSE" ? liveError : error));
+  server.listen(options.path, () => {
+    try { chmodSync(options.path, 0o600); listening.resolve(); }
+    catch (error) { server.close(); listening.reject(error); }
   });
+  await listening.promise;
 
+  let closed: Promise<void> | undefined;
   return {
     path: options.path,
-    close: () => new Promise<void>((resolve) => {
+    attach(next, live) { handlers = next; liveEvents = live; },
+    close() {
+      if (closed) return closed;
+      const { promise, resolve } = Promise.withResolvers<void>();
+      closed = promise;
       for (const socket of sockets) socket.destroy();
       server.close(() => resolve());
-    }),
+      return closed;
+    },
   };
-}
-
-function safeParse(line: string): unknown {
-  try {
-    return JSON.parse(line);
-  } catch {
-    return undefined;
-  }
 }

@@ -12,10 +12,10 @@ import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment, BUILTIN_EXTENSIONS } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
 import type { CapabilitySet } from "../src/roles/types.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
+import { CorralClient } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 import { mcpServer } from "./support/mcp-server.ts";
 import { nextEvent } from "./support/wait.ts";
 
@@ -27,7 +27,7 @@ test("workspace MCP policy holds directly, deferred and nested across reconnect 
   const sdk = await import("@earendil-works/pi-coding-agent");
   try {
     restrictEnvironment(process.env);
-    for (const role of ["worker", "reviewer", "pm"] as const) {
+    for (const role of ["worker", "reviewer"] as const) {
       for (const search of [false, true]) {
         const peer = await mcpServer();
         const cwd = join(work, `${role}-${search}`);
@@ -52,13 +52,11 @@ test("workspace MCP policy holds directly, deferred and nested across reconnect 
           origins: [new URL(peer.url).origin], send: raw.bind(globalThis),
         });
         globalThis.fetch = network.fetch;
-        const identity = { store: "st-demo", project: "demo", role, generation: 1, task: "T-567", run: "R1" };
-        const events = new EventLog(1);
-        const corral = writeFakeCorral(cwd);
+        const identity = { store: "st-demo", project: "demo", role, task: "T-567", run: "R1" };
+        const events = new EventLog();
+        const corral = writeFakeEngine(cwd);
         let host: HostSession | undefined;
-        const client = new CorralClient({
-          corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
-        });
+        const client = new CorralClient({ corral: corral.path, root: work, cwd, identity });
         const nested: ToolDefinition = {
           name: "fixture_mcp", label: "Nested MCP", description: "Exercise the shared nested execution check",
           parameters: Type.Object({ name: Type.String(), args: Type.Unsafe<Record<string, unknown>>({ type: "object" }) }),
@@ -76,7 +74,7 @@ test("workspace MCP policy holds directly, deferred and nested across reconnect 
             sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")),
           });
           await host.session.bindExtensions({});
-          await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+          await host.startLocal();
           const lookup = mcpToolName("docs", "lookup");
           const write = mcpToolName("docs", "write_file");
           expect(peer.calls.filter(({ method }) => method === "initialize")).toHaveLength(1);
@@ -117,8 +115,7 @@ test("workspace MCP policy holds directly, deferred and nested across reconnect 
             ];
             fixtureTransport().script(steps);
             const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-            expect((await host.submit({ text: stage, busyPolicy: "prompt", idempotencyKey: stage, origin: "test" },
-              `rq-${stage}`)).disposition).toBe("started");
+            expect((await host.submitLocal({ text: stage, busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
             await ended;
             await host.drained();
             // Then only approved reads reached the wire, resources were filtered and search stayed cached.

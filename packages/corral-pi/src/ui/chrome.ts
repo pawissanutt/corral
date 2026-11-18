@@ -29,18 +29,15 @@ export const STATUS_BINDING = "corral-1-binding";
 export const STATUS_ALERTS = "corral-2-alerts";
 
 const ROLE_LABEL: Record<Role, string> = {
-  worker: "WORKER", reviewer: "REVIEWER", pm: "PM", planner: "PLANNER", plan_reviewer: "PLAN REVIEWER",
-  assistant: "ASSISTANT", build: "BUILD",
+  worker: "WORKER", reviewer: "REVIEWER", assistant: "ASSISTANT", build: "BUILD",
 };
 const ROLE_COLOR: Record<Role, "accent" | "warning" | "success"> = {
-  worker: "accent", reviewer: "warning", pm: "success", planner: "accent", plan_reviewer: "warning",
-  assistant: "success", build: "accent",
+  worker: "accent", reviewer: "warning", assistant: "success", build: "accent",
 };
 
 export function target(identity: HostIdentity): string {
   if (!identity.task) return identity.assistant ?? identity.project;
-  const run = identity.review ?? identity.run;
-  return run ? `${identity.task} · ${run}` : identity.task;
+  return identity.run ? `${identity.task} · ${identity.run}` : identity.task;
 }
 
 export function modelLabel(info: Pick<ChromeInfo, "provider" | "model">): string {
@@ -52,7 +49,7 @@ export function headerLines(info: ChromeInfo, theme: Style): string[] {
   const badge = theme.fg(ROLE_COLOR[identity.role], theme.bold(`▌${ROLE_LABEL[identity.role]}`));
   const detail = [modelLabel(info), info.effort, basename(info.cwd)].filter(Boolean).join(" · ");
   return [
-    `${badge}  ${theme.bold(target(identity))}  ${theme.fg("dim", `g${identity.generation}`)}`,
+    `${badge}  ${theme.bold(target(identity))}`,
     theme.fg("dim", detail),
   ];
 }
@@ -71,8 +68,8 @@ export function sessionTitle(base: string, attention: TitleAttention): string {
   return attention === "needs-you" ? `▲ needs you · ${base}` : attention === "working" ? `● working · ${base}` : base;
 }
 
-export function bindingStatus(bound: boolean, generation: number, theme: Style): string {
-  return bound ? theme.fg("success", `● corral g${generation}`) : theme.fg("warning", "○ corral unbound");
+export function bindingStatus(bound: boolean, theme: Style): string {
+  return bound ? theme.fg("success", "● corral bound") : theme.fg("warning", "○ corral unbound");
 }
 
 export function alertsStatus(alerts: Alerts, theme: Style): string | undefined {
@@ -96,7 +93,7 @@ export function installChrome(
   let ui: ExtensionUIContext | undefined;
   const refresh = () => {
     if (!ui) return;
-    ui.setStatus(STATUS_BINDING, bindingStatus(bound(), info.identity.generation, ui.theme));
+    ui.setStatus(STATUS_BINDING, bindingStatus(bound(), ui.theme));
     ui.setStatus(STATUS_ALERTS, alertsStatus(alerts, ui.theme));
   };
   events.on((event) => {

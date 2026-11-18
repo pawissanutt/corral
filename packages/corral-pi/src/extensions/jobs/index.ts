@@ -1,7 +1,7 @@
 import type { AgentToolUpdateCallback, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { callKey, nestedChild } from "../codemode/child.ts";
+import { nestedChild } from "../codemode/child.ts";
 import { INPUT_QUEUED_NOTICE, type InputWake, wakeableWait } from "../input-wake.ts";
 import { type Commands } from "./commands.ts";
 import { JobError, type JobRuntime, OUTPUT_READ_MAX } from "./runtime.ts";
@@ -47,7 +47,7 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands, 
       parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 4096 }),
         timeout: Type.Optional(Type.Number({ minimum: 1 })), wait_ms: waitBudget }),
       async execute(id: string, params: { command: string; timeout?: number; wait_ms?: number }, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>) {
-        return guarded("bash", id, () => commands.run(params.command, callKey("bash", id), {
+        return guarded("bash", id, () => commands.run(params.command, {
           ...params, ...(signal ? { signal } : {}), ...(onUpdate ? { onUpdate } : {}), nested: nestedChild("bash", id) !== undefined }), true, true);
       },
     } satisfies ToolDefinition] : []),
@@ -61,8 +61,8 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands, 
         + "Turn endings do not stop it. The hard runtime cap, job_kill, or owning host teardown stops its process group. Completion is announced automatically.",
       parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 4096 }) }),
       async execute(id, params: { command: string }, signal) {
-        return guarded("job_start", id, () => commands ? commands.run(params.command, callKey("job_start", id), { wait_ms: 0, ...(signal ? { signal } : {}) })
-          : jobs.start(params.command, callKey("job_start", id)));
+        return guarded("job_start", id, () => commands ? commands.run(params.command, { wait_ms: 0, ...(signal ? { signal } : {}) })
+          : jobs.start(params.command));
       },
     },
     {
@@ -101,18 +101,17 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands, 
     {
       name: JOB_MONITOR_TOOL, label: "Wake on command exit or matching line",
       description: "Arm one exit or JavaScript-regex line wake for an owned job. End your turn rather than polling. "
-        + "A timeout_secs deadline wakes without killing work. Worker waits remain receipted by corral; PM/assistant watches are session-owned and report interruption after host loss.",
+        + "The deadline wakes without killing work; an interrupted host does not replay the command.",
       parameters: Type.Object({ job: Type.String(), on: Type.Union([Type.Literal("exit"), Type.Literal("line")]),
         pattern: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
         timeout_secs: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })) }),
       async execute(id, params: { job: string; on: "exit" | "line"; pattern?: string; timeout_secs?: number }) {
         return guarded(JOB_MONITOR_TOOL, id, async () => {
-          const runtime = commands ?? jobs;
-          const receipt = await runtime.monitor(params.job, params.on, params.pattern, params.timeout_secs ?? 3600, callKey(JOB_MONITOR_TOOL, id));
-          return { state: receipt.state, result: receipt.result };
+          if (!commands) throw new JobError("local command monitor is unavailable");
+          return commands.monitor(params.job, params.on, params.pattern, params.timeout_secs ?? 3600);
         });
       },
     },
   ];
-  return monitor ? tools : tools.filter(tool => tool.name !== JOB_MONITOR_TOOL);
+  return monitor && commands ? tools : tools.filter(tool => tool.name !== JOB_MONITOR_TOOL);
 }

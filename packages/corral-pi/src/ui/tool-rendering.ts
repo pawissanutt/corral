@@ -28,9 +28,9 @@ export type JobFacts = Pick<JobInspection, "job" | "command" | "state" | "starte
 export interface ToolRenderDeps extends RowDeps {
   /** The session's working directory: paths inside it are shown relative to it. */
   readonly cwd: string;
-  /** Live facts of an owned job by id; undefined when this host does not know it (another generation, pruned). */
+  /** Live facts of an owned job by id; undefined when this host does not know it (another process, pruned). */
   job(id: string): JobFacts | undefined;
-  /** The generation's Code Mode runtime, when Code Mode is enabled. */
+  /** The session's Code Mode runtime, when Code Mode is enabled. */
   code(): CodeRuntime | undefined;
   /** The host's todo ledger, when `corral_todo` is loaded. */
   ledger(): TodoLedger | undefined;

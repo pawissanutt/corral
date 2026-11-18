@@ -21,10 +21,19 @@ export class TranscriptWatch {
   private started = false;
   /** The transcript's revision once another view showed; undefined while Chat is open. */
   private away: number | undefined;
-  constructor(private readonly transcript: ScrollView) {
+  /** Where a paused reader was when a dialog opened over the transcript; restored until it closes. */
+  private pinned: number | undefined;
+  /** `modal`: a dialog holds the keys. Laying out under it never moves a paused reader to the end. */
+  constructor(private readonly transcript: ScrollView, private readonly modal?: () => boolean) {
     const layout = transcript.updateLayout.bind(transcript);
     transcript.updateLayout = (contentHeight, viewportHeight, requestRender) => {
+      const held = this.modal?.() ?? false;
+      if (held && this.pinned === undefined && !transcript.isFollowingEnd) this.pinned = transcript.scrollTop;
       layout(contentHeight, viewportHeight, requestRender);
+      if (this.pinned !== undefined) {
+        if (transcript.isFollowingEnd || transcript.scrollTop !== this.pinned) transcript.scrollTo(this.pinned, { disableFollow: true });
+        if (!held) this.pinned = undefined;
+      }
       this.height = contentHeight;
       if (this.transcript.isFollowingEnd || this.rewrap) { this.seen = contentHeight; this.rewrap = false; }
     };
@@ -96,10 +105,8 @@ export interface EmptyChat {
 function emptyCopy(identity: HostIdentity): { readonly lead: string; readonly rest: string; readonly more?: string } {
   switch (identity.role) {
     case "build":
-      return { lead: "Build session, unbound.", rest: "Describe what to build and press Enter.",
+      return { lead: "Build session.", rest: "Describe what to build and press Enter.",
         more: "Independent slices run in parallel in one worktree, each on the profile that fits it. Nothing is filed on the board until you choose an exit." };
-    case "pm":
-      return { lead: `Project manager for ${identity.project || "this project"}.`, rest: "What you send goes to this project's PM agent." };
     case "assistant":
       return { lead: `Assistant ${identity.assistant ?? ""}`.trimEnd() + ".", rest: "What you send goes to this assistant." };
     default:

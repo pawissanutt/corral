@@ -13,7 +13,7 @@ const settings = { explore: { max_parallel: 3, model: null, max_turns: 12, timeo
   oracle: { model: "stronger", timeout_secs: 30 } };
 function fixture(execute: (i: Invocation, s: AbortSignal) => Promise<AuxiliaryResult>) {
   const records: Record<string, unknown>[] = [];
-  const runtime = new AuxiliaryRuntime({ settings, generation: 7, provider: "openai-codex", model: "normal",
+  const runtime = new AuxiliaryRuntime({ settings, provider: "openai-codex", model: "normal",
     sessionId: () => "parent", execute,
     async record(payload) {
       records.push(payload);
@@ -47,10 +47,26 @@ test("oracle cancellation uses the shared attribution seam and records uncertain
   console.log("oracle: configured stronger model; response cancelled; one uncertain terminal record; duplicate request reused");
 });
 
+test("relaunching the same parent with a reused tool call ID allocates a new auxiliary transcript", async () => {
+  const execute = async (invocation: Invocation): Promise<AuxiliaryResult> => ({
+    text: invocation.sessionId, outcome: "completed",
+  });
+  const first = fixture(execute);
+  const before = await first.runtime.run("oracle", "call", "question");
+  await first.runtime.close();
+  const next = fixture(execute);
+  try {
+    const after = await next.runtime.run("oracle", "call", "question");
+    expect(after.request).not.toBe(before.request);
+    expect(after.sessionFile).toBe(`/private/${after.request}.jsonl`);
+    expect(after.text).toBe(after.request);
+  } finally { await next.runtime.close(); }
+});
+
 test("disabled/unconfigured auxiliary calls and bypassed explore calls create no billing records", async () => {
   let calls = 0;
   const runtime = new AuxiliaryRuntime({ settings: { oracle: { model: null, timeout_secs: 30 } },
-    generation: 1, provider: "fixture", model: "parent", sessionId: () => "parent",
+    provider: "fixture", model: "parent", sessionId: () => "parent",
     record: async () => { calls++; return {}; }, execute: async () => { calls++; return { text: "bad", outcome: "completed" }; },
   });
   // @ts-expect-error Public auxiliary calls cannot enter the private review explore pool.
