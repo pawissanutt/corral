@@ -8,8 +8,9 @@ use corral_protocol::detail::{
 };
 
 use super::{
+    NotFound,
     details::{offset, reply},
-    fingerprint, rows,
+    fingerprint,
 };
 
 const PATCH_BYTES: usize = 8 * 1024; // Safe for the worst JSON escaping.
@@ -18,7 +19,7 @@ fn submission(engine: &Engine, task: &str) -> Result<(Option<Run>, Option<Artifa
     let run = engine
         .store
         .latest_run(task, Role::Worker)?
-        .filter(|run| run.head_sha.is_some());
+        .filter(|run| run.summary.is_some());
     let diff = if let Some(run) = &run {
         if let Some(reference) = engine.store.submitted_diff_ref(task, &run.id)? {
             Some(
@@ -46,15 +47,13 @@ fn patch(engine: &Engine, diff: &Artifact) -> Result<String> {
 }
 
 pub(super) fn detail(engine: &Engine, id: &str) -> Result<ReviewDetail> {
-    let task = engine.store.require_task(id)?;
+    let task = engine
+        .store
+        .get_task(id)?
+        .ok_or(NotFound("task not found"))?;
     let (run, diff) = submission(engine, id)?;
-    let (gate, review) = rows::current_checks(engine, &task, run.as_ref())?;
-    let max_rounds = task
-        .project
-        .as_ref()
-        .and_then(|name| engine.config.projects.get(name))
-        .and_then(|project| project.max_rounds)
-        .unwrap_or(engine.config.defaults.max_rounds);
+    let run = run.ok_or(NotFound("task has no submitted worker run"))?;
+    let max_rounds = engine.config.task_max_rounds(&task);
     let files = if let Some(diff) = &diff {
         sections(&patch(engine, diff)?)
             .into_iter()
@@ -65,9 +64,9 @@ pub(super) fn detail(engine: &Engine, id: &str) -> Result<ReviewDetail> {
     };
     Ok(ReviewDetail {
         task: task.id,
-        run,
+        run: Some(run),
         diff,
-        checks: gate.into_iter().chain(review).collect(),
+        checks: engine.store.list_checks(id)?,
         max_rounds,
         files,
     })
@@ -80,10 +79,13 @@ pub(super) fn file(
     task: &str,
     path: &str,
 ) -> Result<DetailReply> {
-    let task = engine.store.require_task(task)?;
+    let task = engine
+        .store
+        .get_task(task)?
+        .ok_or(NotFound("task not found"))?;
     let (run, diff) = submission(engine, &task.id)?;
-    let run = run.context("task has no submitted worker run")?;
-    let diff = diff.context("task has no stored review patch")?;
+    let run = run.ok_or(NotFound("task has no submitted worker run"))?;
+    let diff = diff.ok_or(NotFound("task has no stored review patch"))?;
     // Landing can rewrite the run's base and head independently of its stored
     // patch. Do not attach a mutable or retired run's coordinates to that patch.
     let candidate = if task.status == Status::Review && engine.observed_head(&run)? == run.head_sha
@@ -101,7 +103,7 @@ pub(super) fn file(
     let section = sections(&patch)
         .into_iter()
         .find(|section| section.file.path == path)
-        .context("file not found in submitted patch")?;
+        .ok_or(NotFound("file not found in submitted patch"))?;
     let patch = &patch[section.range];
     let at = offset(query.page.as_deref(), &etag)?;
     ensure!(

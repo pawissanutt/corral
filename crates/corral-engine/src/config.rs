@@ -387,6 +387,15 @@ impl Config {
         })
     }
 
+    /// The pipeline's review-round limit for a task, including unassigned tasks.
+    pub fn task_max_rounds(&self, task: &Task) -> u32 {
+        task.project
+            .as_ref()
+            .and_then(|name| self.projects.get(name))
+            .and_then(|project| project.max_rounds)
+            .unwrap_or(self.defaults.max_rounds)
+    }
+
     pub fn resolve_profile(&self, task: &Task, flag: Option<&str>) -> Result<String> {
         if let Some(name) = flag.or(task.profile.as_deref()) {
             return self.require_profile(name);

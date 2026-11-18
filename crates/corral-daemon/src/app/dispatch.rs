@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use corral_engine::refuse;
 use corral_protocol::{
     self as wire, app, config as settings, device, op, pane,
@@ -23,6 +23,9 @@ use crate::{
     topics::Subscriptions,
     views,
 };
+
+#[path = "pane_keys.rs"]
+mod pane_keys;
 
 pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
     wire::Welcome {
@@ -132,10 +135,12 @@ pub(crate) fn serve(
                 )
                 .into());
             };
-            let keys: Vec<_> = request.keys.iter().map(String::as_str).collect();
-            health::herdr(&engine.config.runner)
-                .pane_send_keys(&pane, &keys)
-                .with_context(|| format!("send keys to herdr pane {pane}"))?;
+            pane_keys::send(
+                &health::herdr(&engine.config.runner),
+                &pane,
+                None,
+                &request.keys,
+            )?;
             Ok(())
         }),
         app::DETAIL_GET => answer!(Ok(views::detail(shared, decode(params)?)?)),
@@ -308,6 +313,8 @@ impl From<anyhow::Error> for Failure {
         let message = format!("{error:#}");
         let code = if error.is::<ops::WorkerBusy>() {
             ErrorCode::Busy
+        } else if error.is::<views::NotFound>() {
+            ErrorCode::NotFound
         } else if message.starts_with("invalid:") {
             ErrorCode::InvalidParams
         } else if message.starts_with("too_large:") {

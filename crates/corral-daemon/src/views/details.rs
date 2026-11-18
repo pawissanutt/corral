@@ -303,7 +303,7 @@ fn paginate(body: &mut DetailBody, offset: usize) -> Result<Option<usize>> {
     match body {
         DetailBody::Task(model) => paginate_fields!(model, runs, checks, artifacts, events),
         DetailBody::Plan(model) => paginate_fields!(model, children),
-        DetailBody::Review(model) => paginate_fields!(model, files),
+        DetailBody::Review(model) => paginate_fields!(model, checks, files),
         DetailBody::Timeline(model) => paginate_fields!(model, runs, events),
         DetailBody::Burnup(model) => paginate_fields!(model, events),
         DetailBody::UsageSeries(model) => paginate_fields!(model, rows, runs),

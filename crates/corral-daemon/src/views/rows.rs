@@ -197,16 +197,9 @@ fn object(value: &impl Serialize) -> Result<serde_json::Map<String, serde_json::
 }
 
 fn tasks(engine: &Engine) -> Result<Vec<TaskRow>> {
-    let mut active = BTreeMap::<String, Run>::new();
-    for run in engine.store.live_runs(None)? {
-        // Prefer the worker when the reviewer is also live.
-        if run.session.is_some() && (run.role == Role::Worker || !active.contains_key(&run.task)) {
-            active.insert(run.task.clone(), run);
-        }
-    }
-    engine
-        .store
-        .list_tasks(&TaskFilter {
+    task_rows(
+        engine,
+        engine.store.list_tasks(&TaskFilter {
             statuses: vec![
                 Status::Idea,
                 Status::Backlog,
@@ -216,7 +209,19 @@ fn tasks(engine: &Engine) -> Result<Vec<TaskRow>> {
                 Status::Review,
             ],
             ..Default::default()
-        })?
+        })?,
+    )
+}
+
+pub(super) fn task_rows(engine: &Engine, tasks: Vec<Task>) -> Result<Vec<TaskRow>> {
+    let mut active = BTreeMap::<String, Run>::new();
+    for run in engine.store.live_runs(None)? {
+        // Prefer the worker when the reviewer is also live.
+        if run.session.is_some() && (run.role == Role::Worker || !active.contains_key(&run.task)) {
+            active.insert(run.task.clone(), run);
+        }
+    }
+    tasks
         .into_iter()
         .map(|task| {
             let run = active.remove(&task.id);

@@ -4,6 +4,10 @@ mod review;
 pub(crate) mod rows;
 mod terminal_screen;
 
+// These consumers are exercised independently while the app still builds old wire literals.
+#[cfg(test)]
+mod pending;
+
 use std::{
     hash::{DefaultHasher, Hasher},
     io::{self, Read, Seek, SeekFrom, Write},
@@ -22,6 +26,17 @@ pub(crate) use rows::{RowCache, Rows};
 
 // The transport reserves room for the response envelope and bounded request id.
 const REPLY_MAX: usize = APP_CONTROL_MAX - 2048;
+
+#[derive(Debug)]
+pub(crate) struct NotFound(pub(crate) &'static str);
+
+impl std::fmt::Display for NotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for NotFound {}
 
 pub(crate) fn detail(shared: &Shared, query: DetailGet) -> Result<DetailReply> {
     details::read(&shared.engine()?, query)

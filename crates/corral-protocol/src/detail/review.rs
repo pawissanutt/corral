@@ -1,4 +1,4 @@
-//! The stored diff and run summary from `done`, with the applicable checks.
+//! The stored diff and run summary from `done`, with the task's check history.
 use corral_types::{Artifact, Check, Run};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ pub struct ReviewDetail {
     pub run: Option<Run>,
     #[schemars(with = "Option<crate::schema_types::Artifact>")]
     pub diff: Option<Artifact>,
-    /// The gate check for HEAD and the review check for the current round.
+    /// Recorded gate and review checks in insertion order; may span detail pages.
     #[schemars(with = "Vec<crate::schema_types::Check>")]
     pub checks: Vec<Check>,
     pub max_rounds: u32,

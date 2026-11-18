@@ -107,6 +107,17 @@ impl crate::Engine {
         }
         Ok(run.head_sha.clone())
     }
+
+    /// Resolve project defaults as dispatch does, without opening or changing a checkout.
+    /// A detached repository with no origin default has no inferred base.
+    pub fn project_settings(&self, name: &str) -> Result<crate::config::EffectiveProject> {
+        let mut settings = self.config.effective_project(name)?;
+        if settings.base.is_none() {
+            settings.base = corral_git::default_branch(&self.root.join(&settings.path))
+                .with_context(|| format!("discover default branch for project {name}"))?;
+        }
+        Ok(settings)
+    }
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<()> {

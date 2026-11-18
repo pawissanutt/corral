@@ -236,12 +236,23 @@ fn settings_delta_contains_parsed_config_listener_and_devices() {
     assert!(delta.rows[0].listener.is_none());
     ack(&mut subs, Topic::Settings, delta.cursor);
     let devices = fixture.shared.devices();
+    assert!(devices.listener_address().is_none());
+    let hostname = crate::devices::reach::hostname();
+    let uname = rustix::system::uname();
+    match uname.nodename().to_str() {
+        Ok("") | Err(_) => assert!(hostname.is_none()),
+        Ok(name) => assert_eq!(hostname.as_deref(), Some(name)),
+    }
     let device = devices.enrol_native("Native test", "test").unwrap();
+    let bound = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = bound.local_addr().unwrap();
+    let origins = ["http://localhost", "https://corral.example"];
     devices.set_listener(
-        "127.0.0.1:0".parse().unwrap(),
-        &["http://localhost".into()],
-        None,
+        address,
+        &origins.map(str::to_owned),
+        Some("wss://corral.example"),
     );
+    assert_eq!(devices.listener_address(), Some(address));
     fs::write(
         fixture.shared.root().join(".corral-next/corral.toml"),
         "[limits]\nrunning = 7\n",
@@ -254,5 +265,7 @@ fn settings_delta_contains_parsed_config_listener_and_devices() {
     let row = &delta.rows[0];
     assert_eq!(row.config["limits"]["running"].as_u64(), Some(7));
     assert_eq!(row.devices[0].id, device.id);
-    assert_eq!(row.listener.as_ref().unwrap().origins, ["http://localhost"]);
+    let listener = row.listener.as_ref().unwrap();
+    assert_eq!(listener.port, address.port());
+    assert_eq!(listener.origins, origins);
 }
