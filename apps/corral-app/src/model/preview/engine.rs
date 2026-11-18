@@ -7,7 +7,8 @@ mod pipeline;
 use corral_protocol::detail::TaskDetail;
 use corral_protocol::op::{OP_SUBMIT, OpReply};
 use corral_types::{
-    Actor, Blocked, EventKind, NewTask, Next, Op, Outcome, Refusal, Role, Status, Task, TaskEdit,
+    Actor, Blocked, EventKind, NewTask, Next, Op, Origin, Outcome, Refusal, Role, Status, Task,
+    TaskEdit,
 };
 use serde_json::{Value, json};
 
@@ -48,6 +49,7 @@ pub fn act(feed: &mut Feed, act: &Act) -> Result<(), String> {
     match outcome {
         Ok(task) => {
             rebuild(feed);
+            super::pi::sync(feed);
             operation.value = serde_json::to_value(OpReply::Done {
                 seq: feed.changes_head,
                 task,
@@ -455,6 +457,8 @@ fn reply(feed: &mut Feed, mut rec: TaskDetail, text: &str) -> Result<(), Fail> {
             json!({}),
         );
     }
+    // The runner sends the reply as the owner's input: a paused pi session resumes.
+    super::pi::deliver(feed, &format!("{id}_{run}"), text, Origin::Owner, None);
     Ok(())
 }
 
@@ -521,6 +525,7 @@ fn retry(
     };
     let profile = profile.map_or(last.profile, str::to_owned);
     let run_id = start(feed, &mut rec, Role::Worker, &profile);
+    super::pi_script::follow(feed, &mut rec, &run_id, fresh);
     supersede(feed, &mut rec, &run_id);
     set_status(feed, &mut rec, Status::Running);
     rec.task.round = 0;

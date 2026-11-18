@@ -17,10 +17,6 @@ impl AppState {
                 Ok(self.poll_changes(feed))
             }
             Event::Rows { delta, replacement } => self.rows(feed, delta, replacement),
-            Event::Live { scope, live } => {
-                self.live(feed, scope, live)?;
-                Ok(vec![])
-            }
             Event::TopicError {
                 topic,
                 scope,
@@ -95,7 +91,6 @@ impl AppState {
                             let thread = feed.threads.entry(scope.into()).or_default();
                             thread.stale = true;
                             thread.loading = true;
-                            thread.live = None;
                         }
                     }
                 });

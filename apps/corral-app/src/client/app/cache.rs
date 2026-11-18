@@ -128,7 +128,7 @@ impl AppState {
         let size = feed.with_untracked(|feed| {
             scope.len()
                 + feed.threads.get(scope).map_or(0, |thread| {
-                    thread.entries.values().map(bytes).sum::<usize>() + bytes(&thread.live)
+                    thread.entries.values().map(bytes).sum::<usize>()
                 })
         });
         self.retained.touch(Key::Thread(scope.into()), size);

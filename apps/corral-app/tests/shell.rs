@@ -469,8 +469,8 @@ fn terminate_from_a_session_row_asks_once_and_ends_the_run() {
 #[test]
 fn pause_on_a_session_without_a_pi_host_shows_the_refusal_reason() {
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.wait_for("id:agent-T-14_R1").unwrap();
-    app.right_click("id:agent-T-14_R1").unwrap();
+    app.wait_for("id:agent-T-15_R1").unwrap();
+    app.right_click("id:agent-T-15_R1").unwrap();
     app.press("id:btn-pause").unwrap();
     app.wait_for("id:refused").unwrap();
     app.wait_for("text:/no Pi socket/").unwrap();
@@ -489,14 +489,14 @@ fn the_reviewer_session_opens_from_review() {
 
 /// The grouping switch asks the feed for the other grouping and redraws the lanes from its
 /// answer: By run draws one lane per run, which By task does not have, and a live run's lane
-/// opens its session terminal.
+/// opens its session terminal (T-15's headless run, which has no pi transcript to open on).
 #[test]
 fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     let mut app = preview(terminal_80(), &[("corral.destination", "timeline")]);
-    app.wait_for("id:lane-T-14").unwrap();
-    assert_eq!(app.screen().count("id:lane-T-14/R1").unwrap(), 0);
+    app.wait_for("id:lane-T-15").unwrap();
+    assert_eq!(app.screen().count("id:lane-T-15/R1").unwrap(), 0);
     app.press("id:seg-group-1").unwrap();
-    app.wait_for("id:lane-T-14/R1").unwrap();
-    app.press("id:lane-T-14/R1").unwrap();
+    app.wait_for("id:lane-T-15/R1").unwrap();
+    app.press("id:lane-T-15/R1").unwrap();
     app.wait_for("id:session-terminal").unwrap();
 }

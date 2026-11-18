@@ -114,7 +114,9 @@ impl AppState {
                 });
                 Topic::Settings
             }
-            SubDelta::Thread { scope, delta, live } => {
+            // An answer streams on the chat's session stream; a thread page's own `live` text
+            // is the older wire's and is not read.
+            SubDelta::Thread { scope, delta, .. } => {
                 scope_key = Some(scope.clone());
                 feed.update(|feed| {
                     let thread = feed.threads.entry(Id::from(&scope)).or_default();
@@ -123,9 +125,6 @@ impl AppState {
                     thread.loading = false;
                     feed.retire_echoed_sends();
                 });
-                if let Some(live) = live {
-                    Self::live_update(feed, &scope, live)?;
-                }
                 self.touch_thread(feed, &scope);
                 Topic::Thread
             }
@@ -254,62 +253,6 @@ impl AppState {
             ));
         }
         outgoing
-    }
-    pub(super) fn live(
-        &mut self,
-        feed: Signal<Feed>,
-        scope: String,
-        fragment: LiveText,
-    ) -> Result<(), String> {
-        let result = Self::live_update(feed, &scope, fragment);
-        self.touch_thread(feed, &scope);
-        self.trim_retained(feed);
-        result
-    }
-
-    fn live_update(feed: Signal<Feed>, scope: &str, fragment: LiveText) -> Result<(), String> {
-        let mut problem = None;
-        feed.update(|feed| {
-            let thread = feed.threads.entry(Id::new(scope)).or_default();
-            let replace = thread
-                .live
-                .as_ref()
-                .is_none_or(|live| live.entry != fragment.entry || live.turn != fragment.turn);
-            if replace {
-                if fragment.offset != 0 {
-                    problem = Some("assistant stream starts at a nonzero offset".to_owned());
-                    return;
-                }
-                thread.live = Some(LiveText {
-                    text: String::new(),
-                    ..fragment.clone()
-                });
-            }
-            let Some(live) = &mut thread.live else {
-                return;
-            };
-            let Ok(offset) = usize::try_from(fragment.offset) else {
-                problem = Some("assistant stream offset overflow".into());
-                return;
-            };
-            if offset == live.text.len() {
-                live.text.push_str(&fragment.text);
-            } else if live
-                .text
-                .get(offset..offset.saturating_add(fragment.text.len()))
-                != Some(fragment.text.as_str())
-            {
-                problem = Some("assistant stream has a gap or inconsistent replay".into());
-                return;
-            }
-            if live.text.len() > TURN_TEXT_MAX {
-                problem = Some("assistant stream exceeds 256 KiB".into());
-                return;
-            }
-            live.offset = 0;
-            live.done = fragment.done;
-        });
-        problem.map_or(Ok(()), Err)
     }
 }
 

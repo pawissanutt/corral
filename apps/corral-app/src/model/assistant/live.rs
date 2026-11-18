@@ -119,7 +119,6 @@ pub fn quick_id(feed: &Feed) -> Option<String> {
             .entries
             .keys()
             .map(|id| id.as_str())
-            .chain(thread.live.as_ref().map(|live| live.entry.as_str()))
             .filter_map(entry_session)
             .max_by_key(|session| session_number(session).unwrap_or(0))
     });
@@ -280,15 +279,18 @@ pub fn amount(usd: f64, basis: Option<CostBasis>) -> String {
     }
 }
 
-/// Whether the loaded thread has a prompt or question still waiting for the owner.
+/// Whether the thread's session asks the owner a question: one still pending in its loaded
+/// transcript, or the wait its row reports.
 pub fn needs_you(feed: &Feed, scope: &str) -> bool {
-    feed.threads.get(scope).is_some_and(|thread| {
-        thread.entries.values().any(|entry| match &entry.card {
-            Some(EntryCard::Prompt { choices, .. }) => !choices.is_empty() && entry.state.is_none(),
-            Some(EntryCard::Question { answer, .. }) => answer.is_none() && entry.state.is_none(),
-            _ => false,
-        })
-    })
+    crate::model::agents::asks(feed, scope)
+        || row(feed, scope)
+            .and_then(|row| row.wait.as_ref())
+            .is_some_and(asks_owner)
+}
+
+/// Whether a row's wait is for the owner's answer rather than for the assistant.
+pub fn asks_owner(wait: &WaitReason) -> bool {
+    wait.code == "owner_question"
 }
 
 /// The thread's state chip. With corrald unreachable the row is only what was last received:
@@ -423,7 +425,7 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
                 wait: Some(wait),
                 state,
                 ..
-            }) if *state != AssistantState::Ended => Some(vec![
+            }) if *state != AssistantState::Ended && !asks_owner(wait) => Some(vec![
                 span(format!("waiting for assistant · {}", wait_label(wait))).hue(Hue::Held),
                 span(" Send still stores your message; it waits in the thread."),
             ]),

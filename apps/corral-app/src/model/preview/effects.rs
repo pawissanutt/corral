@@ -1,13 +1,16 @@
-//! Chat, device and subscription effects against the sample, on the unchanged chat wire.
+//! Chat, device and subscription effects against the sample, on the unchanged chat wire. A chat
+//! message goes to the thread's pi host, as corrald submits it; the thread shows it once the
+//! host recorded it.
 
-use super::{act, detail, fleet, sessions, stamp};
+use super::{act, detail, fleet, pi, sessions, stamp};
 use crate::model::{
     Id,
     daemon::*,
     devices::{DeviceOp, Pairing},
     effect::Effect,
 };
-use corral_protocol::{app::*, assistant::*, detail::*, rows::*};
+use corral_protocol::{app::*, assistant::*, rows::*};
+use corral_types::Origin;
 use serde_json::{Value, json};
 
 pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
@@ -39,17 +42,15 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
             Ok(())
         }
         Effect::Watch { session, on } => {
-            if feed
-                .detail(&DetailRef::Session {
-                    id: session.to_string(),
-                })
-                .is_none()
-            {
+            if pi::resolve(feed, session).is_none() && !feed.agents.contains_key(session.as_str()) {
                 return Err(format!("Unknown preview session {session}"));
             }
+            // Several views can watch one scope and the sample does not count them, so a scope
+            // once watched stays fed; a later watcher gets the running turn again.
             if *on {
                 feed.topics
                     .insert(format!("session:{session}"), TopicState::default());
+                pi::watch(feed, session.as_str());
                 fleet::watch(feed, session.as_str());
             }
             Ok(())
@@ -181,61 +182,12 @@ fn send_inner(feed: &mut Feed, request: &AssistantSend) -> Result<(), String> {
     if !request.attachments.is_empty() {
         return Err("Preview sends do not upload or deliver attachments; remove them first".into());
     }
-    let assistant = if request.thread == QUICK_THREAD {
-        "A-7"
-    } else {
-        &request.thread
-    };
-    if feed
-        .assistants
-        .get(assistant)
-        .is_some_and(|row| row.state == AssistantState::Ended)
-    {
-        return Err("Preview assistant session has ended".into());
-    }
-    if request.target == AskTarget::Other {
+    if request.target != AskTarget::Assistant {
         return Err("Unknown preview message recipient".into());
     }
-    let pm = request.target == AskTarget::Pm;
-    let id = format!("preview-message:{}", request.cmd_id);
-    let at = stamp(feed.now);
-    let mut entry = sessions::entry(
-        &id,
-        &at,
-        if pm {
-            EntryKind::PmMessage
-        } else {
-            EntryKind::Message
-        },
-        &request.text,
-    );
-    entry.typed_at = Some(request.typed_at.clone());
-    entry.links = request.context.clone();
-    entry.state = Some(if pm {
-        MessageState::PmDelivered
-    } else {
-        MessageState::Delivered
-    });
-    let notice = sessions::entry(
-        &format!("{id}:notice"),
-        &at,
-        EntryKind::Notice,
-        "Preview · message recorded locally. No model ran and no reply was generated.",
-    );
-    let scopes: Vec<String> = if request.thread == QUICK_THREAD || request.thread == "A-7" {
-        vec![QUICK_THREAD.into(), "A-7".into()]
-    } else {
-        vec![request.thread.clone()]
-    };
-    for scope in scopes {
-        if let Some(thread) = feed.threads.get_mut(scope.as_str()) {
-            thread.entries.insert(id.clone().into(), entry.clone());
-            thread
-                .entries
-                .insert(notice.id.clone().into(), notice.clone());
-        }
-        feed.drafts.remove(scope.as_str());
-    }
+    let id = chat_for(feed, &request.thread)?;
+    let entry = pi::input_entry(&id, &request.cmd_id);
+    feed.drafts.remove(request.thread.as_str());
     feed.commands.insert(
         request.cmd_id.clone().into(),
         CommandState {
@@ -244,11 +196,56 @@ fn send_inner(feed: &mut Feed, request: &AssistantSend) -> Result<(), String> {
             request: serde_json::to_value(request).map_err(|error| error.to_string())?,
             status: CommandStatus::Done,
             error: None,
-            entry: Some(id.into()),
+            entry: Some(entry.clone().into()),
         },
     );
+    // As corrald starts a stopped chat host before it submits the message.
+    pi::revive(feed, &id);
+    pi::deliver(feed, &id, &request.text, Origin::Owner, Some(entry));
     feed.retire_echoed_sends();
     Ok(())
+}
+
+/// The chat a message to `thread` reaches: a named session, or the quick thread's current one;
+/// once the quick thread has ended, the next message starts a new session.
+fn chat_for(feed: &mut Feed, thread: &str) -> Result<String, String> {
+    if thread != QUICK_THREAD {
+        return match feed.assistants.get(thread) {
+            Some(row) if row.state == AssistantState::Ended => {
+                Err("chat thread ended; start a new session".into())
+            }
+            Some(_) => Ok(thread.to_owned()),
+            None => Err("Preview assistant session does not exist".into()),
+        };
+    }
+    let current = crate::model::assistant::quick_id(feed).filter(|id| {
+        feed.assistants
+            .get(id.as_str())
+            .is_some_and(|row| row.state != AssistantState::Ended)
+    });
+    if let Some(id) = current {
+        return Ok(id);
+    }
+    let profile = crate::model::assistant::quick_id(feed)
+        .and_then(|id| feed.assistants.get(id.as_str()))
+        .and_then(|row| row.profile.clone());
+    let id = next_chat(feed);
+    sessions::assistant(feed, &id, "Quick thread", None, profile, true);
+    Ok(id)
+}
+
+fn next_chat(feed: &Feed) -> String {
+    let next = feed
+        .assistants
+        .keys()
+        .filter_map(|id| {
+            id.strip_prefix("A-")
+                .and_then(|number| number.parse::<u64>().ok())
+        })
+        .max()
+        .unwrap_or(17)
+        + 1;
+    format!("A-{next}")
 }
 
 fn execute_operation(feed: &mut Feed, effect: &Effect) -> Result<Value, String> {
@@ -256,19 +253,20 @@ fn execute_operation(feed: &mut Feed, effect: &Effect) -> Result<Value, String> 
         Effect::Session { op, .. } => assistant_session(feed, op),
         Effect::Warm(request) => {
             require_thread(feed, &request.thread)?;
-            let id = if request.thread == QUICK_THREAD {
-                "A-7"
-            } else {
-                &request.thread
-            };
-            let row = feed
-                .assistants
-                .get_mut(id)
+            let id = pi::resolve(feed, &request.thread)
                 .ok_or("Preview assistant session does not exist")?;
-            if row.state == AssistantState::Ended {
+            if feed
+                .assistants
+                .get(id.as_str())
+                .is_none_or(|row| row.state == AssistantState::Ended)
+            {
                 return Err("Preview assistant session ended".into());
             }
-            row.state = AssistantState::Ready;
+            pi::revive(feed, &id);
+            let row = feed
+                .assistants
+                .get(id.as_str())
+                .ok_or("Preview assistant session does not exist")?;
             serde_json::to_value(row).map_err(|error| error.to_string())
         }
         Effect::Device(op) => device(feed, op),
@@ -284,69 +282,64 @@ fn assistant_session(feed: &mut Feed, op: &AssistantSessionOp) -> Result<Value, 
             {
                 return Err("Preview focus task does not exist".into());
             }
-            let next = feed
-                .assistants
-                .keys()
-                .filter_map(|id| {
-                    id.strip_prefix("A-")
-                        .and_then(|number| number.parse::<u64>().ok())
-                })
-                .max()
-                .unwrap_or(17)
-                + 1;
-            let id = format!("A-{next}");
+            let id = next_chat(feed);
             sessions::assistant(
                 feed,
                 &id,
                 "New session",
                 task.as_deref(),
                 profile.clone().or_else(|| Some("omp-sol".into())),
+                false,
             );
             id
         }
         AssistantSessionOp::End { session }
         | AssistantSessionOp::Pause { session }
-        | AssistantSessionOp::Resume { session }
-        | AssistantSessionOp::TakeOver { session } => session.clone(),
-        AssistantSessionOp::SetProfile { thread, .. } => {
-            if thread == QUICK_THREAD {
-                "A-7".into()
-            } else {
-                thread.clone()
-            }
-        }
-        AssistantSessionOp::Other => {
-            return Err("Unsupported preview assistant session operation".into());
+        | AssistantSessionOp::Resume { session } => pi::resolve(feed, session)
+            .map(|id| id.to_string())
+            .ok_or("Preview assistant session does not exist")?,
+        AssistantSessionOp::SetProfile { thread, .. } => pi::resolve(feed, thread)
+            .map(|id| id.to_string())
+            .ok_or("Preview assistant session does not exist")?,
+        AssistantSessionOp::TakeOver { .. } | AssistantSessionOp::Other => {
+            return Err(
+                "invalid: chat has no take-over operation; use the same session directly".into(),
+            );
         }
     };
-    if let AssistantSessionOp::SetProfile { profile, .. } = op
-        && !feed.settings.as_ref().is_some_and(|settings| {
-            settings.config["profiles"]
-                .as_object()
-                .is_some_and(|profiles| profiles.contains_key(profile))
-        })
-    {
-        return Err("Preview profile does not exist".into());
+    match op {
+        AssistantSessionOp::SetProfile { profile, .. } => {
+            let known = feed.settings.as_ref().is_some_and(|settings| {
+                settings.config["profiles"]
+                    .as_object()
+                    .is_some_and(|profiles| profiles.contains_key(profile))
+            });
+            if !known {
+                return Err("Preview profile does not exist".into());
+            }
+            if let Some(row) = feed.assistants.get_mut(id.as_str()) {
+                row.profile = Some(profile.clone());
+            }
+        }
+        AssistantSessionOp::End { .. } => {
+            pi::end(feed, &id);
+            if let Some(row) = feed.assistants.get_mut(id.as_str()) {
+                row.state = AssistantState::Ended;
+                row.live_in = AssistantLocation::None;
+            }
+        }
+        AssistantSessionOp::Pause { .. } => {
+            pi::control(feed, &id, crate::model::agents::Control::Pause)?;
+        }
+        AssistantSessionOp::Resume { .. } => {
+            pi::control(feed, &id, crate::model::agents::Control::Resume)?;
+        }
+        _ => {}
     }
     let row = feed
         .assistants
         .get_mut(id.as_str())
         .ok_or("Preview assistant session does not exist")?;
-    match op {
-        AssistantSessionOp::End { .. } => {
-            row.state = AssistantState::Ended;
-            row.live_in = AssistantLocation::None;
-            row.turn = None;
-        }
-        AssistantSessionOp::Pause { .. } => row.state = AssistantState::Paused,
-        AssistantSessionOp::Resume { .. } => row.state = AssistantState::Ready,
-        AssistantSessionOp::TakeOver { .. } => {
-            row.live_in = AssistantLocation::Daemon;
-            row.state = AssistantState::Ready;
-        }
-        AssistantSessionOp::SetProfile { profile, .. } => row.profile = Some(profile.clone()),
-        AssistantSessionOp::New { .. } | AssistantSessionOp::Other => {}
-    }
     row.rev += 1;
     serde_json::to_value(row).map_err(|error| error.to_string())
 }
