@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeSet,
+    fs::File,
     io::{Read, Seek, SeekFrom},
     mem,
 };
@@ -350,8 +351,38 @@ fn artifact(engine: &Engine, query: &DetailGet, seq: u64, reference: &str) -> Re
         .store
         .get_artifact(reference)?
         .context("artifact reference not found")?;
-    let media_type = media_type(&artifact.title);
-    let mut file = engine.open_artifact_blob(&artifact)?;
+    let file = engine.open_artifact_blob(&artifact)?;
+    let content = ArtifactSource {
+        media_type: media_type(&artifact.title),
+        fingerprint: fingerprint(&(&query.target, &artifact))?,
+        bytes: artifact.bytes,
+        task: artifact.task,
+        key: artifact.id.to_string(),
+    };
+    artifact_page(query, seq, file, content)
+}
+
+pub(super) struct ArtifactSource<'a> {
+    pub media_type: Option<&'a str>,
+    pub fingerprint: String,
+    pub bytes: u64,
+    pub task: String,
+    pub key: String,
+}
+
+pub(super) fn artifact_page(
+    query: &DetailGet,
+    seq: u64,
+    mut file: File,
+    source: ArtifactSource<'_>,
+) -> Result<DetailReply> {
+    let ArtifactSource {
+        media_type,
+        fingerprint,
+        bytes: total,
+        task,
+        key,
+    } = source;
     let text = match query.page.as_deref() {
         Some(token) => match token.as_bytes().first() {
             Some(b't') => true,
@@ -366,17 +397,13 @@ fn artifact(engine: &Engine, query: &DetailGet, seq: u64, reference: &str) -> Re
         }
         None => is_text(&mut file)?,
     };
-    let etag = format!(
-        "{}{}",
-        if text { 't' } else { 'b' },
-        fingerprint(&(&query.target, &artifact))?
-    );
+    let etag = format!("{}{}", if text { 't' } else { 'b' }, fingerprint);
     let at = offset(query.page.as_deref(), &etag)? as u64;
     ensure!(
-        at == 0 || at < artifact.bytes,
+        at == 0 || at < total,
         "invalid: artifact page is past the end"
     );
-    let take = (artifact.bytes - at).min(if text { TEXT_BYTES } else { BINARY_BYTES } as u64);
+    let take = (total - at).min(if text { TEXT_BYTES } else { BINARY_BYTES } as u64);
     file.seek(SeekFrom::Start(at))
         .context("seek to artifact page")?;
     let mut bytes = vec![0; take as usize];
@@ -384,9 +411,7 @@ fn artifact(engine: &Engine, query: &DetailGet, seq: u64, reference: &str) -> Re
     let (encoding, content, size) = if text {
         let size = match std::str::from_utf8(&bytes) {
             Ok(_) => bytes.len(),
-            Err(error) if error.error_len().is_none() && at + take < artifact.bytes => {
-                error.valid_up_to()
-            }
+            Err(error) if error.error_len().is_none() && at + take < total => error.valid_up_to(),
             Err(error) => return Err(error).context("invalid: artifact text page is not UTF-8"),
         };
         bytes.truncate(size);
@@ -399,15 +424,15 @@ fn artifact(engine: &Engine, query: &DetailGet, seq: u64, reference: &str) -> Re
         )
     };
     let next_at = at + size as u64;
-    let truncated = next_at < artifact.bytes;
+    let truncated = next_at < total;
     ensure!(
         !truncated || size != 0,
         "invalid: artifact page did not advance"
     );
     let next = truncated.then(|| format!("{etag}:{next_at}"));
     let body = ArtifactPage {
-        task: artifact.task,
-        key: artifact.id.to_string(),
+        task,
+        key,
         media_type: media_type.map(str::to_owned),
         encoding,
         content,

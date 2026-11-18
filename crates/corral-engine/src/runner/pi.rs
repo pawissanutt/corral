@@ -29,6 +29,9 @@ use sha2::{Digest, Sha256};
 use super::{LaunchSpec, Origin, Runner, SessionRef, SessionStatus};
 use crate::{config::shell_quote, refuse};
 
+mod chat;
+pub use chat::{ChatLaunch, chat_session};
+
 const VERSION: u32 = 2;
 const FRAME_MAX: usize = 64 * 1024;
 const START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -112,15 +115,37 @@ impl<'a> Client<'a> {
     /// Send a v2 command and decode its result. The daemon can use this for host
     /// commands that do not implement an engine operation, such as `live_since`.
     pub fn request<T: Serialize, R: DeserializeOwned>(&self, command: &str, args: T) -> Result<R> {
+        self.request_with_timeout(command, args, IO_TIMEOUT)
+    }
+
+    pub fn request_with_timeout<T: Serialize, R: DeserializeOwned>(
+        &self,
+        command: &str,
+        args: T,
+        timeout: Duration,
+    ) -> Result<R> {
         let id = request_id();
-        self.exchange(command, &id, &encode(command, &id, args)?, IO_TIMEOUT)
+        self.exchange(command, &id, &encode(command, &id, args)?, timeout)
+    }
+
+    /// Exchange a v2 request over a caller-connected blocking stream by an
+    /// absolute deadline, including any time the caller spent connecting.
+    #[cfg(unix)]
+    pub fn request_on<T: Serialize, R: DeserializeOwned>(
+        stream: UnixStream,
+        command: &str,
+        args: T,
+        deadline: Instant,
+    ) -> Result<R> {
+        let id = request_id();
+        Self::exchange_on(stream, command, &id, &encode(command, &id, args)?, deadline)
     }
 
     pub fn hello(&self) -> Result<Hello> {
         self.hello_with_timeout(IO_TIMEOUT)
     }
 
-    fn hello_with_timeout(&self, timeout: Duration) -> Result<Hello> {
+    pub fn hello_with_timeout(&self, timeout: Duration) -> Result<Hello> {
         let id = request_id();
         let result: Value =
             self.exchange("hello", &id, &encode("hello", &id, json!({}))?, timeout)?;
@@ -182,11 +207,28 @@ impl<'a> Client<'a> {
         frame: &[u8],
         timeout: Duration,
     ) -> Result<R> {
-        let mut stream = self.connect()?;
+        Self::exchange_on(
+            self.connect()?,
+            command,
+            id,
+            frame,
+            Instant::now() + timeout,
+        )
+    }
+
+    #[cfg(unix)]
+    fn exchange_on<R: DeserializeOwned>(
+        mut stream: UnixStream,
+        command: &str,
+        id: &str,
+        frame: &[u8],
+        deadline: Instant,
+    ) -> Result<R> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        ensure!(!remaining.is_zero(), "timed out writing Pi request");
         stream
-            .set_write_timeout(Some(timeout))
+            .set_write_timeout(Some(remaining))
             .context("set Pi socket write timeout")?;
-        let deadline = Instant::now() + timeout;
         stream
             .write_all(frame)
             .with_context(|| format!("write Pi {command} request"))?;
@@ -204,7 +246,12 @@ impl<'a> Client<'a> {
             let error: ReplyError =
                 serde_json::from_value(reply.error.context("missing Pi reply error")?)
                     .context("decode Pi reply error")?;
-            bail!("Pi {command} refused ({}): {}", error.code, error.reason);
+            return Err(PiRefusal {
+                command: command.into(),
+                code: error.code,
+                reason: error.reason,
+            }
+            .into());
         }
         reply
             .result
@@ -274,6 +321,25 @@ struct ReplyError {
     code: String,
     reason: String,
 }
+
+#[derive(Debug)]
+pub struct PiRefusal {
+    pub command: String,
+    pub code: String,
+    pub reason: String,
+}
+
+impl std::fmt::Display for PiRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Pi {} refused ({}): {}",
+            self.command, self.code, self.reason
+        )
+    }
+}
+
+impl std::error::Error for PiRefusal {}
 
 fn request_id() -> String {
     let elapsed = SystemTime::now()
@@ -379,7 +445,7 @@ impl<'a> PiRunner<'a> {
         }
     }
 
-    fn wait_for_hello(&self, client: &Client<'_>, inner: &SessionRef) -> Result<()> {
+    fn wait_for_hello(&self, client: &Client<'_>, inner: &SessionRef) -> Result<Hello> {
         let deadline = Instant::now() + START_TIMEOUT;
         let mut check_placement = Instant::now();
         loop {
@@ -390,8 +456,12 @@ impl<'a> PiRunner<'a> {
                 "timed out waiting for corral-pi hello"
             );
             match client.hello_with_timeout(remaining) {
-                Ok(_) => return Ok(()),
-                Err(error) if unavailable(&error) => {}
+                Ok(hello) => return Ok(hello),
+                Err(error)
+                    if unavailable(&error)
+                        || error
+                            .downcast_ref::<PiRefusal>()
+                            .is_some_and(|error| error.code == "starting") => {}
                 Err(error) => return Err(error),
             }
             if now >= check_placement {

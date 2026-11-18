@@ -5,20 +5,21 @@ use std::{
 };
 
 use anyhow::Result;
-use corral_engine::refuse;
+use corral_engine::{Runner, refuse};
 use corral_protocol::{
-    self as wire, app, config as settings, device, op, pane,
+    self as wire, app, assistant as chat, attachment, config as settings, device, op, pane,
     rpc::{self, ErrorCode},
+    session as control,
 };
 use corral_types::{Refusal, SessionRef};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::{
-    config,
+    assistant, config,
     conn::{self, Conn},
     devices::{DeviceError, SessionGuard},
-    health, ops,
+    health, ops, sessions,
     state::Shared,
     topics::Subscriptions,
     views,
@@ -28,6 +29,12 @@ use crate::{
 mod pane_keys;
 
 pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
+    let chat = hello.caps.iter().any(|cap| {
+        matches!(
+            cap.as_str(),
+            wire::ASSISTANT_V1 | attachment::ASSISTANT_ATTACH_V1
+        )
+    }) && assistant::configured(shared).unwrap_or(false);
     wire::Welcome {
         proto: wire::Proto {
             major: wire::PROTO_MAJOR,
@@ -44,6 +51,9 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::PLANS_V1
                         | wire::PROJECTS_V1
                         | wire::AGENTS_V1
+                        | app::SESSION_V1
+                        | app::SESSION_FLEET_V1
+                        | wire::detail::STREAM_TERMINAL_V1
                         | wire::REVIEW_V1
                         | wire::TIMELINE_V1
                         | wire::USAGE_V1
@@ -51,7 +61,11 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::CLOSED_V1
                         | device::DEVICE_V1
                         | device::PUSH_V1
-                )
+                ) || chat
+                    && matches!(
+                        cap.as_str(),
+                        wire::ASSISTANT_V1 | attachment::ASSISTANT_ATTACH_V1
+                    )
             })
             .collect(),
         daemon: wire::DaemonInfo {
@@ -115,6 +129,49 @@ pub(crate) fn serve(
             Ok(())
         }),
         op::OP_SUBMIT => answer!(Ok(ops::submit(shared, decode(params)?)?)),
+        chat::ASSISTANT_SEND => answer!(Ok(assistant::send(
+            shared,
+            device.as_ref().map_or("local", |device| device.id.as_str()),
+            decode(params)?,
+        )?)),
+        chat::ASSISTANT_CANCEL => answer!(Ok(assistant::cancel(shared, decode(params)?)?)),
+        chat::ASSISTANT_WARM => answer!(Ok(assistant::warm(shared, decode(params)?)?)),
+        chat::ASSISTANT_STOP => answer!(Ok(assistant::stop(shared, decode(params)?)?)),
+        chat::ASSISTANT_SESSION => answer!(Ok(assistant::session(shared, decode(params)?)?)),
+        chat::PROMPT_ANSWER => answer!(Ok(sessions::answer(shared, decode(params)?)?)),
+        attachment::ATTACHMENT_BEGIN => answer!(Ok(assistant::attach_begin(
+            shared,
+            device.as_ref().map_or("local", |device| device.id.as_str()),
+            decode(params)?,
+        )?)),
+        attachment::ATTACHMENT_PUT => answer!(Ok(assistant::attach_put(
+            shared,
+            device.as_ref().map_or("local", |device| device.id.as_str()),
+            decode(params)?,
+        )?)),
+        attachment::ATTACHMENT_DISCARD => answer!(Ok(assistant::attach_discard(
+            shared,
+            device.as_ref().map_or("local", |device| device.id.as_str()),
+            decode(params)?,
+        )?)),
+        control::SESSION_CANCEL => answer!(Ok(sessions::cancel(shared, decode(params)?)?)),
+        control::SESSION_PAUSE => answer!({
+            let target: control::SessionTarget = decode(params)?;
+            Ok(sessions::pause(shared, &target.id)?)
+        }),
+        control::SESSION_RESUME => answer!({
+            let target: control::SessionTarget = decode(params)?;
+            Ok(sessions::resume(shared, &target.id)?)
+        }),
+        control::SESSION_TERMINATE => answer!({
+            let target: control::SessionTarget = decode(params)?;
+            Ok(sessions::terminate(shared, &target.id)?)
+        }),
+        control::SESSION_RELAUNCH => answer!({
+            let target: control::SessionTarget = decode(params)?;
+            Ok(sessions::relaunch(shared, &target.id)?)
+        }),
+        control::SESSION_REWIND => answer!(Ok(sessions::rewind(shared, decode(params)?)?)),
         settings::CONFIG_GET => answer!({
             let _: settings::ConfigGet = decode(params)?;
             Ok(config::get(shared)?)
@@ -123,19 +180,20 @@ pub(crate) fn serve(
         pane::PANE_FOCUS => answer!({
             let engine = shared.engine()?;
             let session = pane_session(&engine, &decode(params)?)?;
-            Ok(engine.runner.focus(&session)?)
+            Ok(engine.session_runner().focus(&session)?)
         }),
         pane::PANE_KEYS => answer!({
             let request: pane::PaneKeys = decode(params)?;
             let engine = shared.engine()?;
-            let SessionRef::Herdr { pane, .. } = pane_session(&engine, &request.target)? else {
+            let session = pane_session(&engine, &request.target)?;
+            let SessionRef::Herdr { pane, .. } = sessions::available_for_pane(&session) else {
                 return Err(refuse(
                     "headless process sessions have no pane to send keys to",
                     vec![],
                 )
                 .into());
             };
-            pane_keys::send(&health::herdr(&engine.config.runner), &pane, &request)?;
+            pane_keys::send(&health::herdr(&engine.config.runner), pane, &request)?;
             Ok(())
         }),
         app::DETAIL_GET => answer!(Ok(views::detail(shared, decode(params)?)?)),
@@ -294,6 +352,9 @@ impl From<DeviceError> for Failure {
 
 impl From<anyhow::Error> for Failure {
     fn from(error: anyhow::Error) -> Self {
+        if let Some(refused) = error.downcast_ref::<corral_engine::runner::pi::PiRefusal>() {
+            return Self::from(refuse(refused.to_string(), Vec::new()));
+        }
         let error = match error.downcast::<Refusal>() {
             Ok(refusal) => {
                 return match rpc::Error::refused(refusal) {

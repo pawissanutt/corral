@@ -275,11 +275,22 @@ impl Engine {
     }
 
     pub fn stop(&self, id: &str) -> Result<Run> {
+        self.stop_selected(id, None)
+    }
+
+    /// Stop the addressed live run, not another role's run on the same task.
+    pub fn stop_run(&self, id: &str, run: &str) -> Result<Run> {
+        self.stop_selected(id, Some(run))
+    }
+
+    fn stop_selected(&self, id: &str, selected: Option<&str>) -> Result<Run> {
         self.store.transaction(|store| {
             let mut task = store.require_task(id)?;
             let runs = store.live_runs_for_task(id)?;
             for mut run in runs.into_iter().rev() {
-                if self.live_session(&run)?.is_none() {
+                if selected.is_some_and(|selected| selected != run.id)
+                    || self.live_session(&run)?.is_none()
+                {
                     continue;
                 }
                 self.end_run(store, &mut run, Outcome::Stopped, true)?;
