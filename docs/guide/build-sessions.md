@@ -64,10 +64,26 @@ fallback policy is required. See [API-first profiles](api-first-profiles.md).
 The Rust-owned ledger reserves a conservative priced bound before every physical request.
 Paid startup authenticates that ledger's current capability, session and exact binding;
 it does not use the separate bound-role continuation-notice protocol.
-By default, paid children use the parent's exact route. A workspace owner can opt new
-Builds into mixed API child routes by mapping existing child presets to approved workspace
-API profiles and setting one shared USD cap. For example, with the named presets and
-API profiles already configured:
+New workspace Builds use mixed API child routes by default, whether the parent runs on a
+subscription or an API route. Without a `[build.api]` section, each child preset is mapped
+to the one workspace API profile that runs the preset's exact vendor and model and carries
+API-start approval for the assistant role. A preset with no such profile, or with several,
+keeps its configured model. The derived default records the approval
+`default-mixed-build` and uses the largest allowance `maximum_micros` accepts, so it does
+not cap the Build below that and does not apply each profile's own `api_start` spending
+limit. There is no setting that turns the default off; with no matching API profile it
+maps nothing and paid children use the parent's exact route. A change to the presets or
+API profiles that alters the derived mappings is a changed approval for Builds already
+running on it.
+
+If the installed host does not support mixed routes, or a mapped profile's credential or
+model is unavailable, a new Build with the derived default starts without it and prints
+the reason; children then keep their configured routes. A configured `[build.api]` and a
+resumed mixed Build refuse instead.
+
+A workspace owner can write the mappings and one shared USD cap explicitly; that section
+replaces the derived default. For example, with the named presets and API profiles
+already configured:
 
 ```toml
 [build.api]

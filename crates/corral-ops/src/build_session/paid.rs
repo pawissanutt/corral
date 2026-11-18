@@ -95,11 +95,8 @@ pub fn open_mixed(
     session: Option<&str>,
 ) -> Result<PaidLaunch> {
     open_with(store, profile, session, |config| {
-        let api = config
-            .build
-            .api
-            .as_ref()
-            .context("mixed Build approval missing")?;
+        let api =
+            crate::agent::pi_build::mixed_api(config).context("mixed Build approval missing")?;
         ensure!(
             &api.profiles == presets,
             "mixed Build preset mappings changed during launch"
@@ -267,7 +264,7 @@ pub fn budget(store: &Store, call: Value) -> Result<Value> {
         ensure!(ledger.generation == p.generation && ledger.cap_sha256 == paths::sha256_hex(p.cap.as_bytes()), "fenced Build financial capability");
         if let Some(mixed) = &ledger.mixed {
             let config = store.config_layers()?.config()?;
-            let api = config.build.api.as_ref().context("mixed Build approval revoked")?;
+            let api = crate::agent::pi_build::mixed_api(&config).context("mixed Build approval revoked")?;
             ensure!(api.approval == mixed.approval && api.profiles == mixed.presets
                 && api.maximum_micros.checked_mul(1000) == Some(mixed.allowance_nanos), "mixed Build approval changed");
             for (name, before) in &mixed.routes {
