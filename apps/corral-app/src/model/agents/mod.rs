@@ -21,6 +21,7 @@ use crate::model::text::{Rich, span};
 use crate::model::{ActStatus, Id, Live, Selection, act};
 
 mod control;
+mod ended_log;
 mod fleet;
 mod items;
 mod live;
@@ -45,6 +46,7 @@ pub use control::{
     Control, ControlAsk, Kind, RewindPoint, RewindSheet, ask, control_verbs, controls, kind,
     rewind_sheet, status as control_status,
 };
+pub use ended_log::run as ended_run;
 pub use fleet::{Fleet, FleetEntry, FleetLine, FleetSection};
 pub use items::{Card, Divider, Footer, Marker, More, Picture, Prose, Section, Thinking};
 pub(crate) use live::placement;

@@ -400,10 +400,17 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
             record.checks = vec![red];
         }
         "T-5" => landed(record, 4 * DAY, 2 * DAY, "omp-sol"),
-        "T-6" => landed(record, 4 * DAY, 3 * DAY, "codex-terra"),
+        // Closed headless runs: the first keeps its log, the stopped second had it pruned.
+        "T-6" => {
+            landed(record, 4 * DAY, 3 * DAY, "codex-terra");
+            if let Some(run) = record.runs.last_mut() {
+                headless(run, 31207);
+            }
+        }
         "T-7" => {
-            let mut run = run(feed, record, Role::Worker, "omp-sol", 5 * DAY);
+            let mut run = run(feed, record, Role::Worker, "codex-terra", 5 * DAY);
             finish(feed, &mut run, 4 * DAY + HOUR, Outcome::Stopped);
+            headless(&mut run, 29114);
             record.runs.push(run);
         }
         "T-8" => {
@@ -571,10 +578,7 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
         "T-15" => {
             let mut run = run(feed, record, Role::Worker, "codex-terra", 4 * HOUR);
             run.quiet_since = Some(ago(feed, 25 * MINUTE));
-            run.session = Some(SessionRef::Process {
-                pid: 48213,
-                dir: PathBuf::from("/preview/corral/.corral-next/runs/T-15/R1"),
-            });
+            headless(&mut run, 48213);
             record.runs.push(run);
         }
         "T-17" => record.task.body.push_str(
@@ -636,6 +640,17 @@ pub(super) fn run(
         quiet_since: None,
         id,
     }
+}
+
+/// Makes `run` a headless run: a detached process writing `session.log` in its run directory.
+pub(super) fn headless(run: &mut Run, pid: u32) {
+    run.session = Some(SessionRef::Process {
+        pid,
+        dir: PathBuf::from(format!(
+            "/preview/corral/.corral-next/runs/{}/{}",
+            run.task, run.id
+        )),
+    });
 }
 
 pub(super) fn harness(profile: &str) -> &'static str {

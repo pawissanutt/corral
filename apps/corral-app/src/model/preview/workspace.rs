@@ -361,4 +361,12 @@ fn history(feed: &mut Feed, records: &[TaskDetail]) {
     for (ts, task, run, kind, actor, detail) in all {
         append(feed, ts, Some(&task), run.as_deref(), kind, actor, detail);
     }
+    // The records are stored after this history, so each event takes its task's project from them.
+    for event in feed.changes.values_mut() {
+        event.project = event
+            .task
+            .as_deref()
+            .and_then(|id| records.iter().find(|record| record.task.id == id))
+            .and_then(|record| record.task.project.clone());
+    }
 }

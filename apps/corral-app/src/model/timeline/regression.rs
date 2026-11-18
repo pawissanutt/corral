@@ -16,6 +16,7 @@ fn event(seq: u64, ts: &str, task: &str, kind: EventKind, actor: Actor) -> Event
         ts: at(ts),
         task: Some(task.into()),
         run: None,
+        project: None,
         kind,
         actor,
         detail: serde_json::Value::Null,
@@ -218,6 +219,45 @@ fn drops_and_reopens_are_drawn_and_each_lane_opens_its_task_or_live_session() {
     };
     assert_eq!(opens("T-1/R1"), Live::Session("T-1_R1".into()));
     assert_eq!(opens("T-2/R1"), Live::Task("T-2".into()));
+}
+
+/// An ended run's lane opened its task, so the retained log of a headless run was out of reach
+/// from the Timeline; only an ended process session opens its page.
+#[test]
+fn an_ended_headless_runs_lane_opens_its_session_and_another_ended_run_its_task() {
+    let feed = Feed::default();
+    let ended = |session: Option<SessionRef>| Run {
+        id: "R1".into(),
+        task: "T-3".into(),
+        role: Role::Worker,
+        profile: "codex".into(),
+        harness: "codex".into(),
+        model: None,
+        effort: None,
+        worktree: PathBuf::new(),
+        branch: String::new(),
+        base: String::new(),
+        base_sha: String::new(),
+        session,
+        started: at("2026-11-15T09:00:00Z"),
+        ended: Some(at("2026-11-15T10:00:00Z")),
+        outcome: Some(Outcome::Done),
+        summary: None,
+        head_sha: None,
+        quiet_since: None,
+    };
+    let process = SessionRef::Process {
+        pid: 7,
+        dir: PathBuf::from("/runs/T-3/R1"),
+    };
+    assert_eq!(
+        opens_run(&ended(Some(process)), &feed).live,
+        Live::Session("T-3_R1".into())
+    );
+    assert_eq!(
+        opens_run(&ended(None), &feed).live,
+        Live::Task("T-3".into())
+    );
 }
 
 #[test]

@@ -35,7 +35,7 @@ use serde_json::Value;
 
 pub use config::config;
 pub use controls::{answer, control};
-pub use details::detail;
+pub use details::{detail, failure};
 pub use effects::{effect, operation};
 pub use engine::act;
 pub use pane::pane;
@@ -254,6 +254,7 @@ pub(super) fn append(
 ) {
     feed.changes_head += 1;
     let seq = feed.changes_head;
+    let project = task.and_then(|id| project_of(feed, id));
     feed.changes.insert(
         seq,
         Event {
@@ -261,6 +262,7 @@ pub(super) fn append(
             ts,
             task: task.map(str::to_owned),
             run: run.map(str::to_owned),
+            project,
             kind,
             actor,
             detail,
@@ -268,6 +270,18 @@ pub(super) fn append(
     );
     let seen = feed.seen.as_ref().map_or(0, |seen| seen.through);
     feed.changes_unseen = Some((seen, feed.changes.range(seen + 1..).count() as u64));
+}
+
+/// The project a stored sample task belongs to, which the daemon puts on each of its events,
+/// closed tasks' too.
+fn project_of(feed: &Feed, task: &str) -> Option<String> {
+    match feed
+        .detail(&DetailRef::Task { id: task.into() })
+        .and_then(DetailCache::body)
+    {
+        Some(DetailBody::Task(record)) => record.task.project.clone(),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

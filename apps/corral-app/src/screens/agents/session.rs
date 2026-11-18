@@ -105,11 +105,13 @@ pub(super) fn draft(
 /// While the session's terminal shows, holds corrald's stream of its pane open: each
 /// replacement screen arrives on its own, so nothing here reads the capture on a clock. It is
 /// released when the view switches back to the transcript, the session loses its pane, or the
-/// page closes, always through the source the page mounted on.
+/// page closes, always through the source the page mounted on. An ended run's log is read once
+/// by the page's follower, never streamed.
 fn stream_screen(app: AppState, session: Memo<Session>, id: Id) {
     let scoped = app.scope();
-    let shown =
-        computed(move || session.with(|s| s.view == View::Terminal && s.terminal.is_some()));
+    let shown = computed(move || {
+        session.with(|s| s.view == View::Terminal && s.terminal.is_some() && !s.ended)
+    });
     let open = stored(false);
     let pane = id.to_string();
     effect(move || {

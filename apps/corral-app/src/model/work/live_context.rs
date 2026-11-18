@@ -215,6 +215,20 @@ fn forced_text(event: &Event) -> String {
     }
 }
 
+/// The project an event is filed under: its own, which the daemon names also for a Done or
+/// Dropped task, else its task's board row. `None` when neither is known; `Some(None)` is a
+/// task without a project.
+pub(crate) fn event_project<'a>(event: &'a Event, feed: &'a Feed) -> Option<Option<&'a str>> {
+    match event.project.as_deref() {
+        Some(project) => Some(Some(project)),
+        None => event
+            .task
+            .as_deref()
+            .and_then(|id| feed.board.task(id))
+            .map(|task| task.project()),
+    }
+}
+
 /// One engine event as a feed row: its local time, its task (opening it), what it says and who
 /// did it.
 pub fn change_row_filtered(
@@ -225,11 +239,8 @@ pub fn change_row_filtered(
 ) -> FeedRow {
     FeedRow {
         at: stamp_at(event.ts, feed),
-        project_chip: event
-            .task
-            .as_deref()
-            .and_then(|id| feed.board.task(id))
-            .and_then(|task| crate::model::projects::project_chip(feed, filter, task.project())),
+        project_chip: event_project(event, feed)
+            .and_then(|project| crate::model::projects::project_chip(feed, filter, project)),
         action: event
             .task
             .as_deref()
