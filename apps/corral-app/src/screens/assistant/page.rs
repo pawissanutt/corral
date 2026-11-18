@@ -25,7 +25,7 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::parts::{act, model_button, note_size, ring, spacer, words};
-use super::{cards, open_scope, session_verbs, side_facts, transcript, watch_ops};
+use super::{cards, open_scope, side_facts, transcript, watch_ops};
 
 /// The facts column beside the transcript (`grid-template-columns: minmax(0,1fr) 300px`).
 const FACTS_WIDTH: f32 = 300.0;
@@ -168,11 +168,10 @@ fn head(app: AppState, source: &ThreadRef) -> AnyElement {
         .into_element()
 }
 
-/// End session as `kind` (outlined beside the desktop title, words alone in a phone's head),
-/// held back while this device may not act for the assistant. The model offers it only on a
-/// served session (or the quick thread's current generation) corrald has not ended.
+/// End session as `kind` (outlined beside the desktop title, words alone in a phone's head).
+/// The model offers it only on a served session (or the quick thread's current generation)
+/// corrald has not ended.
 fn end_button(app: AppState, mut end: Button, kind: ButtonKind) -> AnyElement {
-    end.enabled &= app.may_message();
     if app.form == Form::Phone {
         // The pushed head's trailing slot sits beside the state chip; the title names the session.
         end.label = "End";
@@ -263,20 +262,6 @@ fn facts(app: AppState, source: &ThreadRef) -> Vec<AnyElement> {
     } else {
         view().mt(px(8.0)).child(note).into_element()
     });
-    let ThreadRef::Live(scope) = source;
-    // The quick thread's actions are its current generation's.
-    let session = if scope.as_str() == QUICK {
-        app.feed.with(quick_id)
-    } else {
-        Some(scope.to_string())
-    };
-    if let Some(session) = session {
-        if form == Form::Terminal {
-            out.push(term::blank());
-        }
-        out.push(h3(app, LABELS.session_actions, None));
-        out.push(session_verbs(app, Id::from(session.as_str())));
-    }
     if !header.filed.is_empty() {
         if form == Form::Terminal {
             out.push(term::blank());

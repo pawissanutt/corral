@@ -1,8 +1,10 @@
 //! Agents roster and session state, reducers and presentation data.
 //!
-//! The roster lists every session (agents and assistants, the quick thread pinned first); the
-//! assistant module supplies the sessions and Filed from chat blocks after it. The presentation
-//! types here are owned so every data source uses the same feed-backed roster and session pages.
+//! The roster lists corrald's live runs (`agents.v1`: role, profile, model, session status and
+//! quiet time) beside the assistant sessions, the quick thread pinned first. Each run's row and
+//! page carry the shared Actions menu of its task; the page shows its pane's terminal. The
+//! presentation types here are owned so every data source uses the same feed-backed roster and
+//! session pages.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,10 +18,8 @@ use crate::model::nav::Destination;
 use crate::model::text::{Rich, span};
 use crate::model::{ActStatus, Id, Live, Selection, act};
 
-mod controls;
 mod fleet;
 mod items;
-mod keys;
 mod live;
 mod live_reply;
 mod live_session;
@@ -35,52 +35,35 @@ mod roster_panel;
 mod roster_tests;
 pub mod screen;
 
-pub use controls::{Ask, Bar, Control, ControlKind, Launch, Weight, op_status};
-pub use fleet::{Fleet, FleetEntry, FleetSection};
+pub use fleet::{Fleet, FleetEntry, FleetLine, FleetSection};
 pub use items::{Card, Divider, Footer, Marker, More, Picture, Prose, Section, Thinking};
-pub use keys::{KeyBar, KeyButton, KeyPress, Keys, Settled};
-pub(crate) use live::{shown_id as session_shown_id, status as session_status};
-pub use live_session::{chat_scope, op_key, session as live_session};
+pub use live_session::session as live_session;
 pub use replay::fetches;
 pub use roster::{RoleTab, Roster, RosterRole, RosterRow, roster};
 pub use roster_panel::{
     Recent, RecentEntry, RecentState, RosterPanel, RosterPanelTab, RosterPanelTabItem, RosterWait,
-    Steps, roster_panel,
+    roster_panel,
 };
 
-/// The agent's current activity, used for the roster chip.
+/// A run's session as the runner last observed it, used for the roster chip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentStatus {
-    Live,
     Working,
-    Asking,
-    Gating,
-    Reviewing,
+    /// Stopped at a prompt or a question on its screen.
+    Blocked,
     Idle,
-    Waiting,
-    /// Fenced by the owner: alive, taking no automated input until resumed.
-    Paused,
-    Ended,
-    Unavailable,
-    /// A state this build does not know.
-    Unknown,
+    /// The runner no longer finds the session.
+    Gone,
 }
 
 impl AgentStatus {
     /// Chip text and state colour.
     pub fn chip(self) -> (&'static str, Hue) {
         match self {
-            Self::Live => ("live", Hue::Corral),
             Self::Working => ("working", Hue::Worker),
-            Self::Asking => ("needs you", Hue::You),
-            Self::Gating => ("gating", Hue::Corral),
-            Self::Reviewing => ("reviewing", Hue::Worker),
+            Self::Blocked => ("blocked", Hue::You),
             Self::Idle => ("idle", Hue::Neutral),
-            Self::Waiting => ("waiting", Hue::Held),
-            Self::Paused => ("paused", Hue::Held),
-            Self::Ended => ("ended", Hue::Neutral),
-            Self::Unavailable => ("unavailable", Hue::Fail),
-            Self::Unknown => ("unknown", Hue::Neutral),
+            Self::Gone => ("gone", Hue::Fail),
         }
     }
 }
@@ -103,15 +86,16 @@ impl Feed {
     }
 }
 
-/// The selected session surface.
+/// The selected session surface. A run's page opens on its terminal: corrald serves its pane,
+/// while recorded transcripts arrive with the chat host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum View {
-    #[default]
     Transcript,
+    #[default]
     Terminal,
 }
 /// Session and roster interaction state; root selection owns the session identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct State {
     pub ids: crate::model::id::IdSupply,
     /// The selected session's transcript or terminal view.
@@ -123,57 +107,29 @@ pub struct State {
     /// Transcript rows the owner opened, by stable item key (a tool's call id). A thinking
     /// block shows by default, so its key here folds it instead.
     pub expanded: BTreeSet<String>,
-    /// The latest reply command per daemon session, kept to show its outcome; one key per
-    /// intended reply, never replaced after an uncertain result.
+    /// The latest reply operation per run session, kept to show its outcome; one key per
+    /// intended reply.
     pub replies: BTreeMap<Id, Id>,
     /// Sessions whose transcript shows an earlier page rather than the latest messages. Such a
     /// page is not replaced by the latest until the owner asks for it.
     pub earlier: BTreeSet<Id>,
-    /// The latest control command per daemon session, kept to show its outcome.
-    pub sent: BTreeMap<Id, controls::Sent>,
-    /// The control whose confirmation this device asks for itself (an assistant's Take over or
-    /// Terminate), with its session.
-    pub asking: Option<(Id, ControlKind)>,
-    /// The latest Launch PM command from the Agents page.
-    pub launch: Option<Id>,
-    /// Each daemon session's gathered keys and latest keys command.
-    pub keys: BTreeMap<Id, keys::Latest>,
-}
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            ids: Default::default(),
-            live_view: View::Transcript,
-            expanded: BTreeSet::new(),
-            roster_session: None,
-            roster_role: RosterRole::All,
-            roster_tab: RosterPanelTab::Summary,
-            replies: BTreeMap::new(),
-            earlier: BTreeSet::new(),
-            sent: BTreeMap::new(),
-            asking: None,
-            launch: None,
-            keys: BTreeMap::new(),
-        }
-    }
 }
 impl State {
     /// Toggle a daemon session's transcript and terminal.
     pub fn toggle_live_view(&mut self) {
         self.live_view = flip(self.live_view);
     }
-    /// Handle an action on daemon data. Every command goes through the root's typed `Act`
+    /// Handle an action on daemon data. Every operation goes through the root's typed `Act`
     /// path; nothing is simulated locally.
     pub fn act_live(
         &mut self,
         action: Action,
         feed: &daemon::Feed,
         selection: &Selection,
-        env: Env,
+        _env: Env,
     ) -> Vec<Effect> {
         match action {
             Action::OpenSession(id) => vec![Effect::OpenLive(Live::Session(id))],
-            Action::OpenQuestion(key) => vec![Effect::OpenLive(Live::Question(key))],
             Action::OpenThread(id) => vec![Effect::OpenLive(Live::Thread(id))],
             Action::SelectRoster(id) => {
                 self.roster_session = Some(id);
@@ -234,29 +190,10 @@ impl State {
                 }
                 vec![reread(feed, target)]
             }
-            Action::Recover(key) => vec![Effect::Recover(key)],
             Action::Send(text) => match selection.session.clone() {
-                Some(session) => self.reply(session, text, live_reply::Policy::FollowUp, feed),
+                Some(session) => self.reply(session, text, feed),
                 None => vec![],
             },
-            Action::Steer(text) => match selection.session.clone() {
-                Some(session) => self.reply(session, text, live_reply::Policy::Steer, feed),
-                None => vec![],
-            },
-            Action::Keys(press) => match selection.session.clone() {
-                Some(session) => self.press_keys(session, press, feed, env),
-                None => vec![],
-            },
-            Action::Control(kind) => match selection.session.clone() {
-                Some(session) => self.press(session, kind, feed),
-                None => vec![],
-            },
-            Action::ConfirmControl => self.confirm_control(feed),
-            Action::DismissControl => {
-                self.asking = None;
-                vec![]
-            }
-            Action::LaunchPm => self.launch_pm(feed),
             Action::SetView(view) => {
                 self.live_view = view;
                 vec![]
@@ -285,24 +222,14 @@ fn wanted(feed: &daemon::Feed, token: &str) -> bool {
         .is_none_or(|fetch| matches!(fetch, crate::model::session_feed::ItemFetch::Failed(_)))
 }
 
-/// True while the session's latest reply is being prepared, queued or in flight; its key must
-/// not be replaced. An unknown outcome does not block: the reply box says it may have arrived,
-/// and sending again is the owner's explicit new message.
+/// True while the session's latest reply is in flight; its key must not be replaced. A settled
+/// one does not block: sending again is the owner's explicit new message.
 pub fn reply_busy(state: &State, session: &str, feed: &daemon::Feed) -> bool {
     state
         .replies
         .get(session)
         .and_then(|key| act::status(feed, key))
-        .is_some_and(|status| {
-            matches!(
-                status,
-                ActStatus::Previewing
-                    | ActStatus::Confirming
-                    | ActStatus::Queued
-                    | ActStatus::Pending
-                    | ActStatus::Running
-            )
-        })
+        .is_some_and(|status| matches!(status, ActStatus::Pending | ActStatus::Running))
 }
 
 /// The page of messages before the shown ones, when the daemon offered one and none is loading.
@@ -335,7 +262,7 @@ fn reread(feed: &daemon::Feed, target: DetailRef) -> Effect {
     })
 }
 
-/// Actions attached to roster rows, the panel, controls, tool calls and the reply box.
+/// Actions attached to roster rows, the panel, tool calls and the reply box.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     SelectRoster(Id),
@@ -346,23 +273,10 @@ pub enum Action {
     Back,
     SetView(View),
     ToggleView,
-    /// Send the reply field's words; a working session takes them after its current turn.
+    /// Send the reply field's words to the run's task (`reply`).
     Send(String),
-    /// Send the reply field's words to a working session now, interrupting what it does.
-    Steer(String),
-    /// Press a control of the open session's action bar.
-    Control(ControlKind),
-    /// Gather keys for, or send them to, the open session's pane.
-    Keys(KeyPress),
-    /// Confirm the confirmation this device asked for itself.
-    ConfirmControl,
-    /// Close that confirmation; nothing is sent.
-    DismissControl,
-    /// Launch the PM from the Agents page.
-    LaunchPm,
     OpenSession(Id),
-    OpenQuestion(Id),
-    /// The assistant thread a pane-less assistant session is answered in.
+    /// The assistant thread a roster assistant row is answered in.
     OpenThread(Id),
     /// Open or fold a transcript row by its stable key. Opening a row whose complete content
     /// is not here yet also fetches it, by the session and continuation token.
@@ -386,8 +300,6 @@ pub enum Action {
     Newer(Id),
     /// Revalidate a session page or terminal capture.
     Refresh(DetailRef),
-    /// Ask the daemon for the outcome of an uncertain reply or control, under the same key.
-    Recover(Id),
 }
 
 /// Terminal line classification, including prompt and success lines.
@@ -485,16 +397,14 @@ pub enum MessageItem {
     Card(Card),
     Question(QuestionCard),
 }
-/// Inline owner-only handover.
+/// A question the agent asked, as its transcript recorded it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuestionCard {
     pub label: String,
     pub question: String,
-    pub button: &'static str,
     pub hint: String,
     /// False once answered: the card is drawn quiet, not in the needs-you colour.
     pub open: bool,
-    pub action: Action,
 }
 /// One transcript message, with avatar and ordered content.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -549,16 +459,10 @@ pub struct Reply {
     pub placeholder: String,
     pub accessibility_label: &'static str,
     pub button: &'static str,
-    /// The second send, offered while the session works: its words interrupt the turn
-    /// (`Action::Steer`) instead of waiting for it.
-    pub steer: Option<&'static str>,
     pub hint: Rich,
-    pub question_hint: String,
     pub mode: ReplyMode,
     /// The latest reply's outcome in its tone.
     pub status: Option<(Hue, String)>,
-    /// "Check delivery" for a reply whose outcome is unknown.
-    pub recover: Option<Action>,
     /// The key of the latest delivered reply: the field clears once when it changes.
     pub delivered: Option<String>,
 }
@@ -599,13 +503,19 @@ pub struct Terminal {
     pub styled: Vec<screen::Row>,
     /// What the empty surface says instead of lines (no capture yet, none recorded).
     pub empty: Option<String>,
-    /// The keys bar under a daemon pane's screen, or why it has none worth saying.
-    pub keys: Option<Keys>,
     /// Revalidate the capture.
     pub refresh: Option<Action>,
 }
-/// Session header and selected surface; both surfaces are supplied for switching. A session
-/// without a pane has no terminal, and no switch.
+/// The strip under a session's head: its state, what a blocked screen waits on, and the run's
+/// task, whose Actions menu (every engine operation) the strip carries.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Bar {
+    pub state: Option<(&'static str, Hue)>,
+    pub lead: Option<String>,
+    pub task: Option<Id>,
+}
+/// Session header and selected surface; both surfaces are supplied for switching. A run without
+/// a recorded pane or process has no terminal, and no switch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Session {
     pub id: String,
@@ -622,14 +532,10 @@ pub struct Session {
     pub toggle: Action,
     /// Why the page shows what it does: the session left Agents, or its source is stale.
     pub notice: Option<(Hue, String)>,
-    /// The session's state and the controls corrald offers for it.
     pub controls: Bar,
     pub transcript: Transcript,
     pub terminal: Option<Terminal>,
     pub reply: Reply,
-    /// The assistant thread scope the page chats in, through the shared composer, instead of
-    /// the reply box.
-    pub chat: Option<Id>,
     pub run_details: Run,
     /// The session's child agents and their messages, beside the run; none when it has neither.
     pub fleet: Option<Fleet>,
@@ -637,13 +543,15 @@ pub struct Session {
 
 #[cfg(test)]
 mod tests {
-    use super::{State, View};
+    use super::State;
 
     #[test]
-    fn toggling_twice_does_not_leave_terminal_selected() {
+    fn toggling_twice_returns_to_the_opening_view() {
         let mut state = State::default();
+        let opening = state.live_view;
         state.toggle_live_view();
+        assert_ne!(state.live_view, opening);
         state.toggle_live_view();
-        assert_eq!(state.live_view, View::Transcript);
+        assert_eq!(state.live_view, opening);
     }
 }

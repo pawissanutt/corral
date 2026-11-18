@@ -1,49 +1,57 @@
 use super::*;
 use corral_protocol::{assistant::ThreadEntry, rows::*};
 
+/// A topic row's identity, as `RowsDelta.left` names it.
 trait Keyed {
-    fn id(&self) -> &str;
-    fn rev(&self) -> u64;
+    fn key(&self) -> String;
 }
-macro_rules! keyed { ($($row:ty),*) => { $(impl Keyed for $row {
-    fn id(&self) -> &str { &self.id } fn rev(&self) -> u64 { self.rev }
-})* }; }
-keyed!(
-    InboxRow,
-    PlanRow,
-    BuildRow,
-    ProjectRow,
-    AgentRow,
-    AssistantRow,
-    UsageRow,
-    SettingsSnapshot,
-    ThreadEntry
-);
-fn apply<T: Keyed>(
+impl Keyed for PlanRow {
+    fn key(&self) -> String {
+        self.parent.id.clone()
+    }
+}
+impl Keyed for ProjectRow {
+    fn key(&self) -> String {
+        self.id.clone()
+    }
+}
+impl Keyed for AgentRow {
+    fn key(&self) -> String {
+        format!("{}_{}", self.run.task, self.run.id)
+    }
+}
+impl Keyed for AssistantRow {
+    fn key(&self) -> String {
+        self.id.clone()
+    }
+}
+impl Keyed for ThreadEntry {
+    fn key(&self) -> String {
+        self.id.clone()
+    }
+}
+fn apply<T: Keyed + PartialEq>(
     map: &mut BTreeMap<Id, T>,
     rows: Vec<T>,
     left: Vec<String>,
     replacement: bool,
 ) -> BTreeSet<String> {
     let mut changed = BTreeSet::new();
+    let keyed: Vec<(String, T)> = rows.into_iter().map(|row| (row.key(), row)).collect();
     if replacement {
-        let next: BTreeSet<_> = rows.iter().map(|row| row.id()).collect();
+        let next: BTreeSet<_> = keyed.iter().map(|(key, _)| key.as_str()).collect();
         changed.extend(
             map.keys()
                 .filter(|key| !next.contains(key.as_str()))
                 .map(ToString::to_string),
         );
-    }
-    for row in &rows {
-        if map.get(row.id()).is_none_or(|old| old.rev() != row.rev()) {
-            changed.insert(row.id().into());
-        }
-    }
-    if replacement {
         map.clear();
     }
-    for row in rows {
-        map.insert(Id::new(row.id()), row);
+    for (key, row) in keyed {
+        if map.get(key.as_str()) != Some(&row) {
+            changed.insert(key.clone());
+        }
+        map.insert(Id::from(key), row);
     }
     for id in left {
         if map.remove(id.as_str()).is_some() {
@@ -62,23 +70,14 @@ impl AppState {
         let mut changed = BTreeSet::new();
         let mut scope_key = None;
         let topic = match delta {
-            SubDelta::Inbox { delta } => {
-                feed.update(|feed| {
-                    changed = apply(&mut feed.inbox, delta.rows, delta.left, replacement)
-                });
-                Topic::Inbox
+            SubDelta::Tasks { delta } => {
+                return Ok(self.tasks(feed, delta.epoch, delta.rows, delta.left, replacement));
             }
             SubDelta::Plans { delta } => {
                 feed.update(|feed| {
                     changed = apply(&mut feed.plans, delta.rows, delta.left, replacement)
                 });
                 Topic::Plans
-            }
-            SubDelta::Builds { delta } => {
-                feed.update(|feed| {
-                    changed = apply(&mut feed.builds, delta.rows, delta.left, replacement)
-                });
-                Topic::Builds
             }
             SubDelta::Projects { delta } => {
                 feed.update(|feed| {
@@ -98,15 +97,20 @@ impl AppState {
                 });
                 Topic::Assistant
             }
+            // Single-row topics: the last row of a complete page is the current snapshot.
             SubDelta::Usage { delta } => {
                 feed.update(|feed| {
-                    changed = apply(&mut feed.usage, delta.rows, delta.left, replacement)
+                    if let Some(row) = delta.rows.into_iter().last() {
+                        feed.usage = Some(row);
+                    }
                 });
                 Topic::Usage
             }
             SubDelta::Settings { delta } => {
                 feed.update(|feed| {
-                    changed = apply(&mut feed.settings, delta.rows, delta.left, replacement)
+                    if let Some(row) = delta.rows.into_iter().last() {
+                        feed.settings = Some(row);
+                    }
                 });
                 Topic::Settings
             }
@@ -176,11 +180,11 @@ impl AppState {
         self.trim_retained(feed);
         Ok(outgoing)
     }
-    pub(super) fn board(
+    pub(super) fn tasks(
         &mut self,
         feed: Signal<Feed>,
         epoch: u64,
-        rows: Vec<corral_protocol::board::BoardRow>,
+        rows: Vec<TaskRow>,
         left: Vec<String>,
         replacement: bool,
     ) -> Vec<Outgoing> {
@@ -189,33 +193,34 @@ impl AppState {
             for row in &rows {
                 if feed
                     .board
-                    .task(&row.id)
-                    .is_none_or(|old| old.rev != row.rev)
+                    .task(&row.task.id)
+                    .is_none_or(|old| old.row != *row)
                 {
-                    changed.insert(row.id.clone());
+                    changed.insert(row.task.id.clone());
                 }
             }
             if replacement {
-                let next: BTreeSet<_> = rows.iter().map(|row| row.id.as_str()).collect();
+                let next: BTreeSet<_> = rows.iter().map(|row| row.task.id.as_str()).collect();
                 changed.extend(
                     feed.board
                         .tasks()
                         .iter()
-                        .filter(|row| !next.contains(row.id.as_str()))
-                        .map(|row| row.id.to_string()),
+                        .filter(|task| !next.contains(task.id.as_str()))
+                        .map(|task| task.id.to_string()),
                 );
             }
         });
         feed.update(|feed| {
             feed.board_received(
                 epoch,
-                rows.into_iter().map(super::super::map::task).collect(),
+                rows.into_iter().map(Task::new).collect(),
                 &left,
                 replacement,
             );
-            feed.topics.insert("board".into(), TopicState::default());
+            feed.topics
+                .insert(topic_key(Topic::Tasks, None), TopicState::default());
         });
-        self.invalidate(feed, Topic::Board, &changed)
+        self.invalidate(feed, Topic::Tasks, &changed)
     }
     fn invalidate(
         &mut self,
@@ -305,25 +310,23 @@ impl AppState {
         problem.map_or(Ok(()), Err)
     }
 }
+
 fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> bool {
     match target {
-        DetailRef::Filings { .. } => matches!(topic, Topic::Board | Topic::Assistant),
-        DetailRef::Closed { .. } => topic == Topic::Board,
-        DetailRef::Question { key } => topic == Topic::Inbox && changed.contains(key),
+        DetailRef::Closed { .. } | DetailRef::Artifacts { .. } => topic == Topic::Tasks,
         DetailRef::Attachment { entry, .. } => topic == Topic::Thread && changed.contains(entry),
-        DetailRef::Task { id } => topic == Topic::Board && changed.contains(id),
-        DetailRef::Plan { id } | DetailRef::PlanDiff { id, .. } => {
-            topic == Topic::Plans && changed.contains(id)
+        DetailRef::Task { id } => topic == Topic::Tasks && changed.contains(id),
+        DetailRef::Plan { id } => {
+            matches!(topic, Topic::Plans | Topic::Tasks) && changed.contains(id)
         }
-        DetailRef::Build { id } => topic == Topic::Builds && changed.contains(id),
-        DetailRef::Review { task }
-        | DetailRef::ReviewFile { task, .. }
-        | DetailRef::Artifact { task, .. } => topic == Topic::Board && changed.contains(task),
+        DetailRef::Review { task } | DetailRef::ReviewFile { task, .. } => {
+            topic == Topic::Tasks && changed.contains(task)
+        }
         DetailRef::Session { id } | DetailRef::Terminal { id } => {
             topic == Topic::Agents && changed.contains(id)
         }
         DetailRef::Timeline { .. } | DetailRef::Burnup { .. } => {
-            matches!(topic, Topic::Board | Topic::Plans | Topic::Agents)
+            matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
         }
         DetailRef::UsageSeries { .. } => topic == Topic::Usage,
         _ => false,
@@ -332,19 +335,15 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
 
 pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
     match target {
-        DetailRef::Filings { .. } => matches!(topic, Topic::Board | Topic::Assistant),
-        DetailRef::Closed { .. } => topic == Topic::Board,
-        DetailRef::Question { .. } => topic == Topic::Inbox,
+        DetailRef::Closed { .. } | DetailRef::Artifacts { .. } => topic == Topic::Tasks,
         DetailRef::Attachment { .. } => topic == Topic::Thread,
-        DetailRef::Task { .. }
-        | DetailRef::Review { .. }
-        | DetailRef::ReviewFile { .. }
-        | DetailRef::Artifact { .. } => topic == Topic::Board,
-        DetailRef::Plan { .. } | DetailRef::PlanDiff { .. } => topic == Topic::Plans,
-        DetailRef::Build { .. } => topic == Topic::Builds,
+        DetailRef::Task { .. } | DetailRef::Review { .. } | DetailRef::ReviewFile { .. } => {
+            topic == Topic::Tasks
+        }
+        DetailRef::Plan { .. } => matches!(topic, Topic::Plans | Topic::Tasks),
         DetailRef::Session { .. } | DetailRef::Terminal { .. } => topic == Topic::Agents,
         DetailRef::Timeline { .. } | DetailRef::Burnup { .. } => {
-            matches!(topic, Topic::Board | Topic::Plans | Topic::Agents)
+            matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
         }
         DetailRef::UsageSeries { .. } => topic == Topic::Usage,
         _ => false,

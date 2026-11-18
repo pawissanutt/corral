@@ -1,9 +1,25 @@
 use super::*;
 use crate::model::timeline::{BurnupScope, burnup_request};
-use corral_protocol::detail::{TimelineLane, TimelineSegment};
+use std::path::PathBuf;
 
 fn second(at: &str) -> u64 {
     at.parse::<Timestamp>().unwrap().as_second() as u64
+}
+
+fn at(at: &str) -> Timestamp {
+    at.parse().unwrap()
+}
+
+fn event(seq: u64, ts: &str, task: &str, kind: EventKind, actor: Actor) -> Event {
+    Event {
+        seq,
+        ts: at(ts),
+        task: Some(task.into()),
+        run: None,
+        kind,
+        actor,
+        detail: serde_json::Value::Null,
+    }
 }
 
 #[test]
@@ -45,15 +61,6 @@ fn scope_selection_requests_the_selected_daemon_burnup() {
         );
     }
     state.set_grouping(Grouping::ByAgent);
-    let env = crate::model::effect::Env {
-        conn: crate::model::effect::Conn::Healthy,
-        form: crate::model::nav::Form::Phone,
-    };
-    assert!(
-        crate::model::timeline::head(&state, env, true)
-            .grouping
-            .is_some()
-    );
     let window = window(Range::Today, second("2026-11-15T12:00:00Z"), &TimeZone::UTC).unwrap();
     assert!(matches!(
         request(&state, &window),
@@ -64,33 +71,77 @@ fn scope_selection_requests_the_selected_daemon_burnup() {
     ));
 }
 
+/// Runs and events become spans: a block waits until the task's next move, an open run is idle
+/// from when its output went quiet, and the owner's moves are on their own lane.
 #[test]
-fn timeline_titles_and_waits_belong_to_the_lane_and_partial_reads_are_disclosed() {
+fn runs_and_events_draw_spans_waits_and_idle_on_the_task_lane() {
     let feed = Feed {
         now: second("2026-11-15T12:00:00Z"),
         time_zone: Some(TimeZone::UTC),
         ..Feed::default()
     };
     let window = window(Range::Today, feed.now, &TimeZone::UTC).unwrap();
-    let page = TimelinePage {
-        lanes: vec![TimelineLane {
-            id: "T-1".into(),
-            title: "T-1 · A title".into(),
-            segments: vec![TimelineSegment {
-                kind: TimelineKind::Ask,
-                from: Some("2026-11-15T09:00:00Z".into()),
-                to: None,
-                note: None,
-            }],
-        }],
-        owner_actions: vec![],
-        pm: vec![],
-        last_visit: None,
-        completeness: Default::default(),
+    let run = Run {
+        id: "R1".into(),
+        task: "T-1".into(),
+        role: Role::Worker,
+        profile: "pi".into(),
+        harness: "pi".into(),
+        model: None,
+        effort: None,
+        worktree: PathBuf::new(),
+        branch: String::new(),
+        base: String::new(),
+        base_sha: String::new(),
+        session: None,
+        started: at("2026-11-15T09:00:00Z"),
+        ended: None,
+        outcome: None,
+        summary: None,
+        head_sha: None,
+        quiet_since: Some(at("2026-11-15T10:30:00Z")),
     };
-    let plot = plot(&page, &window, &feed);
-    assert_eq!(plot.lanes[0].title, "A title");
-    assert!(plot.lanes[0].wait.is_some());
-    assert!(plot.lanes[0].segments[0].note.is_none());
-    assert!(plot.completeness.is_some());
+    let page = TimelinePage {
+        runs: vec![run],
+        events: vec![
+            event(1, "2026-11-15T08:00:00Z", "T-1", EventKind::Blocked, Actor::Auto),
+            event(2, "2026-11-15T08:20:00Z", "T-1", EventKind::Commented, Actor::Owner),
+            event(3, "2026-11-15T08:45:00Z", "T-1", EventKind::Resumed, Actor::Owner),
+        ],
+    };
+    let plot = plot(&page, &window, Grouping::ByTask, &feed);
+    let lane = &plot.lanes[0];
+    let kinds: Vec<(Kind, i64, i64)> = lane
+        .segments
+        .iter()
+        .map(|s| (s.kind, s.start, s.end))
+        .collect();
+    assert!(kinds.contains(&(Kind::Ask, 8 * 60, 8 * 60 + 45)));
+    assert!(kinds.contains(&(Kind::Run, 9 * 60, 10 * 60 + 30)));
+    assert!(kinds.contains(&(Kind::Idle, 10 * 60 + 30, 12 * 60)));
+    assert_eq!(plot.owner.len(), 2);
+    assert_eq!(plot.auto.len(), 1);
+    let gaps = gaps(&plot, &window, &feed);
+    assert_eq!(gaps.len(), 1);
+    assert_eq!(gaps[0].kind, Kind::Idle);
+}
+
+#[test]
+fn burnup_counts_created_and_landed_tasks_once() {
+    let feed = Feed {
+        now: second("2026-11-15T12:00:00Z"),
+        time_zone: Some(TimeZone::UTC),
+        ..Feed::default()
+    };
+    let burnup = WireBurnup {
+        scope: "workspace".into(),
+        events: vec![
+            event(1, "2026-11-10T08:00:00Z", "T-1", EventKind::Created, Actor::Owner),
+            event(2, "2026-11-11T08:00:00Z", "T-2", EventKind::Created, Actor::Owner),
+            event(3, "2026-11-12T08:00:00Z", "T-1", EventKind::Landed, Actor::Owner),
+            event(4, "2026-11-13T08:00:00Z", "T-1", EventKind::Landed, Actor::Owner),
+        ],
+    };
+    let series = burnup_series(&burnup, feed.now, &feed).unwrap();
+    assert_eq!(series.points.last().map(|p| (p.1, p.2)), Some((2, 1)));
 }

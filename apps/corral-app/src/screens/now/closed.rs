@@ -21,7 +21,7 @@ use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 use super::list::{Disclosure, disclosure_head, revealing};
 use super::parts::{press, pressable, quiet};
 use super::rows::{
-    self, ACTOR, AGE, COST, DELTA, DESK_GAP, DESK_PAD, Fit, ID, PHONE_PAD, PROJECT, RAIL, blank,
+    self, ACTOR, DATE, DELTA, DESK_PAD, Fit, ID, PHONE_PAD, PROJECT, RAIL, blank,
     column, figures, optional, pressable_line, words,
 };
 
@@ -250,10 +250,9 @@ fn outcome(app: AppState, row: &ClosedRow) -> View {
 }
 
 /// Desktop and terminal: the changed and actor columns left empty, id, project, title, the
-/// outcome where the rail stands, the date where age and cost stand.
+/// outcome where the rail stands, the date where the age stands.
 fn line_cells(app: AppState, row: &ClosedRow, fit: Memo<Fit>) -> Vec<AnyElement> {
     let form = app.form;
-    let date = (AGE.0 + COST.0 + DESK_GAP, AGE.1 + COST.1 + 1.0);
     let mut out = vec![
         blank(form, DELTA),
         blank(form, ACTOR),
@@ -283,7 +282,7 @@ fn line_cells(app: AppState, row: &ClosedRow, fit: Memo<Fit>) -> Vec<AnyElement>
     out.push(column(form, RAIL, false, outcome(app, row)).into_element());
     out.push(optional(
         form,
-        date,
+        DATE,
         true,
         move || fit.get().age,
         figures(form, row.at.clone(), 12.0, Token::Ink3),

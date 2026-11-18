@@ -1,7 +1,6 @@
 //! Device enrolment and browser pairing state, the device operations Settings asks the app to
 //! run, with wording shared by every app form.
 
-use corral_protocol::app::DeviceSetAuthority;
 use corral_protocol::device::PushKind;
 
 use crate::model::Id;
@@ -64,8 +63,8 @@ impl DeviceLink {
 }
 
 /// A device operation a Settings reducer asks the app to run (`Effect::Device`). The app gates
-/// each on the link and this device's authority and says why it refused; Revoke and
-/// SetAuthority report their outcome under `key` (`AppState::act_status`).
+/// each on the link and says why it refused; Revoke reports its outcome under `key`
+/// (`AppState::device_status`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceOp {
     Enrol {
@@ -89,13 +88,6 @@ pub enum DeviceOp {
         key: Id,
         device: String,
     },
-    /// Already reviewed on this device; granting admin also goes through corrald's preview and
-    /// this device's proof.
-    SetAuthority {
-        key: Id,
-        title: String,
-        change: DeviceSetAuthority,
-    },
     /// Turn this browser's Web Push on for `kinds`, or change the kinds while it is on.
     PushSubscribe {
         kinds: Vec<PushKind>,
@@ -107,8 +99,6 @@ pub enum DeviceOp {
 pub struct DeviceRow {
     pub id: String,
     pub name: String,
-    /// What the daemon lets this device do; absent from daemons that do not report it.
-    pub authority: Option<corral_protocol::app::DeviceAuthority>,
     pub platform: &'static str,
     /// Calendar date, YYYY-MM-DD.
     pub enrolled: String,
@@ -313,8 +303,8 @@ pub struct LiveDevices {
     pub pair_note: Option<&'static str>,
 }
 
-/// Settings › Devices on any platform: a browser with admin authority pairs and manages devices
-/// exactly as a native app does.
+/// Settings › Devices on any platform: every enrolled device, browser or native, pairs and
+/// revokes devices exactly as the local socket does.
 pub fn live_devices(feed: &Feed) -> LiveDevices {
     let panel = match &feed.pairing {
         Pairing::Idle => PairingPanel::Idle,
@@ -359,17 +349,11 @@ pub fn live_devices(feed: &Feed) -> LiveDevices {
         },
         Pairing::Ended { line } => PairingPanel::Ended { line: line.clone() },
     };
-    let admin = feed
-        .session
-        .as_ref()
-        .is_some_and(|session| session.authority.admin);
     let idle = matches!(feed.pairing, Pairing::Idle | Pairing::Ended { .. });
     let pair_note = if feed.link != Link::Up {
         Some("Pairing needs a live connection to corrald.")
     } else if !matches!(feed.device, DeviceLink::Enrolled { .. }) {
         Some("Enrol or pair this device first; only a known device can pair others.")
-    } else if !admin {
-        Some("Only an administrator device can pair new devices; this one is not an administrator.")
     } else {
         None
     };

@@ -3,19 +3,19 @@
 //!
 //! Desktop: the head names the project with its counts and the two ways on (Open in Now, Ask).
 //! The main column is the loop band (a stage opens its destination in this project's scope),
-//! the owner moves and moving tasks in Now's own rows, the project's plans and sessions, Waiting,
-//! Closed, then its recent builds and goal burn-up. The side column holds the facts (path, PM
-//! scope, autopilot, open and running) over the project's digest of what changed. It stands
-//! beside the list while the page has Now's room for both; narrower, it follows the list in its
-//! scroll. Terminal: the same, by Now's terminal rule. Phone: the pushed page scrolls whole: the
-//! counts, the facts, the two actions, the sections in Now's phone rows, plans, sessions,
-//! builds, the burn-up and the digest.
+//! the tasks that move in Now's own rows, the project's plans and sessions, Waiting, Closed,
+//! then its goal burn-up. The side column holds the facts (path, the two automation switches,
+//! open and running) over the project's digest of what changed. It stands beside the list while
+//! the page has Now's room for both; narrower, it follows the list in its scroll. Terminal: the
+//! same, by Now's terminal rule. Phone: the pushed page scrolls whole: the counts, the facts,
+//! the two actions, the sections in Now's phone rows, plans, sessions, the burn-up and the
+//! digest.
 //!
-//! The page has no selection: every row opens its record (a task on Now, a question, plan,
-//! review or session on its page). A project corrald no longer lists says so. Every part renders
-//! `projects::page` or `projects::project_now`; the screen adds no words. test ids:
-//! "project-<id>-page", "project-count-<slug>", "btn-open-in-now", "btn-ask-project",
-//! "task-<id>", "plan-<id>", "agent-<id>", "build-<id>".
+//! The page has no selection: every row opens its record (a task on Now, a plan or session on
+//! its page). A project corrald no longer lists says so. Every part renders `projects::page` or
+//! `projects::project_now`; the screen adds no words. test ids: "project-<id>-page",
+//! "project-count-<slug>", "btn-open-in-now", "btn-ask-project", "task-<id>", "plan-<id>",
+//! "agent-<id>".
 
 mod list;
 
@@ -25,16 +25,15 @@ use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
 use crate::model::projects::{
-    self, BUILDS_HEADING, FACTS_LABEL, FilterScreen, NO_BUILDS, PLANS_HEADING, PLANS_HINT,
-    ProjectBuild, ProjectEmpty, ProjectEntry, ProjectFact, ProjectPage, ProjectPlan,
-    ProjectSession, SESSIONS_HEADING, SESSIONS_HINT,
+    self, FACTS_LABEL, FilterScreen, PLANS_HEADING, PLANS_HINT, ProjectEmpty, ProjectEntry,
+    ProjectFact, ProjectPage, ProjectPlan, ProjectSession, SESSIONS_HEADING, SESSIONS_HINT,
 };
-use crate::model::work::{NowPage, NowRow, NowSection, Press};
-use crate::model::{Destination, Form, Hue, Id, Live};
+use crate::model::work::{NowPage, NowSection, Press};
+use crate::model::{Destination, Form, Hue, Id};
 use crate::screens::now::closed::closed_section;
 use crate::screens::now::list::{board_status, loading, section_head, waiting};
 use crate::screens::now::parts::{dim_when, go_scoped, quiet, stale};
-use crate::screens::now::rows::{self, Fit, ask_row, task_row};
+use crate::screens::now::rows::{self, Fit, task_row};
 use crate::screens::now::{BESIDE, LIST_COLUMNS, SIDE, SIDE_COLUMNS, side};
 use crate::screens::{PhonePage, timeline};
 use crate::state::AppState;
@@ -44,8 +43,6 @@ use crate::ui::kit::chip::chip;
 use crate::ui::kit::glance::{loop_band, page_head, stats};
 use crate::ui::kit::hint::{hint_on, hinted};
 use crate::ui::kit::notice;
-use crate::ui::kit::rows::{group_header, list_row};
-use crate::ui::kit::text::{dim, plain};
 use crate::ui::term::{self, cells};
 use crate::ui::tokens::{Token, color, text_size};
 
@@ -224,7 +221,6 @@ fn main_scroll(app: AppState, parts: &Parts, below: Option<AnyElement>) -> AnyEl
         .child(board_status(app, parts.now))
         .child(band(app, parts.now))
         .child(work_list(app, parts.data, parts.now))
-        .child(builds(app, parts.data))
         .child(burnup(app, parts.burnup.clone()));
     scroll()
         .test_id("project-main")
@@ -365,10 +361,7 @@ fn moving_rows(
             &section.hint,
         ));
         for row in &section.rows {
-            out.push(match row {
-                NowRow::Ask(row) => ask_row(app, row, unselected, fit),
-                NowRow::Task(row) => task_row(app, row, unselected, fit),
-            });
+            out.push(task_row(app, row, unselected, fit));
         }
     }
     view().children(out).into_element()
@@ -552,7 +545,6 @@ fn phone_body(app: AppState, data: Data, first: &ProjectPage) -> AnyElement {
                 .child(board_status(app, now))
                 .child(work_list(app, data, now)),
         )
-        .child(builds(app, data))
         .child(burnup(app, first.burnup_request.clone()))
         .child(
             view()
@@ -689,64 +681,6 @@ fn fact_line(app: AppState, fact: &ProjectFact) -> AnyElement {
         .child(label)
         .child(hint_on(app, cell, fact.hint.clone()))
         .into_element()
-}
-
-fn builds(app: AppState, data: Data) -> AnyElement {
-    let shown = computed(move || data.with(|page| page.as_ref().map(|p| p.builds.clone())));
-    dynamic(move || {
-        let shown = shown.get();
-        untracked(move || {
-            shown.map(|builds| {
-                let rows: Vec<AnyElement> = builds
-                    .into_iter()
-                    .map(|build| build_row(app, build))
-                    .collect();
-                listed(app, BUILDS_HEADING, rows, NO_BUILDS)
-            })
-        })
-    })
-}
-
-fn build_row(app: AppState, build: ProjectBuild) -> AnyElement {
-    let id = build.id.clone();
-    list_row(
-        app,
-        format!("{}, {}", build.title, build.state),
-        format!("build-{}", build.id),
-        || false,
-        move || app.open_live(Live::Build(id.clone())),
-        vec![
-            plain(app, build.title)
-                .flex_1()
-                .min_w(px(0.0))
-                .truncate()
-                .into_element(),
-            chip(app, build.state, Hue::Neutral),
-        ],
-    )
-}
-
-/// A list under the page's sections: its header with the count, then its rows, or the line that
-/// says there are none.
-fn listed(
-    app: AppState,
-    heading: &'static str,
-    rows: Vec<AnyElement>,
-    none: &'static str,
-) -> AnyElement {
-    let count = u32::try_from(rows.len()).unwrap_or(u32::MAX);
-    let form = app.form;
-    let header = group_header(app, heading, Some(count), Hue::Neutral, None);
-    if !rows.is_empty() {
-        return view().child(header).children(rows).into_element();
-    }
-    let line = dim(app, none);
-    let line = match form {
-        Form::Desktop => line.pl(px(16.0)).pr(px(14.0)).py(px(6.0)),
-        Form::Phone => line.px(px(18.0)).py(px(10.0)),
-        Form::Terminal => line.px(cells(1.0)),
-    };
-    view().child(header).child(line).into_element()
 }
 
 /// The project's goal burn-up, requested while the page shows.

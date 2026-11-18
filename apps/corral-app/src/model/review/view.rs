@@ -1,14 +1,13 @@
 //! Typed content for feed-backed Review renderers.
 //! No widgets, dimensions or styling APIs live here.
 
-use crate::model::board::Mark;
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
 use crate::model::text::Rich;
 
-use super::diff::{Anchor, split_rows, unified_rows};
-use super::{Action, Compose, Layout, State, Tab};
+use super::diff::{split_rows, unified_rows};
+use super::{Action, Layout, State, Tab};
 
 /// A neutral or state-coloured chip whose copy is already resolved for the form.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +36,7 @@ pub enum ButtonStyle {
     Quiet,
 }
 
-/// A labelled intent; a refused control remains pressable so its reducer can explain itself.
+/// A labelled intent. Engine operations are never disabled: the engine decides.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Button {
     /// Visible label.
@@ -46,12 +45,10 @@ pub struct Button {
     pub short: Option<&'static str>,
     /// Reducer intent.
     pub action: Action,
-    /// Whether the control can be activated at all.
-    pub enabled: bool,
     /// Source emphasis.
     pub style: ButtonStyle,
-    /// Why activating it will not run the command: the control's hint.
-    pub refusal: Option<String>,
+    /// What pressing it does beyond its label: the control's hint.
+    pub hint: Option<String>,
 }
 
 pub(super) fn button(label: impl Into<String>, action: Action, style: ButtonStyle) -> Button {
@@ -59,9 +56,8 @@ pub(super) fn button(label: impl Into<String>, action: Action, style: ButtonStyl
         label: label.into(),
         short: None,
         action,
-        enabled: true,
         style,
-        refusal: None,
+        hint: None,
     }
 }
 
@@ -86,63 +82,20 @@ pub struct LayoutChoice {
     pub action: Action,
 }
 
-/// One message of a thread.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MessageView {
-    /// Author, time and candidate.
-    pub attribution: Rich,
-    pub text: String,
-}
-
-/// A text field and its send control. The renderer keeps the draft under `draft`, and on Send
-/// dispatches `Action::Submit { target, text }` with the draft's text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Composer {
-    /// Draft key, unique on the page.
-    pub draft: String,
-    pub target: Compose,
-    pub placeholder: &'static str,
-    /// Accessible name of the field.
-    pub label: &'static str,
-    pub send: &'static str,
-    /// Closes the composer without sending.
-    pub cancel: Option<Button>,
-    /// Why Send will not run, shown under the field; Send stays pressable to explain.
-    pub refusal: Option<String>,
-}
-
-/// A command this page sent and its truthful status, with what can still be done about it.
+/// An operation this page sent and where it stands, with Dismiss once it settled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusLine {
     pub text: Rich,
     pub hue: Hue,
-    /// Check again, restore the unsent text, or dismiss a settled line.
     pub actions: Vec<Button>,
-}
-
-/// A discussion: the thread's messages, its state, a reply composer and thread actions. A new
-/// line comment is a discussion with no messages yet.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommentView {
-    /// Thread id, or the anchor of a new comment; a stable rendering key.
-    pub key: String,
-    /// Where the thread is anchored, for a thread shown away from its line.
-    pub anchor: Option<String>,
-    pub messages: Vec<MessageView>,
-    /// Resolved, stale (older candidate), sending.
-    pub chips: Vec<Chip>,
-    pub composer: Option<Composer>,
-    /// Resolve or reopen.
-    pub actions: Vec<Button>,
-    pub status: Vec<StatusLine>,
 }
 
 /// Unified or side-by-side rows of one hunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffContent {
-    /// One-stream gutters and code; insert discussions after rows that name them.
+    /// One-stream gutters and code.
     Unified(Vec<super::UnifiedRow>),
-    /// Paired old/new cells; insert discussions after rows that name them.
+    /// Paired old/new cells.
     Split(Vec<super::SplitRow>),
 }
 
@@ -162,8 +115,8 @@ pub enum FileBody {
     Loading(String),
     /// The patch could not be shown; the line says why and what to do.
     Unavailable(String),
-    /// Hunks with their discussions and any whole-file notes. The client assembles every
-    /// bounded page of the patch before it is shown.
+    /// Hunks and any whole-file notes. The client assembles every bounded page of the patch
+    /// before it is shown.
     Hunks {
         hunks: Vec<HunkView>,
         notes: Vec<String>,
@@ -172,27 +125,17 @@ pub enum FileBody {
     },
 }
 
-/// A file heading with its counts, illustrative tag, actions and resolved body.
+/// A file heading with its counts, actions and resolved body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileView {
     /// Full path, also the stable rendering key.
     pub path: String,
     /// Monospace path followed by coloured added and deleted counts.
     pub heading: Rich,
-    /// Optional patch-source disclosure.
-    pub illustrative: Option<&'static str>,
     /// Ask about this file or hunk.
     pub ask: Option<Button>,
     /// Collapse an expanded served file.
     pub collapse: Option<Button>,
-    /// Every discussion of the file; rows and `loose` name them by index.
-    pub discussions: Vec<CommentView>,
-    /// Discussions whose anchored line is not among the shown lines, shown above the hunks.
-    pub loose: Vec<usize>,
-    /// Whether pressing a code line opens a new line comment there.
-    pub annotatable: bool,
-    /// Identity captured by the displayed patch's line actions, never inferred on click.
-    pub candidate: Option<super::CandidateAt>,
     pub body: FileBody,
 }
 
@@ -208,32 +151,22 @@ pub struct DiffView {
     pub empty: Option<String>,
 }
 
-/// A marked or plain acceptance criterion.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AcceptanceView {
-    /// Pass mark; absent when the record carries no per-criterion result.
-    pub mark: Option<Mark>,
-    pub text: String,
-}
-
-/// Rendered report data with its provenance sentence.
+/// The worker run's summary with its provenance sentence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReportView {
     pub heading: String,
     pub paragraphs: Vec<String>,
-    pub acceptance_heading: &'static str,
-    pub acceptance: Vec<AcceptanceView>,
     /// Source label and provenance.
     pub source: Rich,
 }
 
-/// One canonical artifact record and, once opened, its contents from corrald's catalog.
+/// One artifact record and, once opened, its contents from corrald's catalog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactView {
     pub title: String,
-    /// The canonical catalog key, shown as text and never opened as a host path.
+    /// The artifact's reference (`T-42:3`), shown as text and never opened as a host path.
     pub source: String,
-    /// Declared media type, or `unknown type`.
+    /// Declared kind, or `unknown kind`.
     pub kind: String,
     /// Show or hide the contents.
     pub toggle: Button,
@@ -260,11 +193,11 @@ pub enum ArtifactContent {
     Unsupported(&'static str),
 }
 
-/// The candidate's artifact records and how they reach this device.
+/// The task's artifact records and how they reach this device.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactsView {
     pub rows: Vec<ArtifactView>,
-    /// Shown when the candidate recorded none.
+    /// Shown when the task recorded none.
     pub empty: Option<&'static str>,
     pub note: &'static str,
 }
@@ -281,7 +214,7 @@ pub struct LogView {
 pub enum Body {
     Diff(DiffView),
     Report(ReportView),
-    /// The served candidate's artifact records.
+    /// The task's artifact records.
     Artifacts(ArtifactsView),
     Log {
         lines: Vec<LogView>,
@@ -291,24 +224,23 @@ pub enum Body {
     Notice(String),
 }
 
-/// Candidate-bound decision controls; approval always goes through a fresh confirmation.
+/// The decide bar: every operation that decides a candidate, always pressable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecideBar {
-    /// Buttons in source order: approve/changes on desktop, changes/approve on phone.
+    /// Approve and land, Request changes and Ask (Request changes first on the phone).
     pub buttons: Vec<Button>,
-    /// Retry and Discard: in the bar on desktop and terminal, in the page on phone.
+    /// Run gate, Start review and, while the gate is red or after a refused Approve, Land
+    /// anyway: at the trailing edge on desktop and terminal, in the page on the phone.
     pub secondary: Vec<Button>,
-    /// Desktop's candidate-bound verdict explanation; absent on phone.
+    /// What approving does to this candidate; absent on phone.
     pub explanation: Option<Rich>,
-    /// The authenticated device the owner acts through; absent on phone.
+    /// The device the owner acts through; absent on phone.
     pub attribution: Option<Rich>,
-    /// The request-changes note while it is open.
-    pub composer: Option<Composer>,
-    /// Decisions sent from this page and where they stand.
+    /// Operations sent from this page and where they stand.
     pub status: Vec<StatusLine>,
 }
 
-/// A page-level notice about the candidate detail: loading, stale, error or superseded.
+/// A page-level notice about the candidate detail: loading, stale, error or no run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notice {
     pub text: String,
@@ -344,14 +276,10 @@ pub(super) fn layouts(state: &State, env: Env) -> Vec<LayoutChoice> {
     .collect()
 }
 
-/// Rows for one hunk at the effective layout, discussions after their anchored rows.
-pub(super) fn hunk_content(
-    lines: Vec<super::NumberedLine>,
-    anchors: &[Anchor],
-    layout: Layout,
-) -> DiffContent {
+/// Rows for one hunk at the effective layout.
+pub(super) fn hunk_content(lines: Vec<super::NumberedLine>, layout: Layout) -> DiffContent {
     match layout {
-        Layout::Split => DiffContent::Split(split_rows(&lines, anchors)),
-        Layout::Unified => DiffContent::Unified(unified_rows(lines, anchors)),
+        Layout::Split => DiffContent::Split(split_rows(&lines)),
+        Layout::Unified => DiffContent::Unified(unified_rows(lines)),
     }
 }

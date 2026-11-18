@@ -40,10 +40,6 @@ pub struct PmMessage {
     pub reply: Option<PmReply>,
     /// Non-interruption explanation for queued-for-PM items.
     pub note: Option<&'static str>,
-    /// Withdraw while the PM has not replied.
-    pub buttons: Vec<Button>,
-    /// Status of a withdrawal this device sent.
-    pub status: Option<Chip>,
 }
 
 /// The PM's outcome of one inbox item, not a separate conversation.

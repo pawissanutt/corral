@@ -9,10 +9,11 @@ use crate::model::live::Selection;
 use crate::model::projects::ProjectFilter;
 
 use super::brief::{Brief, brief};
+use super::decide::decide_bar;
 use super::live::{Shown, log, notice, report, selected_filtered};
 use super::outline::{
-    CandidateHeader, OutlineGroup, candidate_decide_bar, candidate_header, candidate_tabs,
-    outline_filtered, outline_stats, selected_tab,
+    CandidateHeader, OutlineGroup, candidate_header, candidate_tabs, outline_filtered,
+    outline_stats, selected_tab,
 };
 use super::view::{effective_layout, layouts};
 use super::{Body, DecideBar, LayoutChoice, Notice, State, Tab, TabView};
@@ -20,7 +21,7 @@ use super::{Body, DecideBar, LayoutChoice, Notice, State, Tab, TabView};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoopContent {
     Brief(Brief),
-    /// Diff, Gate log, Report and Artifacts keep their existing typed content builders.
+    /// Diff, Gate log, Summary and Artifacts keep their own typed content builders.
     Evidence(Body),
 }
 
@@ -68,32 +69,24 @@ pub fn loop_page_filtered(
             .and_then(|shown| shown.review_cache)
             .is_some_and(|cache| cache.stale);
     let detail = shown.as_ref().map(|shown| {
-        let content = match shown.review {
-            Some(review) => match selected_tab(state, Some(review)) {
-                Tab::Brief => LoopContent::Brief(brief(state, feed, shown, review, env, width)),
-                Tab::Diff => LoopContent::Evidence(Body::Diff(super::live_files::diff(
+        let content = match (shown.review, selected_tab(state, shown)) {
+            (_, Tab::Brief) => LoopContent::Brief(brief(state, feed, shown, env, width)),
+            (Some(review), Tab::Diff) => LoopContent::Evidence(Body::Diff(
+                super::live_files::diff(
                     state,
                     feed,
                     shown,
                     review,
                     effective_layout(state, env, width),
                     env,
-                ))),
-                Tab::Log => LoopContent::Evidence(log(review, shown.sha().unwrap_or_default())),
-                Tab::Report => LoopContent::Evidence(report(
-                    review,
-                    shown.id(),
-                    shown.sha().unwrap_or_default(),
-                )),
-                Tab::Shot => LoopContent::Evidence(super::evidence::artifacts(
-                    state,
-                    feed,
-                    shown.id(),
-                    review,
-                    env,
-                )),
-            },
-            None => LoopContent::Evidence(Body::Notice(notice(shown).map_or_else(
+                ),
+            )),
+            (_, Tab::Log) => LoopContent::Evidence(log(feed, shown)),
+            (_, Tab::Report) => LoopContent::Evidence(report(shown)),
+            (_, Tab::Shot) => {
+                LoopContent::Evidence(super::evidence::artifacts(state, feed, shown, env))
+            }
+            (None, Tab::Diff) => LoopContent::Evidence(Body::Notice(notice(shown).map_or_else(
                 || "Loading the candidate's review detail…".into(),
                 |notice| notice.text,
             ))),
@@ -101,10 +94,10 @@ pub fn loop_page_filtered(
         LoopCandidate {
             header: candidate_header(feed, shown.task, filter),
             notice: notice(shown),
-            tabs: candidate_tabs(state, shown.review),
+            tabs: candidate_tabs(state, shown),
             layouts: layouts(state, env),
             content,
-            decide: candidate_decide_bar(state, feed, Some(shown.task), env),
+            decide: decide_bar(state, feed, shown, env),
         }
     });
     let outline = outline_filtered(feed, selection, focus, filter);
@@ -119,7 +112,7 @@ pub fn loop_page_filtered(
         } else if !feed.board.complete {
             Some("Waiting for the board…".into())
         } else {
-            Some("No candidates in this scope.".into())
+            Some("No task is in Review in this scope.".into())
         },
         detail,
         stale,

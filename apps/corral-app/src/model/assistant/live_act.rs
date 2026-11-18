@@ -1,6 +1,6 @@
 //! Daemon-mode reducers. Every chat control returns the canonical send, session operation,
-//! prompt answer or typed command as an `Effect`; nothing completes in this store. A command
-//! identity is allocated once per intent and kept: an uncertain one is recovered, never resent.
+//! prompt answer or engine operation as an `Effect`; nothing completes in this store. An
+//! operation's identity is allocated once per intent and kept.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,13 +8,8 @@ use corral_protocol::assistant::{
     self as wire, AssistantSend, AssistantSessionOp, AssistantStop, AssistantWarm, ContextRef,
     MESSAGE_TEXT_MAX, PromptAnswer, PromptChoice,
 };
-use corral_protocol::cmd::message::MessageCommand;
-use corral_protocol::cmd::pm::PmCommand;
-use corral_protocol::cmd::question::QuestionCommand;
-use corral_protocol::cmd::task::TaskCommand;
-use corral_protocol::cmd::{Command, Expect};
-use corral_protocol::detail::{DetailGet, DetailRef};
 use corral_protocol::rows::AssistantRow;
+use corral_types::{NewTask, Op, Status, TaskEdit};
 
 use super::{Action, State, live};
 use crate::model::act::{self, Act, ActStatus};
@@ -75,15 +70,10 @@ pub struct LiveState {
     pub confirm_end: Option<String>,
     /// Ends sent, by session.
     pub ends: BTreeMap<String, Ending>,
-    /// Commands sent from thread cards, by subject (`file:<entry>`, `discard:<task>`, …).
+    /// Operations sent from thread cards, by subject (`file:<entry>`, `discard:<task>`, …).
     pub acts: BTreeMap<String, Id>,
-    /// The words last sent as a question's free-text answer, by question key: its field shows
-    /// them again if corrald refuses that answer, so nothing typed is lost.
-    pub answer_words: BTreeMap<String, String>,
     /// The filed Idea whose title is being edited.
     pub editing: Option<String>,
-    /// The filed Idea whose merge destination is being typed.
-    pub merging: Option<String>,
     /// Open thread views by scope; the subscription closes with the last one.
     pub subs: BTreeMap<String, u32>,
     /// Threads already asked to warm their host in this app session.
@@ -92,8 +82,6 @@ pub struct LiveState {
     /// the client retires (or something replaces) that saved draft, no composer of the scope,
     /// including one mounted meanwhile, brings it back.
     pub handed: BTreeMap<String, String>,
-    /// The served anchor of the global filings page on the Agents wall; `None` is the newest.
-    pub filings_before: Option<u64>,
     /// The attachment whose readback is open under its message: (entry, attachment id).
     pub attachment: Option<(String, String)>,
 }
@@ -414,101 +402,30 @@ impl State {
                     },
                 }]
             }
-            Action::FileEntry(entry) => self.once(subject("file", &entry), feed, |ids| {
-                Act::new(
-                    ids,
-                    "File as idea, as written",
-                    Command::Message(MessageCommand::FileAsIdea { entry }),
-                )
-            }),
-            Action::WithdrawEntry(entry) => self.once(subject("withdraw", &entry), feed, |ids| {
-                Act::new(
-                    ids,
-                    "Withdraw message",
-                    Command::Message(MessageCommand::Withdraw { entry }),
-                )
-            }),
-            Action::WithdrawPm { id, revision } => {
-                let title = format!("Withdraw PM item {id}");
-                self.once(subject("withdraw", &id), feed, |ids| {
-                    Act::new(
-                        ids,
-                        title,
-                        Command::Pm(PmCommand::InboxWithdraw {
-                            id,
-                            expected_revision: revision,
-                            reason: "withdrawn by the owner from Ask".into(),
-                            json: false,
-                        }),
-                    )
-                })
-            }
-            Action::Answer {
-                key,
-                rev,
-                choice,
-                confirm,
-            } => self.answer(key, rev, choice, confirm, feed),
-            Action::Choose { key, rev, option } => {
-                let title = format!("Answer {key}: {option}");
-                self.once(subject("answer", &key), feed, |ids| {
-                    Act::new(
-                        ids,
-                        title,
-                        Command::Question(QuestionCommand::Answer {
-                            key: key.clone(),
-                            rev,
-                            text: option.clone(),
-                            option: Some(option),
-                            basis: Vec::new(),
-                            scope_note: None,
-                            owner: true,
-                            json: false,
-                        }),
-                    )
-                    .about(Live::Question(Id::from(key)))
-                })
-            }
-            Action::AnswerText { key, rev, text } => self.answer_text(key, rev, text, feed),
+            Action::FileEntry(entry) => match idea_from(feed, &entry) {
+                Some(task) => {
+                    self.once(subject("file", &entry), feed, |ids| {
+                        Act::new(ids, Op::New { task }, false)
+                    })
+                }
+                None => vec![Effect::Toast(
+                    "This message is not loaded here; nothing was filed".into(),
+                )],
+            },
+            Action::Answer { key, rev, choice } => self.answer(key, rev, choice, feed),
             Action::EditIdea(Some(task)) => {
-                self.live.merging = None;
-                self.live.editing = Some(task.clone());
-                load_task(feed, &task)
+                self.live.editing = Some(task);
+                Vec::new()
             }
             Action::EditIdea(None) => {
                 self.live.editing = None;
                 Vec::new()
             }
             Action::SaveIdea { task, title } => self.save_title(task, title, feed),
-            Action::MergeIdea(Some(task)) => {
-                self.live.editing = None;
-                self.live.merging = Some(task.clone());
-                load_task(feed, &task)
-            }
-            Action::MergeIdea(None) => {
-                self.live.merging = None;
-                Vec::new()
-            }
-            Action::MergeInto { task, into } => self.merge(task, into, feed),
-            Action::DiscardIdea(task) => self.idea_command(
-                "discard",
-                format!("Discard idea {task}"),
-                task,
-                "drop",
-                None,
-                true,
-                feed,
-            ),
-            Action::Recover(key) => vec![Effect::Recover(key)],
+            Action::DiscardIdea(task) => self.once(subject("discard", &task), feed, |ids| {
+                Act::new(ids, Op::Drop { id: task }, false)
+            }),
             Action::RetryThread(scope) => vec![Effect::Thread { scope, open: true }],
-            Action::FilingsPage(before) => {
-                self.live.filings_before = before;
-                vec![Effect::Detail(DetailGet {
-                    target: DetailRef::Filings { before },
-                    etag: None,
-                    page: None,
-                })]
-            }
             Action::Unattach(key) => vec![Effect::Unattach(Id::from(key))],
             Action::CancelSend(key) => vec![Effect::CancelSend(Id::from(key))],
             Action::OpenAttachment { entry, id } => self.open_attachment(entry, id, feed),
@@ -568,14 +485,7 @@ impl State {
         }]
     }
 
-    fn answer(
-        &mut self,
-        key: String,
-        rev: u32,
-        choice: PromptChoice,
-        confirm: bool,
-        feed: &Feed,
-    ) -> Vec<Effect> {
+    fn answer(&mut self, key: String, rev: u32, choice: PromptChoice, feed: &Feed) -> Vec<Effect> {
         let remembered = subject("prompt", &key);
         if let Some(effects) = self.held(&remembered, feed) {
             return effects;
@@ -589,9 +499,7 @@ impl State {
                 key,
                 rev,
                 choice,
-                confirm: None,
             },
-            confirm,
         }]
     }
 
@@ -605,15 +513,19 @@ impl State {
                 "A title cannot be empty; nothing was sent".into(),
             )];
         }
-        let effects = self.idea_command(
-            "edit",
-            format!("Retitle idea {task}"),
-            task,
-            "",
-            Some(title),
-            false,
-            feed,
-        );
+        let effects = self.once(subject("edit", &task), feed, |ids| {
+            Act::new(
+                ids,
+                Op::Edit {
+                    id: task,
+                    edit: TaskEdit {
+                        title: Some(title),
+                        ..TaskEdit::default()
+                    },
+                },
+                false,
+            )
+        });
         if effects
             .iter()
             .any(|effect| matches!(effect, Effect::Act(_)))
@@ -623,109 +535,8 @@ impl State {
         effects
     }
 
-    fn merge(&mut self, task: String, into: String, feed: &Feed) -> Vec<Effect> {
-        if self.live.merging.as_deref() != Some(task.as_str()) {
-            return Vec::new();
-        }
-        let into = into.trim().to_owned();
-        if into.is_empty() || into == task {
-            return vec![Effect::Toast(
-                "Type the id of a different task to merge into".into(),
-            )];
-        }
-        let effects = self.idea_command(
-            "merge",
-            format!("Merge idea {task} into {into}"),
-            task,
-            "merge",
-            Some(into),
-            false,
-            feed,
-        );
-        if effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::Act(_)))
-        {
-            self.live.merging = None;
-        }
-        effects
-    }
-
-    /// A task verb on a filed Idea, carrying the task's owner revision as its precondition.
-    /// `field` is the new title for `edit`, the destination for `merge`.
-    #[allow(clippy::too_many_arguments)]
-    fn idea_command(
-        &mut self,
-        kind: &str,
-        title: String,
-        task: String,
-        idea_action: &str,
-        field: Option<String>,
-        confirm: bool,
-        feed: &Feed,
-    ) -> Vec<Effect> {
-        let remembered = subject(kind, &task);
-        let conflicted = self.live.acts.get(&remembered).is_some_and(|key| {
-            matches!(
-                act::status(feed, key.as_str()),
-                Some(ActStatus::Conflict(_))
-            )
-        });
-        if conflicted {
-            // The task moved meanwhile: never retry blind; reload it so the owner sees the winner.
-            self.live.acts.remove(&remembered);
-            return vec![Effect::Detail(DetailGet {
-                target: DetailRef::Task { id: task.clone() },
-                etag: feed
-                    .detail(&DetailRef::Task { id: task.clone() })
-                    .and_then(|cache| cache.pages.first())
-                    .map(|page| page.etag.clone()),
-                page: None,
-            })];
-        }
-        let Some(revision) = live::task_revision(feed, &task) else {
-            let mut effects = load_task(feed, &task);
-            effects.push(Effect::Toast(format!(
-                "Waiting for {task}'s current revision; nothing was sent"
-            )));
-            return effects;
-        };
-        let command = if kind == "edit" {
-            TaskCommand::Edit {
-                id: task.clone(),
-                title: field,
-                body: None,
-                owner_ok: true,
-            }
-        } else {
-            TaskCommand::Idea {
-                id: task.clone(),
-                action: idea_action.to_owned(),
-                reason: if idea_action == "merge" {
-                    "merged by the owner from Ask; the owner's words move unchanged".into()
-                } else {
-                    "discarded by the owner from Ask".into()
-                },
-                into: field,
-                body: None,
-                owner_ok: true,
-            }
-        };
-        let expect = Expect::TaskRevision {
-            task: task.clone(),
-            revision,
-        };
-        let about = Live::Task(Id::from(task.as_str()));
-        self.once(subject(kind, &task), feed, move |ids| {
-            let act = Act::new(ids, title, Command::Task(command))
-                .expect(expect)
-                .about(about);
-            if confirm { act.confirmed() } else { act }
-        })
-    }
-
-    /// Sends a card command once: a settled failure may be retried under a new identity, an
-    /// uncertain one is only recovered, an in-flight or done one is left alone.
+    /// Sends a card operation once: a settled failure may be sent again under a new identity, an
+    /// in-flight or done one is left alone.
     pub(super) fn once(
         &mut self,
         remembered: String,
@@ -743,35 +554,28 @@ impl State {
     fn held(&self, remembered: &str, feed: &Feed) -> Option<Vec<Effect>> {
         let key = self.live.acts.get(remembered)?;
         match act::status(feed, key.as_str()) {
-            Some(ActStatus::Unknown) => Some(vec![Effect::Recover(key.clone())]),
             // Never submitted (a confirmation the owner cancelled) or settled without running.
-            None
-            | Some(
-                ActStatus::Failed(_)
-                | ActStatus::Refused(_)
-                | ActStatus::Conflict(_)
-                | ActStatus::Abandoned,
-            ) => None,
+            None | Some(ActStatus::Failed(_) | ActStatus::Refused(_)) => None,
             // In flight or done.
-            Some(_) => Some(Vec::new()),
+            Some(ActStatus::Pending | ActStatus::Running | ActStatus::Done) => Some(Vec::new()),
         }
     }
 }
 
-/// Fetches a task's detail, for the owner revision its verbs carry.
-fn load_task(feed: &Feed, task: &str) -> Vec<Effect> {
-    let target = DetailRef::Task {
-        id: task.to_owned(),
-    };
-    let cached = feed.detail(&target);
-    if cached.is_some_and(|cache| cache.loading || (!cache.stale && cache.body().is_some())) {
-        return Vec::new();
-    }
-    vec![Effect::Detail(DetailGet {
-        etag: cached
-            .and_then(|cache| cache.pages.first())
-            .map(|page| page.etag.clone()),
-        target,
-        page: None,
-    })]
+/// A waiting message filed as an Idea in its owner's words: the first line, cut at 120
+/// characters, as the title, and the whole message as the body.
+fn idea_from(feed: &Feed, entry: &str) -> Option<NewTask> {
+    let words = feed
+        .threads
+        .values()
+        .find_map(|thread| thread.entries.get(entry))?
+        .text
+        .clone()?;
+    let title = super::saved_as_written(entry, &words).title;
+    Some(NewTask {
+        title,
+        body: words,
+        status: Status::Idea,
+        ..NewTask::default()
+    })
 }

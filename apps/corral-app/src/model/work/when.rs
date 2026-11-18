@@ -30,8 +30,8 @@ fn offset(feed: &Feed) -> i64 {
     local - utc
 }
 
-fn seconds(at: &str) -> Option<i64> {
-    at.parse::<jiff::Timestamp>().ok().map(|at| at.as_second())
+fn parse(at: &str) -> Option<jiff::Timestamp> {
+    at.parse::<jiff::Timestamp>().ok()
 }
 
 /// `HH:MM` of `secs` in local time.
@@ -54,40 +54,28 @@ fn day(local: i64) -> String {
 
 /// A daemon instant as a feed time: `18:40` today, `Nov 12` before; empty when unparseable.
 pub fn stamp(at: &str, feed: &Feed) -> String {
-    if let Some(zone) = &feed.time_zone {
-        let Some(at) = at.parse::<jiff::Timestamp>().ok() else {
-            return String::new();
-        };
-        let at = at.to_zoned(zone.clone());
-        let today = i64::try_from(feed.now)
-            .ok()
-            .and_then(|now| jiff::Timestamp::from_second(now).ok())
-            .map(|now| now.to_zoned(zone.clone()).date());
-        return if Some(at.date()) == today {
-            at.strftime("%H:%M").to_string()
-        } else {
-            at.strftime("%b %-d").to_string()
-        };
-    }
-    let Some(at) = seconds(at) else {
-        return String::new();
-    };
-    let offset = offset(feed);
-    let local = at + offset;
-    let today = (i64::try_from(feed.now).unwrap_or(0) + offset).div_euclid(86_400);
-    if local.div_euclid(86_400) == today {
-        clock(local)
-    } else {
-        day(local)
-    }
+    parse(at).map_or_else(String::new, |at| stamp_at(at, feed))
+}
+
+/// [`stamp`] of an instant the engine serves typed.
+pub fn stamp_at(at: jiff::Timestamp, feed: &Feed) -> String {
+    local(at, feed, "%b %-d", false)
 }
 
 /// A daemon instant with its day and time, for attribution: `Nov 12 18:40`, or `18:40` today.
 pub fn when(at: &str, feed: &Feed) -> String {
+    parse(at).map_or_else(String::new, |at| when_at(at, feed))
+}
+
+/// [`when`] of an instant the engine serves typed.
+pub fn when_at(at: jiff::Timestamp, feed: &Feed) -> String {
+    local(at, feed, "%b %-d %H:%M", true)
+}
+
+/// `HH:MM` today, else `earlier` (a strftime pattern) in the client's zone, or, before a zone
+/// arrives, the last tick's offset; `with_clock` adds the clock to the offset fallback's day.
+fn local(at: jiff::Timestamp, feed: &Feed, earlier: &str, with_clock: bool) -> String {
     if let Some(zone) = &feed.time_zone {
-        let Some(at) = at.parse::<jiff::Timestamp>().ok() else {
-            return String::new();
-        };
         let at = at.to_zoned(zone.clone());
         let today = i64::try_from(feed.now)
             .ok()
@@ -96,19 +84,18 @@ pub fn when(at: &str, feed: &Feed) -> String {
         return if Some(at.date()) == today {
             at.strftime("%H:%M").to_string()
         } else {
-            at.strftime("%b %-d %H:%M").to_string()
+            at.strftime(earlier).to_string()
         };
     }
-    let Some(at) = seconds(at) else {
-        return String::new();
-    };
     let offset = offset(feed);
-    let local = at + offset;
+    let local = at.as_second() + offset;
     let today = (i64::try_from(feed.now).unwrap_or(0) + offset).div_euclid(86_400);
     if local.div_euclid(86_400) == today {
         clock(local)
-    } else {
+    } else if with_clock {
         format!("{} {}", day(local), clock(local))
+    } else {
+        day(local)
     }
 }
 
@@ -124,11 +111,6 @@ pub fn age(since: Option<u64>, now: u64) -> String {
         3600..86400 => format!("{}h{:02}m", seconds / 3600, seconds % 3600 / 60),
         _ => format!("{}d", seconds / 86400),
     }
-}
-
-/// Age of a daemon instant; empty when unparseable.
-pub fn ago(at: &str, feed: &Feed) -> String {
-    age(seconds(at).and_then(|at| u64::try_from(at).ok()), feed.now)
 }
 
 #[cfg(test)]

@@ -4,10 +4,8 @@
 use std::collections::BTreeMap;
 
 use corral_protocol::assistant::{ContextRef, EntryCard, MESSAGE_TEXT_MAX, PromptChoice};
-use corral_protocol::board::CostBasis;
-use corral_protocol::detail::{DetailBody, DetailRef};
 use corral_protocol::rows::{
-    AssistantKind, AssistantLocation, AssistantRow, AssistantState, ModelChoice, SettingsSnapshot,
+    AssistantKind, AssistantLocation, AssistantRow, AssistantState, CostBasis, SettingsSnapshot,
     WaitReason,
 };
 
@@ -18,7 +16,7 @@ use super::{
     Action, Agents, COMPOSER_KEYS, Chip, Composer, Drawer, Fact, FiledLine, ModelList, ModelOption,
     QUICK, SessionRow, Staged, State, ThreadHeader, tray,
 };
-use crate::model::daemon::{Feed, Link, PmLevel};
+use crate::model::daemon::{Feed, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::id::Id;
@@ -32,12 +30,44 @@ mod model_choice_tests;
 
 /// The served settings snapshot, when settings are served.
 pub fn settings(feed: &Feed) -> Option<&SettingsSnapshot> {
-    feed.settings.values().next()
+    feed.settings.as_ref()
 }
 
-/// The configured corral-pi profiles, in selector order.
-pub fn models(feed: &Feed) -> &[ModelChoice] {
-    settings(feed).map_or(&[], |settings| settings.assistant_models.as_slice())
+/// The harness the chat host runs as (`[harnesses.pi]`); its profiles are the assistant's models.
+const ASSISTANT_HARNESS: &str = "pi";
+
+/// A configured profile the assistant can answer with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelChoice {
+    pub name: String,
+    /// The profile's model, or its harness default when it names none.
+    pub model: String,
+    pub effort: Option<String>,
+}
+
+/// The configured profiles of the chat host's harness, in `corral.toml`'s order.
+pub fn models(feed: &Feed) -> Vec<ModelChoice> {
+    let Some(profiles) = settings(feed)
+        .and_then(|settings| settings.config.get("profiles"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let text = |profile: &serde_json::Value, key: &str| {
+        profile
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    profiles
+        .iter()
+        .filter(|(_, profile)| text(profile, "harness").as_deref() == Some(ASSISTANT_HARNESS))
+        .map(|(name, profile)| ModelChoice {
+            name: name.clone(),
+            model: text(profile, "model").unwrap_or_else(|| "harness default".into()),
+            effort: text(profile, "effort"),
+        })
+        .collect()
 }
 
 /// The assistant row of a thread scope: the quick row for "quick", else the session's.
@@ -136,15 +166,12 @@ pub fn pick_state(state: &State, feed: &Feed, scope: &str) -> Option<(String, Pi
     Some((pick.profile.clone(), outcome))
 }
 
-/// The profile that answers the thread's next message: a pending pick, the row's, or the
-/// configured default.
+/// The profile that answers the thread's next message: a pending pick, else the row's.
 pub fn profile(state: &State, feed: &Feed, scope: &str) -> Option<String> {
     if let Some((profile, PickState::Pending)) = pick_state(state, feed, scope) {
         return Some(profile);
     }
-    row(feed, scope)
-        .and_then(|row| row.profile.clone())
-        .or_else(|| settings(feed).and_then(|settings| settings.assistant_profile.clone()))
+    row(feed, scope).and_then(|row| row.profile.clone())
 }
 
 /// Whether corrald reports the session ended; an ended session takes no more messages.
@@ -184,24 +211,10 @@ pub fn end_target(feed: &Feed, scope: &str) -> Option<String> {
     }
 }
 
-/// The task's owner revision from its served detail; task verbs carry it as their precondition.
-pub fn task_revision(feed: &Feed, task: &str) -> Option<String> {
-    let cache = feed.detail(&DetailRef::Task {
-        id: task.to_owned(),
-    })?;
-    if cache.stale {
-        return None;
-    }
-    match cache.body()? {
-        DetailBody::Task(detail) => Some(detail.owner_revision.clone()),
-        _ => None,
-    }
-}
-
 /// The filed Idea's current title: the board's when it is on the board, else the filing card's.
 pub fn idea_title(feed: &Feed, task: &str) -> Option<String> {
     if let Some(row) = feed.board.task(task) {
-        return Some(row.title.clone());
+        return Some(row.title().to_owned());
     }
     feed.threads
         .values()
@@ -299,19 +312,19 @@ fn model_list(feed: &Feed, scope: &str, current: Option<&str>) -> ModelList {
     ModelList {
         label: "Model",
         options: models(feed)
-            .iter()
+            .into_iter()
             .map(|model| ModelOption {
-                name: model.name.clone(),
-                model: match &model.effort {
-                    Some(effort) => format!("{} · {effort}", model.model),
-                    None => model.model.clone(),
-                },
-                note: model.note.clone().unwrap_or_default(),
                 selected: Some(model.name.as_str()) == current,
                 action: Action::PickProfile {
                     thread: scope.to_owned(),
                     profile: model.name.clone(),
                 },
+                model: match &model.effort {
+                    Some(effort) => format!("{} · {effort}", model.model),
+                    None => model.model,
+                },
+                note: String::new(),
+                name: model.name,
             })
             .collect(),
         footer: model_footer(),
@@ -330,8 +343,6 @@ pub struct Draft<'a> {
     pub text: &'a str,
     /// Ask's bounded context.
     pub context: Option<&'a ContextRef>,
-    /// This device may message the assistant (or has no session to say otherwise yet).
-    pub can_send: bool,
     /// What is staged for the next message.
     pub staged: &'a [Staged],
 }
@@ -343,7 +354,6 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
         target,
         text,
         context,
-        can_send,
         staged,
     } = draft;
     let named = scope != QUICK;
@@ -354,7 +364,7 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
     let pick = pick_state(state, feed, scope);
     let pickable = to_assistant && pickable(feed, scope) && !models(feed).is_empty();
     let too_long = text.trim().len() > MESSAGE_TEXT_MAX;
-    let tray = tray(feed, staged, to_assistant, can_send, text.trim().is_empty());
+    let tray = tray(feed, staged, to_assistant, text.trim().is_empty());
     let ended = ended(feed, scope);
     let end = end_state(state, feed, scope);
     let closing = ended || end == Some(EndState::Pending);
@@ -369,11 +379,6 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
         Some(vec![
             span("ending").hue(Hue::Held),
             span(" corrald is stopping the host and closing this session."),
-        ])
-    } else if !can_send {
-        Some(vec![
-            span("may not message the assistant").hue(Hue::Fail),
-            span(" This device was not granted assistant access; nothing is sent from here."),
         ])
     } else if too_long {
         Some(vec![
@@ -401,12 +406,7 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
             span(format!(" {name}: {why}")),
         ])
     } else if !to_assistant {
-        (feed.health.as_ref().map(|health| health.pm) == Some(PmLevel::Absent)).then(|| {
-            vec![
-                span("PM absent").hue(Hue::Held),
-                span(" Messages wait in the PM inbox until it next takes input."),
-            ]
-        })
+        None
     } else {
         match row {
             // The quick thread's last generation ended: Send starts the next one, it does not
@@ -444,27 +444,13 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
             _ => None,
         }
     };
-    let default = settings(feed).and_then(|settings| settings.assistant_profile.as_deref());
-    let next_message = match (&pick, current.as_deref()) {
-        _ if !pickable => None,
-        (Some((name, PickState::Pending)), _) => Some(vec![
+    let next_message = match &pick {
+        Some((name, PickState::Pending)) if pickable => Some(vec![
             span(name.clone()),
             span(
                 " Switching… it answers your next message once corrald confirms. The conversation is kept.",
             ),
         ]),
-        (_, Some(name)) if Some(name) != default => {
-            let model = models(feed)
-                .iter()
-                .find(|model| model.name == name)
-                .map_or_else(|| name.to_owned(), |model| model.model.clone());
-            Some(vec![
-                span(name.to_owned()),
-                span(format!(
-                    " Your next message is answered by {model}. The conversation is kept."
-                )),
-            ])
-        }
         _ => None,
     };
     let placeholder = if named {
@@ -478,7 +464,7 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
     };
     let mut send = button("Send", Action::Send);
     send.primary = true;
-    send.enabled = can_send && !closing && !too_long && !text.trim().is_empty() && !tray.holds_send;
+    send.enabled = !closing && !too_long && !text.trim().is_empty() && !tray.holds_send;
     Composer {
         targets: if named {
             Vec::new()
@@ -703,8 +689,8 @@ pub fn live_thread_header(state: &State, feed: &Feed, scope: &str) -> ThreadHead
     }
 }
 
-/// Agents' assistant blocks from the served rows.
-pub fn live_agents(state: &State, feed: &Feed, can_send: bool) -> Agents {
+/// Agents' assistant sessions block from the served rows.
+pub fn live_agents(state: &State, feed: &Feed) -> Agents {
     // Earlier quick generations stay openable as their own A-n threads; the current
     // generation is already pinned in the roster.
     let current = row(feed, QUICK).map(|row| row.id.as_str());
@@ -753,8 +739,7 @@ pub fn live_agents(state: &State, feed: &Feed, can_send: bool) -> Agents {
         None
     };
     let mut new_session = button("+ New session", Action::NewSession);
-    new_session.enabled = can_send && !creating;
-    let filed = super::global_filed(state, feed);
+    new_session.enabled = !creating;
     Agents {
         sessions_title: "Assistant sessions",
         sessions_count: format!("{} · daemon and pane", rows.len()),
@@ -762,12 +747,6 @@ pub fn live_agents(state: &State, feed: &Feed, can_send: bool) -> Agents {
         new_session,
         sessions_note,
         sessions_illustrative: None,
-        filed_title: "Filed from chat",
-        filed_total: filed.total,
-        filed_note: filed.note,
-        filed_pager: filed.pager,
-        filed: filed.rows,
-        filed_illustrative: None,
     }
 }
 
@@ -777,7 +756,6 @@ pub fn record_link(context: &ContextRef) -> Option<(String, Live)> {
     let live = match context.kind.as_str() {
         "task" => Live::Task(id),
         "plan" => Live::Plan(id),
-        "question" => Live::Question(id),
         "session" => Live::Session(id),
         "thread" => Live::Thread(id),
         "review" => Live::Review(id),

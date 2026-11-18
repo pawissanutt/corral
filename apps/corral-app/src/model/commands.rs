@@ -1,14 +1,12 @@
-//! Palette rows, their actions and fresh-confirmation previews. Renderers display these values
-//! and delegate actions to AppState; filtering and command wording stay here. Which keys each
-//! destination answers, and their terminal legend, are in `keys`.
+//! Palette rows, their actions and the local confirm sheet's wording. Renderers display these
+//! values and delegate actions to AppState; filtering and command wording stay here. Which keys
+//! each destination answers, and their terminal legend, are in `keys`.
 
 mod keys;
 #[cfg(test)]
 mod tests;
 
 pub use keys::{key_legend_live, list_keys_live};
-
-use corral_protocol::rows::PlanState;
 
 use crate::model::daemon::Feed;
 use crate::model::{
@@ -55,21 +53,20 @@ pub fn palette_example(data: DataState, feed: &Feed) -> Option<String> {
     }
 }
 
-/// Desktop explanation beneath a fresh-confirmation title.
-pub const CONFIRM_SUB: &str =
-    "Confirm on this device. The daemon checks the preview still matches before it applies.";
+/// Desktop explanation beneath the confirm sheet's title.
+pub const CONFIRM_SUB: &str = "Asked once, on this device. Nothing is sent until you confirm.";
 
-/// Heading above the three consequences of a risky command.
-pub const CONFIRM_EFFECT_HEADING: &str = "Exact effect";
+/// Heading above the operation the confirm sheet will send.
+pub const CONFIRM_EFFECT_HEADING: &str = "Operation";
 
 /// Confirmation cancellation button label.
 pub const CONFIRM_CANCEL: &str = "Cancel";
 
-/// What a tap on the phone's Confirm is checked against. There is no biometric or PIN step on
-/// any client: the tap is the confirmation, and corrald accepts it only from this paired device
-/// and only while the preview still matches.
-pub const CONFIRM_CHECK: &str = "Tapping Confirm is the check. corrald accepts it only from this \
-     paired device, and only while the preview above still matches.";
+/// The phone's line over Confirm: the tap itself is the confirmation; no PIN or biometric.
+pub const CONFIRM_CHECK: &str = "Tapping Confirm sends it. Nothing has been sent yet.";
+
+/// The refusal sheet's line under its title.
+pub const REFUSED_SUB: &str = "The engine refused this. Each button below is a step that gets past it.";
 
 /// A live command's confirming button: generic on phone, else its title's first verb.
 pub fn act_confirm_label(title: &str, form: Form) -> String {
@@ -175,7 +172,7 @@ pub fn commands(
     }
     if live && managed {
         live_needs_you(&mut rows, feed, query);
-        live_verbs(&mut rows, feed, record);
+        live_verbs(&mut rows, record);
     }
     rows.extend(
         crate::model::nav::navigation(feed)
@@ -366,68 +363,49 @@ fn push_live(
     );
 }
 
-/// Open owner decisions the daemon served: questions, prompts, plans to accept, reviews.
+/// Tasks that wait on the owner: Blocked ones, and reviews ready to land.
 fn live_needs_you(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
-    let open = crate::model::inbox::owner_moves(feed).filter_map(|row| {
-        let target = crate::model::inbox::target(row)?;
-        let label = match &target {
-            Live::Question(id) => format!("Answer {id} · {}", row.title),
-            Live::Plan(id) => format!("Review plan {id} · {}", row.title),
-            Live::Review(id) => format!("Review {id} · {}", row.title),
-            Live::Thread(_) | Live::Session(_) => format!("Permission {} · {}", row.id, row.title),
-            Live::Task(id) => format!("{id} · {}", row.title),
-            Live::Build(id) => format!("Build {id} · {}", row.title),
-        };
-        Some((label, target))
-    });
+    let open = feed
+        .board
+        .in_group(crate::model::daemon::Group::NeedsYou)
+        .map(|task| {
+            (
+                format!("{} · {} · {}", task.id, task.title(), task.now()),
+                Live::Task(task.id.clone()),
+            )
+        });
     push_live(rows, "Needs you", query, open);
 }
 
-fn live_verbs(rows: &mut Vec<Command>, feed: &Feed, record: Option<&crate::model::work::Record>) {
+/// The Actions menu of the selected task, then the workspace's own.
+fn live_verbs(rows: &mut Vec<Command>, record: Option<&crate::model::work::Record>) {
     use crate::model::work::{Record, record_verbs};
     let workspace = Record::Workspace;
-    let actions = record_verbs(feed, record.unwrap_or(&workspace));
-    rows.extend(actions.into_iter().filter(|verb| verb.enabled).map(|verb| {
+    let record = record.unwrap_or(&workspace);
+    rows.extend(record_verbs(record).into_iter().map(|verb| {
+        let label = match record {
+            Record::Task(id) => format!("{} {id}", verb.label),
+            Record::Workspace => verb.label,
+        };
         row(
             format!("verb:{}", verb.slug),
             "Actions",
-            verb.label,
+            label,
             None,
             Action::Work(verb.press),
         )
     }));
-    if record.is_some_and(|record| !matches!(record, Record::Workspace)) {
-        rows.extend(
-            record_verbs(feed, &workspace)
-                .into_iter()
-                .filter(|verb| verb.enabled)
-                .map(|verb| {
-                    row(
-                        format!("verb:{}", verb.slug),
-                        "Workspace actions",
-                        verb.label,
-                        None,
-                        Action::Work(verb.press),
-                    )
-                }),
-        );
+    if !matches!(record, Record::Workspace) {
+        rows.extend(record_verbs(&workspace).into_iter().map(|verb| {
+            row(
+                format!("verb:{}", verb.slug),
+                "Workspace actions",
+                verb.label,
+                None,
+                Action::Work(verb.press),
+            )
+        }));
     }
-    rows.extend(
-        feed.commands
-            .keys()
-            .filter(|key| {
-                crate::model::act::status(feed, key) == Some(crate::model::act::ActStatus::Unknown)
-            })
-            .map(|key| {
-                row(
-                    format!("recover:{key}"),
-                    "Command results",
-                    format!("Check command result {key}"),
-                    None,
-                    Action::Work(crate::model::work::Press::Recover(key.clone())),
-                )
-            }),
-    );
 }
 
 /// The task a query names whole (`T-123`, either case of the prefix), spelled as corrald does.
@@ -459,7 +437,7 @@ fn live_open(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
             query,
             feed.board.tasks().iter().map(|task| {
                 (
-                    format!("{} {}", task.id, task.title),
+                    format!("{} {}", task.id, task.title()),
                     Live::Task(task.id.clone()),
                 )
             }),
@@ -468,35 +446,26 @@ fn live_open(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
             rows,
             "Open",
             query,
-            feed.plans
-                .iter()
-                .filter(|(_, plan)| {
-                    !matches!(plan.state, PlanState::Complete | PlanState::Cancelled)
-                })
-                .map(|(id, plan)| (format!("Plan {id} {}", plan.title), Live::Plan(id.clone()))),
+            feed.plans.iter().map(|(id, plan)| {
+                (
+                    format!("Plan {id} {}", plan.parent.title),
+                    Live::Plan(id.clone()),
+                )
+            }),
         );
-        if feed.capable(corral_protocol::app::BUILDS_V1) {
-            push_live(
-                rows,
-                "Open",
-                query,
-                feed.builds.iter().map(|(id, build)| {
-                    (
-                        format!("Build {id} {}", build.title),
-                        Live::Build(id.clone()),
-                    )
-                }),
-            );
-        }
     }
     push_live(
         rows,
         "Open",
         query,
         feed.agents.iter().map(|(id, agent)| {
-            let task = agent.task.as_deref().unwrap_or(id.as_str());
             (
-                format!("{task} {} · session", agent.title),
+                format!(
+                    "{} {} · {} session",
+                    agent.run.task,
+                    agent.run.profile,
+                    agent.run.role.as_str()
+                ),
                 Live::Session(id.clone()),
             )
         }),

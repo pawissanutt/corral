@@ -5,7 +5,7 @@
 use nsh_core::prelude::*;
 
 use super::live_sections::{facts, snapshot_parts};
-use super::parts::{button_row, cell, first_heading, frame, space};
+use super::parts::{button_row, cell, first_heading, frame};
 use crate::model::settings::{connect, live};
 use crate::model::{Destination, Form};
 use crate::state::AppState;
@@ -16,24 +16,11 @@ use crate::ui::tokens::Token;
 
 pub fn page(app: AppState) -> AnyElement {
     let workspace = if untracked(|| app.daemon()) {
-        snapshot_parts(app, |app, settings, _| {
+        snapshot_parts(app, |app, settings| {
             let rows = app
                 .feed
                 .with_untracked(|feed| live::general_facts(feed, settings));
-            vec![
-                facts(app, rows),
-                space(app, 10.0),
-                cell(
-                    app,
-                    format!(
-                        "Workspace settings change from an administrator device; changes made here are recorded with {}.",
-                        app.via()
-                    ),
-                    Token::Ink3,
-                    false,
-                )
-                .into_element(),
-            ]
+            vec![facts(app, rows)]
         })
     } else {
         crate::screens::unavailable_body(app, Destination::Settings)

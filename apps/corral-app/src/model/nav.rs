@@ -31,16 +31,12 @@ pub const SEARCH_LABEL: &str = "Search";
 /// A top-level destination in the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Destination {
-    /// The inbox.
-    Inbox,
-    /// The current workspace.
+    /// The current workspace; its first group is what needs you.
     Now,
     /// Recent changes.
     Changes,
     /// Plans.
     Plans,
-    /// Builds: interactive sessions that implemented, verified, reviewed and landed work.
-    Builds,
     /// Agents.
     Agents,
     /// Items to review.
@@ -54,23 +50,11 @@ pub enum Destination {
 }
 
 impl Destination {
-    /// Sidebar badges use the same canonical owner moves as their destination groups.
-    pub fn attention_count(self, counts: &corral_protocol::rows::AttentionCounts) -> Option<u64> {
-        match self {
-            Self::Inbox => Some(counts.inbox),
-            Self::Now => Some(counts.now),
-            Self::Plans => Some(counts.plans),
-            Self::Review => Some(counts.review),
-            _ => None,
-        }
-    }
     /// Destinations in navigation order.
-    pub const ALL: [Destination; 10] = [
-        Self::Inbox,
+    pub const ALL: [Destination; 8] = [
         Self::Now,
         Self::Changes,
         Self::Plans,
-        Self::Builds,
         Self::Agents,
         Self::Review,
         Self::Timeline,
@@ -80,11 +64,9 @@ impl Destination {
     /// The display label.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Inbox => "Inbox",
             Self::Now => "Now",
             Self::Changes => "Changes",
             Self::Plans => "Plans",
-            Self::Builds => "Builds",
             Self::Agents => "Agents",
             Self::Review => "Review",
             Self::Timeline => "Timeline",
@@ -95,11 +77,9 @@ impl Destination {
     /// The storage and identifier slug.
     pub const fn slug(self) -> &'static str {
         match self {
-            Self::Inbox => "inbox",
             Self::Now => "now",
             Self::Changes => "changes",
             Self::Plans => "plans",
-            Self::Builds => "builds",
             Self::Agents => "agents",
             Self::Review => "review",
             Self::Timeline => "timeline",
@@ -107,18 +87,20 @@ impl Destination {
             Self::Settings => "settings",
         }
     }
-    /// Finds a destination by its slug.
+    /// Finds a destination by its slug; the merged Inbox and Builds slugs open their new homes.
     pub fn from_slug(slug: &str) -> Option<Destination> {
-        Self::ALL.into_iter().find(|item| item.slug() == slug)
+        match slug {
+            "inbox" => Some(Self::Now),
+            "builds" => Some(Self::Agents),
+            _ => Self::ALL.into_iter().find(|item| item.slug() == slug),
+        }
     }
     /// The destination's keyboard shortcut.
     pub const fn key(self) -> char {
         match self {
-            Self::Inbox => 'i',
             Self::Now => 'n',
             Self::Changes => '.',
             Self::Plans => 'p',
-            Self::Builds => 'b',
             Self::Agents => 'a',
             Self::Review => 'r',
             Self::Timeline => 't',
@@ -126,14 +108,16 @@ impl Destination {
             Self::Settings => ',',
         }
     }
-    /// Finds a destination by its keyboard shortcut.
+    /// Finds a destination by its keyboard shortcut; `i`, the former Inbox key, opens Now.
     pub fn from_key(key: char) -> Option<Destination> {
+        if key == 'i' {
+            return Some(Self::Now);
+        }
         Self::ALL.into_iter().find(|item| item.key() == key)
     }
     /// The phone tab containing this destination.
     pub const fn phone_tab(self) -> PhoneTab {
         match self {
-            Self::Inbox => PhoneTab::Inbox,
             Self::Now => PhoneTab::Now,
             Self::Agents => PhoneTab::Agents,
             Self::Plans => PhoneTab::Plans,
@@ -153,22 +137,19 @@ pub enum SettingsSection {
     Connection,
     /// Notification settings.
     Notifications,
-    /// Assistant settings.
-    Assistant,
-    /// Autopilot and grants settings.
-    Autopilot,
+    /// `corral.toml`, read-only until the config editor lands.
+    Config,
     /// General settings.
     General,
 }
 impl SettingsSection {
     /// Settings sections in navigation order.
-    pub const ALL: [SettingsSection; 7] = [
+    pub const ALL: [SettingsSection; 6] = [
         Self::Devices,
         Self::Machines,
         Self::Connection,
         Self::Notifications,
-        Self::Assistant,
-        Self::Autopilot,
+        Self::Config,
         Self::General,
     ];
     /// The display label.
@@ -178,8 +159,7 @@ impl SettingsSection {
             Self::Machines => "Machines",
             Self::Connection => "Connection",
             Self::Notifications => "Notifications",
-            Self::Assistant => "Assistant",
-            Self::Autopilot => "Autopilot & grants",
+            Self::Config => "Configuration",
             Self::General => "General",
         }
     }
@@ -190,8 +170,7 @@ impl SettingsSection {
             Self::Machines => "machines",
             Self::Connection => "connection",
             Self::Notifications => "notifications",
-            Self::Assistant => "assistant",
-            Self::Autopilot => "autopilot",
+            Self::Config => "config",
             Self::General => "general",
         }
     }
@@ -204,9 +183,7 @@ impl SettingsSection {
 /// A phone navigation tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PhoneTab {
-    /// The inbox tab.
-    Inbox,
-    /// The current workspace tab.
+    /// The current workspace tab, opening at what needs you.
     Now,
     /// The agents tab.
     Agents,
@@ -217,17 +194,10 @@ pub enum PhoneTab {
 }
 impl PhoneTab {
     /// Phone tabs in display order.
-    pub const ALL: [PhoneTab; 5] = [
-        Self::Inbox,
-        Self::Now,
-        Self::Agents,
-        Self::Plans,
-        Self::More,
-    ];
+    pub const ALL: [PhoneTab; 4] = [Self::Now, Self::Agents, Self::Plans, Self::More];
     /// Destinations listed under More.
-    pub const MORE: [Destination; 6] = [
+    pub const MORE: [Destination; 5] = [
         Destination::Changes,
-        Destination::Builds,
         Destination::Review,
         Destination::Timeline,
         Destination::Usage,
@@ -236,7 +206,6 @@ impl PhoneTab {
     /// The display label.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Inbox => "Inbox",
             Self::Now => "Now",
             Self::Agents => "Agents",
             Self::Plans => "Plans",
@@ -246,7 +215,6 @@ impl PhoneTab {
     /// The identifier slug.
     pub const fn slug(self) -> &'static str {
         match self {
-            Self::Inbox => "inbox",
             Self::Now => "now",
             Self::Agents => "agents",
             Self::Plans => "plans",
@@ -256,11 +224,10 @@ impl PhoneTab {
     /// The tab's zero-based index.
     pub const fn index(self) -> u32 {
         match self {
-            Self::Inbox => 0,
-            Self::Now => 1,
-            Self::Agents => 2,
-            Self::Plans => 3,
-            Self::More => 4,
+            Self::Now => 0,
+            Self::Agents => 1,
+            Self::Plans => 2,
+            Self::More => 3,
         }
     }
     /// Finds a tab by its zero-based index.
@@ -270,7 +237,6 @@ impl PhoneTab {
     /// The tab's destination, if it opens one directly.
     pub const fn destination(self) -> Option<Destination> {
         match self {
-            Self::Inbox => Some(Destination::Inbox),
             Self::Now => Some(Destination::Now),
             Self::Agents => Some(Destination::Agents),
             Self::Plans => Some(Destination::Plans),
@@ -405,10 +371,7 @@ pub enum Form {
 impl Form {
     /// The initial destination for this form.
     pub const fn home(self) -> Destination {
-        match self {
-            Self::Phone => Destination::Inbox,
-            Self::Desktop | Self::Terminal => Destination::Now,
-        }
+        Destination::Now
     }
 }
 
@@ -570,11 +533,9 @@ pub fn explicit_record_filter(
     if filter == ProjectFilter::All {
         return None;
     }
-    let projects = match live {
-        Live::Task(id) | Live::Review(id) => feed.board.task(id)?.project.as_slice(),
-        Live::Build(id) => feed.builds.get(id)?.project.as_slice(),
-        Live::Plan(id) if feed.capable(corral_protocol::PROJECTS_V1) => {
-            feed.plans.get(id)?.projects.as_slice()
+    let projects: &[String] = match live {
+        Live::Task(id) | Live::Review(id) | Live::Plan(id) => {
+            feed.board.task(id)?.row.task.project.as_slice()
         }
         _ => return None,
     };

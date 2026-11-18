@@ -189,7 +189,7 @@ fn avatar(author: &str) -> (&'static str, Hue) {
     }
 }
 
-/// The inline handover for a question the agent asked, open or settled.
+/// A question the agent asked, open or settled, as the transcript recorded it.
 fn question(
     key: &str,
     text: &str,
@@ -211,15 +211,12 @@ fn question(
         None => QuestionCard {
             label: format!("{key} · waiting on you"),
             question: text.to_owned(),
-            button: "Open handover · decide",
             hint: format!("{count}{recommended}"),
             open: true,
-            action: Action::OpenQuestion(Id::from(key)),
         },
         Some(answer) => QuestionCard {
             label: format!("{key} · answered by {}", answer.by),
             question: text.to_owned(),
-            button: "Open handover",
             hint: [
                 clock(Some(answer.at.as_str()), feed),
                 Some(answer.option.clone().unwrap_or_else(|| answer.text.clone())),
@@ -229,7 +226,6 @@ fn question(
             .collect::<Vec<_>>()
             .join(" · "),
             open: false,
-            action: Action::OpenQuestion(Id::from(key)),
         },
     }
 }

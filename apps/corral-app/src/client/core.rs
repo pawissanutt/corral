@@ -1,8 +1,10 @@
-use corral_protocol::board::BoardRow;
-use corral_protocol::cmd::{
-    APP_COMMAND_DEADLINE_MS, APP_READ_DEADLINE_MS, APP_READ_WAIT_MS, APP_REQUEST_DEADLINE_MS,
-    APP_REQUEST_MARGIN_MS,
-};
+/// Plain request deadlines; reads may wait on the daemon's reader worker first.
+const APP_REQUEST_DEADLINE_MS: u64 = 5_000;
+const APP_REQUEST_MARGIN_MS: u64 = 5_000;
+const APP_READ_WAIT_MS: u64 = 25_000;
+const APP_READ_DEADLINE_MS: u64 = APP_READ_WAIT_MS + APP_REQUEST_MARGIN_MS;
+/// The daemon answers a long operation with `running` after 5 s; this leaves it room.
+const APP_COMMAND_DEADLINE_MS: u64 = 25_000 + APP_REQUEST_MARGIN_MS;
 use corral_protocol::frame::{Frame, FrameKind};
 #[cfg(test)]
 use corral_protocol::rpc::Request;
@@ -19,12 +21,6 @@ const MAX_TOPIC_RESET_ERRORS: u8 = 3;
 
 pub(super) enum Event {
     Health(Health),
-    Board {
-        epoch: u64,
-        rows: Vec<BoardRow>,
-        left: Vec<String>,
-        replacement: bool,
-    },
     Reply {
         tag: Option<String>,
         params: Value,
@@ -69,13 +65,23 @@ struct Pending {
     closing: Option<String>,
 }
 
-#[derive(Default)]
-struct Batch {
-    rows: BTreeMap<String, BoardRow>,
-    left: BTreeSet<String>,
-    bytes: usize,
+/// The identity a topic row is keyed by in `RowsDelta.left`: the task id for tasks and plans,
+/// `<task>_<run>` for agents, and one fixed key for the single-row usage and settings topics.
+fn row_key(topic: Topic, row: &Value) -> Option<String> {
+    let text = |value: &Value| value.as_str().map(str::to_owned);
+    match topic {
+        Topic::Tasks => text(&row["task"]["id"]),
+        Topic::Plans => text(&row["parent"]["id"]),
+        Topic::Agents => Some(format!(
+            "{}_{}",
+            row["run"]["task"].as_str()?,
+            row["run"]["id"].as_str()?
+        )),
+        Topic::Usage => Some("usage".into()),
+        Topic::Settings => Some("settings".into()),
+        _ => text(&row["id"]),
+    }
 }
-
 #[derive(Default)]
 struct PageBatch {
     epoch: Option<u64>,
@@ -90,9 +96,6 @@ pub(super) struct Core {
     pending: BTreeMap<u64, Pending>,
     welcome: Option<Welcome>,
     events: VecDeque<Event>,
-    epoch: Option<u64>,
-    replacement: bool,
-    batch: Batch,
     outbox: VecDeque<Frame>,
     pages: BTreeMap<String, PageBatch>,
     deferred_opens: BTreeMap<String, (u64, Frame, SubOpen)>,
@@ -107,9 +110,6 @@ impl Core {
             pending: BTreeMap::new(),
             welcome: None,
             events: VecDeque::new(),
-            epoch: None,
-            replacement: true,
-            batch: Batch::default(),
             outbox: VecDeque::new(),
             pages: BTreeMap::new(),
             deferred_opens: BTreeMap::new(),
@@ -268,22 +268,14 @@ impl Core {
         if !reset_reopen {
             self.clear_topic_errors(&key);
         }
-        match open.topic {
-            Topic::Board => {
-                self.batch = Batch::default();
-                self.epoch = None;
-                self.replacement = true;
-            }
-            Topic::Health | Topic::Classic | Topic::Other => {}
-            _ => {
-                self.pages.insert(
-                    key,
-                    PageBatch {
-                        replacement: true,
-                        ..PageBatch::default()
-                    },
-                );
-            }
+        if !matches!(open.topic, Topic::Health | Topic::Other) {
+            self.pages.insert(
+                key,
+                PageBatch {
+                    replacement: true,
+                    ..PageBatch::default()
+                },
+            );
         }
     }
 
@@ -489,7 +481,7 @@ impl Core {
             .cloned()
             .unwrap_or(Value::Null);
         let topic: Topic = serde_json::from_value(topic_value).map_err(decode)?;
-        if matches!(topic, Topic::Other | Topic::Classic) {
+        if topic == Topic::Other {
             return Ok(());
         }
         let key = topic_key(topic, notification.params["scope"].as_str());
@@ -506,49 +498,18 @@ impl Core {
             wire::SUB_DELTA => {
                 self.reset_errors
                     .remove(&topic_key(topic, notification.params["scope"].as_str()));
-                if !matches!(topic, Topic::Board | Topic::Health) {
+                if topic != Topic::Health {
                     return self.rows_page(notification.params, now_ms, page_bytes);
                 }
                 let delta: SubDelta =
                     serde_json::from_value(notification.params).map_err(decode)?;
-                let (topic, cursor) = match delta {
-                    SubDelta::Board { delta } => {
-                        if self.epoch.is_some_and(|epoch| epoch != delta.epoch) {
-                            return Err("daemon board epoch changed without sub.reset".into());
-                        }
-                        self.epoch = Some(delta.epoch);
-                        for row in delta.rows {
-                            self.batch.left.remove(&row.id);
-                            self.batch.rows.insert(row.id.clone(), row);
-                        }
-                        for id in delta.left {
-                            self.batch.rows.remove(&id);
-                            self.batch.left.insert(id);
-                        }
-                        self.batch.bytes = self.batch.bytes.saturating_add(page_bytes);
-                        if self.batch.rows.len() > 50_000 || self.batch.bytes > 32 * 1024 * 1024 {
-                            return Err("daemon board snapshot exceeds client bounds".into());
-                        }
-                        if !delta.more {
-                            let batch = std::mem::take(&mut self.batch);
-                            self.events.push_back(Event::Board {
-                                epoch: delta.epoch,
-                                rows: batch.rows.into_values().collect(),
-                                left: batch.left.into_iter().collect(),
-                                replacement: self.replacement,
-                            });
-                            self.replacement = false;
-                        }
-                        (Topic::Board, delta.cursor)
-                    }
-                    SubDelta::Health { rows, cursor, .. } => {
-                        if let Some(health) = rows.into_iter().last() {
-                            self.events.push_back(Event::Health(health));
-                        }
-                        (Topic::Health, cursor)
-                    }
-                    _ => return Ok(()),
+                let SubDelta::Health { rows, cursor, .. } = delta else {
+                    return Ok(());
                 };
+                if let Some(health) = rows.into_iter().last() {
+                    self.events.push_back(Event::Health(health));
+                }
+                let topic = Topic::Health;
                 self.request(
                     wire::SUB_ACK,
                     serde_json::to_value(SubAck {
@@ -576,24 +537,16 @@ impl Core {
                 {
                     return Ok(());
                 }
-                match reset.topic {
-                    Topic::Board => {
-                        self.batch = Batch::default();
-                        self.epoch = Some(reset.epoch);
-                        self.replacement = true;
-                    }
-                    Topic::Health => {}
-                    _ => {
-                        let key = topic_key(reset.topic, reset.scope.as_deref());
-                        self.pages.insert(
-                            key,
-                            PageBatch {
-                                epoch: Some(reset.epoch),
-                                replacement: true,
-                                ..PageBatch::default()
-                            },
-                        );
-                    }
+                if reset.topic != Topic::Health {
+                    let key = topic_key(reset.topic, reset.scope.as_deref());
+                    self.pages.insert(
+                        key,
+                        PageBatch {
+                            epoch: Some(reset.epoch),
+                            replacement: true,
+                            ..PageBatch::default()
+                        },
+                    );
                 }
                 self.queue_request(
                     wire::SUB_OPEN,
@@ -684,7 +637,7 @@ impl Core {
         }
         if let Some(rows) = value["rows"].as_array_mut() {
             for row in std::mem::take(rows) {
-                let id = row["id"].as_str().ok_or("topic row has no id")?.to_owned();
+                let id = row_key(topic, &row).ok_or("topic row has no id")?;
                 batch.left.remove(&id);
                 batch.rows.insert(id, row);
             }
@@ -787,16 +740,12 @@ fn request_deadline(method: &str, params: &Value) -> u64 {
         wire::app::DETAIL_GET | wire::app::CHANGES_PAGE | wire::app::SEEN_ADVANCE => {
             APP_READ_DEADLINE_MS
         }
-        wire::app::ACT_RESULT => params["wait_ms"]
-            .as_u64()
-            .unwrap_or(0)
-            .saturating_add(APP_REQUEST_MARGIN_MS),
         wire::device::PAIR_STATUS => params["wait_ms"]
             .as_u64()
             .unwrap_or(0)
             .min(APP_READ_WAIT_MS)
             .saturating_add(APP_REQUEST_MARGIN_MS),
-        wire::app::ACT_SUBMIT | wire::assistant::PROMPT_ANSWER => APP_COMMAND_DEADLINE_MS,
+        wire::op::OP_SUBMIT | wire::assistant::PROMPT_ANSWER => APP_COMMAND_DEADLINE_MS,
         _ => APP_REQUEST_DEADLINE_MS,
     }
 }

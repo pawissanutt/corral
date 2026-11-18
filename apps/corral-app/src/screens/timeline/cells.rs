@@ -26,14 +26,12 @@ const ID_CELLS: usize = 7;
 const ID_MAX: usize = 14;
 /// Block heights from an eighth to full.
 const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-/// What marks an owner action, the supervisor's bar and the last-visit line.
-const OWNER_GLYPH: char = '●';
-const PM_GLYPH: char = '━';
-const GUIDE_GLYPH: char = '┊';
+/// What marks an action on the owner and automatic lanes.
+const ACTION_GLYPH: char = '●';
 
 /// The glyph a kind of segment fills its Cells with: a heavy line for run, double for gate, a
-/// dashed heavy line for review, squares for land, a faint dash for idle, `╱` for waiting, a
-/// shade for awaiting acceptance and a faint dotted line where corral recorded no times.
+/// dashed heavy line for review, squares for land, a faint dash for idle, `╱` for blocked and a
+/// shade for awaiting acceptance.
 pub fn glyph(kind: Kind) -> char {
     match kind {
         Kind::Run => '━',
@@ -43,7 +41,6 @@ pub fn glyph(kind: Kind) -> char {
         Kind::Idle => '╌',
         Kind::Ask => '╱',
         Kind::Held => '▒',
-        Kind::Unavailable => '┄',
     }
 }
 
@@ -60,7 +57,7 @@ enum Ink {
 
 fn ink_of(kind: Kind) -> Ink {
     match kind {
-        Kind::Idle | Kind::Unavailable => Ink::Quiet,
+        Kind::Idle => Ink::Quiet,
         other => Ink::Hue(other.hue()),
     }
 }
@@ -110,14 +107,6 @@ impl Track {
     fn mark(&mut self, x: f32, glyph: char, ink: Ink) {
         let i = self.index(self.at(x).round());
         self.cells[i] = Some((glyph, ink));
-    }
-
-    /// The last-visit line, where nothing else is drawn.
-    fn guide(&mut self, x: f32) {
-        let i = self.index(self.at(x).round());
-        if self.cells[i].is_none() {
-            self.cells[i] = Some((GUIDE_GLYPH, Ink::Quiet));
-        }
     }
 
     /// Writes `words` from `start` when they fit in free Cells; otherwise leaves the row as is.
@@ -231,12 +220,11 @@ fn spoken<'a>((name, title): (&str, &str), parts: impl Iterator<Item = &'a str>)
     format!("{name} {title}, {}", parts.join(", "))
 }
 
-/// The lanes as rows of Cells across the pane: the hour labels, the owner's actions (`●`), the
-/// supervisor (`━`, the relaunch in amber with its caption under it), then one row per task
-/// with its segments as glyphs, its annotations on a row above, the question strip on a row
-/// between, phases without recorded times written after its bars, the last-visit line as `┊`,
-/// and the captions of the last visit and now at the foot. Narrow grids drop the titles to keep
-/// the track. Each lane row tells a screen reader the task and every segment's label.
+/// The lanes as rows of Cells across the pane: the hour labels, the owner's moves (`●`), the
+/// pipeline's and assistants' moves (`●`, quiet), then one row per task or run with its
+/// segments as glyphs, its long waits on a row above, and the now caption at the foot. Narrow
+/// grids drop the titles to keep the track. Each lane row tells a screen reader the lane and
+/// every segment's label.
 pub fn lanes(data: Memo<Shown>) -> AnyElement {
     let width = signal(0.0_f32);
     let plot = computed(move || data.with(|shown| shown.plot.clone()));
@@ -287,100 +275,40 @@ fn grid(layout: Layout, columns: usize) -> AnyElement {
     }
     rows.push(line(blank(), &axis.cells, Voice::Hidden));
 
-    let mut owner = Track::new(track, &layout);
-    for marker in &layout.owner {
-        owner.mark(marker.x, OWNER_GLYPH, Ink::Hue(Hue::You));
-    }
-    if let Some(visit) = &layout.last_visit {
-        owner.guide(visit.x);
-    }
-    rows.push(line(
-        lead(layout.owner_label.0, layout.owner_label.1, label),
-        &owner.cells,
-        Voice::Label(spoken(
-            layout.owner_label,
-            layout.owner.iter().map(|m| m.accessible_label.as_str()),
-        )),
-    ));
-
-    let mut pm = Track::new(track, &layout);
-    let mut pm_notes = Track::new(track, &layout);
-    let mut relaunched = false;
-    for interval in &layout.pm {
-        let ink = match interval.hue {
-            Hue::Neutral => Ink::Quiet,
-            hue => Ink::Hue(hue),
-        };
-        pm.span(interval.x, interval.width, PM_GLYPH, ink);
-        if let Some(words) = &interval.label {
-            pm_notes.text(interval.x, words, Ink::Quiet);
-            relaunched = true;
+    for (markers, name, ink) in [
+        (&layout.owner, layout.owner_label, Ink::Hue(Hue::You)),
+        (&layout.auto, layout.auto_label, Ink::Quiet),
+    ] {
+        let mut track_row = Track::new(track, &layout);
+        for marker in markers {
+            track_row.mark(marker.x, ACTION_GLYPH, ink);
         }
-    }
-    if let Some(visit) = &layout.last_visit {
-        pm.guide(visit.x);
-    }
-    rows.push(line(
-        lead(layout.pm_label.0, layout.pm_label.1, label),
-        &pm.cells,
-        Voice::Label(spoken(
-            layout.pm_label,
-            layout.pm.iter().map(|p| p.accessible_label.as_str()),
-        )),
-    ));
-    if relaunched {
-        rows.push(line(blank(), &pm_notes.cells, Voice::Hidden));
+        rows.push(line(
+            lead(name.0, name.1, label),
+            &track_row.cells,
+            Voice::Label(spoken(
+                name,
+                markers.iter().map(|m| m.accessible_label.as_str()),
+            )),
+        ));
     }
 
     for lane in &layout.lanes {
-        let mut notes = Track::new(track, &layout);
-        let mut strip = Track::new(track, &layout);
         let mut bars = Track::new(track, &layout);
-        let (mut noted, mut stripped) = (false, false);
         for segment in &lane.segments {
-            let target = if segment.overlay {
-                stripped = true;
-                &mut strip
-            } else {
-                &mut bars
-            };
-            target.span(
+            bars.span(
                 segment.x,
                 segment.width,
                 glyph(segment.kind),
                 ink_of(segment.kind),
             );
-            if let Some(words) = &segment.annotation {
-                notes.text(segment.x, words, Ink::Hue(segment.hue));
-                noted = true;
-            }
         }
         // The lane's long waits belong to the row (TT-27): on the row over its bars, from the
         // track's start.
         if let Some(words) = &lane.wait {
+            let mut notes = Track::new(track, &layout);
             notes.text(layout.label_width, words, Ink::Hue(Hue::Held));
-            noted = true;
-        }
-        if let Some(words) = &lane.missing {
-            let end = lane
-                .segments
-                .iter()
-                .filter(|segment| !segment.overlay)
-                .map(|segment| segment.x + segment.width)
-                .reduce(f32::max);
-            match end {
-                Some(end) => bars.text(end, &format!(" {words}"), Ink::Quiet),
-                None => bars.text(layout.label_width, words, Ink::Quiet),
-            }
-        }
-        if let Some(visit) = &layout.last_visit {
-            bars.guide(visit.x);
-        }
-        if noted {
             rows.push(line(blank(), &notes.cells, Voice::Text));
-        }
-        if stripped {
-            rows.push(line(blank(), &strip.cells, Voice::Hidden));
         }
         rows.push(line(
             lead(&lane.id, &lane.title, label),
@@ -390,17 +318,13 @@ fn grid(layout: Layout, columns: usize) -> AnyElement {
                 lane.segments
                     .iter()
                     .map(|s| s.accessible_label.as_str())
-                    .chain(lane.wait.as_deref())
-                    .chain(lane.missing.as_deref()),
+                    .chain(lane.wait.as_deref()),
             )),
         ));
     }
 
     let mut foot = Track::new(track, &layout);
     foot.text_end(layout.now.x, &layout.now.label, Ink::Hue(Hue::Neutral));
-    if let Some(visit) = &layout.last_visit {
-        foot.text_end(visit.x, &visit.label, Ink::Quiet);
-    }
     rows.push(line(blank(), &foot.cells, Voice::Text));
 
     view()

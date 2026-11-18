@@ -1,17 +1,16 @@
-//! The selected member's Story inspector for corrald's plans: the board row of the task (who
-//! acts, the agent, cost) and the plan member's rail and dependencies. Worker progress steps are
-//! not served, so the progress block stays absent rather than invented.
+//! The selected member's Story inspector: the member's task (its run, checks and where it
+//! stands) and its place in the plan's dependency edges.
 
-use corral_protocol::detail::{PlanDetail, PlanMember};
-use corral_protocol::rows::PlanRow as WirePlan;
+use corral_protocol::detail::PlanDetail;
+use corral_types::Status;
 
-use super::live::{open_question, rail};
+use super::member::Member;
+use super::path::next_step;
 use super::story::{field, ids};
 use super::{Action, Button, ButtonKind, LiveAction, Story, StoryStage};
-use crate::model::board::{Mark, STAGES, money};
+use crate::model::board::{Mark, STAGES};
 use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
-use crate::model::inbox::owner_moves;
 use crate::model::text::span;
 use crate::model::{Id, Live};
 
@@ -26,47 +25,38 @@ fn status(mark: Mark) -> &'static str {
     }
 }
 
-/// The inspector of `member` in `detail`.
+/// The inspector of `child` in `detail`.
 pub(super) fn story(
     feed: &Feed,
     plan: &Id,
-    row: Option<&WirePlan>,
     detail: &PlanDetail,
-    member: &PlanMember,
+    child: &corral_types::Task,
 ) -> Story {
-    let id = Id::from(&member.id);
-    let task = feed.board.task(&member.id);
-    let question = open_question(feed, &member.id);
-    let you = owner_moves(feed).any(|row| row.task.as_deref() == Some(member.id.as_str()));
-    let marks = rail(member);
-    let agent = task.and_then(|task| task.agent.as_ref());
-    let context = match agent {
-        Some(agent) => {
-            let mut words = agent.role.clone();
-            if let Some(profile) = &agent.profile {
-                words.push_str(&format!(" · {profile}"));
-            }
-            if let Some(machine) = &agent.machine {
-                words.push_str(&format!(" · on {machine}"));
+    let member = Member::of(feed, child);
+    let id = Id::new(member.id());
+    let you = member.needs_you();
+    let marks = member.marks();
+    let run = member.row.and_then(|row| row.row.run.as_ref());
+    let context = match run {
+        Some(run) => {
+            let mut words = format!("{} · {}", run.role.as_str(), run.profile);
+            if let Some(model) = &run.model {
+                words.push_str(&format!(" · {model}"));
             }
             vec![span(words)]
         }
-        None => vec![span(format!("Plan {plan} · {}", member.state))],
+        None => vec![span(format!("Plan {plan} · {}", member.status().as_str()))],
     };
     let stages = STAGES
         .into_iter()
         .enumerate()
         .map(|(i, label)| {
             let mark = marks[i];
-            let sub = match (i, &member.rail[i].sha7) {
-                (0, _) => agent
-                    .and_then(|agent| agent.profile.clone())
-                    .or_else(|| agent.map(|agent| agent.role.clone()))
-                    .unwrap_or_else(|| "−".into()),
-                (3, _) => row
-                    .and_then(|row| row.delivery.clone())
-                    .unwrap_or_else(|| "−".into()),
-                (_, Some(sha)) => sha.clone(),
+            let sha = member.row.and_then(|row| row.rail[i].sha7.clone());
+            let sub = match (i, sha) {
+                (0, _) => run.map_or_else(|| "−".into(), |run| run.profile.clone()),
+                (3, _) => member.task().base.clone().unwrap_or_else(|| "−".into()),
+                (_, Some(sha)) => sha,
                 (_, None) if mark == Mark::Next => format!("after {}", STAGES[i - 1]),
                 _ => "−".into(),
             };
@@ -90,30 +80,24 @@ pub(super) fn story(
             }
         })
         .collect();
-    let needs: Vec<&str> = detail
-        .edges
-        .iter()
-        .filter(|edge| edge.to == member.id)
-        .map(|edge| edge.from.as_str())
-        .collect();
-    let mut needs_rich = vec![];
-    for (i, dep) in needs.iter().enumerate() {
+    let mut needs = vec![];
+    for (i, dep) in member.task().depends_on.iter().enumerate() {
         if i > 0 {
-            needs_rich.push(span(" · "));
+            needs.push(span(" · "));
         }
-        needs_rich.push(span(*dep).mono());
-        if let Some(prior) = detail.members.iter().find(|m| m.id == *dep) {
-            needs_rich.push(span(format!(" {}", rail(prior)[3].glyph())));
+        needs.push(span(dep.as_str()).mono());
+        if let Some(prior) = detail.children.iter().find(|other| other.id == *dep) {
+            needs.push(span(format!(" {}", Member::of(feed, prior).marks()[3].glyph())));
         }
     }
-    if needs_rich.is_empty() {
-        needs_rich.push(span("−"));
+    if needs.is_empty() {
+        needs.push(span("−"));
     }
     let unblocks: Vec<&str> = detail
-        .edges
+        .children
         .iter()
-        .filter(|edge| edge.from == member.id)
-        .map(|edge| edge.to.as_str())
+        .filter(|other| other.depends_on.iter().any(|dep| *dep == child.id))
+        .map(|other| other.id.as_str())
         .collect();
     let mut you_field = field(
         "You",
@@ -123,46 +107,28 @@ pub(super) fn story(
             vec![span("nothing needed").hue(Hue::Ok)]
         },
     );
-    if let Some(key) = &question {
-        you_field.value = vec![];
-        you_field.button = Some(Button {
+    if let Some(blocked) = member.blocked() {
+        you_field.value = vec![span(blocked.reason.clone()).hue(Hue::You)];
+        you_field.button = next_step(&id, blocked).map(|next| Button {
             kind: ButtonKind::Standard,
-            ..Button::new(
-                format!("Answer {key}"),
-                Action::Live(LiveAction::Question(key.clone())),
-            )
+            ..Button::new(next.label, next.action).hinted(next.hint)
         });
     }
-    let cost = match task.and_then(|task| task.cost) {
-        Some(cost) => {
-            let mut words = vec![span(money(Some(cost as f32)))];
-            if task.is_some_and(|task| task.cost_estimated) {
-                words.push(span(" · estimated").dim());
-            }
-            if cost > 20.0 {
-                words.push(span(" · over the $20 warning").hue(Hue::Held));
-            }
-            words
-        }
-        None => vec![span("unknown").dim()],
-    };
     let mut buttons = vec![];
-    if let Some(session) = agent.and_then(|agent| agent.session.as_ref()) {
+    let session = run.map(|run| format!("{id}_{}", run.id));
+    if let Some(session) = session.filter(|session| feed.agents.contains_key(session.as_str())) {
         buttons.push(Button::new(
             "Open session",
-            Action::Live(LiveAction::Session(Id::from(session))),
+            Action::Live(LiveAction::Session(Id::new(&session))),
         ));
     }
     buttons.push(Button::new(
         "Ask about this",
         Action::Live(LiveAction::Ask {
             record: Live::Task(id.clone()),
-            rev: task.map(|task| task.rev),
-            to: None,
-            text: None,
         }),
     ));
-    if !matches!(marks[2], Mark::Next | Mark::Na) {
+    if member.status() == Status::Review {
         buttons.push(
             Button::new(
                 "Review candidate",
@@ -172,22 +138,15 @@ pub(super) fn story(
         );
     }
     Story {
-        title: task.map_or_else(|| member.title.clone(), |task| task.title.clone()),
+        title: member.title().to_owned(),
         plan: Some(format!("· plan {plan}")),
         context,
         stages,
         fields: vec![
-            field(
-                "Next",
-                vec![span(task.map_or_else(
-                    || member.state.clone(),
-                    |task| task.now.clone(),
-                ))],
-            ),
+            field("Next", vec![span(member.now())]),
             you_field,
-            field("Needs", needs_rich),
+            field("Needs", needs),
             field("Unblocks", ids(&unblocks[..], " ")),
-            field("Cost", cost),
         ],
         buttons,
         id,

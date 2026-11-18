@@ -60,7 +60,7 @@ pub struct Node {
     pub hue: Hue,
     /// Neutral selection emphasis.
     pub selected: bool,
-    /// Needs-you card treatment and question target.
+    /// Needs-you card treatment.
     pub needs_you: bool,
     /// Press target; stacked cards open tasks, placed cards select members.
     pub action: Action,
@@ -108,9 +108,9 @@ pub struct GraphMember {
     pub needs_you: bool,
     /// Zero-based dependency layer.
     pub layer: usize,
-    /// What a placed card press does (select the member, or open its question).
+    /// What a placed card press does: select the member.
     pub select: Action,
-    /// What a stacked card press does (open the task, or its question).
+    /// What a stacked card press does: open the member's task.
     pub open: Action,
 }
 

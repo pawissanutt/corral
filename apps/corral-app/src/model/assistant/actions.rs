@@ -1,5 +1,5 @@
 //! The typed actions content carries, and the composer keys, so renderers never infer behavior
-//! from labels. Actions carry owned identities and revisions from the shared feed.
+//! from labels. Actions carry owned identities from the shared feed.
 
 use corral_protocol::assistant::PromptChoice;
 
@@ -50,7 +50,7 @@ pub enum Key {
 }
 
 /// App-owned changes requested by a composer key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct KeyOutcome {
     /// Effects to execute after the reducer.
     pub effects: Vec<Effect>,
@@ -73,12 +73,11 @@ pub enum Action {
     CloseAsk,
     /// Open the quick thread in Agents.
     OpenQuickThread,
-    /// Open a thread at the Inbox decision rather than its newest message.
+    /// Open a thread at a prompt rather than its newest message.
     OpenPrompt { thread: ThreadRef, key: String },
     /// Submit the app's draft to its selected target.
     Send,
-    /// Daemon: open a live record (an assistant thread, or a task, plan or question an answer
-    /// rests on).
+    /// Daemon: open a live record (an assistant thread, or a task or plan an answer rests on).
     OpenLive(Live),
     /// Daemon: the profile that answers a thread's next message.
     PickProfile { thread: String, profile: String },
@@ -92,47 +91,22 @@ pub enum Action {
     NewSession,
     /// Daemon: file a waiting message as an Idea in its owner's words, with no model.
     FileEntry(String),
-    /// Daemon: withdraw a waiting assistant-target message; its text stays readable.
-    WithdrawEntry(String),
-    /// Daemon: withdraw a PM inbox item at its current PM revision.
-    WithdrawPm { id: String, revision: u32 },
     /// Daemon: answer a permission or confirmation prompt by key at its revision.
     Answer {
         key: String,
         rev: u32,
         choice: PromptChoice,
-        confirm: bool,
     },
-    /// Daemon: answer an assistant's ask_user question with one of its options.
-    Choose {
-        key: String,
-        rev: u32,
-        option: String,
-    },
-    /// Daemon: answer an assistant's ask_user question in the owner's own words, at its
-    /// revision. The field owns the text while typing, so the renderer fills `text` when Send
-    /// is pressed.
-    AnswerText { key: String, rev: u32, text: String },
     /// Daemon: start (`Some(task)`) or leave editing a filed Idea's title.
     EditIdea(Option<String>),
     /// Daemon: save the typed title of a filed Idea. The field owns the text while typing, so
     /// the renderer fills `title` when Save is pressed.
     SaveIdea { task: String, title: String },
-    /// Daemon: start (`Some(task)`) or leave choosing a filed Idea's merge destination.
-    MergeIdea(Option<String>),
-    /// Daemon: merge a filed Idea into the typed task; the owner's words move unchanged. The
-    /// renderer fills `into` from the destination field when Merge is pressed.
-    MergeInto { task: String, into: String },
-    /// Daemon: discard a filed Idea after a fresh confirmation on this device.
+    /// Daemon: drop a filed Idea; the app asks once on this device first.
     DiscardIdea(String),
-    /// Daemon: ask corrald for the outcome of an uncertain command under its own id.
-    Recover(Id),
     /// Daemon: open the thread's updates again after corrald stopped them with an error; a
     /// fresh open, not another view of the subscription.
     RetryThread(String),
-    /// Daemon: show the global filings page before this served anchor (`None`: the newest),
-    /// or fetch the current one again.
-    FilingsPage(Option<u64>),
     /// Daemon: attach a saved image or a text file. The app root opens the system picker in
     /// the press, or the path field in a terminal; the reducer never sees it.
     Attach(PickKind),

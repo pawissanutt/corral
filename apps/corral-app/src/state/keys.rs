@@ -11,9 +11,7 @@ use nsh_core::prelude::*;
 
 use super::AppState;
 use crate::model::projects::{FilterScreen, NowScope, WorkspaceMode};
-use crate::model::{
-    DataState, Destination, Effect, Overlay, builds, commands, inbox, plans, review, work,
-};
+use crate::model::{DataState, Destination, Effect, Overlay, commands, plans, review, work};
 
 /// Where the keyboard focus is, as far as key routing needs it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -59,7 +57,7 @@ impl AppState {
                 .into_iter()
                 .filter_map(commands::destination_key),
         );
-        for domain in [inbox::KEYS, work::KEYS, plans::KEYS, review::KEYS] {
+        for domain in [work::KEYS, plans::KEYS, review::KEYS] {
             keys.extend(domain.iter().copied());
         }
         for &key in &keys {
@@ -110,12 +108,12 @@ impl AppState {
             .on_focus_out(move || focus.update(|at| at.list = false));
     }
 
-    /// Tracked: the list keys to bind now. None while a confirmation or an overlay is up (its
-    /// own controls take Enter), while a control outside the list has the focus, or without a
+    /// Tracked: the list keys to bind now. None while a sheet or an overlay is up (its own
+    /// controls take Enter), while a control outside the list has the focus, or without a
     /// connection.
     fn list_keys_now(&self) -> &'static [&'static str] {
         if !self.key_focus.get().takes_list_keys()
-            || self.confirmation.with(Option::is_some)
+            || self.sheet_open()
             || self.nav.with(|nav| nav.newest().is_some())
             || self.work.with(|state| state.menu.is_some())
         {
@@ -139,7 +137,7 @@ impl AppState {
     }
 
     fn press_key(&self, key: &str) {
-        if self.confirmation.with_untracked(Option::is_some)
+        if untracked(|| self.sheet_open())
             || self.nav.with_untracked(|nav| nav.newest().is_some())
             || self.work.with_untracked(|state| state.menu.is_some())
         {
@@ -223,9 +221,6 @@ impl AppState {
                     },
                 );
             }),
-            Destination::Inbox => self.inbox.update(|state| {
-                effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
-            }),
             Destination::Plans => self.plans.update(|state| {
                 effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
             }),
@@ -235,11 +230,17 @@ impl AppState {
             Destination::Review => self.review.update(|state| {
                 effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
             }),
-            Destination::Builds => {
-                effects = builds::key_live_filtered(key, &selection, feed, &filter)
-            }
             _ => {}
         });
         effects
+    }
+}
+
+impl AppState {
+    /// Tracked: the confirm sheet, the refusal sheet or the action composer is up.
+    pub(super) fn sheet_open(&self) -> bool {
+        self.confirm.with(Option::is_some)
+            || self.refusal.with(Option::is_some)
+            || self.work.with(|state| state.composer.is_some())
     }
 }

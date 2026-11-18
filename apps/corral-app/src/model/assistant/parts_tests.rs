@@ -29,7 +29,7 @@ fn entry(id: String, kind: EntryKind, text: String) -> ThreadEntry {
 }
 
 fn answer(feed: &Feed) -> super::AssistantMessage {
-    let messages: Vec<_> = live_items(&State::default(), feed, "A-1", true)
+    let messages: Vec<_> = live_items(&State::default(), feed, "A-1")
         .into_iter()
         .filter_map(|item| match item {
             ThreadItem::Assistant(message) => Some(message),
@@ -106,7 +106,7 @@ fn long_answer_parts_render_once_in_numeric_order_and_retire_the_live_override()
         let mut feed = Feed::default();
         feed.threads.insert("A-1".into(), thread);
         assert_eq!(text(&answer(&feed)), format!("{canonical} streamed"));
-        let rows = live_items(&State::default(), &feed, "A-1", true);
+        let rows = live_items(&State::default(), &feed, "A-1");
         assert_eq!(
             rows.iter()
                 .filter(|item| matches!(item, ThreadItem::Waiting(_)))

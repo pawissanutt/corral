@@ -13,7 +13,7 @@ use super::AppState;
 use crate::client::requests;
 use crate::model::assistant::{self, AttachField, PickKind, Staged};
 use crate::model::daemon::Link;
-use crate::model::{Authority, Form, Id};
+use crate::model::{Form, Id};
 
 /// Saved images are scaled to fit this edge and kept in a format every browser and server
 /// takes (HEIC and TIFF become JPEG).
@@ -136,10 +136,6 @@ impl AppState {
             );
         }
         self.feed.with_untracked(|feed| {
-            let granted = feed
-                .session
-                .as_ref()
-                .is_some_and(|session| session.authority.assistant);
             if !feed.capable(corral_protocol::attachment::ASSISTANT_ATTACH_V1) {
                 Some(
                     "Not attached: this corrald does not accept attachments; upgrade corral."
@@ -150,8 +146,6 @@ impl AppState {
                     "Not attached: screenshots and files upload only while corrald is reachable."
                         .into(),
                 )
-            } else if !granted {
-                Some(Authority::Assistant.refusal().into())
             } else if self.ask_staged.with_untracked(Vec::len) >= ATTACHMENTS_PER_MESSAGE {
                 Some(format!(
                     "Not attached: {ATTACHMENTS_PER_MESSAGE} attachments per message."

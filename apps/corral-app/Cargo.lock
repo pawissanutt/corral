@@ -752,7 +752,17 @@ name = "corral-protocol"
 version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
+ "corral-types",
  "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "corral-types"
+version = "0.4.0"
+dependencies = [
+ "jiff",
  "serde",
  "serde_json",
 ]
@@ -2952,6 +2962,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "corral-protocol",
+ "corral-types",
  "env_logger",
  "futures-channel",
  "futures-core",

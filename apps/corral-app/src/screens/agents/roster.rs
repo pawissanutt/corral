@@ -1,19 +1,19 @@
-//! The Agents page around its roster (`pgAgents`): the page head with the counts, Launch PM while
-//! no PM runs and the role tabs; the project scope; the stale notice; the roster
-//! (`roster_rows`) with the selected session's panel (`panel`); then the assistant sessions and
-//! Filed from chat (`assistant::agents_tail`).
+//! The Agents page around its roster (`pgAgents`): the page head with the counts and the role
+//! tabs; the project scope; the stale notice; the roster (`roster_rows`) of live runs and the
+//! pinned quick thread with the selected session's panel (`panel`); then the assistant sessions
+//! (`assistant::agents_tail`).
 //!
 //! Desktop: the panel sits beside the roster while the content is at least [`BESIDE`] wide,
 //! overlays the roster's right side below that, and takes the whole content below [`STACK`] (the
-//! mock's 1180 and 900 rules); the roster drops its project, last output, since and cost columns
-//! while a panel is open or its room runs short. Phone: the head's counts, the role tabs and the
-//! scope chips each on a sideways scrolling line, then two-line rows that push the session page;
-//! no panel. Terminal: the same table in Cells, the panel beside it on a grid wide enough and in
+//! mock's 1180 and 900 rules); the roster drops its project, quiet and started columns while a
+//! panel is open or its room runs short. Phone: the head's counts, the role tabs and the scope
+//! chips each on a sideways scrolling line, then two-line rows that push the session page; no
+//! panel. Terminal: the same table in Cells, the panel beside it on a grid wide enough and in
 //! its place otherwise (Esc closes it).
 
 use nsh_core::prelude::*;
 
-use crate::model::agents::{Fill, Launch, Roster};
+use crate::model::agents::{Fill, Roster};
 use crate::model::assistant::QUICK;
 use crate::model::glance::Stat;
 use crate::model::hue::Hue;
@@ -22,15 +22,12 @@ use crate::model::text::span;
 use crate::model::{Form, Id};
 use crate::screens::assistant;
 use crate::state::AppState;
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::glance::page_head;
-use crate::ui::kit::hint::hint_on;
-use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::notice::{empty, error, loading, notice};
 use crate::ui::kit::page::{pane, search};
 use crate::ui::kit::project_filter::project_filter;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_TEXT, Token, color};
+use crate::ui::tokens::{Token, color};
 
 use super::panel::{self, Place};
 use super::roster_rows::{self, Columns};
@@ -40,12 +37,10 @@ use super::{panel_view, roster_view, run_roster, segs};
 const BESIDE: f32 = 1180.0;
 /// Content width (pt) under which the panel takes the whole content.
 const STACK: f32 = 900.0;
-/// Roster width (pt) that holds all nine columns: the mock's grid, its gaps and sides.
+/// Roster width (pt) that holds all eight columns: the mock's grid, its gaps and sides.
 const WIDE: f32 = 1040.0;
 /// Terminal: the roster's least Cells beside the panel.
 const TERM_ROSTER: f32 = 56.0;
-/// The status of a launch in the head is cut to this width; its hint is the whole.
-const LAUNCH_STATUS: f32 = 240.0;
 
 /// The page for the form. With the daemon, the page holds the quick thread's subscription (the
 /// pinned row says what it last answered) and settles the assistant blocks' session operations,
@@ -103,14 +98,8 @@ fn desktop(app: AppState, roster: Memo<Roster>) -> AnyElement {
 
 fn phone(app: AppState, roster: Memo<Roster>) -> AnyElement {
     let content = view()
-        .child(launch_notice(app, roster))
         .child(stale(app, roster))
-        .child(roster_rows::lines(
-            app,
-            roster,
-            fixed_columns(),
-            dash(roster),
-        ))
+        .child(roster_rows::lines(app, roster, fixed_columns()))
         .child(fill(app, roster))
         .child(untracked(|| assistant::agents_tail(app)))
         .into_element();
@@ -187,7 +176,7 @@ fn terminal(app: AppState, roster: Memo<Roster>) -> AnyElement {
 /// failed state in their place, then the assistant blocks.
 fn list(app: AppState, roster: Memo<Roster>, columns: Memo<Columns>) -> AnyElement {
     let content = view()
-        .child(roster_rows::lines(app, roster, columns, dash(roster)))
+        .child(roster_rows::lines(app, roster, columns))
         .child(fill(app, roster))
         .when(app.form == Form::Terminal, |content| {
             content.child(term::hrule())
@@ -224,28 +213,20 @@ fn state_cells(roster: Memo<Roster>) -> u16 {
     })
 }
 
-/// What a row shows for activity no one reported.
-fn dash(roster: Memo<Roster>) -> &'static str {
-    untracked(|| roster.with(|r| r.unknown_activity))
-}
-
 /// The head's facts, apart from the roles and rows: the head is redrawn when these change.
 #[derive(Clone, PartialEq)]
 struct Head {
     title: &'static str,
     stats: Vec<Stat>,
-    launch: Option<Launch>,
 }
 
-/// The page head (`.phead`): the title, its counts, and at the trailing edge Launch PM (when
-/// offered) and the role tabs. The phone's head keeps search at its trailing edge; its role tabs
-/// and launch sit under it.
+/// The page head (`.phead`): the title, its counts, and the role tabs at the trailing edge. The
+/// phone's head keeps search at its trailing edge; its role tabs sit under it.
 fn head(app: AppState, roster: Memo<Roster>) -> AnyElement {
     let shown = computed(move || {
         roster.with(|r| Head {
             title: r.title,
             stats: r.stats.clone(),
-            launch: r.launch.clone(),
         })
     });
     dynamic(move || {
@@ -253,15 +234,7 @@ fn head(app: AppState, roster: Memo<Roster>) -> AnyElement {
             untracked(|| {
                 let actions = match app.form {
                     Form::Phone => vec![search(app)],
-                    Form::Desktop | Form::Terminal => {
-                        let mut actions = head
-                            .launch
-                            .as_ref()
-                            .map(|launch| launch_actions(app, launch))
-                            .unwrap_or_default();
-                        actions.push(role_tabs(app, roster));
-                        actions
-                    }
+                    Form::Desktop | Form::Terminal => vec![role_tabs(app, roster)],
                 };
                 page_head(app, head.title, &head.stats, actions)
             })
@@ -317,112 +290,6 @@ fn role_tabs(app: AppState, roster: Memo<Roster>) -> AnyElement {
                     })
                     .collect();
                 segs::track(app, options)
-            })
-        })
-    })
-}
-
-/// Launch PM in the head (desktop, terminal): the launch's outcome in its tone (cut, its whole
-/// as the hint), Check result while it is unknown, and the button, whose hint says why it is
-/// offered.
-fn launch_actions(app: AppState, launch: &Launch) -> Vec<AnyElement> {
-    let form = app.form;
-    let mut actions = Vec::with_capacity(3);
-    if let Some((hue, status)) = &launch.status {
-        let ink = match hue {
-            Hue::Neutral => color(Token::Ink3),
-            hue => hue_ink(*hue),
-        };
-        let words = text(status.clone())
-            .number_of_lines(1u32)
-            .truncate()
-            .flex_shrink(1.0)
-            .min_w(px(0.0))
-            .max_w(px(LAUNCH_STATUS))
-            .text_color(ink);
-        let words = if form == Form::Terminal {
-            words
-        } else {
-            words.font_family(FONT_TEXT).text_size(px(12.0))
-        };
-        let words = view()
-            .flex_row()
-            .flex_shrink(1.0)
-            .min_w(px(0.0))
-            .child(words);
-        actions.push(hint_on(app, words, status.clone()).into_element());
-    }
-    if let Some((label, action)) = launch.recover.clone() {
-        actions.push(button(
-            app,
-            label,
-            ButtonKind::Quiet,
-            "btn-recover-launch",
-            move || run_roster(app, action.clone()),
-        ));
-    }
-    actions.push(launch_button(app, launch));
-    actions
-}
-
-/// The Launch PM button, its reason as its hint.
-fn launch_button(app: AppState, launch: &Launch) -> AnyElement {
-    let action = launch.action.clone();
-    let press = button_with(
-        app,
-        launch.label,
-        ButtonKind::Primary,
-        ButtonOptions {
-            disabled: !launch.enabled,
-            ..ButtonOptions::default()
-        },
-        "btn-launch-pm",
-        move || run_roster(app, action.clone()),
-    );
-    hint_on(
-        app,
-        view().flex_row().flex_shrink_0().child(press),
-        launch.words.clone(),
-    )
-    .into_element()
-}
-
-/// The phone's Launch PM: a phone has no hints, so the reason and the outcome are the notice's
-/// words, with Check result and the button.
-fn launch_notice(app: AppState, roster: Memo<Roster>) -> AnyElement {
-    let shown = computed(move || roster.with(|r| r.launch.clone()));
-    dynamic(move || {
-        shown.with(|launch| {
-            launch.as_ref().map(|launch| {
-                untracked(|| {
-                    let mut words = vec![span(launch.words.clone())];
-                    if let Some((hue, status)) = &launch.status {
-                        words.push(span(" "));
-                        words.push(span(status.clone()).hue(*hue));
-                    }
-                    let recover = launch.recover.clone().map(|(label, action)| {
-                        button(
-                            app,
-                            label,
-                            ButtonKind::Quiet,
-                            "btn-recover-launch",
-                            move || run_roster(app, action.clone()),
-                        )
-                    });
-                    let actions = view()
-                        .flex_row()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap(px(8.0))
-                        .children(recover)
-                        .child(launch_button(app, launch))
-                        .into_element();
-                    view()
-                        .px(px(16.0))
-                        .pt(px(12.0))
-                        .child(notice(app, Hue::Held, &words, Some(actions)))
-                        .into_element()
-                })
             })
         })
     })

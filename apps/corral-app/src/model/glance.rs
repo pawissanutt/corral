@@ -137,7 +137,7 @@ impl StageRail {
     /// The rail of a daemon task: the first stage that has not passed is the current one.
     pub fn daemon(task: &daemon::Task, actor: Actor) -> StageRail {
         let marks: Rail = std::array::from_fn(|index| task.rail[index].mark);
-        StageRail::of(marks, actor, &task.now)
+        StageRail::of(marks, actor, &task.now())
     }
 
     /// The rail of `marks` for a task `actor` acts on next, with its now-phrase as the hint.

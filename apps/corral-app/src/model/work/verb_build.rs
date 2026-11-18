@@ -1,166 +1,137 @@
-//! Frozen record identities and structured owner input become canonical commands here.
-use super::{Verb, verbs::Frozen};
-use corral_protocol::cmd::{
-    Command, assistant::AssistantCommand as Assistant, attention::AttentionCommand as Attention,
-    mode::ModeCommand as Mode, plan::PlanCommand as Plan, question::QuestionCommand as Question,
-    queue::QueueCommand as Queue, review::ReviewCommand as Review, task::TaskCommand as Task,
-};
+//! A composer's values become one engine operation here, field by field as `verb_forms` lists
+//! them. Nothing here checks whether the engine will accept it.
+use corral_types::{NewTask, Op, Priority, TaskEdit};
 
-pub(super) fn command(at: &Frozen, verb: Verb, values: &[String]) -> Result<Command, String> {
-    let value = |index: usize| values.get(index).map(String::as_str).unwrap_or_default();
-    let optional = |index| (!value(index).trim().is_empty()).then(|| value(index).to_owned());
-    let id = at.record.id().to_owned();
-    if verb == Verb::Route && !matches!(value(2).trim(), "" | "yes" | "no") {
-        return Err("Clear reviewer must be yes or no.".into());
-    }
-    if verb == Verb::MoveMember && (value(3).is_empty() != value(4).is_empty()) {
-        return Err("A gate report needs both its path and its complete contents.".into());
-    }
+use super::verb_forms::status;
+use super::{Record, Verb};
+
+pub(super) fn op(
+    record: &Record,
+    verb: Verb,
+    values: &[String],
+    initial: &[String],
+) -> Result<Op, String> {
+    let value = |index: usize| values.get(index).map_or("", |value| value.trim());
+    let optional = |index| (!value(index).is_empty()).then(|| value(index).to_owned());
+    let words = |index: usize| values.get(index).cloned().unwrap_or_default();
+    let id = match record {
+        Record::Task(id) => id.to_string(),
+        Record::Workspace if verb == Verb::NewTask => String::new(),
+        Record::Workspace => return Err("Choose a task first.".into()),
+    };
     Ok(match verb {
-        Verb::Hold => Command::Task(Task::Hold { id, reason: None }),
-        Verb::Release => Command::Task(Task::Release { id }),
-        Verb::Retry => Command::Task(Task::Retry {
+        Verb::Edit => Op::Edit {
             id,
-            run: at.run.clone(),
-            profile: None,
-        }),
-        Verb::Dispatch => Command::Task(Task::Dispatch {
+            edit: edit(values, initial)?,
+        },
+        Verb::Comment => Op::Comment { id, text: words(0) },
+        Verb::Move => Op::Move {
             id,
-            profile: None,
-            model: None,
-            effort: None,
-            base: None,
-            headless: true,
-        }),
-        Verb::QueueAdd => Command::Queue(Queue::Add {
+            status: status(value(0))?,
+        },
+        Verb::Dispatch => Op::Dispatch {
             id,
-            profile: None,
-            model: None,
-            effort: None,
-            base: None,
-            headless: true,
-        }),
-        Verb::QueueRemove => Command::Queue(Queue::Remove { id }),
-        Verb::Park => Command::Attention(Attention::Park {
-            id,
-            reason: value(0).into(),
-            resume_when: value(1)
-                .lines()
-                .filter(|s| !s.trim().is_empty())
-                .map(|s| s.trim().to_owned())
-                .collect(),
-            resume_action: value(2).into(),
-            review_by: value(3)
-                .parse()
-                .map_err(|_| "Review interval must be seconds (3600–604800).")?,
-            json: false,
-        }),
-        Verb::Unpark => Command::Attention(Attention::Unpark {
-            id,
-            expected_revision: at
-                .park_revision
-                .ok_or("The park revision is unavailable.")?,
-            json: false,
-        }),
-        Verb::Comment => Command::Task(Task::Comment {
-            id,
-            text: value(0).into(),
-            author: "owner".into(),
-            send: true,
-        }),
-        Verb::NewTask => Command::Task(Task::New {
-            title: vec![value(0).into()],
-            origin: "owner".into(),
-            project: optional(2),
-            status: "backlog".into(),
-            body: value(1).into(),
-            profile: None,
-            depends: Vec::new(),
-            priority: None,
-            kind: None,
-            size: None,
-            difficulty: None,
-            design: false,
-            labels: Vec::new(),
-        }),
-        Verb::Unstick => Command::Task(Task::Unstick { id }),
-        Verb::Revert => Command::Task(Task::Revert { id }),
-        Verb::Discard => Command::Review(Review::Discard { id }),
-        Verb::PlanCancel => Command::Plan(Plan::Cancel {
-            id,
-            owner_ok: true,
-            reason: optional(0),
-            json: false,
-        }),
-        Verb::Verdict => Command::Review(Review::Verdict {
-            id,
-            sha: at.sha.clone(),
-            verdict: value(0).trim().into(),
-            notes: optional(1),
-        }),
-        Verb::AddMember => Command::Plan(Plan::AddMember {
-            tracker: id,
-            member: value(0).trim().into(),
-            json: false,
-        }),
-        Verb::Escalate => Command::Question(Question::Escalate {
-            key: id,
-            rev: at.question_rev,
-            note: optional(0),
-            kind: optional(1),
-            json: false,
-        }),
-        Verb::CancelQuestion => Command::Question(Question::Cancel {
-            key: id,
-            rev: at.question_rev,
-            reason: value(0).into(),
-            owner: true,
-            json: false,
-        }),
-        Verb::MoveMember => Command::Plan(Plan::MoveMember {
-            tracker: id,
-            member: value(0).trim().into(),
-            to: value(1).trim().into(),
-            gate_file: (!value(3).is_empty()).then(|| corral_protocol::cmd::FileInput {
-                path: value(3).into(),
-                text: value(4).into(),
-            }),
-            reason: optional(2),
-            json: false,
-        }),
-        Verb::Deadline => Command::Question(Question::Deadline {
-            key: id,
-            rev: at.question_rev,
-            at: value(0).trim().into(),
-            instruction: value(1).into(),
-            json: false,
-        }),
-        Verb::Route => Command::Task(Task::Route {
-            id,
-            set_reviewer: optional(1),
-            clear_reviewer: value(2).trim() == "yes",
             profile: optional(0),
-            model: optional(3),
-            effort: optional(4),
-            json: false,
-        }),
-        Verb::Focus => Command::Task(Task::Focus {
-            id: Some(id),
-            all: false,
-        }),
-        Verb::Move => Command::Task(Task::Move {
+            base: optional(1),
+        },
+        Verb::Reply => Op::Reply { id, text: words(0) },
+        Verb::Done => Op::Done {
             id,
-            status: value(0).trim().into(),
-            force: false,
-            owner_ok: true,
-            reason: optional(1),
-        }),
-        Verb::ModeOff => Command::Mode(Mode::Off { json: false }),
-        Verb::PermissionsRevoke => Command::Assistant(Assistant::PermissionsRevoke {
+            summary: words(0),
+        },
+        Verb::Gate => Op::Gate { id },
+        Verb::Review => Op::Review {
             id,
-            grant: optional(0),
-            all: optional(0).is_none(),
-            json: false,
-        }),
+            profile: optional(0),
+        },
+        Verb::Verdict => Op::Verdict {
+            id,
+            approve: value(0) == "approve",
+            notes: optional(1),
+        },
+        Verb::Changes => Op::Changes { id, text: words(0) },
+        Verb::Approve => Op::Approve { id, onto: None },
+        Verb::Retry => Op::Retry {
+            id,
+            profile: optional(0),
+            fresh: value(1) == "yes",
+            note: optional(2),
+        },
+        Verb::Stop => Op::Stop { id },
+        Verb::Drop => Op::Drop { id },
+        Verb::Reopen => Op::Reopen { id },
+        Verb::NewTask => Op::New {
+            task: NewTask {
+                title: value(0).to_owned(),
+                body: words(1),
+                project: optional(2),
+                status: status(value(3))?,
+                ..NewTask::default()
+            },
+        },
     })
+}
+
+/// Only the fields the owner changed; an emptied optional field clears it.
+fn edit(values: &[String], initial: &[String]) -> Result<TaskEdit, String> {
+    let changed = |index: usize| {
+        let now = values.get(index).map_or("", |value| value.trim());
+        (initial.get(index).map_or("", |value| value.trim()) != now).then_some(now)
+    };
+    let cleared = |index| changed(index).map(|now: &str| (!now.is_empty()).then(|| now.to_owned()));
+    let priority = changed(3)
+        .map(|now| match now {
+            "P0" => Ok(Priority::P0),
+            "P1" => Ok(Priority::P1),
+            "P2" => Ok(Priority::P2),
+            "P3" => Ok(Priority::P3),
+            other => Err(format!("Unknown priority {other}.")),
+        })
+        .transpose()?;
+    let edit = TaskEdit {
+        title: changed(0).map(str::to_owned),
+        body: changed(1).map(|_| values.get(1).cloned().unwrap_or_default()),
+        project: cleared(2),
+        priority,
+        profile: cleared(4),
+        base: cleared(5),
+        parent: cleared(6),
+        depends_on: changed(7).map(|now| {
+            now.split(',')
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .collect()
+        }),
+        ..TaskEdit::default()
+    };
+    if edit == TaskEdit::default() {
+        return Err("Nothing changed.".into());
+    }
+    Ok(edit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Id;
+
+    #[test]
+    fn an_edit_sends_only_changed_fields_and_an_emptied_field_clears() {
+        let initial: Vec<String> = ["Title", "Body", "web", "P2", "", "", "", ""]
+            .map(String::from)
+            .to_vec();
+        let mut values = initial.clone();
+        values[2] = String::new();
+        values[3] = "P1".into();
+        let Ok(Op::Edit { edit, .. }) =
+            op(&Record::Task(Id::new("T-1")), Verb::Edit, &values, &initial)
+        else {
+            panic!("an edit");
+        };
+        assert_eq!(edit.title, None);
+        assert_eq!(edit.project, Some(None));
+        assert_eq!(edit.priority, Some(Priority::P1));
+        assert!(op(&Record::Task(Id::new("T-1")), Verb::Edit, &initial, &initial).is_err());
+    }
 }

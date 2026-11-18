@@ -26,8 +26,7 @@ use super::context::{plan_body, tail};
 use super::inspector::content;
 use super::list::{board_status, list, scope_note};
 use super::parts::{
-    dim_when, go_scoped, keep_loaded, now_page, press, press_id, pressable, stale, wanted,
-    wanted_id,
+    dim_when, go_scoped, keep_loaded, now_page, press, press_id, pressable, stale, wanted_id,
 };
 use super::rows::{PHONE_PAD, words};
 
@@ -133,16 +132,14 @@ fn ask_head(app: AppState, label: String, action: Press) -> AnyElement {
 
 /// The task page pushed for a task (`Live::Task`): titled with its id, back to Now, the header
 /// asking about it. Its body is the task's story, the Session, Ask and Review buttons, the
-/// captured log tail and the task's plan graph; the task's detail stays loaded while the page
-/// is open, on the board or off it.
+/// run's terminal capture and the task's plan graph; the task's detail stays loaded while the
+/// page is open, on the board or off it, once the open tasks have arrived.
 pub fn live_task_phone(app: AppState, id: Id) -> PhonePage {
     let target = {
         let id = id.clone();
         computed(move || {
-            app.feed.with(|feed| match feed.board.task(&id) {
-                Some(task) => wanted(feed, task),
-                None => work::off_board_id(feed, &id).and_then(|id| wanted_id(feed, id, None)),
-            })
+            app.feed
+                .with(|feed| wanted_id(feed, &id).filter(|_| feed.board.complete))
         })
     };
     keep_loaded(app, target);
@@ -151,10 +148,7 @@ pub fn live_task_phone(app: AppState, id: Id) -> PhonePage {
         "Ask about this".into(),
         Press::Ask {
             about: Live::Task(id.clone()),
-            rev: untracked(|| {
-                app.feed
-                    .with(|feed| feed.board.task(&id).map(|task| task.rev))
-            }),
+            rev: None,
         },
     ));
     let page = {

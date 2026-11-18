@@ -124,7 +124,7 @@ fn group(
 /// What a screen reader hears for a plan: its id, project and hint (the title and what the
 /// second line says).
 fn spoken(row: &OutlineRow) -> String {
-    match row.project_hint.as_ref().or(row.project_chip.as_ref()) {
+    match &row.project_chip {
         Some(project) => format!("{}, {project}, {}", row.id_label, row.hint),
         None => format!("{}, {}", row.id_label, row.hint),
     }
@@ -347,21 +347,14 @@ fn two_lines(app: AppState, row: &OutlineRow) -> Vec<AnyElement> {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(color(Token::Ink)),
             );
-    let lead = match (&row.project_chip, &row.project_hint) {
-        (Some(project), hint) => {
-            let words = quiet_line(project.clone(), small, false);
-            let words = match hint {
-                Some(hint) => hint_on(app, words, hint.clone()),
-                None => words,
-            };
-            view()
-                .flex_shrink_0()
-                .min_w(px(id_column))
-                .max_w(px(PROJECT_MAX))
-                .child(words)
-                .into_element()
-        }
-        (None, _) => view().w(px(id_column)).flex_shrink_0().into_element(),
+    let lead = match &row.project_chip {
+        Some(project) => view()
+            .flex_shrink_0()
+            .min_w(px(id_column))
+            .max_w(px(PROJECT_MAX))
+            .child(quiet_line(project.clone(), small, false))
+            .into_element(),
+        None => view().w(px(id_column)).flex_shrink_0().into_element(),
     };
     let second = view()
         .flex_row()

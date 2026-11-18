@@ -2,12 +2,11 @@
 //! once the owner opens it. The board never carries closed tasks (their number only grows), so
 //! nothing here is projected from it; the count is the daemon's total, never the rows on screen.
 
-use std::borrow::Cow;
-
 use corral_protocol::app::CLOSED_V1;
-use corral_protocol::detail::{ClosedPage, ClosedTask, DetailBody, DetailGet, DetailRef};
+use corral_protocol::detail::{ClosedPage, DetailBody, DetailGet, DetailRef};
+use corral_types::{Status, Task};
 
-use super::{Button, ButtonKind, Press, State, stamp};
+use super::{Button, ButtonKind, Press, State, stamp_at};
 use crate::model::board::Mark;
 use crate::model::daemon::{DetailCache, Feed, Link};
 use crate::model::effect::Effect;
@@ -90,7 +89,7 @@ pub struct ClosedRow {
     /// Done is a pass, dropped not applicable: the two differ by shape as well as colour.
     pub mark: Mark,
     pub hue: Hue,
-    /// The canonical status word, then the plan and goal the task served when known.
+    /// The status word, then the plan (parent task) it belongs to, if any.
     pub status: String,
     /// When it last changed (normally when it closed), as a real feed date.
     pub at: String,
@@ -260,21 +259,18 @@ pub fn closed_view_filtered(
     view
 }
 
-fn row(feed: &Feed, task: &ClosedTask, shown: Option<&Id>, filter: &ProjectFilter) -> ClosedRow {
+fn row(feed: &Feed, task: &Task, shown: Option<&Id>, filter: &ProjectFilter) -> ClosedRow {
     let id = Id::from(task.id.as_str());
-    let (mark, hue) = if task.status == "done" {
+    let (mark, hue) = if task.status == Status::Done {
         (Mark::Done, Hue::Ok)
     } else {
         (Mark::Na, Hue::Neutral)
     };
-    let mut status: Cow<'_, str> = Cow::Borrowed(task.status.as_str());
-    if let Some(plan) = &task.plan {
-        status = Cow::Owned(format!("{status} · plan {plan}"));
-    }
-    if let Some(goal) = &task.goal {
-        status = Cow::Owned(format!("{status} · {goal}"));
-    }
-    let at = stamp(&task.updated, feed);
+    let status = match &task.parent {
+        Some(plan) => format!("{} · plan {plan}", task.status.as_str()),
+        None => task.status.as_str().to_owned(),
+    };
+    let at = stamp_at(task.updated, feed);
     ClosedRow {
         label: format!("{} {}, {status}, {at}", task.id, task.title),
         selected: shown == Some(&id),
@@ -284,7 +280,7 @@ fn row(feed: &Feed, task: &ClosedTask, shown: Option<&Id>, filter: &ProjectFilte
         project_chip: project_chip(feed, filter, task.project.as_deref()),
         mark,
         hue,
-        status: status.into_owned(),
+        status,
         at,
     }
 }

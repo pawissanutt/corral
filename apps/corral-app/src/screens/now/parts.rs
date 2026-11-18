@@ -93,21 +93,18 @@ pub(crate) fn press_id(press: &Press) -> String {
         Press::Select(id) | Press::Open(Live::Task(id)) => format!("task-{id}"),
         Press::Open(Live::Plan(id)) => format!("plan-{id}"),
         Press::Open(Live::Session(_)) => "btn-open-session".into(),
-        Press::Open(Live::Question(_)) => "btn-answer".into(),
         Press::Open(Live::Review(_)) => "btn-review".into(),
         Press::Open(Live::Thread(id)) => format!("thread-{id}"),
-        Press::Open(Live::Build(id)) => format!("build-{id}"),
         Press::Ask { .. } => "btn-ask-about".into(),
         Press::Verb { verb, .. } => format!("btn-{}", verb.slug()),
         Press::SubmitVerb(_) => "btn-verb-send".into(),
         Press::CancelVerb => "btn-verb-cancel".into(),
         Press::CloseMenu => "btn-verbs-close".into(),
-        Press::Recover(_) => "btn-check-result".into(),
+        Press::Next { index, .. } => format!("btn-next-{index}"),
         Press::Seen(_) => "btn-mark-seen".into(),
         Press::Older(_) => "btn-older".into(),
         Press::RetryBoard => "btn-retry-board".into(),
         Press::Closed(press) => super::closed::press_id(press).into(),
-        Press::SelectAsk(key) => format!("inbox-{key}"),
         Press::ClearSelection => "btn-clear-selection".into(),
     }
 }
@@ -135,17 +132,18 @@ pub(crate) fn quiet(app: AppState, words: impl Into<SharedString>) -> AnyElement
     .into_element()
 }
 
-/// A task to keep loaded: its id, its board row's revision (none off the board), and whether
-/// its detail is missing or stale while the link is up.
-pub(crate) type Wanted = Option<(crate::model::Id, Option<u64>, bool)>;
+/// A task to keep loaded: its id, whether the open-task list carries it, and whether its detail
+/// is missing or stale while the link is up.
+pub(crate) type Wanted = Option<(crate::model::Id, bool, bool)>;
 
 /// Keeps a task's detail loaded while `target` names it: requests it when absent or stale,
-/// revalidates it when the board row's revision moves, and pins it in the client's cache while
-/// it is shown, letting go when the target changes or the view goes. Requests and pins go to
-/// the source the view mounted on (`AppState::scope`).
+/// revalidates it once when it leaves or joins the open-task list, and pins it in the client's
+/// cache while it is shown, letting go when the target changes or the view goes. A served row's
+/// change refreshes the pinned detail in the client itself. Requests and pins go to the source
+/// the view mounted on (`AppState::scope`).
 pub(crate) fn keep_loaded(app: AppState, target: Memo<Wanted>) {
     let app = untracked(|| app.scope());
-    let seen = stored(None::<(crate::model::Id, Option<u64>)>);
+    let seen = stored(None::<(crate::model::Id, bool)>);
     let pinned = stored(None::<crate::model::Id>);
     effect(move || {
         let wanted = target.get();
@@ -161,12 +159,12 @@ pub(crate) fn keep_loaded(app: AppState, target: Memo<Wanted>) {
                 }
             });
         }
-        let Some((id, rev, needed)) = wanted else {
+        let Some((id, open, needed)) = wanted else {
             return;
         };
         let reference = work::task_ref(&id);
-        let previous = seen.replace(Some((id.clone(), rev)));
-        let moved = previous.is_some_and(|(known, known_rev)| known == id && known_rev != rev);
+        let previous = seen.replace(Some((id.clone(), open)));
+        let moved = previous.is_some_and(|(known, was_open)| known == id && was_open != open);
         untracked(|| {
             if moved {
                 app.refresh(reference);
@@ -183,26 +181,13 @@ pub(crate) fn keep_loaded(app: AppState, target: Memo<Wanted>) {
     });
 }
 
-/// What to keep loaded for a daemon task, read from the feed (tracked).
-pub(crate) fn wanted(
-    feed: &crate::model::daemon::Feed,
-    task: &crate::model::daemon::Task,
-) -> Wanted {
-    wanted_id(feed, &task.id, Some(task.rev))
-}
-
-/// What to keep loaded for a task by id; `rev` is its board row's, absent off the board, so a
-/// task leaving the board is revalidated once (tracked).
-pub(crate) fn wanted_id(
-    feed: &crate::model::daemon::Feed,
-    id: &crate::model::Id,
-    rev: Option<u64>,
-) -> Wanted {
+/// What to keep loaded for a task by id, on the open-task list or off it (tracked).
+pub(crate) fn wanted_id(feed: &crate::model::daemon::Feed, id: &crate::model::Id) -> Wanted {
     let needed = feed.link == crate::model::daemon::Link::Up
         && feed
             .detail(&work::task_ref(id))
             .is_none_or(|cache| cache.stale && !cache.loading);
-    Some((id.clone(), rev, needed))
+    Some((id.clone(), feed.board.task(id).is_some(), needed))
 }
 
 /// Now's own project scope and grouping, tracked: every Now builder reads the list it shows.
@@ -233,18 +218,14 @@ pub(crate) fn go_scoped(app: AppState, page: Memo<NowPage>, to: Destination) {
 }
 
 /// The task the side panel shows, to keep loaded, on the board or off it (tracked); none while
-/// the panel holds the digest or an owner move.
+/// the panel holds the digest.
 pub(crate) fn shown_task(app: AppState, page: Memo<NowPage>) -> Memo<Wanted> {
     computed(move || {
         let shown = page.with(|page| matches!(page.panel, NowPanel::Task(_) | NowPanel::Closed(_)));
         if !shown {
             return None;
         }
-        let selection = app.selection();
-        let id = selection.task.clone()?;
-        app.feed.with(|feed| match feed.board.task(&id) {
-            Some(task) => wanted(feed, task),
-            None => work::off_board(&selection, feed).and_then(|id| wanted_id(feed, id, None)),
-        })
+        let id = app.selection().task?;
+        app.feed.with(|feed| wanted_id(feed, &id))
     })
 }

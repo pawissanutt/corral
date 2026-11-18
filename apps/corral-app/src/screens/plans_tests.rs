@@ -8,9 +8,6 @@ use nsh_core::{Points, Size};
 use nsh_engine::{EngineConfig, Root};
 use nsh_testing::{Headless, LayoutNode, MemoryStorage};
 
-/// The synthetic feed's last plan (the approved T-385, after T-885, the executing plans and the
-/// 64-member preview tracker S-900), below the fold of a 360 pt window.
-const LAST: &str = "plan-T-385";
 const LIST: &str = "plans-list";
 
 fn bounds_of<'a>(nodes: &'a [LayoutNode], id: &str) -> &'a LayoutNode {
@@ -49,22 +46,26 @@ fn a_plan_selected_with_j_scrolls_into_the_list() {
     app.press("text:Data: fixture").unwrap();
     app.wait_for_gone("id:palette-input", Duration::from_secs(5))
         .unwrap();
-    // The first plan takes the press and with it the focus, so j and k are the list's keys.
-    app.press("id:plan-T-885").unwrap();
-    // j walks the list in its drawn order; however many plans the feed serves, the last is at
-    // most one press per row away.
+    // The list's rows in drawn order; the sample serves more plans than a 360 pt window shows.
     let nodes = app.screen().layout_nodes();
-    let rows = nodes
+    let rows: Vec<String> = nodes
         .iter()
-        .filter(|node| {
-            node.test_id
-                .as_deref()
-                .is_some_and(|id| id.starts_with("plan-"))
-                && inside(&nodes, node, LIST)
-        })
-        .count();
-    let target = format!("id:{LAST}");
-    for _ in 0..rows {
+        .filter(|node| inside(&nodes, node, LIST))
+        .filter_map(|node| node.test_id.as_deref().map(str::to_owned))
+        .filter(|id| id.starts_with("plan-"))
+        .fold(Vec::new(), |mut rows, id| {
+            if !rows.contains(&id) {
+                rows.push(id);
+            }
+            rows
+        });
+    let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
+        panic!("the sample serves plans");
+    };
+    // The first plan takes the press and with it the focus, so j and k are the list's keys.
+    app.press(&format!("id:{first}")).unwrap();
+    let target = format!("id:{last}");
+    for _ in 0..rows.len() {
         if app.screen().selected(&target).unwrap() {
             break;
         }
@@ -72,11 +73,12 @@ fn a_plan_selected_with_j_scrolls_into_the_list() {
     }
     assert!(
         app.screen().selected(&target).unwrap(),
-        "j through {rows} plans never selected {LAST}"
+        "j through {} plans never selected {last}",
+        rows.len()
     );
     let nodes = app.screen().layout_nodes();
     let list = bounds_of(&nodes, LIST);
-    let row = bounds_of(&nodes, LAST);
+    let row = bounds_of(&nodes, last);
     let (top, bottom) = (
         list.bounds.origin.y.0,
         list.bounds.origin.y.0 + list.bounds.size.height.0,

@@ -1,19 +1,20 @@
 //! The Plans list: its counts, then each section's plans as two terse lines whose sentences
-//! live in hints.
-use corral_protocol::detail::PlanDetail;
-use corral_protocol::rows::{PlanRow as WirePlan, PlanState};
+//! live in hints. A row reads only the plan row (the parent and its per-status child counts)
+//! and the board, so the list never waits on a plan's detail.
+use corral_protocol::rows::PlanRow;
+use corral_types::Status;
 
-use super::live::{current_plan_filtered, list_sections, plan_detail, row_projects};
-use super::member_brief::{needs_you, segment};
+use super::live::{
+    by_id, current_plan_filtered, matches_project, plan_filter, row_project, topic_loading,
+};
 use super::{
     Action, ListNotice, LiveAction, MemberShare, OutlineRow, OutlineSecond, OutlineSection,
     PlanOutline, StateIndicator,
 };
 use crate::model::board::Mark;
-use crate::model::daemon::{Feed, Group};
+use crate::model::daemon::{Feed, Group, Link};
 use crate::model::glance::{Stat, StatIcon};
 use crate::model::hue::Hue;
-use crate::model::inbox::owner_moves;
 use crate::model::projects::ProjectFilter;
 use crate::model::{Id, Selection};
 
@@ -21,117 +22,188 @@ use crate::model::{Id, Selection};
 pub const TITLE: &str = "Plans";
 /// The most members a row draws one segment each; a longer plan draws each state's share.
 const STRIP_EACH: usize = 12;
-/// The heading of an approved design's section while it names no tracker.
-const NOT_STARTED: &str = "Approved, not started";
 
-/// The list's sections in the order it draws them: by state, an approved design that names no
-/// tracker in a section of its own ahead of the approved ones that do. The one order the rows,
-/// the keys and the first selection follow.
+/// Where a plan stands, in the list's order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Section {
+    NeedsYou,
+    Moving,
+    NotStarted,
+    Done,
+    Dropped,
+}
+
+const SECTIONS: [(Section, &str, Hue); 5] = [
+    (Section::NeedsYou, "Needs you", Hue::You),
+    (Section::Moving, "In progress", Hue::Corral),
+    (Section::NotStarted, "Not started", Hue::Neutral),
+    (Section::Done, "Done", Hue::Ok),
+    (Section::Dropped, "Dropped", Hue::Neutral),
+];
+
+fn count(row: &PlanRow, status: Status) -> usize {
+    row.child_counts
+        .iter()
+        .filter(|each| each.status == status)
+        .map(|each| usize::try_from(each.count).unwrap_or(usize::MAX))
+        .sum()
+}
+
+/// Members that count toward the plan: every child but the dropped ones.
+fn total(row: &PlanRow) -> usize {
+    row.child_counts
+        .iter()
+        .filter(|each| each.status != Status::Dropped)
+        .map(|each| usize::try_from(each.count).unwrap_or(usize::MAX))
+        .sum()
+}
+
+/// The parent or one of its open children waits on the owner.
+pub(super) fn needs_you(feed: &Feed, row: &PlanRow) -> bool {
+    let parent = row.parent.id.as_str();
+    count(row, Status::Blocked) > 0
+        || feed
+            .board
+            .task(parent)
+            .is_some_and(|task| task.group == Group::NeedsYou)
+        || feed
+            .board
+            .children(parent)
+            .any(|task| task.group == Group::NeedsYou)
+}
+
+fn section(feed: &Feed, row: &PlanRow) -> Section {
+    match row.parent.status {
+        Status::Dropped => Section::Dropped,
+        Status::Done => Section::Done,
+        _ if needs_you(feed, row) => Section::NeedsYou,
+        _ if [Status::Running, Status::Review, Status::Done]
+            .into_iter()
+            .any(|status| count(row, status) > 0) =>
+        {
+            Section::Moving
+        }
+        _ => Section::NotStarted,
+    }
+}
+
+/// Served plans in the Plans scope by list section, in display order, empty sections left out.
 fn grouped<'a>(
     feed: &'a Feed,
     filter: &ProjectFilter,
-) -> (
-    Option<ListNotice>,
-    Vec<(&'static str, Hue, Vec<&'a WirePlan>)>,
-) {
-    let (notice, sections) = list_sections(feed, filter);
-    let mut drawn = Vec::with_capacity(sections.len() + 1);
-    for (label, hue, rows) in sections {
-        let (unpublished, published): (Vec<&WirePlan>, Vec<&WirePlan>) =
-            rows.into_iter().partition(|row| {
-                row.state == PlanState::Approved
-                    && row.linked.is_none()
-                    && plan_detail(feed, &row.id).is_none_or(|detail| detail.linked.is_none())
-            });
-        if !unpublished.is_empty() {
-            drawn.push((NOT_STARTED, hue, unpublished));
-        }
-        if !published.is_empty() {
-            drawn.push((label, hue, published));
-        }
+) -> Vec<(&'static (Section, &'static str, Hue), Vec<&'a PlanRow>)> {
+    let filter = plan_filter(feed, filter);
+    let mut rows: Vec<(Section, &PlanRow)> = feed
+        .plans
+        .values()
+        .filter(|row| matches_project(row, &filter))
+        .map(|row| (section(feed, row), row))
+        .collect();
+    rows.sort_by(|(a, x), (b, y)| a.cmp(b).then_with(|| by_id(&x.parent.id, &y.parent.id)));
+    SECTIONS
+        .iter()
+        .map(|entry| {
+            let rows: Vec<&PlanRow> = rows
+                .iter()
+                .filter(|(section, _)| *section == entry.0)
+                .map(|(_, row)| *row)
+                .collect();
+            (entry, rows)
+        })
+        .filter(|(_, rows)| !rows.is_empty())
+        .collect()
+}
+
+/// What the list says instead of, or above, its rows.
+fn list_notice(feed: &Feed, filter: &ProjectFilter, empty: bool) -> Option<ListNotice> {
+    let topic = feed.topics.get("plans");
+    let error = topic.and_then(|topic| topic.error.as_ref());
+    if empty {
+        let all = plan_filter(feed, filter) == ProjectFilter::All;
+        return Some(if let Some(error) = error {
+            ListNotice::Error(format!("corrald could not send plans: {}", error.message))
+        } else if feed.link == Link::Down {
+            ListNotice::Error("No plans received from corrald yet; the connection is down.".into())
+        } else if topic_loading(feed) && feed.plans.is_empty() {
+            ListNotice::Loading
+        } else {
+            ListNotice::Empty {
+                heading: if all { "No plans" } else { "No matching plans" },
+                body: if all {
+                    "A task with children is a plan. corrald serves none yet."
+                } else {
+                    "No served plan matches this project filter."
+                },
+            }
+        });
     }
-    (notice, drawn)
+    if let Some(error) = error {
+        Some(ListNotice::Stale(format!(
+            "Showing the last plans received · {}",
+            error.message
+        )))
+    } else if feed.link == Link::Down || topic.is_some_and(|topic| topic.stale) {
+        Some(ListNotice::Stale(
+            "Showing the last plans received; corrald is not current.".into(),
+        ))
+    } else {
+        None
+    }
 }
 
 /// Served plan ids in the order the list draws them, for j/k and the first selection.
 pub(super) fn display_order(feed: &Feed, filter: &ProjectFilter) -> Vec<Id> {
     grouped(feed, filter)
-        .1
         .into_iter()
-        .flat_map(|(_, _, rows)| rows)
-        .map(|row| Id::from(&row.id))
+        .flat_map(|(_, rows)| rows)
+        .map(|row| Id::new(&row.parent.id))
         .collect()
 }
 
-/// Counts plans, not attention rows: several owner moves in one plan still count once.
-pub fn page_stats(feed: &Feed, filter: &ProjectFilter) -> Vec<Stat> {
-    let mut awaiting = 0;
-    let mut held = 0;
-    let mut executing = 0;
-    for id in display_order(feed, filter) {
-        let Some(row) = feed.plans.get(id.as_str()) else {
-            continue;
-        };
-        match row.state {
-            PlanState::Awaiting => awaiting += 1,
-            PlanState::Executing => {
-                executing += 1;
-                held += usize::from(plan_needs_you(feed, row));
-            }
+/// The list's counts: plans that need the owner, plans in progress.
+fn page_stats(feed: &Feed, filter: &ProjectFilter) -> Vec<Stat> {
+    let mut needs = 0;
+    let mut moving = 0;
+    for ((kind, ..), rows) in grouped(feed, filter) {
+        match kind {
+            Section::NeedsYou => needs += rows.len(),
+            Section::Moving => moving += rows.len(),
             _ => {}
         }
     }
     let mut stats = Vec::new();
-    let count = awaiting + held;
-    if count > 0 {
+    if needs > 0 {
         stats.push(Stat::new(
-            "needs-you", StatIcon::NeedsYou, count.to_string(), Hue::You,
-            format!("{count} plans need you: {awaiting} await your acceptance; {held} executing plans have a member waiting on you. Only received owner-attention and member facts are counted."),
+            "needs-you",
+            StatIcon::NeedsYou,
+            needs.to_string(),
+            Hue::You,
+            format!("{needs} plans have a member, or the plan's own task, waiting on you."),
         ));
     }
-    if executing > 0 {
+    if moving > 0 {
         stats.push(Stat::new(
-            "executing",
+            "moving",
             StatIcon::Moving,
-            executing.to_string(),
+            moving.to_string(),
             Hue::Corral,
-            format!("{executing} plans are executing in this project scope."),
+            format!("{moving} plans have members under way in this project scope."),
         ));
     }
     stats
 }
 
-pub(super) fn plan_needs_you(feed: &Feed, row: &WirePlan) -> bool {
-    let detail = plan_detail(feed, &row.id);
-    detail.is_some_and(|detail| detail.members.iter().any(|member| needs_you(feed, member)))
-        || feed.board.tasks().iter().any(|task| {
-            task.plan.as_deref() == Some(row.id.as_str()) && task.group == Group::NeedsYou
-        })
-        || owner_moves(feed).any(|item| {
-            item.task.as_deref().is_some_and(|task| {
-                task != row.id
-                    && (item.plan.as_deref() == Some(row.id.as_str())
-                        || feed
-                            .board
-                            .task(task)
-                            .is_some_and(|task| task.plan.as_deref() == Some(row.id.as_str()))
-                        || detail.is_some_and(|detail| {
-                            detail.members.iter().any(|member| member.id == task)
-                        }))
-            })
-        })
-}
-
 /// Every plan in the Plans scope by section, the selected one (the root selection, else the
 /// first) marked.
 pub fn plan_outline(selection: &Selection, feed: &Feed, filter: &ProjectFilter) -> PlanOutline {
-    let (notice, grouped) = grouped(feed, filter);
+    let grouped = grouped(feed, filter);
     let selected = current_plan_filtered(selection, feed, filter);
+    let notice = list_notice(feed, filter, grouped.is_empty());
     let sections = grouped
         .into_iter()
-        .map(|(label, hue, rows)| OutlineSection {
-            label,
-            hue,
+        .map(|((_, label, hue), rows)| OutlineSection {
+            label: *label,
+            hue: *hue,
             count: rows.len(),
             rows: rows
                 .into_iter()
@@ -147,8 +219,19 @@ pub fn plan_outline(selection: &Selection, feed: &Feed, filter: &ProjectFilter) 
     }
 }
 
-/// Each state's share of a long plan's members, in the order landed, needs you, moving, held,
-/// waiting; none for a plan short enough to draw a segment per member.
+/// Each status's mark and hue in the member bar, in the bar's order; dropped members are left
+/// out.
+const BAR: [(Status, Mark, Hue); 7] = [
+    (Status::Done, Mark::Done, Hue::Ok),
+    (Status::Blocked, Mark::Active, Hue::You),
+    (Status::Review, Mark::Active, Hue::Corral),
+    (Status::Running, Mark::Active, Hue::Worker),
+    (Status::Ready, Mark::Next, Hue::Neutral),
+    (Status::Backlog, Mark::Next, Hue::Neutral),
+    (Status::Idea, Mark::Next, Hue::Neutral),
+];
+
+/// Each state's share of a long plan's members: done, needs you, moving, waiting.
 fn shares(segments: &[(Mark, Hue)]) -> Option<Vec<MemberShare>> {
     if segments.len() <= STRIP_EACH {
         return None;
@@ -162,7 +245,6 @@ fn shares(segments: &[(Mark, Hue)]) -> Option<Vec<MemberShare>> {
             share(Hue::Ok, &|hue| hue == Hue::Ok),
             share(Hue::You, &|hue| hue == Hue::You),
             share(Hue::Corral, &|hue| matches!(hue, Hue::Corral | Hue::Worker)),
-            share(Hue::Held, &|hue| matches!(hue, Hue::Held | Hue::Fail)),
             share(Hue::Neutral, &|hue| hue == Hue::Neutral),
         ]
         .into_iter()
@@ -171,185 +253,82 @@ fn shares(segments: &[(Mark, Hue)]) -> Option<Vec<MemberShare>> {
     )
 }
 
-fn outline_row(
-    feed: &Feed,
-    row: &WirePlan,
-    filter: &ProjectFilter,
-    selected: Option<&Id>,
-) -> OutlineRow {
-    let detail = plan_detail(feed, &row.id);
-    let id = Id::from(&row.id);
-    let title = one_line(&row.title);
-    let second = if matches!(row.state, PlanState::Executing | PlanState::Complete) {
-        let segments: Vec<(Mark, Hue)> = detail.map_or_else(Vec::new, |detail| {
-            detail
-                .members
-                .iter()
-                .map(|member| segment(feed, member))
-                .collect()
-        });
-        OutlineSecond::Members {
-            shares: shares(&segments),
-            segments,
-            progress: format!("{}/{}", row.members_landed, row.members_total),
-            state: state_indicator(feed, row, detail),
-        }
-    } else {
-        let (text, hint) = status(row, detail);
-        let hue = match row.state {
-            PlanState::Awaiting => Hue::You,
-            PlanState::PlanFailed => Hue::Fail,
-            _ => Hue::Neutral,
-        };
-        OutlineSecond::Status { text, hint, hue }
-    };
-    let said = match &second {
-        OutlineSecond::Members { state, .. } => &state.hint,
-        OutlineSecond::Status { hint, .. } => hint,
-    };
-    let projects = row_projects(feed, row, filter);
-    let project_chip = projects.first().map(|first| match projects.len() {
-        1 => first.clone(),
-        n => format!("{first} +{}", n - 1),
-    });
-    OutlineRow {
-        test_id: format!("plan-{}", row.id),
-        hint: format!("{title} · {said}"),
-        id_label: row.id.clone(),
-        project_chip,
-        project_hint: (projects.len() > 1).then(|| projects.join(", ")),
-        selected: selected == Some(&id),
-        action: Action::Live(LiveAction::Plan(id.clone())),
-        id,
-        title,
-        second,
-    }
-}
-
-fn state_indicator(feed: &Feed, row: &WirePlan, detail: Option<&PlanDetail>) -> StateIndicator {
-    let (icon, hue, hint) = if row.state == PlanState::Complete {
-        (StatIcon::Landed, Hue::Ok, "This plan is complete.".into())
-    } else if plan_needs_you(feed, row) {
+fn state_indicator(feed: &Feed, row: &PlanRow) -> StateIndicator {
+    let total = total(row);
+    let done = count(row, Status::Done);
+    let (icon, hue, hint) = if row.parent.status == Status::Done {
+        (StatIcon::Landed, Hue::Ok, "This plan is done.".into())
+    } else if needs_you(feed, row) {
         (
             StatIcon::NeedsYou,
             Hue::You,
-            "A member of this plan needs you.".into(),
+            "A member of this plan, or the plan's own task, needs you.".into(),
         )
-    } else if let Some(detail) = detail {
-        let mut stale = false;
-        let mut held = false;
-        let mut moving = None;
-        let mut all_landed = !detail.members.is_empty();
-        for member in &detail.members {
-            let (mark, hue) = segment(feed, member);
-            stale |= mark == Mark::Stale;
-            held |= hue == Hue::Held;
-            if mark == Mark::Active && moving.is_none() {
-                moving = Some(hue);
-            }
-            all_landed &= mark == Mark::Done;
-        }
-        if stale {
-            (
-                StatIcon::Stale,
-                Hue::Held,
-                "A member of this plan has a stale result.".into(),
-            )
-        } else if held {
-            (
-                StatIcon::Held,
-                Hue::Held,
-                "A member of this plan is held.".into(),
-            )
-        } else if let Some(hue) = moving {
-            (
-                StatIcon::Moving,
-                hue,
-                "Members of this plan are moving.".into(),
-            )
-        } else if all_landed {
-            (
-                StatIcon::Landed,
-                Hue::Ok,
-                "Every member has landed; final acceptance is next.".into(),
-            )
-        } else {
-            (
-                StatIcon::Queued,
-                Hue::Neutral,
-                "No received member state is moving or waiting on you.".into(),
-            )
-        }
-    } else {
+    } else if total > 0 && done == total {
+        (
+            StatIcon::Landed,
+            Hue::Ok,
+            "Every member is done; marking the plan's task done is next.".into(),
+        )
+    } else if count(row, Status::Running) + count(row, Status::Review) > 0 {
         (
             StatIcon::Moving,
             Hue::Corral,
-            "This plan is executing; member states have not been received.".into(),
+            "Members of this plan are running or in review.".into(),
+        )
+    } else {
+        (
+            StatIcon::Queued,
+            Hue::Neutral,
+            "No member is running, in review or waiting on you.".into(),
         )
     };
     StateIndicator { icon, hue, hint }
 }
 
-fn status(row: &WirePlan, detail: Option<&PlanDetail>) -> (String, String) {
-    match row.state {
-        PlanState::Awaiting => {
-            let revision = row.revision.as_deref();
-            let review = detail
-                .filter(|detail| detail.revision.as_deref() == revision)
-                .and_then(|detail| {
-                    detail
-                        .reviews
-                        .iter()
-                        .rev()
-                        .find(|review| Some(review.revision.as_str()) == revision)
-                });
-            let short = match review {
-                Some(review) if review.verdict.starts_with("approve") => "reviewer approves".into(),
-                Some(review) => format!("reviewer · {}", one_line(&review.verdict)),
-                None => format!("{} members", row.members_total),
-            };
-            let text =
-                revision.map_or_else(|| short.clone(), |revision| format!("{revision} · {short}"));
-            (
-                text,
-                match review {
-                    Some(review) => format!(
-                        "{} awaits your acceptance. The reviewer verdict for {} is {}.",
-                        row.id, review.revision, review.verdict
-                    ),
-                    None => format!(
-                        "{} awaits your acceptance and lists {} members. No review for this revision has been received.",
-                        row.id, row.members_total
-                    ),
-                },
-            )
+fn outline_row(
+    feed: &Feed,
+    row: &PlanRow,
+    filter: &ProjectFilter,
+    selected: Option<&Id>,
+) -> OutlineRow {
+    let id = Id::new(&row.parent.id);
+    let title = one_line(&row.parent.title);
+    let total = total(row);
+    let second = if total == 0 {
+        OutlineSecond::Status {
+            text: "no members".into(),
+            hint: "No open or finished task is filed under this plan yet.".into(),
+            hue: Hue::Neutral,
         }
-        PlanState::Approved
-            if row.linked.is_none() && detail.is_none_or(|detail| detail.linked.is_none()) =>
-        {
-            (
-                "no tracker published".into(),
-                "This plan is approved; no published tracker is named.".into(),
-            )
+    } else {
+        let segments: Vec<(Mark, Hue)> = BAR
+            .iter()
+            .flat_map(|(status, mark, hue)| {
+                std::iter::repeat_n((*mark, *hue), count(row, *status))
+            })
+            .collect();
+        OutlineSecond::Members {
+            shares: shares(&segments),
+            segments,
+            progress: format!("{}/{total}", count(row, Status::Done)),
+            state: state_indicator(feed, row),
         }
-        PlanState::Approved => (
-            "approved".into(),
-            "This plan is approved and names a published tracker.".into(),
-        ),
-        PlanState::Drafting => ("drafting".into(), "The plan is being drafted.".into()),
-        PlanState::Reviewing => (
-            "in plan review".into(),
-            "The plan is in independent review.".into(),
-        ),
-        PlanState::PlanFailed => (
-            "planning failed".into(),
-            "Planning or its review failed or escalated.".into(),
-        ),
-        PlanState::Cancelled => ("cancelled".into(), "This plan is cancelled.".into()),
-        _ => (
-            "state unknown".into(),
-            "The daemon sent a plan state this app does not know.".into(),
-        ),
+    };
+    let said = match &second {
+        OutlineSecond::Members { state, .. } => &state.hint,
+        OutlineSecond::Status { hint, .. } => hint,
+    };
+    OutlineRow {
+        test_id: format!("plan-{id}"),
+        hint: format!("{title} · {said}"),
+        id_label: id.to_string(),
+        project_chip: row_project(feed, row, filter),
+        selected: selected == Some(&id),
+        action: Action::Live(LiveAction::Plan(id.clone())),
+        id,
+        title,
+        second,
     }
 }
 

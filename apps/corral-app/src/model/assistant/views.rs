@@ -243,7 +243,7 @@ pub struct FiledLine {
     pub action: Action,
 }
 
-/// The two assistant blocks below the Agents roster: sessions and Filed from chat.
+/// The assistant sessions block below the Agents roster.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Agents {
     /// Assistant sessions section heading.
@@ -258,19 +258,6 @@ pub struct Agents {
     pub sessions_note: Option<String>,
     /// Optional session-source disclosure.
     pub sessions_illustrative: Option<&'static str>,
-    /// Filed section heading.
-    pub filed_title: &'static str,
-    /// Filed rows, each naming its originating session.
-    pub filed: Vec<FiledLine>,
-    /// The source's total of filings beside the heading; none while the source is unknown,
-    /// loading or unavailable.
-    pub filed_total: Option<u64>,
-    /// Loading, freshness, error, capability or empty.
-    pub filed_note: Option<String>,
-    /// Newest, Newer, Older or Retry for the served page.
-    pub filed_pager: Vec<Button>,
-    /// Filed id disclosure.
-    pub filed_illustrative: Option<&'static str>,
 }
 
 /// One label/value fact in the session sidebar.

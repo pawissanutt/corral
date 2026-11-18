@@ -11,7 +11,6 @@ use super::{
     PAIRED_KEY,
     app::{self, AppState},
     core::{Core, Event},
-    map,
     requests::ClientRequest,
 };
 use crate::model::{
@@ -633,7 +632,7 @@ impl Driver {
                         .ok_or_else(|| "missing browser pairing".to_owned())?;
                     self.app.welcomed(self.feed, &welcome);
                     self.feed.update(|feed| {
-                        feed.welcome_received(welcome.daemon.store, map::health(welcome.health));
+                        feed.welcome_received(welcome.daemon.store, welcome.health);
                         feed.device = DeviceLink::Enrolled {
                             id: credential.device.clone(),
                             name: credential.name.clone(),
@@ -660,7 +659,13 @@ impl Driver {
                 continue;
             }
             if matches!(conn.role, Role::Session) && app::handles(&event) {
-                if matches!(&event, Event::Board { .. }) {
+                if matches!(
+                    &event,
+                    Event::Rows {
+                        delta: corral_protocol::subscription::SubDelta::Tasks { .. },
+                        ..
+                    }
+                ) {
                     self.failures = 0;
                 }
                 let outgoing = self.app.event_async(self.feed, event).await?;

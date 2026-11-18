@@ -1,19 +1,17 @@
 //! Settings. Desktop and terminal: the section selected in the navigation (the sidebar lists
 //! the sections), in a scrolling body. Phone: the root list of sections, and each section as a
 //! pushed page. A served feed — corrald's, or the explicitly chosen synthetic preview — draws
-//! each section from its settings (`live_*`) with the owner edits this device's authority
-//! allows. Without a connection, Connection says how to connect, General keeps this device's
+//! each section from its settings (`live_*`): the configuration read-only, devices, pairing
+//! and push. Without a connection, Connection says how to connect, General keeps this device's
 //! preferences, and every other section says why it waits and leads to Connection.
 
 mod connection;
 mod enrolment;
 mod general;
 mod guide;
-mod live_assistant;
-mod live_autopilot;
+mod live_config;
 mod live_devices;
 mod live_sections;
-mod live_summary;
 mod parts;
 mod qr;
 
@@ -79,8 +77,7 @@ fn page(app: AppState, section: SettingsSection, data: DataState) -> AnyElement 
         SettingsSection::Devices => live_devices::page(app),
         SettingsSection::Machines => live_sections::machines(app),
         SettingsSection::Notifications => live_sections::notifications(app),
-        SettingsSection::Assistant => live_assistant::page(app),
-        SettingsSection::Autopilot => live_autopilot::page(app),
+        SettingsSection::Config => live_config::page(app),
     }
 }
 

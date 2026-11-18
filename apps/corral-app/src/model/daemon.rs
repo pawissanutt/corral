@@ -1,10 +1,15 @@
-//! Owned daemon snapshots, independent of the transport and the UI runtime.
+//! Owned daemon snapshots, independent of the transport and the UI runtime. Rows hold the
+//! `corral_types` values the daemon serves; the app derives groups and rails from them.
 use crate::model::Id;
 use corral_protocol::{
-    app::*, assistant::ThreadEntry, cmd::CmdResult, detail::*, rows::*, subscription::LiveText,
+    Health, app::*, assistant::ThreadEntry, detail::*, rows::*, subscription::LiveText,
 };
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use corral_types::{Event, Refusal, UsageSummary};
+use std::collections::{BTreeMap, BTreeSet};
+
+#[path = "daemon_board.rs"]
+mod board;
+pub use board::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Link {
@@ -15,170 +20,6 @@ pub enum Link {
     Up,
     /// Health and board remain the last ones received.
     Down,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Group {
-    NeedsYou,
-    Verifying,
-    Producing,
-    Queued,
-    Held,
-    Parked,
-    Other,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Step {
-    pub mark: crate::model::board::Mark,
-    pub sha7: Option<String>,
-    /// Unix seconds.
-    pub at: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Agent {
-    pub session: Option<String>,
-    pub role: String,
-    pub profile: Option<String>,
-    pub runtime: Option<String>,
-    pub machine: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Task {
-    pub id: Id,
-    pub title: String,
-    pub project: Option<String>,
-    pub plan: Option<String>,
-    pub goal: Option<String>,
-    pub group: Group,
-    /// Run, gate, review, land.
-    pub rail: [Step; 4],
-    pub now: String,
-    pub now_code: String,
-    /// Unix seconds since the task's canonical age origin, independent of its current state.
-    pub age_since: Option<u64>,
-    /// Unix seconds since when `now` holds.
-    pub since: Option<u64>,
-    pub held_reason: Option<String>,
-    pub questions: u64,
-    pub attention: Vec<String>,
-    pub agent: Option<Agent>,
-    pub cost: Option<f64>,
-    /// True when the cost is not wholly provider-reported.
-    pub cost_estimated: bool,
-    pub rev: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct Board {
-    pub epoch: u64,
-    /// False until one complete snapshot has been applied since app startup.
-    pub complete: bool,
-    rows: Vec<Task>,
-    pending_epoch: Option<u64>,
-}
-
-impl Board {
-    pub fn tasks(&self) -> &[Task] {
-        &self.rows
-    }
-
-    pub fn task(&self, id: &str) -> Option<&Task> {
-        self.rows
-            .binary_search_by(|task| order(&task.id, id))
-            .ok()
-            .map(|index| &self.rows[index])
-    }
-
-    pub fn in_group(&self, group: Group) -> impl Iterator<Item = &Task> {
-        self.rows.iter().filter(move |task| task.group == group)
-    }
-
-    pub fn count(&self, group: Group) -> usize {
-        self.in_group(group).count()
-    }
-
-    /// Keep the previous snapshot visible until the replacement is complete.
-    pub fn begin_epoch(&mut self, epoch: u64) {
-        self.pending_epoch = Some(epoch);
-    }
-
-    /// Apply only complete batches: page accumulation belongs to the session.
-    pub fn apply_batch(&mut self, epoch: u64, rows: Vec<Task>, left: &[String]) {
-        if !self.complete || self.epoch != epoch || self.pending_epoch == Some(epoch) {
-            self.rows.clear();
-        }
-        for row in rows {
-            match self
-                .rows
-                .binary_search_by(|existing| order(&existing.id, &row.id))
-            {
-                Ok(index) => self.rows[index] = row,
-                Err(index) => self.rows.insert(index, row),
-            }
-        }
-        if !left.is_empty() {
-            let left: HashSet<&str> = left.iter().map(String::as_str).collect();
-            self.rows.retain(|row| !left.contains(row.id.as_str()));
-        }
-        self.epoch = epoch;
-        self.complete = true;
-        self.pending_epoch = None;
-    }
-}
-
-fn order(a: &str, b: &str) -> Ordering {
-    fn number(id: &str) -> Option<u64> {
-        id.strip_prefix("T-")?.parse().ok()
-    }
-    match (number(a), number(b)) {
-        (Some(a_num), Some(b_num)) => a_num.cmp(&b_num).then_with(|| a.cmp(b)),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => a.cmp(b),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DaemonLevel {
-    Healthy,
-    Degraded,
-    Down,
-    Unknown,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeLevel {
-    Ok,
-    Unreachable,
-    Unknown,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PmLevel {
-    Live,
-    Relaunching,
-    Absent,
-    Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Runtime {
-    pub kind: String,
-    pub level: RuntimeLevel,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DaemonHealth {
-    pub level: DaemonLevel,
-    pub reasons: Vec<String>,
-    pub runtimes: Vec<Runtime>,
-    pub pm: PmLevel,
-    pub pass_seq: u64,
-    /// Unix seconds of the last completed pass.
-    pub last_pass: Option<u64>,
-    pub last_pass_ms: Option<u64>,
-    pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,25 +98,28 @@ pub enum CommandStatus {
     Abandoned,
 }
 
+/// A chat send or prompt answer this device made, kept until its echo or outcome.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandState {
     pub device: Option<String>,
     pub method: String,
     pub request: serde_json::Value,
     pub status: CommandStatus,
-    pub result: Option<CmdResult>,
     pub error: Option<ClientError>,
     /// The thread entry corrald acknowledged for an assistant send; kept with the command, never
     /// in the bounded reply cache, so the local copy stays merged into it.
     pub entry: Option<Id>,
 }
 
+/// One request answered on the connection: its reply value, or its error. An `op.submit` the
+/// engine refused carries the typed refusal with its next steps.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Operation {
     pub method: String,
     pub loading: bool,
     pub value: Option<serde_json::Value>,
     pub error: Option<ClientError>,
+    pub refusal: Option<Refusal>,
 }
 
 impl Operation {
@@ -296,29 +140,28 @@ pub struct Feed {
     pub link: Link,
     /// A one-line connection problem; absent while up.
     pub problem: Option<String>,
-    pub health: Option<DaemonHealth>,
+    pub health: Option<Health>,
     pub board: Board,
     pub session: Option<AppSession>,
     /// Current transport welcome, authenticated identity and projection readiness are distinct.
     pub transport_ready: bool,
     pub projection_ready: bool,
     pub capabilities: BTreeSet<String>,
-    /// Invalidates pending confirmations when this device's authority changes.
-    pub authority_revision: u64,
     pub date: String,
-    pub inbox: BTreeMap<Id, InboxRow>,
     /// Driver-supplied local timezone; absent when the platform cannot determine it.
     pub time_zone: Option<jiff::tz::TimeZone>,
+    /// Parent tasks with their children's counts, by parent id.
     pub plans: BTreeMap<Id, PlanRow>,
-    /// Published build records (`Topic::Builds`); never tasks.
-    pub builds: BTreeMap<Id, BuildRow>,
     /// Configured workspace projects (`Topic::Projects`, `projects.v1`). With the topic's
     /// complete page applied, an empty map means the workspace has no project management.
     pub projects: BTreeMap<Id, ProjectRow>,
+    /// Live runs by `<task>_<run>`, the same id as their terminal scope.
     pub agents: BTreeMap<Id, AgentRow>,
     pub assistants: BTreeMap<Id, AssistantRow>,
-    pub usage: BTreeMap<Id, UsageRow>,
-    pub settings: BTreeMap<Id, SettingsSnapshot>,
+    /// The engine's usage totals and their run coverage.
+    pub usage: Option<UsageSummary>,
+    /// Parsed `corral.toml`, the listener and the devices.
+    pub settings: Option<SettingsSnapshot>,
     pub threads: BTreeMap<Id, ThreadSnapshot>,
     pub topics: BTreeMap<String, TopicState>,
     pub details: BTreeMap<String, DetailCache>,
@@ -333,7 +176,7 @@ pub struct Feed {
     pub uploads: BTreeMap<Id, UploadState>,
     pub cancelling: BTreeSet<Id>,
     pub not_withdrawn: BTreeSet<Id>,
-    pub changes: BTreeMap<u64, ChangeLine>,
+    pub changes: BTreeMap<u64, Event>,
     pub changes_head: u64,
     /// Canonical owner-relevant count, tied to the seen cursor used by the reader.
     pub changes_unseen: Option<(u64, u64)>,
@@ -448,7 +291,7 @@ impl Feed {
             .get_or_insert_with(|| "Waiting for the daemon board".into());
     }
 
-    pub fn welcome_received(&mut self, store: String, health: DaemonHealth) {
+    pub fn welcome_received(&mut self, store: String, health: Health) {
         self.transport_ready = true;
         self.workspace = std::path::Path::new(&store)
             .parent()
@@ -459,7 +302,7 @@ impl Feed {
         self.health_received(health);
     }
 
-    pub fn health_received(&mut self, health: DaemonHealth) {
+    pub fn health_received(&mut self, health: Health) {
         self.health = Some(health);
         if self.ready() {
             self.synced = Some(self.clock.clone());
@@ -503,13 +346,11 @@ impl Feed {
         self.device = crate::model::devices::DeviceLink::Revoked { id };
         self.board = Board::default();
         self.session = None;
-        self.inbox.clear();
         self.plans.clear();
-        self.builds.clear();
         self.agents.clear();
         self.assistants.clear();
-        self.usage.clear();
-        self.settings.clear();
+        self.usage = None;
+        self.settings = None;
         self.threads.clear();
         self.details.clear();
         // A watched session's turn and child agents are daemon facts this device may no
@@ -567,52 +408,19 @@ pub fn age(since: Option<u64>, now: u64) -> String {
     crate::model::work::age(since, now)
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::board::Mark;
+    use corral_types::Status;
 
-    fn task(text: &str) -> Task {
-        Task {
-            id: Id::new(text),
-            title: text.into(),
-            project: None,
-            plan: None,
-            goal: None,
-            group: Group::Queued,
-            rail: std::array::from_fn(|_| Step {
-                mark: Mark::Next,
-                sha7: None,
-                at: None,
-            }),
-            now: "queued".into(),
-            now_code: "queued".into(),
-            since: None,
-            age_since: None,
-            held_reason: None,
-            questions: 0,
-            attention: vec![],
-            agent: None,
-            cost: None,
-            cost_estimated: false,
-            rev: 1,
-        }
-    }
-
-    #[test]
-    fn board_batch_removes_left_and_keeps_numeric_order() {
-        let mut board = Board::default();
-        board.apply_batch(1, vec![task("T-10"), task("T-9"), task("other")], &[]);
-        board.apply_batch(1, vec![task("T-2")], &["T-10".into()]);
-        assert_eq!(
-            board
-                .tasks()
-                .iter()
-                .map(|row| row.id.as_str())
-                .collect::<Vec<_>>(),
-            ["T-2", "T-9", "other"]
-        );
-        assert!(board.task("T-10").is_none());
+    fn task(id: &str) -> Task {
+        Task::new(task_row(bare_task(
+            id,
+            id,
+            Status::Ready,
+            jiff::Timestamp::UNIX_EPOCH,
+        )))
     }
 
     #[test]

@@ -214,7 +214,7 @@ pub fn web_guide(feed: &Feed, origin: Option<&str>) -> Guide {
             step(
                 progress[1],
                 "Get a pairing code",
-                "Run the pairing command below on the daemon host, or press Pair a device in Settings › Devices on an administrator device. A code works once, for two minutes.",
+                "Run the pairing command below on the daemon host, or press Pair a device in Settings › Devices on a device already paired. A code works once, for two minutes.",
             ),
             step(
                 progress[2],

@@ -21,10 +21,7 @@ impl AppState {
         };
         let key = detail_key(&request.target);
         // One page of a paged list is shown at a time, so a new page retires its siblings.
-        let paged = matches!(
-            &request.target,
-            DetailRef::Filings { .. } | DetailRef::Closed { .. }
-        );
+        let paged = matches!(&request.target, DetailRef::Closed { .. });
         let mut retired = if paged {
             let list = std::mem::discriminant(&request.target);
             feed.with_untracked(|feed| {
@@ -477,10 +474,6 @@ mod artifact_tests {
         assert_eq!(artifact.content, "AAECAw==");
     }
 }
-
-#[cfg(test)]
-#[path = "filings_tests.rs"]
-mod filings_tests;
 
 #[cfg(test)]
 #[path = "closed_tests.rs"]

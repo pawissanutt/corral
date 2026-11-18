@@ -1,7 +1,7 @@
 //! Settings sections of a served feed (corrald's, or the synthetic preview's) that read the
-//! canonical settings snapshot or say what this device can do: Machines and Notifications;
-//! and the parts every live section shares (the snapshot's loading/stale/unreachable/failed
-//! state, the admin refusal, a facts table and a command's truthful status line).
+//! settings snapshot or say what this device can do: Machines and Notifications; and the parts
+//! every live section shares (the snapshot's loading/stale/unreachable/failed state and a
+//! facts table).
 
 use corral_protocol::rows::SettingsSnapshot;
 use nsh_core::prelude::*;
@@ -11,7 +11,7 @@ use crate::model::daemon::Feed;
 use crate::model::settings::live::{self, Fact, Standing};
 use crate::model::settings::push;
 use crate::model::text::span;
-use crate::model::{ActStatus, Form, Hue, Id};
+use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
@@ -50,7 +50,7 @@ fn standing(app: AppState, standing: &Standing) -> Option<AnyElement> {
             app,
             Hue::Held,
             &vec![span(
-                "Showing the last settings received; changes are off until corrald answers again.",
+                "Showing the last settings received; they update when corrald answers again.",
             )],
             None,
         )),
@@ -74,33 +74,23 @@ fn standing(app: AppState, standing: &Standing) -> Option<AnyElement> {
 
 /// What a live snapshot section is built from.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Source {
-    pub settings: Option<SettingsSnapshot>,
-    pub standing: Standing,
-    /// Why this device may not change owner-only settings, if it may not.
-    pub refusal: Option<&'static str>,
-}
-
-impl Source {
-    /// Whether owner edits may be offered: an admin session with current settings.
-    pub fn editable(&self) -> bool {
-        self.refusal.is_none() && self.standing == Standing::Ready
-    }
+struct Source {
+    settings: Option<SettingsSnapshot>,
+    standing: Standing,
 }
 
 fn source(feed: &Feed) -> Source {
     Source {
         settings: live::snapshot(feed).cloned(),
         standing: live::standing(feed),
-        refusal: live::admin_refusal(feed),
     }
 }
 
-/// The parts drawn from the settings snapshot, again whenever it or this device's authority
-/// changes: the standing notice, then `build`'s parts (absent while there is no snapshot).
+/// The parts drawn from the settings snapshot, again whenever it changes: the standing notice,
+/// then `build`'s parts (absent while there is no snapshot).
 pub fn snapshot_parts(
     app: AppState,
-    build: impl Fn(AppState, &SettingsSnapshot, &Source) -> Vec<AnyElement> + 'static,
+    build: impl Fn(AppState, &SettingsSnapshot) -> Vec<AnyElement> + 'static,
 ) -> AnyElement {
     let shown = computed(move || app.feed.with(source));
     dynamic(move || {
@@ -111,7 +101,7 @@ pub fn snapshot_parts(
                 if !parts.is_empty() {
                     parts.push(space(app, 12.0));
                 }
-                parts.extend(build(app, settings, &source));
+                parts.extend(build(app, settings));
             }
             view().min_w(px(0.0)).children(parts).into_element()
         })
@@ -123,85 +113,13 @@ pub fn snapshot_parts(
 pub fn snapshot_section(
     app: AppState,
     title: &'static str,
-    build: impl Fn(AppState, &SettingsSnapshot, &Source) -> Vec<AnyElement> + 'static,
+    build: impl Fn(AppState, &SettingsSnapshot) -> Vec<AnyElement> + 'static,
 ) -> AnyElement {
     frame(app, title, 12.0, vec![snapshot_parts(app, build)])
 }
 
-/// The admin refusal in the quiet notice, when this device may not change these settings.
-pub fn refusal(app: AppState, source: &Source) -> Option<AnyElement> {
-    source
-        .refusal
-        .map(|line| notice(app, Hue::Neutral, &vec![span(line)], None))
-}
-
-/// The truthful status of the command a control last sent, live; nothing before it is pressed.
-/// A result lost on the way offers to ask corrald about that same command again, never to
-/// send it anew.
-pub fn act_line(app: AppState, slot: impl Into<String>) -> AnyElement {
-    let slot: String = slot.into();
-    dynamic(move || {
-        let key: Option<Id> = app
-            .settings
-            .with(|state| state.edits.acts.get(&slot).cloned());
-        let status = key.as_ref().and_then(|key| app.act_status(key));
-        let slot = slot.clone();
-        untracked(move || {
-            let (key, status) = (key?, status?);
-            let ink = match &status {
-                ActStatus::Failed(_)
-                | ActStatus::Refused(_)
-                | ActStatus::Conflict(_)
-                | ActStatus::Unknown => Token::Fail,
-                ActStatus::Done => Token::Ok,
-                _ => Token::Ink3,
-            };
-            let line = cell(app, status.line(), ink, false).into_element();
-            if status != ActStatus::Unknown {
-                return Some(line);
-            }
-            let check = button_with(
-                app,
-                "Check result",
-                ButtonKind::Quiet,
-                ButtonOptions::default(),
-                format!("btn-recover-{slot}"),
-                move || app.recover(&key),
-            );
-            Some(
-                view()
-                    .gap(px(2.0))
-                    .child(line)
-                    .child(view().flex_row().child(check))
-                    .into_element(),
-            )
-        })
-    })
-    .into_element()
-}
-
-/// Whether the command `slot` last sent is still in flight or of unknown outcome, so its
-/// control must not send another.
-pub fn in_flight(app: AppState, slot: &str) -> bool {
-    let key: Option<Id> = app
-        .settings
-        .with(|state| state.edits.acts.get(slot).cloned());
-    key.and_then(|key| app.act_status(&key))
-        .is_some_and(|status| {
-            matches!(
-                status,
-                ActStatus::Previewing
-                    | ActStatus::Confirming
-                    | ActStatus::Queued
-                    | ActStatus::Pending
-                    | ActStatus::Running
-                    | ActStatus::Unknown
-            )
-        })
-}
-
-/// Machines: this daemon host as the one machine, with what corrald reports of its runtimes and
-/// agents (counted as the Agents wall counts them), and why there is nothing to add.
+/// Machines: this daemon host as the one machine, with what corrald reports of its runner and
+/// its live runs, and why there is nothing to add.
 pub fn machines(app: AppState) -> AnyElement {
     let row = computed(move || app.feed.with(live::machine));
     dynamic(move || {
@@ -225,7 +143,7 @@ pub fn machines(app: AppState) -> AnyElement {
                         .child(devtable(
                             app,
                             &widths,
-                            &["Machine", "Role", "Runtime", "Agents", "Reach"],
+                            &["Machine", "Role", "Runner", "Agents", "Reach"],
                             vec![vec![
                                 cell(app, name, Token::Ink, true).into_element(),
                                 cell(app, role, Token::Ink, false).into_element(),

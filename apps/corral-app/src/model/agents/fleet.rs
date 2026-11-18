@@ -1,14 +1,13 @@
 //! A watched session's child agents and the messages between them, from the fleet corrald
 //! last sent with the session's live pages (`session.fleet.v1`). Children are read here, never
-//! steered: no command addresses them. A child and a message read as a published build's
-//! slices and messages do, through the same words (`builds::slice_state`, `delivery` ...).
+//! steered: no command addresses them. Each child and message is one marked line.
 
 use corral_protocol::subscription::{
     SessionAgentMessage, SessionChild, SessionChildVerdict, SessionFleet,
 };
 
 use crate::model::Id;
-use crate::model::builds::{self, Line};
+use crate::model::board::Mark;
 use crate::model::daemon;
 use crate::model::hue::Hue;
 use crate::model::text::{Rich, span};
@@ -43,12 +42,22 @@ pub struct FleetSection {
     pub entries: Vec<FleetEntry>,
 }
 
-/// A child or a message, drawn as a build's marked entry.
+/// A child or a message, drawn as one marked line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FleetEntry {
     /// `agent-<session>-child-<id>` or `agent-<session>-msg-<seq>`.
     pub test_id: String,
-    pub line: Line,
+    pub line: FleetLine,
+}
+
+/// One marked entry: its chips and head on the first line, each body line under it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FleetLine {
+    pub mark: Mark,
+    pub hue: Hue,
+    pub chips: Vec<(String, Hue)>,
+    pub head: Rich,
+    pub body: Vec<Rich>,
 }
 
 /// Child states still at work: their running time counts up to now.
@@ -85,12 +94,73 @@ fn fold_key(id: &Id) -> String {
     format!("fleet:{id}")
 }
 
+/// `1 child`, `4 children`.
+fn count(n: u64, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// A recorded cost, or "cost unknown": a missing price is never shown as zero.
+fn cost(usd: Option<f64>) -> String {
+    match usd {
+        Some(value) if value.is_finite() => format!("${value:.2}"),
+        _ => "cost unknown".into(),
+    }
+}
+
+/// `1.2M tokens`.
+fn tokens(n: u64) -> String {
+    match n {
+        0..1_000 => format!("{n} tokens"),
+        1_000..1_000_000 => format!("{:.1}k tokens", n as f64 / 1_000.0),
+        _ => format!("{:.1}M tokens", n as f64 / 1_000_000.0),
+    }
+}
+
+/// A section's heading note: "showing 100 of 240 messages" when corrald sent fewer than the
+/// record holds, else how many there are.
+fn note(len: usize, total: u64, noun: &str) -> Option<String> {
+    let len = u64::try_from(len).unwrap_or(u64::MAX);
+    Some(if total > len {
+        format!("showing {len} of {total} {noun}")
+    } else {
+        total.to_string()
+    })
+}
+
+/// A child's state as a mark, its hue and its word.
+fn child_state(state: &str) -> (Mark, Hue, &'static str) {
+    match state {
+        "queued" => (Mark::Next, Hue::Neutral, "queued"),
+        "running" => (Mark::Active, Hue::Worker, "running"),
+        "needs" => (Mark::Active, Hue::You, "needs an answer"),
+        "done" => (Mark::Done, Hue::Neutral, "done"),
+        "failed" => (Mark::Fail, Hue::Fail, "failed"),
+        "cancelled" => (Mark::Na, Hue::Neutral, "cancelled"),
+        _ => (Mark::Na, Hue::Neutral, "state not known to this app"),
+    }
+}
+
+/// How a message reached its recipient: the mark, and the words when it did not simply arrive.
+fn delivery(delivery: &str) -> (Mark, Hue, Option<&'static str>) {
+    match delivery {
+        "delivered" => (Mark::Done, Hue::Neutral, None),
+        "queued" => (Mark::Next, Hue::Held, Some("queued, not yet delivered")),
+        "undeliverable" => (Mark::Fail, Hue::Fail, Some("undeliverable")),
+        "answered_from_report" => (Mark::Na, Hue::Neutral, Some("answered from its report")),
+        _ => (
+            Mark::Na,
+            Hue::Neutral,
+            Some("delivery not known to this app"),
+        ),
+    }
+}
+
 /// `3 children · 1 at work · 1 open question · 12 messages`.
 fn summary(fleet: &SessionFleet) -> String {
     let mut parts = Vec::new();
     if !fleet.children.is_empty() {
         let n = fleet.children.len() as u64;
-        parts.push(builds::count(n, "child", "children"));
+        parts.push(count(n, "child", "children"));
         let working = fleet
             .children
             .iter()
@@ -101,11 +171,11 @@ fn summary(fleet: &SessionFleet) -> String {
         }
         let asking = fleet.children.iter().filter(|child| asks(child)).count() as u64;
         if asking > 0 {
-            parts.push(builds::count(asking, "open question", "open questions"));
+            parts.push(count(asking, "open question", "open questions"));
         }
     }
     if fleet.messages_total > 0 {
-        parts.push(builds::count(fleet.messages_total, "message", "messages"));
+        parts.push(count(fleet.messages_total, "message", "messages"));
     }
     parts.join(" · ")
 }
@@ -139,18 +209,17 @@ fn children(id: &Id, fleet: &SessionFleet, feed: &daemon::Feed) -> Option<FleetS
 /// A child: its title, its kind unless it is a slice, a review's verdict and an open question
 /// as chips; then its model, state, current tool, running time, tokens and cost. A cost the host
 /// did not report is unknown, never zero.
-fn child_line(child: &SessionChild, feed: &daemon::Feed) -> Line {
-    let (mark, hue, state) = builds::slice_state(&child.state);
+fn child_line(child: &SessionChild, feed: &daemon::Feed) -> FleetLine {
+    let (mark, hue, state) = child_state(&child.state);
     let mut chips = Vec::new();
     if child.kind != "slice" {
         chips.push((child.kind.clone(), Hue::Neutral));
     }
     if let Some(verdict) = child.verdict {
-        let (_, hue, words) = builds::verdict(match verdict {
-            SessionChildVerdict::Approve => "approve",
-            SessionChildVerdict::Changes => "changes",
+        chips.push(match verdict {
+            SessionChildVerdict::Approve => ("approved".to_owned(), Hue::Ok),
+            SessionChildVerdict::Changes => ("changes requested".to_owned(), Hue::Held),
         });
-        chips.push((words.to_owned(), hue));
     }
     if asks(child) {
         chips.push(("open question".to_owned(), Hue::You));
@@ -169,12 +238,12 @@ fn child_line(child: &SessionChild, feed: &daemon::Feed) -> Line {
     facts.push(
         span(format!(
             " · {} · {}",
-            builds::tokens(child.tokens),
-            builds::cost(child.cost_usd)
+            tokens(child.tokens),
+            cost(child.cost_usd)
         ))
         .dim(),
     );
-    Line {
+    FleetLine {
         mark,
         hue,
         chips,
@@ -202,7 +271,7 @@ fn messages(id: &Id, fleet: &SessionFleet, feed: &daemon::Feed) -> Option<FleetS
     shown.sort_by_key(|message| (message.at, message.seq));
     Some(FleetSection {
         heading: "Agent messages",
-        note: builds::note(shown.len(), fleet.messages_total, "messages"),
+        note: note(shown.len(), fleet.messages_total, "messages"),
         entries: shown
             .into_iter()
             .map(|message| FleetEntry {
@@ -215,8 +284,8 @@ fn messages(id: &Id, fleet: &SessionFleet, feed: &daemon::Feed) -> Option<FleetS
 
 /// `parent → review · 14:02`, the words, then how it was delivered when it did not simply
 /// arrive.
-fn message_line(message: &SessionAgentMessage, feed: &daemon::Feed) -> Line {
-    let (mark, hue, words) = builds::delivery(&message.delivery);
+fn message_line(message: &SessionAgentMessage, feed: &daemon::Feed) -> FleetLine {
+    let (mark, hue, words) = delivery(&message.delivery);
     let mut head = vec![
         span(message.from.as_str()).mono(),
         span(" → "),
@@ -234,7 +303,7 @@ fn message_line(message: &SessionAgentMessage, feed: &daemon::Feed) -> Line {
     if let Some(words) = words {
         body.push(vec![span(words).hue(hue)]);
     }
-    Line {
+    FleetLine {
         mark,
         hue,
         chips: Vec::new(),

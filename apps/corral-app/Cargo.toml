@@ -22,6 +22,7 @@ nsh-core = "0.5.1"
 nsh-base = "0.5.1"
 env_logger = { version = "0.11", optional = true }
 corral-protocol = { path = "../../crates/corral-protocol" }
+corral-types = { path = "../../crates/corral-types" }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 jiff = "0.2"

@@ -1,6 +1,6 @@
 //! Pure data, reducers and view builders shared by all app forms.
 
-/// Typed canonical commands, device authority and command status.
+/// Engine operations, the local question destructive ones ask, and their status.
 pub mod act;
 /// Agent sessions and worker wall.
 pub mod agents;
@@ -8,9 +8,7 @@ pub mod agents;
 pub mod assistant;
 /// Shared board snapshot.
 pub mod board;
-/// Published build records of interactive build sessions; never tasks.
-pub mod builds;
-/// Palette commands and confirmation previews.
+/// Palette commands and confirmation wording.
 pub mod commands;
 /// Owned snapshots received from the daemon.
 pub mod daemon;
@@ -28,18 +26,18 @@ pub mod health;
 pub mod hue;
 /// Owned daemon identifiers.
 pub mod id;
-/// Questions and needs-you items.
-pub mod inbox;
 /// Live records, their routes and the shared selection.
 pub mod live;
 /// Navigation and overlay state.
 pub mod nav;
-/// Plans and dependency graphs.
+/// Plans: parent tasks with children and a Markdown document.
 pub mod plans;
 /// Explicit sample data served through the canonical daemon model.
 pub mod preview;
 /// Configured projects, independent screen scopes and assistant-only workspace views.
 pub mod projects;
+/// Human names for recorded actors and devices.
+pub mod provenance;
 /// Independent review and candidate evidence.
 pub mod review;
 /// A watched session's open turn and continued transcript items.
@@ -55,7 +53,7 @@ pub mod usage;
 /// Now, tasks and changes.
 pub mod work;
 
-pub use act::{Act, ActStatus, Authority};
+pub use act::{Act, ActStatus};
 pub use effect::{Conn, Effect, Env};
 pub use health::{
     Availability, DataState, Health, Segment, Snapshot, Tone, Workspace, compact_segments,

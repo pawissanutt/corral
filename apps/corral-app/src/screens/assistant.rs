@@ -1,8 +1,8 @@
 //! Assistant threads, which live inside Agents: the thread page with its composer docked, the
-//! transcript the Ask drawer also shows, the session blocks Agents places under its roster, and
-//! a pending assistant prompt as Inbox shows it. Everything renders the served
-//! threads of the selected feed through `model::assistant`; every button runs its reducer, whose
-//! canonical sends, commands and prompt answers the app performs.
+//! transcript the Ask drawer also shows, the session block Agents places under its roster, and
+//! a pending assistant prompt. Everything renders the served threads of the selected feed
+//! through `model::assistant`; every button runs its reducer, whose canonical sends, engine
+//! operations and prompt answers the app performs.
 
 mod agents;
 mod attachments;
@@ -11,7 +11,6 @@ mod page;
 mod parts;
 mod side_facts;
 mod transcript;
-mod verbs;
 
 use corral_protocol::rows::AssistantRow;
 use nsh_core::prelude::*;
@@ -23,7 +22,6 @@ use crate::state::AppState;
 pub use agents::agents_tail;
 pub use page::{live_prompt, live_thread, live_thread_phone, live_thread_title};
 pub use side_facts::{identified, stacked};
-pub use verbs::session_verbs;
 
 /// The transcript rows' inset in the Ask drawer (`.drawer .tm` padding 7 16) and on the phone.
 const DRAWER_INSET: f32 = 16.0;
