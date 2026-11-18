@@ -240,8 +240,9 @@ def main():
     ensure_pyte()
     walk = Walk(args)
     try:
-        # Started: the app's sidebar lists Now.
-        walk.until("Now", True, args.start)
+        # Started: the top bar names the app. The sidebar's "Now" is not a sign at every size:
+        # a narrow grid folds the sidebar to its keys.
+        walk.until("Corral", True, args.start)
         walk.pump(quiet=1.0, limit=10)
         for step in steps:
             print(f"> {step}")

@@ -8,7 +8,6 @@ use corral_protocol::assistant::{
     AssistantSend, ContextRef, EntryKind, MessageState as WireState, ThreadEntry, ToolLine,
     TurnCompletion,
 };
-use corral_protocol::op::OpReply;
 
 use super::cards::{WAIT_LIFETIME, WAIT_NOTE};
 use super::views::button;
@@ -93,17 +92,10 @@ fn filing(
     let status = key.and_then(|key| act::status(feed, key.as_str()));
     let chip = status.as_ref().map(|status| match status {
         ActStatus::Pending | ActStatus::Running => Chip::new("filing as idea…", Hue::Corral),
-        ActStatus::Done => {
-            let created = key
-                .and_then(|key| feed.operations.get(key.as_str()))
-                .and_then(|operation| operation.decode::<OpReply>());
-            match created {
-                Some(OpReply::Done {
-                    task: Some(task), ..
-                }) => Chip::new(format!("filed as idea · {task}"), Hue::Ok),
-                _ => Chip::new("filed as idea", Hue::Ok),
-            }
-        }
+        ActStatus::Done => match key.and_then(|key| act::created(feed, key.as_str())) {
+            Some(task) => Chip::new(format!("filed as idea · {task}"), Hue::Ok),
+            None => Chip::new("filed as idea", Hue::Ok),
+        },
         ActStatus::Refused(refusal) => {
             Chip::new(format!("not filed · {}", refusal.reason), Hue::Fail)
         }

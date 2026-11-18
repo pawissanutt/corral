@@ -194,8 +194,10 @@ fn head(
     let back = session.back.clone();
     if app.form == Form::Terminal {
         let has_switch = switch.is_some();
+        // The title gives way first: the switch's views and the menu are what is pressed.
         let trailing = view()
             .flex_row()
+            .flex_shrink_0()
             .items_center()
             .when(has_switch, |row| {
                 row.child(term::legend(session.switch_key, session.switch_hint))

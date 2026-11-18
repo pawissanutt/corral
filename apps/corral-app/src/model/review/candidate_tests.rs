@@ -1,5 +1,6 @@
 use corral_protocol::detail::{DetailBody, ReviewDetail};
-use corral_types::{Actor, Check, CheckKind, CheckResult, Op, Status};
+use corral_protocol::rows::ProjectRow;
+use corral_types::{Actor, Check, CheckKind, CheckResult, Op, Run, Status};
 use jiff::Timestamp;
 
 use super::live::review_ref;
@@ -181,5 +182,111 @@ fn a_review_body_without_a_finished_run_says_so_instead_of_an_empty_diff() {
     assert!(
         diff.empty
             .is_some_and(|line| line.contains("No worker run"))
+    );
+}
+
+/// The list shows Your verdict above In verification whatever the board's order, so Review must
+/// open at the first candidate of Your verdict and j/k must walk the rows as they are drawn.
+#[test]
+fn review_opens_at_your_verdict_and_j_k_follow_the_rows_on_screen() {
+    let verifying = task_row(bare_task(
+        "T-1",
+        "In verification",
+        Status::Review,
+        Timestamp::UNIX_EPOCH,
+    ));
+    let mut ready = task_row(bare_task(
+        "T-3",
+        "Your verdict",
+        Status::Review,
+        Timestamp::UNIX_EPOCH,
+    ));
+    ready.ready = true;
+    let mut feed = Feed::default();
+    feed.board_received(1, vec![Task::new(verifying), Task::new(ready)], &[], true);
+
+    let drawn: Vec<String> = page(&State::default(), &feed)
+        .outline
+        .into_iter()
+        .flat_map(|group| group.rows.into_iter().map(|row| row.id))
+        .collect();
+    assert_eq!(drawn, ["T-3", "T-1"]);
+    let opened = super::live::selected_filtered(&Selection::default(), &feed, &ProjectFilter::All);
+    assert_eq!(opened.map(|task| task.id.as_str()), Some("T-3"));
+
+    let mut state = State::default();
+    let mut walk = |key: &str, from: &str| {
+        let mut selection = Selection::default();
+        selection.set(&Live::Review(Id::new(from)));
+        state.key_live_filtered(key, None, &selection, &feed, env(), &ProjectFilter::All)
+    };
+    let to = |id: &str| Some(vec![Effect::Select(Live::Review(Id::new(id)))]);
+    assert_eq!(walk("j", "T-3"), to("T-1"));
+    assert_eq!(walk("k", "T-1"), to("T-3"));
+}
+
+/// The engine refuses landing a candidate onto its own branch, so the Onto field's branches and
+/// the Approve form's must leave it out while offering the project's other branches.
+#[test]
+fn onto_and_the_approve_form_never_offer_the_candidates_own_branch() {
+    let mut task = bare_task("T-1", "Candidate", Status::Review, Timestamp::UNIX_EPOCH);
+    task.project = Some("corral".into());
+    let mut row = task_row(task.clone());
+    row.run = Some(Run {
+        id: "R1".into(),
+        task: "T-1".into(),
+        role: corral_types::Role::Worker,
+        profile: "omp-sol".into(),
+        harness: "omp".into(),
+        model: None,
+        effort: None,
+        worktree: "/work/T-1".into(),
+        branch: "corral/T-1".into(),
+        base: "main".into(),
+        base_sha: "0".repeat(40),
+        session: None,
+        started: Timestamp::UNIX_EPOCH,
+        ended: None,
+        outcome: None,
+        summary: None,
+        head_sha: None,
+        quiet_since: None,
+    });
+    let mut feed = Feed::default();
+    feed.projects.insert(
+        "corral".into(),
+        ProjectRow {
+            id: "corral".into(),
+            local_branches: Some(
+                ["corral/T-1", "main", "release/0.9"]
+                    .map(String::from)
+                    .to_vec(),
+            ),
+            ..ProjectRow::default()
+        },
+    );
+    feed.board_received(1, vec![Task::new(row)], &[], true);
+
+    let own = "corral/T-1".to_owned();
+    let onto = page(&State::default(), &feed)
+        .detail
+        .map(|detail| detail.decide.target.branches)
+        .unwrap_or_default();
+    assert!(
+        onto.contains(&"release/0.9".to_owned()),
+        "Onto offers {onto:?}"
+    );
+    assert!(
+        !onto.contains(&own),
+        "Onto offers the candidate's own branch"
+    );
+    let form = crate::model::work::FormContext::new(&feed, Some(&task)).branches;
+    assert!(
+        form.contains(&"main".to_owned()),
+        "the form offers {form:?}"
+    );
+    assert!(
+        !form.contains(&own),
+        "the Approve form offers the own branch"
     );
 }

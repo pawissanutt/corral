@@ -147,18 +147,18 @@ impl AppState {
                 let keys = self
                     .nav
                     .with(|nav| commands::list_keys_live(destination, nav.live()));
-                // Enter opens the selected task; with the focus on another control of the list
-                // (a toggle, another row) that control takes it.
-                let on_selected = !self.key_focus.get().anywhere
-                    || self.focused_row.with(|row| {
-                        self.nav
-                            .with(|nav| row.as_deref() == nav.selection.task.as_deref())
-                    });
-                if on_selected {
-                    keys
-                } else {
-                    commands::without_open(keys)
-                }
+                let focus = self
+                    .key_focus
+                    .get()
+                    .anywhere
+                    .then(|| self.focused_row.get());
+                self.nav.with(|nav| {
+                    commands::with_focus(
+                        keys,
+                        focus.as_ref().map(|row| row.as_deref()),
+                        nav.selection.task.as_deref(),
+                    )
+                })
             }
             DataState::Disconnected => &[],
         }

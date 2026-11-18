@@ -300,6 +300,28 @@ pub fn status(feed: &Feed, key: &str) -> Option<ActStatus> {
     })
 }
 
+/// The task a finished operation reports, as the engine's reply names it: the id a new task got.
+pub fn created(feed: &Feed, key: &str) -> Option<String> {
+    match feed
+        .operations
+        .get(key)?
+        .decode::<corral_protocol::op::OpReply>()?
+    {
+        corral_protocol::op::OpReply::Done { task, .. } => task,
+        corral_protocol::op::OpReply::Running { .. } => None,
+    }
+}
+
+/// The receipt a settled operation toasts. A new task has no id until the engine gives it one,
+/// so its receipt names the id from the reply: "New task T-21 · Done".
+pub fn receipt(feed: &Feed, act: &Act, status: &ActStatus) -> String {
+    let new = matches!(act.op, Op::New { .. }) && *status == ActStatus::Done;
+    match new.then(|| created(feed, &act.key)).flatten() {
+        Some(task) => format!("{} {task} · {}", act.title, status.line()),
+        None => format!("{} · {}", act.title, status.line()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

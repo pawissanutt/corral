@@ -153,7 +153,8 @@ pub(super) fn list(app: AppState, page: Memo<NowPage>) -> AnyElement {
 /// the first task that needs you is selected beside the list (the phone keeps its list), its
 /// group's heading is scrolled into view and its row takes the keyboard focus, so the list
 /// keys and the Actions menu work at once; with nothing waiting on the owner the selected row
-/// takes it. A data source switch counts as opening Now again.
+/// takes it. A task opened by name (a Changes line, a Timeline lane, the palette) is what Now
+/// was opened for, so it stays selected. A data source switch counts as opening Now again.
 fn open_at_needs_you(
     app: AppState,
     page: Memo<NowPage>,
@@ -169,7 +170,10 @@ fn open_at_needs_you(
             return;
         }
         untracked(|| {
-            let opens_at = page.with(|page| page.opens_at.clone());
+            let named = app
+                .nav
+                .with(|nav| matches!(nav.opened, Some(crate::model::Live::Task(_))));
+            let opens_at = page.with(|page| page.opens_at.clone()).filter(|_| !named);
             if app.form != Form::Phone
                 && let Some(id) = opens_at.clone()
             {

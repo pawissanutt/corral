@@ -445,27 +445,15 @@ impl Entry {
     }
 }
 
-/// Go to's and Ask's names give way after every destination's.
-const KEEP_GO_TO: u8 = 10;
-const KEEP_ASK: u8 = 11;
+/// Go to's name gives way first, then Ask's: the sidebar lists both, named.
+const KEEP_GO_TO: u8 = 1;
+const KEEP_ASK: u8 = 2;
+/// The destinations are named whenever they show: a destination's key alone (`,`, `.`) says
+/// nothing, so they go whole rather than as bare keys.
+const KEEP_DESTINATION: u8 = 3;
 /// The keys in focus keep their names longest: they are the ones the page in view (or Ask's
 /// field) answers to, and no other line of the screen lists them.
-const KEEP_PAGE: u8 = 12;
-
-/// How long each destination's name stays when the key line is short: the daily ones and
-/// Settings (whose key, `,`, says nothing by itself) last.
-fn keep(destination: Destination) -> u8 {
-    match destination {
-        Destination::Usage => 0,
-        Destination::Timeline => 1,
-        Destination::Plans => 2,
-        Destination::Review => 3,
-        Destination::Changes => 4,
-        Destination::Agents => 5,
-        Destination::Settings => 6,
-        Destination::Now => 7,
-    }
-}
+const KEEP_PAGE: u8 = 4;
 
 /// The key line's groups in order, a line between each two: the keys in focus, the
 /// destinations, then Ask and Go to, with the sidebar's toggle after them while there is room.
@@ -489,32 +477,33 @@ struct Fit {
 }
 
 /// Every fit, longest first. The sidebar's toggle goes first, whole: the sidebar it opens or
-/// folds is in sight anyway. Then each destination's name gives way, the least used
-/// first; then the destinations go whole (the sidebar, folded or not, lists their keys); then Go
-/// to's and Ask's names; last the names of the keys in focus. A cap never gives way to a name.
+/// folds is in sight anyway. Then Go to's and Ask's names give way, which the sidebar lists too;
+/// then the destinations go whole, all named or none shown, and the sidebar's toggle comes back
+/// to say where they are named; last the names of the keys in focus. A cap never gives way to a
+/// name.
 fn fits() -> impl Iterator<Item = Fit> {
-    std::iter::once(Fit {
-        keep: 0,
-        destinations: true,
-        sidebar: true,
-    })
-    .chain((0..=KEEP_GO_TO).map(|keep| Fit {
+    let fit = |keep, destinations, sidebar| Fit {
         keep,
-        destinations: true,
-        sidebar: false,
-    }))
-    .chain((KEEP_GO_TO..=KEEP_PAGE + 1).map(|keep| Fit {
-        keep,
-        destinations: false,
-        sidebar: false,
-    }))
+        destinations,
+        sidebar,
+    };
+    [
+        fit(0, true, true),
+        fit(0, true, false),
+        fit(KEEP_ASK, true, false),
+        fit(KEEP_DESTINATION, true, false),
+        fit(0, false, true),
+    ]
+    .into_iter()
+    .chain((0..=KEEP_PAGE + 1).map(move |keep| fit(keep, false, false)))
 }
 
 /// The key line for what is in view. While Ask's field has the keys, letters typed go into it:
 /// the line gives the composer's own keys and Go to, the one chord that still reaches past it.
 /// Otherwise the keys of the page in view (when the model gives it any and the destination is
-/// served), the `shown` destinations, then Ask and Go to. `off_board`: Now's selection is off
-/// the board.
+/// served), the `shown` destinations, then Ask and Go to. A destination whose key the page
+/// takes for itself (`.`, Changes, opens a list's menu) is left out rather than listed twice
+/// with two meanings. `off_board`: Now's selection is off the board.
 fn line(
     destination: Destination,
     live: Option<Live>,
@@ -540,16 +529,23 @@ fn line(
     } else {
         Vec::new()
     };
+    let taken = |key: char| {
+        legend
+            .iter()
+            .any(|(keys, _)| keys.split(' ').any(|own| own.chars().eq([key])))
+    };
+    let destinations = shown
+        .iter()
+        .copied()
+        .filter(|item| !taken(item.key()))
+        .map(|item| Entry::new(item.key(), item.label(), KEEP_DESTINATION))
+        .collect();
     Line {
         own: legend
             .into_iter()
             .map(|(keys, name)| Entry::new(keys, name, KEEP_PAGE))
             .collect(),
-        destinations: shown
-            .iter()
-            .copied()
-            .map(|item| Entry::new(item.key(), item.label(), keep(item)))
-            .collect(),
+        destinations,
         actions: vec![Entry::new(ASK_KEY, ASK_LABEL, KEEP_ASK), go_to],
         sidebar: Some(Entry::new(SIDEBAR_CHORD, SIDEBAR_LABEL, 0)),
     }
@@ -675,7 +671,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn key_line_drops_names_and_groups_before_any_key_is_cut() {
+    fn key_line_never_cuts_a_key_or_shows_a_destination_key_unnamed() {
         let views = [
             (Destination::Now, None),
             (Destination::Plans, None),
@@ -701,6 +697,14 @@ mod tests {
                     assert!(
                         line.cells(fit, count) <= room,
                         "{destination:?} at {room}: {fit:?} overflows"
+                    );
+                    let unnamed = line
+                        .entries(fit)
+                        .take(count)
+                        .any(|(group, entry)| group == 1 && entry.keep < fit.keep);
+                    assert!(
+                        !unnamed,
+                        "{destination:?} at {room}: a destination key shows without its name"
                     );
                 }
                 // The classic 80-column grid keeps every key in focus, named.

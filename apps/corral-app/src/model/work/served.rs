@@ -390,7 +390,10 @@ impl State {
                 )
             }
             "." => {
-                let id = selection(self, chosen, tasks, feed, form, grouping)?;
+                // A task opened by name off the board (a closed one) is the one beside the list.
+                let id = chosen
+                    .filter(|id| feed.board.task(id).is_none())
+                    .or_else(|| selection(self, chosen, tasks, feed, form, grouping))?;
                 Some(vec![Effect::VerbMenu(super::Record::Task(id.clone()))])
             }
             "enter" | "Enter" => {

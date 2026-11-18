@@ -1,6 +1,7 @@
 //! One session per line: corrald's live runs, then the pinned quick assistant thread. Assistant
 //! rows supplement run rows, never duplicate them.
 use corral_protocol::rows::{AgentRow, AssistantRow};
+use corral_types::SessionStatus;
 
 use crate::model::board::Mark;
 use crate::model::daemon;
@@ -140,11 +141,28 @@ impl<'a> Source<'a> {
             .map(|task| task.title().to_owned())
             .unwrap_or_default()
     }
+    /// What the session is doing: a blocked screen's prompt, the task's progress while the
+    /// session works, else what an idle or ended session says of itself. A turn that was
+    /// cancelled or a session that was terminated leaves the task Running, so the task's line
+    /// would still read "running".
     pub fn doing(self, feed: &daemon::Feed) -> String {
         if let Some(row) = self.row {
-            return live::excerpt(row)
-                .map(str::to_owned)
-                .or_else(|| self.task(feed).map(daemon::Task::now))
+            let task = self.task(feed);
+            let said = match &row.status {
+                SessionStatus::Blocked { .. } => live::excerpt(row)
+                    .map(str::to_owned)
+                    .or_else(|| task.map(daemon::Task::now)),
+                SessionStatus::Working => task.map(daemon::Task::now),
+                SessionStatus::Idle if row.paused == Some(true) => {
+                    Some("paused · its input waits for Resume".into())
+                }
+                SessionStatus::Idle => Some(
+                    task.and_then(daemon::Task::blocked)
+                        .map_or_else(|| "idle · no turn running".into(), |b| b.reason.clone()),
+                ),
+                SessionStatus::Gone => Some("session ended".into()),
+            };
+            return said
                 .filter(|text| !text.trim().is_empty())
                 .unwrap_or_else(|| "Doing now unknown".into());
         }
@@ -353,6 +371,8 @@ pub fn roster(state: &State, feed: &daemon::Feed, _env: Env, filter: &ProjectFil
         stale_count += usize::from(source.is_stale(feed));
     }
     let mut stats = Vec::new();
+    let one =
+        |n: usize, single: &'static str, many: &'static str| if n == 1 { single } else { many };
     for (key, icon, count, hue, hint) in [
         (
             "sessions",
@@ -361,10 +381,14 @@ pub fn roster(state: &State, feed: &daemon::Feed, _env: Env, filter: &ProjectFil
             Hue::Neutral,
             if scoped_project {
                 format!(
-                    "{sessions} live runs work in this project scope. The pinned quick thread stays listed."
+                    "{sessions} {} in this project scope. The pinned quick thread stays listed.",
+                    one(sessions, "live run works", "live runs work")
                 )
             } else {
-                format!("{sessions} sessions: live runs and the pinned quick thread.")
+                format!(
+                    "{sessions} {}: live runs and the pinned quick thread.",
+                    one(sessions, "session", "sessions")
+                )
             },
         ),
         (
@@ -372,14 +396,20 @@ pub fn roster(state: &State, feed: &daemon::Feed, _env: Env, filter: &ProjectFil
             StatIcon::NeedsYou,
             needs,
             Hue::You,
-            format!("{needs} sessions are blocked at a prompt"),
+            format!(
+                "{needs} {} blocked at a prompt",
+                one(needs, "session is", "sessions are")
+            ),
         ),
         (
             "stale",
             StatIcon::Stale,
             stale_count,
             Hue::Held,
-            format!("{stale_count} sessions show last-known facts"),
+            format!(
+                "{stale_count} {} last-known facts",
+                one(stale_count, "session shows", "sessions show")
+            ),
         ),
     ] {
         if count > 0 {

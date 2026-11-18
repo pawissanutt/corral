@@ -134,7 +134,10 @@ impl AppState {
                             title: act.title,
                             refusal,
                         })),
-                        status => self.toast(format!("{} · {}", act.title, status.line())),
+                        status => {
+                            let line = self.feed.with(|feed| act::receipt(feed, &act, &status));
+                            self.toast(line);
+                        }
                     }
                 }
             });
