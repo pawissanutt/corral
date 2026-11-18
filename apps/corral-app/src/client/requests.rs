@@ -218,8 +218,6 @@ macro_rules! operation {
 }
 operation!(detail, DetailGet, Detail);
 operation!(config_put, ConfigDocument, ConfigPut);
-operation!(pane_focus, PaneFocus, PaneFocus);
-operation!(pane_keys, PaneKeys, PaneKeys);
 operation!(assistant_warm, AssistantWarm, AssistantWarm);
 operation!(assistant_stop, AssistantStop, AssistantStop);
 operation!(assistant_session, AssistantSessionOp, AssistantSession);

@@ -250,15 +250,32 @@ fn terminal(feed: &Feed, records: &[TaskDetail], agent: &AgentRow) -> TerminalSn
         .iter()
         .find(|record| record.task.id == run.task)
         .map_or("", |record| record.task.title.as_str());
-    let mut lines = vec![
-        format!(
-            "Preview · {} {} · {} · no process is running",
-            run.task, run.id, run.profile
-        ),
-        format!("$ {} · {}", run.harness, title),
-        format!("  worktree {}", run.worktree.display()),
-        format!("  branch {} from {}", run.branch, run.base),
-    ];
+    let log = matches!(run.session, Some(corral_types::SessionRef::Process { .. }));
+    let mut lines = vec![format!(
+        "Preview · {} {} · {} · {}",
+        run.task,
+        run.id,
+        run.profile,
+        if log {
+            "a sample session.log; no process is running"
+        } else {
+            "no process is running"
+        }
+    )];
+    if log {
+        lines.extend([
+            format!("[{}] reading prompt.md · {title}", run.harness),
+            format!("[{}] cd {}", run.harness, run.worktree.display()),
+            format!("[{}] edit src/model/usage/live.rs", run.harness),
+            format!("[{}] cargo test usage:: · 14 passed", run.harness),
+        ]);
+    } else {
+        lines.extend([
+            format!("$ {} · {}", run.harness, title),
+            format!("  worktree {}", run.worktree.display()),
+            format!("  branch {} from {}", run.branch, run.base),
+        ]);
+    }
     lines.push(match &agent.status {
         SessionStatus::Blocked { excerpt } => format!("? {excerpt}"),
         SessionStatus::Idle => "  idle · waiting for input".into(),

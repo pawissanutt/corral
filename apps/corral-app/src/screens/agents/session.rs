@@ -1,13 +1,14 @@
-//! The session page: its header and Transcript | Terminal switch, the strip with the run's state
-//! and its task's Actions menu (`controls`), then the terminal (`.termbar`, `.bigterm`) or the
-//! transcript with its reply box beside the run (`.side-col`); on the phone the segmented switch
-//! (`.pseg`) and the strip over the view, the reply docked. A run without a recorded pane or
-//! process shows no switch and no terminal. A run's terminal is its pane's bounded scrollback
-//! and screen (or its process log's tail), streamed while it shows and scrolling inside its
-//! surface, with the reply under it (docked on the phone) so the owner answers without leaving
-//! it. A session running child agents lists them and their messages under the run
-//! (`transcript::fleet`), and on the phone in a fold under the strip.
+//! The session page: its head with the run's Session menu (and, where corrald serves
+//! transcripts, the Transcript | Terminal switch), the strip with the run's state (`controls`),
+//! then the terminal (`.termbar`, `.bigterm`) with the pane's keys bar and type field under it
+//! (`keys`), or the transcript with its reply box beside the run (`.side-col`); on the phone the
+//! segmented switch (`.pseg`) and the strip over the view, the keys or the reply docked. A run
+//! without a recorded pane or process shows no terminal. A run's terminal is its pane's bounded
+//! scrollback and screen (or its process log's tail), streamed while it shows and scrolling
+//! inside its surface. A session running child agents lists them and their messages under the
+//! run (`transcript::fleet`), and on the phone in a fold under the strip.
 
+use corral_protocol::app::SESSION_V1;
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
@@ -30,7 +31,7 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::console::{self, BIG, PHONE, PHONE_SCREEN, SCREEN};
 use super::transcript::{fleet, line, transcript};
-use super::{Dispatch, controls, grid, reply, run};
+use super::{Dispatch, controls, grid, keys, reply, run};
 
 /// The run column's width (`minmax(0, 1fr) 280px`).
 const RUN_WIDTH: f32 = 280.0;
@@ -144,8 +145,11 @@ pub(super) fn draft(
             && now.is_some()
         {
             draft.set(String::new());
-            let target = DetailRef::Session { id: id.to_string() };
-            untracked(|| send(app, Action::Refresh(target)));
+            // Only a corrald that serves transcripts has one to read the reply in.
+            if untracked(|| app.capable(SESSION_V1)) {
+                let target = DetailRef::Session { id: id.to_string() };
+                untracked(|| send(app, Action::Refresh(target)));
+            }
         }
     });
     draft
@@ -177,26 +181,27 @@ fn stream_screen(app: AppState, session: Memo<Session>, id: Id) {
 
 /// Desktop and terminal: the head, the action bar, then any notice about the session, then the
 /// open view. The terminal is built once while it shows and follows its parts, so a screen
-/// arriving neither moves the owner's scroll nor takes the reply field's focus; the
-/// transcript, the reply and the run each follow their own part of the session.
+/// arriving neither moves the owner's scroll nor takes the type field's focus; the transcript,
+/// the reply and the run each follow their own part of the session.
 pub fn page(app: AppState, session: Memo<Session>, id: Id) -> AnyElement {
     stream_screen(app, session, id.clone());
     let draft = draft_for(app, session, id);
-    // The head follows the open session and whether it has a terminal, not its view: the
-    // switch keeps its focus.
-    let key = computed(move || session.with(|s| (s.id.clone(), s.terminal.is_some())));
+    // The head follows the open session, its switch and its menu, not its view: the switch and
+    // the menu keep their focus.
+    let key = computed(move || session.with(|s| (s.id.clone(), s.switch, s.controls.menu.clone())));
     let top = dynamic(move || {
-        let (_, terminal) = key.get();
+        let (_, switch_shown, menu) = key.get();
         untracked(move || {
-            let control = terminal.then(|| switch(app, session));
-            session.with(|s| head(app, s, control))
+            let control = switch_shown.then(|| switch(app, session));
+            let menu = menu.map(|id| controls::session_menu(app, id));
+            session.with(|s| head(app, s, control, menu))
         })
     });
     let shape = shape_of(session);
     let content = dynamic(move || {
         let (terminal, note) = shape.get();
         let surface = if terminal {
-            untracked(|| terminal_view(app, session, draft))
+            untracked(|| terminal_view(app, session))
         } else {
             untracked(|| transcript_view(app, session, draft))
         };
@@ -230,25 +235,35 @@ pub fn page(app: AppState, session: Memo<Session>, id: Id) -> AnyElement {
 }
 
 /// The page head. Desktop (`.pagehead`): back to Agents, the id in quiet mono and the title in
-/// bold, the run and agent, then the `` ` `` key and the switch at the trailing edge when the
-/// session has a terminal. Terminal: the kit's pushed head with the key's legend and the switch.
-fn head(app: AppState, session: &Session, switch: Option<AnyElement>) -> AnyElement {
+/// bold, the run and agent, then the `` ` `` key and the switch when the session has both views,
+/// and the Session menu at the trailing edge. Terminal: the kit's pushed head with the same at
+/// its trailing edge.
+fn head(
+    app: AppState,
+    session: &Session,
+    switch: Option<AnyElement>,
+    menu: Option<AnyElement>,
+) -> AnyElement {
     let back = session.back.clone();
     if app.form == Form::Terminal {
+        let has_switch = switch.is_some();
+        let trailing = view()
+            .flex_row()
+            .items_center()
+            .when(has_switch, |row| {
+                row.child(term::legend(session.switch_key, session.switch_hint))
+                    .child(term::space(2.0))
+            })
+            .children(switch)
+            .when(has_switch, |row| row.child(term::space(2.0)))
+            .children(menu)
+            .into_element();
         return pushed_head(
             app,
             format!("{} {}", session.id, session.title),
             session.desktop_back_label,
             move || run(app, back.clone()),
-            switch.map(|switch| {
-                view()
-                    .flex_row()
-                    .items_center()
-                    .child(term::legend(session.switch_key, session.switch_hint))
-                    .child(term::space(2.0))
-                    .child(switch)
-                    .into_element()
-            }),
+            Some(trailing),
         );
     }
     let has_switch = switch.is_some();
@@ -321,6 +336,7 @@ fn head(app: AppState, session: &Session, switch: Option<AnyElement>) -> AnyElem
             )
         })
         .children(switch)
+        .children(menu)
         .into_element()
 }
 
@@ -588,13 +604,13 @@ pub(super) fn surface_scroll(rows: Memo<Option<Rows>>) -> Scroll {
     )
 }
 
-/// The terminal view. Desktop: the toolbar over the dark mono surface, scrolling, and the reply
-/// box under it. Terminal: the toolbar's words quiet on one row with the refresh control, a
-/// rule, the lines, then the reply.
-fn terminal_view(app: AppState, session: Memo<Session>, draft: Signal<String>) -> AnyElement {
+/// The terminal view. Desktop: the toolbar over the dark mono surface, scrolling, and the
+/// pane's keys bar and type field under it. Terminal: the toolbar's words quiet on one row with
+/// the refresh control, a rule, the lines, then the keys.
+fn terminal_view(app: AppState, session: Memo<Session>) -> AnyElement {
     let bar = termbar_of(session);
     let rows = rows_of(session);
-    let answer = reply::region(app, session, draft);
+    let keys = keys::region(app, session);
     let top = dynamic(move || {
         bar.with(|bar| match bar {
             Some(bar) => toolbar(app, bar, run),
@@ -610,7 +626,7 @@ fn terminal_view(app: AppState, session: Memo<Session>, draft: Signal<String>) -
             .child(surface_scroll(rows).child(dynamic(move || {
                 rows.with(|rows| rows_view(app, rows.as_ref(), BIG, (0.0, 0.0)))
             })))
-            .child(answer)
+            .child(keys)
             .into_element();
     }
     view()
@@ -625,7 +641,7 @@ fn terminal_view(app: AppState, session: Memo<Session>, draft: Signal<String>) -
                     rows.with(|rows| rows_view(app, rows.as_ref(), BIG, (18.0, 14.0)))
                 })),
         )
-        .child(answer)
+        .child(keys)
         .into_element()
 }
 
@@ -704,16 +720,18 @@ fn phone_terminal(app: AppState, session: Memo<Session>) -> AnyElement {
         .into_element()
 }
 
-/// The phone's session page: the switch over the transcript or the terminal (when there is
-/// one), the trailing control switching the view. The reply docks in the bar, and the page
-/// scrolls itself so the terminal can keep to its newest rows.
+/// The phone's session page: the switch over the transcript or the terminal (where corrald
+/// serves both), the trailing control switching the view. The terminal docks the pane's keys
+/// in the bar, the transcript its reply, and the page scrolls itself so the terminal can keep
+/// to its newest rows.
 pub fn phone(app: AppState, session: Memo<Session>, id: Id) -> PhonePage {
     stream_screen(app, session, id.clone());
     let draft = draft_for(app, session, id);
     let (title, toggle) =
         untracked(move || session.with(|s| (s.phone_title.clone(), s.toggle.clone())));
-    let has_terminal = computed(move || session.with(|s| s.terminal.is_some()));
+    let has_terminal = computed(move || session.with(|s| s.switch));
     let terminal = move || session.with(|s| s.view == View::Terminal && s.terminal.is_some());
+    let docks_keys = computed(terminal);
     let switcher = dynamic(move || {
         if has_terminal.get() {
             untracked(move || {
@@ -764,9 +782,15 @@ pub fn phone(app: AppState, session: Memo<Session>, id: Id) -> PhonePage {
             }))
             .into_element()
     });
-    // The reply is redrawn only when it changes, not with each new screen, so a field being
-    // typed in keeps its focus.
-    let docked = reply::region(app, session, draft);
+    // The docked words are redrawn only when the view switches, not with each new screen, so a
+    // field being typed in keeps its focus.
+    let docked = dynamic(move || {
+        if docks_keys.get() {
+            untracked(|| keys::region(app, session))
+        } else {
+            untracked(|| reply::region(app, session, draft))
+        }
+    });
     PhonePage {
         title,
         body,

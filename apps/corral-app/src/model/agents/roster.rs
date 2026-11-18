@@ -7,6 +7,7 @@ use crate::model::daemon;
 use crate::model::effect::{Effect, Env};
 use crate::model::glance::{Stat, StatIcon};
 use crate::model::projects::ProjectFilter;
+use crate::model::work::{Record, session_task};
 use crate::model::{Hue, Id, Live, Selection, assistant};
 
 use super::{Action, AgentStatus, State, live};
@@ -474,6 +475,8 @@ pub fn roster(state: &State, feed: &daemon::Feed, _env: Env, filter: &ProjectFil
 }
 
 impl State {
+    /// The roster's keys: j/k (and the arrows) move the selection, Escape clears it, and `.`
+    /// opens the Session menu of the selected run, or of the run whose page is open.
     pub fn key_live_filtered(
         &mut self,
         key: &str,
@@ -483,6 +486,19 @@ impl State {
         _env: Env,
         filter: &ProjectFilter,
     ) -> Option<Vec<Effect>> {
+        if key == "." {
+            let session = match top {
+                Some(Live::Session(id)) => Some(id.clone()),
+                Some(_) => return None,
+                None => self.roster_session.clone(),
+            };
+            return Some(
+                session
+                    .filter(|id| session_task(id).is_some())
+                    .map(|id| vec![Effect::VerbMenu(Record::Session(id))])
+                    .unwrap_or_default(),
+            );
+        }
         if top.is_some() {
             return None;
         }

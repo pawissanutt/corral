@@ -448,3 +448,30 @@ fn escape_clears_the_roster_selection_before_leaving_agents() {
             .selected
     );
 }
+
+/// A run row's Session menu stops its run: Stop asks once, confirming submits `stop`, and the
+/// run leaves the roster.
+#[test]
+fn stop_from_a_session_row_asks_once_and_stops_the_run() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.wait_for("id:agent-T-14_R1").unwrap();
+    app.right_click("id:agent-T-14_R1").unwrap();
+    app.press("id:btn-stop").unwrap();
+    app.wait_for("id:confirm").unwrap();
+    app.press("id:confirm-confirm").unwrap();
+    app.wait_for("text:/^Stop T-14 · Done/").unwrap();
+    app.wait_for_gone("id:agent-T-14_R1", Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(app.screen().count("id:confirm").unwrap(), 0);
+}
+
+/// Review's live reviewer opens its session page: the reviewer run's terminal.
+#[test]
+fn the_reviewer_session_opens_from_review() {
+    let mut app = preview(desktop(), &[("corral.destination", "review")]);
+    app.press("id:task-T-13").unwrap();
+    app.press("id:btn-open-reviewer").unwrap();
+    app.wait_for("id:session-terminal").unwrap();
+    app.wait_for("id:btn-session-menu").unwrap();
+    app.wait_for("text:/T-13-R2/").unwrap();
+}

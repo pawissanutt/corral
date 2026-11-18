@@ -267,7 +267,7 @@ impl State {
         self.menu = None;
         let task = match &record {
             Record::Task(id) => feed.board.task(id).map(|task| task.task()),
-            Record::Workspace => None,
+            Record::Workspace | Record::Session(_) => None,
         };
         let fields = fields(verb, task, &FormContext::new(feed, task));
         if fields.is_empty() {

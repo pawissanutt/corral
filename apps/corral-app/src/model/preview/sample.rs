@@ -528,9 +528,14 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
         "T-14" => record
             .runs
             .push(run(feed, record, Role::Worker, "omp-sol", 2 * HOUR)),
+        // A headless run: a detached process writing `session.log`, which takes no keys.
         "T-15" => {
             let mut run = run(feed, record, Role::Worker, "codex-terra", 4 * HOUR);
             run.quiet_since = Some(ago(feed, 25 * MINUTE));
+            run.session = Some(SessionRef::Process {
+                pid: 48213,
+                dir: PathBuf::from("/preview/corral/.corral-next/runs/T-15/R1"),
+            });
             record.runs.push(run);
         }
         "T-17" => record.task.body.push_str(

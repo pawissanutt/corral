@@ -331,8 +331,8 @@ fn sent_line(state: &State, feed: &Feed, task: &str) -> Option<SentLine> {
 }
 
 /// Every engine operation on the task, all enabled: the engine decides.
-fn verbs(id: &Id) -> Vec<Button> {
-    super::record_verbs(&Record::Task(id.clone()))
+fn verbs(id: &Id, feed: &Feed) -> Vec<Button> {
+    super::record_verbs(&Record::Task(id.clone()), feed)
         .into_iter()
         .map(|verb| Button::new(verb.label, verb.press, ButtonKind::Ghost))
         .collect()
@@ -577,7 +577,7 @@ pub fn live_story(state: &State, feed: &Feed, task: &daemon::Task, form: Form) -
     } else {
         task_buttons(feed, task, false)
     };
-    actions.extend(verbs(&task.id));
+    actions.extend(verbs(&task.id, feed));
     let actor = daemon_actor(task.group);
     LiveStory {
         id: task.id.to_string(),

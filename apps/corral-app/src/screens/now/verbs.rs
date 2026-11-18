@@ -3,9 +3,10 @@
 //! Menu key; phone: a held finger opens it as the action sheet), a control's press-opened menu,
 //! the reasons under an action row's unavailable commands, and the work state's overlays the
 //! shells host once beside the confirmation: the command menu the keyboard opens (`.`) and the
-//! composer a text verb opens (a comment, a park reason).
+//! composer a text verb opens (a comment, a park reason). A run's Session menu opens its task's
+//! Actions menu as a submenu (beside it, or in the sheet's place on the phone).
 
-use nsh_base::{button as press_target, context_menu, menu, menu_item};
+use nsh_base::{button as press_target, context_menu, menu, menu_item, submenu};
 use nsh_core::element::{StyleRefinement, color as for_appearance, input};
 use nsh_core::prelude::*;
 
@@ -13,6 +14,7 @@ use crate::model::commands::CONFIRM_CANCEL;
 use crate::model::work::{self, Button, Press, Record, VerbAction};
 use crate::model::{Form, Hue, Live};
 use crate::state::AppState;
+use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::overlay::{Modal, modal};
@@ -95,16 +97,89 @@ fn backdrop(s: StyleRefinement) -> StyleRefinement {
 
 /// Every engine operation of the record, in the table's order; each runs when chosen, or
 /// opens the composer when it asks for input. Nothing is predicted or disabled: the engine
-/// decides, and a refusal opens its sheet.
+/// decides, and a refusal opens its sheet. A Session menu's Task entry is a submenu holding the
+/// task's Actions menu; its Focus pane says why where it cannot work.
 fn items(app: AppState, record: &Record) -> AnyElement {
-    let verbs = work::record_verbs(record);
+    let verbs = app
+        .feed
+        .with_untracked(|feed| work::record_verbs(record, feed));
     view()
         .children(
             verbs
                 .into_iter()
-                .map(|verb| item(app, verb))
+                .map(|verb| match &verb.press {
+                    Press::Menu(inner) => task_menu(app, inner.clone(), verb.label, verb.slug),
+                    _ => item(app, verb),
+                })
                 .collect::<Vec<_>>(),
         )
+        .into_element()
+}
+
+/// The Task entry of a Session menu: the task's Actions menu, opened beside the entry on
+/// desktop (its chevron; ` ›` in a terminal) and in the sheet's place on the phone, under a
+/// Back row. test_id `btn-<slug>`.
+fn task_menu(app: AppState, record: Record, label: String, slug: &'static str) -> AnyElement {
+    let form = app.form;
+    let words = text(label)
+        .number_of_lines(1u32)
+        .truncate()
+        .flex_1()
+        .min_w(px(0.0))
+        .text_color(color(Token::Ink));
+    let trigger = match form {
+        Form::Terminal => view()
+            .flex_row()
+            .items_center()
+            .h(term::rows(1.0))
+            .px(term::cells(1.0))
+            .child(words),
+        Form::Desktop => view()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .px(px(12.0))
+            .py(px(6.0))
+            .child(words.font_family(FONT_TEXT).text_size(px(12.5)))
+            .child(icon(Icon::Chevron, 12.0, color(Token::Ink3))),
+        Form::Phone => view()
+            .flex_row()
+            .items_center()
+            .min_h(px(TARGET + 4.0))
+            .px(px(18.0))
+            .py(px(8.0))
+            .child(words.font_family(FONT_TEXT).text_size(px(16.0)))
+            .child(icon(Icon::Chevron, 16.0, color(Token::Ink3))),
+    };
+    let trigger = trigger
+        .test_id(&format!("btn-{slug}"))
+        .cursor_pointer()
+        .hover(|s| s.bg(color(Token::Hover)))
+        .focus(|s| s.bg(color(Token::Hover)));
+    let back = view()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .min_h(px(TARGET))
+        .px(px(14.0))
+        .cursor_pointer()
+        .role(AccessibilityRole::Button)
+        .label("Back to the Session menu")
+        .test_id("btn-menu-back")
+        .child(icon(Icon::Back, 16.0, color(Token::Ink2)))
+        .child(
+            text("Session")
+                .font_family(FONT_TEXT)
+                .text_size(px(15.0))
+                .text_color(color(Token::Ink2)),
+        );
+    submenu()
+        .trigger(trigger)
+        .back(back)
+        .child(dynamic(move || {
+            let record = record.clone();
+            untracked(move || items(app, &record))
+        }))
         .into_element()
 }
 
@@ -250,18 +325,29 @@ fn overlay(state: &work::State) -> Overlay {
 /// menu the keyboard opens on the selected record, and the composer of a text verb. Each is a
 /// dialog on desktop, a sheet on the phone, the framed region over the page in a terminal. The
 /// host follows the overlay last shown, so a closing sheet leaves with its own exit; a verb
-/// chosen in the menu that needs words replaces it with its composer.
+/// chosen in the menu that needs words replaces it with its composer, and a Session menu's Task
+/// entry replaces it with the task's menu.
 pub fn verb_composer(app: AppState) -> AnyElement {
     let shown = computed(move || app.work.with(overlay));
     let host = signal(Overlay::Composer);
+    let listed = signal(None::<Record>);
     effect(move || {
         let now = shown.get();
         if now != Overlay::Hidden && untracked(|| host.get()) != now {
             host.set(now);
         }
+        // The menu's record while it shows; a closing menu keeps the last, so it leaves whole.
+        if let Some(record) = app.work.with(|state| state.menu.clone())
+            && untracked(|| listed.get()).as_ref() != Some(&record)
+        {
+            listed.set(Some(record));
+        }
     });
     dynamic(move || {
         let kind = host.get();
+        if kind == Overlay::Menu {
+            listed.with(|_| ());
+        }
         untracked(|| match kind {
             Overlay::Menu => modal(
                 app,
@@ -293,7 +379,11 @@ pub fn verb_composer(app: AppState) -> AnyElement {
 fn command_menu(app: AppState) -> Modal {
     let form = app.form;
     let record = app.work.with_untracked(|state| state.menu.clone());
-    let verbs = record.as_ref().map_or_else(Vec::new, work::record_verbs);
+    let verbs = app.feed.with_untracked(|feed| {
+        record
+            .as_ref()
+            .map_or_else(Vec::new, |record| work::record_verbs(record, feed))
+    });
     let first = element_ref();
     let mut focused = false;
     let rows: Vec<AnyElement> = verbs
@@ -303,7 +393,11 @@ fn command_menu(app: AppState) -> Modal {
                 focused = true;
                 first
             });
-            command_row(app, verb, focus)
+            let label = match &verb.press {
+                Press::Menu(_) => format!("{} ›", verb.label),
+                _ => verb.label.clone(),
+            };
+            command_row(app, VerbAction { label, ..verb }, focus)
         })
         .collect();
     if focused {
@@ -564,7 +658,8 @@ fn composer(app: AppState) -> Modal {
 }
 
 /// A closed set of values (a status, a verdict, a profile) as one button each, the chosen one
-/// filled: a press picks it, Tab walks them, and Return or Space presses the focused one.
+/// filled: a press picks it, Tab walks them, and Return or Space presses the focused one. A
+/// chosen button is drawn anew in its filled look, so the keyboard focus is put back on it.
 /// test_id `seg-<field>-<value>`, the field label lower-cased with dashes, `none` for an empty
 /// value.
 fn choice_row(
@@ -575,6 +670,16 @@ fn choice_row(
     caption: Text,
 ) -> AnyElement {
     let group = field.label.to_lowercase().replace(' ', "-");
+    // Runs under the row, which outlives the buttons a choice redraws.
+    let chosen_at = stored(None::<ElementRef>);
+    let picks = signal(0u64);
+    effect(move || {
+        if picks.get() > 0
+            && let Some(handle) = chosen_at.get()
+        {
+            after_answer(move || handle.focus());
+        }
+    });
     let buttons: Vec<AnyElement> = field
         .choices
         .iter()
@@ -586,6 +691,7 @@ fn choice_row(
             };
             let id = format!("seg-{group}-{shown}");
             let work::Choice { value, label } = choice.clone();
+            let handle = element_ref();
             dynamic(move || {
                 let chosen = values.with(|values| values.get(index) == Some(&value));
                 let value = value.clone();
@@ -597,14 +703,19 @@ fn choice_row(
                     } else {
                         ButtonKind::Ghost
                     },
-                    ButtonOptions::default(),
+                    ButtonOptions {
+                        focus: Some(handle),
+                        ..ButtonOptions::default()
+                    },
                     id.clone(),
                     move || {
                         values.update(|values| {
                             if let Some(slot) = values.get_mut(index) {
                                 slot.clone_from(&value);
                             }
-                        })
+                        });
+                        chosen_at.replace(Some(handle));
+                        picks.update(|picks| *picks += 1);
                     },
                 )
             })

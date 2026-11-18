@@ -1,14 +1,17 @@
 //! One Actions menu for every task, shared by row menus, page heads, the keyboard menu and the
 //! palette. It lists every engine operation in a fixed order and never predicts a refusal:
-//! every item is enabled and the engine decides.
+//! every item is enabled and the engine decides. A run's Session menu leads with the operations
+//! that act on its session, then opens its task's Actions menu.
 use super::Press;
+use crate::model::daemon::Feed;
 use crate::model::{Destination, Id, Live, Selection};
 
-/// What an action list is about: a task (a plan and a review candidate are tasks), or the
-/// workspace, whose only action creates a task.
+/// What an action list is about: a task (a plan and a review candidate are tasks), a run's
+/// session (`T-42_R1`), or the workspace, whose only action creates a task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Record {
     Task(Id),
+    Session(Id),
     Workspace,
 }
 
@@ -16,22 +19,20 @@ impl Record {
     pub fn from_live(live: &Live) -> Self {
         match live {
             Live::Task(id) | Live::Plan(id) | Live::Review(id) => Self::Task(id.clone()),
-            Live::Session(id) => match session_task(id) {
-                Some(task) => Self::Task(Id::new(task)),
-                None => Self::Workspace,
-            },
-            Live::Thread(_) => Self::Workspace,
+            Live::Session(id) if session_task(id).is_some() => Self::Session(id.clone()),
+            Live::Session(_) | Live::Thread(_) => Self::Workspace,
         }
     }
     pub fn live(&self) -> Option<Live> {
         match self {
             Self::Task(id) => Some(Live::Task(id.clone())),
+            Self::Session(id) => Some(Live::Session(id.clone())),
             Self::Workspace => None,
         }
     }
     pub fn id(&self) -> &str {
         match self {
-            Self::Task(id) => id.as_str(),
+            Self::Task(id) | Self::Session(id) => id.as_str(),
             Self::Workspace => "workspace",
         }
     }
@@ -60,9 +61,9 @@ pub fn palette_record(
             Destination::Review => selected.review.clone().map(Record::Task),
             Destination::Agents => selected
                 .session
-                .as_deref()
-                .and_then(session_task)
-                .map(|task| Record::Task(Id::new(task))),
+                .clone()
+                .filter(|session| session_task(session).is_some())
+                .map(Record::Session),
             _ => None,
         }
         .unwrap_or(Record::Workspace),
@@ -160,7 +161,7 @@ impl Verb {
 
     pub fn title(self, record: &Record) -> String {
         match record {
-            Record::Task(id) => format!("{} {id}", self.submit_label()),
+            Record::Task(id) | Record::Session(id) => format!("{} {id}", self.submit_label()),
             Record::Workspace => self.submit_label().into(),
         }
     }
@@ -193,16 +194,15 @@ pub struct VerbAction {
     pub press: Press,
 }
 
-fn table(record: &Record) -> &'static [Verb] {
-    match record {
+/// No surface owns a second list of operations or its own enabled conditions. A run's Session
+/// menu reads the feed for where its pane can be focused.
+pub fn record_verbs(record: &Record, feed: &Feed) -> Vec<VerbAction> {
+    let table: &[Verb] = match record {
         Record::Task(_) => &Verb::TASK,
         Record::Workspace => &[Verb::NewTask],
-    }
-}
-
-/// No surface owns a second list of operations or its own enabled conditions.
-pub fn record_verbs(record: &Record) -> Vec<VerbAction> {
-    table(record)
+        Record::Session(session) => return crate::model::agents::session_verbs(feed, session),
+    };
+    table
         .iter()
         .map(|&verb| VerbAction {
             slug: verb.slug(),
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn every_task_lists_all_fifteen_operations_in_order_and_all_enabled() {
-        let verbs = record_verbs(&Record::Task(Id::new("T-1")));
+        let verbs = record_verbs(&Record::Task(Id::new("T-1")), &Feed::default());
         assert_eq!(
             verbs.iter().map(|verb| verb.slug).collect::<Vec<_>>(),
             [
@@ -239,10 +239,10 @@ mod tests {
     }
 
     #[test]
-    fn a_run_session_acts_on_its_task() {
+    fn a_run_session_has_its_session_menu_and_an_assistant_none() {
         assert_eq!(
             Record::from_live(&Live::Session(Id::new("T-42_R2"))),
-            Record::Task(Id::new("T-42"))
+            Record::Session(Id::new("T-42_R2"))
         );
         assert_eq!(
             Record::from_live(&Live::Session(Id::new("A-1"))),

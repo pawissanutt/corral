@@ -7,6 +7,7 @@ mod details;
 mod effects;
 mod engine;
 mod fleet;
+mod pane;
 mod rollup;
 mod sample;
 mod sessions;
@@ -27,6 +28,7 @@ use serde_json::Value;
 pub use details::detail;
 pub use effects::{effect, operation};
 pub use engine::act;
+pub use pane::pane;
 
 pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZone>) -> Feed {
     let mut feed = base(now, date, clock, time_zone);
@@ -104,13 +106,13 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         version: "preview".into(),
         slots: None,
     });
+    // As corrald in phase 2: no `session.v1`, so run pages read no transcripts.
     for capability in [
         corral_protocol::TASKS_V1,
         CHANGES_V1,
         PLANS_V1,
         PROJECTS_V1,
         AGENTS_V1,
-        SESSION_V1,
         SESSION_FLEET_V1,
         REVIEW_V1,
         TIMELINE_V1,

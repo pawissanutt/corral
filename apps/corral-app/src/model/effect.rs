@@ -5,6 +5,7 @@ use corral_protocol::assistant::{
     AssistantSend, AssistantSessionOp, AssistantStop, AssistantWarm, ContextRef, PromptAnswer,
 };
 use corral_protocol::detail::DetailGet;
+use corral_protocol::pane::{PaneFocus, PaneKeys};
 
 use crate::model::act::Act;
 use crate::model::id::Id;
@@ -34,6 +35,13 @@ impl Conn {
 pub struct Env {
     pub conn: Conn,
     pub form: Form,
+}
+
+/// What goes to a run's herdr pane: focus it, or type literal text and then named keys into it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneRequest {
+    Focus(PaneFocus),
+    Keys(PaneKeys),
 }
 
 /// What a reducer asks the app to do after it changed its own state.
@@ -107,5 +115,13 @@ pub enum Effect {
     Session {
         key: Id,
         op: AssistantSessionOp,
+    },
+    /// Send a pane request (`pane.focus`, `pane.keys`) for run session `session` under `key`,
+    /// the request id its reply is read by; `what` names it where the session shows its outcome.
+    Pane {
+        session: Id,
+        key: Id,
+        what: crate::model::agents::PaneAsk,
+        request: PaneRequest,
     },
 }

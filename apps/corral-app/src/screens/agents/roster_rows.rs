@@ -4,8 +4,8 @@
 //! room and no panel is open. Phone (the mock's `.ar` at 640 pt and under): chip, name and id;
 //! what it does; profile, model and quiet time. Terminal: the desktop's columns as Cells, one row
 //! each, giving way one at a time as the grid narrows; words too long for their column are cut
-//! at the character. A run's line carries the Actions menu of its task (secondary press,
-//! Shift+F10 or the Menu key; a held finger on the phone).
+//! at the character. A run's line carries its Session menu (secondary press, Shift+F10 or the
+//! Menu key; a held finger on the phone; `.` while the roster has the focus).
 //!
 //! Rows are kept by session while the roster changes, each part following its own fact, so a
 //! row the keyboard is on keeps the focus as its times and counts tick. Every word and number is
@@ -237,7 +237,7 @@ pub(super) fn heads(app: AppState, roster: Memo<Roster>, columns: Memo<Columns>)
 /// One line per session, kept by session id, in the destination's keyboard list
 /// (`AppState::list_keys`), so j, k and the arrows move the selection while a line has the
 /// focus. Desktop and terminal lines select (the panel opens for them); a phone row opens the
-/// session page. A run's line carries its task's Actions menu.
+/// session page. A run's line carries its Session menu.
 pub(super) fn lines(app: AppState, roster: Memo<Roster>, columns: Memo<Columns>) -> AnyElement {
     let rows = each(
         move || roster.with(|r| r.rows.clone()),
@@ -247,8 +247,8 @@ pub(super) fn lines(app: AppState, roster: Memo<Roster>, columns: Memo<Columns>)
                 Form::Phone => phone_line(app, row),
                 Form::Desktop | Form::Terminal => line(app, row, columns),
             };
-            match untracked(|| row.with(|r| r.task.clone())) {
-                Some(task) => with_menu(app, Record::Task(task), drawn),
+            match untracked(|| row.with(|r| r.task.is_some().then(|| r.session.clone()))) {
+                Some(session) => with_menu(app, Record::Session(session), drawn),
                 None => drawn,
             }
         },

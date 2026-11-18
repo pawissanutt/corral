@@ -1,9 +1,10 @@
 //! The selected session's panel (`.apanel`, the mock's `agentPanel`), from `RosterPanel`: the
 //! head (state, role, id, project, close; the name; profile, model, harness, pane and since),
-//! the Summary | Terminal tabs with Open session and the Actions menu of the run's task, then the
-//! Summary (what waits on the owner, what the session does now, what it said and did) or the
-//! pane's terminal, and the reply box pinned under them. Every press goes through the roster's
-//! selection (`run_roster`), never the full session route.
+//! the Summary | Terminal tabs with Open session and the run's Session menu, how its latest pane
+//! request ended, then the Summary (what waits on the owner, what the session does now and,
+//! from a corrald that serves transcripts, what it said and did) or the pane's terminal, and the
+//! reply box pinned under them. Every press goes through the roster's selection
+//! (`run_roster`), never the full session route.
 //!
 //! The panel keeps what it shows loaded while it stays open (`RosterPanel::wants`), as the
 //! session page does: the transcript read once and again when the run's row changes, the pane's
@@ -22,6 +23,7 @@ use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::chip::chip;
+use crate::ui::kit::marks::hue_ink;
 use crate::ui::term::{self, cells};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
@@ -91,6 +93,7 @@ fn body(app: AppState, panel: Memo<Option<RosterPanel>>, place: Memo<Place>) -> 
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(head(app, current, place))
+        .child(pane_outcome(app, current))
         .child(content)
         .child(words);
     let at = move |wanted: Place| move || place.get() == wanted;
@@ -188,11 +191,14 @@ fn keep_loaded(app: AppState, current: Memo<RosterPanel>) {
             let earlier = app
                 .agents
                 .with_untracked(|state| state.earlier.contains(id.as_str()));
+            let target = DetailRef::Session { id: id.to_string() };
+            // Only what the panel wants: a run's transcript only from a corrald serving them.
+            let wanted = current.with_untracked(|p| p.wants.contains(&target));
             if let Some(before) = seen.replace(Some(now.clone()))
                 && before != now
                 && !earlier
+                && wanted
             {
-                let target = DetailRef::Session { id: id.to_string() };
                 untracked(|| scoped.refresh(target));
             }
         });
@@ -273,7 +279,7 @@ struct Head {
     tabs: Vec<(&'static str, &'static str, Action)>,
     open_label: &'static str,
     open: Action,
-    task: Option<Id>,
+    menu: Option<Id>,
 }
 
 /// The head (`.phd`): the state chip, role, id and project with close at the trailing edge (a
@@ -298,7 +304,7 @@ fn head(app: AppState, current: Memo<RosterPanel>, place: Memo<Place>) -> AnyEle
                 .collect(),
             open_label: p.open_label,
             open: p.open.clone(),
-            task: p.task.clone(),
+            menu: p.menu.clone(),
         })
     });
     let chosen = computed(move || {
@@ -384,7 +390,7 @@ fn head_view(
             "btn-open-session",
             move || run_roster(app, open.clone()),
         ))
-        .children(head.task.clone().map(|task| controls::actions(app, task)));
+        .children(head.menu.clone().map(|id| controls::session_menu(app, id)));
     let block = view()
         .flex_none()
         .child(first)
@@ -431,6 +437,34 @@ fn close(app: AppState, head: &Head, place: Memo<Place>) -> AnyElement {
                 "btn-close-panel",
                 move || run_roster(app, action.clone()),
             )
+        })
+    })
+}
+
+/// How the run's latest pane request (keys, Focus pane) ended, in its tone, under the head;
+/// nothing before the first (`pane-status`).
+fn pane_outcome(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
+    let status = computed(move || current.with(|p| p.pane.clone()));
+    dynamic(move || {
+        status.with(|status| {
+            status.as_ref().map(|(hue, words)| {
+                let ink = match hue {
+                    Hue::Neutral => color(Token::Ink3),
+                    hue => hue_ink(*hue),
+                };
+                let line = text(words.clone()).test_id("pane-status").text_color(ink);
+                if app.form == Form::Terminal {
+                    return view().flex_none().px(cells(1.0)).child(line).into_element();
+                }
+                view()
+                    .flex_none()
+                    .px(px(SIDE))
+                    .py(px(8.0))
+                    .border_b_1()
+                    .border_b_color(color(Token::Rule))
+                    .child(line.font_family(FONT_TEXT).text_size(px(12.0)))
+                    .into_element()
+            })
         })
     })
 }

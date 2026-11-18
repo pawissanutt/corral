@@ -1,12 +1,13 @@
 //! The Agents destination: the roster of live runs and the quick thread with the selected one's
-//! panel, and one run's full session page, its terminal or its transcript beside the run.
-//! Everything shown comes from `model::agents`, built from the feed's rows and details; this
-//! module lays it out per form and sends every press to the model's reducer. Each run's row, panel
-//! and page carry the shared Actions menu of its task.
+//! panel, and one run's full session page: its terminal with the pane's keys, or, from a corrald
+//! that serves them, its transcript beside the run. Everything shown comes from `model::agents`,
+//! built from the feed's rows and details; this module lays it out per form and sends every
+//! press to the model's reducer. Each run's row, panel and page carry its Session menu.
 
 mod console;
 mod controls;
 mod grid;
+mod keys;
 mod panel;
 mod panel_summary;
 mod reply;
@@ -16,6 +17,7 @@ mod segs;
 mod session;
 mod transcript;
 
+use corral_protocol::app::SESSION_V1;
 use corral_protocol::detail::{DetailRef, STREAM_TERMINAL_V1};
 use corral_protocol::rows::AgentRow;
 use nsh_core::prelude::*;
@@ -41,15 +43,18 @@ pub fn screen(app: AppState) -> AnyElement {
 }
 
 /// A session page on desktop and terminal, by its session id: the header with back to Agents,
-/// the Transcript | Terminal switch (the `` ` `` key toggles it too), the strip with the task's
-/// Actions menu, then the terminal or the transcript with its reply box beside the run.
+/// its Session menu and, where corrald serves transcripts, the Transcript | Terminal switch (the
+/// `` ` `` key toggles it too), the strip with the run's state, then the terminal with the
+/// pane's keys, or the transcript with its reply box beside the run.
 pub fn live_session(app: AppState, id: Id) -> AnyElement {
     let view = computed({
         let id = id.clone();
         move || daemon_session(app, &id)
     });
     follow(app, id.clone());
-    transcript::watch(app, id.clone());
+    if untracked(|| app.capable(SESSION_V1)) {
+        transcript::watch(app, id.clone());
+    }
     session::page(app, view, id)
 }
 
@@ -60,7 +65,9 @@ pub fn live_session_phone(app: AppState, id: Id) -> PhonePage {
         move || daemon_session(app, &id)
     });
     follow(app, id.clone());
-    transcript::watch(app, id.clone());
+    if untracked(|| app.capable(SESSION_V1)) {
+        transcript::watch(app, id.clone());
+    }
     session::phone(app, view, id)
 }
 
@@ -117,24 +124,29 @@ fn row_of(app: AppState, id: Id) -> Memo<Option<AgentRow>> {
     computed(move || app.feed.with(|feed| feed.agents.get(id.as_str()).cloned()))
 }
 
-/// Keeps the open session's details current: its transcript page whenever its row changes (not
-/// while the owner reads an earlier page), and its pane's screen while the terminal shows: read
-/// when first shown, then revalidated once a tick of the feed's clock while the link is up. A
-/// failed read is not repeated every tick; it is tried again once the row changes or the link
-/// comes back, or by the owner's Refresh. A corrald that streams terminals sends the screen
-/// itself, its first frame complete, to the session page's stream; reading it here as well
-/// would race that stream, so then nothing is read. The session page itself refreshes the
-/// transcript once a reply is delivered. Reads go to the source the page mounted on.
+/// Keeps the open session's details current: its transcript page, from a corrald that serves
+/// transcripts, whenever its row changes (not while the owner reads an earlier page), and its
+/// pane's screen while the terminal shows: read when first shown, then revalidated once a tick
+/// of the feed's clock while the link is up. A failed read is not repeated every tick; it is
+/// tried again once the row changes or the link comes back, or by the owner's Refresh. A
+/// corrald that streams terminals sends the screen itself, its first frame complete, to the
+/// session page's stream; reading it here as well would race that stream, so then nothing is
+/// read. The session page itself refreshes the transcript once a reply is delivered. Reads go
+/// to the source the page mounted on.
 fn follow(app: AppState, id: Id) {
     let scoped = untracked(|| app.scope());
     let transcript = DetailRef::Session { id: id.to_string() };
     let capture = DetailRef::Terminal { id: id.to_string() };
     let row = row_of(app, id.clone());
+    let transcripts = computed(move || app.capable(SESSION_V1));
     let seen_row = stored(None::<Option<AgentRow>>);
     {
         let id = id.clone();
         effect(move || {
             let now = row.get();
+            if !transcripts.get() {
+                return;
+            }
             let earlier = app
                 .agents
                 .with_untracked(|state| state.earlier.contains(id.as_str()));
@@ -153,7 +165,7 @@ fn follow(app: AppState, id: Id) {
     let shown = computed(move || {
         has_screen.get()
             && !streamed.get()
-            && app.agents.with(|state| state.live_view == View::Terminal)
+            && (!transcripts.get() || app.agents.with(|state| state.live_view == View::Terminal))
     });
     {
         let capture = capture.clone();

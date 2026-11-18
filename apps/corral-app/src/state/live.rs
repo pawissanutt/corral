@@ -10,7 +10,9 @@ use nsh_core::prelude::*;
 
 use super::AppState;
 use crate::client::requests;
+use crate::model::agents::PaneAsk;
 use crate::model::daemon::{DetailCache, Feed, Operation};
+use crate::model::effect::PaneRequest;
 use crate::model::health::{self, Availability};
 use crate::model::{AskTarget, Destination, Effect, Env, Id, Live, Overlay, Selection};
 
@@ -239,6 +241,7 @@ impl AppState {
                     | Effect::Act(_)
                     | Effect::Device(_)
                     | Effect::Send(_)
+                    | Effect::Pane { .. }
             )
         {
             self.run_preview(effect);
@@ -341,8 +344,41 @@ impl AppState {
                     self.toast(why);
                 }
             }
+            Effect::Pane {
+                session,
+                key,
+                what,
+                request,
+            } => self.pane(session, key, what, request),
             _ => {}
         }
+    }
+
+    /// Sends a pane request under its key and remembers it as the session's latest, so the
+    /// session shows how it ended; one that cannot leave says why there instead.
+    fn pane(&self, session: Id, key: Id, what: PaneAsk, request: PaneRequest) {
+        let unsent = if self.fixture() {
+            self.feed
+                .update(|feed| crate::model::preview::pane(feed, &key, &request));
+            None
+        } else if let Some(refusal) = self.link_refusal() {
+            Some(refusal.to_owned())
+        } else {
+            let request_id = key.to_string();
+            let sent = requests::send(match request {
+                PaneRequest::Focus(request) => requests::ClientRequest::PaneFocus {
+                    request_id,
+                    request,
+                },
+                PaneRequest::Keys(request) => requests::ClientRequest::PaneKeys {
+                    request_id,
+                    request,
+                },
+            });
+            (!sent).then(|| "the app's connection task is not running".to_owned())
+        };
+        self.agents
+            .update(|state| state.pane_sent(session, key, what, unsent));
     }
 
     /// Why a call that needs the connection cannot leave now.

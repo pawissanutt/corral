@@ -236,6 +236,10 @@ pub enum Press {
     SubmitVerb(Vec<String>),
     CancelVerb,
     CloseMenu,
+    /// Show another record's menu in the keyboard menu's place: a Session menu's Task entry.
+    Menu(Record),
+    /// Bring run session `<task>_<run>`'s herdr pane forward on corrald's machine.
+    Focus(Id),
     /// Run entry `index` of the task's Blocked card `next` list, as served now.
     Next {
         task: Id,
@@ -368,6 +372,13 @@ impl State {
             Press::CloseMenu => {
                 self.menu = None;
                 Vec::new()
+            }
+            Press::Menu(record) => {
+                self.menu = Some(record);
+                Vec::new()
+            }
+            Press::Focus(session) => {
+                vec![crate::model::agents::focus(&mut self.ids, feed, session)]
             }
             Press::Next { task, index } => match served_next(feed, &task, index) {
                 Some(next) => self.next(&next, false),

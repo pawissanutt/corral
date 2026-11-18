@@ -1,7 +1,8 @@
 //! The panel's Summary tab: what waits on the owner (`.callout`, its task's Blocked reason),
-//! what the session does now and how long it has been quiet, and what it said and did (`.log`),
-//! each a section (`.sec`) of the mock's `agentPanel`. Every word and number is the
-//! `RosterPanel`'s; presses go through the roster's selection.
+//! what the session does now and how long it has been quiet, and, from a corrald that serves
+//! transcripts, what it said and did (`.log`), each a section (`.sec`) of the mock's
+//! `agentPanel`. Every word and number is the `RosterPanel`'s; presses go through the roster's
+//! selection.
 
 use std::collections::BTreeSet;
 
@@ -110,7 +111,11 @@ pub(super) fn summary(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
         }))
         .child(doing(app, current))
         .child(dynamic(move || {
-            recent.with(|recent| untracked(|| recent_view(app, recent, open)))
+            recent.with(|recent| {
+                recent
+                    .as_ref()
+                    .map(|recent| untracked(|| recent_view(app, recent, open)))
+            })
         }));
     scroll()
         .test_id("agent-panel-summary")
