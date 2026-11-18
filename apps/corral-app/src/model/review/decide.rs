@@ -17,7 +17,7 @@ use crate::model::projects::ProjectFilter;
 use crate::model::text::span;
 
 use super::live::{Shown, artifact_ref, file_ref, review_ref, selected_filtered, sha7, task_ref};
-use super::view::{Button, ButtonStyle, DecideBar, StatusLine, button};
+use super::view::{Button, ButtonStyle, DecideBar, StatusLine, Target, button};
 use super::{Action, Sent, State};
 use crate::model::work::Verb;
 
@@ -48,12 +48,41 @@ fn status_line(feed: &Feed, sent: &Sent) -> Option<StatusLine> {
     })
 }
 
+/// The Onto field of the shown candidate: what was typed for it, else the run's base.
+fn target(state: &State, shown: &Shown) -> Target {
+    let base = shown.base();
+    Target {
+        label: "Onto",
+        value: state
+            .onto
+            .get(shown.id())
+            .cloned()
+            .or_else(|| base.map(str::to_owned))
+            .unwrap_or_default(),
+        placeholder: "Branch to land onto",
+        hint: match base {
+            Some(base) => format!(
+                "The branch approving lands onto: {base}, the run's base, unless you name another existing branch."
+            ),
+            None => "The branch approving lands onto; empty lands onto the run's base.".into(),
+        },
+    }
+}
+
+/// The branch approving names: the typed one when it is not the run's base, which the engine
+/// takes without being told.
+fn onto(state: &State, shown: &Shown) -> Option<String> {
+    let typed = state.onto.get(shown.id())?.trim();
+    (!typed.is_empty() && Some(typed) != shown.base()).then(|| typed.to_owned())
+}
+
 /// The decide bar of the shown candidate.
 pub(super) fn decide_bar(state: &State, feed: &Feed, shown: &Shown, env: Env) -> DecideBar {
     let phone = env.form == Form::Phone;
     let id = shown.id();
+    let onto = onto(state, shown);
     let approve = button(
-        act::label(&approve_op(id), false),
+        act::label(&approve_op(id, onto.clone()), false),
         Action::Approve,
         ButtonStyle::Primary,
     );
@@ -96,16 +125,17 @@ pub(super) fn decide_bar(state: &State, feed: &Feed, shown: &Shown, env: Env) ->
             && matches!(act::status(feed, &sent.key), Some(ActStatus::Refused(_)))
     });
     if shown.gate_red() || refused {
+        let land = approve_op(id, onto.clone());
         secondary.push(Button {
-            hint: act::skips(&approve_op(id)).map(|skips| format!("Skips {skips}.")),
+            hint: act::skips(&land).map(|skips| format!("Skips {skips}.")),
             ..button(
-                act::label(&approve_op(id), true),
+                act::label(&land, true),
                 Action::LandAnyway,
                 ButtonStyle::Ghost,
             )
         });
     }
-    let base = shown.run().map(|run| run.base.as_str());
+    let target = target(state, shown);
     let device = feed
         .session
         .as_ref()
@@ -120,12 +150,17 @@ pub(super) fn decide_bar(state: &State, feed: &Feed, shown: &Shown, env: Env) ->
         explanation: (!phone).then(|| {
             let mut line = vec![span("Approving rebases ")];
             line.push(span(shown.head().map_or_else(|| "the task branch".into(), sha7)).mono());
-            line.push(span(match base {
-                Some(base) => format!(" onto {base}, fast-forwards it and removes the worktree."),
-                None => " onto its base, fast-forwards it and removes the worktree.".into(),
+            line.push(span(if target.value.trim().is_empty() {
+                " onto its base, fast-forwards it and removes the worktree.".into()
+            } else {
+                format!(
+                    " onto {}, fast-forwards it and removes the worktree.",
+                    target.value.trim()
+                )
             }));
             line
         }),
+        target,
         attribution: device
             .filter(|_| !phone)
             .map(|device| vec![span(format!("actor=owner · via=app:{device}")).mono().dim()]),
@@ -138,10 +173,10 @@ pub(super) fn decide_bar(state: &State, feed: &Feed, shown: &Shown, env: Env) ->
     }
 }
 
-fn approve_op(id: &Id) -> Op {
+fn approve_op(id: &Id, onto: Option<String>) -> Op {
     Op::Approve {
         id: id.to_string(),
-        onto: None,
+        onto,
     }
 }
 
@@ -244,8 +279,12 @@ impl State {
                 self.rtab(tab);
                 self.gate_log(feed, &shown).into_iter().collect()
             }
-            Action::Approve => self.send(&id, approve_op(&id), false),
-            Action::LandAnyway => self.send(&id, approve_op(&id), true),
+            Action::Approve => self.send(&id, approve_op(&id, onto(self, &shown)), false),
+            Action::LandAnyway => self.send(&id, approve_op(&id, onto(self, &shown)), true),
+            Action::Onto(words) => {
+                self.onto.insert(id, words);
+                Vec::new()
+            }
             Action::Gate => self.send(&id, Op::Gate { id: id.to_string() }, false),
             Action::StartReview => self.send(
                 &id,
@@ -289,7 +328,8 @@ impl State {
             | Action::Pick(_)
             | Action::Dismiss(_)
             | Action::AskCandidate
-            | Action::OpenSession => Vec::new(),
+            | Action::OpenSession
+            | Action::OpenReviewer => Vec::new(),
         }
     }
 }

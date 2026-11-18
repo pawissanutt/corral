@@ -18,6 +18,8 @@ mod diff;
 mod evidence;
 mod head;
 mod list;
+mod onto;
+mod rounds;
 mod status;
 
 use corral_protocol::detail::DetailRef;
@@ -671,7 +673,7 @@ fn command_hinted(cx: &Ctx, button: &review::Button, hint: Option<String>) -> An
     let options = ButtonOptions {
         icon: match button.action {
             Action::AskAbout { .. } | Action::AskCandidate => Some(Icon::Ask),
-            Action::OpenSession => Some(Icon::Agents),
+            Action::OpenSession | Action::OpenReviewer => Some(Icon::Agents),
             _ => None,
         },
         wide: app.form == Form::Phone && button.style == ButtonStyle::Primary,
@@ -715,6 +717,8 @@ fn button_id(action: &Action) -> String {
         Action::Refresh => "btn-refresh".to_owned(),
         Action::AskCandidate => "btn-ask-candidate".to_owned(),
         Action::OpenSession => "btn-open-session".to_owned(),
+        Action::OpenReviewer => "btn-open-reviewer".to_owned(),
+        Action::Onto(_) => "field-onto".to_owned(),
     }
 }
 

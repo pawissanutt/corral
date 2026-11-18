@@ -110,3 +110,40 @@ fn path_to_done_lists_open_members_and_runs_a_blocked_ones_served_next_step() {
         super::Action::Live(LiveAction::Next { index: 0, .. })
     ));
 }
+
+/// A plan page lists its children as the rows corrald serves for them, also those the open board
+/// does not carry: a child in Review whose gate failed draws that failure on its card, and a Done
+/// one counts as done on the path.
+#[test]
+fn a_plan_page_lists_its_children_from_their_served_rows() {
+    let mut feed = Feed::default();
+    feed.board_received(1, vec![], &[], true);
+    let mut red = task_row(task("T-2", Status::Review));
+    red.gate = Some(corral_types::Check {
+        task: "T-2".into(),
+        kind: corral_types::CheckKind::Gate,
+        key: "4a72ec4f00".into(),
+        result: corral_types::CheckResult::Fail,
+        notes: None,
+        log: None,
+        by: corral_types::Actor::Auto,
+        at: Timestamp::UNIX_EPOCH,
+    });
+    let landed = task_row(task("T-3", Status::Done));
+    let detail = PlanDetail {
+        parent: task("T-1", Status::Backlog),
+        children: vec![red.task.clone(), landed.task.clone()],
+        child_rows: Some(vec![red, landed]),
+    };
+    let plan = Id::new("T-1");
+    let brief = super::plan_brief(&feed, &plan, &detail);
+    let members: Vec<&str> = brief
+        .graph
+        .members
+        .iter()
+        .map(|member| member.id.as_str())
+        .collect();
+    assert_eq!(members, ["T-2", "T-3"]);
+    assert_eq!(brief.graph.members[0].stage.marks[1], Mark::Fail);
+    assert_eq!((brief.path.done, brief.path.total), (1, 2));
+}

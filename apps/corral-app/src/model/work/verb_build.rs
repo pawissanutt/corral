@@ -14,6 +14,14 @@ pub(super) fn op(
     let value = |index: usize| values.get(index).map_or("", |value| value.trim());
     let optional = |index| (!value(index).is_empty()).then(|| value(index).to_owned());
     let words = |index: usize| values.get(index).cloned().unwrap_or_default();
+    // A value the owner changed from the form's default; an untouched default is left to the
+    // engine, which resolves the same profile, base or landing target and also applies what the
+    // app cannot see (a routing rule's title pattern).
+    let chosen = |index: usize| {
+        let now = value(index);
+        (initial.get(index).map_or("", |was| was.trim()) != now && !now.is_empty())
+            .then(|| now.to_owned())
+    };
     let id = match record {
         Record::Task(id) => id.to_string(),
         Record::Workspace if verb == Verb::NewTask => String::new(),
@@ -29,20 +37,11 @@ pub(super) fn op(
             id,
             status: status(value(0))?,
         },
-        // An untouched default is left to the engine, which resolves the same profile and base
-        // and also applies what the app cannot see (a routing rule's title pattern).
-        Verb::Dispatch => {
-            let chosen = |index: usize| {
-                let now = value(index);
-                (initial.get(index).map_or("", |was| was.trim()) != now && !now.is_empty())
-                    .then(|| now.to_owned())
-            };
-            Op::Dispatch {
-                id,
-                profile: chosen(0),
-                base: chosen(1),
-            }
-        }
+        Verb::Dispatch => Op::Dispatch {
+            id,
+            profile: chosen(0),
+            base: chosen(1),
+        },
         Verb::Reply => Op::Reply { id, text: words(0) },
         Verb::Done => Op::Done {
             id,
@@ -59,7 +58,10 @@ pub(super) fn op(
             notes: optional(1),
         },
         Verb::Changes => Op::Changes { id, text: words(0) },
-        Verb::Approve => Op::Approve { id, onto: None },
+        Verb::Approve => Op::Approve {
+            id,
+            onto: chosen(0),
+        },
         Verb::Retry => Op::Retry {
             id,
             profile: optional(0),
@@ -210,6 +212,29 @@ mod tests {
                 id: "T-12".into(),
                 profile: Some("codex-terra".into()),
                 base: None,
+            })
+        );
+    }
+
+    /// The Actions menu's Approve opens on the run's base: left as it is, the engine lands onto
+    /// that base; another branch typed in goes out as `onto`.
+    #[test]
+    fn approving_onto_another_branch_sends_that_branch() {
+        let task = Record::Task(Id::new("T-11"));
+        let initial = vec!["main".to_owned()];
+        let approve = |onto: &str| op(&task, Verb::Approve, &[onto.to_owned()], &initial);
+        assert_eq!(
+            approve("main"),
+            Ok(Op::Approve {
+                id: "T-11".into(),
+                onto: None,
+            })
+        );
+        assert_eq!(
+            approve(" release/0.9 "),
+            Ok(Op::Approve {
+                id: "T-11".into(),
+                onto: Some("release/0.9".into()),
             })
         );
     }

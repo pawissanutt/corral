@@ -154,8 +154,20 @@ const fn forced_verb(op: &Op) -> &'static str {
     }
 }
 
-/// A button's words for an operation: what the menu or a refusal's next step says.
+/// A button's words for an operation: what the menu or a refusal's next step says. An approve
+/// naming its target says where it lands, so a refusal listing the existing branches reads as
+/// one button per branch.
 pub fn label(op: &Op, force: bool) -> String {
+    if let Op::Approve {
+        onto: Some(onto), ..
+    } = op
+    {
+        return if force {
+            format!("Land onto {onto} anyway")
+        } else {
+            format!("Approve onto {onto}")
+        };
+    }
     if force {
         return format!("{} anyway", forced_verb(op));
     }
@@ -199,9 +211,9 @@ const fn effect(op: &Op) -> Option<&'static str> {
     match op {
         Op::Drop { .. } => Some("Moves the task to Dropped and stops its sessions."),
         Op::Stop { .. } => Some("Kills the live session; the task becomes Blocked."),
-        Op::Approve { .. } => {
-            Some("Rebases, fast-forwards the base branch, removes the worktree and branch.")
-        }
+        Op::Approve { .. } => Some(
+            "Rebases onto the target (the run's base unless --onto names another), fast-forwards it, removes the worktree and branch.",
+        ),
         Op::Retry { fresh: true, .. } => {
             Some("Starts a new worker run from the base, not the task branch.")
         }

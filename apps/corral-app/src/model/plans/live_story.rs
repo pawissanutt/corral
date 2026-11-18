@@ -32,11 +32,11 @@ pub(super) fn story(
     detail: &PlanDetail,
     child: &corral_types::Task,
 ) -> Story {
-    let member = Member::of(feed, child);
+    let member = Member::of(feed, detail, child);
     let id = Id::new(member.id());
     let you = member.needs_you();
     let marks = member.marks();
-    let run = member.row.and_then(|row| row.row.run.as_ref());
+    let run = member.row.as_deref().and_then(|row| row.row.run.as_ref());
     let context = match run {
         Some(run) => {
             let mut words = format!("{} · {}", run.role.as_str(), run.profile);
@@ -52,7 +52,10 @@ pub(super) fn story(
         .enumerate()
         .map(|(i, label)| {
             let mark = marks[i];
-            let sha = member.row.and_then(|row| row.rail[i].sha7.clone());
+            let sha = member
+                .row
+                .as_deref()
+                .and_then(|row| row.rail[i].sha7.clone());
             let sub = match (i, sha) {
                 (0, _) => run.map_or_else(|| "−".into(), |run| run.profile.clone()),
                 (3, _) => member.task().base.clone().unwrap_or_else(|| "−".into()),
@@ -89,7 +92,7 @@ pub(super) fn story(
         if let Some(prior) = detail.children.iter().find(|other| other.id == *dep) {
             needs.push(span(format!(
                 " {}",
-                Member::of(feed, prior).marks()[3].glyph()
+                Member::of(feed, detail, prior).marks()[3].glyph()
             )));
         }
     }

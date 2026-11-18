@@ -18,6 +18,9 @@ pub struct FormContext {
     pub projects: Vec<String>,
     /// The branch the task starts from and lands onto; `None` for the repository's default.
     pub base: Option<String>,
+    /// The branch the task's latest worker run started from: where approving lands unless
+    /// told otherwise.
+    pub landing: Option<String>,
 }
 
 fn config(feed: &Feed) -> Option<&serde_json::Map<String, Value>> {
@@ -114,6 +117,10 @@ impl FormContext {
                 .and_then(|task| task.base.clone())
                 .or_else(|| effective(feed, project).and_then(|settings| settings.base.clone()))
                 .or_else(|| default_of(feed, "base")),
+            landing: task
+                .and_then(|task| feed.board.task(&task.id))
+                .and_then(|row| row.row.run.as_ref())
+                .map(|run| run.base.clone()),
         }
     }
 }

@@ -108,6 +108,9 @@ pub struct PlanView {
     pub brief: PlanBrief,
     /// The parent task's body as written; empty when it has none.
     pub document: String,
+    /// On the phone, a long document shows its opening and this toggle; absent elsewhere and
+    /// for a short one.
+    pub document_fold: Option<DocumentFold>,
     /// Members heading and what its layout means.
     pub members_heading: &'static str,
     pub members_hint: &'static str,
@@ -117,6 +120,16 @@ pub struct PlanView {
     pub selected: Option<Id>,
     /// The selected member's story; absent on phone, where members push task pages.
     pub story: Option<Story>,
+}
+
+/// A long document on the phone: its opening, cut at a paragraph and never inside a code
+/// fence, and the press that shows the rest or folds it again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocumentFold {
+    pub preview: String,
+    /// Whether the whole document shows.
+    pub open: bool,
+    pub toggle: Button,
 }
 
 /// What the detail says when there is no plan content to show.

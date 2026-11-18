@@ -47,6 +47,11 @@ fn kind_of(detail: &Detail) -> Kind {
             plan.brief.path.current = None;
             plan.selected = None;
             plan.story = None;
+            // Whether the document folds stays; whether it is open is the document's own part.
+            if let Some(fold) = &mut plan.document_fold {
+                fold.open = false;
+                fold.toggle.label.clear();
+            }
             Kind::Plan(plan)
         }
         Detail::Loading => Kind::Loading,

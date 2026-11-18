@@ -65,18 +65,28 @@ fn link(feed: &Feed, kind: CheckKind, check: Option<&Check>, waiting: bool) -> R
             .into(),
         };
     };
+    recorded(feed, check, false)
+}
+
+/// A recorded check: a gate names its commit, a review its round. The reviewer's notes are
+/// quoted; a gate's failing line is quoted too when `quote_gate`, else it joins the hint.
+pub(super) fn recorded(feed: &Feed, check: &Check, quote_gate: bool) -> ReadyLink {
+    let kind = check.kind;
     let mark = match check.result {
         CheckResult::Pass => Mark::Done,
         CheckResult::Fail => Mark::Fail,
     };
+    let on = match kind {
+        CheckKind::Gate => sha7(&check.key),
+        CheckKind::Review => format!("round {}", check.key),
+    };
     let mut hint = format!(
-        "{} recorded {} on {}",
+        "{} recorded {} on {on}",
         actor(check.by),
         match check.result {
             CheckResult::Pass => "a pass",
             CheckResult::Fail => "a failure",
         },
-        sha7(&check.key)
     );
     let at = when(check.at, feed);
     if !at.is_empty() {
@@ -86,22 +96,19 @@ fn link(feed: &Feed, kind: CheckKind, check: Option<&Check>, waiting: bool) -> R
         .notes
         .as_ref()
         .filter(|notes| !notes.trim().is_empty());
-    if kind == CheckKind::Gate
-        && let Some(notes) = notes
-    {
+    let quoted = kind == CheckKind::Review || quote_gate;
+    if !quoted && let Some(notes) = notes {
         hint.push_str(&format!(" · {notes}"));
     }
     ReadyLink {
         mark,
         hue: hue(mark),
         title: title(kind, mark),
-        sha7: Some(sha7(&check.key)),
-        quote: notes
-            .filter(|_| kind == CheckKind::Review)
-            .map(|notes| ReviewQuote {
-                by: actor(check.by).to_owned(),
-                text: notes.clone(),
-            }),
+        sha7: (kind == CheckKind::Gate).then(|| sha7(&check.key)),
+        quote: notes.filter(|_| quoted).map(|notes| ReviewQuote {
+            by: actor(check.by).to_owned(),
+            text: notes.clone(),
+        }),
         hint,
     }
 }

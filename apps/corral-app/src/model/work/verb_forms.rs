@@ -204,6 +204,12 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
             text("Notes", "Reviewer notes", ""),
         ],
         Verb::Changes => vec![required("Notes", "What to change", "")],
+        // The run's base, which the engine lands onto unless another existing branch is named.
+        Verb::Approve => vec![text(
+            "Onto",
+            "Branch to land onto; empty lands onto the run's base",
+            ctx.landing.clone().unwrap_or_default(),
+        )],
         Verb::Retry => vec![
             text("Profile", "Worker profile; empty keeps the default", ""),
             pick("From base", &YES_NO, "no"),
@@ -221,7 +227,7 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
             text("Depends on", "Task ids, comma separated", ""),
             text("Base", "Empty uses the project's base", ""),
         ],
-        Verb::Gate | Verb::Approve | Verb::Stop | Verb::Drop | Verb::Reopen => Vec::new(),
+        Verb::Gate | Verb::Stop | Verb::Drop | Verb::Reopen => Vec::new(),
     }
 }
 

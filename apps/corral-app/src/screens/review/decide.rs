@@ -12,6 +12,7 @@ use crate::ui::kit::page::bar;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
+use super::onto::onto;
 use super::{Ctx, command, command_hinted, rich_at, status};
 
 /// A terminal button's Cells beside its label, the Cells between two actions and the bar's own
@@ -65,11 +66,13 @@ impl TermFit {
     }
 }
 
-/// The decide bar of the shown candidate; an empty element while none is shown. A terminal
-/// measures its row to keep the line whole (`TermFit`).
+/// The Onto line and the decide bar of the shown candidate; an empty element while none is
+/// shown. A terminal measures its row to keep the line whole (`TermFit`).
 pub(super) fn decide(cx: Ctx) -> AnyElement {
     let page = cx.page;
     let terminal = cx.app.form == Form::Terminal;
+    // The phone's Onto field stands in the page (`phone_secondary`), not in its pinned bar.
+    let onto = (cx.app.form != Form::Phone).then(|| onto(&cx));
     let room = signal(0.0_f32);
     let model = computed(move || {
         let decide = page.with(|page| page.detail.as_ref().map(|detail| detail.decide.clone()))?;
@@ -92,6 +95,7 @@ pub(super) fn decide(cx: Ctx) -> AnyElement {
                 }
             })
         })
+        .children(onto)
         .child(dynamic(move || {
             model
                 .get()
@@ -100,9 +104,10 @@ pub(super) fn decide(cx: Ctx) -> AnyElement {
         .into_element()
 }
 
-/// Run gate, Start review and Land anyway, which a phone keeps in the page rather than in its
-/// bar.
+/// The Onto field, then Run gate, Start review and Land anyway, which a phone keeps in the page
+/// rather than in its bar.
 pub(super) fn phone_secondary(cx: &Ctx) -> AnyElement {
+    let field = onto(cx);
     let page = cx.page;
     let secondary = computed(move || {
         page.with(|page| {
@@ -113,7 +118,7 @@ pub(super) fn phone_secondary(cx: &Ctx) -> AnyElement {
         })
     });
     let cx = cx.clone();
-    dynamic(move || {
+    let buttons = dynamic(move || {
         let buttons = secondary.get();
         (!buttons.is_empty()).then(|| {
             view()
@@ -130,7 +135,8 @@ pub(super) fn phone_secondary(cx: &Ctx) -> AnyElement {
                 )
                 .into_element()
         })
-    })
+    });
+    view().child(field).child(buttons).into_element()
 }
 
 fn decide_bar(cx: &Ctx, decide: &DecideBar, fit: TermFit) -> AnyElement {

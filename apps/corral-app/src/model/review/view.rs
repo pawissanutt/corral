@@ -224,11 +224,27 @@ pub enum Body {
     Notice(String),
 }
 
+/// The branch approving lands onto: the run's base until another is typed. Any existing branch
+/// is a target; the engine refuses a missing one and names the branches that exist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    /// The field's caption.
+    pub label: &'static str,
+    /// What the field holds now.
+    pub value: String,
+    pub placeholder: &'static str,
+    /// What the field decides, for the pointer and the screen reader.
+    pub hint: String,
+}
+
 /// The decide bar: every operation that decides a candidate, always pressable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecideBar {
     /// Approve and land, Request changes and Ask (Request changes first on the phone).
     pub buttons: Vec<Button>,
+    /// Where Approve and Land anyway land: beside Approve on desktop and terminal, in the page
+    /// on the phone.
+    pub target: Target,
     /// Run gate, Start review and, while the gate is red or after a refused Approve, Land
     /// anyway: at the trailing edge on desktop and terminal, in the page on the phone.
     pub secondary: Vec<Button>,

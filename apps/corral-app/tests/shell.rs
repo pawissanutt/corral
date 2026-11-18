@@ -395,6 +395,43 @@ fn the_confirm_sheet_takes_the_focus_so_enter_cancels_it() {
         .unwrap();
 }
 
+/// T-10's gate is red, so its decide bar offers Land anyway: one press opens the one local
+/// question, which names what it skips; confirming submits approve with force and the task lands
+/// and leaves Review.
+#[test]
+fn land_anyway_over_a_red_gate_asks_once_and_lands() {
+    let mut app = preview(desktop(), &[("corral.destination", "review")]);
+    app.press("id:task-T-10").unwrap();
+    app.press("id:btn-land-anyway").unwrap();
+    app.wait_for("id:confirm").unwrap();
+    app.wait_for("text:/the gate check/").unwrap();
+    app.press("id:confirm-confirm").unwrap();
+    app.wait_for("text:/^Land anyway T-10 · Done/").unwrap();
+    app.wait_for_gone("id:task-T-10", Duration::from_secs(5))
+        .unwrap();
+}
+
+/// Approve lands onto the branch typed in Onto. A branch the repository lacks is refused, and the
+/// refusal offers one Approve per existing branch; choosing one asks once and lands there.
+#[test]
+fn approving_onto_a_missing_branch_offers_each_existing_branch() {
+    let mut app = preview(desktop(), &[("corral.destination", "review")]);
+    app.press("id:task-T-11").unwrap();
+    app.wait_for("id:field-onto").unwrap();
+    app.clear("id:field-onto").unwrap();
+    app.type_text("id:field-onto", "release/1.0").unwrap();
+    app.press("id:btn-approve").unwrap();
+    app.wait_for("text:/--onto release\\/1.0/").unwrap();
+    app.press("id:confirm-confirm").unwrap();
+    app.wait_for("id:refused").unwrap();
+    app.wait_for("text:Approve onto release/0.9").unwrap();
+    app.press("id:btn-refusal-1").unwrap();
+    app.wait_for("id:confirm").unwrap();
+    app.press("id:confirm-confirm").unwrap();
+    app.wait_for("text:/^Approve onto release\\/0.9 T-11 · Done/")
+        .unwrap();
+}
+
 /// Escape closes the roster's panel first: the page stays Agents rather than navigating back.
 #[test]
 fn escape_clears_the_roster_selection_before_leaving_agents() {
