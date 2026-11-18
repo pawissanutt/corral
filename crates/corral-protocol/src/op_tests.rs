@@ -49,6 +49,7 @@ fn refused_response_keeps_both_next_operations_in_order() {
                 base: None,
             }),
         ],
+        problems: None,
     };
     let response = Response::<OpReply> {
         jsonrpc: rpc::JSONRPC.into(),
