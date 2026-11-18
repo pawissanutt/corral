@@ -25,5 +25,8 @@ export function resolveModel(choice: string | undefined, profiles: readonly Buil
   if (slash < 1 || slash === value.length - 1) throw new Error(`Invalid child model ${value}; expected <provider>/<id>`);
   const provider = value.slice(0, slash);
   if (!profile?.binding && !approved.includes(provider)) throw new Error(`Child model provider is not approved: ${provider}`);
-  return { profile: profile?.name ?? value, provider, model: value.slice(slash + 1), effort: profile?.effort, ...(profile?.binding ? { binding: profile.binding } : {}) };
+  const id = value.slice(slash + 1);
+  // The exact wire binding may retain the provider prefix; the API catalog indexes bare IDs.
+  const model = profile?.binding && id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id;
+  return { profile: profile?.name ?? value, provider, model, effort: profile?.effort, ...(profile?.binding ? { binding: profile.binding } : {}) };
 }

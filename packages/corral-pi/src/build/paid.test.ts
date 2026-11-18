@@ -57,7 +57,7 @@ test("Build paid profile previews are sticky and cannot mutate the saved route",
 });
 
 test("a subscription Build admits named API children without changing the parent route", async () => {
-  const secondBase = { ...base, candidate: "other-api", model: "other-model" };
+  const secondBase = { ...base, candidate: "other-api", model: "openai/other-model" };
   const second = { ...secondBase, digest: bindingDigest(secondBase) };
   const profiles = [binding, second].map((route, index) => ({ name: `child-${index}`, model: `openai/${route.model}`, binding: route }));
   const wire = { version: 1, assets: launch.assets, data_root: launch.dataRoot, corral: launch.corral, repo_root: launch.repoRoot,
@@ -72,7 +72,7 @@ test("a subscription Build admits named API children without changing the parent
     const parsed = readBuildLaunch(openSync(file, "r"));
     expect(parsed.provider).toBe("openai-codex");
     expect(resolveModel("child-0", parsed.settings.profiles, ["openai-codex"]).binding).toEqual(binding);
-    expect(resolveModel("child-1", parsed.settings.profiles, ["openai-codex"]).binding).toEqual(second);
+    expect(resolveModel("child-1", parsed.settings.profiles, ["openai-codex"])).toMatchObject({ model: "other-model", binding: second });
     expect(() => resolveModel("openai/other-model", parsed.settings.profiles, ["openai-codex"])).toThrow();
     const record = createBuildBudgetRecord(parsed, async (_argv, options) => {
       const payload = JSON.parse(options.input!);
