@@ -116,8 +116,8 @@ impl Engine {
                 self.applied_for(&id, self.verdict(&id, approve, notes.as_deref())?)?
             }
             Op::Changes { id, text } => self.applied_for(&id, self.changes(&id, &text)?)?,
-            Op::Approve { id } => {
-                let run = self.approve(&id, force)?;
+            Op::Approve { id, onto } => {
+                let run = self.approve(&id, onto.as_deref(), force)?;
                 self.applied_for(&id, self.store.get_run(&id, &run.id)?)?
             }
             Op::Drop { id } => applied_task(self.drop_task(&id)?),

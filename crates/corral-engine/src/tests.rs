@@ -21,6 +21,7 @@ pub(crate) fn task(id: &str) -> Task {
         size: None,
         profile: None,
         parent: None,
+        base: None,
         depends_on: Vec::new(),
         blocked: None,
         round: 0,

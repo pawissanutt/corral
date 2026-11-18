@@ -14,6 +14,7 @@ pub(crate) fn prepare(engine: &Engine, flags: Edit) -> Result<(String, TaskEdit)
         kind: flags.kind.map(nonempty),
         size: flags.size.map(nonempty),
         profile: flags.profile.map(nonempty),
+        base: flags.base.map(nonempty),
         parent: flags.parent.map(nonempty),
         depends_on: flags.depends_on.as_deref().map(dependencies),
     };

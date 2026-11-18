@@ -37,6 +37,7 @@ impl Engine {
                 kind: new.kind,
                 size: new.size,
                 profile: new.profile,
+                base: new.base,
                 parent: new.parent,
                 depends_on: new.depends_on,
                 blocked: None,
@@ -79,6 +80,9 @@ impl Engine {
             }
             if let Some(value) = edit.profile {
                 task.profile = value;
+            }
+            if let Some(value) = edit.base {
+                task.base = value;
             }
             if let Some(value) = edit.parent {
                 task.parent = value;
@@ -330,7 +334,10 @@ pub(crate) fn next_changes(id: &str) -> Next {
 }
 
 pub(crate) fn next_force_approve(id: &str) -> Next {
-    Next::force(Op::Approve { id: id.to_owned() })
+    Next::force(Op::Approve {
+        id: id.to_owned(),
+        onto: None,
+    })
 }
 
 fn planning(status: Status) -> bool {

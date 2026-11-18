@@ -6,7 +6,7 @@
 
 # [defaults]
 # profile = "omp-sol"
-# base = "main"
+# base = "release"         # Optional; unset uses the repository's default branch.
 # max_rounds = 2
 # auto_dispatch = false
 # auto_land = false
@@ -26,6 +26,7 @@
 
 # [projects.example]
 # path = "example"          # Relative to the workspace root; use "." for the root itself.
+# base = "develop"         # Optional per-project target branch.
 # gate = ["just check"]     # Optional shell commands run in the task worktree.
 # running = 2               # Optional per-project slot cap.
 # reviewer = "omp-sol"      # Optional reviewer profile.

@@ -217,6 +217,62 @@ pub fn current_branch(repo: &Path) -> Result<String> {
     Ok(name)
 }
 
+/// Follow origin's default branch, falling back to this checkout's symbolic HEAD.
+/// The returned name is local, even when origin's HEAD supplied it.
+pub fn default_branch(repo: &Path) -> Result<Option<String>> {
+    if let Some(origin) = symbolic_branch(repo, "refs/remotes/origin/HEAD")? {
+        return Ok(Some(
+            origin
+                .strip_prefix("refs/remotes/origin/")
+                .or_else(|| origin.strip_prefix("refs/heads/"))
+                .context("origin/HEAD does not point to a branch of origin")?
+                .to_owned(),
+        ));
+    }
+    symbolic_branch(repo, "HEAD")?
+        .map(|head| {
+            head.strip_prefix("refs/heads/")
+                .map(str::to_owned)
+                .context("HEAD does not point to a local branch")
+        })
+        .transpose()
+}
+
+fn symbolic_branch(repo: &Path, name: &str) -> Result<Option<String>> {
+    let args = ["symbolic-ref", "--quiet", name];
+    let out = git_raw(repo, &args)?;
+    match out.status.code() {
+        Some(0) => {
+            let mut name = String::from_utf8(out.stdout).context("decode symbolic branch name")?;
+            name.truncate(name.trim_end_matches('\n').len());
+            Ok(Some(name))
+        }
+        Some(1) => Ok(None),
+        _ => Err(fail(repo, &args, &out)),
+    }
+}
+
+/// Return local branch names in Git's ref order.
+pub fn local_branches(repo: &Path) -> Result<Vec<String>> {
+    let names = history::git_utf8(
+        repo,
+        &["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"],
+    )?;
+    Ok(names.lines().map(str::to_owned).collect())
+}
+
+/// Test for an exact ref, without accepting a tag, SHA, or revision expression.
+pub fn local_branch_exists(repo: &Path, branch: &str) -> Result<bool> {
+    let name = format!("refs/heads/{branch}");
+    let args = ["show-ref", "--verify", "--quiet", &name];
+    let out = git_raw(repo, &args)?;
+    match out.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(fail(repo, &args, &out)),
+    }
+}
+
 /// Install the project-local scratch exclusion shared by all linked worktrees.
 /// This does not modify the tracked project or make its checkout dirty.
 pub fn ensure_evidence_excluded(repo: &Path) -> Result<()> {
@@ -453,15 +509,23 @@ fn unmerged_paths(worktree: &Path) -> Result<Vec<String>> {
 /// A failed, started rebase is aborted before returning; abort failures are errors.
 /// Refuses a pre-existing rebase or unmerged index rather than aborting somebody else's operation.
 pub fn rebase(worktree: &Path, onto: &str) -> Result<RebaseOutcome> {
+    rebase_args(worktree, &["rebase", onto])
+}
+
+/// Replay only commits after `from` onto `onto`, without taking over the old base's history.
+pub fn rebase_onto(worktree: &Path, from: &str, onto: &str) -> Result<RebaseOutcome> {
+    rebase_args(worktree, &["rebase", "--onto", onto, from])
+}
+
+fn rebase_args(worktree: &Path, args: &[&str]) -> Result<RebaseOutcome> {
     if rebase_in_progress(worktree)? || !unmerged_paths(worktree)?.is_empty() {
         bail!("cannot rebase with an existing rebase or unmerged index");
     }
-    let args = ["rebase", onto];
-    let out = git_raw(worktree, &args)?;
+    let out = git_raw(worktree, args)?;
     if out.status.success() {
         return Ok(RebaseOutcome::Rebased);
     }
-    let error = fail(worktree, &args, &out);
+    let error = fail(worktree, args, &out);
     let paths = unmerged_paths(worktree);
     let started =
         rebase_in_progress(worktree).with_context(|| format!("checking state after {error}"))?;
@@ -549,6 +613,44 @@ pub fn fast_forward(repo: &Path, branch: &str, base: &str) -> Result<()> {
         _ => return Err(fail(repo, &args, &out)),
     }
     Ok(())
+}
+
+/// Fast-forward an existing target, merging in its checkout if Git lists one.
+/// Caller holds `landing_lock` across rebase, checks and this update.
+pub fn fast_forward_in_worktree(repo: &Path, branch: &str, target: &str) -> Result<()> {
+    let target_ref = format!("refs/heads/{target}");
+    let args = ["worktree", "list", "--porcelain", "-z"];
+    let out = git_raw(repo, &args)?;
+    if !out.status.success() {
+        return Err(fail(repo, &args, &out));
+    }
+    let branch_field = format!("branch {target_ref}");
+    let mut path = None;
+    for field in out.stdout.split(|byte| *byte == 0) {
+        if field.is_empty() {
+            path = None;
+        } else if let Some(name) = field.strip_prefix(b"worktree ") {
+            path = Some(name);
+        } else if field == branch_field.as_bytes() {
+            let path = path.context("malformed worktree path")?;
+            #[cfg(unix)]
+            let path = {
+                use std::os::unix::ffi::OsStrExt as _;
+                Path::new(std::ffi::OsStr::from_bytes(path))
+            };
+            #[cfg(not(unix))]
+            let path = Path::new(std::str::from_utf8(path).context("decode worktree path")?);
+            anyhow::ensure!(
+                symbolic_branch(path, "HEAD")?.as_deref() == Some(target_ref.as_str()),
+                "{} is no longer on {target}",
+                path.display()
+            );
+            let source = format!("refs/heads/{branch}");
+            git(path, &["merge", "--ff-only", "--", &source])?;
+            return Ok(());
+        }
+    }
+    fast_forward(repo, branch, target)
 }
 
 /// Serialize corral landing across worktrees and workspace stores sharing this repository.

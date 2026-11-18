@@ -58,7 +58,7 @@ impl Default for Limits {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Defaults {
-    pub base: String,
+    pub base: Option<String>,
     pub branch_prefix: String,
     pub max_rounds: u32,
     pub profile: Option<String>,
@@ -69,7 +69,7 @@ pub struct Defaults {
 impl Default for Defaults {
     fn default() -> Self {
         Self {
-            base: "main".into(),
+            base: None,
             branch_prefix: "corral/".into(),
             max_rounds: 2,
             profile: Some("omp-sol".into()),
@@ -174,7 +174,7 @@ pub struct RoutingRule {
 #[derive(Clone, Debug)]
 pub struct EffectiveProject {
     pub path: PathBuf,
-    pub base: String,
+    pub base: Option<String>,
     pub gate: Vec<String>,
     pub reviewer: Option<String>,
     pub profile: Option<String>,
@@ -205,7 +205,12 @@ impl Config {
         if !matches!(self.runner.mode.as_str(), "process" | "herdr") {
             problems.push("runner.mode must be process or herdr".into());
         }
-        if self.defaults.base.trim().is_empty() {
+        if self
+            .defaults
+            .base
+            .as_ref()
+            .is_some_and(|base| base.trim().is_empty())
+        {
             problems.push("defaults.base must not be empty".into());
         }
         if let Some(profile) = &self.defaults.profile {
@@ -352,10 +357,7 @@ impl Config {
         })?;
         Ok(EffectiveProject {
             path: project.path.clone(),
-            base: project
-                .base
-                .clone()
-                .unwrap_or_else(|| self.defaults.base.clone()),
+            base: project.base.clone().or_else(|| self.defaults.base.clone()),
             gate: project.gate.clone(),
             reviewer: project.reviewer.clone(),
             profile: project

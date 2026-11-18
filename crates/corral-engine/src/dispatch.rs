@@ -135,11 +135,22 @@ impl Engine {
                 .canonicalize()
                 .context("resolve project repository path")?;
             let branch = format!("{}{id}", project.branch_prefix);
+            let base = resolve_base(
+                &repo,
+                &branch,
+                base.or(task.base.as_deref()).or(project.base.as_deref()),
+                |base| Op::Dispatch {
+                    id: id.into(),
+                    profile: Some(profile.clone()),
+                    base: Some(base),
+                },
+                force,
+            )?;
             let mut checkout = Checkout {
                 path: repo.join(".worktrees").join(id),
                 repo,
                 branch,
-                base: base.unwrap_or(&project.base).to_owned(),
+                base,
                 base_sha: String::new(),
             };
             let reuse = latest.as_ref().is_some_and(|last| {
@@ -669,4 +680,40 @@ fn dispatch_next(task: &Task) -> Next {
             Next::force(op)
         }
     }
+}
+
+fn resolve_base(
+    repo: &std::path::Path,
+    task_branch: &str,
+    configured: Option<&str>,
+    retry: impl Fn(String) -> Op,
+    force: bool,
+) -> Result<String> {
+    let selected = match configured {
+        Some(branch) => Some(branch.to_owned()),
+        None => corral_git::default_branch(repo).context("discover repository default branch")?,
+    };
+    let reason = match selected {
+        Some(branch) if branch == task_branch => {
+            format!("task branch {branch:?} cannot be its own base; choose a branch with --base")
+        }
+        Some(branch) => {
+            if corral_git::local_branch_exists(repo, &branch)
+                .context("check dispatch base branch")?
+            {
+                return Ok(branch);
+            }
+            format!("base branch {branch:?} does not exist; choose a local branch with --base")
+        }
+        None => "project checkout has a detached HEAD; choose a branch with --base".into(),
+    };
+    let next = corral_git::local_branches(repo)?
+        .into_iter()
+        .filter(|branch| branch != task_branch)
+        .map(|branch| Next {
+            op: retry(branch),
+            force,
+        })
+        .collect();
+    Err(refuse(reason, next))
 }

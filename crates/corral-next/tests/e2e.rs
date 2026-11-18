@@ -34,7 +34,7 @@ impl Workspace {
             root,
             repo,
         };
-        workspace.git(&["init", "-b", "main"]);
+        workspace.git(&["init", "-b", "trunk"]);
         for (key, value) in [
             ("user.name", "Corral CLI Test"),
             ("user.email", "corral@example.invalid"),
@@ -182,10 +182,11 @@ fn headless_agent_lands_and_a_refusal_command_is_runnable() {
     let id = created.task.unwrap().id;
     assert_eq!(id, "T-042");
     let run = ws.json::<Applied>(&["dispatch", &id]).run.unwrap();
+    assert_eq!(run.base, "trunk");
     ws.wait_ready(&id, created.seq);
     let landed: Applied = ws.json(&["approve", &id]);
     assert_eq!(landed.task.unwrap().status, Status::Done);
-    assert_eq!(ws.git(&["show", "main:landed.txt"]).trim_end(), id);
+    assert_eq!(ws.git(&["show", "trunk:landed.txt"]).trim_end(), id);
     assert!(!run.worktree.exists());
     assert!(
         !ws.git_output(&[
@@ -211,8 +212,27 @@ fn headless_agent_lands_and_a_refusal_command_is_runnable() {
     );
 
     let prerequisite = ws.new_task("unmet dependency", &[]).task.unwrap().id;
-    let dependent = ws.new_task("force a dependency", &["--depends-on", &prerequisite]);
-    let dependent_id = dependent.task.unwrap().id;
+    let checkout = ws.root.join("release checkout");
+    ws.git(&[
+        "worktree",
+        "add",
+        "-b",
+        "release",
+        checkout.to_str().unwrap(),
+    ]);
+    let config = ws.root.join(".corral-next/corral.toml");
+    let mut text = fs::read_to_string(&config).unwrap();
+    text.push_str("\n[defaults]\nbase = \"release\"\n");
+    fs::write(config, text).unwrap();
+    let dependent = ws.new_task(
+        "force a dependency",
+        &["--depends-on", &prerequisite, "--base", "release"],
+    );
+    let dependent = dependent.task.unwrap();
+    assert_eq!(dependent.base.as_deref(), Some("release"));
+    let dependent_id = dependent.id;
+    let edited: Applied = ws.json(&["edit", &dependent_id, "--base", "trunk"]);
+    assert_eq!(edited.task.unwrap().base.as_deref(), Some("trunk"));
     let refused = ws.cli(&["dispatch", &dependent_id]);
     assert_eq!(refused.status.code(), Some(2));
     let stderr = String::from_utf8(refused.stderr).unwrap();
@@ -230,7 +250,7 @@ fn headless_agent_lands_and_a_refusal_command_is_runnable() {
             .output()
             .unwrap(),
     );
-    let ready = ws.wait_ready(&dependent_id, dependent.seq);
+    let ready = ws.wait_ready(&dependent_id, edited.seq);
     assert_eq!(
         ws.cli(&[
             "wait",
@@ -245,5 +265,16 @@ fn headless_agent_lands_and_a_refusal_command_is_runnable() {
         .code(),
         Some(124)
     );
-    ws.ok(&["approve", &dependent_id]);
+    let trunk = ws.git(&["rev-parse", "refs/heads/trunk"]);
+    ws.git(&["branch", "-m", "trunk", "retired-trunk"]);
+    let landed: Applied = ws.json(&["approve", &dependent_id, "--onto", "release"]);
+    assert_eq!(landed.task.unwrap().status, Status::Done);
+    assert_eq!(landed.run.unwrap().base, "trunk");
+    assert_eq!(ws.git(&["rev-parse", "refs/heads/retired-trunk"]), trunk);
+    assert_eq!(
+        fs::read_to_string(checkout.join("landed.txt"))
+            .unwrap()
+            .trim_end(),
+        dependent_id
+    );
 }

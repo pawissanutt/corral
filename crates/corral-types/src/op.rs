@@ -62,6 +62,7 @@ pub enum Op {
     },
     Approve {
         id: String,
+        onto: Option<String>,
     },
     Drop {
         id: String,
@@ -136,6 +137,7 @@ impl Next {
                 }
                 optional(f, "--kind", task.kind.as_deref())?;
                 optional(f, "--size", task.size.as_deref())?;
+                optional(f, "--base", task.base.as_deref())?;
                 optional(f, "--parent", task.parent.as_deref())?;
                 if let Some((first, rest)) = task.depends_on.split_first() {
                     option(f, "--depends-on", first)?;
@@ -146,7 +148,12 @@ impl Next {
                 }
                 Ok(())
             }),
-            Op::Edit { id, .. } => plain(f, "edit", &[id]),
+            Op::Edit { id, edit } => invocation(f, "edit", &[id], |f| {
+                if let Some(base) = &edit.base {
+                    option(f, "--base", base.as_deref().unwrap_or(""))?;
+                }
+                Ok(())
+            }),
             Op::Comment { id, text } => plain(f, "comment", &[id, text]),
             Op::Move { id, status } => invocation(f, "move", &[id, status.as_str()], |f| {
                 flag(f, " --force", self.force)
@@ -182,9 +189,10 @@ impl Next {
                 |f| optional(f, "--notes", notes.as_deref()),
             ),
             Op::Changes { id, text } => plain(f, "changes", &[id, text]),
-            Op::Approve { id } => {
-                invocation(f, "approve", &[id], |f| flag(f, " --force", self.force))
-            }
+            Op::Approve { id, onto } => invocation(f, "approve", &[id], |f| {
+                optional(f, "--onto", onto.as_deref())?;
+                flag(f, " --force", self.force)
+            }),
             Op::Drop { id } => plain(f, "drop", &[id]),
             Op::Reopen { id } => plain(f, "reopen", &[id]),
             Op::ArtifactAdd {

@@ -12,6 +12,7 @@ fn task() -> Task {
         kind: Some("ui".into()),
         size: Some("l".into()),
         profile: None,
+        base: None,
         parent: None,
         depends_on: Vec::new(),
         blocked: None,
@@ -59,7 +60,7 @@ effort = "medium"
 args = ["--verbose"]
 [projects.app]
 path = "app"
-base = "main"
+base = "develop"
 gate = ["just check", "just test"]
 reviewer = "sol"
 profile = "sol"
@@ -88,7 +89,7 @@ profile = "sol"
     assert_eq!(config.resolve_profile(&task(), None).unwrap(), "sol");
     let project = config.effective_project("app").unwrap();
     assert_eq!(project.path, Path::new("app"));
-    assert_eq!(project.base, "main");
+    assert_eq!(project.base.as_deref(), Some("develop"));
     assert_eq!(project.gate, ["just check", "just test"]);
     assert_eq!(project.reviewer.as_deref(), Some("sol"));
     assert_eq!(project.running, Some(2));
@@ -111,17 +112,20 @@ gate = "just check"
     .unwrap();
     assert_eq!(config.runner.mode, "herdr");
     assert_eq!(config.limits.running, 4);
-    assert_eq!(config.defaults.base, "main");
+    assert_eq!(config.defaults.base, None);
     assert_eq!(config.defaults.branch_prefix, "corral/");
     assert_eq!(config.defaults.max_rounds, 2);
     assert_eq!(config.defaults.profile.as_deref(), Some("omp-sol"));
     assert_eq!(config.harnesses.len(), 4);
     assert_eq!(config.profiles.len(), 5);
+    assert_eq!(config.effective_project("app").unwrap().base, None);
+    config.defaults.base = Some("trunk".into());
     config.defaults.profile = Some("omp".into());
     config.defaults.auto_dispatch = true;
     config.defaults.auto_land = true;
     let inherited = config.effective_project("app").unwrap();
     assert_eq!(inherited.profile.as_deref(), Some("omp"));
+    assert_eq!(inherited.base.as_deref(), Some("trunk"));
     assert!(inherited.auto_dispatch && inherited.auto_land);
     assert_eq!(inherited.gate, ["just check"]);
     assert!(inherited.running.is_none());
