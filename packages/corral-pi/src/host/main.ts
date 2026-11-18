@@ -25,8 +25,8 @@ import { serverVisible } from "./mcp-settings.ts";
 import { type AwsRoute, HostSession, authContext } from "./session.ts";
 import { subscriptionRoutes } from "./subscriptions.ts";
 import { guardTerminalStop } from "./terminal-stop.ts";
-import { admitConnection } from "./connections.ts";
-import { connectionRules, isApiConnection } from "../auth/connections.ts";
+import { connectionRules, isApiConnection, resolveConnection } from "../auth/connections.ts";
+import { Spending } from "../capabilities/budget.ts";
 import { errorPresenter } from "../ui/error-copy.ts";
 import { repaintTranscript } from "../ui/transcript-repaint.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
@@ -58,8 +58,13 @@ export async function runHost(config: HostConfig, overrides: HostOverrides = {})
 async function runSession(config: HostConfig, overrides: HostOverrides, events: EventLog,
   bridge: BridgeServer, record: SessionRecord): Promise<void> {
   const provider = config.provider ?? "openai-codex";
-  if (overrides.build?.session.bare) requireBareProvider(provider);
-  const connection = admitConnection(provider, config.binding, true);
+  const connection = resolveConnection(provider, config.connection ?? config.binding?.connection);
+  const api = isApiConnection(connection);
+  if (overrides.build?.session.bare && !api) requireBareProvider(provider);
+  if (config.maxUsd !== undefined && !api && PROVIDERS[provider].lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
+  const spending = Spending.open(config.local.dir, config);
+  if (api && !spending) throw new Error("API models require --max-usd");
+  if (spending && !api && PROVIDERS[provider].lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
   restrictEnvironment(process.env, provider);
   if (config.summary?.provider === "amazon-bedrock") restrictEnvironment(process.env, "amazon-bedrock");
   process.env.CORRAL_NEXT_ROOT = config.root;
@@ -74,8 +79,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   if (config.local) process.env.PI_CODING_AGENT_DIR ??= agentDir;
   const modules = await loadModules(assets, config.identity.role, provider);
   const rawFetch = globalThis.fetch.bind(globalThis);
-  const api = isApiConnection(connection);
-  const bare = overrides.build?.session.bare ? await bareProviders(modules.auth, provider) : undefined;
+  const bare = overrides.build?.session.bare && !api ? await bareProviders(modules.auth, provider) : undefined;
   const providers = bare?.providers ?? (api ? [provider] : (await subscriptionRoutes(modules.auth, provider, config.identity.role)).providers);
   const send = bare ? providerTransport(modules.auth, bare.providers, rawFetch)
     : modules.auth.transport?.(authContext(provider, connection)) ?? rawFetch;
@@ -121,7 +125,8 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   let remote: RemoteOwner | undefined;
   let host: HostSession | undefined;
   let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;
-  const client = new CorralClient({ corral: config.corral, root: config.root, cwd: config.cwd, identity: config.identity });
+  const client = new CorralClient({ corral: config.corral, root: config.root, cwd: config.cwd, identity: config.identity,
+    sessionDir: config.local.dir });
   const pane = config.pane || process.env.HERDR_PANE_ID;
   let transcript = record.transcript;
   if (!transcript && config.identity.role === "worker" && !config.freshSession) {
@@ -130,7 +135,8 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   }
   host = await HostSession.create({
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider, ...(aws ? { aws } : {}),
-    ...(config.binding ? { binding: config.binding } : {}),
+    connection, ...(config.binding ? { binding: config.binding } : {}),
+    spending, apiFetch: rawFetch, sessionDir: config.local.dir,
     paneInput: async (text, images) => await remote?.paneInput(text, images) ?? false,
     transcriptRewound: () => { if (terminal) repaintTranscript(terminal); },
     automatedInput: input => remote?.submit(input),

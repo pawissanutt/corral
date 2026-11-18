@@ -2,7 +2,8 @@ import { randomBytes, randomInt } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { BuildLaunch, BuildSessionRecord } from "./types.ts";
-import { parseBuildProfileRoute } from "./profiles.ts";
+import { isProviderId } from "../auth/providers.ts";
+import { resolveConnection } from "../auth/connections.ts";
 
 export function sessionDir(dataRoot: string, id: string): string {
   if (!/^B-[a-z0-9]+$/.test(id)) throw new Error("Invalid build session id");
@@ -15,7 +16,7 @@ export function createSession(launch: BuildLaunch, worktree: Pick<BuildSessionRe
   const name = launch.name?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || suffix;
   return { version: 1, id: `B-${suffix}`, name, created: now.toISOString(), updated: now.toISOString(),
     repoRoot: launch.repoRoot, ...worktree, here: launch.here, ...(launch.bare ? { bare: true } : {}),
-    ...(launch.route ? { route: launch.route } : {}),
+    route: { provider: launch.provider, model: launch.model, effort: launch.effort, connection: launch.connection, aws: launch.aws },
     ...(launch.project ? { project: launch.project } : {}), ...(launch.workspaceRoot ? { workspaceRoot: launch.workspaceRoot } : {}) };
 }
 
@@ -32,7 +33,10 @@ export function loadSession(dataRoot: string, id: string): BuildSessionRecord {
     || (record.baseBranch !== undefined && record.baseBranch !== null && typeof record.baseBranch !== "string")
     || (record.bare === true && (record.workspaceRoot !== undefined || record.project !== undefined))
     || (record.project !== undefined && typeof record.project !== "string")) throw new Error(`Invalid build session record: ${id}`);
-  if (record.route) parseBuildProfileRoute(record.route);
+  if (record.route) {
+    if (!isProviderId(record.route.provider) || typeof record.route.model !== "string") throw new Error(`Invalid Build model route: ${id}`);
+    resolveConnection(record.route.provider, record.route.connection);
+  }
   return record;
 }
 

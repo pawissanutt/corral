@@ -1,16 +1,10 @@
-// Wire contracts between the corral-pi host and `corral build gate|land|record|list|show`.
-// Snake case exactly as the JSON on the wire: the host writes these shapes, the corral binary
-// stores and prints them, and the app reads the stored record. Types only.
-
-/** stdout of `corral build gate --json`. Exit status 0 for pass, fail and skipped; non-zero only for a refusal. */
-export interface GateReceipt {
+/** A local run of one project's configured gate on the Build worktree. */
+export interface BuildGateResult {
   /** `G1`, `G2`, ...: unique within the session. */
   readonly attempt: string;
-  /** `quick` or `full`. */
-  readonly tier: string;
   /** The commit the gate ran on. */
   readonly head: string;
-  /** `skipped` when the project configures no gate commands for the tier. */
+  /** `skipped` when the project configures no gate commands. */
   readonly result: "pass" | "fail" | "skipped";
   readonly failed_command?: string;
   readonly commands: readonly string[];
@@ -19,21 +13,7 @@ export interface GateReceipt {
   readonly ended: string;
   /** Absolute path of the combined command log; absent when skipped. */
   readonly log?: string;
-  /** Absolute path of this receipt's JSON file. */
-  readonly receipt: string;
 }
-
-/** stdout of `corral build land --json`. */
-export interface LandResult {
-  /** The commit the base branch now points at. */
-  readonly landed: string;
-  readonly base_branch: string;
-  /** The base branch's commit before landing. */
-  readonly previous: string;
-}
-
-/** stderr of a refused `corral build land` starts with one of these codes, then `: detail`. */
-export type LandRefusal = "landing_stale" | "gate_missing" | "gate_stale" | "gate_failed" | "main_dirty" | "main_off_base" | "worktree_dirty" | "head_mismatch";
 
 export interface RecordUsage {
   readonly input: number;
@@ -104,7 +84,7 @@ export interface RecordDecision {
 }
 
 /**
- * The tracked record of one in-session build: `corral build record --file <json>` upserts it by `id`.
+ * The locally tracked record of one in-session build.
  * Caps: `intent` 32 entries of 4,096 characters; `commits` 200; `messages` the newest 500.
  */
 export interface BuildRecord {
@@ -137,18 +117,11 @@ export interface BuildRecord {
   readonly diff?: { readonly commits: number; readonly files: number; readonly added: number; readonly removed: number };
   readonly commits: readonly { readonly sha: string; readonly subject: string; readonly slice?: string }[];
   readonly slices: readonly RecordSlice[];
-  readonly verification: readonly Omit<GateReceipt, "commands" | "receipt">[];
+  readonly verification: readonly Omit<BuildGateResult, "commands">[];
   readonly reviews: readonly RecordReview[];
   readonly messages: readonly RecordMessage[];
   readonly decisions: readonly RecordDecision[];
   readonly usage: { readonly parent: RecordUsage; readonly children: RecordUsage; readonly reviewers: RecordUsage; readonly total: RecordUsage };
   readonly timeline: readonly { readonly at: string; readonly phase: "started" | "children" | "verify" | "review" | "land" | "exit"; readonly detail?: string }[];
   readonly transcripts: { readonly parent?: string; readonly children: Readonly<Record<string, string>> };
-}
-
-/** stdout of `corral build record --json`. */
-export interface RecordPublished {
-  readonly id: string;
-  /** Starts at 1 and grows by one per accepted upsert. */
-  readonly revision: number;
 }

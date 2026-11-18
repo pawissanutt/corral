@@ -8,7 +8,7 @@ import * as sdk from "@earendil-works/pi-coding-agent";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import type { Fetch } from "../src/auth/types.ts";
 import { overrideSdk } from "../src/claude/sdk.ts";
-import { RunBudget } from "../src/capabilities/budget.ts";
+import { observeUsage } from "../src/host/model-usage.ts";
 import { createModelCatalog } from "../src/host/catalog.ts";
 import { HostSession, authContext, restrictProvider } from "../src/host/session.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
@@ -17,6 +17,7 @@ import { loadModules } from "../src/host/modules.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
 import type { RoleContext } from "../src/roles/types.ts";
 import { CorralClient } from "../src/tools/corral.ts";
+import type { ModelUsage } from "../src/tools/corral.ts";
 import { Type } from "typebox";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { writeFakeEngine } from "./support/fake-engine.ts";
@@ -61,7 +62,7 @@ function codexReply(search = true): Response {
   ];
   return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
 }
-async function fixture(provider: "openai-codex" | "anthropic", send: Fetch, limited = false) {
+async function fixture(provider: "openai-codex" | "anthropic", send: Fetch) {
   const cwd = temp();
   const credentials: CredentialStore = provider === "openai-codex" ? fixtureAuth.credentials(authContext()) : {
     read: async (id) => id === "anthropic" ? { type: "oauth", access: "sk-ant-oat01-SYNTHETIC", refresh: "r", expires: Date.now() + 3600000 } : undefined,
@@ -74,13 +75,9 @@ async function fixture(provider: "openai-codex" | "anthropic", send: Fetch, limi
     configDir: join(cwd, "claude"), cwd, executable: () => "/fixture/claude", searchOnly: true,
     env: { PATH: "/bin", ANTHROPIC_API_KEY: "paid-key", CLAUDE_CODE_OAUTH_TOKEN: "foreign-token" },
   });
-  const budgetRecords: Record<string, unknown>[] = [];
-  const budget = new RunBudget({ cancel() {}, async record(payload) {
-    budgetRecords.push(payload);
-    return { admitted: !limited, exhausted: false, limits: { max_tokens: limited ? 100 : null, max_usd_nanos: null } };
-  } });
+  const usage: ModelUsage[] = [];
   const restricted = models.getProvider(provider)!;
-  models.registerNativeProvider({ ...restricted, streamSimple: budget.wrap(restricted.streamSimple.bind(restricted), true) });
+  models.registerNativeProvider({ ...restricted, streamSimple: observeUsage(restricted.streamSimple.bind(restricted), "subscription", row => usage.push(row)) });
   const refs: Record<string, unknown>[] = [];
   let binding = { provider, model: provider === "openai-codex" ? "gpt-6.1-sol" : "claude-sonnet-5-5" };
   const runtime = new AuxiliaryRuntime({ provider, model: binding.model,
@@ -91,7 +88,7 @@ async function fixture(provider: "openai-codex" | "anthropic", send: Fetch, limi
   });
   const run = (id: string, signal?: AbortSignal) => runtime.run("web_search", id, JSON.stringify({ query: "Rust docs", count: 1 }), signal);
   const transcript = () => readFileSync(join(cwd, `${refs[0]?.request}.jsonl`), "utf8").split("\n").filter(Boolean).map((s) => record(JSON.parse(s)));
-  return { runtime, run, refs, budgetRecords, transcript, setModel: (model: string) => { binding = { provider, model }; } };
+  return { runtime, run, refs, usage, transcript, setModel: (model: string) => { binding = { provider, model }; } };
 }
 
 test("Codex forces hosted search through OAuth, returns deduplicated sources and persists usage once", async () => {
@@ -116,8 +113,7 @@ test("Codex forces hosted search through OAuth, returns deduplicated sources and
   ]);
   const assistant = fx.transcript().map((entry) => record(entry.message)).find((m) => m.role === "assistant");
   expect(record(assistant?.usage)).toMatchObject({ input: 30, output: 3, cacheRead: 2, totalTokens: 35 });
-  expect(fx.budgetRecords[0]).toMatchObject({ action: "reserve", unbounded: true });
-  expect(fx.budgetRecords[1]).toMatchObject({ action: "settle", tokens: 35 });
+  expect(fx.usage).toMatchObject([{ input: 30, output: 3, cache_read: 2, cache_write: 0, billing: "subscription" }]);
   await fx.runtime.close();
 });
 
@@ -126,7 +122,7 @@ test("a completion without search evidence is refused, while its usage remains a
   await expect(fx.run("not-search")).rejects.toThrow("verified hosted search");
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
   expect(fx.transcript().some((entry) => record(entry.message).role === "assistant")).toBeTrue();
-  expect(fx.budgetRecords.at(-1)?.action).toBe("settle");
+  expect(fx.usage).toHaveLength(1);
 });
 
 test("provider errors do not retry or fall back to another transport", async () => {
@@ -135,15 +131,7 @@ test("provider errors do not retry or fall back to another transport", async () 
   await expect(fx.run("quota")).rejects.toThrow();
   expect(calls).toBe(1);
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
-  expect(fx.budgetRecords).toHaveLength(1);
-});
-
-test("hard budgets refuse the unbounded hosted-search transport before network", async () => {
-  let calls = 0;
-  const fx = await fixture("openai-codex", async () => { calls++; return codexReply(); }, true);
-  await expect(fx.run("limited")).rejects.toThrow("budget_exhausted");
-  expect(calls).toBe(0);
-  expect(fx.budgetRecords[0]?.unbounded).toBeTrue();
+  expect(fx.usage).toHaveLength(0);
 });
 
 test("cancellation retains a single uncertain reference and does not retry the model", async () => {
@@ -159,7 +147,6 @@ test("cancellation retains a single uncertain reference and does not retry the m
   expect((await observed)[0]?.status).toBe("rejected");
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
   expect(wire.requests).toBe(1);
-  expect(fx.budgetRecords).toHaveLength(1);
 });
 
 function fakeClaude(script: (options: Options, interrupted: Promise<void>) => AsyncGenerator<unknown>) {
@@ -205,7 +192,7 @@ test("Claude executes only native WebSearch, scrubs ambient auth and accounts th
   const fx = await fixture("anthropic", async () => { throw new Error("Claude must not use host HTTP"); });
   expect(JSON.parse((await fx.run("claude")).text)).toMatchObject({ provider: "anthropic", answer: "Rust documentation",
     results: [{ title: "Rust", url: "https://www.rust-lang.org/" }] });
-  expect(fx.budgetRecords.at(-1)).toMatchObject({ action: "settle", tokens: 28 });
+  expect(fx.usage).toMatchObject([{ input: 23, output: 5, billing: "subscription" }]);
   expect(run.closes).toBe(1);
 });
 
@@ -227,7 +214,7 @@ test("Claude terminal failures retain reported usage instead of becoming zero-to
   expect(record(assistant?.usage)).toMatchObject({ input: 30, output: 5, totalTokens: 35 });
   expect(JSON.stringify(assistant)).not.toContain("sk-SYNTHETIC-SECRET");
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
-  expect(fx.budgetRecords).toHaveLength(1);
+  expect(fx.usage).toMatchObject([{ input: 30, output: 5, billing: "subscription" }]);
 });
 
 test("Claude search cancellation interrupts and closes its subprocess query", async () => {

@@ -6,10 +6,11 @@ import { restrictEnvironment } from "./host/restrict.ts";
 const usage = `Usage:
   corral-pi run --dir <run-dir> [--socket <path>] [--prompt-file <path>] [--corral <path>] [model flags]
   corral-pi chat --dir <chat-dir> [--socket <path>] [--corral <path>] [model flags]
-  corral-pi build [--data-dir <path>] [--name <name> | --resume <id>] [--here] [--socket <path>] [--corral <path>] [model flags]
+  corral-pi build [--data-dir <path>] [--name <name> | --resume <id>] [--profile <name>] [--here] [--socket <path>] [--corral <path>] [model flags]
   corral-pi login [--provider <id> | --connection <id>] [--auth-dir <path>]
   corral-pi models [--provider <id>]
-Model flags: --model [<provider>/]<id>, --provider <id>, --effort <level>, --aws-profile <name>, --aws-region <region>.
+Model flags: --model [<provider>/]<id>, --provider <id>, --connection <id>, --effort <level>, --aws-profile <name>, --aws-region <region>.
+Spending flags: --max-usd <amount>, --paid-route <provider/model> (requires --max-usd).
 Sessions can also take --project <name> and --headless; non-interactive launches are headless by default.
 `;
 

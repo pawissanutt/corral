@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
@@ -38,16 +38,15 @@ function fixture(root: string, exit?: ExitRecord, workspace = false, bare = fals
       here: true, branch: "build/test", base: workspace ? "base" : null, ...(workspace ? { workspaceRoot: root, project: "app" } : {}),
       ...(bare ? { bare: true, repository: false } : {}), ...(exit ? { exit } : {}) } };
   saveSession(root, context.session);
+  if (workspace) {
+    mkdirSync(join(root, ".corral-next"));
+    writeFileSync(join(root, ".corral-next", "corral.toml"), `[projects.app]\ngate = ["printf 'local check'"]\n`);
+  }
   const runner = new FakeRunner();
   const calls: string[][] = [];
-  const run: Run = async (argv, options) => {
+  const run: Run = async argv => {
     calls.push([...argv]);
-    if (argv[1] === "gate") {
-      expect(options.timeoutMs).toBe(7_200_000);
-      return { code: 0, stdout: JSON.stringify({ attempt: "G1", tier: argv[argv.indexOf("--tier") + 1], head: "abc", result: "pass",
-        commands: ["check"], started: now, ended: now, receipt: "/logs/G1.json", log: "/logs/G1.log" }), stderr: "" };
-    }
-    return { code: 0, stdout: JSON.stringify({ id: "B-test", revision: 1 }), stderr: "" };
+    throw new Error(`Unexpected engine command: ${argv.join(" ")}`);
   };
   const git: Run = async argv => ({ code: 0, stdout: argv[0] === "rev-parse" ? argv.includes("--abbrev-ref") ? "build/test\n" : "abc\n" : "", stderr: "" });
   let changed = 0;
@@ -120,14 +119,14 @@ test("resumed build controls restore saved exits with no persisted children", as
   }
 });
 
-test("build evidence tools run the quick gate and retain an independent reviewer's exact verdict and resolutions", async () => {
+test("build evidence tools record the configured gate and retain the reviewer's exact verdict and resolutions", async () => {
   const root = mkdtempSync(join(tmpdir(), "build-evidence-"));
   const { controls, runner, calls } = fixture(root, undefined, true);
   try {
     controls.noteOwnerInput("Build a parser\nHandle empty input");
     const verify = await controls.tools.find(tool => tool.name === "build_verify")!.execute("verify", {}, undefined, undefined, {} as never);
-    expect(verify.details).toMatchObject({ receipt: { attempt: "G1", tier: "quick", result: "pass", log: "/logs/G1.log" } });
-    expect(calls[0]).toEqual(["build", "gate", "--session", "B-test", "--worktree", root, "--project", "app", "--tier", "quick", "--base", "base", "--json"]);
+    expect(verify.details).toMatchObject({ gate: { attempt: "G1", result: "pass" } });
+    expect(calls).toEqual([]);
     const reviewing = controls.tools.find(tool => tool.name === "build_review")!.execute("review", { focus: "Empty input" }, undefined, undefined, {} as never);
     const id = await runner.started.promise;
     const reviewer = runner.children.get(id)!;

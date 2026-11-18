@@ -8,6 +8,9 @@ import { TOML } from "bun";
 import type { AwsBinding } from "../auth/aws.ts";
 import type { CapabilityGuidance } from "../capabilities/guidance.ts";
 import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
+import { CONNECTIONS, type ConnectionId, isConnectionId } from "../auth/connections.ts";
+import type { SpendingOptions } from "../capabilities/budget.ts";
+import { paidRoute } from "./continuation.ts";
 import type { CapabilitySet, HostIdentity } from "../roles/types.ts";
 import { WebSettingsSchema } from "../extensions/web/settings.ts";
 import { McpSettingsSchema } from "./mcp-settings.ts";
@@ -22,7 +25,7 @@ export interface HostCapabilities extends CapabilitySet {
   readonly llama_cpp?: LlamaCppSettings;
 }
 
-export interface HostConfig {
+export interface HostConfig extends SpendingOptions {
   readonly identity: HostIdentity;
   readonly pane: string | null;
   /** Flag launches have a run directory and public local socket, not an inherited binding. */
@@ -40,6 +43,7 @@ export interface HostConfig {
   readonly guidance?: CapabilityGuidance;
   readonly model: string;
   readonly provider?: ProviderId;
+  readonly connection?: ConnectionId;
   readonly binding?: ConnectionBinding;
   /** The non-secret Amazon Bedrock binding corral read at dispatch; absent means none. */
   readonly aws?: AwsBinding;
@@ -54,14 +58,20 @@ type Json = Record<string, unknown>;
 
 export const modelFlags = {
   model: { type: "string" }, provider: { type: "string" }, effort: { type: "string" },
+  connection: { type: "string" }, "max-usd": { type: "string" }, "paid-route": { type: "string" },
   "aws-profile": { type: "string" }, "aws-region": { type: "string" },
 } as const;
 
-export function modelSettings(values: { model?: string; provider?: string; effort?: string; "aws-profile"?: string; "aws-region"?: string }) {
+export function modelSettings(values: { model?: string; provider?: string; effort?: string; connection?: string;
+  "aws-profile"?: string; "aws-region"?: string; "max-usd"?: string; "paid-route"?: string }) {
   const prefix = values.model?.split("/", 1)[0];
   const qualified = values.model?.includes("/") && isProviderId(prefix) ? prefix : undefined;
-  const provider = values.provider ?? qualified ?? "openai-codex";
-  if (!isProviderId(provider) || (qualified && qualified !== provider)) throw new Error("invalid --provider or conflicting --model provider");
+  const connection = values.connection;
+  if (connection !== undefined && !isConnectionId(connection)) throw new Error("invalid --connection");
+  const provider = values.provider ?? qualified ?? (connection ? CONNECTIONS[connection].provider : "openai-codex");
+  if (!isProviderId(provider) || (qualified && qualified !== provider) || (connection && CONNECTIONS[connection].provider !== provider)) {
+    throw new Error("invalid --provider or conflicting --model/--connection provider");
+  }
   const model = values.model ?? (provider === "openai-codex" ? "gpt-6.1-sol"
     : provider === "anthropic" ? "claude-opus-4-8" : undefined);
   if (!model || /\s|\0/.test(model) || model === `${provider}/`) throw new Error(`pass --model <${provider}/id>`);
@@ -74,7 +84,15 @@ export function modelSettings(values: { model?: string; provider?: string; effor
     }
     aws = { profile, region };
   }
-  return { provider, model, ...(values.effort ? { effort: values.effort } : {}), ...(aws ? { aws } : {}) };
+  const maxUsd = values["max-usd"] === undefined ? undefined : Number(values["max-usd"]);
+  if (maxUsd !== undefined && (!Number.isFinite(maxUsd) || maxUsd <= 0)) throw new Error("--max-usd must be a positive dollar amount");
+  const continuation = values["paid-route"];
+  if (continuation !== undefined) {
+    paidRoute(continuation);
+    if (maxUsd === undefined) throw new Error("--paid-route requires --max-usd");
+  }
+  return { provider, model, ...(connection ? { connection } : {}), ...(values.effort ? { effort: values.effort } : {}),
+    ...(aws ? { aws } : {}), ...(maxUsd === undefined ? {} : { maxUsd }), ...(continuation ? { paidRoute: continuation } : {}) };
 }
 
 const COMMON_ABILITIES = ["ask_user", "todo", "queue_control", "context_files", "skills", "compaction", "tool_search"];
