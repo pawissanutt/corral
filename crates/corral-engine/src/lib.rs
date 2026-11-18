@@ -198,6 +198,12 @@ impl Engine {
         Self::open_with(root.as_ref(), Some(runner))
     }
 
+    /// Route socket-backed sessions through Pi, and ordinary sessions through
+    /// the configured placement runner. Use `runner` directly for non-Pi starts.
+    pub fn session_runner(&self) -> runner::pi::PiRunner<'_> {
+        runner::pi::PiRunner::new(self.runner.as_ref())
+    }
+
     fn open_with(root: &Path, runner: Option<Box<dyn Runner>>) -> Result<Self> {
         let root = root.canonicalize().context("resolve workspace root")?;
         let state_dir = root.join(".corral-next");

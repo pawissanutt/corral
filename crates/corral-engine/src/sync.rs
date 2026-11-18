@@ -3,7 +3,7 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::{
-    Actor, Blocked, Engine, Op, Outcome, Role, Run, SessionStatus, Status, as_refusal,
+    Actor, Blocked, Engine, Op, Outcome, Role, Run, Runner, SessionStatus, Status, as_refusal,
     events::EventKind,
     review::worker_blocked,
     store::TaskFilter,
@@ -51,7 +51,7 @@ impl Engine {
 
     fn reconcile(&self, observed: &Run) -> Result<()> {
         let status = if let Some(session) = &observed.session {
-            self.runner
+            self.session_runner()
                 .status(session)
                 .with_context(|| format!("read session {}:{}", observed.task, observed.id))?
         } else {

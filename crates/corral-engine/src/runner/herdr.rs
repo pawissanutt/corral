@@ -122,7 +122,7 @@ impl Runner for HerdrRunner {
 fn herdr_pane(session: &SessionRef) -> Result<&str> {
     match session {
         SessionRef::Herdr { pane, .. } => Ok(pane),
-        SessionRef::Process { .. } => Err(refuse(
+        SessionRef::Process { .. } | SessionRef::Pi { .. } => Err(refuse(
             "this session is not owned by the herdr runner; set runner.mode to \"process\" in .corral-next/corral.toml",
             Vec::new(),
         )),

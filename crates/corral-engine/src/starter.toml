@@ -31,6 +31,10 @@
 # running = 2               # Optional per-project slot cap.
 # reviewer = "omp-sol"      # Optional reviewer profile.
 
+# [profiles.pi]
+# harness = "pi"            # Built in; use runner.mode for pane or headless placement.
+# model = "provider/model"  # Optional, otherwise corral-pi chooses its default.
+
 # [harnesses.example]
 # command = "example-agent {prompt_ref}"
 
