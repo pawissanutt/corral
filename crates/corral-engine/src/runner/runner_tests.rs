@@ -33,10 +33,22 @@ fn session_contract_round_trips_with_snake_case_variants() {
             pid: 42,
             dir: "/tmp/run".into(),
         },
+        SessionRef::Pi {
+            socket: "/tmp/pi.sock".into(),
+            inner: Box::new(SessionRef::Herdr {
+                workspace: "workspace".into(),
+                pane: "pane".into(),
+            }),
+            dir: "/tmp/run".into(),
+        },
     ];
     for session in sessions {
         let value = serde_json::to_value(&session).unwrap();
-        assert!(value.get("herdr").is_some() || value.get("process").is_some());
+        assert!(
+            value.get("herdr").is_some()
+                || value.get("process").is_some()
+                || value.get("pi").is_some()
+        );
         assert_eq!(
             serde_json::from_value::<SessionRef>(value).unwrap(),
             session
