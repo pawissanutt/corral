@@ -130,7 +130,10 @@ fn notices(app: AppState) -> AnyElement {
                         .as_ref()
                         .and_then(|s| s.problem.as_ref())
                         .map(editor::on_disk),
-                    state.config.changed_elsewhere(feed),
+                    state
+                        .config
+                        .changed_elsewhere(feed)
+                        .then(|| editor::changed_elsewhere_notice(state.config.dirty())),
                     state.config.problem.clone(),
                     state.config.reasons.clone(),
                     state.config.saved.is_some(),
@@ -146,7 +149,7 @@ fn notices(app: AppState) -> AnyElement {
                 parts.push(error(app, &vec![span(disk)], None));
                 parts.push(space(app, 10.0));
             }
-            if elsewhere {
+            if let Some(notice) = elsewhere {
                 let again = button(
                     app,
                     "Read again",
@@ -156,11 +159,7 @@ fn notices(app: AppState) -> AnyElement {
                         app.act(app.settings, |state, _| state.reread_config());
                     },
                 );
-                parts.push(error(
-                    app,
-                    &vec![span(editor::CHANGED_ELSEWHERE)],
-                    Some(again),
-                ));
+                parts.push(error(app, &vec![span(notice)], Some(again)));
                 parts.push(space(app, 10.0));
             }
             if let Some(problem) = problem {

@@ -215,3 +215,29 @@ fn quick_thread_end_closes_its_current_generation_and_frees_the_next_one() {
         "an earlier generation's End must not hold the new one"
     );
 }
+
+/// "+ New session" stayed pressable on a corrald that serves no assistant sessions, and
+/// pressing it could only fail.
+#[test]
+fn new_session_is_disabled_with_its_reason_when_corrald_serves_no_assistant() {
+    let mut feed = Feed {
+        link: Link::Up,
+        ..Feed::default()
+    };
+    feed.capabilities
+        .insert(corral_protocol::app::PLANS_V1.into());
+    let agents = super::live_agents(&State::default(), &feed);
+    assert!(!agents.new_session.enabled);
+    assert!(
+        agents
+            .sessions_note
+            .is_some_and(|note| note.contains("serves no assistant sessions"))
+    );
+    feed.capabilities
+        .insert(corral_protocol::app::ASSISTANT_V1.into());
+    assert!(
+        super::live_agents(&State::default(), &feed)
+            .new_session
+            .enabled
+    );
+}

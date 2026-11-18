@@ -150,20 +150,27 @@ Where the actions sit:
 
 ## 5. Classic TUI parity (`crates/corral-tui/src`)
 
-| Classic board | App today | Left to do |
+Walked 2026-11-18 on `nsh run --target tui` against the sample preview, 140x44. Marks: covered, covered differently, missing. "Reached by" is the key or menu in the app; `Actions` is the row menu (`.` on a Now or Review list, the `…` button elsewhere), `Ctrl K` the palette.
+
+| Classic board | Mark | Reached by |
 |---|---|---|
-| Capture (`n`, `c`; `board/input.rs:139`, `overlays.rs`) | Covered: Ask, and a New task form with title, body, project (`app/model/work/verb_forms.rs:46-50`) | Add priority, kind, size, parent, depends-on, Idea or Ready |
-| Dispatch sheet with profile choice (`d`; `board/input.rs:110`, `choice.rs`) | Missing: dispatch sends no profile (`app/model/work/verb_build.rs:27-34`) | Sheet with the profile list, base and the resolved default |
-| Reply (`r`; `board/input.rs:97`) | Covered: chat input (`app/model/agents/live_reply.rs:165`) and Inbox answers | Rewire to `reply`; reply box on Blocked cards |
-| Review and merge (`review.rs:455-479`) | Covered: decide bar (`app/model/review/decide.rs:115-123`) | Rewire; add Run gate, Start review, Land anyway |
-| Artifact finder (`A`; `board/input.rs:160`, `artifacts.rs`) | Missing: artifacts show per task only (`app/model/work/inspector.rs:80`) | Finder over all artifacts, opened from the palette and the sidebar |
-| Settings (`settings.rs:423-430`: General, Projects, Profiles, Harnesses, Automation, Artifacts) | Part: config keys and profiles (`app/model/settings/live.rs:286`, `profiles.rs:164-191`) | Projects, routing, globs, harnesses, the two switches |
-| Task detail: runs, events, comments (`detail.rs`, `detail_runs.rs`) | Covered: task page (`app/model/work/task_page.rs`) | Re-read from the new detail |
-| Move and drop a card (`H`, `L`, `X`; `board/input.rs:129-131`) | Covered: Move, Discard (`verbs.rs:93,103`) | Rewire to `move`, `drop` |
-| History and search (`history.rs`, `search.rs`) | Covered: Closed (`app/model/work/closed.rs`), palette | — |
-| Jump to the agent's pane (`a`; `board/input.rs:87`) | Missing | Focus pane; local herdr sessions only |
-| Recover and unstick sheets (`recovery.rs`, `detail/unstick.rs`) | Replaced by force, `stop` and `retry` | — |
-| Pin shelf, gallery, tour, operating view, `corral pi` launcher | Not carried: the finder replaces shelf and gallery; the launcher is phase 3 | — |
+| Capture (`n`, `c`; `board/input.rs:139`, `overlays.rs`) | Covered | `Ctrl K` › New task…: title, body, idea, backlog or ready, project, priority, kind, size, parent, depends-on, base. `/` Ask files an idea by chat |
+| Dispatch sheet with profile choice (`d`; `board/input.rs:110`, `choice.rs`) | Covered | Actions › Dispatch…: the profile list with the resolved default marked, and the base |
+| Reply (`r`; `board/input.rs:97`) | Covered | `R` on a Blocked task in Now, in place; Actions › Reply…; a session's Reply… in Agents |
+| Review and merge (`review.rs:455-479`) | Covered | `r` Review: decide bar with Approve and land (`A` focuses it), Request changes, Run gate, Start review, an Onto line; "Land anyway" is offered on a blocked or red task |
+| Artifact finder (`A`; `board/input.rs:160`, `artifacts.rs`) | Covered | `f` Artifacts: one filter over every task's artifacts (`kind:`, `task:`, `project:`), Open full size; Evidence tab on Now links to it |
+| Settings (`settings.rs:423-430`: General, Projects, Profiles, Harnesses, Automation, Artifacts) | Covered | `,` Settings › Configuration: Workspace (limits, defaults, Auto dispatch, Auto land), Projects, Profiles, Harnesses, Routing, Artifacts, File; `Ctrl S` saves `corral.toml` |
+| Task detail: runs, events, comments (`detail.rs`, `detail_runs.rs`) | Covered differently | Now's side panel (Story, Evidence, Session tabs, `]`) shows the latest run and checks; a task off the board opens as a task page. Comments and other events read in Changes (sidebar, or `.` outside a task list); runs in Timeline (`t`); the panel lists only the latest run |
+| Move and drop a card (`H`, `L`, `X`; `board/input.rs:129-131`) | Covered differently | Actions › Move to… (all eight statuses) and Drop (asks once); no single-key move |
+| History and search (`history.rs`, `search.rs`) | Covered | Closed at the bottom of Now (paged); `Ctrl K` finds tasks by id or title; Changes lists events |
+| Jump to the agent's pane (`a`; `board/input.rs:87`) | Covered | Agents › a session's menu (`.`) › Focus pane; works for local herdr sessions |
+| Recover and unstick sheets (`recovery.rs`, `detail/unstick.rs`) | Covered differently | Actions › Stop, Retry…, Run gate, Approve and land; a refused step offers its "… anyway" form on the refusal sheet |
+| Pin shelf and gallery (`shelf.rs`, `gallery.rs`) | Covered differently | `f` Artifacts replaces both |
+| Welcome tour (`guide.rs`) | Missing | Nothing in the app |
+| Operating view (`app/operating`, Settings › operating) | Covered differently | The sidebar's Automation line, Now's running-slots readout, Settings › This daemon; no resource gauges |
+| `corral pi` launcher (`launcher.rs`) | Missing | Lives in corral-pi, not the app; the app's Ask (`/`) is its one chat |
+
+Totals: 8 covered, 5 covered differently, 2 missing (the welcome tour and the `corral pi` launcher).
 
 `crates/corral-tui` is deleted in phase 4, once every row is covered on `nsh run --target tui`.
 

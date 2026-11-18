@@ -542,8 +542,15 @@ const NOT_A_NUMBER: &str =
     "Not sent: a number field holds something other than a whole number. Fix the marked field.";
 /// Why a form edit did not apply: the draft is not TOML, which the text view says where.
 const UNPARSED: &str = "The form cannot change the file until it parses again:";
-/// Said over the editor once corral.toml changed since the draft was read.
-pub const CHANGED_ELSEWHERE: &str = "corral.toml changed outside this editor since it was read. Read again to take the file as it is now (your unsaved edits are dropped), or Save to write this draft over it.";
+/// Said over the editor once corral.toml changed since the draft was read; it warns that a
+/// re-read drops edits only when there are some.
+pub fn changed_elsewhere_notice(dirty: bool) -> &'static str {
+    if dirty {
+        "corral.toml changed outside this editor since it was read. Read again to take the file as it is now (your unsaved edits are dropped), or Save to write this draft over it."
+    } else {
+        "corral.toml changed outside this editor since it was read. Read again to take the file as it is now."
+    }
+}
 
 /// Said over the editor while the file on disk does not parse, and where.
 pub fn on_disk(problem: &ConfigProblem) -> String {
@@ -692,6 +699,10 @@ mod tests {
             state.config.draft, draft,
             "the draft stays until the owner chooses"
         );
+        assert!(
+            changed_elsewhere_notice(state.config.dirty()).contains("dropped"),
+            "unsaved edits are named as dropped"
+        );
         let effects = state.reread_config();
         assert!(matches!(
             effects.as_slice(),
@@ -701,6 +712,10 @@ mod tests {
         answered(&mut state, &mut feed, Some(elsewhere), None);
         assert_eq!(state.config.draft, elsewhere);
         assert!(!state.config.dirty());
+        assert!(
+            !changed_elsewhere_notice(state.config.dirty()).contains("dropped"),
+            "no edits, nothing to drop"
+        );
     }
 
     /// Removing a line or a name and value pair took the keyboard focus with its Remove button,

@@ -362,7 +362,10 @@ fn autopilot(ws: Workspace) -> AnyElement {
 /// This device, in the sidebar's bottom line: with its caption where the line has room.
 fn device(ws: Workspace) -> AnyElement {
     term::bottom_title(dynamic(move || {
-        let name = text(ws.device.clone().into_owned())
+        let Some(name) = ws.device.clone() else {
+            return term::quiet(THIS_DEVICE.to_owned()).into_element();
+        };
+        let name = text(name.into_owned())
             .font_weight(FontWeight::BOLD)
             .text_color(color(Token::Ink));
         if term::wide() {
