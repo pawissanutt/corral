@@ -385,6 +385,7 @@ pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str)
         pane: row.and_then(|row| pane::input(state, id, row, feed)),
         terminal,
         reply: live_reply::reply(id, row, &shown, state, feed, env, via),
+        ended: row.is_some_and(|row| row.run.ended.is_some()),
         run_details: Run {
             title: "Run",
             facts: task

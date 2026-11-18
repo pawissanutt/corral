@@ -458,8 +458,8 @@ fn refresh_details(feed: &mut Feed) {
         })
         .collect();
     for target in targets {
-        if let DetailRef::Artifacts { filter } = &target {
-            super::artifacts::again(feed, filter.as_deref());
+        if let DetailRef::Artifacts { .. } = &target {
+            super::artifacts::again(feed, &target);
             continue;
         }
         match details::build(feed, &target) {

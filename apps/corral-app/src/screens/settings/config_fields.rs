@@ -13,6 +13,7 @@ use crate::model::Form;
 use crate::model::settings::document::{ListEdit, Path, Seg};
 use crate::model::settings::editor::{Edit, Typed};
 use crate::model::settings::form::{self, Field, Kind, Live};
+use crate::model::settings::inherit;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::suggest::suggestions;
@@ -144,7 +145,7 @@ fn under(app: AppState, field: &Field, live: Memo<Live>) -> AnyElement {
                 }));
         let inherited = unset.then(|| {
             app.feed
-                .with(|feed| live.with(|live| form::unset(&path, live, feed)))
+                .with(|feed| live.with(|live| inherit::unset(&path, live, feed)))
         });
         let (reasons, invalid) = app.settings.with(|state| {
             (
@@ -443,10 +444,19 @@ fn pairs(app: AppState, path: &Path, names: &[String], live: Memo<Live>) -> AnyE
         .into_element()
 }
 
+/// The new name and value with Add. Removing the last pair hands the keyboard focus to the new
+/// name (the editor's `added` names the pairs' own path then).
 fn new_pair(app: AppState, path: &Path) -> AnyElement {
     let name = signal(String::new());
     let value = signal(String::new());
     let add_path = path.clone();
+    let handle = element_ref();
+    if app
+        .settings
+        .with_untracked(|state| state.config.added.as_ref() == Some(path))
+    {
+        after_answer(move || handle.focus());
+    }
     let add = dynamic(move || {
         let disabled = name.with(|name| name.trim().is_empty());
         let path = add_path.clone();
@@ -482,12 +492,13 @@ fn new_pair(app: AppState, path: &Path) -> AnyElement {
             8.0
         }))
         .min_w(px(0.0))
-        .child(entry(
+        .child(entry_with(
             app,
             format!("{}-new-name", id(path)),
             "New variable",
             move || name.get(),
             move |text| name.set(text),
+            Some(handle),
         ))
         .child(entry(
             app,

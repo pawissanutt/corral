@@ -622,6 +622,9 @@ pub struct Session {
     pub transcript: Transcript,
     pub terminal: Option<Terminal>,
     pub reply: Reply,
+    /// The run has ended: it takes no more messages, so its page shows no reply box, as an
+    /// ended assistant session's shows no composer.
+    pub ended: bool,
     /// The pane's keys bar and type field under the terminal; none without a recorded session.
     pub pane: Option<PaneInput>,
     pub run_details: Run,

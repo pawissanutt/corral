@@ -1,13 +1,15 @@
 //! Settings › Configuration's editor: `corral.toml` as `config.get` returned it, and the draft
 //! the owner changes. Every change edits the draft document in place (see `document`), the
 //! form and the plain-text view alike; Save sends the whole draft in one `config.put`. corrald
-//! checks it with the engine and either replaces the file or refuses with reasons, each naming
-//! the key it is about where it can; a refusal leaves the draft as it was, each reason shown on
-//! its field or at the top.
+//! checks it with the engine and either replaces the file or refuses with its problems, each
+//! naming the key it is about or, for a syntax error, its line and column; a refusal leaves the
+//! draft as it was, each problem shown on its field or at the top. The settings topic states the
+//! file's revision, so an edit made elsewhere is noticed, and a file on disk that does not parse.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use corral_protocol::config::ConfigDocument;
+use corral_types::{ConfigProblem, Refusal};
 use toml_edit::{DocumentMut, Value};
 
 use super::State;
@@ -72,11 +74,13 @@ pub struct Waiting {
 }
 
 /// One reason a save was refused: the key it names (a field, or an entry such as a profile),
-/// or none when it names no key, and what corrald says about it.
+/// or none when it names no key, what corrald says about it, and for a syntax error its line
+/// and column (1-based).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reason {
     pub at: Option<Path>,
     pub line: String,
+    pub position: Option<(usize, usize)>,
 }
 
 /// How a typed field's text becomes a value.
@@ -129,6 +133,13 @@ pub struct Editor {
     /// a removed one's place (the next line, rule or entry), so the focus stays where the owner
     /// was working rather than leaving with the removed field's controls.
     pub added: Option<Path>,
+    /// The revision of `saved`, as corrald stated it.
+    pub revision: Option<String>,
+    /// The revision the last accepted save replaced: a settings snapshot still stating it has
+    /// not caught up with the save yet, rather than showing an edit made elsewhere.
+    pub replaced: Option<String>,
+    /// The problem of the file on disk the editor last opened the File part for.
+    pub disk: Option<ConfigProblem>,
 }
 
 impl Editor {
@@ -147,6 +158,16 @@ impl Editor {
             .iter()
             .filter(move |reason| reason.at.as_ref() == Some(path))
             .map(|reason| reason.line.as_str())
+    }
+
+    /// Whether corral.toml changed since the editor read it: the settings topic states another
+    /// revision than the one the draft was read at (or the one a save of ours replaced).
+    pub fn changed_elsewhere(&self, feed: &Feed) -> bool {
+        let Some(now) = feed.settings.as_ref().and_then(|s| s.revision.as_ref()) else {
+            return false;
+        };
+        self.revision.as_ref().is_some_and(|read| read != now)
+            && self.replaced.as_ref() != Some(now)
     }
 
     fn apply(&mut self, edit: &Edit) -> Result<(), String> {
@@ -179,7 +200,24 @@ impl Editor {
                 }
             }
             Edit::Pair(path, name, value) => {
+                let names = |doc: &DocumentMut| {
+                    document::pairs(document::get(doc, path))
+                        .into_iter()
+                        .map(|(name, _)| name)
+                        .collect::<Vec<_>>()
+                };
+                let at = names(&doc).iter().position(|held| held == name);
                 document::set_pair(&mut doc, path, name, value.as_deref());
+                if let (None, Some(at)) = (value, at) {
+                    // The value of the pair now in its place, else the new name's field (the
+                    // pairs' own path).
+                    let left = names(&doc);
+                    let mut focus = path.clone();
+                    if let Some(next) = left.get(at.min(left.len().saturating_sub(1))) {
+                        focus.0.push(Seg::Key(next.clone()));
+                    }
+                    self.added = Some(focus);
+                }
             }
             Edit::AddEntry(part, name) => {
                 let name = name.trim();
@@ -247,38 +285,67 @@ impl Editor {
         }
     }
 
-    /// Sorts each line of a refusal under the longest key of the draft it starts with.
-    fn refuse(&mut self, reason: &str) {
+    /// Places each problem of a refused save: a syntax error at the top with its line and
+    /// column, a keyed one on the field (or entry) its key names, any other at the top. A
+    /// refusal without problems is said at the top as corrald worded it.
+    fn refuse(&mut self, refusal: &Refusal) {
+        let Some(problems) = &refusal.problems else {
+            self.reasons = vec![Reason {
+                at: None,
+                line: refusal.reason.clone(),
+                position: None,
+            }];
+            return;
+        };
         let anchors = document::parse(&self.draft)
             .map(|doc| super::form::anchors(&doc))
             .unwrap_or_default();
-        self.reasons = reason
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(|line| place(line, &anchors))
+        self.reasons = problems
+            .iter()
+            .map(|problem| place(problem, &anchors))
             .collect();
+        self.reasons.sort_by_key(|reason| reason.position.is_none());
     }
 }
 
-/// The reason under the longest anchor `line` starts with, the anchor cut from its words.
-fn place(line: &str, anchors: &[Path]) -> Reason {
+/// Where `problem` shows: at its position, else on the longest anchor its key is or lies under
+/// (what lies below the anchor kept in the words), else at the top with its key.
+fn place(problem: &ConfigProblem, anchors: &[Path]) -> Reason {
+    if let (Some(line), Some(column)) = (problem.line, problem.column) {
+        return Reason {
+            at: None,
+            line: format!("Line {line}, column {column}: {}", problem.message),
+            position: Some((line, column)),
+        };
+    }
+    let Some(key) = problem.key.as_deref().filter(|key| !key.is_empty()) else {
+        return Reason {
+            at: None,
+            line: problem.message.clone(),
+            position: None,
+        };
+    };
     let found = anchors
         .iter()
         .map(|anchor| (anchor, anchor.to_string()))
-        .filter(|(_, name)| {
-            line.strip_prefix(name.as_str())
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with([':', ' ', '.', '[']))
+        .filter_map(|(anchor, name)| {
+            let rest = key.strip_prefix(name.as_str())?;
+            (rest.is_empty() || rest.starts_with(['.', '['])).then(|| (anchor, rest, name.len()))
         })
-        .max_by_key(|(_, name)| name.len());
+        .max_by_key(|(_, _, len)| *len);
     match found {
-        Some((anchor, name)) => Reason {
+        Some((anchor, rest, _)) => Reason {
             at: Some(anchor.clone()),
-            line: line[name.len()..].trim_start_matches([':', ' ']).to_owned(),
+            line: match rest.trim_start_matches('.') {
+                "" => problem.message.clone(),
+                below => format!("{below}: {}", problem.message),
+            },
+            position: None,
         },
         None => Reason {
             at: None,
-            line: line.to_owned(),
+            line: format!("{key}: {}", problem.message),
+            position: None,
         },
     }
 }
@@ -307,6 +374,26 @@ impl State {
             return Vec::new();
         }
         self.request_config(None)
+    }
+
+    /// The owner's choice once the file changed elsewhere: drop the draft and read the file as
+    /// it is now.
+    pub fn reread_config(&mut self) -> Vec<Effect> {
+        if self.config.waiting.is_some() {
+            return Vec::new();
+        }
+        self.discard_config();
+        self.request_config(None)
+    }
+
+    /// Opens the plain-text view once for each problem the file on disk newly has, since the
+    /// form cannot read a file that does not parse; forgets it once the file parses again.
+    pub fn disk_problem(&mut self, problem: Option<ConfigProblem>) -> Vec<Effect> {
+        if problem.is_some() && problem != self.config.disk {
+            self.config.part = Part::File;
+        }
+        self.config.disk = problem;
+        Vec::new()
     }
 
     fn request_config(&mut self, put: Option<String>) -> Vec<Effect> {
@@ -413,13 +500,19 @@ impl State {
         }
         self.config.waiting = None;
         let editor = &mut self.config;
-        if let Some(ConfigDocument { toml }) = operation.decode::<ConfigDocument>() {
+        if let Some(ConfigDocument { toml, revision }) = operation.decode::<ConfigDocument>() {
             let fresh = !editor.dirty();
             if waiting.save || fresh {
                 editor.draft.clone_from(&toml);
                 editor.raw.clear();
                 editor.invalid.clear();
             }
+            editor.replaced = if waiting.save {
+                editor.revision.take()
+            } else {
+                None
+            };
+            editor.revision = revision;
             editor.saved = Some(toml);
             editor.problem = None;
             editor.reasons.clear();
@@ -431,7 +524,7 @@ impl State {
         }
         if let Some(refusal) = &operation.refusal {
             editor.problem = None;
-            editor.refuse(&refusal.reason);
+            editor.refuse(refusal);
         } else if let Some(error) = &operation.error {
             editor.problem = Some(if waiting.save {
                 format!("Not saved: {}", error.message)
@@ -449,17 +542,40 @@ const NOT_A_NUMBER: &str =
     "Not sent: a number field holds something other than a whole number. Fix the marked field.";
 /// Why a form edit did not apply: the draft is not TOML, which the text view says where.
 const UNPARSED: &str = "The form cannot change the file until it parses again:";
+/// Said over the editor once corral.toml changed since the draft was read.
+pub const CHANGED_ELSEWHERE: &str = "corral.toml changed outside this editor since it was read. Read again to take the file as it is now (your unsaved edits are dropped), or Save to write this draft over it.";
+
+/// Said over the editor while the file on disk does not parse, and where.
+pub fn on_disk(problem: &ConfigProblem) -> String {
+    match (problem.line, problem.column) {
+        (Some(line), Some(column)) => format!(
+            "corral.toml on disk is not valid at line {line}, column {column}: {}. Fix it in File and Save.",
+            problem.message
+        ),
+        _ => format!("corral.toml on disk is not valid: {problem}. Fix it in File and Save."),
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use corral_types::Refusal;
+    use corral_protocol::rows::SettingsSnapshot;
 
     use super::*;
     use crate::model::daemon::Operation;
 
     const FILE: &str = "# owner notes\n[limits]\nrunning = 4\n\n[projects.app] # main repo\npath = \"app\"\ngate = [\"just check\"]\n\n[unknown_table]\nkept = 1\n";
 
-    fn answered(state: &mut State, feed: &mut Feed, value: Option<String>, refusal: Option<&str>) {
+    fn problem(key: Option<&str>, message: &str, at: Option<(usize, usize)>) -> ConfigProblem {
+        ConfigProblem {
+            key: key.map(str::to_owned),
+            message: message.into(),
+            line: at.map(|(line, _)| line),
+            column: at.map(|(_, column)| column),
+        }
+    }
+
+    /// corrald answers the request in flight: the file at a revision, or a refusal.
+    fn answered(state: &mut State, feed: &mut Feed, value: Option<&str>, refusal: Option<Refusal>) {
         let key = state
             .config
             .waiting
@@ -471,15 +587,16 @@ mod tests {
             Operation {
                 method: "config".into(),
                 loading: false,
-                value: value.map(|toml| serde_json::json!({ "toml": toml })),
-                error: refusal.map(|reason| crate::model::daemon::ClientError {
-                    code: "refused".into(),
-                    message: reason.into(),
-                }),
-                refusal: refusal.map(|reason| Refusal {
-                    reason: reason.into(),
-                    next: Vec::new(),
-                }),
+                value: value.map(
+                    |toml| serde_json::json!({ "toml": toml, "revision": toml.len().to_string() }),
+                ),
+                error: refusal
+                    .as_ref()
+                    .map(|refusal| crate::model::daemon::ClientError {
+                        code: "refused".into(),
+                        message: refusal.reason.clone(),
+                    }),
+                refusal,
             },
         );
         state.settle_config(feed);
@@ -489,7 +606,7 @@ mod tests {
         let mut state = State::default();
         let mut feed = Feed::default();
         state.open_config();
-        answered(&mut state, &mut feed, Some(FILE.into()), None);
+        answered(&mut state, &mut feed, Some(FILE), None);
         (state, feed)
     }
 
@@ -516,38 +633,80 @@ mod tests {
         assert!(sent.contains("[unknown_table]\nkept = 1"), "{sent}");
     }
 
+    /// The keys came out of the refusal's words, so a problem whose message did not start with
+    /// its key fell to the top, and a syntax error lost the place it names.
     #[test]
-    fn a_refused_save_keeps_the_draft_and_puts_each_reason_on_its_field() {
+    fn a_keyed_problem_lands_on_its_field_and_a_syntax_error_at_the_top_with_its_position() {
         let (mut state, mut feed) = loaded();
         let profile = Path::entry("projects", "app", "profile");
         state.edit_config(Edit::Text(profile.clone(), "nope".into()));
         let draft = state.config.draft.clone();
         state.save_config();
-        answered(
-            &mut state,
-            &mut feed,
-            None,
-            Some("projects.app.profile: unknown profile \"nope\"\nprofile names must not be empty"),
-        );
+        let problems = vec![
+            problem(
+                Some("projects.app.profile"),
+                "unknown profile \"nope\"",
+                None,
+            ),
+            problem(Some("profiles"), "names must not be empty", None),
+            problem(None, "expected `]`", Some((3, 7))),
+        ];
+        let refusal = Refusal {
+            reason: "configuration problems".into(),
+            next: Vec::new(),
+            problems: Some(problems),
+        };
+        answered(&mut state, &mut feed, None, Some(refusal));
         assert_eq!(state.config.draft, draft);
         assert!(state.config.dirty());
-        assert_eq!(
-            state.config.reasons_at(&profile).collect::<Vec<_>>(),
-            ["unknown profile \"nope\""]
-        );
-        assert!(
-            state
-                .config
-                .reasons
-                .iter()
-                .any(|reason| reason.at.is_none())
-        );
+        assert_eq!(state.config.reasons_at(&profile).count(), 1);
+        let top: Vec<_> = state
+            .config
+            .reasons
+            .iter()
+            .filter(|reason| reason.at.is_none())
+            .map(|reason| reason.position)
+            .collect();
+        assert_eq!(top, [Some((3, 7)), None], "the syntax error leads the top");
     }
 
-    /// Removing a line took the keyboard focus with its Remove button, so the next Tab started
-    /// at the top of the app.
+    /// An edit made on disk went unseen, and a save silently wrote the old draft over it.
     #[test]
-    fn removing_a_line_hands_the_focus_to_the_line_in_its_place() {
+    fn a_changed_revision_offers_read_again_and_keeps_the_draft_until_chosen() {
+        let (mut state, mut feed) = loaded();
+        let read = state.config.revision.clone();
+        feed.settings = Some(SettingsSnapshot {
+            revision: read,
+            ..SettingsSnapshot::default()
+        });
+        assert!(!state.config.changed_elsewhere(&feed));
+        let running = Path::of(&["limits", "running"]);
+        state.edit_config(Edit::Typed(running, Typed::Number, "6".into()));
+        let draft = state.config.draft.clone();
+        if let Some(settings) = &mut feed.settings {
+            settings.revision = Some("elsewhere".into());
+        }
+        assert!(state.config.changed_elsewhere(&feed));
+        state.settle_config(&feed);
+        assert_eq!(
+            state.config.draft, draft,
+            "the draft stays until the owner chooses"
+        );
+        let effects = state.reread_config();
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::Config { put: None, .. }]
+        ));
+        let elsewhere = "[limits]\nrunning = 2\n";
+        answered(&mut state, &mut feed, Some(elsewhere), None);
+        assert_eq!(state.config.draft, elsewhere);
+        assert!(!state.config.dirty());
+    }
+
+    /// Removing a line or a name and value pair took the keyboard focus with its Remove button,
+    /// so the next Tab started at the top of the app.
+    #[test]
+    fn removing_a_line_or_a_pair_hands_the_focus_to_what_takes_its_place() {
         let (mut state, _) = loaded();
         let gate = Path::entry("projects", "app", "gate");
         state.edit_config(Edit::List(gate.clone(), ListEdit::Add));
@@ -555,5 +714,16 @@ mod tests {
         let mut first = gate;
         first.0.push(Seg::Index(0));
         assert_eq!(state.config.added, Some(first));
+
+        let env = Path::entry("projects", "app", "env");
+        for name in ["A", "B"] {
+            state.edit_config(Edit::Pair(env.clone(), name.into(), Some("1".into())));
+        }
+        state.edit_config(Edit::Pair(env.clone(), "A".into(), None));
+        let mut next = env.clone();
+        next.0.push(Seg::Key("B".into()));
+        assert_eq!(state.config.added, Some(next));
+        state.edit_config(Edit::Pair(env.clone(), "B".into(), None));
+        assert_eq!(state.config.added, Some(env), "the new name's field");
     }
 }

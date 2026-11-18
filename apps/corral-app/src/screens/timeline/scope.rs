@@ -12,6 +12,7 @@ use crate::model::Form;
 use crate::model::timeline::{self, BURNUP_SCOPE_LABEL, ScopeOption};
 use crate::screens::plans::menu_trigger;
 use crate::state::AppState;
+use crate::ui::kit::overlay::counted;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -58,6 +59,7 @@ pub fn picker(app: AppState) -> AnyElement {
                     }
                 })
                 .backdrop_style(|s| s.bg(color(Token::Shell).opacity(0.5)))
+                .on_open_change(counted(app))
                 .trigger(menu_trigger(app, label, spoken, "btn-burnup-scope"))
                 // The scopes are read when the menu opens: a plan published since is there.
                 .child(dynamic(move || untracked(move || items(app))))

@@ -1,6 +1,6 @@
 //! What Settings › Configuration's form shows of the draft: each part's fields in the order an
-//! owner tunes them, the entries a part lists, each field's value, and what an unset field
-//! inherits (from `[defaults]` in the draft, or the value corrald reports it uses).
+//! owner tunes them, the entries a part lists, and each field's value (what an unset field
+//! inherits is `inherit`'s).
 
 use std::collections::BTreeMap;
 
@@ -571,134 +571,6 @@ impl Live {
     }
 }
 
-/// The value corrald reports it uses for a workspace key the file leaves unset: what its parsed
-/// configuration holds, but only while the saved file leaves it unset too, so it is the
-/// engine's default and not a value the draft has since removed.
-fn engine(live: &Live, feed: &Feed, table: &str, key: &str) -> Option<String> {
-    if live.saved.get(&Path::of(&[table, key])).is_some() {
-        return None;
-    }
-    let value = feed.settings.as_ref()?.config.get(table)?.get(key)?;
-    json_words(value)
-}
-
-fn json_words(value: &Json) -> Option<String> {
-    match value {
-        Json::Null => None,
-        Json::Bool(true) => Some("on".into()),
-        Json::Bool(false) => Some("off".into()),
-        Json::String(text) if text.is_empty() => None,
-        Json::String(text) => Some(text.clone()),
-        other => Some(other.to_string()),
-    }
-}
-
-fn words(shown: &Shown) -> String {
-    match shown {
-        Shown::Flag(true) => "on".into(),
-        Shown::Flag(false) => "off".into(),
-        Shown::Text(text) => text.clone(),
-        Shown::Lines(lines) => lines.join(", "),
-        Shown::Pairs(pairs) => pairs
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>()
-            .join(", "),
-    }
-}
-
-/// A workspace key's value as a project inherits it: the draft's `[defaults]`, else corrald's.
-fn workspace_value(live: &Live, feed: &Feed, table: &str, key: &str) -> Option<(String, bool)> {
-    match live.draft.get(&Path::of(&[table, key])) {
-        Some(shown) => Some((words(shown), true)),
-        None => engine(live, feed, table, key).map(|value| (value, false)),
-    }
-}
-
-/// What an unset field means: the value it inherits and from where.
-pub fn unset(path: &Path, live: &Live, feed: &Feed) -> String {
-    use super::document::Seg;
-    let keys: Vec<&str> = path
-        .0
-        .iter()
-        .filter_map(|seg| match seg {
-            Seg::Key(key) => Some(key.as_str()),
-            Seg::Index(_) => None,
-        })
-        .collect();
-    match keys.as_slice() {
-        ["defaults", "base"] => "unset · each repository's default branch".into(),
-        ["defaults", "profile"] => match engine(live, feed, "defaults", "profile") {
-            Some(profile) => format!("unset · corrald uses {profile}"),
-            None => {
-                "unset · no workspace profile; routing, the project or dispatch names one".into()
-            }
-        },
-        [table @ ("defaults" | "limits" | "artifacts"), key] => {
-            match engine(live, feed, table, key) {
-                Some(value) if *key == "max_bytes" => {
-                    format!("unset · corrald uses {}", bytes(&value))
-                }
-                Some(value) => format!("unset · corrald uses {value}"),
-                None => "unset · corral's default".into(),
-            }
-        }
-        ["projects", project, key] => project_unset(live, feed, project, key),
-        ["profiles", _, "model" | "effort"] => "unset · the harness's default".into(),
-        ["profiles", _, "args"] => "No extra arguments.".into(),
-        ["harnesses", _, "model_flag" | "effort_flag"] => {
-            "unset · profiles of this harness cannot set it".into()
-        }
-        ["routing", "profile"] => "unset · a rule must name a profile".into(),
-        ["routing", _] => "unset · any".into(),
-        _ => "unset".into(),
-    }
-}
-
-fn project_unset(live: &Live, feed: &Feed, project: &str, key: &str) -> String {
-    let inherited = |key: &str| workspace_value(live, feed, "defaults", key);
-    let from = |(value, drafted): (String, bool)| {
-        if drafted {
-            format!("inherits {value} from Workspace")
-        } else {
-            format!("inherits {value}")
-        }
-    };
-    match key {
-        "base" => match inherited("base") {
-            Some(base) => from(base),
-            None => {
-                let found = feed
-                    .projects
-                    .get(project)
-                    .and_then(|row| row.effective.as_ref()?.base.clone())
-                    .filter(|_| {
-                        live.saved
-                            .get(&Path::entry("projects", project, "base"))
-                            .is_none()
-                            && live.saved.get(&Path::of(&["defaults", "base"])).is_none()
-                    });
-                match found {
-                    Some(base) => format!("inherits the repository's default branch, {base}"),
-                    None => "inherits the repository's default branch".into(),
-                }
-            }
-        },
-        "profile" | "max_rounds" | "branch_prefix" | "auto_dispatch" | "auto_land" => {
-            inherited(key).map_or_else(|| "inherits corral's default".into(), from)
-        }
-        "running" => match workspace_value(live, feed, "limits", "running") {
-            Some((limit, _)) => format!("unset · only the workspace limit of {limit} applies"),
-            None => "unset · only the workspace limit applies".into(),
-        },
-        "reviewer" => "unset · no review pass after done".into(),
-        "gate" => "No gate lines: the gate has nothing to run.".into(),
-        "env" => "No variables.".into(),
-        "path" => "unset · corrald refuses a project without a path".into(),
-        _ => "unset".into(),
-    }
-}
-
 /// Under a number field whose text is not a whole number.
 pub const WHOLE_NUMBER: &str = "Type a whole number, or leave it empty to unset it.";
 
@@ -758,7 +630,7 @@ pub fn subtitle(config: &Map<String, Json>) -> String {
         config
             .get("defaults")
             .and_then(|defaults| defaults.get(key))
-            .and_then(json_words)
+            .and_then(super::inherit::json_words)
             .unwrap_or_else(|| "off".into())
     };
     let noun = if projects == 1 { "project" } else { "projects" };

@@ -18,8 +18,7 @@ use crate::model::devices::DeviceRow;
 pub(super) fn populate(feed: &mut Feed, projects: bool) {
     let devices = devices(feed.now);
     let file = super::config::sample(projects);
-    feed.settings = Some(SettingsSnapshot {
-        config: super::config::parsed(&file),
+    let around = SettingsSnapshot {
         listener: Some(ListenerInfo {
             port: 7778,
             origins: vec!["http://127.0.0.1:8080".into()],
@@ -27,7 +26,9 @@ pub(super) fn populate(feed: &mut Feed, projects: bool) {
         }),
         devices,
         hostname: Some("preview-workstation".into()),
-    });
+        ..SettingsSnapshot::default()
+    };
+    feed.settings = Some(super::config::snapshot(&file, around));
     feed.sample_config = Some(file);
     if !projects {
         return;

@@ -32,29 +32,39 @@ enum TermFit {
     Below,
 }
 
+/// A terminal button's Cells: its words and its marks.
+fn cells_of(button: &Button, short: bool) -> f32 {
+    let words = match (short, button.short) {
+        (true, Some(short)) => short,
+        _ => button.label.as_str(),
+    };
+    words.chars().count() as f32 + TERM_BUTTON
+}
+
+/// The Cells of buttons in a row, the gaps between them included.
+fn row_cells(widths: &[f32]) -> f32 {
+    widths.iter().sum::<f32>() + TERM_GAP * widths.len().saturating_sub(1) as f32
+}
+
 impl TermFit {
     /// The fullest line that fits `cells`; whole until the bar is measured.
     fn of(decide: &DecideBar, cells: f32) -> TermFit {
         if cells <= 0.0 {
             return TermFit::Whole;
         }
-        let size = |button: &Button, short: bool| {
-            let words = match (short, button.short) {
-                (true, Some(short)) => short,
-                _ => button.label.as_str(),
-            };
-            words.chars().count() as f32 + TERM_BUTTON
-        };
         let row = |short: bool| {
             let widths: Vec<f32> = decide
                 .buttons
                 .iter()
-                .map(|button| size(button, short))
-                .chain(decide.secondary.iter().map(|button| size(button, false)))
+                .map(|button| cells_of(button, short))
+                .chain(
+                    decide
+                        .secondary
+                        .iter()
+                        .map(|button| cells_of(button, false)),
+                )
                 .collect();
-            widths.iter().sum::<f32>()
-                + TERM_GAP * widths.len().saturating_sub(1) as f32
-                + TERM_EDGES
+            row_cells(&widths) + TERM_EDGES
         };
         if row(false) <= cells {
             TermFit::Whole
@@ -63,6 +73,30 @@ impl TermFit {
         } else {
             TermFit::Below
         }
+    }
+
+    /// Whether the attribution fits whole on its line (after the secondary operations when
+    /// they went below); a clipped one would say nothing but an ellipsis.
+    fn attribution(self, decide: &DecideBar, cells: f32) -> bool {
+        let Some(line) = &decide.attribution else {
+            return false;
+        };
+        if cells <= 0.0 {
+            return true;
+        }
+        let words = flat(line).chars().count() as f32;
+        let before = match self {
+            TermFit::Below if !decide.secondary.is_empty() => {
+                let widths: Vec<f32> = decide
+                    .secondary
+                    .iter()
+                    .map(|button| cells_of(button, false))
+                    .collect();
+                row_cells(&widths) + TERM_GAP
+            }
+            _ => 0.0,
+        };
+        before + words + TERM_EDGES <= cells
     }
 }
 
@@ -76,12 +110,14 @@ pub(super) fn decide(cx: Ctx) -> AnyElement {
     let room = signal(0.0_f32);
     let model = computed(move || {
         let decide = page.with(|page| page.detail.as_ref().map(|detail| detail.decide.clone()))?;
-        let fit = if terminal {
-            TermFit::of(&decide, room.get() / term::cells(1.0).0)
+        let cells = room.get() / term::cells(1.0).0;
+        let (fit, attribution) = if terminal {
+            let fit = TermFit::of(&decide, cells);
+            (fit, fit.attribution(&decide, cells))
         } else {
-            TermFit::Whole
+            (TermFit::Whole, decide.attribution.is_some())
         };
-        Some((decide, fit))
+        Some((decide, fit, attribution))
     });
     view()
         .flex_none()
@@ -99,7 +135,7 @@ pub(super) fn decide(cx: Ctx) -> AnyElement {
         .child(dynamic(move || {
             model
                 .get()
-                .map(|(decide, fit)| decide_bar(&cx, &decide, fit))
+                .map(|(decide, fit, attribution)| decide_bar(&cx, &decide, fit, attribution))
         }))
         .into_element()
 }
@@ -139,7 +175,7 @@ pub(super) fn phone_secondary(cx: &Ctx) -> AnyElement {
     view().child(field).child(buttons).into_element()
 }
 
-fn decide_bar(cx: &Ctx, decide: &DecideBar, fit: TermFit) -> AnyElement {
+fn decide_bar(cx: &Ctx, decide: &DecideBar, fit: TermFit, attributed: bool) -> AnyElement {
     let app = cx.app;
     let phone = app.form == Form::Phone;
     let desktop = app.form == Form::Desktop;
@@ -181,32 +217,29 @@ fn decide_bar(cx: &Ctx, decide: &DecideBar, fit: TermFit) -> AnyElement {
             .map(|button| command(cx, button))
             .collect()
     };
-    // A terminal keeps the attribution under its row of actions, where the bar clips it; when
-    // the row is still too tight, the secondary operations lead that line.
+    // A terminal keeps the attribution under its row of actions, whole or not at all; when the
+    // row is still too tight, the secondary operations lead that line, wrapping rather than
+    // clipping a button.
     let attribution = decide
         .attribution
         .as_ref()
-        .filter(|_| app.form == Form::Terminal)
+        .filter(|_| app.form == Form::Terminal && attributed)
         .map(|line| {
             rich_at(app, line, 11.5, Token::Ink3, false)
-                .truncate()
+                .number_of_lines(1u32)
                 .into_element()
         });
     let (secondary, attribution) = if fit == TermFit::Below && !secondary.is_empty() {
-        let mut line = Vec::with_capacity(secondary.len() * 2 + 1);
-        for (at, button) in secondary.into_iter().enumerate() {
-            if at > 0 {
-                line.push(term::space(TERM_GAP));
-            }
-            line.push(view().flex_shrink_0().child(button).into_element());
-        }
-        if let Some(words) = attribution {
-            line.push(term::space(TERM_GAP));
-            line.push(view().flex_1().min_w(px(0.0)).child(words).into_element());
-        }
+        let mut line: Vec<AnyElement> = secondary
+            .into_iter()
+            .map(|button| view().flex_shrink_0().child(button).into_element())
+            .collect();
+        line.extend(attribution);
         let below = view()
             .flex_row()
+            .flex_wrap()
             .items_center()
+            .gap_x(term::cells(TERM_GAP))
             .children(line)
             .into_element();
         (Vec::new(), Some(below))

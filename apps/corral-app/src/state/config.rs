@@ -24,7 +24,10 @@ impl AppState {
             let sent = requests::send(match put {
                 Some(toml) => ClientRequest::ConfigPut {
                     request_id,
-                    request: corral_protocol::config::ConfigDocument { toml },
+                    request: corral_protocol::config::ConfigDocument {
+                        toml,
+                        revision: None,
+                    },
                 },
                 None => ClientRequest::ConfigGet { request_id },
             });
@@ -69,6 +72,20 @@ impl AppState {
         self.refusal.set(None);
         self.confirm
             .set(Some(Confirming::Leave(Box::new(next.clone()))));
+        true
+    }
+
+    /// The phone's back from its pushed Configuration page, whose leaving the model's
+    /// navigation does not see: with unsaved edits the confirm sheet asks first, and its
+    /// Discard lands on the Settings list (a `go`, which the phone's stack follows).
+    pub fn asks_before_leaving_config(&self) -> bool {
+        if !self.settings.with_untracked(|state| state.config.dirty()) {
+            return false;
+        }
+        let mut next = self.nav.get_untracked();
+        next.go(Destination::Settings);
+        self.refusal.set(None);
+        self.confirm.set(Some(Confirming::Leave(Box::new(next))));
         true
     }
 }

@@ -25,6 +25,7 @@ fn a_refused_submit_keeps_the_typed_next_steps() {
     let refusal = Refusal {
         reason: "T-41 is not done".into(),
         next: vec![Next::force(dispatch)],
+        problems: None,
     };
     app.event(
         feed,

@@ -31,6 +31,7 @@ fn refuse(reason: impl Into<String>, next: Vec<Next>) -> Fail {
     Fail::Refused(Refusal {
         reason: reason.into(),
         next,
+        problems: None,
     })
 }
 

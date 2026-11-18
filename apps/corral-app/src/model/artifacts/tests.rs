@@ -1,5 +1,5 @@
 use corral_protocol::detail::{
-    ArtifactsPage, DetailBody, DetailGet, DetailRef, DetailReply, TaskDetail,
+    ArtifactNarrowing, ArtifactsPage, DetailBody, DetailGet, DetailRef, DetailReply, TaskDetail,
 };
 use corral_types::{Actor, Artifact, Task};
 
@@ -16,6 +16,8 @@ fn artifact(task: &str, id: u32, kind: &str, title: &str, minute: i64) -> Artifa
         title: title.into(),
         at: jiff::Timestamp::from_second(1_800_000_000 + minute * 60).unwrap(),
         by: Actor::Agent,
+        project: None,
+        run: None,
     }
 }
 
@@ -82,10 +84,11 @@ fn titles(page: &Page) -> Vec<&str> {
         .collect()
 }
 
-/// corrald filters by one text, so the request has to carry the most selective token, and the
-/// tokens it cannot carry still have to narrow what it serves.
+/// corrald pages through the rows a request narrows: the field tokens have to travel as its
+/// narrowing and the words as its filter, or the app pages through unrelated artifacts; a second
+/// token of the same field still narrows what it serves.
 #[test]
-fn tokens_narrow_the_request_and_every_token_narrows_the_list() {
+fn tokens_go_into_the_narrowing_and_words_into_the_filter() {
     let query = Query::parse("Kind:report coverage task:t-10 project:");
     assert_eq!(query.kinds, ["report"]);
     assert_eq!(query.tasks, ["T-10"]);
@@ -94,20 +97,39 @@ fn tokens_narrow_the_request_and_every_token_narrows_the_list() {
         query.projects.is_empty(),
         "a field still being typed narrows nothing"
     );
-    let filter = |text: &str| match Query::parse(text).request() {
-        DetailRef::Artifacts { filter } => filter,
-        other => panic!("not a list request: {other:?}"),
-    };
-    assert_eq!(filter("coverage task:T-10").as_deref(), Some("T-10:"));
-    assert_eq!(filter("gate kind:log").as_deref(), Some("gate"));
-    assert_eq!(filter("kind:rep").as_deref(), Some("rep"));
-    assert_eq!(filter("  "), None);
+    assert_eq!(
+        query.request(),
+        DetailRef::Artifacts {
+            filter: Some("coverage".into()),
+            narrowing: Some(ArtifactNarrowing {
+                kind: Some("report".into()),
+                task: Some("T-10".into()),
+                project: None,
+            }),
+        }
+    );
+    assert_eq!(
+        Query::parse("gate log project:si").request(),
+        DetailRef::Artifacts {
+            filter: Some("gate log".into()),
+            narrowing: Some(ArtifactNarrowing {
+                project: Some("si".into()),
+                ..ArtifactNarrowing::default()
+            }),
+        }
+    );
+    assert_eq!(
+        Query::parse("  ").request(),
+        DetailRef::Artifacts {
+            filter: None,
+            narrowing: None,
+        }
+    );
 
     let mut feed = Feed::default();
     task(&mut feed, "T-6", "site");
-    task(&mut feed, "T-10", "corral");
     let state = State {
-        query: "project:site kind:screenshot".into(),
+        query: "kind:screenshot kind:screens".into(),
         ..State::default()
     };
     let target = Query::parse(&state.query).request();
@@ -116,31 +138,11 @@ fn tokens_narrow_the_request_and_every_token_narrows_the_list() {
         &target,
         vec![vec![
             artifact("T-6", 1, "screenshot", "hero.png", 3),
-            artifact("T-10", 1, "screenshot", "usage.png", 2),
-            artifact("T-6", 2, "report", "screenshot-notes.md", 1),
+            artifact("T-6", 2, "screens", "notes.md", 1),
         ]],
         false,
     );
     assert_eq!(titles(&page(&state, &feed, Form::Terminal)), ["hero.png"]);
-    let state = State {
-        query: "notes T-6".into(),
-        ..state
-    };
-    let target = Query::parse(&state.query).request();
-    served(
-        &mut feed,
-        &target,
-        vec![vec![
-            artifact("T-6", 2, "report", "screenshot-notes.md", 1),
-            artifact("T-10", 2, "report", "notes.md", 4),
-        ]],
-        false,
-    );
-    assert_eq!(
-        titles(&page(&state, &feed, Form::Terminal)),
-        ["screenshot-notes.md"],
-        "a word matches the reference as well as the title"
-    );
 }
 
 /// Only the page corrald served is listed: unless reaching its end asks for the next, the owner
@@ -154,18 +156,14 @@ fn walking_to_the_last_result_asks_for_the_next_page() {
         &mut feed,
         &target,
         vec![vec![
-            artifact("T-1", 1, "diff", "diff", 1),
             artifact("T-2", 1, "log", "gate log", 3),
             artifact("T-3", 1, "plan", "plan.md", 2),
+            artifact("T-1", 1, "diff", "diff", 1),
         ]],
         true,
     );
     let shown = page(&state, &feed, Form::Desktop);
-    assert_eq!(
-        titles(&shown),
-        ["gate log", "plan.md", "diff"],
-        "newest first"
-    );
+    assert_eq!(titles(&shown), ["gate log", "plan.md", "diff"]);
     assert_eq!(more(&state, &feed), None);
     state.act(Action::Walk(Walk::Down), &feed);
     assert_eq!(more(&state, &feed), None);
@@ -184,9 +182,9 @@ fn walking_to_the_last_result_asks_for_the_next_page() {
         &target,
         vec![
             vec![
-                artifact("T-1", 1, "diff", "diff", 1),
                 artifact("T-2", 1, "log", "gate log", 3),
                 artifact("T-3", 1, "plan", "plan.md", 2),
+                artifact("T-1", 1, "diff", "diff", 1),
             ],
             vec![artifact("T-4", 1, "summary", "summary.md", 0)],
         ],

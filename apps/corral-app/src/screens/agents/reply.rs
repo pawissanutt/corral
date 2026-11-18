@@ -22,12 +22,20 @@ use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 use super::transcript::line;
 use super::{Dispatch, run};
 
-/// The words region for a run's page: the reply box (docked in the phone's bar). It is redrawn
-/// only when what it shows changes, not with each new screen or transcript page, so a field
-/// being typed in keeps its focus.
+/// The words region for a run's page: the reply box (docked in the phone's bar), none once the
+/// run has ended. It is redrawn only when what it shows changes, not with each new screen or
+/// transcript page, so a field being typed in keeps its focus.
 pub fn region(app: AppState, session: Memo<Session>, draft: Signal<String>) -> AnyElement {
-    let shown = computed(move || session.with(|s| s.reply.clone()));
-    words(app, shown, computed(|| None), draft, run)
+    let ended = computed(move || session.with(|s| s.ended));
+    dynamic(move || {
+        (!ended.get()).then(|| {
+            untracked(|| {
+                let shown = computed(move || session.with(|s| s.reply.clone()));
+                words(app, shown, computed(|| None), draft, run)
+            })
+        })
+    })
+    .into_element()
 }
 
 /// [`region`] from its parts: the reply box `shown`, or the composer on the thread `chat`

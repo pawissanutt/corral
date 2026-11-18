@@ -33,9 +33,10 @@ use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
 /// The results column's width on desktop (and, a Cell for every 12 points, in a terminal).
 const LIST: f32 = 680.0;
-/// Terminal Cells of a result's kind, task, project and date columns.
+/// Terminal Cells of a result's kind, task, run, project and date columns.
 const KIND_CELLS: f32 = 10.0;
 const TASK_CELLS: f32 = 5.0;
+const RUN_CELLS: f32 = 3.0;
 const PROJECT_CELLS: f32 = 7.0;
 const DATE_CELLS: f32 = 6.0;
 
@@ -389,6 +390,7 @@ fn result(app: AppState, row: &Row, selected: Memo<Option<String>>) -> AnyElemen
         let facts = [
             Some(row.kind.as_str()),
             Some(row.task.as_str()),
+            row.run.as_deref(),
             row.project.as_deref(),
             Some(row.at.as_str()),
         ]
@@ -430,6 +432,11 @@ fn result(app: AppState, row: &Row, selected: Memo<Option<String>>) -> AnyElemen
             mono(app, row.task.to_string()).text_color(color(Token::Ink2)),
             TASK_CELLS,
             44.0,
+        ),
+        fixed(
+            dim(app, row.run.clone().unwrap_or_default()),
+            RUN_CELLS,
+            28.0,
         ),
         fixed(
             dim(app, row.project.clone().unwrap_or_default()).truncate(),

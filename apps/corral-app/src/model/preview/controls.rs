@@ -35,6 +35,7 @@ pub fn control(feed: &mut Feed, key: &Id, session: &str, control: Control) {
             operation.refusal = Some(Refusal {
                 reason,
                 next: Vec::new(),
+                problems: None,
             })
         }
         Err(Fail::Missing(message)) => {
@@ -62,6 +63,7 @@ pub fn answer(feed: &mut Feed, key: &Id, answer: &SessionPromptAnswer) {
             operation.refusal = Some(Refusal {
                 reason,
                 next: Vec::new(),
+                problems: None,
             })
         }
     }

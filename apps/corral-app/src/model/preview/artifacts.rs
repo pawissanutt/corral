@@ -1,5 +1,7 @@
-//! The sample's artifact catalog as corrald serves it: the list one page at a time, filtered by
-//! one text over title, kind and reference, and each artifact's content by reference.
+//! The sample's artifact catalog as corrald serves it: the list newest first across pages,
+//! narrowed by kind and project prefix and exact task and filtered by words that must all match
+//! title, kind or reference, each row with its project and run; and each artifact's content by
+//! reference.
 
 use corral_protocol::detail::*;
 use corral_types::{Artifact, CheckKind, CheckResult, Status};
@@ -15,13 +17,9 @@ const PAGE: usize = 10;
 /// A small capture of the app (a sidebar, a head and rows), served as a screenshot's bytes.
 const SCREENSHOT: &str = "iVBORw0KGgoAAAANSUhEUgAAAGAAAAA8CAIAAAAWtijjAAAApklEQVR42u3bIQqAMBgGUM8iBu9/ApOYrRZZELOgyWC2DRHc3IPvAnvh/7axVXXTPkiYp0JSAQIECBAgQIAA3XLsWyEBBAhQikBD332YmIWtS3glgAABApQhUPrtAwhQ1kBjOJMNIECAABUPpMUAAXIWAwQIECD3QVoMECAzCBAgQIDsg7QYIEBmECBAgADZB2kxQIB+P4M8JAcECFDBQH77AAIUlwuEzW4tvLY9qAAAAABJRU5ErkJggg==";
 
-/// Serve the list `filter` names into `feed.details`: every page up to the one `page` asks for
+/// Serve the list `target` names into `feed.details`: every page up to the one `page` asks for
 /// (corrald's opaque token; the sample's is `<etag>:<offset>`).
-pub(super) fn list(
-    feed: &mut Feed,
-    filter: Option<&str>,
-    page: Option<&str>,
-) -> Result<(), String> {
+pub(super) fn list(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result<(), String> {
     let pages = match page {
         None => 1,
         Some(token) => {
@@ -32,42 +30,60 @@ pub(super) fn list(
             offset / PAGE + 1
         }
     };
-    serve(feed, filter, pages);
+    serve(feed, target, pages);
     Ok(())
 }
 
 /// Serve the list again after the sample changed, keeping every page the owner walked to.
-pub(super) fn again(feed: &mut Feed, filter: Option<&str>) {
-    let target = DetailRef::Artifacts {
-        filter: filter.map(str::to_owned),
-    };
+pub(super) fn again(feed: &mut Feed, target: &DetailRef) {
     let walked = feed
-        .detail(&target)
+        .detail(target)
         .map_or(1, |cache| cache.pages.len().max(1));
-    serve(feed, filter, walked);
+    serve(feed, target, walked);
 }
 
-fn serve(feed: &mut Feed, filter: Option<&str>, pages: usize) {
-    let target = DetailRef::Artifacts {
-        filter: filter.map(str::to_owned),
+/// Whether the request keeps `row`.
+fn kept(target: &DetailRef, row: &Artifact) -> bool {
+    let DetailRef::Artifacts { filter, narrowing } = target else {
+        return false;
     };
-    let needle = filter
-        .map(str::trim)
-        .filter(|filter| !filter.is_empty())
-        .map(str::to_lowercase);
+    let lower = |text: &str| text.to_lowercase();
+    let kind = row.kind.as_deref().map(lower).unwrap_or_default();
+    let prefix = |value: Option<&str>, wanted: &Option<String>| {
+        wanted.as_deref().is_none_or(|wanted| {
+            value.is_some_and(|value| lower(value).starts_with(&lower(wanted)))
+        })
+    };
+    let narrowed = narrowing.as_ref().is_none_or(|narrowing| {
+        prefix(Some(&kind), &narrowing.kind)
+            && prefix(row.project.as_deref(), &narrowing.project)
+            && narrowing
+                .task
+                .as_deref()
+                .is_none_or(|task| row.task == task)
+    });
+    let title = lower(&row.title);
+    let reference = lower(&row.reference());
+    narrowed
+        && filter
+            .as_deref()
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(lower)
+            .all(|word| title.contains(&word) || kind.contains(&word) || reference.contains(&word))
+}
+
+fn serve(feed: &mut Feed, target: &DetailRef, pages: usize) {
     let mut rows: Vec<Artifact> = records(feed)
         .into_iter()
-        .flat_map(|record| record.artifacts)
-        .filter(|row| {
-            needle.as_deref().is_none_or(|needle| {
-                row.title.to_lowercase().contains(needle)
-                    || row
-                        .kind
-                        .as_deref()
-                        .is_some_and(|kind| kind.contains(needle))
-                    || row.reference().to_lowercase().contains(needle)
+        .flat_map(|record| {
+            let project = record.task.project;
+            record.artifacts.into_iter().map(move |row| Artifact {
+                project: project.clone(),
+                ..row
             })
         })
+        .filter(|row| kept(target, row))
         .collect();
     rows.sort_by(|a, b| {
         b.at.cmp(&a.at)
@@ -97,9 +113,9 @@ fn serve(feed: &mut Feed, filter: Option<&str>, pages: usize) {
         .collect();
     rows.truncate(shown * PAGE);
     feed.details.insert(
-        detail_key(&target),
+        detail_key(target),
         DetailCache {
-            target,
+            target: target.clone(),
             pages: replies,
             loading: false,
             stale: false,

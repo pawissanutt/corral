@@ -12,7 +12,7 @@ use crate::model::daemon::Feed;
 /// record the sample does not hold.
 pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result<(), String> {
     match target {
-        DetailRef::Artifacts { filter } => super::artifacts::list(feed, filter.as_deref(), page),
+        DetailRef::Artifacts { .. } => super::artifacts::list(feed, target, page),
         DetailRef::Task { id } => record(feed, id)
             .map(|_| ())
             .ok_or_else(|| format!("not_found: task {id}")),

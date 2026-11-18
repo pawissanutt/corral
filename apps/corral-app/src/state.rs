@@ -107,10 +107,12 @@ pub struct AppState {
     /// On the destination's keyboard list (Now's, Inbox's): its keys act while the focus is in
     /// it, or nowhere.
     pub list_keys: ElementRef,
-    /// The Now task row that has the keyboard focus: the list's Enter opens the selected task
-    /// only while the focus is on its row (or nowhere), so Enter on a focused Waiting toggle or
-    /// another row presses that control.
+    /// The Now task row that holds the keyboard focus, or that a reply sent beside the list hands
+    /// it to: the list's Enter opens the selected task only while the focus is on its row (or
+    /// nowhere), so Enter on a focused Waiting toggle or another row presses that control.
     pub focused_row: Signal<Option<String>>,
+    /// Press-opened menus open now: the terminal's key line gives a menu's keys while any is.
+    pub menus: Signal<u32>,
     key_focus: Signal<keys::KeyFocus>,
 }
 
@@ -246,6 +248,7 @@ impl AppState {
             focus_root: element_ref(),
             list_keys: element_ref(),
             focused_row: signal(None),
+            menus: signal(0),
             key_focus: signal(keys::KeyFocus::default()),
         };
         app.follow_browser_pairing();

@@ -6,6 +6,7 @@ pub mod document;
 pub mod editor;
 mod edits;
 pub mod form;
+pub mod inherit;
 pub mod live;
 pub mod push;
 pub mod qr;

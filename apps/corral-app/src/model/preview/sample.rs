@@ -739,6 +739,14 @@ pub(super) fn artifact(
         } else {
             Actor::Agent
         },
+        // corrald states the project when it lists the catalog; the run is the latest one, which
+        // an agent's artifact came from.
+        project: None,
+        run: record
+            .runs
+            .last()
+            .filter(|_| kind != "log")
+            .map(|run| run.id.clone()),
     }
 }
 
