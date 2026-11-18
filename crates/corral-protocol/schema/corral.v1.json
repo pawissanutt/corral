@@ -850,6 +850,28 @@
         ],
         "type": "string"
       },
+      "DependencyStatus": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent when the dependency task is unavailable."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "DetailBody": {
         "oneOf": [
           {
@@ -1248,13 +1270,31 @@
                   }
                 ]
               },
+              "from": {
+                "description": "Inclusive local date (`YYYY-MM-DD`).",
+                "type": "string"
+              },
               "kind": {
                 "const": "usage_series",
                 "type": "string"
+              },
+              "to": {
+                "description": "Exclusive local date; a range may span at most 366 days.",
+                "type": "string"
+              },
+              "utc_offset_minutes": {
+                "description": "Fixed minutes east of UTC (`-1439..=1439`), applied to the entire range.",
+                "format": "int16",
+                "maximum": 32767,
+                "minimum": -32768,
+                "type": "integer"
               }
             },
             "required": [
-              "kind"
+              "kind",
+              "from",
+              "to",
+              "utc_offset_minutes"
             ],
             "type": "object"
           },
@@ -1549,6 +1589,77 @@
         },
         "required": [
           "device"
+        ],
+        "type": "object"
+      },
+      "EffectiveProjectSettings": {
+        "description": "Project settings after applying workspace defaults, before task-specific overrides.",
+        "properties": {
+          "auto_dispatch": {
+            "type": "boolean"
+          },
+          "auto_land": {
+            "type": "boolean"
+          },
+          "base": {
+            "description": "The configured or discovered base; absent when discovery cannot determine one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch_prefix": {
+            "type": "string"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "gate": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "max_rounds": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reviewer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "running": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "gate",
+          "env",
+          "auto_dispatch",
+          "auto_land",
+          "max_rounds",
+          "branch_prefix"
         ],
         "type": "object"
       },
@@ -1909,6 +2020,17 @@
           "runner_reachable": {
             "type": "boolean"
           },
+          "slots": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Slots"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Dispatch occupancy and limits, absent when the engine cannot be observed."
+          },
           "version": {
             "type": "string"
           }
@@ -1948,6 +2070,13 @@
       },
       "ListenerInfo": {
         "properties": {
+          "address": {
+            "description": "The address actually bound by the daemon, including its port.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "origins": {
             "items": {
               "type": "string"
@@ -2503,6 +2632,7 @@
         "description": "Resolve the pane from the stored run rather than taking a runner ID from the client.",
         "properties": {
           "keys": {
+            "default": [],
             "items": {
               "type": "string"
             },
@@ -2513,12 +2643,18 @@
           },
           "task": {
             "type": "string"
+          },
+          "text": {
+            "description": "Literal text, delivered before any keys, without implicitly submitting it.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "task",
-          "run",
-          "keys"
+          "run"
         ],
         "type": "object"
       },
@@ -2559,6 +2695,16 @@
       },
       "PlanDetail": {
         "properties": {
+          "child_rows": {
+            "description": "Enriched rows for the same children, in the same order on each page.",
+            "items": {
+              "$ref": "#/components/schemas/TaskRow"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "children": {
             "description": "Each child's `depends_on` describes its dependency edges.",
             "items": {
@@ -2606,6 +2752,16 @@
             "description": "Parsed `[projects.<id>]` as serialized by the engine.",
             "type": "object"
           },
+          "effective": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EffectiveProjectSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "type": "string"
           },
@@ -2613,6 +2769,16 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "open_by_status": {
+            "description": "Counts exclude Done and Dropped; an empty vector means no open tasks.",
+            "items": {
+              "$ref": "#/components/schemas/StatusCount"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -4233,6 +4399,12 @@
             },
             "type": "array"
           },
+          "hostname": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "listener": {
             "anyOf": [
               {
@@ -4247,6 +4419,45 @@
         "required": [
           "config",
           "devices"
+        ],
+        "type": "object"
+      },
+      "SlotCount": {
+        "properties": {
+          "limit": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used": {
+            "description": "Running and Blocked tasks currently occupying slots.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "used",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "Slots": {
+        "properties": {
+          "global": {
+            "$ref": "#/components/schemas/SlotCount"
+          },
+          "projects": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SlotCount"
+            },
+            "description": "Only projects with an explicit running limit.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "global",
+          "projects"
         ],
         "type": "object"
       },
@@ -4995,8 +5206,18 @@
         "type": "object"
       },
       "TaskRow": {
-        "description": "One open task. Checks match the current HEAD and review round, respectively.",
+        "description": "One task in the open board or a plan. Checks are for its current HEAD and review round.",
         "properties": {
+          "dependencies": {
+            "description": "In `task.depends_on` order, including dependencies that are no longer open.",
+            "items": {
+              "$ref": "#/components/schemas/DependencyStatus"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "gate": {
             "anyOf": [
               {
@@ -5005,6 +5226,15 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "max_rounds": {
+            "description": "Effective limit for this task, including project overrides.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "ready": {
@@ -5020,6 +5250,17 @@
                 "type": "null"
               }
             ]
+          },
+          "reviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Run"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Live reviewer session, even when `run` holds the worker."
           },
           "run": {
             "anyOf": [
@@ -5404,37 +5645,37 @@
         ],
         "type": "object"
       },
-      "Usage": {
-        "type": "object",
-        "x-rust-type": "corral_types::Usage"
-      },
       "UsageBy": {
         "type": "string",
         "x-rust-type": "corral_types::UsageBy"
       },
-      "UsageSeries": {
+      "UsageDay": {
         "properties": {
-          "rows": {
-            "items": {
-              "$ref": "#/components/schemas/Usage"
-            },
-            "type": "array"
-          },
-          "runs": {
-            "items": {
-              "$ref": "#/components/schemas/Run"
-            },
-            "type": "array"
+          "day": {
+            "type": "string"
           },
           "summary": {
-            "$ref": "#/components/schemas/UsageSummary",
-            "description": "Coverage and totals for the whole query, independent of the detail page."
+            "$ref": "#/components/schemas/UsageSummary"
           }
         },
         "required": [
-          "summary",
-          "rows",
-          "runs"
+          "day",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "UsageSeries": {
+        "properties": {
+          "days": {
+            "description": "Ascending days, including days without any reports or runs.",
+            "items": {
+              "$ref": "#/components/schemas/UsageDay"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "days"
         ],
         "type": "object"
       },
@@ -5890,8 +6131,9 @@
       "params": [
         {
           "name": "keys",
-          "required": true,
+          "required": false,
           "schema": {
+            "default": [],
             "items": {
               "type": "string"
             },
@@ -5910,6 +6152,17 @@
           "required": true,
           "schema": {
             "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": false,
+          "schema": {
+            "description": "Literal text, delivered before any keys, without implicitly submitting it.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       ],
@@ -7006,10 +7259,19 @@
           "name": "from",
           "required": false,
           "schema": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "description": "Inclusive local date (`YYYY-MM-DD`).",
+                "type": "string"
+              }
+            ]
           },
           "x-required-in": [
-            7
+            7,
+            9
           ]
         },
         {
@@ -7140,10 +7402,19 @@
           "name": "to",
           "required": false,
           "schema": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "description": "Exclusive local date; a range may span at most 366 days.",
+                "type": "string"
+              }
+            ]
           },
           "x-required-in": [
-            7
+            7,
+            9
           ]
         },
         {
@@ -7154,6 +7425,20 @@
           },
           "x-required-in": [
             5
+          ]
+        },
+        {
+          "name": "utc_offset_minutes",
+          "required": false,
+          "schema": {
+            "description": "Fixed minutes east of UTC (`-1439..=1439`), applied to the entire range.",
+            "format": "int16",
+            "maximum": 32767,
+            "minimum": -32768,
+            "type": "integer"
+          },
+          "x-required-in": [
+            9
           ]
         }
       ],

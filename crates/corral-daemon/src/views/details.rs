@@ -11,7 +11,7 @@ use corral_protocol::detail::*;
 use jiff::Timestamp;
 use serde::Serialize;
 
-use super::{REPLY_MAX, fingerprint, json_len, review, task_number, terminal};
+use super::{REPLY_MAX, fingerprint, json_len, review, rows, task_number, terminal};
 
 const ROW_LIMIT: usize = 100;
 const TEXT_BYTES: usize = 8 * 1024; // Worst-case JSON escaping still fits CONTROL.
@@ -74,13 +74,22 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
                 events,
             })
         }
-        DetailRef::Plan { id } => DetailBody::Plan(PlanDetail {
-            parent: store.require_task(id)?,
-            children: store.list_tasks(&TaskFilter {
-                parent: Some(id.clone()),
-                ..Default::default()
-            })?,
-        }),
+        DetailRef::Plan { id } => {
+            let parent = store.require_task(id)?;
+            let child_rows = rows::task_rows(
+                engine,
+                store.list_tasks(&TaskFilter {
+                    parent: Some(id.clone()),
+                    ..Default::default()
+                })?,
+            )?;
+            let children = child_rows.iter().map(|row| row.task.clone()).collect();
+            DetailBody::Plan(PlanDetail {
+                parent,
+                children,
+                child_rows: Some(child_rows),
+            })
+        }
         DetailRef::Review { task } => DetailBody::Review(review::detail(engine, task)?),
         DetailRef::Timeline { from, to, by } => {
             ensure!(
@@ -98,11 +107,18 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
             })
         }
         DetailRef::Burnup { scope } => DetailBody::Burnup(burnup(engine, scope)?),
-        DetailRef::UsageSeries { by } => DetailBody::UsageSeries(UsageSeries {
-            summary: engine.usage_summary(*by)?,
-            rows: store.list_usage()?,
-            runs: store.all_runs()?,
-        }),
+        DetailRef::UsageSeries {
+            from,
+            to,
+            by,
+            utc_offset_minutes,
+        } => {
+            let window = corral_engine::usage::UsageWindow::parse(from, to, *utc_offset_minutes)
+                .map_err(|error| anyhow::anyhow!("invalid: {error:#}"))?;
+            DetailBody::UsageSeries(UsageSeries {
+                days: engine.usage_series(window, *by)?,
+            })
+        }
         DetailRef::Artifacts { filter } => {
             let mut rows = store.list_artifacts(None)?;
             if let Some(filter) = filter.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -302,11 +318,23 @@ fn paginate(body: &mut DetailBody, offset: usize) -> Result<Option<usize>> {
     }
     match body {
         DetailBody::Task(model) => paginate_fields!(model, runs, checks, artifacts, events),
-        DetailBody::Plan(model) => paginate_fields!(model, children),
+        DetailBody::Plan(model) => {
+            let children = mem::take(&mut model.children);
+            let child_rows = model
+                .child_rows
+                .as_mut()
+                .context("plan child rows missing")?;
+            let child_rows = mem::take(child_rows);
+            page.reserve(model)?;
+            let pairs = children.into_iter().zip(child_rows).collect();
+            let (children, rows) = page.take(pairs)?.into_iter().unzip();
+            model.children = children;
+            model.child_rows = Some(rows);
+        }
         DetailBody::Review(model) => paginate_fields!(model, checks, files),
         DetailBody::Timeline(model) => paginate_fields!(model, runs, events),
         DetailBody::Burnup(model) => paginate_fields!(model, events),
-        DetailBody::UsageSeries(model) => paginate_fields!(model, rows, runs),
+        DetailBody::UsageSeries(model) => paginate_fields!(model, days),
         DetailBody::Artifacts(model) => paginate_fields!(model, rows),
         _ => ensure!(offset == 0, "invalid: unexpected detail page token"),
     }

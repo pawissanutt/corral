@@ -10,10 +10,11 @@ mod op;
 
 pub use op::{Next, Op, Refusal};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Idea,
+    #[default]
     Backlog,
     Ready,
     Running,
@@ -96,7 +97,7 @@ pub enum Actor {
     Auto,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
     pub title: String,
@@ -334,12 +335,15 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     pub task: Option<String>,
     pub run: Option<String>,
     pub at: Timestamp,
     pub profile: Option<String>,
+    /// Reported harness, or the harness of the exact associated run when resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
     pub model: String,
     pub input: u64,
     pub output: u64,
@@ -441,11 +445,17 @@ pub struct UsageTotal {
     pub usd: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageGroup {
-    /// `None` for rows missing the selected profile or task; days are UTC.
+    /// Missing request or run group is `None`; days are local for a series, UTC otherwise.
     pub key: Option<String>,
     pub total: UsageTotal,
+    /// Cohort runs with at least one report in this group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_runs: Option<u64>,
+    /// Persisted runs in this group, including those without reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_runs: Option<u64>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
@@ -453,7 +463,14 @@ pub struct UsageSummary {
     pub total: UsageTotal,
     /// Empty when ungrouped; otherwise ordered by key (missing first).
     pub groups: Vec<UsageGroup>,
-    /// Distinct persisted runs with at least one report matching both IDs.
+    /// Distinct cohort runs with a report matching both IDs and, for a series, the local day.
     pub covered_runs: u64,
     pub total_runs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageDay {
+    /// Local calendar date in `YYYY-MM-DD` format.
+    pub day: String,
+    pub summary: UsageSummary,
 }

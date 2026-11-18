@@ -3,7 +3,9 @@ use corral_types::Task;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+use crate::rows::TaskRow;
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PlanDetail {
     /// The parent's `body` is the Markdown document.
     #[schemars(with = "crate::schema_types::Task")]
@@ -11,4 +13,7 @@ pub struct PlanDetail {
     /// Each child's `depends_on` describes its dependency edges.
     #[schemars(with = "Vec<crate::schema_types::Task>")]
     pub children: Vec<Task>,
+    /// Enriched rows for the same children, in the same order on each page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_rows: Option<Vec<TaskRow>>,
 }

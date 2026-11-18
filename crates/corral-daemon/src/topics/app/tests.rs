@@ -209,6 +209,7 @@ fn usage_delta_observes_usage_without_a_new_event() {
                 run: None,
                 at: jiff::Timestamp::now(),
                 profile: None,
+                harness: None,
                 model: "model".into(),
                 input: 100,
                 output: 20,
@@ -234,15 +235,16 @@ fn settings_delta_contains_parsed_config_listener_and_devices() {
         panic!("expected settings");
     };
     assert!(delta.rows[0].listener.is_none());
+    let observed_hostname = delta.rows[0].hostname.as_deref();
+    let uname = rustix::system::uname();
+    let expected_hostname = uname
+        .nodename()
+        .to_str()
+        .ok()
+        .filter(|name| !name.is_empty());
+    assert_eq!(observed_hostname, expected_hostname);
     ack(&mut subs, Topic::Settings, delta.cursor);
     let devices = fixture.shared.devices();
-    assert!(devices.listener_address().is_none());
-    let hostname = crate::devices::reach::hostname();
-    let uname = rustix::system::uname();
-    match uname.nodename().to_str() {
-        Ok("") | Err(_) => assert!(hostname.is_none()),
-        Ok(name) => assert_eq!(hostname.as_deref(), Some(name)),
-    }
     let device = devices.enrol_native("Native test", "test").unwrap();
     let bound = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = bound.local_addr().unwrap();
@@ -252,7 +254,6 @@ fn settings_delta_contains_parsed_config_listener_and_devices() {
         &origins.map(str::to_owned),
         Some("wss://corral.example"),
     );
-    assert_eq!(devices.listener_address(), Some(address));
     fs::write(
         fixture.shared.root().join(".corral-next/corral.toml"),
         "[limits]\nrunning = 7\n",
@@ -267,5 +268,6 @@ fn settings_delta_contains_parsed_config_listener_and_devices() {
     assert_eq!(row.devices[0].id, device.id);
     let listener = row.listener.as_ref().unwrap();
     assert_eq!(listener.port, address.port());
+    assert_eq!(listener.address, Some(address.to_string()));
     assert_eq!(listener.origins, origins);
 }

@@ -26,7 +26,6 @@ pub(crate) fn classify(ip: IpAddr) -> DeviceReach {
     }
 }
 
-#[cfg(test)]
 pub(crate) fn hostname() -> Option<String> {
     rustix::system::uname()
         .nodename()
@@ -73,14 +72,8 @@ impl Devices {
         lock(&self.listener).as_ref().map(|listener| ListenerInfo {
             port: listener.address.port(),
             origins: listener.origins.clone(),
+            address: Some(listener.address.to_string()),
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn listener_address(&self) -> Option<SocketAddr> {
-        lock(&self.listener)
-            .as_ref()
-            .map(|listener| listener.address)
     }
 
     pub(crate) fn touch(&self, device: &str, reach: DeviceReach) -> Result<(), DeviceError> {

@@ -87,10 +87,7 @@ fn blocked_task_survives_a_tasks_delta_with_its_next_operation() {
             epoch: 1,
             rows: vec![TaskRow {
                 task,
-                run: None,
-                gate: None,
-                review: None,
-                ready: false,
+                ..Default::default()
             }],
             left: vec![],
             cursor: BoardCursor::default(),

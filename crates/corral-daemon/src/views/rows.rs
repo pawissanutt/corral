@@ -183,6 +183,7 @@ fn read(shared: &Shared, topic: Topic) -> Result<Rows> {
         Topic::Settings => Ok(Rows::Settings(vec![SettingsSnapshot {
             config: object(&engine.config)?,
             listener: shared.devices().listener(),
+            hostname: crate::devices::reach::hostname(),
             devices: shared.devices().list()?,
         }])),
         _ => bail!("unsupported topic"),
@@ -213,27 +214,53 @@ fn tasks(engine: &Engine) -> Result<Vec<TaskRow>> {
     )
 }
 
+/// The caller reads the tasks and their related facts in one store snapshot.
 pub(super) fn task_rows(engine: &Engine, tasks: Vec<Task>) -> Result<Vec<TaskRow>> {
-    let mut active = BTreeMap::<String, Run>::new();
+    if tasks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dependencies = tasks
+        .iter()
+        .flat_map(|task| task.depends_on.iter().map(String::as_str))
+        .collect();
+    let statuses = engine.store.task_statuses(&dependencies)?;
+    let mut active = BTreeMap::<String, (Option<Run>, Option<Run>)>::new();
     for run in engine.store.live_runs(None)? {
-        // Prefer the worker when the reviewer is also live.
-        if run.session.is_some() && (run.role == Role::Worker || !active.contains_key(&run.task)) {
-            active.insert(run.task.clone(), run);
+        if run.session.is_some() {
+            let (worker, reviewer) = active.entry(run.task.clone()).or_default();
+            match run.role {
+                Role::Worker => *worker = Some(run),
+                Role::Reviewer => *reviewer = Some(run),
+            }
         }
     }
     tasks
         .into_iter()
         .map(|task| {
-            let run = active.remove(&task.id);
+            let (worker, reviewer) = active.remove(&task.id).unwrap_or_default();
+            // Preserve the legacy preference for the worker when both are live.
+            let run = worker.or_else(|| reviewer.clone());
             let (gate, review) = current_checks(engine, &task, run.as_ref())?;
             let ready =
                 task.status == Status::Review && engine.store.has_ready_since_done(&task.id)?;
+            let max_rounds = engine.config.task_max_rounds(&task);
+            let dependencies = task
+                .depends_on
+                .iter()
+                .map(|id| DependencyStatus {
+                    status: statuses.get(id).copied(),
+                    id: id.clone(),
+                })
+                .collect();
             Ok(TaskRow {
                 task,
                 run,
                 gate,
                 review,
                 ready,
+                max_rounds: Some(max_rounds),
+                reviewer,
+                dependencies: Some(dependencies),
             })
         })
         .collect()
@@ -309,16 +336,42 @@ fn plans(engine: &Engine) -> Result<Vec<PlanRow>> {
 }
 
 fn projects(engine: &Engine) -> Result<Vec<ProjectRow>> {
-    let mut counts = engine.store.open_project_counts()?;
+    let mut counts = engine.store.open_project_status_counts()?;
     engine
         .config
         .projects
         .iter()
         .map(|(id, project)| {
+            let by_status = counts.remove(id).unwrap_or_default();
+            let open = by_status.iter().map(|(_, count)| count).sum();
+            // An unavailable repository only loses its inferred base, not the rest
+            // of the effective config or the project topic.
+            let effective = engine
+                .project_settings(id)
+                .or_else(|_| engine.config.effective_project(id))?;
             Ok(ProjectRow {
                 id: id.clone(),
                 config: object(project)?,
-                open: counts.remove(id).unwrap_or_default(),
+                open,
+                open_by_status: Some(
+                    by_status
+                        .into_iter()
+                        .map(|(status, count)| StatusCount { status, count })
+                        .collect(),
+                ),
+                effective: Some(EffectiveProjectSettings {
+                    path: effective.path,
+                    base: effective.base,
+                    reviewer: effective.reviewer,
+                    profile: effective.profile,
+                    gate: effective.gate,
+                    running: effective.running.map(|limit| limit as u64),
+                    env: effective.env,
+                    auto_dispatch: effective.auto_dispatch,
+                    auto_land: effective.auto_land,
+                    max_rounds: effective.max_rounds,
+                    branch_prefix: effective.branch_prefix,
+                }),
             })
         })
         .collect()

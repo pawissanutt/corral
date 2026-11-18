@@ -259,6 +259,25 @@ fn socket_review_before_done_is_not_found() {
 }
 
 #[test]
+fn socket_usage_add_preserves_reported_harness() {
+    let fixture = Fixture::new();
+    let mut client = Client::connect(&fixture.unix_server());
+    let reply: OpReply = client.ok(
+        wire::op::OP_SUBMIT,
+        json!({
+            "op": {"usage_add":{"usage":{
+                "model":"model", "at":"2026-02-03T00:00:00Z", "input":1, "output":1,
+                "cache_read":0, "cache_write":0, "harness":"reported-harness"
+            }}}
+        }),
+    );
+    assert_eq!(reply, OpReply::Done { seq: 0, task: None });
+    let engine = fixture.shared.engine().unwrap();
+    let rows = engine.store.list_usage().unwrap();
+    assert_eq!(rows[0].harness.as_deref(), Some("reported-harness"));
+}
+
+#[test]
 fn socket_refusal_offers_the_force_that_records_what_it_skipped() {
     let fixture = Fixture::with_repository();
     let mut client = Client::connect(&fixture.unix_server());

@@ -56,8 +56,14 @@ pub enum DetailRef {
         scope: String,
     },
     UsageSeries {
+        /// Inclusive local date (`YYYY-MM-DD`).
+        from: String,
+        /// Exclusive local date; a range may span at most 366 days.
+        to: String,
         #[schemars(with = "Option<crate::schema_types::UsageBy>")]
         by: Option<UsageBy>,
+        /// Fixed minutes east of UTC (`-1439..=1439`), applied to the entire range.
+        utc_offset_minutes: i16,
     },
     Artifact {
         reference: String,
