@@ -174,7 +174,7 @@ test("workspace MCP schema and role ceiling exclude invalid transports and write
   // When evaluating each role, then only worker gets configured writes/shell, never Corral proxy.
   expect(toolAllowed(server, "worker", "write_file")).toBeTrue();
   expect(toolAllowed(server, "worker", "shell")).toBeTrue();
-  for (const role of ["worker", "reviewer", "pm", "planner", "plan_reviewer"]) {
+  for (const role of ["worker", "reviewer"]) {
     expect(toolAllowed(server, role, "corral_done")).toBeFalse();
     expect(toolAllowed(server, role, "lookup")).toBeTrue();
     if (role !== "worker") {

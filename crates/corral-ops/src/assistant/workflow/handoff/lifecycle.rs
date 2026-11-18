@@ -35,14 +35,20 @@ pub enum Instruction {
         via: Option<Box<crate::assistant::owner_action::ViaAssistant>>,
         at: Timestamp,
     },
+    /// A host-rendered native selection, consumed exactly once against its full binding.
+    /// The copied evidence survives owner-input journal eviction and restart.
+    Choice {
+        evidence: Box<corral_core::assistant_workflow::DecisionEvidence>,
+        at: Timestamp,
+    },
 }
 
 impl Instruction {
-    /// Domain fence, not authentication. Only the guarded owner entry (or its persisted
-    /// recovery selection) can construct a transfer instruction; C1 consent stays C1.
+    /// Domain fence, not authentication. Only the guarded owner entry, its persisted
+    /// recovery selection, or a consumed native Choice can construct a transfer instruction.
     pub(super) fn require_transfer(&self) -> Result<()> {
         ensure!(
-            matches!(self, Self::Shell { .. }),
+            matches!(self, Self::Shell { .. } | Self::Choice { .. }),
             "handoff_consent: completion provenance is not authenticated transfer consent"
         );
         Ok(())
@@ -133,7 +139,9 @@ impl Transfer {
             .last()
             .map_or(&self.instruction, |t| &t.instruction);
         match instruction {
-            Instruction::Shell { at, .. } | Instruction::Completion { at, .. } => *at,
+            Instruction::Shell { at, .. }
+            | Instruction::Completion { at, .. }
+            | Instruction::Choice { at, .. } => *at,
         }
     }
 }

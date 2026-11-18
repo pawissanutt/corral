@@ -9,9 +9,9 @@ import { OwnerQuestionUi, OWNER_QUESTION_STATE, QUESTIONS_KEY, QuestionDock, own
 test("owner UI dismisses without consent, preserves permission dialogs and fences stale callbacks", async () => {
   const entries: QuestionEntry[] = [];
   let records = 0, selects = 0;
-  const q = new PendingQuestions({ session: () => "owned", generation: 1, entries: () => entries,
+  const q = new PendingQuestions({ session: () => "owned", entries: () => entries,
     append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
-    record: async text => { records++; return text; }, deliver: async () => true });
+    deliver: async () => { records++; return true; } });
   const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
   let command!: (args: string, ctx: ExtensionContext) => Promise<void>;
   const shortcuts: string[] = [];
@@ -48,9 +48,9 @@ test("owner UI dismisses without consent, preserves permission dialogs and fence
 
 test("owner question changes stay in host messages without changing the default system prefix or duplicating state", async () => {
   const entries: QuestionEntry[] = [];
-  const questions = new PendingQuestions({ session: () => "owned", generation: 1, entries: () => entries,
+  const questions = new PendingQuestions({ session: () => "owned", entries: () => entries,
     append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
-    record: async text => text, deliver: async () => false });
+    deliver: async () => false });
   const sessionManager = SessionManager.inMemory("/project");
   const ctx = { sessionManager, hasUI: false } as unknown as ExtensionContext;
   let before!: (event: BeforeAgentStartEvent, ctx: ExtensionContext) => BeforeAgentStartEventResult | void;
@@ -125,9 +125,9 @@ test("owner question changes stay in host messages without changing the default 
 test("/questions takes the owner's own typed answer, keeps drafts across questions and Escape sends nothing", async () => {
   const entries: QuestionEntry[] = [];
   const records: string[] = [];
-  const q = new PendingQuestions({ session: () => "owned", generation: 1, entries: () => entries,
+  const q = new PendingQuestions({ session: () => "owned", entries: () => entries,
     append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
-    record: async text => { records.push(text); return text; }, deliver: async () => true });
+    deliver: async text => { records.push(text); return true; } });
   const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
   let command!: (args: string, ctx: ExtensionContext) => Promise<void>;
   const api = {
@@ -167,9 +167,9 @@ test("/questions takes the owner's own typed answer, keeps drafts across questio
 
 test("waiting owner questions use the docked dialog form: count in the header, one option per question", () => {
   const entries: QuestionEntry[] = [];
-  const q = new PendingQuestions({ session: () => "owned", generation: 1, entries: () => entries,
+  const q = new PendingQuestions({ session: () => "owned", entries: () => entries,
     append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
-    record: async text => text, deliver: async () => true });
+    deliver: async () => true });
   const ids = ["A", "B", "C", "D"].map(key => q.ask(key, [{ question: `Which layout for ${key}?`, options: ["Grid", "List"] }]).id);
   expect(ownerQuestionLines([], 120).lines).toEqual([]);
   for (let width = 30; width <= 160; width++) {
@@ -193,9 +193,9 @@ test("waiting owner questions use the docked dialog form: count in the header, o
 
 test("the docked card takes keys only while focused: a digit opens that question, a letter is typing, Esc returns", () => {
   const entries: QuestionEntry[] = [];
-  const q = new PendingQuestions({ session: () => "owned", generation: 1, entries: () => entries,
+  const q = new PendingQuestions({ session: () => "owned", entries: () => entries,
     append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
-    record: async text => text, deliver: async () => true });
+    deliver: async () => true });
   const ids = ["A", "B"].map(key => q.ask(key, [{ question: `Ship ${key}?`, options: ["Yes", "No"] }]).id);
   const opened: (string | undefined)[] = [];
   let composer = 0;

@@ -35,7 +35,7 @@ export async function checkCodeKernel(): Promise<void> {
   const expect = async (name: string, result: Promise<CellResult>, ok: Expectation) => {
     const settled = await result;
     if (!ok(settled)) throw new Error(`code kernel ${name} failed: ${JSON.stringify(settled)}`);
-    process.stdout.write(`code kernel ${name}: ${JSON.stringify({ status: settled.status, generation: settled.generation,
+    process.stdout.write(`code kernel ${name}: ${JSON.stringify({ status: settled.status,
       stateLost: settled.stateLost, value: settled.value })}\n`);
   };
   const lostFor = async (reason: string, act: () => unknown) => {
@@ -65,13 +65,13 @@ export async function checkCodeKernel(): Promise<void> {
     kernel.cancel(queued.cell);
     await expect("queued cancel", queued.result, (r) => r.status === "cancelled" && !r.stateLost);
     await lostFor("cancelled", () => kernel.cancel(active.cell));
-    await expect("active cancel", active.result, (r) => r.status === "cancelled" && r.stateLost && r.generation === 1);
+    await expect("active cancel", active.result, (r) => r.status === "cancelled" && r.stateLost);
     await expect("after cancel", kernel.submit("let survivor = 1; return typeof greeting;").result,
-      (r) => r.value === "undefined" && r.generation === 2);
+      (r) => r.status === "ok" && r.value === "undefined");
 
     await lostFor("reset", () => kernel.reset());
     await expect("after reset", kernel.submit("let kept = 1; return typeof survivor;").result,
-      (r) => r.value === "undefined" && r.generation === 3);
+      (r) => r.status === "ok" && r.value === "undefined");
 
     const blocked = next((e) => e.kind === "cell_started");
     const stuck = kernel.submit("Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);");
@@ -79,13 +79,13 @@ export async function checkCodeKernel(): Promise<void> {
     await lostFor("cancelled", () => kernel.cancel(stuck.cell));
     await expect("blocked cancel", stuck.result, (r) => r.status === "cancelled" && r.stateLost);
     await expect("after blocked cancel", kernel.submit("return typeof kept;").result,
-      (r) => r.value === "undefined" && r.generation === 4);
+      (r) => r.status === "ok" && r.value === "undefined");
 
     await lostFor("timeout", () => expect("detached block", kernel.submit(
       "(async () => { await null; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); })(); return 1;",
       { timeoutMs: 300 },
     ).result, (r) => r.status === "timeout" && r.stateLost));
-    await expect("after detached block", kernel.submit("return 2;").result, (r) => r.value === "2" && r.generation === 5);
+    await expect("after detached block", kernel.submit("return 2;").result, (r) => r.status === "ok" && r.value === "2");
   } finally {
     await kernel.close();
   }

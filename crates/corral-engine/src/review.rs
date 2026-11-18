@@ -11,7 +11,7 @@ use serde_json::json;
 
 use crate::{
     Actor, Blocked, Check, CheckKind, CheckResult, Engine, Next, Op, Origin, Outcome, Role, Run,
-    Status, Store, Task,
+    Runner, Status, Store, Task,
     artifacts::ArtifactTarget,
     as_refusal,
     checkout::Checkout,
@@ -313,7 +313,7 @@ impl Engine {
                         .join("prompt.md");
                     let request =
                         rereview_request(&crate::binary_path()?, &task, &reviewer, &prompt)?;
-                    match self.runner.send(session, &request, Origin::Auto) {
+                    match self.session_runner().send(session, &request, Origin::Auto) {
                         Ok(()) => {
                             self.record_review_request(
                                 store, &mut task, &reviewer, actor, recovery,
@@ -347,6 +347,7 @@ impl Engine {
                     profile: &profile,
                     note: history.as_deref(),
                     project: project.as_ref(),
+                    fresh: false,
                 },
             )?;
             self.record_review_request(store, &mut task, &run, actor, recovery)?;
@@ -440,7 +441,7 @@ impl Engine {
         let advanced = self.kick_pipeline(id);
         let stopped =
             if close && let Some(session) = run.as_ref().and_then(|run| run.session.as_ref()) {
-                self.runner
+                self.session_runner()
                     .stop(session)
                     .context("close reviewer after recording verdict")
             } else {
@@ -511,7 +512,7 @@ impl Engine {
         };
         let live_session = self.live_session(&worker)?;
         let delivered = if let Some(session) = live_session {
-            match self.runner.send(session, notes, origin) {
+            match self.session_runner().send(session, notes, origin) {
                 Ok(()) => true,
                 Err(error) if as_refusal(&error).is_some() => false,
                 Err(error) => return Err(error).context("send work back to worker"),
@@ -541,6 +542,7 @@ impl Engine {
                     profile: &worker.profile,
                     note: Some(notes),
                     project: project.as_ref(),
+                    fresh: false,
                 },
             )?;
         }

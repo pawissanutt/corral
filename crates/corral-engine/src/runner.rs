@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 mod fake;
 mod herdr;
+pub mod pi;
 mod process;
 
 pub use corral_types::{SessionRef, SessionStatus};

@@ -71,8 +71,9 @@ pub fn ordinary(container: &AssistantContainer) -> Result<bool> {
 }
 
 /// Generic owner/board effects and filesystem grants cannot consume design agreement,
-/// reviews, or a scratch execution grant. Until a scoped consumer is installed, executing
-/// also refuses here rather than silently treating an artifact reference as consent.
+/// reviews, or a scratch execution grant. Executing is local authority only while its typed
+/// Implement here grant validates against the current ready plan and its scratch is recorded;
+/// an execution reference alone is never consent.
 pub fn require_ordinary(
     store: &Store,
     session: &str,
@@ -82,7 +83,9 @@ pub fn require_ordinary(
         // A closed label must not turn missing/corrupt authoritative bytes into ordinary work.
         super::read_state(store, session, container, 0, 1)?;
     }
-    if !ordinary(container)? {
+    if !ordinary(container)?
+        && !super::handoff::native_implement::granted(store, session, container)?
+    {
         return Err(crate::agent::Rejection::new(
             crate::agent::RejectCode::OpNotAllowed,
             "assistant_planning: this effect requires ordinary local authority; a plan, review, permission or old owner action cannot unlock it",

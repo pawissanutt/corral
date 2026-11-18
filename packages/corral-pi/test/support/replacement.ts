@@ -105,6 +105,6 @@ export async function expectReplacementsRefused(host: HostSession, events: Event
   ]);
   for (const event of refused) {
     expect(event.session_id).toBe(boundId);
-    expect(String(event.message)).toContain(`refused while this pane is bound to corral session ${boundId}`);
+    expect(String(event.message)).toContain("would replace this session transcript");
   }
 }

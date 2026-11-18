@@ -17,7 +17,7 @@ const NOW = 1_000_000;
 const base: PanelSnapshot = { bound: true, model: "m", effort: "off", streaming: false, context: undefined, tokens: 0, tools: [], contextFiles: [], skills: [],
   ledger: null, ledgerStale: false, steering: 0, followUps: 0, auxiliary: null, jobs: [] };
 function helper(extra: Partial<HelperInspection>): HelperInspection {
-  return { request: "r", kind: "explore", model: "provider/model-a", generation: 1, phase: "running", createdAt: NOW - 9000, startedAt: NOW - 8000,
+  return { request: "r", kind: "explore", model: "provider/model-a", phase: "running", createdAt: NOW - 9000, startedAt: NOW - 8000,
     prompt: "Question", messages: [{ id: "a", kind: "assistant", text: "Visible response" }], truncated: false, ...extra };
 }
 function rowOf(entry: HelperInspection): AgentRow {

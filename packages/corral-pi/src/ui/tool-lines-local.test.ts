@@ -70,8 +70,8 @@ test("research shows its progress while running and states why partial research 
   const running = row("explore", { prompt: "Trace the slot store", effort: "quick" }, { result: reply("read app/src/state/slots.ts", { progress: { turns: 3, tools: 7 } }), partial: true });
   expect(running[0]).toContain("turn 3");
   expect(running[1]).toContain("read app/src/state/slots.ts");
-  const partial = row("explore", { prompt: "Trace the slot store" }, { result: reply("Research partial; stop: turn_limit.\nRequest: abc; generation: 1.\n\nSlots load in useSlots().",
-    { text: "Slots load in useSlots().", outcome: "uncertain", report: { status: "partial", stopReason: "turn_limit" }, request: "abc", generation: 1 }) });
+  const partial = row("explore", { prompt: "Trace the slot store" }, { result: reply("Research partial; stop: turn_limit.\nRequest: abc.\n\nSlots load in useSlots().",
+    { text: "Slots load in useSlots().", outcome: "uncertain", report: { status: "partial", stopReason: "turn_limit" }, request: "abc" }) });
   expect(partial[0]).toContain("!");
   expect(partial[0]).toContain("turn limit");
   expect(partial.join("\n")).not.toContain("Request: abc");

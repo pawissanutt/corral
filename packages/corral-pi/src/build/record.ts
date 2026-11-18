@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { checked, json, type Run } from "./corral-cli.ts";
+import { checked, type Run } from "./corral-cli.ts";
 import { summarize } from "./git.ts";
 import type { BuildContext, BuildSessionRecord, ChildSnapshot, FleetSnapshot } from "./types.ts";
-import type { BuildRecord, GateReceipt, RecordDecision, RecordPublished, RecordReview, RecordUsage } from "./record-types.ts";
+import type { BuildGateResult, BuildRecord, RecordDecision, RecordReview, RecordUsage } from "./record-types.ts";
 
 interface JournalData {
   version: 1;
@@ -12,7 +12,7 @@ interface JournalData {
   summary?: string;
   intent: { at: string; text: string }[];
   ownerSteers: Record<string, number>;
-  verification: GateReceipt[];
+  verification: BuildGateResult[];
   reviews: RecordReview[];
   decisions: RecordDecision[];
   timeline: BuildRecord["timeline"][number][];
@@ -28,13 +28,12 @@ interface TranscriptUsage { readonly input?: number; readonly output?: number; r
 export interface BuildJournal {
   record(): BuildRecord;
   refresh(): Promise<void>;
-  publish(): Promise<string | undefined>;
   capture(): void;
   noteOwnerInput(text: string): void;
   prompts(): { at: string; text: string }[];
   finish(title: string, summary?: string): void;
-  gate(receipt: GateReceipt): void;
-  latestGate(): GateReceipt | undefined;
+  gate(result: BuildGateResult): void;
+  latestGate(): BuildGateResult | undefined;
   latestReview(): RecordReview | undefined;
   review(child: ChildSnapshot, head: string): RecordReview;
   resolve(round: number, finding: string, resolution: { state: "fixed" | "declined"; commit?: string; reason?: string }): void;
@@ -49,7 +48,7 @@ function sum(values: readonly RecordUsage[]): RecordUsage {
 }
 
 export function createJournal(options: {
-  context: BuildContext; run: Run; git: Run; fleet: () => FleetSnapshot;
+  context: BuildContext; git: Run; fleet: () => FleetSnapshot;
   session?: () => BuildSessionRecord; changed?: () => void; now?: () => number;
 }): BuildJournal {
   const { context } = options;
@@ -137,7 +136,8 @@ export function createJournal(options: {
         ended: child.endedAt === undefined ? undefined : iso(child.endedAt), usage: { input: child.usage.input, output: child.usage.output, turns: child.usage.turns,
           ...(child.usage.cost === undefined ? {} : { cost: child.usage.cost }) },
         outside: [...new Set(child.edits.filter(edit => edit.outside).map(edit => edit.path))], report: child.report?.slice(0, 8192) })),
-      verification: data.verification.map(({ commands: _commands, receipt: _receipt, ...attempt }) => attempt),
+      verification: data.verification.map(({ attempt, head, result, failed_command, started, ended, log }) =>
+        ({ attempt, head, result, failed_command, started, ended, log })),
       reviews: data.reviews, messages: data.mail.slice(-500).map(message => ({ at: iso(message.at), from: message.from, to: message.to,
         text: message.text.slice(0, 2048), delivery: message.delivery })), decisions: data.decisions,
       usage: { parent, children, reviewers, total: sum([parent, children, reviewers]) }, timeline: data.timeline,
@@ -166,21 +166,8 @@ export function createJournal(options: {
     data.commits = commits;
     persist();
   }
-  async function publish(): Promise<string | undefined> {
-    if (session().bare) return undefined;
-    const temporary = join(context.dir, `.record-${randomBytes(12).toString("hex")}.json`);
-    try {
-      captureFleet(); persist();
-      const current = session();
-      if (!current.workspaceRoot || !current.project) return undefined;
-      writeFileSync(temporary, `${JSON.stringify(record())}\n`, { flag: "wx", mode: 0o600 });
-      await json<RecordPublished>(options.run, ["build", "record", "--file", temporary, "--json"], current.workspaceRoot);
-      return undefined;
-    } catch (error) { return `Build record publication failed: ${error instanceof Error ? error.message : String(error)}`; }
-    finally { try { rmSync(temporary, { force: true }); } catch { /* Publication cleanup never changes the owner's exit. */ } }
-  }
   return {
-    record, refresh, publish,
+    record, refresh,
     capture() { captureFleet(); persist(); },
     noteOwnerInput(text: string) { data.intent.push({ at: iso(now()), text }); persist(); },
     prompts: () => data.intent.map(prompt => ({ ...prompt })),
@@ -188,7 +175,7 @@ export function createJournal(options: {
       if (!title.trim() || title.length > 120) throw new Error("A real build title of 1 to 120 characters is required.");
       data.title = title; data.summary = summary; persist();
     },
-    gate(receipt: GateReceipt) { data.verification.push(receipt); data.timeline.push({ at: receipt.ended, phase: "verify", detail: `${receipt.attempt}: ${receipt.result}` }); persist(); },
+    gate(result) { data.verification.push(result); data.timeline.push({ at: result.ended, phase: "verify", detail: `${result.attempt}: ${result.result}` }); persist(); },
     latestGate: () => data.verification.at(-1),
     latestReview: () => data.reviews.at(-1),
     review(child: ChildSnapshot, head: string): RecordReview {

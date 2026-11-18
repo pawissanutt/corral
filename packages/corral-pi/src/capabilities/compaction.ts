@@ -1,6 +1,6 @@
-// Upstream compaction and branch-summary settings from the generation snapshot (T-564, plan
-// T-460@P3 menu 4). Omitted values keep upstream's defaults; summarization requests record their
-// usage on the session entry, which corral's usage collector counts toward the run.
+// Upstream compaction and branch-summary settings (T-564, plan T-460@P3 menu 4). Omitted values
+// keep upstream's defaults; summarization requests record their usage on the session entry,
+// which corral's usage collector counts toward the run.
 import type { CapabilitySet } from "../roles/types.ts";
 import type { CapabilityGuidance } from "./guidance.ts";
 

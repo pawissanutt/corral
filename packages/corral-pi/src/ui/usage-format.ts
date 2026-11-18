@@ -1,4 +1,4 @@
-// Number and row formatting shared by the Usage page's sections (usage-view.ts, usage-budget-view.ts). Exact values:
+// Number and row formatting shared by the Usage page's sections (usage-view.ts). Exact values:
 // integers grouped, USD at the stored six decimals, an absent value `unknown`, never zero.
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { wrap } from "./panel-parts.ts";

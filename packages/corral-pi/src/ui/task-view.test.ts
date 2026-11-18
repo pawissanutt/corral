@@ -5,19 +5,20 @@ import type { HostIdentity } from "../roles/types.ts";
 import { TaskStore } from "./task-store.ts";
 import { taskHeadline, taskLines } from "./task-view.ts";
 
-const worker = { store: "s", project: "corral", role: "worker" as const, task: "T-796", run: "R1", generation: 1 };
-const assistant = { store: "s", project: "", role: "assistant" as const, assistant: "A-1", generation: 1 };
+const worker = { store: "s", project: "corral", role: "worker" as const, task: "T-796", run: "R1" };
+const assistant = { store: "s", project: "", role: "assistant" as const, assistant: "A-1" };
+const run = (id: string, extra: Record<string, unknown>) => ({ id, task: "T-796", role: "worker", harness: "pi", worktree: "/w", branch: "corral/T-796",
+  base: "main", base_sha: "a".repeat(40), started: "2026-11-04T00:00:00Z", ...extra });
 const record = {
-  id: "T-796", title: "Main regression: receipts_tests\u001b[31m list", status: "running", status_since: "2026-11-04T00:00:00Z",
-  kind: "test", size: "xs", difficulty: "routine", priority: "P1", project: "corral",
-  body: "## Goal\nMain is red.\n\n## Acceptance\n- targeted test passes\n  continues here\n- full gate green\n\n```sh\n# not a heading\nbun test --filter receipts\n```\n",
-  criteria_progress: [
-    { criterion: { id: "gate", required: true, live: false, scenario: "run the full gate", expected: "full gate green" }, steps: [1, 2], evidence: [] },
-    { criterion: { id: "docs", required: false, live: false, scenario: "", expected: "docs updated" }, steps: [], evidence: [{}] },
-  ],
-  runs: [{ id: "R0", agent: "pi-sol", outcome: "abandoned" }, { id: "R1", agent: "pi-terra", agent_state: "working", started: "2026-11-04T00:00:00Z", summary: "Updated expectations" }],
-  comments: [{ at: "2026-11-04T00:30:00Z", author: "pm", text: "approve" }],
-  extra_field: { ignored: true },
+  task: {
+    id: "T-796", title: "Main regression: receipts_tests\u001b[31m list", status: "blocked", priority: "P1", project: "corral", kind: "test", size: "xs",
+    body: "## Goal\nMain is red.\n\n## Acceptance\n- targeted test passes\n  continues here\n- full gate green\n\n```sh\n# not a heading\nbun test --filter receipts\n```\n",
+    blocked: { reason: "agent asks", detail: null, next: [] }, depends_on: [], round: 0,
+    created: "2026-11-03T00:00:00Z", updated: "2026-11-04T00:30:00Z",
+  },
+  runs: [run("R0", { profile: "pi-sol", outcome: "failed", ended: "2026-11-04T00:10:00Z" }),
+    run("R1", { profile: "pi-terra", model: "gpt-terra", summary: "Updated expectations" })],
+  checks: [], artifacts: [],
 };
 const NOW = Date.parse("2026-11-04T01:00:00Z");
 const view = (store: TaskStore, width: number, legend = false, identity: HostIdentity = worker) => taskLines(identity, store, width, { now: NOW, legend });
@@ -26,28 +27,28 @@ const bounded = (rows: readonly string[], width: number) => { for (const row of 
 const WIDTHS = [120, 101, 68, 44];
 const LONG_REASON = `corral show exited 1: ${"database is locked, ".repeat(12)}tail-marker`;
 
-test("a loaded task shows its own sections, spec-only criteria, the bound run and comments at every width", async () => {
+test("a loaded task shows its own sections, the bound run and its facts at every width", async () => {
   const store = new TaskStore(worker, async () => record, () => {});
   await store.refresh();
   for (const width of WIDTHS) {
     const rows = view(store, width, true);
     bounded(rows, width);
     const out = plain(rows).join("\n");
-    for (const part of ["Main is red.", "targeted test passes", "continues here", "full gate green", "docs updated", "run the full gate",
-      "bun test --filter receipts", "Updated expectations", "pm", "approve", "R1", "pi-terra", "working", "routine", "xs", "P1", "corral", "test", "T-796"]) {
+    for (const part of ["Main is red.", "targeted test passes", "continues here", "full gate green",
+      "bun test --filter receipts", "Updated expectations", "R1", "pi-terra", "gpt-terra", "xs", "P1", "corral", "test", "T-796"]) {
       expect(out).toContain(part);
     }
     // Fenced code is not read as a heading.
     expect(out).not.toContain("NOT A HEADING");
     // The age or clock time of the data on screen survives the shortest header form.
     expect(plain(rows.slice(0, 6)).join("\n")).toMatch(/\d+[smhd] ago|\d\d:\d\d/);
-    // Criteria are spec: no row about a criterion carries a pass mark.
-    for (const row of plain(rows).filter(row => row.includes("full gate green") || row.includes("docs updated"))) expect(row).not.toMatch(/[✓✔]|passed/);
   }
   expect(plain(view(store, 120)).some(row => row.includes("│"))).toBeTrue();
+  // The blocked reason is a task fact: the facts column states it beside the prose.
+  expect(plain(view(store, 120)).join("\n")).toContain("blocked · agent asks");
   expect(plain(view(store, 101)).some(row => row.includes("│"))).toBeFalse();
   expect(view(store, 101).join("\n")).not.toContain("\u001b[31m");
-  expect(taskHeadline(worker, store)).toEqual({ id: "T-796", title: "Main regression: receipts_tests [31m list", chips: ["● running", "P1", "xs"] });
+  expect(taskHeadline(worker, store)).toEqual({ id: "T-796", title: "Main regression: receipts_tests [31m list", chips: ["⚠ blocked", "P1", "xs"] });
 });
 
 test("a failed reread keeps the data, names its time and keeps the whole reason in the legend", async () => {
@@ -84,7 +85,7 @@ test("a task that was never read, is being read or could not be read shows no in
       const out = plain(rows).join("\n");
       expect(out).toContain("T-796");
       expect(out).not.toContain("Goal");
-      expect(out).not.toMatch(/[☐◇]/);
+      expect(out).not.toContain("Facts");
     }
   };
   empty("never_read");
@@ -102,7 +103,7 @@ test("a task that was never read, is being read or could not be read shows no in
 });
 
 test("a mismatched read is a failure and recovery clears it without inventing content", async () => {
-  let value: unknown = { ...record, id: "T-1" };
+  let value: unknown = { ...record, task: { ...record.task, id: "T-1" } };
   const store = new TaskStore(worker, async () => value, () => {});
   await store.refresh();
   expect(store.current).toBeUndefined();
@@ -111,22 +112,20 @@ test("a mismatched read is a failure and recovery clears it without inventing co
   value = record; await store.refresh(true);
   expect(store.stale).toBeFalse(); expect(store.state.phase).toBe("current");
   value = { nope: 1 }; await store.refresh(true);
-  expect(store.current?.id).toBe("T-796");
+  expect(store.current?.task.id).toBe("T-796");
   expect(store.state.phase).toBe("retained");
 });
 
 test("a missing field is unknown, never zero", async () => {
-  const bare = { id: "T-796", title: "Bare", status: "ready", criteria_progress: [{ criterion: { id: "c1", required: true, scenario: "s", expected: "works" } }] };
+  const bare = { task: { id: "T-796", title: "Bare", body: "", status: "ready", priority: "P2" } };
   const store = new TaskStore(worker, async () => bare, () => {});
   await store.refresh();
-  for (const width of [101, 44]) {
+  for (const width of [120, 44]) {
     const out = plain(view(store, width)).join("\n");
-    expect(out).toContain("works");
-    expect(out).not.toMatch(/\b0 (step|steps|evidence)\b/);
+    expect(out).toContain("No task description");
+    expect(out).toContain("Run R1 is not in this task record yet");
+    expect(out).not.toMatch(/\b0\b/);
   }
-  const legacy = new TaskStore(worker, async () => ({ id: "T-796", title: "Bare", status: "ready" }), () => {});
-  await legacy.refresh();
-  expect(plain(view(legacy, 101)).join("\n")).not.toContain("0 criteria");
 });
 
 test("sessions without a task, or without a reader, are not applicable and never read", async () => {

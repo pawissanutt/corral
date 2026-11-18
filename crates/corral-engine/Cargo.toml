@@ -19,6 +19,4 @@ libc = "0.2"
 corral-git.workspace = true
 corral-herdr.workspace = true
 corral-types.workspace = true
-
-[dev-dependencies]
 tempfile.workspace = true

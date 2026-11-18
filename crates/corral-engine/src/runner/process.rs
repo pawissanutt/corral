@@ -75,8 +75,8 @@ impl Runner for ProcessRunner {
     }
 
     fn status(&self, session: &SessionRef) -> Result<SessionStatus> {
-        let (_, dir) = process_session(session)?;
-        Ok(if completed(dir)? {
+        let (pid, dir) = process_session(session)?;
+        Ok(if completed(dir)? || !placement_alive(pid)? {
             SessionStatus::Gone
         } else {
             SessionStatus::Working
@@ -113,7 +113,7 @@ impl Runner for ProcessRunner {
 fn process_session(session: &SessionRef) -> Result<(u32, &Path)> {
     match session {
         SessionRef::Process { pid, dir } => Ok((*pid, dir)),
-        SessionRef::Herdr { .. } => Err(refuse(
+        SessionRef::Herdr { .. } | SessionRef::Pi { .. } => Err(refuse(
             "this session is not owned by the process runner; set runner.mode to \"herdr\" in .corral-next/corral.toml",
             Vec::new(),
         )),
@@ -145,6 +145,31 @@ fn completed(dir: &Path) -> Result<bool> {
     dir.join("exit_code")
         .try_exists()
         .with_context(|| format!("inspect process completion marker in {}", dir.display()))
+}
+
+#[cfg(unix)]
+fn placement_alive(pid: u32) -> Result<bool> {
+    let pid = libc::pid_t::try_from(pid).context("process session pid exceeds Unix pid range")?;
+    if pid <= 1 {
+        bail!("invalid process session pid {pid}");
+    }
+    // SAFETY: getsid only inspects a positive PID. A detached group leader
+    // also leads its Unix session; do not mistake another process for it.
+    let sid = unsafe { libc::getsid(pid) };
+    if sid != -1 {
+        return Ok(sid == pid);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(false)
+    } else {
+        Err(error).context("inspect detached process session")
+    }
+}
+
+#[cfg(not(unix))]
+fn placement_alive(_: u32) -> Result<bool> {
+    bail!("detached process sessions require Unix")
 }
 
 fn record_stopped(dir: &Path, code: i32) -> Result<()> {

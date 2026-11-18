@@ -162,6 +162,7 @@ impl BoardView {
                         wait: self.waits.get(&t.id).map(String::as_str),
                         automation_block: self.automation_blocks.get(&t.id).map(String::as_str),
                         plan_review_wait: self.plan_review_waits.get(&t.id).map(String::as_str),
+                        handoff: self.handoffs.get(&t.id),
                         route: self.routes.get(&t.id).map(|r| &r.card),
                         done_ids: Some(&self.index.done_ids),
                     };

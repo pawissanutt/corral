@@ -94,7 +94,7 @@ fn approval(config: &Config, name: &str, binding: &ConnectionBinding) -> Result<
     Ok(approval)
 }
 
-pub(super) fn recorded(data_root: &std::path::Path, id: &str) -> Result<Option<Route>> {
+pub(super) fn recorded(data_root: &std::path::Path, id: &str) -> Result<(Option<Route>, bool)> {
     use std::io::Read;
     let path = data_root.join("build").join(id).join("session.json");
     let mut bytes = Vec::new();
@@ -109,10 +109,20 @@ pub(super) fn recorded(data_root: &std::path::Path, id: &str) -> Result<Option<R
     );
     let value: serde_json::Value =
         serde_json::from_slice(&bytes).context("reading build identity")?;
-    value
+    let route = value
         .get("route")
         .map(|route| serde_json::from_value(route.clone()).context("reading recorded build route"))
-        .transpose()
+        .transpose()?;
+    let mixed = value
+        .get("mixedPaid")
+        .map(|flag| {
+            flag.as_bool()
+                .filter(|flag| *flag)
+                .context("invalid mixed Build lineage")
+        })
+        .transpose()?
+        .unwrap_or(false);
+    Ok((route, mixed))
 }
 
 pub(super) fn validate_recorded(config: &Config, route: &Route, bare: bool) -> Result<()> {
@@ -179,8 +189,13 @@ pub(super) fn override_recorded(mut route: Route, args: &BuildArgs) -> Result<Ro
     Ok(route)
 }
 
-pub(super) fn require_host(assets: &std::path::Path, named: bool, paid: bool) -> Result<()> {
-    if !named && !paid {
+pub(super) fn require_host(
+    assets: &std::path::Path,
+    named: bool,
+    paid: bool,
+    mixed: bool,
+) -> Result<()> {
+    if !named && !paid && !mixed {
         return Ok(());
     }
     let manifest: serde_json::Value = serde_json::from_slice(
@@ -188,7 +203,11 @@ pub(super) fn require_host(assets: &std::path::Path, named: bool, paid: bool) ->
             .context("reading Build profile host compatibility")?,
     )
     .context("decoding Build profile host compatibility")?;
-    for (required, key) in [(paid, "build_paid"), (named, "build_profiles")] {
+    for (required, key) in [
+        (paid, "build_paid"),
+        (named, "build_profiles"),
+        (mixed, "build_mixed_paid"),
+    ] {
         if required && manifest[key].as_u64() != Some(1) {
             return Err(refuse(
                 "build_protocol_unsupported",

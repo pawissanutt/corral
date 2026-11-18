@@ -14,7 +14,7 @@ const progress = ProgressSchema.parse({
   ] }],
   waits: [{ step: "test", on: { kind: "owner", question: "Ship it?" } }, { step: "gone", on: { kind: "event", event: "ci" } }],
 });
-const identity = { store: "s", project: "p", role: "worker", task: "T-1", run: "R1", generation: 2 } as const;
+const identity = { store: "s", project: "p", role: "worker", task: "T-1", run: "R1" } as const;
 
 /** The `/todo` command and `session_start` handler a host installs, over a recording Plan surface. */
 function harness(load: () => Promise<unknown>) {
@@ -98,11 +98,11 @@ test("worker restore selects the bound run, not the latest run", () => {
   expect(restored).toEqual(progress);
 });
 
-test("PM restores its own ledger and malformed snapshots are refused", () => {
-  // Given the PM container snapshot.
-  const pm = { store: "s", project: "p", role: "pm", generation: 2 } as const;
-  // When the PM ledger is restored.
-  expect(snapshotProgress({ container: { todo: progress } }, pm)).toEqual(progress);
+test("an assistant restores its own ledger and malformed snapshots are refused", () => {
+  // Given the assistant session snapshot.
+  const assistant = { store: "s", project: "p", role: "assistant", assistant: "A-2" } as const;
+  // When the assistant ledger is restored.
+  expect(snapshotProgress({ container: { state: { todo: progress, todo_requests: null } } }, assistant)).toEqual(progress);
   // Then an invalid status is not accepted as canonical progress.
-  expect(() => snapshotProgress({ container: { todo: { ...progress, phases: "broken" } } }, pm)).toThrow();
+  expect(() => snapshotProgress({ container: { state: { todo: { ...progress, phases: "broken" } } } }, assistant)).toThrow();
 });

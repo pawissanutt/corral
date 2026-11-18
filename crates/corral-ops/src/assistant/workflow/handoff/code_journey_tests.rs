@@ -305,7 +305,30 @@ fn dirty_saved_seed_returns_exact_layers_and_branch_without_residual_intent() {
             "C3_NATIVE_STOP: verified owned stand-in exited; no replacement generation or fabricated turn end"
         );
     }
-    let next = continuation::preview(&f.ctx, &running.id, Goal::ImplementationPrepare).unwrap();
+    // Code-only change after the board displayed the saved card: same contract, plan and
+    // transfer revision, a new work layer. The stale card refuses; the current one binds.
+    let shown = continuation::pin(&f.ctx, &running.id).unwrap();
+    let extra = run.worktree.join("after-display");
+    std::fs::write(&extra, b"changed after display").unwrap();
+    let error = continuation::preview_pinned(
+        &f.ctx,
+        Some(&shown),
+        &running.id,
+        Goal::ImplementationPrepare,
+    )
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("handoff_stale_choice"),
+        "{error:#}"
+    );
+    std::fs::remove_file(&extra).unwrap();
+    let next = continuation::preview_pinned(
+        &f.ctx,
+        Some(&shown),
+        &running.id,
+        Goal::ImplementationPrepare,
+    )
+    .unwrap();
     let resumed =
         continuation::start(&f.ctx, &next, &next.digest().unwrap(), instruction()).unwrap();
     assert!(

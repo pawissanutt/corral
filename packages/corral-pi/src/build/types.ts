@@ -1,32 +1,18 @@
-// The shared contract of build mode (`corral pi --build`). Types and constants only: nothing here
+// The shared contract of `corral-pi build`. Types and constants only: nothing here
 // imports the host session, the SDK runtime or the UI, so every build module can depend on it.
 import type { AwsBinding } from "../auth/aws.ts";
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
 import type { BuildRecord } from "./record-types.ts";
-import type { ConnectionBinding } from "../host/connections.ts";
-import type { BudgetOptions } from "../capabilities/budget.ts";
+import type { ApiConnectionId, ConnectionId } from "../auth/connections.ts";
+import type { ProviderId } from "../auth/providers.ts";
+import type { SpendingOptions } from "../capabilities/budget.ts";
 
-export interface BuildPaidApproval {
-  readonly policy_digest: string;
-  readonly approval: string;
-  readonly allowance_nanos: number;
-  readonly candidates: readonly ConnectionBinding[];
-}
-export interface BuildProfileRoute {
-  readonly name: string;
-  readonly label: string;
-  readonly provider: string;
+export interface BuildRoute {
+  readonly provider: ProviderId;
   readonly model: string;
   readonly effort?: string;
-  readonly binding?: ConnectionBinding;
-  readonly paid?: BuildPaidApproval;
-  readonly available?: boolean;
-  readonly reason?: string;
-}
-export interface BuildPaidLaunch {
-  readonly session: string;
-  readonly generation: number;
-  readonly cap: string;
+  readonly connection?: ConnectionId;
+  readonly aws?: AwsBinding;
 }
 
 /** What landing from the session requires for a project: an approving in-session review and the full gate, the full gate alone, or no landing. */
@@ -39,6 +25,7 @@ export interface BuildProfile {
   readonly model: string;
   readonly effort?: string;
   readonly description?: string;
+  readonly connection?: ApiConnectionId;
 }
 
 export interface BuildSettings {
@@ -54,12 +41,8 @@ export const MAX_PARALLEL_LIMIT = 32;
 /** Children one `task` call may start. */
 export const MAX_CHILDREN_PER_CALL = 32;
 
-/**
- * The JSON `corral pi --build` writes to the host's inherited `--launch-fd`. Snake case on the wire:
- * `data_root`, `workspace_root`, `repo_root`. `capabilities` and `guidance` carry exactly the JSON
- * the rich launch message carries under the same names, resolved for the assistant role.
- */
-export interface BuildLaunch {
+/** Options derived from the local build flags. */
+export interface BuildLaunch extends BuildRoute, SpendingOptions {
   readonly version: 1;
   readonly assets: string;
   /** `$XDG_DATA_HOME/corral/corral-pi`; build sessions live under `<dataRoot>/build/`. */
@@ -78,18 +61,6 @@ export interface BuildLaunch {
   readonly name?: string;
   /** A build session id to resume instead of starting one. */
   readonly resume?: string;
-  readonly provider: string;
-  readonly model: string;
-  readonly effort?: string;
-  readonly route?: BuildProfileRoute;
-  readonly binding?: ConnectionBinding;
-  readonly paid?: BuildPaidLaunch;
-  readonly profileCatalog?: readonly BuildProfileRoute[];
-  readonly profileRequestPath?: string;
-  readonly capabilities?: unknown;
-  /** Required when the profile's provider is Amazon Bedrock; the same field the bound launch carries. */
-  readonly aws?: AwsBinding;
-  readonly guidance?: unknown;
   readonly settings: BuildSettings;
 }
 
@@ -117,7 +88,7 @@ export interface BuildSessionRecord {
   readonly project?: string;
   readonly workspaceRoot?: string;
   /** Frozen route identity; resume does not consult mutable profile defaults. */
-  readonly route?: BuildProfileRoute;
+  readonly route?: BuildRoute;
   /** The Pi transcript of the parent conversation. */
   readonly sessionFile?: string;
   readonly exit?: ExitRecord;
@@ -130,9 +101,6 @@ export interface BuildContext {
   /** `<dataRoot>/build/<id>`: transcripts, journal and child session files. */
   readonly dir: string;
   readonly corral: string;
-  readonly paidRecord?: BudgetOptions["record"];
-  readonly profileCatalog?: readonly BuildProfileRoute[];
-  readonly profileRequestPath?: string;
 }
 
 // ---------- children ----------

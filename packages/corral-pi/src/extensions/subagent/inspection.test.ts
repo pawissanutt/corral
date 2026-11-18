@@ -3,7 +3,7 @@ import { AuxiliaryHistory, HELPER_TEXT_LIMIT, type HelperEvent } from "./inspect
 
 test("retained size matches messages through deltas, replacement and eviction", () => {
   const history = new AuxiliaryHistory();
-  history.begin("r", "explore", "fixture/model", 1, "Question");
+  history.begin("r", "explore", "fixture/model", "Question");
   const retained = Reflect.get(history, "entries") as Map<string, { size: number }>;
   const observe = (event: HelperEvent) => {
     history.observe("r", event);
@@ -39,7 +39,7 @@ test("history subscriptions are synchronous, isolated and released on disposal",
   history.subscribe(() => { throw new Error("broken observer"); });
   history.subscribe(() => { healthy++; });
   const release = history.subscribe(() => { released++; });
-  history.begin("r", "explore", "fixture/model", 1, "Question");
+  history.begin("r", "explore", "fixture/model", "Question");
   expect([original, healthy, released]).toEqual([1, 1, 1]);
   expect(history.snapshot()[0]!.inspectionError).toContain("broken observer");
   release(); release();
@@ -53,7 +53,7 @@ test("history subscriptions are synchronous, isolated and released on disposal",
 
 test("latest activity survives transcript head clipping and stays a bounded visible line", () => {
   const history = new AuxiliaryHistory();
-  history.begin("r", "explore", "fixture/model", 1, "Question");
+  history.begin("r", "explore", "fixture/model", "Question");
   history.observe("r", { type: "assistant_start" });
   history.observe("r", { type: "assistant_delta", text: "old".repeat(2000) });
   history.observe("r", { type: "assistant_delta", text: "\nLatest reply" });

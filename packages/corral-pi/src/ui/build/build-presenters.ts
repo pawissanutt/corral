@@ -1,8 +1,8 @@
-// Tool rows for the build session's verification tools, in the tool row grammar. `build_verify` reads as `gate <tier>`
-// with the receipt's result (`✓ gate full · passed`, `✗ gate quick · failed` over the failed command) and its attempt
-// on the right; `build_review` reads as `review` with the verdict and the findings counted by severity, the round on
-// the right, and every finding once the row is expanded. Results come from `details` (`{ receipt }`, `{ round, review }`).
-import type { GateReceipt, RecordReview } from "../../build/record-types.ts";
+// Tool rows for the build session's verification tools, in the tool row grammar. `build_verify` reads as `gate` with
+// the gate's result (`✓ gate · passed`, `✗ gate · failed` over the failed command) and its attempt on the right;
+// `build_review` reads as `review` with the verdict and the findings counted by severity, the round on the right, and
+// every finding once the row is expanded. Results come from `details` (`{ gate }`, `{ round, review }`).
+import type { BuildGateResult, RecordReview } from "../../build/record-types.ts";
 import type { PresenterModule } from "../tool-rendering.ts";
 import { baseState, firstLine, recordOf, resultText, shortPath, stringArg } from "../tool-row.ts";
 import type { BodyLine, Presenter, RowModel, Tone } from "../tool-row.ts";
@@ -10,22 +10,21 @@ import type { BodyLine, Presenter, RowModel, Tone } from "../tool-row.ts";
 const SEVERITY_TONE: Readonly<Record<RecordReview["findings"][number]["severity"], Tone>> = { blocker: "error", major: "warning", minor: "muted" };
 
 const presentVerify: Presenter = call => {
-  const state = baseState(call), data = recordOf(recordOf(call.result?.details)?.["receipt"]);
-  const receipt = typeof data?.["attempt"] === "string" && typeof data["result"] === "string" ? data as unknown as GateReceipt : undefined;
-  const tier = receipt?.tier ?? stringArg(call.args, "tier");
-  const base = { verb: "gate", ...(tier ? { target: firstLine(tier) } : {}), ...(receipt ? { right: firstLine(receipt.attempt) } : {}) };
+  const state = baseState(call), data = recordOf(recordOf(call.result?.details)?.["gate"]);
+  const gate = typeof data?.["attempt"] === "string" && typeof data["result"] === "string" ? data as unknown as BuildGateResult : undefined;
+  const base = { verb: "gate", ...(gate ? { right: firstLine(gate.attempt) } : {}) };
   if (state === "failed") {
     const reason = firstLine(resultText(call.result));
     return { ...base, state, ...(reason ? { body: [{ text: reason }] } : {}) };
   }
   if (state !== "ok") return { ...base, state };
-  if (!receipt) return { ...base, state: "unknown" };
-  if (receipt.result === "pass") return { ...base, state: "ok", outcome: "passed", outcomeTone: "success" };
-  // A tier without gate commands vouches for nothing, so it never reads as a pass.
-  if (receipt.result === "skipped") return { ...base, state: "ok", outcome: "skipped · no gate commands", outcomeTone: "warning" };
+  if (!gate) return { ...base, state: "unknown" };
+  if (gate.result === "pass") return { ...base, state: "ok", outcome: "passed", outcomeTone: "success" };
+  // A project without gate commands vouches for nothing, so it never reads as a pass.
+  if (gate.result === "skipped") return { ...base, state: "ok", outcome: "skipped · no gate commands", outcomeTone: "warning" };
   const body: BodyLine[] = [
-    ...(receipt.failed_command ? [{ text: firstLine(receipt.failed_command), tone: "text" as const }] : []),
-    ...(receipt.log ? [{ text: "log " + shortPath(receipt.log, call.cwd), tone: "muted" as const }] : []),
+    ...(gate.failed_command ? [{ text: firstLine(gate.failed_command), tone: "text" as const }] : []),
+    ...(gate.log ? [{ text: "log " + shortPath(gate.log, call.cwd), tone: "muted" as const }] : []),
   ];
   return { ...base, state: "failed", outcome: "failed", ...(body.length ? { body } : {}) };
 };

@@ -84,6 +84,7 @@ fn pane_input(n: usize) -> NewOwnerInput {
         command: None,
         answers: None,
         request: format!("ev-1-{n}"),
+        binding: None,
     }
 }
 

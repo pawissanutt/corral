@@ -89,7 +89,7 @@ test("titles count against the window; arrows, wheel and clicks reach the action
 });
 
 test("production catalog disables effort when capability is unavailable or unknown", () => {
-  const panels = new NativePanels({ identity: { store: "st-0123456789abcdef", project: "demo", role: "worker", generation: 1 },
+  const panels = new NativePanels({ identity: { store: "st-0123456789abcdef", project: "demo", role: "worker" },
     cwd: process.cwd(), snapshot: () => null });
   try {
     const effort = panels.actions().find(a => a.id === "app.thinking.cycle");

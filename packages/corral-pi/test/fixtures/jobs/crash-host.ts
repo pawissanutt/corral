@@ -1,16 +1,18 @@
-// A host that starts one job and stalls inside its identity commit, so a test can kill it in
-// exactly the window between spawn and the started record. It prints `STARTED <pid>` there.
+// Stop at capability registration: the supervisor exists but has not been sent "run".
+// The test kills this stopped host and checks that the supervisor exits without launching work.
+import { mkdirSync, writeSync } from "node:fs";
 import { JobRuntime } from "../../../src/extensions/jobs/runtime.ts";
 
 const [runtimeDir, marker] = process.argv.slice(2);
 if (!runtimeDir || !marker) throw new Error("usage: crash-host.ts <runtime-dir> <marker>");
+mkdirSync(runtimeDir, { recursive: true });
 const runtime = new JobRuntime({
-  cwd: runtimeDir, runtimeDir, generation: 1,
+  cwd: runtimeDir, runtimeDir,
   settings: { max_jobs: 1, max_output_bytes: 1024, max_runtime_secs: 60 },
-  call: async (_op, _key, payload) => {
-    if (payload.action !== "started") return { state: "committed", result: {} };
-    process.stdout.write(`STARTED ${String(payload.pid)}\n`);
-    return new Promise(() => undefined);
+  registerCapability(pid) {
+    writeSync(1, `STARTED ${pid}\n`);
+    process.kill(process.pid, "SIGSTOP");
+    return () => {};
   },
 });
-void runtime.start(`echo ran > ${marker}`, "crash");
+await runtime.start(`echo ran > "${marker}"`);
